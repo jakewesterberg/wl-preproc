@@ -1,0 +1,34 @@
+[project]
+name = "wl-preproc"
+version = "0.1.0"
+description = "Automated post-session preprocessing pipeline for NHP systems neuroscience"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6", "pyyaml>=6.0", "wl-sync"]
+
+# No upper Python bound. An earlier draft pinned <3.12, justified as the
+# Kilosort4/PyTorch requirement for Pascal — that was wrong and is recorded in
+# spec section 6.6. The Pascal constraint is the *wheel index*: PyTorch must
+# come from cu126, which is the last index shipping sm_61 kernels. cu126 itself
+# ships wheels for cp39 through cp315, so Python was never constrained by it.
+#
+# PyTorch is deliberately NOT a dependency here. Installing it correctly means
+# pointing at the cu126 index explicitly, since PyPI's default moved to CUDA 13
+# at PyTorch 2.11 and CUDA 13 dropped Pascal entirely. That belongs in the
+# per-stage container image (spec section 6.6.1), not in a requirements list
+# where a plain resolve would silently produce a build that cannot run.
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+wlpp = "wl_preproc.cli.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["wl_preproc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
