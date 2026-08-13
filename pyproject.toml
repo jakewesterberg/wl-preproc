@@ -17,9 +17,10 @@ dependencies = [
     # element-animal pins to the open PR that does its migration, which is zero
     # divergence by construction; the other three already activate cleanly on
     # 2.3 in the specific sense of .activate(db_name) — that is NOT a claim
-    # that they need no compatibility handling. element_session and
-    # element_event both still call the lowercase dj.schema() at import time
-    # and raise AttributeError without wl_preproc.schema._compat's shim; see
+    # that they need no compatibility handling. element_session raises
+    # AttributeError on a bare import without wl_preproc.schema._compat's
+    # shim; element_event's event and trial submodules do too once imported
+    # directly (bare `import element_event` alone does not trigger it). See
     # that module's docstring. element-array-ephys is deliberately absent —
     # its issue #230 is unfixed and its tables silently destroy array data
     # under 2.x. See spec section 5.1.1 and the Phase 2 precondition recorded
@@ -50,7 +51,7 @@ dependencies = [
 # their own emitted session in tests/synth/, and Intan is checked past merely
 # opening: the amplifier stream is reshaped correctly and the Stim stream's gain
 # is the stim step size the header declares.
-dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.0,<5"]
+dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.15,<5"]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
