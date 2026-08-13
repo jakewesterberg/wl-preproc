@@ -163,8 +163,11 @@ wl-preproc/
     export/    nwb assembly + validation
     archive/   compression, roundtrip verification, checksums, tiered transfer
     responder/ the HTTP surface wl.works polls (§11)
+    synth/     synthetic session generator (§9) — shipped code, not a test fixture:
+               `wlpp synth generate --profile benchmark` produces the P6000
+               benchmark session, which is not a test
     cli/       wlpp commands
-  tests/synth/   synthetic session generator
+  tests/        one module per source module
   docs/schemas/  exported JSON Schema for wl.works and the camera project
 
 hardware/breakout/  distribution PCB: buffers, level shifters, optoisolators
