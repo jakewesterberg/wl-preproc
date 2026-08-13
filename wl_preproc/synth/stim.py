@@ -71,6 +71,8 @@ def unpack_stim_word(word: int) -> StimWord:
 
 
 SETTLE_DURATION_S = 0.002
+STIM_PULSE_DURATION_S = 0.0005
+STIM_GUARD_S = 0.05
 
 
 @dataclass(frozen=True, slots=True)

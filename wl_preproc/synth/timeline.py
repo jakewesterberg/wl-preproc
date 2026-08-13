@@ -11,14 +11,12 @@ import numpy as np
 
 from wl_preproc.contracts.events import Escape, Marker, encode_payload
 from wl_preproc.synth.recipe import SessionRecipe
-from wl_preproc.synth.stim import StimEvent
+from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 from wl_preproc.synth.truth import BlockTruth, GroundTruth, TrialTruth
 
 BARCODE_INTERVAL_S = 1.0
 SPIKE_RATE_HZ = 5.0
 CODE_WORD_SPACING_S = 0.001
-STIM_PULSE_DURATION_S = 0.0005
-STIM_GUARD_S = 0.05
 
 
 def apply_drift(time_s: float, drift_ppm: float) -> float:
