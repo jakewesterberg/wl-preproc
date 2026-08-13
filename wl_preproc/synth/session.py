@@ -16,6 +16,7 @@ from wl_preproc.synth.peripherals import (
     write_task_file,
 )
 from wl_preproc.synth.recipe import Fault, SessionRecipe
+from wl_preproc.synth.rhs import write_rhs
 from wl_preproc.synth.spikeglx import write_spikeglx
 from wl_preproc.synth.syncbox import write_syncbox_log
 from wl_preproc.synth.timeline import build_timeline
@@ -45,6 +46,8 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
             )
             if Fault.TRUNCATED_FILE in recipe.faults:
                 truncate_file(bin_path, keep_fraction=0.6)
+        elif system == "rhs":
+            write_rhs(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
         elif system == "bcam":
             dropped = (
                 drop_camera_frames(int(recipe.duration_s * CAMERA_FPS), rng)

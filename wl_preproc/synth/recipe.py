@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.contracts.paths import SYSTEMS
+from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S
 
 
 class Fault(str, Enum):
@@ -33,6 +34,7 @@ class BlockSpec(BaseModel):
     task_type: TaskTypeCode
     n_trials: int
     trial_duration_s: float
+    stim_per_trial: int = 0
 
     @property
     def duration_s(self) -> float:
@@ -77,6 +79,28 @@ class SessionRecipe(BaseModel):
             raise ValueError(
                 f"montages must cover the session: {covered}s of {self.duration_s}s"
             )
+        for block_index, block in enumerate(self.blocks, start=1):
+            if block.stim_per_trial < 0:
+                raise ValueError(
+                    f"block {block_index} ({block.task_type.name}): stim_per_trial "
+                    f"must not be negative, got {block.stim_per_trial}"
+                )
+            if block.stim_per_trial == 0:
+                continue
+            if block.trial_duration_s <= 2 * STIM_GUARD_S:
+                raise ValueError(
+                    f"block {block_index} ({block.task_type.name}): "
+                    f"trial_duration_s={block.trial_duration_s}s leaves no room for "
+                    f"the {STIM_GUARD_S}s guard band required at each end"
+                )
+            span = block.trial_duration_s - 2 * STIM_GUARD_S
+            if span / block.stim_per_trial <= STIM_PULSE_DURATION_S:
+                raise ValueError(
+                    f"block {block_index} ({block.task_type.name}): "
+                    f"stim_per_trial={block.stim_per_trial} packs pulses tighter "
+                    f"than STIM_PULSE_DURATION_S={STIM_PULSE_DURATION_S}s within "
+                    f"the {span}s available after guard bands"
+                )
         return self
 
 
@@ -105,4 +129,25 @@ BENCHMARK_RECIPE = SessionRecipe(
     n_ap_channels=384,
     ap_sample_rate_hz=30_000.0,
     seed=20270314,
+)
+
+STIM_RECIPE = SessionRecipe(
+    session_id="2027-03-14_03",
+    subject="pico",
+    rig="rig-a",
+    # Standalone Intan: no NI, no SpikeGLX. Tier B provenance — Pi codes plus an
+    # Intan strobe witness (spec section 4.7).
+    systems=("syncbox", "rhs"),
+    blocks=(
+        BlockSpec(
+            task_type=TaskTypeCode.RF_MAP,
+            n_trials=4,
+            trial_duration_s=3.0,
+            stim_per_trial=2,
+        ),
+    ),
+    montages=(MontageSpec(start_s=0.0, end_s=12.0),),
+    n_ap_channels=4,
+    ap_sample_rate_hz=30_000.0,
+    seed=7,
 )

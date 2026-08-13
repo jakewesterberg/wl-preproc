@@ -11,6 +11,7 @@ import numpy as np
 
 from wl_preproc.contracts.events import Escape, Marker, encode_payload
 from wl_preproc.synth.recipe import SessionRecipe
+from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 from wl_preproc.synth.truth import BlockTruth, GroundTruth, TrialTruth
 
 BARCODE_INTERVAL_S = 1.0
@@ -55,6 +56,7 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
 
     blocks: list[BlockTruth] = []
     trials: list[TrialTruth] = []
+    stim_events: list[StimEvent] = []
     words: list[tuple[float, int]] = []
 
     _emit(words, 0.0, Marker.SESSION_START.value)
@@ -79,6 +81,20 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
                     end_s=trial_end,
                 )
             )
+            for pulse in range(block.stim_per_trial):
+                # Spread pulses evenly inside the trial, keeping a guard at each
+                # end so a pulse never straddles a trial boundary.
+                span = block.trial_duration_s - 2 * STIM_GUARD_S
+                offset = STIM_GUARD_S + span * (pulse + 0.5) / block.stim_per_trial
+                stim_events.append(
+                    StimEvent(
+                        onset_s=trial_start + offset,
+                        duration_s=STIM_PULSE_DURATION_S,
+                        channel=int(rng.integers(0, recipe.n_ap_channels)),
+                        magnitude=int(rng.integers(50, 200)),
+                        negative=bool(rng.integers(0, 2)),
+                    )
+                )
             _emit(words, trial_start, Marker.TRIAL_START.value)
             for word in encode_payload(Escape.TRIAL_NUMBER, _uint32_words(trial_id)):
                 _emit(words, trial_start, word)
@@ -109,4 +125,5 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
         trials=tuple(trials),
         blocks=tuple(blocks),
         spikes=spikes,
+        stim_events=tuple(stim_events),
     )

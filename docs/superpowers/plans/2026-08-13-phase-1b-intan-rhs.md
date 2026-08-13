@@ -4,7 +4,11 @@
 
 **Goal:** Extend the synthetic generator to emit Intan RHS sessions with stimulation, so the artifact-removal stage and the standalone-Intan provenance tier have fixtures with known ground truth.
 
-**Architecture:** Emit the **One File Per Signal Type** layout — flat `.dat` arrays plus an `info.rhs` header — rather than the traditional interleaved 128-sample block format. Flat arrays are far easier to generate correctly, SpikeInterface reads them, and the same reader-as-oracle test that verified SpikeGLX applies here. Stim state is planted first as ground truth, then rendered into both the stim words and the amplifier artifacts, so the two cannot disagree.
+**Architecture:** Emit the **One File Per Signal Type** layout — flat `.dat` arrays plus an `info.rhs` header — rather than the traditional interleaved 128-sample block format. Flat arrays are far easier to generate correctly. Stim state is planted first as ground truth, then rendered into both the stim words and the amplifier artifacts, so the two cannot disagree.
+
+> **Corrected 2026-08-13, during execution.** This paragraph originally continued *"SpikeInterface reads them, and the same reader-as-oracle test that verified SpikeGLX applies here."* **That is false as built, and it was the stated justification for choosing this layout.** Task 3 writes `info.rhs` as a 20-byte identification stub — magic number, version, sample rate, stim step size, channel count — not a parseable Intan header, so `spikeinterface.extractors.read_intan` fails on it (`IndexError` while parsing channel definitions). No task in this plan specified the oracle test its own Architecture and Tech Stack promised, so nothing caught it.
+>
+> **The gap is recorded rather than closed here.** `neo`'s `read_rhs` is ~195 lines of version-dependent field sets, QString channel names and per-channel signal-group structs; emitting that by reverse-engineering a reader is how a format gets fabricated, which is precisely what §6.3's `dcamplifier.dat` ruling refuses. A byte-correct header needs the vendor document in hand and is its own task. **Until it exists, these fixtures are readable by this repository's own code and not by a third-party reader** — which is fine for the stim-word and artifact assertions Phase 2 needs, and *not* fine for anything that tests the real ingest path through SpikeInterface. See "Deliberately excluded".
 
 **Tech Stack:** Python 3.11+, NumPy, pytest, SpikeInterface (test-only, as the format oracle)
 
@@ -368,12 +372,14 @@ and add as the final field of `GroundTruth`:
     stim_events: tuple[StimEvent, ...] = ()
 ```
 
-In `wl_preproc/synth/timeline.py`, add near the other constants:
+In `wl_preproc/synth/stim.py`, add beside the existing `SETTLE_DURATION_S`:
 
 ```python
 STIM_PULSE_DURATION_S = 0.0005
 STIM_GUARD_S = 0.05
 ```
+
+> **Corrected 2026-08-13, during execution.** This step originally put both constants in `wl_preproc/synth/timeline.py`. **That placement is not implementable.** Task 2's review added a geometry validator to `SessionRecipe`, so `recipe.py` must import these constants — and `timeline.py` already imports `recipe.py`, which makes the reverse import circular. They live in `stim.py`, which imports nothing from the package and is therefore reachable from both, and which already held the third stim timing constant. `timeline.py` imports them from there (`from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent`). Nothing else in this step changes; the planting code below is unaffected.
 
 Inside `build_timeline`, declare `stim_events: list[StimEvent] = []` beside `trials`, and inside the per-trial loop — after `trials.append(...)` and before `_emit(words, trial_start, Marker.TRIAL_START.value)` — insert:
 
@@ -394,10 +400,10 @@ Inside `build_timeline`, declare `stim_events: list[StimEvent] = []` beside `tri
                 )
 ```
 
-Add the import at the top of `timeline.py`:
+Add the import at the top of `timeline.py` (see the correction above — the two timing constants come from `stim.py` too, not from `timeline.py` itself):
 
 ```python
-from wl_preproc.synth.stim import StimEvent
+from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 ```
 
 and pass the events into the returned `GroundTruth`:
@@ -428,7 +434,7 @@ git commit -m "feat(synth): plant stim events per trial as ground truth"
 
 **Interfaces:**
 - Consumes: `SessionRecipe`, `GroundTruth`, `StimEvent`, `pack_stim_word`, `SETTLE_DURATION_S`; `encode` from `wl_sync.barcode`
-- Produces: `write_rhs(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0) -> Path` returning the subdirectory written; `RHS_PRE_ROLL_S = 0.35`; `STIM_STEP_SIZE_A = 10e-6`; `RHS_SAMPLE_RATE_HZ = 30_000.0`; `BARCODE_DIGITAL_BIT = 0`; `STROBE_DIGITAL_BIT = 1`
+- Produces: `write_rhs(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0) -> Path` returning the subdirectory written; `RHS_PRE_ROLL_S = 0.45` (**corrected from 0.35 during execution** — `wl_sync.barcode.IDLE_MIN_US` is 400_000 µs and `decode_edges` drops any frame with a shorter preceding idle, so 0.35 silently loses the first barcode: measured 11/12 decoded at 0.35, 12/12 at 0.45); `STIM_STEP_SIZE_A = 10e-6`; `RHS_SAMPLE_RATE_HZ = 30_000.0`; `BARCODE_DIGITAL_BIT = 0`; `STROBE_DIGITAL_BIT = 1`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -601,7 +607,10 @@ from wl_preproc.synth.timeline import apply_drift
 from wl_preproc.synth.truth import GroundTruth
 
 RHS_SAMPLE_RATE_HZ = 30_000.0
-RHS_PRE_ROLL_S = 0.35  # a third distinct tick origin — see syncbox.py
+RHS_PRE_ROLL_S = 0.45  # a third distinct tick origin — see syncbox.py
+# 0.45 not 0.35: wl_sync.barcode.IDLE_MIN_US is 400_000 us and decode_edges
+# drops any frame whose preceding idle is shorter, so a 0.35 pre-roll silently
+# loses the first barcode. Measured: 0.35 -> 11/12 decoded, 0.45 -> 12/12.
 STIM_STEP_SIZE_A = 10e-6
 UV_PER_BIT = 0.195
 NOISE_UV = 6.0
@@ -821,11 +830,63 @@ git commit -m "feat(synth): standalone-Intan stim profile in session assembly"
 
 - **Artifact removal (Phase 2)** — a blanking mask keyed to amplifier settle, with ground truth for which samples should be blanked
 - **Tier-B provenance (Phase 1c)** — the standalone-Intan case, which currently has no fixture
-- **Multi-system alignment** — three distinct tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS 0.35 s), so a pipeline that never computes an offset fails
+- **Multi-system alignment** — three distinct tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS **0.45 s**), so a pipeline that never computes an offset fails
 
 ## Deliberately excluded
 
+- **A parseable `info.rhs` header, and with it the SpikeInterface reader-as-oracle test.** Added to this list **2026-08-13 during execution**, having been discovered rather than planned — see the Architecture correction above. `info.rhs` is a 20-byte identification stub and `read_intan` cannot open the emitted session. The same reasoning as `dcamplifier.dat` applies and is why this is excluded rather than improvised: a header reverse-engineered from `neo`'s ~195-line parser would be a fabricated format, and the fixture's whole value is that it is not fabricated. **This is the first thing to fix in a Phase 1b follow-on**, and it gates anything that exercises the real ingest path through a third-party reader.
 - **`dcamplifier.dat`** — dtype unresolved, spec §6.3. Emitting it would fabricate a format.
 - **The traditional interleaved `.rhs` format** — the flat layout is a supported RHX option and is what these fixtures use. If the lab configures RHX to write traditional files, that is a follow-on.
 - **`analogin.dat` / `analogout.dat`** — the photodiode lands on an Intan analog input (spec §4.3), but nothing consumes it until Phase 3.
 - **A `Fault` member for stim.** Stim is a recording mode, not pathology. Pathological stim — amplifier saturation, or a settle flag that never clears — would be a real fault and is left for when something consumes it.
+
+---
+
+## Follow-on work, found during execution
+
+**Added 2026-08-13.** None of this was in the plan as written; all of it was surfaced by the
+review loop and is recorded here rather than in a scratch ledger, because the ledger is
+deleted and this file is not. Ordered by what gates the most.
+
+1. **A byte-correct `info.rhs` header, and the SpikeInterface reader-as-oracle test it
+   enables.** The largest gap. See the Architecture correction above and the first entry
+   under "Deliberately excluded". A strict-`xfail` test
+   (`tests/synth/test_rhs.py::test_spikeinterface_can_open_the_emitted_session`) now pins it:
+   the day a real header lands, that test XPASSes and fails the build, which is the signal to
+   wire up the oracle. **Gates anything exercising the real ingest path through a third-party
+   reader**, which is most of Phase 1c's tier-B work.
+
+2. **Two of 31 code words never reach `digitalin.dat`.** `build_timeline` places `BLOCK_END`
+   at `duration_s` and `SESSION_END` 1 ms later, while every emitter sizes its buffer at
+   `duration_s + <pre-roll>` — pre-roll only, no post-roll — so both fall past the last
+   sample. Pre-existing and not introduced by Phase 1b; RHS is simply the first emitter to
+   render code words as a strobe and make it visible. `test_every_code_word_gets_its_own_strobe_edge`
+   pins the shortfall at exactly two **bidirectionally**: it fails if a post-roll is added and
+   if a new truncation appears. Deliberately not fixed here — the choice is between giving
+   every emitter a post-roll (changes every emitted file's length) and moving Phase 1a's
+   session-closing markers, and that is a cross-emitter decision, not a Phase 1b patch.
+   A real Intan is still recording when those markers fire, so the fixture is currently
+   unrealistic at the session boundary.
+
+3. **The stim-geometry validator belongs on `BlockSpec`, not `SessionRecipe`.** Every input it
+   reads — `trial_duration_s`, `stim_per_trial` — is a `BlockSpec` field; nothing from
+   `SessionRecipe` participates. As written, an invalid `BlockSpec` constructs happily and is
+   only rejected on assembly. Moving it to a `model_validator` on `BlockSpec` rejects at
+   construction and lets the negative check become a plain `Field(ge=0)`.
+
+4. **The planting geometry is computed in two places** — `recipe.py`'s validator and
+   `timeline.py`'s planting loop derive `span` independently. If the planter's formula
+   changes, the validator keeps validating the old one and its guarantee silently evaporates,
+   which is a smaller instance of the very failure the validator was added to prevent. Fix:
+   one `stim_offsets(trial_duration_s, n_pulses) -> tuple[float, ...]` in `stim.py`, called by
+   both.
+
+5. **`tests/synth/test_spikeglx.py`'s spike-presence baseline** still uses a whole-channel
+   `np.std`, which lets planted signal inflate its own reference. Phase 1b replaced exactly
+   that pattern in the RHS sibling; SpikeGLX is a natural candidate for the same treatment.
+
+6. **Smaller, genuinely deferrable:** `unpack_stim_word` does not validate its input range;
+   `drift_ppm` is never exercised by an RHS test (the SpikeGLX sibling does not test it
+   either); `test_emission_is_deterministic` reuses one `truth` object and diffs 2 of the 5
+   emitted files; `np.clip(...).astype(np.int16)` truncates toward zero rather than rounding
+   (pre-existing, shared with SpikeGLX).
