@@ -13,7 +13,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **148 tests + 1 strict xfail** | Phase 0 contracts, Phase 1a synthetic generator, Phase 1b Intan RHS — all merged. |
+| **wl-preproc** | private, CI green, **171 tests, no xfails** | Phase 0 contracts, Phase 1a synthetic generator, Phase 1b Intan RHS, Phase 1b2 the RHS header — all merged. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -46,22 +46,30 @@ and rendered into both the stim words and the amplifier artifacts so the two can
 Three tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS 0.45 s), so a pipeline that
 never computes an offset fails.
 
-> **One thing it does *not* do, and the plan claimed it did.** `info.rhs` is a 20-byte
-> identification stub, **not** a parseable Intan header, so `spikeinterface.read_intan`
-> cannot open these fixtures — unlike the SpikeGLX ones. The plan justified the whole file
-> layout on "SpikeInterface reads them" and specified no test for it, so nothing caught it
-> until a review checked the claim. A **strict xfail** in `tests/synth/test_rhs.py` now pins
-> the gap: write a real header and that test XPASSes and fails the build, which is the signal
-> to wire up the oracle. Follow-on work is listed at the end of the Phase 1b plan.
+**wl-preproc Phase 1b2** — `wl_preproc/synth/rhs_header.py`. `info.rhs` was a 20-byte
+identification stub that `spikeinterface.read_intan` could not open; it is now a **byte-correct
+Standard Intan RHS header**, transcribed from the vendor document and cross-checked field by
+field against neo's own tables. `read_intan` opens the emitted sessions, returns the four
+channels at 30 kHz, reshapes `amplifier.dat` correctly and reports the declared stim step size
+as the Stim stream's gain. **The reader-as-oracle test that verified SpikeGLX now covers RHS
+too**, so the claim the Phase 1b plan made — and did not test — is now the thing CI enforces.
+The strict xfail that pinned the gap is gone, having done its job.
+
+> A header that parses is not the same as a header that is true, so
+> `write_rhs_header` refuses to write one that is not: a reader reshapes `amplifier.dat` by the
+> header's **enabled** channel count, and a declared count that differs from `n_ap_channels` —
+> or an amplifier channel marked `enabled=False` — silently mis-shapes every sample instead of
+> failing. It is checked in the writer rather than the recipe because `model_copy(update=...)`
+> does not re-run pydantic validators.
 
 ---
 
 ## What is next
 
 1. **Phase 1c — DataJoint schemas and guardrails, ingest watcher, timebase fitting,
-   coverage, responder.** Larger than one plan; expect to split it. **Decide first whether
-   its tier-B work needs reader-openable Intan fixtures** — if it does, the `info.rhs` header
-   follow-on stops being follow-on and becomes 1c's first task.
+   coverage, responder.** Larger than one plan; expect to split it. Its tier-B work can
+   assume reader-openable Intan fixtures: `--profile stim` sessions open with `read_intan`
+   today, so 1c plans against them directly rather than around them.
 2. **Phase 2 onward** — see spec §12.
 
 **Not software, and on a clock: order the PCIe-6363.** §12. Lead time from NI is 12–13 weeks,
@@ -128,6 +136,13 @@ defensible call, but it is a reversal rather than a gap.
   emitted fixtures cannot in fact be opened by `read_intan`. Every task passed its own review,
   because the claim lived in the Architecture paragraph and in no task's diff. **When a plan
   argues from a capability, check that some task actually exercises it.**
+- **neo cannot parse a header out of `io.BytesIO`.** `read_variable_header` reads every
+  non-QString field with `np.fromfile`, which needs a real OS file descriptor, so a BytesIO
+  raises `UnsupportedOperation: fileno` on the very first field — before a byte of header
+  content is examined. Phase 1b2's plan specified four tests that way and every one of them
+  failed identically, which reads exactly like a broken header when the header is fine. **Any
+  test that parses an Intan header must hand neo an open file**, so round-trip through
+  `tmp_path` rather than staying in memory.
 - **Check `git log main..<branch>` before merging, and read it.** Not doing so once
   fast-forwarded twenty unrelated commits of an unmerged feature onto `wl-works` `main`.
 
