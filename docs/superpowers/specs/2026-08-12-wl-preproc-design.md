@@ -834,7 +834,7 @@ Refines wl.works Plan 24 §1.2, which makes one NWB one activation but treats al
 
 | Kind | Origin | Block set | Multiplicity |
 |---|---|---|---|
-| **Canonical** | Automatic, X hours after session data lands | All blocks **within one recording montage** with no `bad` `block_neural_assertion` for that probe | Exactly one current per `(session, montage)` |
+| **Canonical** | Automatic, **12 h** after session data lands (§8.3.1) | All blocks **within one recording montage** with no `bad` `block_neural_assertion` for that probe | Exactly one current per `(session, montage)` |
 | **Derivative** | Requested via wl.works | Any hand-picked subset; may span sessions for a chronic array | Unbounded, additive |
 
 #### The recording montage
@@ -855,7 +855,7 @@ wl.works already models the other half: three penetrations in one rig day are **
 
 **That leaves one failure mode, and it is closed by refusing to guess.** Those rows are human-entered and may be late; with none present the pipeline would see one undifferentiated session and sort straight across a move, silently. So: **no insertion record → no canonical.** The session is quarantined and reported as "waiting on ELN entry" through the existing tier-D machinery. A silent bad sort becomes a visible blocked one.
 
-The consequence is that the X-hour window must be long enough for **both** block rows and insertion rows to exist — open items 9 and 10 compound into a single dependency on the ELN being current.
+The consequence is that the delay window must be long enough for **both** block rows and insertion rows to exist — items 9 and 10 compound into a single dependency on the ELN being current. **Both are now closed; §8.3.1 records how, and why the answer makes automatic re-firing load-bearing rather than optional.**
 
 > **This corrects a wl.works amendment made earlier in the same session.** The partial unique index committed to Plan 24 §10.4 keys on `(animal_session_id) WHERE role = 'canonical'`, which permits exactly one canonical per session and therefore makes the three-penetration case unrepresentable. It must key on the montage as well (§14 item 10).
 
@@ -868,6 +868,56 @@ The consequence is that the X-hour window must be long enough for **both** block
 > Cost: roughly 25 GB per derived NWB against ~180 GB of compressed raw per session, so two or three canonical generations is a modest overhead — and since NWBs never go cold, they stay online.
 >
 > This is also the argument for a generous X-hour window: **the window is what makes regeneration rare.**
+
+#### 8.3.1 The delay, the block rows, and why retry stops being optional
+
+> **Closes open items 9 and 10, 2026-08-13.** The full argument is in
+> `docs/handoffs/2026-08-13-open-item-9-block-rows.md`; this records the rulings and their
+> consequences.
+
+**Item 9 — block rows are created by the session planner in wl.works, and wl-preproc never
+writes them.** The pipeline decodes block boundaries from event codes and *cross-validates*
+against `animal_session_block`, exactly as §4.2 requirement 2 already specified. Three cases:
+
+| ELN state | Behaviour |
+|---|---|
+| Rows exist, boundaries agree | Proceed; the canonical activation fires. |
+| Rows exist, boundaries **disagree in count or position** | QC hard-fail. §4.2 req 2, unchanged. |
+| Rows absent | Quarantine, reported as "waiting on ELN entry" through the tier-D machinery — **and the report carries the decoded boundaries.** |
+
+**The decoded boundaries in that report are a decision aid, not a write.** The human still
+authors the row; they simply do not reconstruct boundaries the machine already computed. This
+requires nothing of wl.works except a place to display them, and if that never exists the
+behaviour degrades to the plain rule with nothing else changing.
+
+**Why not the alternative.** Having wl-preproc *propose* rows for wl.works to adopt would
+amend §4.2 — a frozen §3.5 interface — depend on item 12 being resolved first, and require a
+written exception to wl.works' rule that nothing reads a precondition and then writes on it,
+a section that repository requires of every spec. §8.3 above already answered the same shape
+of question for montage boundaries by refusing to guess; a block is *less* safe to infer than
+a montage, because an event code carries no `task_type`, no template and no experiment link.
+
+**Item 10 — the delay is 12 hours.** Data landing at 18:00 activates at 06:00 and a sort
+exists mid-morning, which is §8.3's "a sort exists by morning" read literally.
+
+> **This is the tight end of the range, and it reverses this section's own leaning.** The
+> paragraph above argues for a *generous* window because the window is what makes
+> regeneration rare. **12 h buys morning availability and pays in regeneration**, which is the
+> requester's trade to make and is recorded here as a deliberate choice rather than an
+> oversight. It is a safe trade in one specific sense: because a count mismatch hard-fails and
+> an absent row quarantines, a short window produces **more blocked sessions, never a wrong
+> canonical**. The failure mode is visible and self-correcting.
+
+**The consequence, and it is the load-bearing one: automatic re-firing is now required, not a
+nicety.** At 48 h a quarantined session would be rare enough to re-trigger by hand. At 12 h
+the ELN will frequently not be current, so quarantine is an ordinary occurrence and **the
+activation must re-evaluate once the missing rows land** — otherwise every late ELN entry
+strands a session until somebody notices. Whatever implements the canonical trigger must treat
+"quarantined, waiting on ELN" as a *retryable* state with no manual step, not a terminal one.
+
+**Item 12 shrinks but does not close.** No machine creates a block under this ruling, so no
+machine actor is needed *for blocks*. The question remains open for the canonical activation
+row itself.
 
 ### 8.4 Compression and archival
 
@@ -1123,10 +1173,10 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 6 | DataJoint `make` fetch/compute/insert splitting API | Phase 1 |
 | 7 | MUAe and compression-strategy citations | Phase 2 |
 | 8 | Event code range allocation finalized against real tasks | Phase 0 |
-| 9 | **Who creates `animal_session_block` rows, and when.** They are human-created in wl.works, but the canonical activation fires X hours after landing and needs a block set to select over. Either the session planner's rows pre-exist and wl-preproc matches its detected boundaries against them, or wl-preproc proposes blocks from event codes and wl.works adopts them — the second is more robust but writes into wl.works from a machine, which several rules there resist | Phase 0 — it gates the canonical trigger |
-| 10 | **The X-hour canonical delay value.** Long enough that regeneration is rare (§8.3), short enough that a sort exists by morning | Phase 0 |
+| 9 | ~~Who creates `animal_session_block` rows, and when~~ **Closed 2026-08-13** — the session planner creates them in wl.works; wl-preproc cross-validates its decoded boundaries and **never writes**. An absent row quarantines and reports, carrying the decoded boundaries as a decision aid. §8.3.1 | ~~Phase 0~~ |
+| 10 | ~~The X-hour canonical delay value~~ **Closed 2026-08-13 — 12 hours.** The tight end of the range: it buys morning availability and pays in regeneration, and it makes automatic re-firing of a quarantined activation load-bearing rather than optional. §8.3.1 | ~~Phase 0~~ |
 | 11 | Whether `seed` and `device` are pinned to the activation or may differ across its probe runs. wl.works flags this as unsettled; **wl-preproc is the machine that would pin them**, so this is answerable from here | Phase 2 |
-| 12 | Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11) | Phase 1 |
+| 12 | Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11). **Narrowed 2026-08-13 by item 9's closure**: no machine creates a block, so this is now only about the activation row itself | Phase 1 |
 | 13 | Who renders the "checked good" verdict (§8.5), and whether it is entered here or in wl.works. **Nothing in wl.works models it and it was declined rather than folded in**, so if it lives there it needs a row somebody designs | Phase 3 |
 | 14 | Chunk shape and per-dataset compression settings that keep the NWB efficiently range-readable (§8.1.2). Measurable on synthetic files before January | Phase 3 |
 | 15 | Whether the derived-vs-recorded channel map comparison (§11.6) should ever *block* a session or only warn. Blocking makes wl.works' pinout a hard dependency of preprocessing | Phase 2 |

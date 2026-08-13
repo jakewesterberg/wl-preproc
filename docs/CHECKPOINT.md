@@ -150,8 +150,8 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Open items
 
-Spec §13 carries the full list. Two are worth naming here because they gate other work, and
-one is named because it is now a schedule risk rather than an open question:
+Spec §13 carries the full list. None now gate other work — these are named because each
+leaves something behind that does:
 
 - **Item 4 is closed (2026-08-13).** MonkeyLogic declares behavioral-code lines multiline
   with no cap, so **the 16-bit protocol was never at risk** and no frozen contract moved.
@@ -159,11 +159,21 @@ one is named because it is now a schedule risk rather than an open question:
   12–13 week lead time from NI** (§12), which is the least slack of any purchase on that list
   against January. The 6321/6323 went end-of-life 31 Dec 2024 — and the 6323 is the board
   NIMH's own documentation uses in its examples, so it is easy to inherit by accident.
-- **Item 9 — who creates `animal_session_block` rows, and when.** Gates the automatic
-  canonical activation, since it needs a block set to select over. Owned by whoever plans
-  wl.works' 11a.
-- **Item 10 — the X-hour canonical delay.** The requester's to set; long enough that
-  regeneration is rare, short enough that a sort exists by morning.
+- **Items 9 and 10 are closed (2026-08-13), and together they hand Phase 1c a requirement.**
+  Block rows are created by the session planner in wl.works; wl-preproc cross-validates its
+  decoded boundaries and **never writes**. An absent row quarantines and reports, carrying the
+  decoded boundaries so the person entering the row has the machine's work in front of them.
+  The canonical delay is **12 hours** — the tight end, buying morning availability and paying
+  in regeneration. §8.3.1, argued in `docs/handoffs/2026-08-13-open-item-9-block-rows.md`.
+  **The requirement: at 12 h the ELN will often not be current, so quarantine is ordinary and
+  the activation must re-fire automatically once the missing rows land.** At 48 h that could
+  have been a manual nudge; at 12 h it cannot. Whatever implements the canonical trigger must
+  treat "waiting on ELN" as retryable with no human step.
+- **Item 12 narrowed.** No machine creates a block, so the actor question is now only about
+  the canonical activation row itself.
+- **One question is out with the wl.works owner**, and nothing blocks on the answer: can the
+  block-entry UI display a pipeline-supplied boundary proposal? If no, the rule above still
+  holds and only the decision aid is lost.
 
 ---
 
