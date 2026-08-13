@@ -4,7 +4,11 @@
 
 **Goal:** Extend the synthetic generator to emit Intan RHS sessions with stimulation, so the artifact-removal stage and the standalone-Intan provenance tier have fixtures with known ground truth.
 
-**Architecture:** Emit the **One File Per Signal Type** layout — flat `.dat` arrays plus an `info.rhs` header — rather than the traditional interleaved 128-sample block format. Flat arrays are far easier to generate correctly, SpikeInterface reads them, and the same reader-as-oracle test that verified SpikeGLX applies here. Stim state is planted first as ground truth, then rendered into both the stim words and the amplifier artifacts, so the two cannot disagree.
+**Architecture:** Emit the **One File Per Signal Type** layout — flat `.dat` arrays plus an `info.rhs` header — rather than the traditional interleaved 128-sample block format. Flat arrays are far easier to generate correctly. Stim state is planted first as ground truth, then rendered into both the stim words and the amplifier artifacts, so the two cannot disagree.
+
+> **Corrected 2026-08-13, during execution.** This paragraph originally continued *"SpikeInterface reads them, and the same reader-as-oracle test that verified SpikeGLX applies here."* **That is false as built, and it was the stated justification for choosing this layout.** Task 3 writes `info.rhs` as a 20-byte identification stub — magic number, version, sample rate, stim step size, channel count — not a parseable Intan header, so `spikeinterface.extractors.read_intan` fails on it (`IndexError` while parsing channel definitions). No task in this plan specified the oracle test its own Architecture and Tech Stack promised, so nothing caught it.
+>
+> **The gap is recorded rather than closed here.** `neo`'s `read_rhs` is ~195 lines of version-dependent field sets, QString channel names and per-channel signal-group structs; emitting that by reverse-engineering a reader is how a format gets fabricated, which is precisely what §6.3's `dcamplifier.dat` ruling refuses. A byte-correct header needs the vendor document in hand and is its own task. **Until it exists, these fixtures are readable by this repository's own code and not by a third-party reader** — which is fine for the stim-word and artifact assertions Phase 2 needs, and *not* fine for anything that tests the real ingest path through SpikeInterface. See "Deliberately excluded".
 
 **Tech Stack:** Python 3.11+, NumPy, pytest, SpikeInterface (test-only, as the format oracle)
 
@@ -428,7 +432,7 @@ git commit -m "feat(synth): plant stim events per trial as ground truth"
 
 **Interfaces:**
 - Consumes: `SessionRecipe`, `GroundTruth`, `StimEvent`, `pack_stim_word`, `SETTLE_DURATION_S`; `encode` from `wl_sync.barcode`
-- Produces: `write_rhs(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0) -> Path` returning the subdirectory written; `RHS_PRE_ROLL_S = 0.35`; `STIM_STEP_SIZE_A = 10e-6`; `RHS_SAMPLE_RATE_HZ = 30_000.0`; `BARCODE_DIGITAL_BIT = 0`; `STROBE_DIGITAL_BIT = 1`
+- Produces: `write_rhs(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0) -> Path` returning the subdirectory written; `RHS_PRE_ROLL_S = 0.45` (**corrected from 0.35 during execution** — `wl_sync.barcode.IDLE_MIN_US` is 400_000 µs and `decode_edges` drops any frame with a shorter preceding idle, so 0.35 silently loses the first barcode: measured 11/12 decoded at 0.35, 12/12 at 0.45); `STIM_STEP_SIZE_A = 10e-6`; `RHS_SAMPLE_RATE_HZ = 30_000.0`; `BARCODE_DIGITAL_BIT = 0`; `STROBE_DIGITAL_BIT = 1`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -601,7 +605,10 @@ from wl_preproc.synth.timeline import apply_drift
 from wl_preproc.synth.truth import GroundTruth
 
 RHS_SAMPLE_RATE_HZ = 30_000.0
-RHS_PRE_ROLL_S = 0.35  # a third distinct tick origin — see syncbox.py
+RHS_PRE_ROLL_S = 0.45  # a third distinct tick origin — see syncbox.py
+# 0.45 not 0.35: wl_sync.barcode.IDLE_MIN_US is 400_000 us and decode_edges
+# drops any frame whose preceding idle is shorter, so a 0.35 pre-roll silently
+# loses the first barcode. Measured: 0.35 -> 11/12 decoded, 0.45 -> 12/12.
 STIM_STEP_SIZE_A = 10e-6
 UV_PER_BIT = 0.195
 NOISE_UV = 6.0
@@ -821,10 +828,11 @@ git commit -m "feat(synth): standalone-Intan stim profile in session assembly"
 
 - **Artifact removal (Phase 2)** — a blanking mask keyed to amplifier settle, with ground truth for which samples should be blanked
 - **Tier-B provenance (Phase 1c)** — the standalone-Intan case, which currently has no fixture
-- **Multi-system alignment** — three distinct tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS 0.35 s), so a pipeline that never computes an offset fails
+- **Multi-system alignment** — three distinct tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS **0.45 s**), so a pipeline that never computes an offset fails
 
 ## Deliberately excluded
 
+- **A parseable `info.rhs` header, and with it the SpikeInterface reader-as-oracle test.** Added to this list **2026-08-13 during execution**, having been discovered rather than planned — see the Architecture correction above. `info.rhs` is a 20-byte identification stub and `read_intan` cannot open the emitted session. The same reasoning as `dcamplifier.dat` applies and is why this is excluded rather than improvised: a header reverse-engineered from `neo`'s ~195-line parser would be a fabricated format, and the fixture's whole value is that it is not fabricated. **This is the first thing to fix in a Phase 1b follow-on**, and it gates anything that exercises the real ingest path through a third-party reader.
 - **`dcamplifier.dat`** — dtype unresolved, spec §6.3. Emitting it would fabricate a format.
 - **The traditional interleaved `.rhs` format** — the flat layout is a supported RHX option and is what these fixtures use. If the lab configures RHX to write traditional files, that is a follow-on.
 - **`analogin.dat` / `analogout.dat`** — the photodiode lands on an Intan analog input (spec §4.3), but nothing consumes it until Phase 3.
