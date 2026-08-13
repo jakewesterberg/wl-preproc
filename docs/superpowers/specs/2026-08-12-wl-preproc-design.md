@@ -243,8 +243,29 @@ Trials can be as short as 3 s, so a single-trial segment always clears the one-b
 1. Every trial start is followed by an explicit **trial-number payload**. Trial matching is by ID, never by ordinal position — one dropped code must not shift every subsequent trial.
 2. Every **block start** emits a block marker, and blocks are the unit wl.works asserts quality against (§5.2.1). Block boundaries decoded here are cross-validated against wl.works' `animal_session_block` rows.
 3. Multi-word payloads carry a **checksum word**.
-4. Strobe timing: data stable ≥0.5 ms before and after a ≥1 ms strobe (≈30 samples of margin each side at 30 kHz).
-5. MonkeyLogic's digital output is software-timed; the *recorded* strobe edge establishes true event time, so ML scheduling jitter is measured rather than inherited.
+4. Strobe timing: **T1 = 500 µs, T2 = 250 µs**, in MonkeyLogic's own terms (§4.2.1).
+5. MonkeyLogic's digital output is software-timed; the *recorded* strobe edge establishes true event time, so ML scheduling jitter is measured rather than inherited. **Blocking is not jitter** — see §4.2.1 for the per-code cost, which this rule does not cover.
+
+#### 4.2.1 Strobe timing, in the emitter's terms
+
+> **Rewritten 2026-08-13, closing open item 4.** Requirement 4 previously read *"data stable ≥0.5 ms before and after a ≥1 ms strobe (≈30 samples of margin each side at 30 kHz)."* That describes a setup interval followed by a separate strobe pulse. **NIMH MonkeyLogic does not implement that shape**, so the sentence could not be transcribed into the software that would emit it — the same class of error as the Intan 1-based-bit trap (§6.3): correct about the intent, wrong about the mechanism.
+
+MonkeyLogic exposes exactly two numbers, `T1` and `T2`, both in **microseconds** (main menu → Strobe → [Spec]; defaults 125/125). Their meaning, from the timing diagram shipped in `mlimagedata.mat`:
+
+- **Data bits and the strobe assert together** at the start of T1. There is no separate setup interval.
+- **T1 is the strobe pulse width**, and the **latching edge is its far end**. Data has therefore been stable for T1 when the receiver latches — T1 *is* the setup time, rather than adding to it.
+- **T2 is the post-latch hold**, during which data remains valid.
+- Latch polarity is selectable (rising or falling). A third mode, "send & clear," drops the data at the latch and needs no strobe bit; **it is not used here** — it makes code recovery depend on change detection rather than on an edge.
+
+| | Value | At 30 kHz |
+|---|---|---|
+| T1 (strobe pulse; data valid this long before latch) | **500 µs** | 15 samples |
+| T2 (post-latch hold) | **250 µs** | 7.5 samples |
+| **Per code, blocking** | **750 µs** | |
+
+**The cost is load-bearing, because `eventmarker()` blocks the task loop for T1+T2.** Requirements 1 and 3 make a trial start at least three codes — marker, trial-number payload, checksum — so **a trial start stalls MonkeyLogic's 1 kHz loop for ≈2.25 ms**. That is affordable in an ITI and **must never be placed inside a timing-critical epoch**; a code emitted at stimulus onset costs 750 µs of blocked behaviour on its own.
+
+**Why 500/250 and not the literal 1000/500.** Fifteen samples of strobe at 30 kHz is ample for offline edge-finding, and the Pi — the sole recorder on training days — captures at sub-µs via PIO and is nowhere near the constraint. Halving the pulse halves the behavioural stall. The floor is not the 30 kHz samplers but **inter-line skew through the breakout PCB's buffers and optoisolators** (§4.4); at 500 µs that skew is negligible, and because the latch is a single edge at the end of T1, skew across the 16 data lines is harmless anyway — they need only be settled before the latch, not simultaneous.
 
 **Two acquisition-provenance stamps, per block.** wl.works row 29 requires `animal_session_block` to carry `acquisitionBuildId` and `stimulusCalibrationId`, both **stamped by the task itself** rather than by a person or the rig machine. Nothing in the protocol above carries them, so they must reach the pipeline via the session manifest or the task file, and from there into `Block` and the NWB.
 
@@ -1081,6 +1102,8 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 **Purchasing recommendations arising from this design:**
 
 - **NI PXIe-6363**, not the 6341 (8 waveform DI cannot fit 16-bit codes + strobe + barcode). Avoid USB NI devices for digital input — SpikeGLX warns of digital buffer overruns.
+- **NI PCIe-6363 for the task PC** — a separate board from the recording PXIe-6363 above, on a different machine. 48 DIO, of which port 0's 32 lines are hardware-timed, so all 17 emitted lines (§4.4) fit on P0 alone. Same X-series family as the recording card: one driver stack, one pinout convention. **Do not spec the PCIe-6321 or 6323** — both were discontinued 31 Dec 2024, and the 6323 is what NIMH's own DAQ-toolbox documentation uses in its examples, which makes it an easy default to inherit by accident. **Lead time from NI is 12–13 weeks**, so this is the purchasing item on this list with the least slack against January.
+- **The task PC is Windows x64.** Not a preference — NIMH MonkeyLogic ships its DAQ layer only as `mdqmex.mexw64`, so there is no other target.
 - **Raspberry Pi 5** per rig, plus one for bench PIO development. Not Pi 4 — `pigpio` is Pi-4-only and unmaintained (§4.3).
 - **Intan I/O expander** at the main rig; base RHS suffices at a satellite rig (barcode + strobe = 2 lines).
 - **≥10 GbE** server↔NAS and rig↔server.
@@ -1095,7 +1118,7 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 1 | NWB representation for extracellular electrical stim; may need an extension | Phase 3 |
 | 2 | Whether OpenIrisDPI surfaces Spinnaker chunk data (per-frame GPIO state) | Phase 3 (enhancement only) |
 | 3 | ~~Exact `.rhs` stim-flag field layout~~ **Closed 2026-08-13** — bit layout in §6.3, including the 1-based numbering trap. One residual: `dcamplifier.dat` dtype, where the vendor document contradicts itself | ~~Phase 2~~ |
-| 4 | MonkeyLogic 16-line behavioral code configuration on the chosen task-PC DAQ | Phase 0 |
+| 4 | ~~MonkeyLogic 16-line behavioral code configuration on the chosen task-PC DAQ~~ **Closed 2026-08-13** — NIMH ML declares Behavioral Codes multiline with **no line cap** (`mliolist.m`, and the third column is a boolean flag rather than a count); codes are `uint16`, covering the full range in §4.2. **The 16-bit protocol is not at risk and no frozen contract moves.** Board chosen in §12; strobe timing restated in §4.2.1, which is where the real finding landed. One residual: the packing itself is inside a closed MEX, so this is the emitter's declared contract and **not a bench test** | ~~Phase 0~~ |
 | 5 | Tolerance for the ingest-time task-PC vs. sync-box clock cross-check | Phase 1 |
 | 6 | DataJoint `make` fetch/compute/insert splitting API | Phase 1 |
 | 7 | MUAe and compression-strategy citations | Phase 2 |

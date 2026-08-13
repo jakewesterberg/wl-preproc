@@ -1,6 +1,6 @@
 # Where this build actually is
 
-**Last updated 2026-08-13**, at `wl-preproc` commit `0d95da5`. Check `git log --oneline -1`
+**Last updated 2026-08-13**, at `wl-preproc` commit `16d8fd9`. Check `git log --oneline -1`
 against that; if it has moved, this file is stale and the spec wins.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
@@ -82,6 +82,15 @@ defensible call, but it is a reversal rather than a gap.
 - **Intan numbers bits from 1.** "Bit 16 (the MSB)" is bit 15 zero-based; reading the
   document literally keys the artifact blanking mask to charge recovery instead of amplifier
   settle, silently. §6.3.
+- **MonkeyLogic's strobe `T1` is the pulse, not a setup interval before it**, and the latch
+  is `T1`'s far edge. §4.2 originally specified "data stable ≥0.5 ms before and after a ≥1 ms
+  strobe," which is a shape ML does not implement, so the requirement could not be
+  transcribed into the software that emits it. Same class as the Intan trap: right about the
+  intent, wrong about the mechanism. §4.2.1.
+- **`eventmarker()` blocks the task loop for `T1 + T2`.** Not jitter — a hard stall, on a
+  1 kHz software-timed system, and §4.2's "jitter is measured rather than inherited" does not
+  cover it. A multi-word trial start costs ≈2.25 ms and must stay out of timing-critical
+  epochs. §4.2.1.
 - **`requires-python <3.12` was invented** and propagated by being cited rather than
   re-derived. There is no Python constraint from Pascal. §6.6.
 - **Barcode alignment is 2.0 s / 3.0 s, not 2.2 s.** The decoder requires a preceding idle,
@@ -93,11 +102,15 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Open items
 
-Spec §13 carries the full list. Three are worth naming here because they gate other work:
+Spec §13 carries the full list. Two are worth naming here because they gate other work, and
+one is named because it is now a schedule risk rather than an open question:
 
-- **Item 4 — MonkeyLogic's 16-line DAQ configuration.** Could still force the event protocol
-  back to 8-bit, which would change a frozen contract. A purchasing check, not a design
-  decision.
+- **Item 4 is closed (2026-08-13).** MonkeyLogic declares behavioral-code lines multiline
+  with no cap, so **the 16-bit protocol was never at risk** and no frozen contract moved.
+  What it left behind is a *procurement clock*: the task-PC board is an **NI PCIe-6363 with a
+  12–13 week lead time from NI** (§12), which is the least slack of any purchase on that list
+  against January. The 6321/6323 went end-of-life 31 Dec 2024 — and the 6323 is the board
+  NIMH's own documentation uses in its examples, so it is easy to inherit by accident.
 - **Item 9 — who creates `animal_session_block` rows, and when.** Gates the automatic
   canonical activation, since it needs a block set to select over. Owned by whoever plans
   wl.works' 11a.
