@@ -22,6 +22,9 @@
 - **No bare `.delete()` anywhere in the codebase.** §10. Task 6 makes this a CI assertion.
 - **Every table gets a docstring comment line** (`# …` as the first line of `definition`) documenting its key, per §10's "keys documented in-schema".
 - **Determinism and idempotence:** activating an already-activated schema must be a no-op, so the suite can run repeatedly against one container.
+- **ONE schema prefix per process — the whole test suite uses `"t_"`.** Each Element module holds a single process-lifetime `schema` object; once bound to a name, activating it under a *different* name raises `DataJointError: The schema is already activated for schema …`. `pipeline.activate`'s own idempotence guard does not catch this, because it only short-circuits a repeat of the *same* prefix — a different one passes straight through into the error.
+
+> **Corrected 2026-08-13 during execution, and it invalidated this plan's original test structure.** Tasks 2–7 were each written with their own prefix (`t1_`, `core_`, `cov_`, `ps_`, `req_`, `guard_`, `daemon_`). Verified against a live MySQL: `pipeline.activate(prefix="a_")` succeeds and `pipeline.activate(prefix="b_")` immediately after raises. Every test module after the first to run in a pytest process would have failed, and the failure would have looked like a schema bug rather than a fixture-design bug. All prefixes are now `"t_"`; the per-module `is_activated()` / `_activated` guards then make every call after the first a no-op, which is what the original design wanted and did not get.
 
 ---
 
@@ -314,7 +317,7 @@ import pytest
 def test_all_four_elements_activate(dj_conn):
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t1_")
+    pipeline.activate(prefix="t_")
     for name in ("lab", "subject", "session", "event"):
         assert getattr(pipeline, name) is not None, name
 
@@ -322,7 +325,7 @@ def test_all_four_elements_activate(dj_conn):
 def test_session_table_exists_and_is_keyed_as_elements_expects(dj_conn):
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t2_")
+    pipeline.activate(prefix="t_")
     assert set(pipeline.session.Session.primary_key) == {"subject", "session_datetime"}
 
 
@@ -349,8 +352,8 @@ def test_activation_is_idempotent(dj_conn):
     """The suite activates repeatedly against one container."""
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t3_")
-    pipeline.activate(prefix="t3_")
+    pipeline.activate(prefix="t_")
+    pipeline.activate(prefix="t_")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -395,7 +398,7 @@ Experimenter = User
 
 # Names element-animal and element-session resolve against this module.
 Subject = subject.Subject
-Session = None  # rebound by activate(); element-event resolves it from here
+Session = session.Session
 
 _activated: set[str] = set()
 
@@ -436,10 +439,23 @@ def activate(prefix: str = "wlpp") -> None:
 > `.venv/bin/python -c "import inspect, element_event.trial as t; print(inspect.signature(t.activate))"`
 > and adjust. Record what you found in your report.
 
-> **`Session` is rebound rather than imported.** `element-event` resolves `Session`
-> from this module's namespace, but it does not exist until `element-session` is
-> activated. Assigning `None` up front and rebinding inside `activate()` is what
-> makes the order work; importing it at module scope cannot.
+> **Corrected 2026-08-13 during execution — the paragraph that stood here was wrong.**
+> It read: *"`Session` is rebound rather than imported. `element-event` resolves `Session`
+> from this module's namespace, but it does not exist until `element-session` is activated.
+> Assigning `None` up front and rebinding inside `activate()` is what makes the order work;
+> importing it at module scope cannot."*
+>
+> **`session.Session` exists at import time**, exactly as `subject.Subject` does — verified
+> directly. And `Session = None` does not merely fail to help, it actively breaks the first
+> activation: `element_session.session_with_datetime` declares four tables that reference
+> `Session` (`SessionDirectory`, `SessionExperimenter`, `SessionNote`, `ProjectSession`), and
+> `Schema.activate()` merges the linking module's `__dict__` **over** each table's own
+> declaration context — so a stale `None` in `pipeline` shadows the correctly-bound class
+> that `element-session` already had.
+>
+> **Bind it eagerly:** `Session = session.Session`, alongside `Subject`. The instruction not
+> to "clean this up" was mine and it was wrong; it is recorded because the wrong version is
+> what a reader would otherwise reconstruct from the same reasoning.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -477,7 +493,7 @@ import pytest
 
 from wl_preproc.contracts.paths import SYSTEMS
 
-PREFIX = "core_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -723,7 +739,7 @@ import datetime
 
 import pytest
 
-PREFIX = "cov_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -766,7 +782,7 @@ def test_coverage_states_are_exactly_full_partial_absent(cov):
 # tests/schema/test_paramset.py
 import pytest
 
-PREFIX = "ps_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -1000,7 +1016,7 @@ import datetime
 
 import pytest
 
-PREFIX = "req_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -1320,7 +1336,7 @@ import pathlib
 import numpy as np
 import pytest
 
-PREFIX = "guard_"
+PREFIX = "t_"
 
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[2] / "wl_preproc"
 
@@ -1478,7 +1494,7 @@ import datajoint as dj
 import numpy as np
 import pytest
 
-PREFIX = "daemon_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
