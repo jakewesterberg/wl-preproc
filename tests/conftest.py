@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datajoint as dj
 import pytest
-from testcontainers.mysql import MySqlContainer
+from testcontainers.community.mysql import MySqlContainer
 
 from wl_preproc.schema._compat import apply_datajoint_compat
 

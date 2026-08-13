@@ -16,9 +16,14 @@ dependencies = [
     # The Elements are mid-migration to DataJoint 2.x and no fork is taken.
     # element-animal pins to the open PR that does its migration, which is zero
     # divergence by construction; the other three already activate cleanly on
-    # 2.3. element-array-ephys is deliberately absent — its issue #230 is
-    # unfixed and its tables silently destroy array data under 2.x. See spec
-    # section 5.1.1 and the Phase 2 precondition recorded there.
+    # 2.3 in the specific sense of .activate(db_name) — that is NOT a claim
+    # that they need no compatibility handling. element_session and
+    # element_event both still call the lowercase dj.schema() at import time
+    # and raise AttributeError without wl_preproc.schema._compat's shim; see
+    # that module's docstring. element-array-ephys is deliberately absent —
+    # its issue #230 is unfixed and its tables silently destroy array data
+    # under 2.x. See spec section 5.1.1 and the Phase 2 precondition recorded
+    # there.
     "element-lab @ git+https://github.com/datajoint/element-lab.git@main",
     "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@compat-fixes",
     "element-session @ git+https://github.com/datajoint/element-session.git@main",
@@ -45,7 +50,7 @@ dependencies = [
 # their own emitted session in tests/synth/, and Intan is checked past merely
 # opening: the amplifier stream is reshaped correctly and the Stim stream's gain
 # is the stim step size the header declares.
-dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.0"]
+dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.0,<5"]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
@@ -59,3 +64,14 @@ include = ["wl_preproc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/conftest.py is the root conftest, so it imports datajoint at
+# collection time for every test in the suite, not only the schema tests.
+# datajoint itself raises two warnings on import/first-config-read that this
+# project has no control over. Each entry below matches the exact message
+# (as a startswith-regex, per Python's warnings module) and the exact module
+# that raises it — not category alone — so an unrelated DeprecationWarning or
+# UserWarning from anywhere else in the suite still surfaces.
+filterwarnings = [
+    "ignore:datajoint.migrate is deprecated and is scheduled for removal in DataJoint 2.4 or 2.5. Complete your schema migrations while on DataJoint 2.3 or earlier.:DeprecationWarning:datajoint$",
+    "ignore:No datajoint.json found. Using defaults and environment variables. Run :UserWarning:datajoint\\.settings$",
+]
