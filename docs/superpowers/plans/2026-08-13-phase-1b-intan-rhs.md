@@ -839,3 +839,54 @@ git commit -m "feat(synth): standalone-Intan stim profile in session assembly"
 - **The traditional interleaved `.rhs` format** — the flat layout is a supported RHX option and is what these fixtures use. If the lab configures RHX to write traditional files, that is a follow-on.
 - **`analogin.dat` / `analogout.dat`** — the photodiode lands on an Intan analog input (spec §4.3), but nothing consumes it until Phase 3.
 - **A `Fault` member for stim.** Stim is a recording mode, not pathology. Pathological stim — amplifier saturation, or a settle flag that never clears — would be a real fault and is left for when something consumes it.
+
+---
+
+## Follow-on work, found during execution
+
+**Added 2026-08-13.** None of this was in the plan as written; all of it was surfaced by the
+review loop and is recorded here rather than in a scratch ledger, because the ledger is
+deleted and this file is not. Ordered by what gates the most.
+
+1. **A byte-correct `info.rhs` header, and the SpikeInterface reader-as-oracle test it
+   enables.** The largest gap. See the Architecture correction above and the first entry
+   under "Deliberately excluded". A strict-`xfail` test
+   (`tests/synth/test_rhs.py::test_spikeinterface_can_open_the_emitted_session`) now pins it:
+   the day a real header lands, that test XPASSes and fails the build, which is the signal to
+   wire up the oracle. **Gates anything exercising the real ingest path through a third-party
+   reader**, which is most of Phase 1c's tier-B work.
+
+2. **Two of 31 code words never reach `digitalin.dat`.** `build_timeline` places `BLOCK_END`
+   at `duration_s` and `SESSION_END` 1 ms later, while every emitter sizes its buffer at
+   `duration_s + <pre-roll>` — pre-roll only, no post-roll — so both fall past the last
+   sample. Pre-existing and not introduced by Phase 1b; RHS is simply the first emitter to
+   render code words as a strobe and make it visible. `test_every_code_word_gets_its_own_strobe_edge`
+   pins the shortfall at exactly two **bidirectionally**: it fails if a post-roll is added and
+   if a new truncation appears. Deliberately not fixed here — the choice is between giving
+   every emitter a post-roll (changes every emitted file's length) and moving Phase 1a's
+   session-closing markers, and that is a cross-emitter decision, not a Phase 1b patch.
+   A real Intan is still recording when those markers fire, so the fixture is currently
+   unrealistic at the session boundary.
+
+3. **The stim-geometry validator belongs on `BlockSpec`, not `SessionRecipe`.** Every input it
+   reads — `trial_duration_s`, `stim_per_trial` — is a `BlockSpec` field; nothing from
+   `SessionRecipe` participates. As written, an invalid `BlockSpec` constructs happily and is
+   only rejected on assembly. Moving it to a `model_validator` on `BlockSpec` rejects at
+   construction and lets the negative check become a plain `Field(ge=0)`.
+
+4. **The planting geometry is computed in two places** — `recipe.py`'s validator and
+   `timeline.py`'s planting loop derive `span` independently. If the planter's formula
+   changes, the validator keeps validating the old one and its guarantee silently evaporates,
+   which is a smaller instance of the very failure the validator was added to prevent. Fix:
+   one `stim_offsets(trial_duration_s, n_pulses) -> tuple[float, ...]` in `stim.py`, called by
+   both.
+
+5. **`tests/synth/test_spikeglx.py`'s spike-presence baseline** still uses a whole-channel
+   `np.std`, which lets planted signal inflate its own reference. Phase 1b replaced exactly
+   that pattern in the RHS sibling; SpikeGLX is a natural candidate for the same treatment.
+
+6. **Smaller, genuinely deferrable:** `unpack_stim_word` does not validate its input range;
+   `drift_ppm` is never exercised by an RHS test (the SpikeGLX sibling does not test it
+   either); `test_emission_is_deterministic` reuses one `truth` object and diffs 2 of the 5
+   emitted files; `np.clip(...).astype(np.int16)` truncates toward zero rather than rounding
+   (pre-existing, shared with SpikeGLX).
