@@ -1,0 +1,66 @@
+import pytest
+from pydantic import ValidationError
+
+from wl_preproc.contracts.events import TaskTypeCode
+from wl_preproc.synth.recipe import BENCHMARK_RECIPE, CI_RECIPE, BlockSpec, MontageSpec, SessionRecipe
+
+
+def test_duration_is_derived_from_blocks():
+    recipe = SessionRecipe(
+        session_id="2027-03-14_01",
+        subject="pico",
+        rig="rig-a",
+        systems=("syncbox", "spikeglx"),
+        blocks=(
+            BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=2, trial_duration_s=3.0),
+            BlockSpec(task_type=TaskTypeCode.RESTING_DARK, n_trials=1, trial_duration_s=4.0),
+        ),
+        montages=(MontageSpec(start_s=0.0, end_s=10.0),),
+        n_ap_channels=4,
+        ap_sample_rate_hz=30_000.0,
+        seed=1,
+    )
+    assert recipe.duration_s == pytest.approx(10.0)
+
+
+def test_syncbox_must_be_present():
+    """The sync box is at every session — a recipe without it is not a session."""
+    with pytest.raises(ValidationError):
+        SessionRecipe(
+            session_id="2027-03-14_01", subject="pico", rig="rig-a",
+            systems=("spikeglx",),
+            blocks=(BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=1, trial_duration_s=3.0),),
+            montages=(MontageSpec(start_s=0.0, end_s=3.0),),
+            n_ap_channels=4, ap_sample_rate_hz=30_000.0, seed=1,
+        )
+
+
+def test_montages_must_cover_the_session():
+    """A gap in montage coverage would leave blocks belonging to no montage."""
+    with pytest.raises(ValidationError) as exc:
+        SessionRecipe(
+            session_id="2027-03-14_01", subject="pico", rig="rig-a",
+            systems=("syncbox",),
+            blocks=(BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=2, trial_duration_s=3.0),),
+            montages=(MontageSpec(start_s=0.0, end_s=3.0),),
+            n_ap_channels=4, ap_sample_rate_hz=30_000.0, seed=1,
+        )
+    assert "cover" in str(exc.value)
+
+
+def test_ci_recipe_is_small_enough_for_ci():
+    """A CI fixture that takes minutes or gigabytes will be deleted by whoever
+    inherits it. Keep it tiny by construction."""
+    assert CI_RECIPE.duration_s <= 30.0
+    assert CI_RECIPE.n_ap_channels <= 8
+
+
+def test_benchmark_recipe_is_realistic():
+    """The P6000 benchmark needs a realistic probe, not a toy."""
+    assert BENCHMARK_RECIPE.n_ap_channels == 384
+    assert BENCHMARK_RECIPE.ap_sample_rate_hz == 30_000.0
+
+
+def test_recipes_are_frozen():
+    with pytest.raises(ValidationError):
+        CI_RECIPE.seed = 99
