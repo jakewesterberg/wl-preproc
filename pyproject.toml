@@ -12,6 +12,17 @@ dependencies = [
     # of them here would create a second definition free to drift from the one the
     # hardware actually implements.
     "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@main",
+    "datajoint>=2.3,<3",
+    # The Elements are mid-migration to DataJoint 2.x and no fork is taken.
+    # element-animal pins to the open PR that does its migration, which is zero
+    # divergence by construction; the other three already activate cleanly on
+    # 2.3. element-array-ephys is deliberately absent — its issue #230 is
+    # unfixed and its tables silently destroy array data under 2.x. See spec
+    # section 5.1.1 and the Phase 2 precondition recorded there.
+    "element-lab @ git+https://github.com/datajoint/element-lab.git@main",
+    "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@compat-fixes",
+    "element-session @ git+https://github.com/datajoint/element-session.git@main",
+    "element-event @ git+https://github.com/datajoint/element-event.git@main",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
@@ -34,7 +45,7 @@ dependencies = [
 # their own emitted session in tests/synth/, and Intan is checked past merely
 # opening: the amplifier stream is reshaped correctly and the Stim stream's gain
 # is the stim step size the header declares.
-dev = ["pytest>=8.0", "spikeinterface>=0.101"]
+dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.0"]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
