@@ -134,25 +134,35 @@ Rig transfers land **directly on server scratch**, not via the NAS. The NAS neve
 
 ### 3.4 Repository layout
 
+**The sync box is a separate repository, `wl-sync`.** It runs on different hardware (Pi 4), carries a different dependency (`pigpio`, behind an optional extra), and is useful to any rig independently of this pipeline. It owns **everything it produces** — session identity, the barcode codec, and the log format — and `wl-preproc` depends on it. The dependency runs one way only; `wl-sync` must never import from here.
+
 ```
-wl_preproc/
-  schemas/   DataJoint schemas: lab, subject, session, sync, event, ephys, eye, video, stim
-  ingest/    watcher, manifest validation, device discovery, session-complete detection
-  sync/      barcode decode, timebase construction, coverage model, provenance metrics
-  events/    code decoding, trial tables, task-file adapters
-  ephys/     spikeinterface wrappers, artifact removal, lfp, mua, kilosort, qc
-  eye/       ohDPI reader, calibration, detection (Engbert–Kliegl, U'n'Eye)
-  export/    nwb assembly + validation
-  archive/   compression, roundtrip verification, checksums, tiered transfer
-  cli/       wlpp commands
-firmware/
-  syncbox/   pi 4 pigpio service, config, session log format
-hardware/
-  breakout/  distribution PCB: buffers, level shifters, optoisolators
-tests/
-  synth/     synthetic session generator
-  integration/
-docs/
+wl-sync/                       ← separate repo
+  wl_sync/
+    session.py   SessionId, minted by the Pi at session start
+    barcode.py   codec, pure — no hardware dependency
+    log.py       on-disk log format, pigpio tick unwrapping
+    gpio.py      GpioBackend protocol + FakePigpio
+    service.py   BarcodeGenerator, EdgeRecorder
+
+wl-preproc/
+  wl_preproc/
+    contracts/ manifest, event codes, sidecar, wl.works protocol, session layout
+    schemas/   DataJoint schemas: lab, subject, session, sync, event, ephys, eye, video, stim
+    ingest/    watcher, manifest validation, device discovery, session-complete detection
+    sync/      timebase construction, coverage model, provenance metrics
+    events/    code decoding, trial tables, task-file adapters
+    ephys/     spikeinterface wrappers, artifact removal, lfp, mua, kilosort, qc
+    characterize/  the plugin registry: depth, RF, preference maps (§6.8)
+    eye/       ohDPI reader, calibration, detection (Engbert–Kliegl, U'n'Eye)
+    export/    nwb assembly + validation
+    archive/   compression, roundtrip verification, checksums, tiered transfer
+    responder/ the HTTP surface wl.works polls (§11)
+    cli/       wlpp commands
+  tests/synth/   synthetic session generator
+  docs/schemas/  exported JSON Schema for wl.works and the camera project
+
+hardware/breakout/  distribution PCB: buffers, level shifters, optoisolators
 ```
 
 ### 3.5 Frozen interfaces
@@ -188,11 +198,19 @@ A 32-bit counter at 1 Hz remains globally unique for ~136 years, making cross-se
 
 | Segment length | Guarantee | Handling |
 |---|---|---|
-| ≥ 2.2 s | ≥2 complete barcodes | Local offset fit + local rate verification |
-| ≥ 1.2 s | ≥1 complete barcode | Offset from barcode, rate inherited from device-level fit |
-| < 1.2 s | May contain zero | **Unalignable** → `RejectedSegment`, excluded, flagged |
+| ≥ 3.0 s | ≥2 complete barcodes | Local offset fit + local rate verification |
+| ≥ 2.0 s | ≥1 complete barcode | Offset from barcode, rate inherited from device-level fit |
+| < 2.0 s | May contain zero | **Unalignable** → `RejectedSegment`, excluded, flagged |
 
-Trials can be as short as 3 s, so a single-trial segment always clears the two-barcode bar.
+Trials can be as short as 3 s, so a single-trial segment always clears the one-barcode bar and normally clears the two-barcode bar as well.
+
+> **Corrected 2026-08-13 while writing the Phase 0 plan, and the correction is a consequence of a decoder decision rather than of the format.** This table first read 2.2 s / 1.2 s / <1.2 s, derived from frame geometry alone: frames are 200 ms long at 1 Hz, so a 2.2 s window must contain two whole frames.
+>
+> **That assumed a decoder that recognises a frame from its internal structure alone, and the implemented decoder does not.** It requires a **preceding idle** of ≥400 ms to identify the lead pulse, because a lead pulse and a run of two set bits are both 10 ms of HIGH and are otherwise indistinguishable. Requiring the idle makes false positives structurally impossible — a garbage barcode is far worse than a missing one — but it means a frame decodes only if the window *also* contains the end of the previous frame, which adds one inter-frame interval to every bound.
+>
+> **This does not threaten the 3 s trial case, because one barcode is sufficient.** §4.5 fits clock rate per `(system, session)` across all segments and needs only an offset locally, so a 2.0 s guarantee covers a single-trial segment with a second to spare. The two-barcode case buys local rate *verification*, which is a QC nicety rather than a requirement.
+>
+> **Kept visible rather than silently fixed**, because the failure is one this design is otherwise careful about: a number derived from geometry, correct about the format, and wrong about the thing that would actually read it.
 
 **Barcode consumers are only 30 kHz samplers** (NI, Intan). Cameras never decode barcodes — the Pi triggers them, so frame times are known by construction. This is what permits short bit slots.
 
