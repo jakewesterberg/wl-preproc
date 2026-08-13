@@ -511,7 +511,22 @@ Artifact removal is a **paramset-keyed stage**, so blanking, interpolation, temp
 
 **Stim sessions are ineligible for auto-publish without review** — artifact contamination is subtle enough to warrant human eyes.
 
-> **OPEN:** confirm exact `.rhs` stim-flag field layout against the RHX file format specification at implementation.
+> **RESOLVED 2026-08-13** against Intan's *RHS Data File Formats* application note (7 July 2017, updated 29 April 2022). Stimulation data is one `uint16` per channel per sample:
+>
+> | Zero-based bits | Meaning | Mask |
+> |---|---|---|
+> | 0–7 | Current magnitude, scaled by the header's `Stim step size` (amps) | `0x00FF` |
+> | 8 | Sign — 1 means negative current | `0x0100` |
+> | 9–12 | Unused, always zero | `0x1E00` |
+> | 13 | **Amplifier settle** | `0x2000` |
+> | 14 | **Charge recovery** | `0x4000` |
+> | 15 | **Compliance limit** | `0x8000` |
+>
+> **Intan numbers bits from 1, and reading the document literally puts every flag one position high.** It says *"Bit 16 (the MSB) indicates a compliance limit… Bit 15 is one if charge recovery… Bit 14 is one if amplifier settle"* — those are bits 15, 14 and 13 zero-based. Getting it wrong would key the blanking mask to charge recovery instead of amplifier settle, and the failure is silent: the sort still runs, on the wrong windows.
+>
+> **A second trap in the same document: amplifier scaling depends on which file format was written.** Traditional `.rhs` stores `uint16` requiring `(v − 32768) × 0.195` µV; `amplifier.dat` in *One File Per Signal Type* stores `int16` requiring only `× 0.195`. Applying the wrong one offsets every trace by 6.4 mV.
+>
+> **And one thing that is not settled, because the document disagrees with itself.** Its prose calls `dcamplifier.dat` `int16`, while the MATLAB snippet directly beneath reads `uint16` and applies `(v − 512) × 19.23` — matching the traditional format. The code is more likely correct, but this is a check against a real recording rather than a resolved fact.
 
 ### 6.4 Derived signals
 
@@ -1079,7 +1094,7 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 |---|---|---|
 | 1 | NWB representation for extracellular electrical stim; may need an extension | Phase 3 |
 | 2 | Whether OpenIrisDPI surfaces Spinnaker chunk data (per-frame GPIO state) | Phase 3 (enhancement only) |
-| 3 | Exact `.rhs` stim-flag field layout | Phase 2 |
+| 3 | ~~Exact `.rhs` stim-flag field layout~~ **Closed 2026-08-13** — bit layout in §6.3, including the 1-based numbering trap. One residual: `dcamplifier.dat` dtype, where the vendor document contradicts itself | ~~Phase 2~~ |
 | 4 | MonkeyLogic 16-line behavioral code configuration on the chosen task-PC DAQ | Phase 0 |
 | 5 | Tolerance for the ingest-time task-PC vs. sync-box clock cross-check | Phase 1 |
 | 6 | DataJoint `make` fetch/compute/insert splitting API | Phase 1 |
