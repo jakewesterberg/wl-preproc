@@ -261,24 +261,50 @@ def test_header_declares_the_stim_step_size(tmp_path):
     assert STIM_STEP_SIZE_A > 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "info.rhs is a 20-byte identification stub, not a parseable Intan "
-        "header, so read_intan raises while parsing channel definitions. "
-        "strict=True is the point: the day someone writes a real header this "
-        "XPASSes and fails the build, which is the signal to wire the reader "
-        "up as the format oracle the way test_spikeglx.py does. Writing that "
-        "header is a follow-on task, not something to improvise from a "
-        "reader's source — see the plan's 'Deliberately excluded'."
-    ),
-)
-def test_spikeinterface_can_open_the_emitted_rhs(tmp_path):
+def test_spikeinterface_can_open_the_emitted_session(tmp_path):
+    """The reader-as-oracle test, matching the one that verifies SpikeGLX.
+
+    Phase 1b could not have this: info.rhs was a 20-byte identification stub and
+    read_intan failed parsing channel definitions. This passing is the whole
+    point of writing a real header.
+    """
     extractors = pytest.importorskip("spikeinterface.extractors")
-    _, out, _ = emit(tmp_path)
-    recording = extractors.read_intan(out / "info.rhs", stream_id="0")
+
+    truth, out, _ = emit(tmp_path)
+    recording = extractors.read_intan(
+        file_path=out / "info.rhs", stream_name="RHS2000 amplifier channel"
+    )
+
     assert recording.get_num_channels() == STIM_RECIPE.n_ap_channels
     assert recording.get_sampling_frequency() == pytest.approx(RHS_SAMPLE_RATE_HZ)
+    assert list(recording.get_channel_ids()) == [
+        c.name for c in STIM_RECIPE.resolved_channels()
+    ]
+
+
+def test_the_reader_returns_the_samples_we_wrote(tmp_path):
+    """Opening is not enough — a header that parses but describes the array
+    wrongly would slice amplifier.dat into the wrong shape."""
+    extractors = pytest.importorskip("spikeinterface.extractors")
+
+    truth, out, _ = emit(tmp_path)
+    recording = extractors.read_intan(
+        file_path=out / "info.rhs", stream_name="RHS2000 amplifier channel"
+    )
+    raw = np.fromfile(out / "amplifier.dat", dtype=np.int16).reshape(
+        -1, STIM_RECIPE.n_ap_channels
+    )
+    assert recording.get_num_samples() == raw.shape[0]
+
+    event = truth.stim_events[0]
+    sample = int((event.onset_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
+    channel_name = STIM_RECIPE.resolved_channels()[event.channel].name
+    through_reader = recording.get_traces(
+        start_frame=sample,
+        end_frame=sample + 1,
+        channel_ids=[channel_name],
+    )
+    assert int(through_reader[0, 0]) == int(raw[sample, event.channel])
 
 
 def test_emission_is_deterministic(tmp_path):

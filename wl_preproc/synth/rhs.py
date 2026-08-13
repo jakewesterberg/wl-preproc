@@ -1,15 +1,7 @@
 """Emit an Intan RHS session in the "One File Per Signal Type" layout.
 
-Flat .dat arrays rather than the traditional format's interleaved 128-sample
-blocks: far easier to generate correctly. This is not a claim that a
-third-party reader can open it — info.rhs is currently an identification stub
-(magic number, version, sample rate, stim step size, channel count) rather
-than a parseable Intan header, so e.g. spikeinterface.extractors.read_intan
-cannot open these fixtures yet (verified: it raises IndexError trying to parse
-the header). See _write_header below.
-
 Files written:
-    info.rhs        header, beginning with the magic number 0xD69127AC
+    info.rhs        Standard Intan RHS header, byte-correct (see rhs_header.py)
     time.dat        int32 sample indices from zero
     amplifier.dat   int16, channel-interleaved, x 0.195 uV, NO offset —
                     noise, the planted spikes, and the stim artifacts
@@ -21,13 +13,13 @@ dcamplifier.dat is deliberately not written — see spec section 6.3.
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.synth.recipe import SessionRecipe
+from wl_preproc.synth.rhs_header import write_rhs_header
 # The spike waveform is imported rather than restated: one definition of the
 # shape, scaled per system by that system's own uV-per-bit. A second copy here
 # would be free to drift from the one write_spikeglx plants, and the two
@@ -67,21 +59,6 @@ STROBE_DIGITAL_BIT = 1
 # derives from the actual emitter — MonkeyLogic strobes for 500 us within a
 # 750 us code — so this is spec-faithful, not merely convenient.
 STROBE_WIDTH_S = 0.0005
-
-_MAGIC = 0xD69127AC
-
-
-def _write_header(path: Path, recipe: SessionRecipe) -> None:
-    """An identification stub, NOT a parseable Intan header: magic number,
-    version, sample rate, stim step size and channel count. Enough to identify
-    the file and scale stim magnitudes, which is what the fixtures are for.
-
-    Writing a byte-correct Standard Intan RHS header is deliberately deferred
-    rather than improvised here — reverse-engineering one from a reader
-    implementation would fabricate a format, the same reasoning that keeps
-    dcamplifier.dat unwritten (spec section 6.3)."""
-    payload = struct.pack("<IhhffI", _MAGIC, 1, 2, RHS_SAMPLE_RATE_HZ, STIM_STEP_SIZE_A, recipe.n_ap_channels)
-    path.write_bytes(payload)
 
 
 def write_rhs(
@@ -162,7 +139,13 @@ def write_rhs(
         if sample + strobe_width <= n_samples:
             digital[sample : sample + strobe_width] |= 1 << STROBE_DIGITAL_BIT
 
-    _write_header(out / "info.rhs", recipe)
+    write_rhs_header(
+        out / "info.rhs",
+        recipe,
+        sample_rate_hz=fs,
+        stim_step_size_a=STIM_STEP_SIZE_A,
+        digital_input_bits=(BARCODE_DIGITAL_BIT, STROBE_DIGITAL_BIT),
+    )
     np.arange(n_samples, dtype=np.int32).tofile(out / "time.dat")
     # Clip, do not let astype wrap: int16 overflow flips the sign, so an
     # out-of-range artifact would silently become a deflection of the opposite
