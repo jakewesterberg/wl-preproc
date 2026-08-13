@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "label"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "Reading": {
+      "additionalProperties": false,
+      "properties": {
+        "featured": {
+          "title": "Featured",
+          "type": "boolean"
+        },
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "value",
+        "featured"
+      ],
+      "title": "Reading",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Served at the health check URL wl.works polls.\n\nThe host publishes its own action list, so adding a sixth job type needs no\nchange on the wl.works side.",
+  "properties": {
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "title": "Actions",
+      "type": "array"
+    },
+    "readings": {
+      "items": {
+        "$ref": "#/$defs/Reading"
+      },
+      "title": "Readings",
+      "type": "array"
+    },
+    "verdict": {
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "required": [
+    "verdict",
+    "readings",
+    "actions"
+  ],
+  "title": "HealthResponse",
+  "type": "object"
+}

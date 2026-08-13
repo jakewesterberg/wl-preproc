@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "VideoFile": {
+      "additionalProperties": false,
+      "properties": {
+        "checksum": {
+          "title": "Checksum",
+          "type": "string"
+        },
+        "codec": {
+          "title": "Codec",
+          "type": "string"
+        },
+        "first_frame_index": {
+          "title": "First Frame Index",
+          "type": "integer"
+        },
+        "last_frame_index": {
+          "title": "Last Frame Index",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "first_frame_index",
+        "last_frame_index",
+        "codec",
+        "checksum"
+      ],
+      "title": "VideoFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "dropped_frame_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Dropped Frame Ids",
+      "type": "array"
+    },
+    "frame_count": {
+      "title": "Frame Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "system": {
+      "title": "System",
+      "type": "string"
+    },
+    "trigger_source": {
+      "title": "Trigger Source",
+      "type": "string"
+    },
+    "video_files": {
+      "items": {
+        "$ref": "#/$defs/VideoFile"
+      },
+      "title": "Video Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "system",
+    "trigger_source",
+    "frame_count",
+    "dropped_frame_ids",
+    "video_files"
+  ],
+  "title": "BehaviorCameraSidecar",
+  "type": "object"
+}

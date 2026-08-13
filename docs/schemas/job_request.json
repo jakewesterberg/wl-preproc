@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "MetadataBundle": {
+      "additionalProperties": false,
+      "description": "Everything wl-preproc needs from the ELN, carried inbound with the request.",
+      "properties": {
+        "blocks": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Blocks",
+          "type": "array"
+        },
+        "experimenter": {
+          "title": "Experimenter",
+          "type": "string"
+        },
+        "montage_boundaries": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Montage Boundaries",
+          "type": "array"
+        },
+        "probes": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Probes",
+          "type": "array"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "task_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Task Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "blocks",
+        "montage_boundaries",
+        "probes",
+        "experimenter",
+        "subject",
+        "task_types"
+      ],
+      "title": "MetadataBundle",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "domain": {
+      "title": "Domain",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/MetadataBundle"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "title": "Parameters",
+      "type": "object"
+    },
+    "selection": {
+      "additionalProperties": true,
+      "title": "Selection",
+      "type": "object"
+    }
+  },
+  "required": [
+    "domain",
+    "selection",
+    "parameters",
+    "idempotency_key",
+    "metadata"
+  ],
+  "title": "JobRequest",
+  "type": "object"
+}

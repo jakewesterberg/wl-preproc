@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "StartedAtSource": {
+      "description": "Which clock stamped the session's label.\n\nThe behavioural control system where present; the sync box's NTP-stamped\nstart otherwise, since anaesthetised mapping and spontaneous-activity\nsessions have no task PC. This is the session *label* only \u2014 the timebase is\nalways the sync box.",
+      "enum": [
+        "behavioral_control",
+        "syncbox_ntp"
+      ],
+      "title": "StartedAtSource",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "acquisition_build_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Acquisition Build Id"
+    },
+    "expected_systems": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Expected Systems",
+      "type": "array"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    },
+    "rig": {
+      "title": "Rig",
+      "type": "string"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "started_at_source": {
+      "$ref": "#/$defs/StartedAtSource"
+    },
+    "stimulus_calibration_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stimulus Calibration Id"
+    },
+    "subject": {
+      "title": "Subject",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "session_id",
+    "subject",
+    "rig",
+    "started_at",
+    "started_at_source",
+    "expected_systems"
+  ],
+  "title": "SessionManifest",
+  "type": "object"
+}

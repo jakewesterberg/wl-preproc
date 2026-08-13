@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "boot_id": {
+      "title": "Boot Id",
+      "type": "string"
+    },
+    "gpio_map": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Gpio Map",
+      "type": "object"
+    },
+    "rig": {
+      "title": "Rig",
+      "type": "string"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "written_at": {
+      "format": "date-time",
+      "title": "Written At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "session_id",
+    "rig",
+    "boot_id",
+    "written_at",
+    "gpio_map"
+  ],
+  "title": "SyncBoxLogHeader",
+  "type": "object"
+}
