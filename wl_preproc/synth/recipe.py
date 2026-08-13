@@ -33,6 +33,7 @@ class BlockSpec(BaseModel):
     task_type: TaskTypeCode
     n_trials: int
     trial_duration_s: float
+    stim_per_trial: int = 0
 
     @property
     def duration_s(self) -> float:
@@ -105,4 +106,25 @@ BENCHMARK_RECIPE = SessionRecipe(
     n_ap_channels=384,
     ap_sample_rate_hz=30_000.0,
     seed=20270314,
+)
+
+STIM_RECIPE = SessionRecipe(
+    session_id="2027-03-14_03",
+    subject="pico",
+    rig="rig-a",
+    # Standalone Intan: no NI, no SpikeGLX. Tier B provenance — Pi codes plus an
+    # Intan strobe witness (spec section 4.7).
+    systems=("syncbox", "rhs"),
+    blocks=(
+        BlockSpec(
+            task_type=TaskTypeCode.RF_MAP,
+            n_trials=4,
+            trial_duration_s=3.0,
+            stim_per_trial=2,
+        ),
+    ),
+    montages=(MontageSpec(start_s=0.0, end_s=12.0),),
+    n_ap_channels=4,
+    ap_sample_rate_hz=30_000.0,
+    seed=7,
 )

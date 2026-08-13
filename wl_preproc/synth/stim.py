@@ -68,3 +68,19 @@ def unpack_stim_word(word: int) -> StimWord:
         charge_recovery=bool(word & CHARGE_RECOVERY_BIT),
         compliance=bool(word & COMPLIANCE_BIT),
     )
+
+
+SETTLE_DURATION_S = 0.002
+
+
+@dataclass(frozen=True, slots=True)
+class StimEvent:
+    """One biphasic pulse. Duration covers the pulse itself; amplifier settle is
+    asserted for SETTLE_DURATION_S afterwards, which is the window the pipeline
+    blanks (spec section 6.3)."""
+
+    onset_s: float
+    duration_s: float
+    channel: int
+    magnitude: int
+    negative: bool

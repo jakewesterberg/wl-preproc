@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from wl_preproc.contracts.events import TaskTypeCode
+from wl_preproc.synth.stim import StimEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,3 +35,4 @@ class GroundTruth:
     trials: tuple[TrialTruth, ...]
     blocks: tuple[BlockTruth, ...]
     spikes: tuple[tuple[float, int], ...]        # (session-time seconds, channel)
+    stim_events: tuple[StimEvent, ...] = ()
