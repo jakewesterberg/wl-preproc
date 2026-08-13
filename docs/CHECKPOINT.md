@@ -1,6 +1,6 @@
 # Where this build actually is
 
-**Last updated 2026-08-13**, at `wl-preproc` commit `16d8fd9`. Check `git log --oneline -1`
+**Last updated 2026-08-13**, at `wl-preproc` commit `675c7cf`. Check `git log --oneline -1`
 against that; if it has moved, this file is stale and the spec wins.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
@@ -13,7 +13,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **108 tests** | Phase 0 contracts and Phase 1a synthetic generator, both merged. |
+| **wl-preproc** | private, CI green, **148 tests + 1 strict xfail** | Phase 0 contracts, Phase 1a synthetic generator, Phase 1b Intan RHS — all merged. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -40,17 +40,32 @@ run against a *fake* wl-preproc.
 complete 4.5 MB session directory that SpikeInterface opens; `--profile benchmark` writes a
 realistic 384-channel hour for the P6000 benchmark.
 
+**wl-preproc Phase 1b** — `wl_preproc/synth/{stim,rhs}.py`. `wlpp synth generate --profile
+stim` writes a **standalone-Intan** session: no NI, no SpikeGLX, stim planted as ground truth
+and rendered into both the stim words and the amplifier artifacts so the two cannot disagree.
+Three tick origins now exist (sync box 1.0 s, SpikeGLX 0.7 s, RHS 0.45 s), so a pipeline that
+never computes an offset fails.
+
+> **One thing it does *not* do, and the plan claimed it did.** `info.rhs` is a 20-byte
+> identification stub, **not** a parseable Intan header, so `spikeinterface.read_intan`
+> cannot open these fixtures — unlike the SpikeGLX ones. The plan justified the whole file
+> layout on "SpikeInterface reads them" and specified no test for it, so nothing caught it
+> until a review checked the claim. A **strict xfail** in `tests/synth/test_rhs.py` now pins
+> the gap: write a real header and that test XPASSes and fails the build, which is the signal
+> to wire up the oracle. Follow-on work is listed at the end of the Phase 1b plan.
+
 ---
 
 ## What is next
 
-1. **Phase 1b — Intan RHS emission.** Unblocked as of 2026-08-13: spec open item 3 is
-   closed, so the `.rhs` stim-flag layout is known (§6.3). Do this *before* 1c, or the
-   ingest and timebase work gets built against a fixture set with no Intan path and no stim
-   artifacts, and tier-B provenance has nothing to test against.
-2. **Phase 1c — DataJoint schemas and guardrails, ingest watcher, timebase fitting,
-   coverage, responder.** Larger than one plan; expect to split it.
-3. **Phase 2 onward** — see spec §12.
+1. **Phase 1c — DataJoint schemas and guardrails, ingest watcher, timebase fitting,
+   coverage, responder.** Larger than one plan; expect to split it. **Decide first whether
+   its tier-B work needs reader-openable Intan fixtures** — if it does, the `info.rhs` header
+   follow-on stops being follow-on and becomes 1c's first task.
+2. **Phase 2 onward** — see spec §12.
+
+**Not software, and on a clock: order the PCIe-6363.** §12. Lead time from NI is 12–13 weeks,
+the longest of any purchase on that list, and nothing in the software queue moves that date.
 
 ---
 
@@ -94,7 +109,25 @@ defensible call, but it is a reversal rather than a gap.
 - **`requires-python <3.12` was invented** and propagated by being cited rather than
   re-derived. There is no Python constraint from Pascal. §6.6.
 - **Barcode alignment is 2.0 s / 3.0 s, not 2.2 s.** The decoder requires a preceding idle,
-  which adds one inter-frame interval to every bound. §4.1.
+  which adds one inter-frame interval to every bound. §4.1. **This one bit a second time**, in
+  Phase 1b: the plan set the RHS pre-roll to 0.35 s, under `IDLE_MIN_US` of 0.4 s, so the
+  first barcode silently failed to decode (11 of 12 recovered). **Any emitter's pre-roll must
+  exceed 400 ms.** When a rule has cost you twice, suspect the next new emitter too.
+- **A strobe as wide as the word spacing is not a strobe.** Phase 1b wrote a 1 ms pulse at
+  1 ms `CODE_WORD_SPACING_S`, so consecutive strobes were *contiguous* — they merged into one
+  long high with no falling edge between, and 31 code words rendered as 5 countable edges.
+  The tier-B "independent strobe witness" (§4.7) silently stopped witnessing. **The pulse must
+  be strictly narrower than the spacing**; it is now 500 µs, matching §4.2.1's `T1`.
+- **§4.2's old strobe requirement was arithmetically impossible**, and nothing caught it for
+  months because no code rendered a strobe. It demanded ≥1 ms strobe plus 0.5 ms each side —
+  2 ms per word — while Phase 1a spaced words 1 ms apart. Two independent investigations, one
+  from the emitter (MonkeyLogic, §4.2.1) and one from the receiver (the RHS fixture), landed
+  on the same 500 µs. **A spec number no code has executed yet is a hypothesis.**
+- **A plan can assert a capability that none of its tasks tests.** Phase 1b's plan justified
+  its whole file layout on "SpikeInterface reads them" and specified no test for it; the
+  emitted fixtures cannot in fact be opened by `read_intan`. Every task passed its own review,
+  because the claim lived in the Architecture paragraph and in no task's diff. **When a plan
+  argues from a capability, check that some task actually exercises it.**
 - **Check `git log main..<branch>` before merging, and read it.** Not doing so once
   fast-forwarded twenty unrelated commits of an unmerged feature onto `wl-works` `main`.
 
@@ -123,6 +156,11 @@ one is named because it is now a schedule risk rather than an open question:
 
 - Both `wl-sync` and `wl-preproc` use `uv` with a `.venv`; develop against **3.11**, the
   floor, since CI also tests 3.13.
+- **Run the suite as `.venv/bin/python -m pytest`, from the repo root.** The `.venv/bin/pytest`
+  console script cannot import `wl_preproc` in this checkout — the package resolves via the
+  working directory rather than an install, and the entry point does not put it on `sys.path`.
+  Same family as the `wl-sync` `.pth` trap below, and it cost two workers a detour each before
+  it was written down.
 - `wl-preproc` installs `wl-sync` **non-editable** from `../wl-sync` locally — an editable
   install's `.pth` did not execute and the import silently failed.
 - Eleven amendments to the wl.works corpus are recorded in spec §14, all applied. The
