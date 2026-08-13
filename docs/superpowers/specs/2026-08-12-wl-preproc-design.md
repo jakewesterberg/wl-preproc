@@ -554,7 +554,11 @@ Follows the `element-array-ephys` pattern: `paramset_idx` (int) with a content-h
 
 Computed tables are keyed on `(…, paramset_idx)`, so **re-running with new parameters adds rows rather than overwriting**. Three sortings of one session with different drift settings coexist permanently with full provenance.
 
-**Paramsets are immutable once used.** The content hash enforces this structurally — an edit yields a different hash, which is a *new* paramset. The CLI refuses in-place modification. Lab defaults are themselves versioned paramsets, so "what were our defaults in March 2027" stays answerable.
+**Paramsets are immutable once used.** Registering identical parameters is idempotent, because the content hash *is* the identity: an edit yields a different hash and is therefore a *new* paramset rather than a mutation of the old one. Lab defaults are themselves versioned paramsets, so "what were our defaults in March 2027" stays answerable.
+
+> **Corrected 2026-08-13, disproved during Phase 1c-1.** This paragraph read *"The content hash enforces this structurally — an edit yields a different hash, which is a new paramset. The CLI refuses in-place modification."* **The hash enforces no such thing.** It makes *registration* idempotent, and nothing more: the unique index is on `(paramset_type, param_hash)`, not on the parameters themselves, so an in-place `update1` on `params` **succeeds** and leaves the row internally inconsistent — the stored hash still describing the old parameters while the stored parameters are new. That is worse than a permitted edit, because every provenance claim keyed on the hash silently becomes false.
+>
+> **What actually enforces it** is a refusal on the table itself, added in 1c-1: `ParamSet.update1` raises. That is stronger than the "CLI refuses" this paragraph originally promised, and it is honest about its limit — it holds at the DataJoint layer, and a raw SQL statement or a `FreeTable` handle to the same physical table would still bypass it. Enforcing in the CLI alone would have left the hole open to every caller that is not the CLI, which is most of them.
 
 ### 5.4 Manual triggering
 
