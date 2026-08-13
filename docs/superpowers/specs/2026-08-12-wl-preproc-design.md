@@ -73,6 +73,11 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Canonical regeneration | New activation superseding the old; the superseded NWB stays readable |
 | Archive grain | **One compressed artifact per session** — not per segment, not per block |
 | Continuous data rate | **500 Hz, uniformly** — LFP, MUA, eye, pupil. Timing-critical signals stored as event times instead |
+| Canonical grain | Per **`(session, recording montage)`** — a montage is a maximal interval with no probe movement |
+| Montage source | **wl.works `item_insertion` alone.** No insertion record → no canonical, session quarantined |
+| Characterization | A plugin registry keyed on task capability, not a frozen task contract |
+| Depth | Three independent methods computed and stored, plus their agreement. kCSD, not standard CSD |
+| Provisional data | Characterizations enter the canonical NWB immediately, flagged `provisional` until a human verdict |
 | "Checked good" gate | Claimed by this pipeline; gates **scratch reclamation only**, never compression or archival |
 | Channel map | wl.works **derives** it; wl-preproc **verifies** it against the recorded `.meta` and disagrees out loud |
 
@@ -357,6 +362,7 @@ DataJoint's `.alter()` handles non-key attributes; **changing a primary key mean
 ```
 Subject                (subject)
   Session              (subject, session_datetime)
+    Montage            (…, montage_id)            ← recording montage; from item_insertion
     Block              (…, block_id)              ← mirrors wl.works animal_session_block
     AcquisitionSystem  (…, system)
       Segment          (…, system, segment_barcode)
@@ -477,6 +483,100 @@ The **Quadro P6000** is Pascal (compute capability 6.1), 24 GB VRAM, no tensor c
 
 **Pre-January benchmark:** run KS4 on synthetic NP sessions to establish a concrete P6000 baseline. This converts "is the P6000 fast enough" into a number, which is exactly what justifies a specific card in a budget request.
 
+### 6.7 Unit and channel enrichment
+
+Computed in every canonical run. Cost is a rounding error against the sort — benchmark on synthetic sessions rather than trusting the estimates below.
+
+**Unit-level**
+
+| Enrichment | Notes |
+|---|---|
+| Waveform metrics | Peak–trough duration, half-width, PT ratio, repolarization and recovery slope, spatial spread, propagation velocity. Templates already extracted for QC, so cost is seconds |
+| Burst metrics | Burst index, CV2, local variation (LV), ISI distribution shape. Milliseconds — spike trains only |
+| Duplicate / oversplit flags | CCG zero-lag structure over spatially-restricted pairs. **Flag, never auto-merge** — oversplitting is the commonest sorting failure and the easiest to miss |
+| Cross-segment and cross-block stability | Per-block presence, amplitude drift, rate drift. Also computed per recording montage (§6.8) |
+
+**No stored cell-type label.** Narrow- versus broad-spiking falls out of the waveform metrics, and a stored class is a second answer free to disagree with the metrics it came from. Store the metrics; derive the class. Same reasoning wl.works applies to derived verdicts throughout.
+
+**Channel and probe-level**
+
+Per-channel RMS noise in AP and LFP bands; bad-channel labels (`good` / `dead` / `noise` / `out`, where `out` is a free brain-surface estimate); **50 Hz** line-noise magnitude (KU Leuven is EU mains); per-channel spectral profile versus depth; saturation and artifact fraction; impedance carried from wl.works' `electrode_reading`.
+
+**Session-level**
+
+Yield (units, good units, units/channel, by area); total drift magnitude; behavioural summary (trials, hit rate, RT distribution, per block); eye quality (tracking-loss %, blink rate, calibration residual); video dropped-frame count. Plus **ELN metadata carried in from wl.works** — probe serials, insertion coordinates, experimenter, subject, recording counts (§11.2).
+
+**Monosynaptic connectivity is explicitly not here.** GLM-per-pair over ~500 units is six figures of fits — hours to days. It becomes an on-demand activation under role B, never part of the canonical run.
+
+### 6.8 The characterization registry
+
+Recording characterization is **not a frozen task contract**. It is a registry of plugins, each declaring what it needs, and the pipeline runs whatever a session's blocks support.
+
+| Block type | Feeds |
+|---|---|
+| `rf_map` | RF estimation, retinotopic progression (gaze-corrected) |
+| `resting_dark` | Spectrolaminar motif, LFP coherence and correlation across depth |
+| `passive_flash` | Evoked CSD — reliable in early areas |
+| *any task with in-RF stimulus events* | **Task-evoked CSD** — the higher-order-area path |
+| `shape_map`, `color_map`, `mgs`, … | Preference maps, response fields, presaccadic activity |
+
+Adding a characterization is a plugin plus a task-type declaration, never a pipeline change.
+
+**A capability report is a required output.** "No depth estimate: no flash block and no in-RF trials" is information, not silence. Every canonical run records which plugins ran, which were skipped, and why.
+
+**One ordering constraint that is a fact rather than a choice:** task-evoked CSD depends on RF maps existing first, because selecting in-RF trials requires knowing the RF.
+
+```
+RF estimation → in-RF trial selection → task-evoked CSD → laminar depth
+```
+
+DataJoint expresses this natively as computed-depends-on-computed, but it means depth is **not a leaf node**: a session whose RF map fails silently loses its higher-order depth estimate too. That chain appears in the capability report rather than being discovered.
+
+**Everything here is computed per recording montage**, not per session — a montage change invalidates depth, RF and unit identity alike.
+
+### 6.9 Depth and receptive fields — method choices
+
+**Depth: three independent families, all computed, all stored.**
+
+| Family | Method | Needs a stimulus? |
+|---|---|---|
+| Evoked CSD | Flash or in-RF task stimulus → LFP → CSD → earliest sink | Yes |
+| Spectrolaminar | Gamma superficial, alpha-beta deep, crossover marks L4 | No — resting-state |
+| Unit-based | MUA depth profile, response latency by depth, waveform duration by depth | Either |
+
+**The spectrolaminar method is contested**, and that drives the design rather than footnoting it. According to PubMed, Mackey et al. 2024 ([DOI](https://doi.org/10.1101/2024.09.18.613490)) tests the "ubiquitous spectrolaminar motif" against A1, belt and V1 laminar data and finds its L4 identification **unreliable** and non-generalising. Committing to one method would bake a contested position into every session the lab ever records. Computing three, storing three, and storing their pairwise agreement means that when the dispute resolves, the archive already holds whichever answer won — the same pattern as the two saccade detectors.
+
+**Use kCSD, not the standard second spatial difference.** Standard CSD assumes a 1D evenly-spaced laminar array; Neuropixels is a staggered multi-column layout at 20 µm row pitch. Averaging columns to force a 1D formulation discards the geometry the probe was bought for. **kCSD** (kernel CSD) handles arbitrary electrode geometry with regularisation and is the natural fit; **iCSD** (`elephant.current_source_density`) is the fallback if kCSD proves awkward. This is the single most consequential methodological choice in the depth pipeline.
+
+**Receptive fields: gaze-corrected, which is the lab's hardware advantage.** Nearly every RF pipeline assumes perfect fixation and maps in screen coordinates. With a dual-Purkinje tracker at 500 Hz (§7.1), RFs are mapped in **retinotopic coordinates corrected sample-by-sample for drift and microsaccades**. For V4-scale RFs that sharpens the estimate; for V1 it is the difference between a receptive field and a blur.
+
+Also: bootstrap significance so units without a real RF are flagged rather than fitted to noise; model fits (2D Gaussian / DoG / Gabor) with parameter CIs rather than a centroid; regularised reverse correlation rather than raw STA; and **retinotopic progression along the probe**, where a smooth progression indicates one area and a discontinuity indicates a crossed boundary — an independent check that feeds wl.works' `functional_mapping` area source.
+
+**Store the profiles; derive the boundaries.** The full CSD map, the power-by-depth matrix and the raw RF response map go into the NWB. The L4 boundary, the layer label and the fitted RF centre are **derived columns**, recomputable from them. This is the same reasoning that forbids a stored cell-type label, and it matters more here: a contested boundary method means the derived answer *will* change, and that must be a recomputation rather than a re-recording.
+
+### 6.10 Provisional until verified
+
+Every characterization is **useful but unverified**, and is marked as such.
+
+- Products land in the canonical NWB as soon as they are computed, each carrying an explicit `provisional` flag and the identity of the method that produced it.
+- A human verdict later **upgrades the flag in place** via the accretion path (§8.3).
+
+**The verification loop needs no new machinery** — every piece already exists in wl.works:
+
+1. wl-preproc computes → full detail into the NWB
+2. wl-preproc generates a **review figure** — Plan 18's 18b already specifies figure ingest
+3. wl.works pulls figure and summary metrics — Plan 20 §5.1's summary-only rule, per-unit detail staying on wl-nas
+4. A person asserts a `verdict` / `reason` / `actor`, exactly as Plan 19 §6.2 already has someone read a sort summary and write an area assignment
+5. The verdict accretes back into the NWB
+
+**wl-preproc stays headless.** It computes and draws; wl.works renders and records judgment.
+
+**The boundary that keeps this package from becoming an analysis grab-bag**, stated so somebody other than the PI can apply it:
+
+> **Preprocessing characterises the recording. Analysis answers questions about the world.**
+
+A plugin qualifies if its output is useful to *every* project touching that session and is provisional rather than a claim. *Where is this unit looking* characterises the recording; *how attention modulates its RF* does not. Shape and colour preference maps qualify; a cross-area selectivity comparison does not.
+
 ---
 
 ## 7. Eye and behavior
@@ -517,18 +617,27 @@ Derived products only — **raw wideband is archived separately**, never embedde
 
 Each NWB is **self-contained over its own activation's block set** — trials, LFP, MUA, eye, units, all trimmed to those blocks. Nothing carries data belonging to blocks the activation did not cover.
 
-- Subject and session metadata
-- Electrode table with probe geometry (ProbeInterface)
-- Units: spike times in session time, waveforms, QC metrics, cross-segment **and cross-block** stability
+- Subject and session metadata, plus **ELN metadata carried in from wl.works** — probe serials, insertion coordinates, experimenter, recording counts (§11.2)
+- Electrode table with probe geometry (ProbeInterface), per-electrode area, per-recording site selection (§11.6), and channel-level metrics (§6.7)
+- Units: spike times in session time, waveforms, QC metrics, waveform/burst metrics, duplicate flags, cross-segment **and cross-block** stability
 - LFP and MUA envelope
 - Trials table **including per-system coverage columns**, and block membership
-- Block table, with wl.works' `block_behaviour_assertion` and `block_neural_assertion` verdicts carried as metadata
+- Block table (`TimeIntervals`), with `task_type`, acquisition provenance, and wl.works' `block_behaviour_assertion` / `block_neural_assertion` verdicts as metadata
 - Full event table (all codes with times)
 - Eye: gaze, pupil, and detection events from *both* detectors
 - Behavior video as external file references plus frame times
 - Stim events and parameters
-- Acquisition provenance: `acquisitionBuildId`, `stimulusCalibrationId` per block (§4.2)
+- **Characterization products** (§6.8–6.10): CSD maps, power-by-depth matrices, RF response maps, preference maps — the **profiles**, with derived boundaries and fits as separate columns, every one flagged `provisional` until verified
+- **The capability report** — which characterizations ran, which were skipped, and why
 - **Timing provenance record and tier**
+
+**Blocks use NWB's `TimeIntervals`**, either `nwbfile.epochs` or a dedicated `intervals/blocks` table, so *"which blocks did this unit survive, and was this block any good"* is answerable inside the file without wl.works.
+
+**Written-once versus accreted, stated explicitly** because Plan 24 §3.3's checksum design depends on the boundary rather than discovering it:
+
+| Written at creation | Accreted later |
+|---|---|
+| Spike times, LFP, MUA, trials, blocks, events, eye, electrode table, QC and waveform metrics | Verified verdicts upgrading `provisional` flags, curation, histology-derived depth, connectivity |
 
 Validated with `nwbinspector` before publication to the analysis array.
 
@@ -592,8 +701,30 @@ Refines wl.works Plan 24 §1.2, which makes one NWB one activation but treats al
 
 | Kind | Origin | Block set | Multiplicity |
 |---|---|---|---|
-| **Canonical** | Automatic, X hours after session data lands | All session blocks with no `bad` `block_neural_assertion` for that probe | Exactly one current per session |
+| **Canonical** | Automatic, X hours after session data lands | All blocks **within one recording montage** with no `bad` `block_neural_assertion` for that probe | Exactly one current per `(session, montage)` |
 | **Derivative** | Requested via wl.works | Any hand-picked subset; may span sessions for a chronic array | Unbounded, additive |
+
+#### The recording montage
+
+A **recording montage** is a maximal interval during which no probe moved. It is the grain at which unit identity is meaningful, and therefore the grain of the canonical NWB.
+
+**Sorting across a montage change produces garbage.** Kilosort's drift model treats a 500 µm advance as drift; it is not. An automatic process must never do it.
+
+wl.works already models the other half: three penetrations in one rig day are **three insertions and one `item_use`** — so a probe move is *not* a new session and *not* a new probe. Within a montage, all probes belong in one NWB, which is what preserves cross-area simultaneity for population and laminar work.
+
+| Case | Canonical NWBs |
+|---|---|
+| No movement — the common case | 1, identical to a session-grain rule |
+| 3 penetrations, both probes moving together | 3, each holding both probes |
+| Probes moved independently | 1 per distinct montage boundary |
+
+**Montage boundaries come from wl.works' `item_insertion` rows and nothing else.** Signal-based detection and a strobed movement code were both considered and declined as impractical.
+
+**That leaves one failure mode, and it is closed by refusing to guess.** Those rows are human-entered and may be late; with none present the pipeline would see one undifferentiated session and sort straight across a move, silently. So: **no insertion record → no canonical.** The session is quarantined and reported as "waiting on ELN entry" through the existing tier-D machinery. A silent bad sort becomes a visible blocked one.
+
+The consequence is that the X-hour window must be long enough for **both** block rows and insertion rows to exist — open items 9 and 10 compound into a single dependency on the ELN being current.
+
+> **This corrects a wl.works amendment made earlier in the same session.** The partial unique index committed to Plan 24 §10.4 keys on `(animal_session_id) WHERE role = 'canonical'`, which permits exactly one canonical per session and therefore makes the three-penetration case unrepresentable. It must key on the montage as well (§14 item 10).
 
 **Behavioural badness never gates a sort.** A block with a mis-specified or irrelevant task still contains good neural data; excluding it would discard real spikes and degrade drift estimation for no benefit. Only `block_neural_assertion` — which is per `(block, probe)` — excludes a block from sorting. Behavioural verdicts travel into the NWB as metadata and exclude from *analysis*.
 
@@ -724,8 +855,17 @@ The protocol carries, at minimum:
 
 | Direction | Content |
 |---|---|
-| wl.works → wl-preproc | Action list request; job request with `(domain, selection, parameters, idempotencyKey)` |
-| wl-preproc → wl.works (in response to polls) | Action list; job status including *"already running since 09:02"*; resolved component versions and commit SHAs; result metrics; figure files; artifact locations as **host + share + relative path** |
+| wl.works → wl-preproc | Action list request; job request with `(domain, selection, parameters, idempotencyKey)` **plus the metadata bundle below** |
+| wl-preproc → wl.works (in response to polls) | Action list; job status including *"already running since 09:02"*; resolved component versions and commit SHAs; result metrics; **review figures**; the capability report; artifact locations as **host + share + relative path** |
+
+**The request payload is the metadata channel, and this is load-bearing.** wl-preproc cannot fetch anything from wl.works — the app binds only to the WireGuard interface and we are on the lab LAN with no route in. So everything this machine needs from the ELN must arrive *with the request*:
+
+```
+activation request → { blocks, recording-montage boundaries, probe serials + insertions,
+                       experimenter, subject, task types, quality verdicts }
+```
+
+One mechanism supplies three things that would otherwise each need their own: the block set, the montage boundaries (so no signal-based detection is required anywhere), and the ELN metadata that makes the NWB self-contained. **The payload schema is therefore a required part of the protocol document**, not an implementation detail.
 
 **Artifact locations are a triple, never a string.** wl.works Plan 23 §10.1 replaced the opaque `artifactLocation` with `artifactHostId` + `artifactShare` + `artifactPath` precisely so an agent can open the file rather than a human reading a path out of a field.
 
@@ -855,6 +995,10 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 13 | Who renders the "checked good" verdict (§8.5), and whether it is entered here or in wl.works. **Nothing in wl.works models it and it was declined rather than folded in**, so if it lives there it needs a row somebody designs | Phase 3 |
 | 14 | Chunk shape and per-dataset compression settings that keep the NWB efficiently range-readable (§8.1.2). Measurable on synthetic files before January | Phase 3 |
 | 15 | Whether the derived-vs-recorded channel map comparison (§11.6) should ever *block* a session or only warn. Blocking makes wl.works' pinout a hard dependency of preprocessing | Phase 2 |
+| 16 | kCSD versus iCSD for Neuropixels geometry (§6.9) — decidable on synthetic laminar data before January | Phase 2 |
+| 17 | Whether `resting_dark`, `rf_map`, `passive_flash` and the area-specific mapping tasks get **reserved event-code ranges** (§4.2), or are identified only by `task_type`. Reserved ranges make a block self-describing in the recording even if the ELN is wrong | Phase 0 |
+| 18 | Whether a montage with **no** usable RF map should still attempt evoked-CSD depth from `passive_flash`, or record no depth at all (§6.8's dependency chain) | Phase 2 |
+| 19 | Pose estimation from behavior video — acknowledged as a later integration. The sidecar contract (§4.6) must leave room for keypoint outputs without committing to a toolchain | Post-January |
 
 ---
 
@@ -873,6 +1017,8 @@ wl-works requires that a design amending another document carry a ledger of what
 | 7 | Plan 23 §12 | **Item 1 claimed.** The "checked good" gate, and the correction that it belongs on scratch reclamation rather than on archival |
 | 8 | Plan 19 §4.1 | The derived map gains an external check. **The derive-not-receive ruling is explicitly not reopened** |
 | 9 | Glossary §6.2 | The per-recording site-selection gap gains an owner — and the reason it could never have been wl.works' |
+| 10 | Plan 24 §10.4 **(correction to item 2)** | The partial unique index must key on `(animal_session_id, montage)`, not `animal_session_id` alone. As first committed it permits one canonical per session, which makes a three-penetration day unrepresentable |
+| 11 | Glossary §1 | **`recording montage`** added to the lab-word map — a maximal interval with no probe movement, the grain at which unit identity holds |
 
 **Item 5 was nearly missed, and how it was caught is worth recording.** The first pass amended the two plan specs and stopped. The design spec turned out to enumerate `analysis_activation`'s columns rather than only naming the table, so a column-level change reaches it — found by grepping the identifier across the repository rather than by re-reading the amendment list. That is that repository's own convention diff, and it produced exactly the class of omission its ledger discipline exists to catch.
 
