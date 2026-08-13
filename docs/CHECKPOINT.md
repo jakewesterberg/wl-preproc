@@ -1,6 +1,6 @@
 # Where this build actually is
 
-**Last updated 2026-08-13**, at `wl-preproc` commit `675c7cf`. Check `git log --oneline -1`
+**Last updated 2026-08-13**, at `wl-preproc` commit `542bcbb`. Check `git log --oneline -1`
 against that; if it has moved, this file is stale and the spec wins.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
