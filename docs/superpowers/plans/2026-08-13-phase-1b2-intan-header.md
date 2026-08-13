@@ -344,6 +344,22 @@ git commit -m "feat(synth): device-neutral channel identity on the session recip
 
 Append to `tests/synth/test_rhs_header.py`:
 
+> **Corrected 2026-08-13, during execution — the test code below is wrong as written.** Four
+> of these tests parse the header by handing `io.BytesIO(header_bytes)` to neo's
+> `read_variable_header`. **That cannot work.** neo reads every non-QString field with
+> `np.fromfile`, which requires a real OS file descriptor and raises
+> `io.UnsupportedOperation: fileno` on any `BytesIO` — it fails on the *first* field, before
+> a single byte of header content is examined, so the failure looks like a broken header when
+> the header is fine. Reproduce with
+> `np.fromfile(io.BytesIO(b"\x01\x02\x03\x04"), dtype="uint32", count=1)`.
+>
+> **The fix is plumbing only:** open the written file (`with open(path, "rb") as stream:`) and
+> pass that handle instead. No assertion, constant or expected value changes, and the
+> trailing-bytes check still works — numpy syncs the Python-level file position back after
+> reading, so `stream.read() == b""` remains a live check rather than passing because the
+> handle sat at EOF. The committed tests do it this way; treat them, not this block, as the
+> reference.
+
 Put these imports at the top of the file beside the existing `import struct`,
 not in the middle where the appended tests begin:
 
