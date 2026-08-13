@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Automated post-session preprocessing pipeline for NHP systems neuroscience"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=1.26",
     "pydantic>=2.6",
     "pyyaml>=6.0",
     # wl-sync is not on PyPI. A direct reference is deliberate: the sync box owns
@@ -26,7 +27,10 @@ dependencies = [
 # where a plain resolve would silently produce a build that cannot run.
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# SpikeInterface is the format oracle for the synthetic generator: the test
+# that matters is whether the reader the pipeline will actually use can open
+# what we wrote. Guessing at .meta fields does not survive contact with it.
+dev = ["pytest>=8.0", "spikeinterface>=0.101"]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
