@@ -22,6 +22,8 @@
 - **No bare `.delete()` anywhere in the codebase.** §10. Task 6 makes this a CI assertion.
 - **Every table gets a docstring comment line** (`# …` as the first line of `definition`) documenting its key, per §10's "keys documented in-schema".
 - **Determinism and idempotence:** activating an already-activated schema must be a no-op, so the suite can run repeatedly against one container.
+- **DataJoint 2.3.2 does not wrap every MySQL error.** `datajoint/adapters/mysql.py`'s `translate_error` maps only a closed set of errnos (1062, 1217/1451/1452/3730, 1064, 1146, 1364, 1054, plus connection-loss codes) into `DataJointError` subclasses. **Errno 1265 — "Data truncated for column", which is what strict-mode MySQL returns for an invalid `enum` value — is not among them**, so the raw `pymysql.err.DataError` propagates unchanged. A test asserting `pytest.raises(dj.DataJointError)` on a bad enum insert will fail. Found in Task 3; corrected there and recorded here because Tasks 4 and 5 assert on exception classes too.
+- **element-lab's `Lab` is `(lab, lab_name, address, time_zone)`.** There is no `institution` attribute, and `time_zone` is required. Found in Task 3; the identical wrong dict was in Task 5's fixture and is corrected.
 - **ONE schema prefix per process — the whole test suite uses `"t_"`.** Each Element module holds a single process-lifetime `schema` object; once bound to a name, activating it under a *different* name raises `DataJointError: The schema is already activated for schema …`. `pipeline.activate`'s own idempotence guard does not catch this, because it only short-circuits a repeat of the *same* prefix — a different one passes straight through into the error.
 
 > **Corrected 2026-08-13 during execution, and it invalidated this plan's original test structure.** Tasks 2–7 were each written with their own prefix (`t1_`, `core_`, `cov_`, `ps_`, `req_`, `guard_`, `daemon_`). Verified against a live MySQL: `pipeline.activate(prefix="a_")` succeeds and `pipeline.activate(prefix="b_")` immediately after raises. Every test module after the first to run in a pytest process would have failed, and the failure would have looked like a schema bug rather than a fixture-design bug. All prefixes are now `"t_"`; the per-module `is_activated()` / `_activated` guards then make every call after the first a no-op, which is what the original design wanted and did not get.
@@ -510,7 +512,9 @@ def a_session(core):
     from wl_preproc.schema import pipeline
 
     pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "Westerberg", "institution": "x", "address": "y"},
+        # element-lab's Lab is (lab, lab_name, address, time_zone) — corrected
+        # 2026-08-13; there is no `institution` attribute and time_zone is required.
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
         skip_duplicates=True,
     )
     pipeline.subject.Subject.insert1(
@@ -576,7 +580,8 @@ def test_only_known_systems_are_accepted(core, a_session):
     creating a silent third acquisition system."""
     import datajoint as dj
 
-    with pytest.raises(dj.DataJointError):
+    # datajoint 2.3.2 does not wrap errno 1265; see Global Constraints.
+    with pytest.raises(pymysql.err.DataError):
         core.AcquisitionSystem.insert1({**a_session, "system": "spikeglex"})
 
 
@@ -1034,7 +1039,9 @@ def selection(req):
     from wl_preproc.schema import core, pipeline
 
     pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "W", "institution": "x", "address": "y"},
+        # element-lab's Lab is (lab, lab_name, address, time_zone). There is no
+        # `institution` attribute — corrected 2026-08-13 after Task 3 hit it.
+        {"lab": "wl", "lab_name": "W", "address": "y", "time_zone": "UTC"},
         skip_duplicates=True,
     )
     pipeline.subject.Subject.insert1(
