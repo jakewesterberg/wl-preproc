@@ -64,3 +64,66 @@ def test_benchmark_recipe_is_realistic():
 def test_recipes_are_frozen():
     with pytest.raises(ValidationError):
         CI_RECIPE.seed = 99
+
+
+def test_channels_default_to_empty_and_resolve_from_the_channel_count():
+    from wl_preproc.synth.recipe import CI_RECIPE
+
+    assert CI_RECIPE.channels == ()
+    resolved = CI_RECIPE.resolved_channels()
+    assert len(resolved) == CI_RECIPE.n_ap_channels
+    assert [c.name for c in resolved] == ["A-000", "A-001", "A-002", "A-003"]
+    assert all(c.enabled for c in resolved)
+
+
+def test_explicit_channels_are_returned_unchanged():
+    from wl_preproc.synth.recipe import CI_RECIPE, ChannelSpec
+
+    named = tuple(
+        ChannelSpec(name=f"B-{i:03d}", impedance_ohms=2.5e6) for i in range(4)
+    )
+    recipe = CI_RECIPE.model_copy(update={"channels": named})
+    assert recipe.resolved_channels() == named
+
+
+def test_channel_count_must_match_the_channel_number():
+    """A recipe whose declared channels disagree with n_ap_channels would emit a
+    header describing a different array than amplifier.dat actually contains."""
+    import pytest
+    from pydantic import ValidationError
+
+    from wl_preproc.synth.recipe import (
+        BlockSpec,
+        ChannelSpec,
+        MontageSpec,
+        SessionRecipe,
+    )
+    from wl_preproc.contracts.events import TaskTypeCode
+
+    with pytest.raises(ValidationError):
+        SessionRecipe(
+            session_id="2027-03-14_09",
+            subject="pico",
+            rig="rig-a",
+            systems=("syncbox", "rhs"),
+            blocks=(
+                BlockSpec(
+                    task_type=TaskTypeCode.RF_MAP, n_trials=1, trial_duration_s=3.0
+                ),
+            ),
+            montages=(MontageSpec(start_s=0.0, end_s=3.0),),
+            n_ap_channels=4,
+            ap_sample_rate_hz=30_000.0,
+            seed=1,
+            channels=(ChannelSpec(name="A-000"),),  # 1 channel, 4 declared
+        )
+
+
+def test_impedance_must_be_positive():
+    import pytest
+    from pydantic import ValidationError
+
+    from wl_preproc.synth.recipe import ChannelSpec
+
+    with pytest.raises(ValidationError):
+        ChannelSpec(name="A-000", impedance_ohms=-1.0)

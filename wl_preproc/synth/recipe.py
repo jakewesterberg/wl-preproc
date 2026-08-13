@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.contracts.paths import SYSTEMS
@@ -26,6 +26,23 @@ class Fault(str, Enum):
     MISSING_DEVICE = "missing_device"
     TRIAL_COUNT_MISMATCH = "trial_count_mismatch"
     TRUNCATED_FILE = "truncated_file"
+
+
+class ChannelSpec(BaseModel):
+    """One recorded channel's identity, in device-neutral terms.
+
+    Name and impedance are things any acquisition system has. Intan's wiring
+    bookkeeping — chip channel, command and board stream, spike-scope defaults —
+    is deliberately absent: it is one vendor's internal model, and this recipe
+    also describes Neuropixels sessions. The RHS header writer derives those.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    impedance_ohms: float = Field(default=1_000_000.0, gt=0.0)
+    impedance_phase_deg: float = 0.0
+    enabled: bool = True
 
 
 class BlockSpec(BaseModel):
@@ -58,6 +75,7 @@ class SessionRecipe(BaseModel):
     blocks: tuple[BlockSpec, ...]
     montages: tuple[MontageSpec, ...]
     n_ap_channels: int
+    channels: tuple[ChannelSpec, ...] = ()
     ap_sample_rate_hz: float
     seed: int
     faults: tuple[Fault, ...] = ()
@@ -66,6 +84,19 @@ class SessionRecipe(BaseModel):
     @property
     def duration_s(self) -> float:
         return sum(block.duration_s for block in self.blocks)
+
+    def resolved_channels(self) -> tuple[ChannelSpec, ...]:
+        """The channels this session records, defaulting to Intan's Port A
+        naming when the recipe does not declare them explicitly.
+
+        Defaulting here rather than in the emitter means every consumer sees the
+        same list, and a recipe that *does* declare channels overrides it wholly.
+        """
+        if self.channels:
+            return self.channels
+        return tuple(
+            ChannelSpec(name=f"A-{i:03d}") for i in range(self.n_ap_channels)
+        )
 
     @model_validator(mode="after")
     def _coherent(self) -> SessionRecipe:
@@ -101,6 +132,12 @@ class SessionRecipe(BaseModel):
                     f"than STIM_PULSE_DURATION_S={STIM_PULSE_DURATION_S}s within "
                     f"the {span}s available after guard bands"
                 )
+        if self.channels and len(self.channels) != self.n_ap_channels:
+            raise ValueError(
+                f"channels declares {len(self.channels)} channels but "
+                f"n_ap_channels is {self.n_ap_channels}; a header describing a "
+                f"different array than amplifier.dat contains is unreadable"
+            )
         return self
 
 
