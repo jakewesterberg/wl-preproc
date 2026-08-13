@@ -4,6 +4,9 @@ from wl_preproc.synth.stim import (
     AMP_SETTLE_BIT,
     CHARGE_RECOVERY_BIT,
     COMPLIANCE_BIT,
+    MAGNITUDE_MASK,
+    SIGN_BIT,
+    UNUSED_MASK,
     pack_stim_word,
     unpack_stim_word,
 )
@@ -65,7 +68,23 @@ def test_unused_bits_are_never_set():
                 charge_recovery=bool(flags & 2),
                 compliance=bool(flags & 4),
             )
-            assert word & 0x1E00 == 0
+            assert word & UNUSED_MASK == 0
+
+
+def test_the_bit_regions_tile_the_word():
+    """Every bit of the 16 belongs to exactly one named region. Stated as a sum
+    because the layout was transcribed from a document that numbers bits from
+    1: an off-by-one in any single mask leaves a gap or an overlap here, rather
+    than silently keying a flag to its neighbour."""
+    regions = (
+        MAGNITUDE_MASK,
+        SIGN_BIT,
+        UNUSED_MASK,
+        AMP_SETTLE_BIT,
+        CHARGE_RECOVERY_BIT,
+        COMPLIANCE_BIT,
+    )
+    assert sum(regions) == 0xFFFF
 
 
 def test_magnitude_out_of_range_rejected():

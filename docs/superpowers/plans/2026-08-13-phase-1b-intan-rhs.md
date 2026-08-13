@@ -372,12 +372,14 @@ and add as the final field of `GroundTruth`:
     stim_events: tuple[StimEvent, ...] = ()
 ```
 
-In `wl_preproc/synth/timeline.py`, add near the other constants:
+In `wl_preproc/synth/stim.py`, add beside the existing `SETTLE_DURATION_S`:
 
 ```python
 STIM_PULSE_DURATION_S = 0.0005
 STIM_GUARD_S = 0.05
 ```
+
+> **Corrected 2026-08-13, during execution.** This step originally put both constants in `wl_preproc/synth/timeline.py`. **That placement is not implementable.** Task 2's review added a geometry validator to `SessionRecipe`, so `recipe.py` must import these constants — and `timeline.py` already imports `recipe.py`, which makes the reverse import circular. They live in `stim.py`, which imports nothing from the package and is therefore reachable from both, and which already held the third stim timing constant. `timeline.py` imports them from there (`from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent`). Nothing else in this step changes; the planting code below is unaffected.
 
 Inside `build_timeline`, declare `stim_events: list[StimEvent] = []` beside `trials`, and inside the per-trial loop — after `trials.append(...)` and before `_emit(words, trial_start, Marker.TRIAL_START.value)` — insert:
 
@@ -398,10 +400,10 @@ Inside `build_timeline`, declare `stim_events: list[StimEvent] = []` beside `tri
                 )
 ```
 
-Add the import at the top of `timeline.py`:
+Add the import at the top of `timeline.py` (see the correction above — the two timing constants come from `stim.py` too, not from `timeline.py` itself):
 
 ```python
-from wl_preproc.synth.stim import StimEvent
+from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 ```
 
 and pass the events into the returned `GroundTruth`:

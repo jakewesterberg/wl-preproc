@@ -7,8 +7,9 @@ from wl_sync.session import SessionId
 
 from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.synth.recipe import STIM_RECIPE
+from wl_preproc.synth.rhs import RHS_SAMPLE_RATE_HZ
 from wl_preproc.synth.session import generate_session
-from wl_preproc.synth.stim import unpack_stim_word
+from wl_preproc.synth.stim import AMP_SETTLE_BIT, SETTLE_DURATION_S
 
 
 def test_rhs_directory_is_written_and_marked_done(tmp_path):
@@ -28,14 +29,21 @@ def test_standalone_intan_session_has_no_spikeglx(tmp_path):
 
 
 def test_stim_words_survive_assembly(tmp_path):
+    """Counted, not merely present. `any(...)` over the whole file passes if a
+    single sample anywhere carries the flag, so an assembler that rendered one
+    of the eight planted events — or smeared one flag across the recording —
+    looks identical to a correct one."""
     truth = generate_session(tmp_path, STIM_RECIPE)
     layout = SessionLayout(tmp_path, SessionId.parse(STIM_RECIPE.session_id))
     out = next(layout.system_dir("rhs").glob("*_rhs"))
     stim = np.fromfile(out / "stim.dat", dtype=np.uint16).reshape(
         -1, STIM_RECIPE.n_ap_channels
     )
-    assert any(unpack_stim_word(int(w)).amp_settle for w in stim.flatten())
     assert truth.stim_events
+
+    flagged = int(np.count_nonzero((stim & AMP_SETTLE_BIT) != 0))
+    settle_samples = int(SETTLE_DURATION_S * RHS_SAMPLE_RATE_HZ)
+    assert flagged == len(truth.stim_events) * settle_samples
 
 
 def test_cli_generates_the_stim_profile(tmp_path):

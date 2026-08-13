@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -5,10 +7,12 @@ from wl_preproc.synth.rhs import (
     BARCODE_DIGITAL_BIT,
     RHS_PRE_ROLL_S,
     RHS_SAMPLE_RATE_HZ,
+    STROBE_DIGITAL_BIT,
+    STROBE_WIDTH_S,
     write_rhs,
 )
 from wl_preproc.synth.recipe import STIM_RECIPE
-from wl_preproc.synth.stim import unpack_stim_word
+from wl_preproc.synth.stim import SETTLE_DURATION_S, unpack_stim_word
 from wl_preproc.synth.timeline import build_timeline
 
 
@@ -17,6 +21,42 @@ def emit(tmp_path, name="rhs"):
     directory = tmp_path / name
     directory.mkdir()
     return truth, write_rhs(directory, STIM_RECIPE, truth), directory
+
+
+def stim_windows(truth):
+    """Each planted event as (event, onset, pulse_end, settle_end) in samples.
+
+    Every stim assertion below is against *all* of these, not the first. A
+    fixture that rendered only event zero, or rendered the events out of order,
+    is indistinguishable from a correct one if the tests only ever look at
+    truth.stim_events[0].
+    """
+    fs = RHS_SAMPLE_RATE_HZ
+    settle_samples = int(SETTLE_DURATION_S * fs)
+    for event in truth.stim_events:
+        onset = int((event.onset_s + RHS_PRE_ROLL_S) * fs)
+        pulse_end = onset + max(1, int(event.duration_s * fs))
+        yield event, onset, pulse_end, pulse_end + settle_samples
+
+
+def planted_mask(truth, shape):
+    """True wherever some planted event claims a sample, channel by channel."""
+    mask = np.zeros(shape, dtype=bool)
+    for event, onset, _pulse_end, settle_end in stim_windows(truth):
+        mask[onset:settle_end, event.channel] = True
+    return mask
+
+
+def read_stim(out):
+    return np.fromfile(out / "stim.dat", dtype=np.uint16).reshape(
+        -1, STIM_RECIPE.n_ap_channels
+    )
+
+
+def read_amplifier(out):
+    return np.fromfile(out / "amplifier.dat", dtype=np.int16).reshape(
+        -1, STIM_RECIPE.n_ap_channels
+    )
 
 
 def test_writes_the_expected_files(tmp_path):
@@ -35,57 +75,162 @@ def test_dcamplifier_is_deliberately_absent(tmp_path):
 def test_amplifier_is_int16_with_no_offset(tmp_path):
     """One File Per Signal Type stores int16 scaled by 0.195 uV with no offset.
     The traditional .rhs format uses uint16 with a 32768 offset; mixing them
-    shifts every trace by 6.4 mV."""
+    shifts every trace by 6.4 mV. The bound is 5 counts, not 500: at 500 a
+    400-count offset — a real mis-scaling, just not the 32768 one — would sail
+    through. Measured mean is about -1 count against a per-sample noise of 31,
+    so 5 is still tens of sigma clear of a false failure."""
     _, out, _ = emit(tmp_path)
     data = np.fromfile(out / "amplifier.dat", dtype=np.int16)
     assert data.size % STIM_RECIPE.n_ap_channels == 0
-    assert abs(float(np.mean(data))) < 500  # centred near zero, not near 32768
+    assert abs(float(np.mean(data))) < 5  # centred near zero, not near 32768
 
 
 def test_stim_words_carry_amp_settle_after_each_pulse(tmp_path):
     """Amplifier settle is the blanking mask the artifact stage keys on, so it
-    must actually be asserted where a pulse happened."""
+    must be asserted across the whole settle window of every pulse — and not
+    during the pulse itself, where the word carries the magnitude instead."""
     truth, out, _ = emit(tmp_path)
-    n_channels = STIM_RECIPE.n_ap_channels
-    stim = np.fromfile(out / "stim.dat", dtype=np.uint16).reshape(-1, n_channels)
-    event = truth.stim_events[0]
-    sample = int((event.onset_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-    window = stim[sample : sample + 30, event.channel]
-    assert any(unpack_stim_word(int(w)).amp_settle for w in window)
+    stim = read_stim(out)
+    assert truth.stim_events
+    for event, onset, pulse_end, settle_end in stim_windows(truth):
+        settle = stim[pulse_end:settle_end, event.channel]
+        assert settle.size == int(SETTLE_DURATION_S * RHS_SAMPLE_RATE_HZ)
+        assert all(unpack_stim_word(int(w)).amp_settle for w in settle)
+        pulse = stim[onset:pulse_end, event.channel]
+        assert not any(unpack_stim_word(int(w)).amp_settle for w in pulse)
 
 
 def test_stim_magnitude_matches_ground_truth(tmp_path):
+    """Every planted event, not just the first: an emitter that rendered one
+    event, or rendered them in the wrong order, passes a first-event check."""
     truth, out, _ = emit(tmp_path)
-    n_channels = STIM_RECIPE.n_ap_channels
-    stim = np.fromfile(out / "stim.dat", dtype=np.uint16).reshape(-1, n_channels)
-    event = truth.stim_events[0]
-    sample = int((event.onset_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-    word = unpack_stim_word(int(stim[sample, event.channel]))
-    assert word.magnitude == event.magnitude
-    assert word.negative == event.negative
+    stim = read_stim(out)
+    assert truth.stim_events
+    for event, onset, pulse_end, _settle_end in stim_windows(truth):
+        for sample in range(onset, pulse_end):
+            word = unpack_stim_word(int(stim[sample, event.channel]))
+            assert word.magnitude == event.magnitude
+            assert word.negative == event.negative
 
 
 def test_channels_without_stim_stay_clean(tmp_path):
-    """A pulse on one channel must not set flags on its neighbours."""
+    """A pulse on one channel must not set flags on its neighbours, for the
+    whole time that pulse and its settle window occupy."""
     truth, out, _ = emit(tmp_path)
     n_channels = STIM_RECIPE.n_ap_channels
-    stim = np.fromfile(out / "stim.dat", dtype=np.uint16).reshape(-1, n_channels)
-    event = truth.stim_events[0]
-    sample = int((event.onset_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-    others = [c for c in range(n_channels) if c != event.channel]
-    assert all(stim[sample, c] == 0 for c in others)
+    stim = read_stim(out)
+    assert truth.stim_events
+    for event, onset, _pulse_end, settle_end in stim_windows(truth):
+        others = [c for c in range(n_channels) if c != event.channel]
+        window = stim[onset:settle_end][:, others]
+        assert not window.any()
+
+
+def test_no_stim_word_is_set_outside_a_planted_window(tmp_path):
+    """The complement of the assertions above, and the one Phase 2's blanking
+    mask actually depends on: the union of the planted windows accounts for
+    every nonzero sample in stim.dat. Without it a fixture could flag samples
+    where nothing was planted, and a blanking stage tuned against it would
+    silently over-blank."""
+    truth, out, _ = emit(tmp_path)
+    stim = read_stim(out)
+    mask = planted_mask(truth, stim.shape)
+    assert stim[~mask].max(initial=0) == 0
+    assert stim[mask].any()  # the mask is not vacuously covering everything
 
 
 def test_amplifier_shows_an_artifact_where_stim_occurred(tmp_path):
-    """The artifact-removal stage needs a real deflection to remove."""
+    """The artifact-removal stage needs a real deflection to remove, at every
+    planted event.
+
+    The baseline is measured away from the planted stim windows. Taking the
+    whole channel's standard deviation instead — as this test first did — lets
+    the artifacts inflate their own reference: on the busiest channel that
+    baseline is about 310 counts rather than the 36 the recording actually
+    sits at, so the ratio being asserted is roughly ten times too forgiving."""
     truth, out, _ = emit(tmp_path)
-    n_channels = STIM_RECIPE.n_ap_channels
-    amp = np.fromfile(out / "amplifier.dat", dtype=np.int16).reshape(-1, n_channels)
-    event = truth.stim_events[0]
-    sample = int((event.onset_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-    during = np.abs(amp[sample : sample + 20, event.channel]).max()
-    quiet = np.std(amp[:, event.channel])
-    assert during > 10 * quiet
+    amp = read_amplifier(out)
+    mask = planted_mask(truth, amp.shape)
+    assert truth.stim_events
+    for event, onset, pulse_end, _settle_end in stim_windows(truth):
+        during = np.abs(amp[onset:pulse_end, event.channel]).max()
+        quiet = np.std(amp[~mask[:, event.channel], event.channel])
+        assert during > 10 * quiet
+
+
+def test_planted_spikes_are_present_where_promised(tmp_path):
+    """GroundTruth.spikes describes 240 events; before this they existed in the
+    SpikeGLX stream and nowhere in the RHS one, so generate_session handed
+    callers a truth its own files contradicted. Mirrors the SpikeGLX check."""
+    truth, out, _ = emit(tmp_path)
+    amp = read_amplifier(out)
+    mask = planted_mask(truth, amp.shape)
+    assert truth.spikes
+    time_s, channel = truth.spikes[0]
+    sample = int((time_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
+    window = amp[sample : sample + 30, channel]
+    baseline = np.std(amp[~mask[:, channel], channel])
+    assert np.abs(window).max() > 3 * baseline
+
+
+def test_a_pulse_straddling_the_end_of_the_buffer_is_truncated_not_fatal(tmp_path):
+    """`if settle_end <= onset` catches an event wholly past the buffer but not
+    one that starts inside it and ends outside: pulse_end then runs past
+    n_samples, the settle tail is a linspace over a negative count, and
+    write_rhs raises. STIM_RECIPE's guard bands make it unreachable, but any
+    hand-built GroundTruth — a fault injector, a shortened recipe — reaches it.
+    """
+    truth = build_timeline(STIM_RECIPE)
+    end_s = STIM_RECIPE.duration_s
+    straddling = replace(truth.stim_events[0], onset_s=end_s - 0.0002, channel=0)
+    truth = replace(truth, stim_events=(straddling,))
+
+    directory = tmp_path / "straddle"
+    directory.mkdir()
+    out = write_rhs(directory, STIM_RECIPE, truth)
+    stim = read_stim(out)
+    assert stim[:, 0].any()  # the part that fits is still rendered
+
+
+def test_every_code_word_gets_its_own_strobe_edge(tmp_path):
+    """The strobe is tier B's only independent witness of the code bus (spec
+    section 4.7), so each planted word must produce a countable rising edge.
+
+    At a 1 ms width against timeline.CODE_WORD_SPACING_S = 1 ms, consecutive
+    pulses were contiguous and merged into one long high: 31 planted words
+    rendered as 5 rising edges, and nothing tested it. STROBE_WIDTH_S is half
+    the spacing, so a low always separates them.
+
+    Two of the 31 words do not appear, and that is a different thing from
+    merging: build_timeline places BLOCK_END and SESSION_END at and just after
+    duration_s, while the RHS buffer ends at duration_s + pre-roll, so those
+    two fall past the last sample. Every word the buffer can hold gets an edge.
+    """
+    truth, out, _ = emit(tmp_path)
+    digital = np.fromfile(out / "digitalin.dat", dtype=np.uint16)
+    strobe = ((digital >> STROBE_DIGITAL_BIT) & 1).astype(np.int8)
+    rising = int(np.count_nonzero(np.diff(np.concatenate(([0], strobe))) == 1))
+
+    width = max(1, int(STROBE_WIDTH_S * RHS_SAMPLE_RATE_HZ))
+    starts = [
+        int((time_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
+        for time_s, _word in truth.code_words
+    ]
+    inside = [s for s in starts if s + width <= digital.size]
+    assert len(inside) == len(truth.code_words) - 2, "only the session-closing pair"
+    assert rising == len(inside)
+
+
+def test_digital_input_uses_only_the_barcode_and_strobe_bits(tmp_path):
+    """The barcode and the strobe share one 16-bit word. If either writer ever
+    reached a bit it does not own, the other's decode would pick it up as its
+    own signal — and both decodes would still look plausible."""
+    _, out, _ = emit(tmp_path)
+    digital = np.fromfile(out / "digitalin.dat", dtype=np.uint16)
+    owned = np.uint16((1 << BARCODE_DIGITAL_BIT) | (1 << STROBE_DIGITAL_BIT))
+    assert not np.any(digital & ~owned)
+    assert np.any(digital & np.uint16(1 << BARCODE_DIGITAL_BIT))
+    assert np.any(digital & np.uint16(1 << STROBE_DIGITAL_BIT))
 
 
 def test_barcode_is_decodable_from_the_digital_input(tmp_path):
@@ -114,6 +259,26 @@ def test_header_declares_the_stim_step_size(tmp_path):
     header = (out / "info.rhs").read_bytes()
     assert np.frombuffer(header[:4], dtype=np.uint32)[0] == 0xD69127AC
     assert STIM_STEP_SIZE_A > 0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "info.rhs is a 20-byte identification stub, not a parseable Intan "
+        "header, so read_intan raises while parsing channel definitions. "
+        "strict=True is the point: the day someone writes a real header this "
+        "XPASSes and fails the build, which is the signal to wire the reader "
+        "up as the format oracle the way test_spikeglx.py does. Writing that "
+        "header is a follow-on task, not something to improvise from a "
+        "reader's source — see the plan's 'Deliberately excluded'."
+    ),
+)
+def test_spikeinterface_can_open_the_emitted_rhs(tmp_path):
+    extractors = pytest.importorskip("spikeinterface.extractors")
+    _, out, _ = emit(tmp_path)
+    recording = extractors.read_intan(out / "info.rhs", stream_id="0")
+    assert recording.get_num_channels() == STIM_RECIPE.n_ap_channels
+    assert recording.get_sampling_frequency() == pytest.approx(RHS_SAMPLE_RATE_HZ)
 
 
 def test_emission_is_deterministic(tmp_path):

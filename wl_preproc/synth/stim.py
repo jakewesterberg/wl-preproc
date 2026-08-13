@@ -1,4 +1,16 @@
-"""Intan RHS stimulation words.
+"""Intan RHS stimulation: the wire format and the timing that shapes it.
+
+Two things live here. The first is the stim word codec — `pack_stim_word`,
+`unpack_stim_word` and the bit-region constants below — which is what
+`write_rhs` emits into `stim.dat` and what a consumer reads back out.
+
+The second is stimulation timing: `SETTLE_DURATION_S`, `STIM_PULSE_DURATION_S`,
+`STIM_GUARD_S` and the `StimEvent` record that `build_timeline` plants and
+`write_rhs` renders. These constants sit here rather than beside the other
+timeline constants because `recipe.SessionRecipe` validates planting geometry
+against them and `timeline` already imports `recipe`, so putting them in
+`timeline` would make that import circular. This module imports nothing from
+the package, which is what keeps it available to both.
 
 Bit layout, spec section 6.3, verified against Intan's RHS Data File Formats
 application note:
@@ -24,6 +36,11 @@ from dataclasses import dataclass
 
 MAGNITUDE_MASK = 0x00FF
 SIGN_BIT = 0x0100
+# Bits 9-12 carry nothing, but naming them completes the map: the six regions
+# sum to 0xFFFF, so any off-by-one introduced while transcribing a document
+# that numbers bits from 1 shows up as a gap or an overlap. It is also the mask
+# a reader tests to tell a garbled word from a real one — which is how
+# test_stim.py's "unused bits are never set" invariant is stated.
 UNUSED_MASK = 0x1E00
 AMP_SETTLE_BIT = 0x2000
 CHARGE_RECOVERY_BIT = 0x4000
