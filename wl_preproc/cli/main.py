@@ -54,6 +54,12 @@ def main(argv: list[str] | None = None) -> int:
     export = schemas_sub.add_parser("export", help="write JSON Schema for every contract")
     export.add_argument("--out", default="docs/schemas", type=Path)
 
+    synth = subparsers.add_parser("synth", help="synthetic session tools")
+    synth_sub = synth.add_subparsers(dest="action", required=True)
+    generate = synth_sub.add_parser("generate", help="write a synthetic session")
+    generate.add_argument("--out", required=True, type=Path)
+    generate.add_argument("--profile", choices=["ci", "benchmark"], default="ci")
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -63,6 +69,19 @@ def main(argv: list[str] | None = None) -> int:
         for path in export_schemas(args.out):
             print(path)
         return 0
+
+    if args.group == "synth" and args.action == "generate":
+        # Imported lazily: the generator pulls in NumPy, and `wlpp schemas
+        # export` has no reason to pay for it.
+        from wl_preproc.synth.recipe import BENCHMARK_RECIPE, CI_RECIPE
+        from wl_preproc.synth.session import generate_session
+
+        recipe = CI_RECIPE if args.profile == "ci" else BENCHMARK_RECIPE
+        args.out.mkdir(parents=True, exist_ok=True)
+        truth = generate_session(args.out, recipe)
+        print(f"{args.out / recipe.session_id}: {len(truth.trials)} trials")
+        return 0
+
     return 2
 
 
