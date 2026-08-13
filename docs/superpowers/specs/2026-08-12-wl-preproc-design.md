@@ -51,7 +51,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 
 | Area | Decision |
 |---|---|
-| Runtime | Python-first: SpikeInterface, Kilosort4, NeuroConv/pynwb |
+| Runtime | Python-first (`>=3.11`, no upper cap): SpikeInterface, Kilosort4, NeuroConv/pynwb. **PyTorch from the `cu126` index only** (§6.6) |
 | Orchestration | DataJoint + DataJoint Elements, with explicit newcomer guardrails |
 | Compute | 16-core AM4, 128 GB RAM, Quadro P6000 (24 GB), ≥4 TB NVMe scratch, ≥10 GbE |
 | Server OS | **Fedora** on wl-preproc |
@@ -528,7 +528,21 @@ Automated curation via rules-based thresholds (in the spirit of Allen's ecephys-
 
 The **Quadro P6000** is Pascal (compute capability 6.1), 24 GB VRAM, no tensor cores.
 
-- **CUDA 13 dropped Pascal support.** The P6000 requires CUDA 12.x with a PyTorch build shipping `sm_61` kernels. Pin explicitly; do not allow `pip install -U` to break sorting.
+- **The constraint is the `cu126` wheel index, and nothing looser.** Verified 2026-08-13 against PyTorch's published architecture lists rather than assumed:
+
+  | Wheel index | Pascal (`sm_61`) |
+  |---|---|
+  | **cu126** | **Yes** — sm_61, 70, 75, 80, 86, 90 |
+  | cu128 / cu129 | **No** — dropped from PyTorch 2.7 on binary-size grounds |
+  | PyPI default | **No** — CUDA 13.0 became the stable PyPI variant at PyTorch 2.11, and CUDA 13 dropped Pascal entirely |
+
+  **So `pip install torch` now silently yields a build that cannot run on this GPU.** It must come from the cu126 index explicitly, and the container image (§6.6.1) is what makes that permanent rather than a thing someone remembers.
+
+> **Corrected 2026-08-13. This bullet read "CUDA 12.x with a PyTorch build shipping `sm_61` kernels", which is too loose in exactly the direction that fails silently** — cu128 *is* CUDA 12.x and has no Pascal kernels, so the rule as written would have permitted a wheel that cannot run. The same check retired a second claim: **`requires-python = ">=3.11,<3.12"` was invented.** It was justified here as "the Kilosort4/PyTorch pin for Pascal", but cu126 ships wheels for cp39 through cp315 — Python was never constrained by Pascal at all, and the two were conflated. The cap propagated into `wl-sync`'s plan before being removed there for an unrelated reason, which is how an invented constraint survives: it gets cited rather than re-derived.
+>
+> **Python is now `>=3.11` with no upper bound**, matching `wl-sync`. Reproducibility comes from the container digest (§6.6.1), not from narrowing a range in `pyproject.toml`.
+
+- **This narrows the P6000's runway, and that is the real argument for the upgrade.** cu126 is the last index carrying `sm_61`, and it will stop being built. The card works today and its supported-software window is closing — which is a better reason to budget for a replacement than raw throughput.
 - Versions are **parameterized, not hardcoded**, so the planned GPU upgrade is a config change.
 - The upgrade will retain ≥24 GB VRAM, so KS4 batching config stays constant across the swap.
 - **Environment isolation:** U'n'Eye is also a PyTorch consumer. Two independently-pinned PyTorch dependents in one environment is how dependency hell starts. Resolved by §6.6.1 — one container per stage.
