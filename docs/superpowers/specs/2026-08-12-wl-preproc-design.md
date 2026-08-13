@@ -1097,8 +1097,8 @@ wl-works requires that a design amending another document carry a ledger of what
 | 7 | Plan 23 §12 | **Item 1 claimed.** The "checked good" gate, and the correction that it belongs on scratch reclamation rather than on archival |
 | 8 | Plan 19 §4.1 | The derived map gains an external check. **The derive-not-receive ruling is explicitly not reopened** |
 | 9 | Glossary §6.2 | The per-recording site-selection gap gains an owner — and the reason it could never have been wl.works' |
-| 10 | Plan 24 §10.4 **(correction to item 2)** | The partial unique index must key on `(animal_session_id, montage)`, not `animal_session_id` alone. As first committed it permits one canonical per session, which makes a three-penetration day unrepresentable |
-| 11 | Glossary §1 | **`recording montage`** added to the lab-word map — a maximal interval with no probe movement, the grain at which unit identity holds |
+| 10 | Plan 24 §10.4 **(correction to item 2)** | The partial unique index must key on `(animal_session_id, montage_id)`, not `animal_session_id` alone. As first committed it permits one canonical per session, which makes a three-penetration day unrepresentable. **Applied 2026-08-13, `3b49ced`** |
+| 11 | Glossary §1 | **`recording montage`** added to the lab-word map — a maximal interval with no probe movement, the grain at which unit identity holds. **Applied 2026-08-13, `3b49ced`** |
 
 **Item 5 was nearly missed, and how it was caught is worth recording.** The first pass amended the two plan specs and stopped. The design spec turned out to enumerate `analysis_activation`'s columns rather than only naming the table, so a column-level change reaches it — found by grepping the identifier across the repository rather than by re-reading the amendment list. That is that repository's own convention diff, and it produced exactly the class of omission its ledger discipline exists to catch.
 
