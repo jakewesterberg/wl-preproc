@@ -56,6 +56,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Compute | 16-core AM4, 128 GB RAM, Quadro P6000 (24 GB), ≥4 TB NVMe scratch, ≥10 GbE |
 | Server OS | **Fedora** on wl-preproc |
 | Sync box OS | **Raspberry Pi OS** — the vendor kernel, for the vendor's silicon (§4.3) |
+| Environments | **One container per stage**, built at deploy not per run. Image digest is the provenance identity (§6.6.1) |
 | Sync master | Sync box (**Raspberry Pi 5** + RP1 PIO), one per rig, present at every session. Separate repo, `wl-sync` |
 | Barcode | 32-bit monotonic counter, 5 ms bits, 200 ms frame, **1 Hz** |
 | Event codes | **16-bit** parallel + strobe |
@@ -530,9 +531,37 @@ The **Quadro P6000** is Pascal (compute capability 6.1), 24 GB VRAM, no tensor c
 - **CUDA 13 dropped Pascal support.** The P6000 requires CUDA 12.x with a PyTorch build shipping `sm_61` kernels. Pin explicitly; do not allow `pip install -U` to break sorting.
 - Versions are **parameterized, not hardcoded**, so the planned GPU upgrade is a config change.
 - The upgrade will retain ≥24 GB VRAM, so KS4 batching config stays constant across the swap.
-- **Environment isolation:** U'n'Eye is also a PyTorch consumer. Two independently-pinned PyTorch dependents in one environment is how dependency hell starts — separate environments or containers per stage.
+- **Environment isolation:** U'n'Eye is also a PyTorch consumer. Two independently-pinned PyTorch dependents in one environment is how dependency hell starts. Resolved by §6.6.1 — one container per stage.
 
 **Pre-January benchmark:** run KS4 on synthetic NP sessions to establish a concrete P6000 baseline. This converts "is the P6000 fast enough" into a number, which is exactly what justifies a specific card in a budget request.
+
+### 6.6.1 Every stage is a container, and the digest is the provenance
+
+**One mechanism, not two.** Every pipeline stage runs as a container with a pinned image digest — including the pure-Python ones, where a lockfile would have sufficed. Uniformity is worth more than the marginal saving: one form of environment identity, one rebuild story for the server, and no per-stage judgment about which mechanism applies.
+
+The lab already runs Docker Compose across `wl-works` and `wl-elab`, so this is an existing competence rather than a second new system landing beside DataJoint.
+
+**Environments are built at deploy, never per run.** Per-run creation would be slow (resolving PyTorch and CUDA is minutes and gigabytes), network-dependent (a registry outage would stop acquisition), and — worst — **non-deterministic**, so two runs weeks apart would silently differ. That would make provenance weaker while appearing to strengthen it.
+
+**The image digest satisfies an obligation that already exists.** wl.works expects resolved component versions back from this host (§11.2), and `analysis_component_version` is where they land. A digest is a stronger identity than a version string or a lock hash, so this is not extra bookkeeping — it discharges a contract already owed.
+
+**Old images are retained, never replaced.** Re-running a 2027 session under its original environment means pulling its recorded digest. Same supersede-don't-overwrite rule as canonical NWBs (§8.3) and paramsets (§5.3).
+
+#### What containers do *not* buy, stated because the opposite was claimed first
+
+> An earlier draft of this design argued that containers insulate the pipeline from Fedora's kernel and `akmod` churn. **That is half wrong and the wrong half matters.** A container pins the **CUDA userspace toolkit**; the **NVIDIA kernel module lives on the host**. If a Fedora kernel update lands before `akmod-nvidia` rebuilds, a containerised sort fails exactly as a host-installed one would. Containers make the toolkit reproducible and do nothing about the driver — so §4.3's hold-the-kernel discipline remains the actual mitigation, not a belt-and-braces extra.
+
+#### Three constraints that are cheap now and expensive later
+
+1. **Logs land on a bind-mounted host path**, not container stdout alone. The entire ops design (§10) optimises for a trainee diagnosing an overnight failure; that survives containerisation only if they read a file rather than first learning `docker logs`.
+2. **`wlpp doctor` runs on the host and inspects the containers**, never requiring the operator to be inside one. Same reasoning.
+3. **Two compose profiles, and the distinction is written down.** Development bind-mounts the source so Phase 1–3 is not a rebuild per change; production bakes it into the image. A bind-mounted dev compose file reaching a rig would silently defeat the reproducibility this section exists for.
+
+#### Setup cost to pay before January, not during it
+
+**Fedora with SELinux enforcing plus GPU passthrough is the fiddly part**: NVIDIA Container Toolkit, correct device exposure, and `:z`/`:Z` labels on every bind mount. It is a one-time cost, but it is the step most likely to consume an afternoon — and far better consumed in October than with an animal waiting.
+
+**Explicitly not a concern: scratch I/O.** Bind mounts on Linux are near-native, so Kilosort hammering the NVMe loses nothing to containerisation. (The intuition that says otherwise comes from Docker Desktop on macOS, where it would be real; it does not apply here.)
 
 ### 6.7 Unit and channel enrichment
 
