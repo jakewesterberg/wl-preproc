@@ -54,6 +54,8 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Runtime | Python-first: SpikeInterface, Kilosort4, NeuroConv/pynwb |
 | Orchestration | DataJoint + DataJoint Elements, with explicit newcomer guardrails |
 | Compute | 16-core AM4, 128 GB RAM, Quadro P6000 (24 GB), ≥4 TB NVMe scratch, ≥10 GbE |
+| Server OS | **Fedora** on wl-preproc |
+| Sync box OS | **Raspberry Pi OS** — the vendor kernel, for the vendor's silicon (§4.3) |
 | Sync master | Sync box (**Raspberry Pi 5** + RP1 PIO), one per rig, present at every session. Separate repo, `wl-sync` |
 | Barcode | 32-bit monotonic counter, 5 ms bits, 200 ms frame, **1 Hz** |
 | Event codes | **16-bit** parallel + strobe |
@@ -280,6 +282,13 @@ Trials can be as short as 3 s, so a single-trial segment always clears the one-b
 | Barcode output | Ordinary GPIO, software-timed |
 
 **A new hardware constraint follows, and it reaches the breakout PCB.** PIO parallel capture reads a **contiguous pin range**, so the 16 code lines plus strobe must be adjacent on the header. `pigpio` sampled all GPIO simultaneously and had no such requirement, so this pins down the GPIO map before the board in §4.4 is designed.
+
+**Raspberry Pi OS on the sync box, whatever the rest of the lab runs.** RP1 support is landing in mainline incrementally — GPIO and pinctrl patches in flight, a PWM driver arriving around April 2026 — but **PIO is the piece this design depends on entirely**, and vendor kernels carry vendor silicon support first. The sync box is an appliance running one service, so there is no upside to matching the lab's general distribution and a real downside to running ahead of the driver.
+
+**This constrains nothing else.** The sync box and the preprocessing server are different machines; the server runs **Fedora** (§6.6). Two practical consequences there, both the kind that bite at 8am rather than at install time:
+
+- **Fedora ships Python 3.13 as system Python**, and this pipeline is pinned to 3.11 by the Kilosort4/PyTorch requirement for Pascal. Use the packaged `python3.11` or a `uv`-managed environment; do not fight the system interpreter.
+- **The NVIDIA driver is an out-of-tree module on a fast-moving kernel.** `akmod-nvidia` rebuilds it automatically, but a kernel update can still leave CUDA broken until that rebuild completes — on a machine expected to sort overnight. Hold or version-lock the kernel and update it deliberately rather than letting it ride.
 
 **The risk is bounded by construction.** `wl-sync` reaches hardware only through a mechanism-neutral `SyncBackend` protocol with an in-memory fake, so the codec, log format and session identity are pure Python tested in CI, and a Pi 4 + `pigpio` backend remains one class away if the PIO acceptance gate fails.
 
