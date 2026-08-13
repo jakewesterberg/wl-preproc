@@ -85,18 +85,13 @@ class SessionRecipe(BaseModel):
     def duration_s(self) -> float:
         return sum(block.duration_s for block in self.blocks)
 
-    def resolved_channels(self) -> tuple[ChannelSpec, ...]:
-        """The channels this session records, defaulting to Intan's Port A
-        naming when the recipe does not declare them explicitly.
-
-        Defaulting here rather than in the emitter means every consumer sees the
-        same list, and a recipe that *does* declare channels overrides it wholly.
-        """
-        if self.channels:
-            return self.channels
-        return tuple(
-            ChannelSpec(name=f"A-{i:03d}") for i in range(self.n_ap_channels)
-        )
+    # There is deliberately no resolved_channels() here. Defaulting the names was
+    # tried on this object and put Intan's Port A convention on a device-neutral
+    # recipe: CI_RECIPE has no `rhs` system and got A-000 anyway. Each emitter
+    # owns its own convention — write_rhs_header defaults to Port A, write_spikeglx
+    # names AP0..APn without consulting this field at all — and `channels` stays
+    # here as the override, which is the seam that makes a deliberately wrong
+    # channel map expressible for spec section 11.6.
 
     @model_validator(mode="after")
     def _coherent(self) -> SessionRecipe:

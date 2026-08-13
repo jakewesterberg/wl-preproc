@@ -66,24 +66,32 @@ def test_recipes_are_frozen():
         CI_RECIPE.seed = 99
 
 
-def test_channels_default_to_empty_and_resolve_from_the_channel_count():
+def test_channels_default_to_empty_and_the_recipe_names_nothing():
+    """A recipe is device-neutral, so it must not carry one vendor's naming.
+
+    This object used to resolve unset channels to Intan's Port A convention, and
+    the consequence was live: CI_RECIPE is a SpikeGLX/bcam recipe with no `rhs`
+    system, and it answered A-000..A-003 anyway. The default now lives in
+    write_rhs_header, which is the code that owns that convention; write_spikeglx
+    names AP0..APn and never consults this field.
+    """
     from wl_preproc.synth.recipe import CI_RECIPE
 
     assert CI_RECIPE.channels == ()
-    resolved = CI_RECIPE.resolved_channels()
-    assert len(resolved) == CI_RECIPE.n_ap_channels
-    assert [c.name for c in resolved] == ["A-000", "A-001", "A-002", "A-003"]
-    assert all(c.enabled for c in resolved)
+    assert not hasattr(CI_RECIPE, "resolved_channels")
 
 
-def test_explicit_channels_are_returned_unchanged():
+def test_explicit_channels_are_stored_unchanged():
+    """`channels` is the override an emitter reads, so it must survive verbatim —
+    including a naming convention that is nobody's default."""
     from wl_preproc.synth.recipe import CI_RECIPE, ChannelSpec
 
     named = tuple(
         ChannelSpec(name=f"B-{i:03d}", impedance_ohms=2.5e6) for i in range(4)
     )
     recipe = CI_RECIPE.model_copy(update={"channels": named})
-    assert recipe.resolved_channels() == named
+    assert recipe.channels == named
+    assert [c.impedance_ohms for c in recipe.channels] == [2.5e6] * 4
 
 
 def test_channel_count_must_match_the_channel_number():
