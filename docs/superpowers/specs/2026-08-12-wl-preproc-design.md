@@ -466,6 +466,33 @@ needs no table migration — but only if it is in place before any row is writte
 > eye and stim in the custom column, and every array-valued attribute among them is exposed to
 > exactly the same silent loss.
 
+**How each Element is wired, decided 2026-08-13 — and no fork is taken.**
+
+| Element | Pin | Why |
+|---|---|---|
+| `element-lab`, `element-session`, `element-event` | upstream commit | Already activate cleanly on 2.3.2. `element-session` needs `Experimenter = User` supplied by the linking module. |
+| `element-animal` | **the open PR branch** (`akshay-jaggi/element-animal @ compat-fixes`, PR #51) | Zero divergence by construction — it is the code that will merge. Re-pin to `main` when it lands. |
+| `element-array-ephys` | **not activated yet** | Issue #230 is unfixed and has no PR. Deferred to Phase 2. |
+
+> **Deferring array-ephys costs nothing on the blob deadline, because that deadline is
+> per-table rather than per-schema.** The fix must precede the first row written *to the
+> affected tables*; tables that do not exist have no rows. Declaring them fresh in Phase 2 with
+> the fix already in place is exactly as safe as declaring them now.
+
+> **PHASE 2 PRECONDITION — do not activate `element-array-ephys` until issue #230 is resolved,
+> upstream or here.** Its 14 `longblob` attributes declare perfectly and then silently destroy
+> every waveform, LFP trace and metrics array written to them. **An activation test cannot see
+> this**; only a round-trip can. Phase 2 must verify a numpy array survives insert-and-fetch
+> through an `element-array-ephys` table *before* anything real is written, and the 1 `attach`
+> attribute must be checked too — it hard-fails declaration rather than failing silently, so it
+> is the friendlier of the two.
+
+**The consequence for §5.2's hierarchy.** `ProbeInsertion`, `Clustering`, `CuratedClustering`,
+`WaveformSet` and the unit tables come from `element-array-ephys`, so that branch is **not**
+declared in 1c-1. Every *custom* table in the hierarchy still is, which is what the
+"declare it all now, populate it later" ruling was really buying: one blob audit over the
+tables this repository actually owns, done while pre-data.
+
 **On species.** Nothing in the adopted Elements is rodent-only in a way that matters:
 `Subject`, `Species`, `Strain` and `SubjectDeath` are species-agnostic. `Line`, `Allele`,
 `Zygosity` and the `genotyping` module are mouse-colony management and simply stay empty here.
