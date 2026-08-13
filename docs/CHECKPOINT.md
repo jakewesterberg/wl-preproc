@@ -99,6 +99,13 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Traps that cost real time, recorded so they are paid for once
 
+- **A bare `longblob` silently destroys array data under DataJoint 2.x.** 2.x declares it as a
+  raw binary column rather than a DataJoint blob, so a numpy array is stored as its *string
+  repr* — with the middle elided by numpy above ~1000 elements — and **nothing raises on insert
+  or on fetch**. Measured: a 384 × 82 float32 waveform set, 31,488 values, became 488 bytes and
+  is unrecoverable. Declare **`<blob>`** instead. The fix is definition-only and needs no table
+  migration **only while no row has yet been written under 2.x** — so it must cover this repo's
+  own custom tables, not just the Elements', and it must land before January. §5.1.1.
 - **PyTorch must come from the `cu126` index.** cu128 dropped Pascal at 2.7, and PyPI's
   default moved to CUDA 13 at 2.11 — so a plain `pip install torch` silently yields a build
   that cannot run on the P6000. §6.6.
@@ -131,6 +138,13 @@ defensible call, but it is a reversal rather than a gap.
   2 ms per word — while Phase 1a spaced words 1 ms apart. Two independent investigations, one
   from the emitter (MonkeyLogic, §4.2.1) and one from the receiver (the RHS fixture), landed
   on the same 500 µs. **A spec number no code has executed yet is a hypothesis.**
+- **A dependency that imports is not a dependency that works, and the first error hides the
+  rest.** Probing the Elements on DataJoint 2.x, the first failure (`dj.schema` removed) masked
+  everything behind it, and a one-line shim made all seven modules import — which looked like
+  the answer and was not. Behind it sat a dropped attribute type, then generated-SQL failures,
+  then the silent blob corruption above, which **activation tests cannot see at all** because
+  the tables declare perfectly and only lose data once written to. **Peel every layer before
+  concluding, and for a data store, test a round-trip rather than a declaration.**
 - **A plan can assert a capability that none of its tasks tests.** Phase 1b's plan justified
   its whole file layout on "SpikeInterface reads them" and specified no test for it; the
   emitted fixtures cannot in fact be opened by `read_intan`. Every task passed its own review,

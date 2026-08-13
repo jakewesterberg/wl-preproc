@@ -433,6 +433,45 @@ DataJoint's `.alter()` handles non-key attributes; **changing a primary key mean
 | Stim (params, events, artifact handling) | **custom** |
 | Intan/RHS ingest | **custom** — Elements covers SpikeGLX and Open Ephys only |
 
+#### 5.1.1 The DataJoint version, and the migration this lands in the middle of
+
+> **Added 2026-08-13, from a spike.** §5.1 above adopts five Elements without naming a
+> DataJoint version. That omission turned out to matter more than a version pin usually does.
+
+**DataJoint 2.0 shipped February 2026 and is a breaking major version.** Its migration guide is
+explicit that **"pre-2.0 versions receive no further support"** and that new projects should
+**"adopt 2.0 directly without legacy compatibility concerns."** Elements' maintainer is equally
+explicit that Elements are following: *"We are not keeping elements working on both 0.14.x and
+2.x… all schemas should be migrated."*
+
+**So this project pins `datajoint>=2.3,<3`.** Staying on 0.14 would not be the conservative
+choice it looks like — it is choosing the branch upstream has abandoned.
+
+**The Elements are mid-migration as of this writing**, and it began days before this decision:
+`element-animal` PR #51 (open) does the type-spelling migration and raises its floor to
+`datajoint>=2.3`; `element-array-ephys` issue #230 is Phase I of the same work. **Until those
+merge, this project carries the patches itself and contributes them back**, tracking the
+upstream tickets rather than forking.
+
+**The one hard deadline this creates.** Under 2.x a bare `longblob` declares a raw binary
+column rather than a DataJoint blob, so a numpy array is stored as its *string repr* — elided
+in the middle by numpy for anything over ~1000 elements — and **nothing raises on insert or on
+fetch**. Verified here: a 384 × 82 float32 waveform set, 31,488 values, was stored as 488 bytes
+and is unrecoverable. The fix is to declare `<blob>` instead, which is **definition-only and
+needs no table migration — but only if it is in place before any row is written under 2.x.**
+
+> **This project is pre-data, which is the cheapest possible moment to be doing this, and the
+> window closes when the lab starts.** The audit must cover **this repository's own custom
+> tables as well as the Elements'** — §5.1 puts sync, segments, timebase, coverage, provenance,
+> eye and stim in the custom column, and every array-valued attribute among them is exposed to
+> exactly the same silent loss.
+
+**On species.** Nothing in the adopted Elements is rodent-only in a way that matters:
+`Subject`, `Species`, `Strain` and `SubjectDeath` are species-agnostic. `Line`, `Allele`,
+`Zygosity` and the `genotyping` module are mouse-colony management and simply stay empty here.
+They are noted because the one attribute that broke under 2.x — `is_active : boolean` — lives
+in that unused corner, which makes it look like an NHP gap when it is not one.
+
 ### 5.2 Key hierarchy
 
 ```
@@ -999,7 +1038,7 @@ Written for a DataJoint first-timer. The four real DataJoint hazards, each with 
 
 | Hazard | Handling |
 |---|---|
-| **Long computations in `make()` transactions** — a 4 h Kilosort run holds a MySQL connection and hits `wait_timeout` | Compute outside the insert; raise `wait_timeout`/`max_allowed_packet`; ping-and-reconnect. Newer DataJoint supports splitting `make` into fetch/compute/insert phases — **OPEN:** confirm exact API |
+| **Long computations in `make()` transactions** — a 4 h Kilosort run holds a MySQL connection and hits `wait_timeout` | **The three-part make** (§13 item 6, closed): define `make_fetch(key)` → `make_compute(key, *fetched)` → `make_insert(key, *computed)` instead of `make`. `populate` runs fetch, then compute **outside any transaction**, then opens the transaction, **re-fetches and deep-hashes the sources**, and inserts only if nothing changed. Verified on both 0.14.9 and 2.3.2; the observed call order is `fetch, compute, fetch, insert` per key. Also raise `wait_timeout`/`max_allowed_packet` and ping-and-reconnect. Upstream is adopting it too — `element-array-ephys` moved `EphysRecording` to it in Dec 2025 |
 | **Stale job reservations** — a crashed populate leaves `~jobs` marked reserved and the session is skipped forever | Scheduled reaper; "stuck jobs" front and centre in the daily report |
 | **Primary key changes** require drop-and-repopulate | Keys documented in-schema with an explicit warning; §5 chosen for stability |
 | **Cascading deletes** reach further than expected | **No bare `.delete()` anywhere in the codebase** |
@@ -1170,7 +1209,7 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 3 | ~~Exact `.rhs` stim-flag field layout~~ **Closed 2026-08-13** — bit layout in §6.3, including the 1-based numbering trap. One residual: `dcamplifier.dat` dtype, where the vendor document contradicts itself | ~~Phase 2~~ |
 | 4 | ~~MonkeyLogic 16-line behavioral code configuration on the chosen task-PC DAQ~~ **Closed 2026-08-13** — NIMH ML declares Behavioral Codes multiline with **no line cap** (`mliolist.m`, and the third column is a boolean flag rather than a count); codes are `uint16`, covering the full range in §4.2. **The 16-bit protocol is not at risk and no frozen contract moves.** Board chosen in §12; strobe timing restated in §4.2.1, which is where the real finding landed. One residual: the packing itself is inside a closed MEX, so this is the emitter's declared contract and **not a bench test** | ~~Phase 0~~ |
 | 5 | Tolerance for the ingest-time task-PC vs. sync-box clock cross-check | Phase 1 |
-| 6 | DataJoint `make` fetch/compute/insert splitting API | Phase 1 |
+| 6 | ~~DataJoint `make` fetch/compute/insert splitting API~~ **Closed 2026-08-13** — it is the **three-part make**: `make_fetch` / `make_compute` / `make_insert`, with the expensive phase outside the transaction and a re-fetch-and-compare guard inside it. Verified empirically on 0.14.9 and 2.3.2 rather than read from docs. §10 | ~~Phase 1~~ |
 | 7 | MUAe and compression-strategy citations | Phase 2 |
 | 8 | Event code range allocation finalized against real tasks | Phase 0 |
 | 9 | ~~Who creates `animal_session_block` rows, and when~~ **Closed 2026-08-13** — the session planner creates them in wl.works; wl-preproc cross-validates its decoded boundaries and **never writes**. An absent row quarantines and reports, carrying the decoded boundaries as a decision aid. §8.3.1 | ~~Phase 0~~ |
