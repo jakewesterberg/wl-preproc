@@ -1,7 +1,12 @@
 """Emit an Intan RHS session in the "One File Per Signal Type" layout.
 
 Flat .dat arrays rather than the traditional format's interleaved 128-sample
-blocks: far easier to generate correctly, and SpikeInterface reads it.
+blocks: far easier to generate correctly. This is not a claim that a
+third-party reader can open it — info.rhs is currently an identification stub
+(magic number, version, sample rate, stim step size, channel count) rather
+than a parseable Intan header, so e.g. spikeinterface.extractors.read_intan
+cannot open these fixtures yet (verified: it raises IndexError trying to parse
+the header). See _write_header below.
 
 Files written:
     info.rhs        header, beginning with the magic number 0xD69127AC
@@ -44,9 +49,14 @@ _MAGIC = 0xD69127AC
 
 
 def _write_header(path: Path, recipe: SessionRecipe) -> None:
-    """A minimal Standard Intan RHS header: magic number, version, sample rate
-    and stim step size. Enough to identify the file and scale stim magnitudes,
-    which is what the fixtures are for."""
+    """An identification stub, NOT a parseable Intan header: magic number,
+    version, sample rate, stim step size and channel count. Enough to identify
+    the file and scale stim magnitudes, which is what the fixtures are for.
+
+    Writing a byte-correct Standard Intan RHS header is deliberately deferred
+    rather than improvised here — reverse-engineering one from a reader
+    implementation would fabricate a format, the same reasoning that keeps
+    dcamplifier.dat unwritten (spec section 6.3)."""
     payload = struct.pack("<IhhffI", _MAGIC, 1, 2, RHS_SAMPLE_RATE_HZ, STIM_STEP_SIZE_A, recipe.n_ap_channels)
     path.write_bytes(payload)
 
