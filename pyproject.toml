@@ -3,7 +3,15 @@ name = "wl-preproc"
 version = "0.1.0"
 description = "Automated post-session preprocessing pipeline for NHP systems neuroscience"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.6", "pyyaml>=6.0", "wl-sync"]
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    # wl-sync is not on PyPI. A direct reference is deliberate: the sync box owns
+    # session identity, the barcode codec and the log format, and vendoring copies
+    # of them here would create a second definition free to drift from the one the
+    # hardware actually implements.
+    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@main",
+]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
 # Kilosort4/PyTorch requirement for Pascal — that was wrong and is recorded in

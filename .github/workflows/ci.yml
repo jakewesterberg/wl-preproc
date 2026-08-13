@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor wl-sync also supports; 3.13 is what Fedora ships on
+        # the preprocessing server. Both ends get tested because a change that
+        # works on one and not the other is what this matrix exists to catch.
+        #
+        # Note this range is *not* constrained by PyTorch. The Pascal constraint
+        # is the cu126 wheel index, which ships cp39 through cp315 — see spec
+        # section 6.6, where an invented <3.12 cap is recorded and retired.
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        # wl-sync resolves from its public git URL declared in pyproject.
+        run: pip install -e ".[dev]"
+
+      - name: Assert the contracts came from wl-sync, not a local copy
+        # The sync box owns session identity and the log format. If either is
+        # ever vendored into this repo, there are two definitions free to drift
+        # from what the hardware implements — and the drift is silent.
+        run: |
+          python - <<'PY'
+          import wl_sync.session, wl_sync.log, wl_preproc
+          for module in (wl_sync.session, wl_sync.log):
+              assert "wl_preproc" not in module.__file__, (
+                  f"{module.__name__} resolved inside wl_preproc: "
+                  "a sync-box contract has been vendored"
+              )
+          print("contracts resolve from wl-sync:", wl_sync.session.__file__)
+          PY
+
+      - name: Test
+        run: pytest -v
+
+      - name: Exported schemas are current
+        # docs/schemas is what wl.works and the behaviour-camera project build
+        # against. A model changed without re-exporting would leave them building
+        # against a contract this repo no longer implements.
+        run: |
+          python -m wl_preproc.cli.main schemas export --out docs/schemas
+          git diff --exit-code -- docs/schemas \
+            || { echo "docs/schemas is stale — run: wlpp schemas export"; exit 1; }
