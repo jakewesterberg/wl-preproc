@@ -54,7 +54,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Runtime | Python-first: SpikeInterface, Kilosort4, NeuroConv/pynwb |
 | Orchestration | DataJoint + DataJoint Elements, with explicit newcomer guardrails |
 | Compute | 16-core AM4, 128 GB RAM, Quadro P6000 (24 GB), ≥4 TB NVMe scratch, ≥10 GbE |
-| Sync master | Sync box (Raspberry Pi 4 + `pigpio` DMA), one per rig, present at every session |
+| Sync master | Sync box (**Raspberry Pi 5** + RP1 PIO), one per rig, present at every session. Separate repo, `wl-sync` |
 | Barcode | 32-bit monotonic counter, 5 ms bits, 200 ms frame, **1 Hz** |
 | Event codes | **16-bit** parallel + strobe |
 | Code routing | Full 16 bits to Pi and NI; **strobe only** to Intan RHS |
@@ -89,7 +89,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 
 | # | Component | Runs on | Role |
 |---|---|---|---|
-| 1 | Sync box | Pi 4, one per rig | Barcode generation, camera triggers, event-code capture, local buffer, push to server |
+| 1 | Sync box | Pi 5, one per rig | Barcode generation, camera triggers, event-code capture, local buffer, push to server |
 | 2 | Acquisition systems | Rig PCs | SpikeGLX, Intan RHX, task PC, OpenIris DPI, FLIR behavior cameras |
 | 3 | Ingest watcher | Server | Detects session-complete, validates manifest, discovers topology, inserts Manual-tier rows |
 | 4 | **Responder** | Server | HTTP endpoint wl.works polls. Publishes the action list, accepts requests carrying an idempotency key, inserts Manual-tier rows. **Never opens a connection outward** (§11) |
@@ -134,14 +134,16 @@ Rig transfers land **directly on server scratch**, not via the NAS. The NAS neve
 
 ### 3.4 Repository layout
 
-**The sync box is a separate repository, `wl-sync`.** It runs on different hardware (Pi 4), carries a different dependency (`pigpio`, behind an optional extra), and is useful to any rig independently of this pipeline. It owns **everything it produces** — session identity, the barcode codec, and the log format — and `wl-preproc` depends on it. The dependency runs one way only; `wl-sync` must never import from here.
+**The sync box is a separate repository, `wl-sync`.** It runs on different hardware (Pi 5), carries a different dependency (`piolib`, behind an optional extra), and is useful to any rig independently of this pipeline. It owns **everything it produces** — session identity, the barcode codec, and the log format — and `wl-preproc` depends on it. The dependency runs one way only; `wl-sync` must never import from here.
 
 ```
 wl-sync/                       ← separate repo
   wl_sync/
     session.py   SessionId, minted by the Pi at session start
     barcode.py   codec, pure — no hardware dependency
-    log.py       on-disk log format, pigpio tick unwrapping
+    log.py       on-disk log: edges, strobed code words, tick unwrapping
+    backend.py   SyncBackend protocol + FakeBackend
+    rp1/         PIO capture decoding and the Pi 5 backend
     gpio.py      GpioBackend protocol + FakePigpio
     service.py   BarcodeGenerator, EdgeRecorder
 
@@ -253,11 +255,33 @@ Trials can be as short as 3 s, so a single-trial segment always clears the one-b
 | 4096–32767 | Task-specific / condition encoding |
 | 32768+ | Payload words and escape codes |
 
-### 4.3 Sync box (Pi 4)
+### 4.3 Sync box (Pi 5)
 
-**Hardware:** Raspberry Pi 4, 2 GB. **Not Pi 5** — `pigpio` drives BCM2711-and-earlier DMA/GPIO peripherals directly and does not support the Pi 5's RP1 southbridge. Pi 4 also has Gigabit Ethernet.
+**Hardware:** Raspberry Pi 5.
 
-**Timing approach:** DMA-driven GPIO, never interrupt handlers. `pigpio` samples GPIO via DMA at a fixed 1–5 µs rate and generates waveforms the same way, bypassing the Linux scheduler entirely. Deterministic ~5 µs timestamps, well under a 30 kHz sample period.
+> **Changed 2026-08-13, reversing this section's original Pi 4 ruling.** It read *"Raspberry Pi 4, 2 GB. **Not Pi 5**"*, on the grounds that `pigpio` cannot reach the Pi 5's RP1 southbridge. That fact is correct and unchanged — `pigpio` and `RPi.GPIO` both mmap Broadcom SoC registers the Pi 5 does not expose, and the kernel-chardev replacements (`lgpio`, `gpiozero`) are interrupt-driven with millisecond tails. **What was wrong was treating the sync box as one hard-real-time job.**
+>
+> It is three jobs, and only one is demanding. Working that out is what made Pi 5 viable:
+>
+> | Function | Requirement | Why |
+> |---|---|---|
+> | **Barcode output** | Very loose | 5 ms bit slots sampled at 30 kHz give 150 samples per bit, and **each receiver times its own edges** — the barcode carries identity, not timing. Several hundred µs of generator jitter is harmless. |
+> | **Camera trigger** | Loose | The box records its own output edges, so jitter is *measured* rather than error — and on Pi 5 it is a hardware PWM channel anyway. |
+> | **Event strobe capture** | **~100 µs or better** | The only hard one. On training days this is the sole record of event times, and reaction times and saccade latencies come off it. |
+>
+> So Pi 5 needs PIO for **one** function, not all three — a bounded piece of work rather than the rewrite this section originally assumed. The decision was taken on **supply chain and maintenance**, not on precision: `pigpio` is Pi-4-only and unmaintained, and starting a decade-long rig on a toolchain the vendor has moved past is starting in debt. Precision was never the differentiator — `pigpio`'s 1–5 µs already beat the requirement by 20×.
+
+**Timing approach:** three mechanisms, one per function.
+
+| Function | Mechanism |
+|---|---|
+| Event strobe capture | **RP1 PIO** via `piolib` — a hardware state machine, sub-µs and deterministic |
+| Camera trigger | **Hardware PWM**, GPIO12/13/18/19 |
+| Barcode output | Ordinary GPIO, software-timed |
+
+**A new hardware constraint follows, and it reaches the breakout PCB.** PIO parallel capture reads a **contiguous pin range**, so the 16 code lines plus strobe must be adjacent on the header. `pigpio` sampled all GPIO simultaneously and had no such requirement, so this pins down the GPIO map before the board in §4.4 is designed.
+
+**The risk is bounded by construction.** `wl-sync` reaches hardware only through a mechanism-neutral `SyncBackend` protocol with an in-memory fake, so the codec, log format and session identity are pure Python tested in CI, and a Pi 4 + `pigpio` backend remains one class away if the PIO acceptance gate fails.
 
 > **HARDWARE WARNING: Pi GPIO is 3.3 V and is NOT 5 V tolerant.** Rig TTL is typically 5 V. Direct connection destroys the Pi. Every input requires level shifting; every output driving 5 V equipment requires buffering. A `74HCT541` handles both directions in one part (3.3 V reads as valid logic high on a 5 V rail) and provides the fan-out for driving NI + Intan + camera GPIO from one barcode line.
 
@@ -280,7 +304,7 @@ Trials can be as short as 3 s, so a single-trial segment always clears the one-b
 
 **Known constraint:** 16-bit codes consume the Pi's headroom. Escape hatches if more inputs are later needed: a second Pi, or dropping camera exposure returns (partly redundant with FLIR frame-ID metadata).
 
-**Residual risk:** `pigpio` is unmaintained upstream would pin the lab to Pi 4 hardware. Years-out concern with an obvious escape hatch; noted, not mitigated.
+**Residual risk:** the PIO strobe-capture program is the one piece with no precedent to copy in this application. It is gated on a bench acceptance test — timestamps within ±100 µs over a 10-minute run with zero dropped words — and a Pi 4 + `pigpio` backend remains one class away behind the same protocol if that gate fails.
 
 ### 4.4 Breakout PCB
 
@@ -605,7 +629,7 @@ Two FLIR BFS-U3-16S2M-CS at 500 Hz, running OpenIris with the OpenIrisDPI plugin
 
 **Dual independent sync paths:**
 
-1. **Pi-triggered frames.** `pigpio` DMA waveform generation emits a jitter-free 500 Hz trigger; the existing primary/secondary cable chains camera 2. Eye frame times exist on the sync-box clock *by construction*, on every session type, independent of OpenIris internals or file format.
+1. **Pi-triggered frames.** A hardware PWM channel emits a jitter-free 500 Hz trigger; the existing primary/secondary cable chains camera 2. Eye frame times exist on the sync-box clock *by construction*, on every session type, independent of OpenIris internals or file format.
 2. **ACCESIO analog output** into Intan/NI ADC channels on recording days — eye signal lands natively on the ephys clock at full rate, needing no alignment.
 
 > **OPEN:** verify whether OpenIrisDPI surfaces Spinnaker **chunk data** (per-frame GPIO pin state). If so, feeding the barcode into a camera GPIO input stamps every eye frame with the barcode for free. Treat as a check, not a dependency.
@@ -987,7 +1011,7 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 **Purchasing recommendations arising from this design:**
 
 - **NI PXIe-6363**, not the 6341 (8 waveform DI cannot fit 16-bit codes + strobe + barcode). Avoid USB NI devices for digital input — SpikeGLX warns of digital buffer overruns.
-- **Raspberry Pi 4**, not Pi 5 (`pigpio` DMA support).
+- **Raspberry Pi 5** per rig, plus one for bench PIO development. Not Pi 4 — `pigpio` is Pi-4-only and unmaintained (§4.3).
 - **Intan I/O expander** at the main rig; base RHS suffices at a satellite rig (barcode + strobe = 2 lines).
 - **≥10 GbE** server↔NAS and rig↔server.
 - Cameras must accept external frame trigger; this is unfixable after purchase.
