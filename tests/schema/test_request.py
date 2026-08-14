@@ -54,7 +54,15 @@ def selection(req):
         },
         skip_duplicates=True,
     )
-    key = {"subject": "pico", "session_datetime": datetime.datetime(2027, 3, 14, 9, 0)}
+    # Deliberately NOT test_core.py's (subject="pico", 2027-03-14 09:00): that
+    # exact tuple backs test_core.py's `a_session` fixture, and
+    # test_rejected_segment_records_why asserts `len(RejectedSegment &
+    # a_session) == 1` with no `system` filter — a second file's rows landing
+    # under the same (subject, session_datetime) would silently inflate that
+    # count. This module writes nothing to RejectedSegment today, so the
+    # collision is dormant rather than active, but there is no reason to keep
+    # it dormant when a distinct key removes it outright.
+    key = {"subject": "pico", "session_datetime": datetime.datetime(2027, 6, 1, 10, 0)}
     pipeline.Session.insert1(key, skip_duplicates=True)
     montage_id = next(_montage_ids)
     core.Montage.insert1({**key, "montage_id": montage_id, "start_s": 0.0, "end_s": 12.0},
@@ -114,8 +122,12 @@ def test_two_requests_for_one_selection_yield_one_activation(req, selection):
 
 
 def test_a_retry_of_the_same_idempotency_key_is_not_a_second_request(req, selection):
-    req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
-    req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
+    first = req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
+    second = req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
+    # the property a network retry actually depends on: the same call, made
+    # twice, must resolve to the same activation, not merely leave Request
+    # alone
+    assert first == second
     assert len(req.Request & {"idempotency_key": "k-5"}) == 1
 
 
@@ -123,13 +135,23 @@ def test_a_failure_between_the_two_inserts_leaves_neither(req, selection, monkey
     """A Request written without its Activation is an accepted request that will
     never run — which wl.works experiences as a silent hang, the worst available
     failure across that boundary."""
+    invoked = {"boom": False}
 
     def boom(*args, **kwargs):
+        invoked["boom"] = True
         raise RuntimeError("simulated failure after the Request insert")
 
     monkeypatch.setattr(req.Activation, "insert1", boom)
-    with pytest.raises(RuntimeError):
+    # match= pins the exact failure: without it, a RuntimeError raised by
+    # anything else on this path (e.g. the Request insert itself) would also
+    # satisfy pytest.raises and the assertion below would never actually
+    # prove Activation.insert1 was reached.
+    with pytest.raises(RuntimeError, match="simulated failure after the Request insert"):
         req.submit("k-6", "neural", "wl_works", selection, {}, "jake")
+    assert invoked["boom"] is True, (
+        "Activation.insert1 was never reached — the dedupe branch was taken "
+        "instead, so this test would not be exercising the rollback at all"
+    )
     assert len(req.Request & {"idempotency_key": "k-6"}) == 0
 
 
@@ -147,3 +169,31 @@ def test_payload_survives_as_a_structure_not_a_string(req, selection):
     req.submit("k-8", "neural", "wl_works", selection, {"nested": {"a": [1, 2, 3]}}, "jake")
     got = (req.Request & {"idempotency_key": "k-8"}).fetch1("payload")
     assert got["nested"]["a"] == [1, 2, 3]
+
+
+def test_submit_always_produces_a_canonical_activation_at_id_zero(req, selection):
+    """submit() has no way to form a derivative: the dedupe above returns on
+    ANY existing Activation for the selection, so the branch that would
+    allocate a second activation_id is unreachable by construction, and a
+    derivative needs a block set this function's selection does not carry.
+    Pinned here so that the day someone widens the dedupe key (or the
+    selection) to admit derivatives, this test fails loudly instead of the
+    canonical-only assumption silently rotting."""
+    key = req.submit("k-9", "neural", "wl_works", selection, {}, "jake")
+    assert key["activation_id"] == 0
+    assert (req.Activation & key).fetch1("role") == "canonical"
+
+
+def test_submit_before_activate_raises_a_clear_error(req, selection, monkeypatch):
+    """Both future entry points — the ingest watcher and the responder — call
+    submit() as their first contact with this module. Without this guard,
+    calling it before activate() fails deep inside DataJoint's lazy table
+    declaration with "Cannot declare new tables inside a transaction": true,
+    but useless to whoever is debugging a misordered startup."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    monkeypatch.setattr(request.schema, "is_activated", lambda: False)
+    with pytest.raises(dj.DataJointError, match="activate"):
+        req.submit("k-10", "neural", "wl_works", selection, {}, "jake")
