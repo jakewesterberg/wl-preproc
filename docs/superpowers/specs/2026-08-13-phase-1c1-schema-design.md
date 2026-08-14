@@ -276,6 +276,32 @@ the three-part make runs compute outside the transaction; the two blob tests in 
 - **MySQL backup** — §10 calls it a first-class component. It is ops rather than schema, and it
   wants the server, which does not exist yet.
 
+## 9.1 A limit found in execution: `submit()` only makes canonical activations
+
+**Found 2026-08-13 during Task 5's review, and it contradicts parent-spec §8.3.**
+
+§4.4's dedupe returns on any existing `Activation` for `(subject, session_datetime, montage_id)`.
+That is exactly right for a **canonical** activation, which §8.3 defines as *"exactly one current
+per (session, montage)"*. It is wrong for a **derivative**, which §8.3 defines as *"any
+hand-picked subset… unbounded, additive"* — a caller asking for one would silently receive the
+canonical activation's key instead, with no error.
+
+Two things follow, and both are recorded rather than patched:
+
+- **`submit()` takes no block set**, so `ActivationBlock` has no writer. Since unit identity is a
+  product of the block set (§8.3), a derivative is not even expressible without one.
+- **`supersedes` has no reachable writer**, so a regenerated canonical cannot point at the one it
+  replaces — which §8.3 requires for enrichment to survive.
+
+**1c-1's `submit()` is therefore narrowed to what it can honour**: canonical activations only,
+with `activation_id` pinned at `0` and a test asserting it, so the day the dedupe key changes the
+change is visible rather than silent. **Derivative support belongs to 1c-3**, the responder, which
+is where a hand-picked block set actually arrives — and it needs a dedupe rule keyed on the
+selection rather than the montage, per §11.3's *"dedupe on `(selection, task type)`"*.
+
+Recorded here rather than in the plan because it is a boundary of the design, not a defect in the
+code that implements it.
+
 ## 10. Open questions this design does not close
 
 - **§13 item 5** — the tolerance for the ingest-time task-PC vs sync-box clock cross-check. It
