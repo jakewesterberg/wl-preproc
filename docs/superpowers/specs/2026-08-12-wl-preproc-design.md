@@ -479,6 +479,22 @@ needs no table migration — but only if it is in place before any row is writte
 > affected tables*; tables that do not exist have no rows. Declaring them fresh in Phase 2 with
 > the fix already in place is exactly as safe as declaring them now.
 
+> **`element-event` has the same defect, in the same release, and it IS activated.** Found
+> 2026-08-13 during Phase 1c-1's guardrail review. Three bare `longblob` attributes ship in the
+> version this project pins: `element_event.event.Event.Attribute.attribute_blob`,
+> `element_event.trial.Block.Attribute.attribute_blob` and
+> `element_event.trial.Trial.Attribute.attribute_blob`.
+>
+> **Nothing writes to them today, which is the only reason this is a hazard rather than an
+> incident.** They are nullable per-event/per-trial attribute columns, and this pipeline does
+> not populate them. **Anything that later writes a numpy array to one will silently destroy
+> it** — the same failure that keeps `element-array-ephys` out, arriving through a module the
+> design does adopt. If per-trial or per-event array attributes are ever wanted, they must go
+> in a custom table declaring `<blob>`, never in these.
+>
+> They are allow-listed by name in `tests/schema/test_guardrails.py` rather than hidden, so a
+> *new* upstream bare `longblob` still trips the guard.
+
 > **PHASE 2 PRECONDITION — do not activate `element-array-ephys` until issue #230 is resolved,
 > upstream or here.** Its 14 `longblob` attributes declare perfectly and then silently destroy
 > every waveform, LFP trace and metrics array written to them. **An activation test cannot see
