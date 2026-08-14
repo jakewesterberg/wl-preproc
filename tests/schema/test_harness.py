@@ -68,6 +68,21 @@ def test_blob_round_trips_as_an_array(dj_conn):
         arr : <blob>
         """
 
+    # Pins the metadata signal test_guardrails.py's declaration check depends
+    # on. `attr.is_blob` is true for `<blob>` AND for a bare `longblob` alike
+    # (it reflects the physical MySQL column category, not codec attachment),
+    # so the declaration guard keys on `attr.codec` instead. That distinction
+    # is only real if `<blob>` actually attaches a codec on this DataJoint
+    # version -- pinned here the same way the data-level round-trip below is
+    # pinned, so a future DataJoint that stops doing this fails loudly instead
+    # of silently disarming the guard the way `is_blob` already did once.
+    assert Payload.heading["arr"].codec is not None, (
+        "a <blob> attribute has no codec attached: DataJoint's behaviour "
+        "changed, and the declaration guard in "
+        "tests/schema/test_guardrails.py::test_no_table_declares_a_bare_longblob "
+        "-- which keys on `codec is None` -- should be revisited"
+    )
+
     arr = np.arange(2048, dtype=np.float32).reshape(32, 64)
     Payload.insert1({"n": 1, "arr": arr})
     got = (Payload & "n=1").fetch1("arr")
@@ -91,6 +106,17 @@ def test_a_bare_longblob_corrupts_silently(dj_conn):
         ---
         arr : longblob
         """
+
+    # The other half of the pin above: a bare `longblob` must have no codec,
+    # which is the metadata signal test_guardrails.py's declaration check
+    # actually relies on (not `is_blob`, which is true here too and cannot
+    # discriminate the two cases -- see that test for the full story).
+    assert Bare.heading["arr"].codec is None, (
+        "a bare longblob attribute has a codec attached: DataJoint's behaviour "
+        "changed, and the declaration guard in "
+        "tests/schema/test_guardrails.py::test_no_table_declares_a_bare_longblob "
+        "-- which keys on `codec is None` -- should be revisited"
+    )
 
     arr = np.arange(2048, dtype=np.float32)
     Bare.insert1({"n": 1, "arr": arr})

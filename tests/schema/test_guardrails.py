@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import pathlib
 
+import datajoint as dj
 import numpy as np
 import pytest
 
@@ -40,9 +41,84 @@ def all_tables(dj_conn):
     return tables
 
 
-def test_no_table_declares_a_bare_longblob(all_tables):
-    offenders = []
+# `pipeline.activate()` binds five Element modules, not just this project's
+# own four (see `wl_preproc/schema/pipeline.py`). All five are swept below --
+# not only `event`/`trial`, where the known offenders happen to live -- for
+# the same reason the sweep must not be scoped to `core, coverage, paramset,
+# request` alone: narrowing to the modules already known to be guilty is
+# exactly the blind spot this fix exists to close.
+_ELEMENT_MODULE_NAMES = ("lab", "subject", "session", "event", "trial")
+
+
+def _iter_tables_recursive(module_name, table):
+    """`table`, then every `dj.Part` nested inside it, at whatever depth
+    DataJoint allows.
+
+    `dir(module)` cannot reach a Part table -- only `dir()` on its master can
+    -- which is exactly what let element_event's bare `longblob` Part
+    attributes go unseen by a sweep scoped to `dir(module)` alone. Part
+    classes are identified structurally (`issubclass(obj, dj.Part)`), not by
+    name or `hasattr` duck-typing, so this cannot mistake an unrelated nested
+    attribute for a table.
+    """
+    yield module_name, table.__qualname__, table
+    for name in dir(table):
+        if name.startswith("_"):
+            continue
+        obj = getattr(table, name)
+        if isinstance(obj, type) and issubclass(obj, dj.Part):
+            yield from _iter_tables_recursive(module_name, obj)
+
+
+@pytest.fixture(scope="module")
+def all_tables_including_elements(all_tables):
+    """Every table `all_tables` finds, plus every table -- and nested `dj.Part`
+    table -- in the five Element modules `pipeline.activate()` actually binds.
+
+    Used only by the declaration test. The round-trip and key-documentation
+    tests deliberately keep the narrower `all_tables` scope: round-tripping an
+    upstream Part table would mean building live parent chains through
+    Session/Trial/Event that are out of scope here, and key-documentation
+    compliance for tables this project does not author is a different
+    question than the one that test asks.
+    """
+    from wl_preproc.schema import pipeline
+
+    tables = []
     for module_name, table_name, table in all_tables:
+        tables.extend(_iter_tables_recursive(module_name, table))
+    for mod_name in _ELEMENT_MODULE_NAMES:
+        module = getattr(pipeline, mod_name)
+        for name in dir(module):
+            obj = getattr(module, name)
+            if hasattr(obj, "heading") and hasattr(obj, "definition"):
+                tables.extend(_iter_tables_recursive(module.__name__, obj))
+    return tables
+
+
+# Spec section 5.1.1 (amended 2026-08-13): the pinned element_event release
+# declares three attributes as bare `longblob` -- the same defect class
+# element-array-ephys is refused outright for (14 attributes, upstream issue
+# #230), just at far smaller scale, which is why element_event is adopted
+# anyway for this phase. Allow-listed by fully-qualified name, never by
+# module: a NEW bare longblob anywhere this sweep reaches -- in element_event
+# or anywhere else -- must still trip this test. Do not add to this set
+# without a corresponding spec amendment; see test_no_table_declares_a_bare_
+# longblob's second assertion, which requires every entry here to actually be
+# found by the sweep.
+_KNOWN_UPSTREAM_BARE_LONGBLOBS = frozenset(
+    {
+        "element_event.event.Event.Attribute.attribute_blob",
+        "element_event.trial.Block.Attribute.attribute_blob",
+        "element_event.trial.Trial.Attribute.attribute_blob",
+    }
+)
+
+
+def test_no_table_declares_a_bare_longblob(all_tables_including_elements):
+    offenders = []
+    seen_known = set()
+    for module_name, table_name, table in all_tables_including_elements:
         for attr_name in table.heading.names:
             attr = table.heading[attr_name]
             declared = (attr.type or "").lower()
@@ -53,12 +129,38 @@ def test_no_table_declares_a_bare_longblob(all_tables):
             # non-None (a BlobCodec) only when the `<blob>` codec is attached, and
             # None for a raw `longblob`, which is what silently returns bytes
             # instead of an array. A condition keyed on `is_blob` here would never
-            # fire, for anything.
-            if "blob" in declared and getattr(attr, "codec", None) is None:
-                offenders.append(f"{module_name}.{table_name}.{attr_name} -> {declared}")
+            # fire, for anything. (Pinned: tests/schema/test_harness.py.)
+            if "blob" not in declared or getattr(attr, "codec", None) is not None:
+                continue
+            qualified = f"{module_name}.{table_name}.{attr_name}"
+            if qualified in _KNOWN_UPSTREAM_BARE_LONGBLOBS:
+                seen_known.add(qualified)
+                continue
+            # `attr.type` is the PHYSICAL db type, which is not always what the
+            # author wrote: a core-type alias like `bytes` also resolves to
+            # `longblob` (confirmed against datajoint/declare.py before
+            # dispatch). `original_type` preserves the as-written spelling when
+            # it differs, so the message never accuses an author of typing a
+            # keyword they didn't.
+            original = getattr(attr, "original_type", None)
+            shown = f"{original} (resolves to {declared})" if original else declared
+            offenders.append(f"{qualified} -> {shown}")
     assert not offenders, (
         "bare longblob attributes found; under DataJoint 2.x these silently "
         "destroy array data. Declare <blob> instead:\n  " + "\n  ".join(offenders)
+    )
+    # The allow-list is only honest if the sweep actually reaches every name in
+    # it. Otherwise an entry could sit there excusing an attribute the sweep
+    # has silently stopped seeing -- the same "manufactured confidence" failure
+    # mode this fix exists to close, just moved one level up. A name that is
+    # allow-listed but never encountered means either the sweep regressed, or
+    # (best case) element_event fixed it upstream and the entry is stale --
+    # either way it must be investigated, not left in place.
+    missing = _KNOWN_UPSTREAM_BARE_LONGBLOBS - seen_known
+    assert not missing, (
+        "allow-listed as known upstream bare longblobs but never encountered by "
+        f"the sweep: {sorted(missing)} -- the sweep no longer reaches them, or "
+        "they no longer exist and the allow-list is stale"
     )
 
 
@@ -86,13 +188,19 @@ def _synthetic_required_secondary(table, exclude: str) -> dict:
     the blob attribute itself, which the caller supplies separately as the
     probe array. Attributes that are nullable or carry a default (like
     Request's `requested_by`) are correctly left for the database to fill in.
+
+    Every OTHER blob attribute (`is_blob`, not just `exclude`) is skipped too,
+    not synthesized: neither table currently has a second one, but if one
+    existed, no branch below knows how to fabricate array-shaped content for
+    it, and it should fail on the resulting missing-field insert error rather
+    than the more confusing "unhandled type for synthetic value: ... blob".
     """
     row = {}
     for name in table.heading.names:
         if name in table.primary_key or name == exclude:
             continue
         attr = table.heading[name]
-        if attr.nullable or attr.default is not None:
+        if attr.is_blob or attr.nullable or attr.default is not None:
             continue
         declared = (attr.type or "").lower()
         if declared.startswith("enum("):
