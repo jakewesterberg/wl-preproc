@@ -1385,37 +1385,55 @@ def test_no_table_declares_a_bare_longblob(all_tables):
     )
 
 
+def _synthetic_key(table) -> dict:
+    """A primary key of the right shape, for a table with no foreign keys."""
+    key = {}
+    for name in table.primary_key:
+        declared = (table.heading[name].type or "").lower()
+        if "char" in declared:
+            key[name] = f"blobprobe-{name}"[:32]
+        elif "int" in declared:
+            key[name] = 99
+        else:  # pragma: no cover - a new key type should fail loudly, not silently
+            raise AssertionError(f"unhandled key type for {name}: {declared}")
+    return key
+
+
 def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
-    """The test whose absence upstream is currently paying for."""
-    import datajoint as dj
+    """The test whose absence upstream is currently paying for.
 
-    schema = dj.Schema(f"{PREFIX}roundtrip")
-
-    @schema
-    class Probe(dj.Manual):
-        definition = """
-        # one row per blob attribute discovered in the pipeline
-        n : int
-        ---
-        arr : <blob>
-        """
-
+    This inserts into the REAL tables. An earlier draft built a stand-in table
+    with its own `<blob>` and round-tripped through that once per discovered
+    attribute — which only proves `<blob>` works in general, something
+    `test_harness.py` already establishes, and says nothing about the attributes
+    actually declared here. Corrected 2026-08-13 before dispatch.
+    """
     blob_attrs = [
-        (m, t, a)
-        for m, t, table in all_tables
-        for a in table.heading.names
-        if getattr(table.heading[a], "is_blob", False)
+        (module_name, table_name, table, attr)
+        for module_name, table_name, table in all_tables
+        for attr in table.heading.names
+        if getattr(table.heading[attr], "is_blob", False)
     ]
     assert blob_attrs, "no blob attributes found — this test would pass vacuously"
 
     arr = np.arange(4096, dtype=np.float32).reshape(64, 64)
-    for i, _ in enumerate(blob_attrs):
-        Probe.insert1({"n": i, "arr": arr})
-        got = (Probe & f"n={i}").fetch1("arr")
-        assert isinstance(got, np.ndarray), f"{blob_attrs[i]} did not return an array"
+    exercised = []
+    for module_name, table_name, table, attr in blob_attrs:
+        assert not table.parents(), (
+            f"{module_name}.{table_name} has a foreign key, so a synthetic row "
+            "cannot be inserted without building its parents first. Extend this "
+            "test to construct them — do not skip the table, or the attribute "
+            "goes unverified and this guard stops guarding."
+        )
+        key = _synthetic_key(table)
+        table.insert1({**key, attr: arr}, skip_duplicates=True)
+        got = (table & key).fetch1(attr)
+        assert isinstance(got, np.ndarray), f"{table_name}.{attr} returned {type(got).__name__}"
         assert got.shape == arr.shape and got.dtype == arr.dtype
         assert np.array_equal(got, arr)
-    schema.drop()
+        exercised.append(f"{table_name}.{attr}")
+
+    assert exercised, "no blob attribute was actually round-tripped"
 
 
 def test_no_bare_delete_call_anywhere_in_the_source():
