@@ -122,7 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.daemon import run_once
 
         report = run_once(prefix=args.prefix)
-        print(report)
+        print(f"populated: {report['populated']}")
+        print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
+        if report["errors"]:
+            print("errors:")
+            for err in report["errors"]:
+                print(f"  {err}")
+        else:
+            print("errors: none")
         return 0
 
     return 2
