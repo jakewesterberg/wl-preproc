@@ -107,6 +107,27 @@ class ActivationBlock(dj.Manual):
     """
 
 
+def _canonicalise(value):
+    """`value` with every dict's keys in sorted order, at every depth.
+
+    `datajoint.blob.pack` serialises a dict in *insertion* order, so two
+    payloads that differ in nothing but key order pack to different bytes.
+    This is the same canonicalisation `paramset.content_hash` performs with
+    `json.dumps(..., sort_keys=True)` and for the same reason, including the
+    depth: `sort_keys` sorts at every level, not just the top, because a
+    payload's nested dicts were built in whatever order their producer chose
+    too. Lists and tuples keep their type and their order — order is meaning
+    there, not incidental.
+    """
+    if isinstance(value, dict):
+        return {key: _canonicalise(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonicalise(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_canonicalise(item) for item in value)
+    return value
+
+
 def _payload_differs(stored, given) -> bool:
     """True if two `<blob>` payloads are not the same value.
 
@@ -116,13 +137,21 @@ def _payload_differs(stored, given) -> bool:
     would not. But `!=` on a payload containing a numpy array returns an array
     rather than a bool, and `bool()` of that raises, so the fallback compares
     exactly what the column would store.
+
+    The fallback canonicalises key order first, because `pack` is key-order
+    sensitive. Without that it contradicted the paragraph above for precisely
+    the payloads that reach it: a genuine retry carrying a numpy array, whose
+    dict happened to be built in a different order, packed to different bytes
+    and was refused as a different request — the inverse of the defect
+    `_reject_key_reuse` exists to fix, and unreachable by the `!=` path that
+    documents the intended behaviour.
     """
     try:
         return bool(stored != given)
     except (ValueError, TypeError):
         from datajoint.blob import pack
 
-        return pack(stored) != pack(given)
+        return pack(_canonicalise(stored)) != pack(_canonicalise(given))
 
 
 def _reject_key_reuse(
@@ -132,6 +161,7 @@ def _reject_key_reuse(
     task_type: str,
     origin: str,
     payload: dict,
+    requested_by: str | None,
     selection_key: dict,
 ) -> None:
     """Raise if an existing `Request` under this key is a different request.
@@ -144,21 +174,31 @@ def _reject_key_reuse(
     consumers take keys from outside this process, which is exactly where
     reuse happens.
 
+    **An idempotency key is caller-scoped.** `requested_by` is compared like
+    any other field: the same key presented by a *different* requester is a
+    collision between two people's key spaces, not one person's retry. It went
+    uncompared until 2026-08-14, so the second person's ask was absorbed into
+    the first person's row and went unrecorded — the same section 4.2 failure
+    this whole function exists to prevent, arriving through the one field that
+    identifies who asked.
+
     **What cannot be checked here.** The selection is compared against the
     activations this key actually produced. If the original submission deduped
     onto a pre-existing `Activation` (see
     `test_two_requests_for_one_selection_yield_one_activation`), no row names
     that request at all, so there is nothing recorded to compare a selection
-    against and only `(task_type, origin, payload)` is checked. Closing that
-    needs a selection recorded on `Request` or `Activation`; adding a column
-    nothing consumes was declined for 1c-1 and is equally free in 1c-3, which
-    is pre-data too.
+    against and only `(task_type, origin, payload, requested_by)` is checked.
+    Closing that needs a selection recorded on `Request` or `Activation`;
+    adding a column nothing consumes was declined for 1c-1 and is equally free
+    in 1c-3, which is pre-data too.
     """
     conflicts = []
     if stored["task_type"] != task_type:
         conflicts.append(f"task_type {stored['task_type']!r} vs {task_type!r}")
     if stored["origin"] != origin:
         conflicts.append(f"origin {stored['origin']!r} vs {origin!r}")
+    if stored["requested_by"] != requested_by:
+        conflicts.append(f"requested_by {stored['requested_by']!r} vs {requested_by!r}")
     if _payload_differs(stored["payload"], payload):
         conflicts.append("payload differs from the one already recorded")
 
@@ -211,7 +251,9 @@ def submit(
 
     Reusing an ``idempotency_key`` for a *different* request raises
     ``DataJointError``; an identical resubmission is a retry and returns the
-    same key. See ``_reject_key_reuse``, including what it cannot check.
+    same key. A *different* ``requested_by`` under the same key counts as a
+    different request: the key space is caller-scoped. See
+    ``_reject_key_reuse``, including what it cannot check.
     """
     if not schema.is_activated():
         # Both future entry points (the ingest watcher and the responder) call
@@ -249,6 +291,7 @@ def submit(
                 task_type=task_type,
                 origin=origin,
                 payload=payload,
+                requested_by=requested_by,
                 selection_key=selection_key,
             )
         else:

@@ -11,7 +11,16 @@ dependencies = [
     # session identity, the barcode codec and the log format, and vendoring copies
     # of them here would create a second definition free to drift from the one the
     # hardware actually implements.
-    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@main",
+    #
+    # A COMMIT PIN, not a branch, for the reason the Elements below are pinned --
+    # and here the exposure is wired directly into a CI gate rather than a test:
+    # `wlpp schemas export` re-exports SyncBoxLogHeader from wl-sync into
+    # docs/schemas (wl_preproc/cli/main.py), and CI's "Exported schemas are
+    # current" step re-runs that export and `git diff --exit-code`s the
+    # directory. On a moving ref, a commit to wl-sync main changes this repo's
+    # published contract -- or reds CI on an unrelated PR -- with no change in
+    # this repo at all. Resolved 2026-08-14 with `git ls-remote <url> main`.
+    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@90b931e8d4714a0b199510d5ccb8813114bb076e",  # main
     "datajoint>=2.3,<3",
     # The Elements are mid-migration to DataJoint 2.x and no fork is taken.
     # element-animal pins to the open PR that does its migration, which is zero

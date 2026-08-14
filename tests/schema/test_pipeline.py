@@ -127,7 +127,7 @@ def test_the_default_prefix_builds_the_schema_names_the_spec_names(monkeypatch):
     }
 
 
-def test_activation_is_idempotent(dj_conn, monkeypatch):
+def test_activation_is_idempotent(dj_conn, monkeypatch, prefix):
     """Activating an already-activated prefix must be a no-op.
 
     `_activated` is a module-level set that lives for the whole process, and
@@ -141,14 +141,21 @@ def test_activation_is_idempotent(dj_conn, monkeypatch):
     the real activation, a *second* call for the same prefix must not reach
     `lab.activate()` again. This is order-independent: it holds no matter
     which test in the suite happens to activate "t_" first.
+
+    Both calls take the `prefix` fixture, not a bare "t_" literal. Those two
+    literals outlived the consolidation into `conftest.py` and were live, not
+    cosmetic: one prefix per process is a standing constraint, so a fixture
+    changed to anything else left this test activating a *second* one and
+    dying with "The schema is already activated for schema u_lab" -- exactly
+    the trap the consolidation exists to prevent, in the file it touched most.
     """
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t_")  # real activation, or already done -- either is fine here
+    pipeline.activate(prefix=prefix)  # real activation, or already done -- either is fine
 
     calls = []
     monkeypatch.setattr(pipeline.lab, "activate", lambda *a, **k: calls.append((a, k)))
 
-    pipeline.activate(prefix="t_")
+    pipeline.activate(prefix=prefix)
 
     assert calls == []

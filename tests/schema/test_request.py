@@ -160,6 +160,76 @@ def test_reusing_an_idempotency_key_for_a_different_request_is_refused(req, sele
         req.submit("k-11", "neural", "cli", selection, {"raw": "first"}, "jake")
 
 
+def test_a_numpy_carrying_retry_survives_a_different_key_order(req, selection):
+    """`_payload_differs`'s numpy fallback, which no test reached until
+    2026-08-14.
+
+    A payload carrying an array cannot be compared with `!=` — that returns an
+    array and `bool()` of it raises — so the comparison falls through to
+    `datajoint.blob.pack`, which is byte-exact and therefore *key-order
+    sensitive*. A genuine retry whose dict was built in a different order (a
+    JSON round trip, a different client library, a dict rebuilt from kwargs)
+    packed to different bytes and was refused as key reuse. That is the exact
+    inverse of the defect `_reject_key_reuse` exists to fix, and the opposite
+    of what `_payload_differs`'s own docstring promises two lines above the
+    fallback — which is why nothing caught it: the documented behaviour is
+    real, just not on this path.
+
+    The nested dict is load-bearing. `pack` is order-sensitive at every level,
+    so a top-level-only sort would leave this test failing with the bug intact
+    one dict down; the fix canonicalises recursively, as
+    `paramset.content_hash`'s `sort_keys=True` does.
+    """
+    import datajoint as dj
+    import numpy as np
+
+    first = {"zeta": 1, "arr": np.arange(8, dtype=np.float32), "nested": {"b": 2, "a": 1}}
+    # the same request, with every dict built in a different order
+    again = {
+        "nested": {"a": 1, "b": 2},
+        "arr": np.arange(8, dtype=np.float32),
+        "zeta": 1,
+    }
+
+    key = req.submit("k-14", "neural", "wl_works", selection, first, "jake")
+    assert req.submit("k-14", "neural", "wl_works", selection, again, "jake") == key
+    assert len(req.Request & {"idempotency_key": "k-14"}) == 1
+
+    # The fallback must still discriminate, or this test would pass just as
+    # well against a `_payload_differs` that never reports a difference at all.
+    different = {**again, "arr": np.arange(8, dtype=np.float32) + 1}
+    with pytest.raises(dj.DataJointError, match="payload"):
+        req.submit("k-14", "neural", "wl_works", selection, different, "jake")
+
+
+def test_reusing_an_idempotency_key_from_a_different_requester_is_refused(req, selection):
+    """An idempotency key is caller-scoped: the same key from a different
+    person is a collision between two key spaces, not one person's retry.
+
+    `requested_by` went uncompared until 2026-08-14, so the second person's ask
+    — identical in every other field, which is exactly the case the retry path
+    is meant to absorb — was absorbed too, the recorded requester stayed the
+    first person, and the second ask went unrecorded. That is section 4.2's
+    "Request records what was asked" failing through the one field that says
+    who asked.
+    """
+    import datajoint as dj
+
+    payload = {"raw": "same ask, different person"}
+    key = req.submit("k-15", "neural", "wl_works", selection, payload, "jake")
+
+    # accept: the same requester resubmitting is still a retry
+    assert req.submit("k-15", "neural", "wl_works", selection, payload, "jake") == key
+
+    # refuse: a different requester is not
+    with pytest.raises(dj.DataJointError, match="requested_by"):
+        req.submit("k-15", "neural", "wl_works", selection, payload, "alice")
+
+    # the first ask is recorded, unmodified, and is still the only one
+    assert len(req.Request & {"idempotency_key": "k-15"}) == 1
+    assert (req.Request & {"idempotency_key": "k-15"}).fetch1("requested_by") == "jake"
+
+
 def test_reusing_an_idempotency_key_for_a_different_selection_is_refused(req, selection):
     """The selection is part of "the same ask", and it is not stored on Request,
     so it is checked against the activations the key actually produced."""
@@ -189,12 +259,18 @@ def test_activation_cannot_name_a_request_that_does_not_exist(req, selection):
     """Section 4.3's provenance claim, as structure rather than convention.
     `request_key` was a bare varchar(64) until 2026-08-14, so this insert
     succeeded — verified — and an Activation could name a Request that was
-    never made."""
+    never made.
+
+    `match=` pins the InnoDB constraint specifically. A bare
+    `pytest.raises(dj.DataJointError)` is satisfied by any insert failure at
+    all — a missing column, a bad enum value, a typo in the key — so it would
+    still pass on a build where the foreign key had been dropped and something
+    unrelated broke instead."""
     import datetime
 
     import datajoint as dj
 
-    with pytest.raises(dj.DataJointError):
+    with pytest.raises(dj.DataJointError, match="foreign key constraint fails"):
         req.Activation.insert1(
             {
                 **selection,

@@ -12,7 +12,9 @@ same constraint ``wlpp doctor``'s connectivity check documents). So each
 table's *direct* parents, among the tables this preview covers, are
 hand-declared here from the ``->`` lines in
 ``wl_preproc/schema/{core,coverage,request}.py`` and must be kept in sync
-with them. ``pipeline.Session`` (and, for ``TrialCoverage``,
+with them — which ``_assert_known_tables_are_real`` now *checks* against
+DataJoint's real dependency graph wherever a connection exists, rather than
+asking to be believed. ``pipeline.Session`` (and, for ``TrialCoverage``,
 ``pipeline.trial.Trial``) anchor every one of these tables but are never
 deleted by this preview, so neither appears in the graph.
 
@@ -37,7 +39,13 @@ _PARENTS: dict[str, tuple[str, ...]] = {
     "Montage": (),
     "Block": (),
     "AcquisitionSystem": (),
-    "Activation": ("Montage",),
+    # `Request` is here because `Activation` names it, not because deleting a
+    # request is a routine thing to want: the foreign key added on 2026-08-14
+    # made it a real parent, and a parent absent from this map is an edge the
+    # closure cannot follow. Listing it makes it a reachable `--from-stage`
+    # too, which is correct -- that is the direction the cascade runs.
+    "Request": (),
+    "Activation": ("Montage", "Request"),
     "Segment": ("AcquisitionSystem",),
     "RejectedSegment": ("AcquisitionSystem",),
     "BlockCoverage": ("Block", "AcquisitionSystem"),
@@ -47,12 +55,29 @@ _PARENTS: dict[str, tuple[str, ...]] = {
 
 
 def _assert_known_tables_are_real() -> None:
-    """Import the real table classes so a name that no longer matches an
-    actual table fails loudly here, at `wlpp delete` invocation, instead of
-    this preview silently describing something that does not exist.
+    """Fail loudly, here at `wlpp delete` invocation, if the graph above has
+    drifted from the schema it claims to mirror.
 
-    Only used for that side effect: the closure itself is computed from the
-    plain string graph above, which needs no live database connection.
+    **The name check** imports the real table classes, so a stage name that no
+    longer matches an actual table cannot sit in the map describing something
+    that does not exist. It needs no database, which is why it always runs:
+    `wlpp delete` is exercised as a bare subprocess with no database configured
+    at all (`tests/test_cli_guardrails.py`), the same constraint `wlpp doctor`'s
+    connectivity check documents.
+
+    **The parent check** compares each declared tuple against DataJoint's own
+    dependency graph — `Table.parents()`, restricted to the tables in the map —
+    rather than trusting the tuple. Comparing key *sets*, all this did until
+    2026-08-14, is structurally blind to a wrong *value*, and one was already
+    sitting here: the foreign key added to `Activation` that day made `Request`
+    its second parent, and `("Montage",)` went unchallenged because no
+    assertion in this module could see an edge, only a name. `parents()` reads
+    `connection.dependencies`, so unlike the name check it needs an activated
+    schema and a live connection, and cannot run in the no-database case above.
+    It therefore runs only when the schemas happen already to be activated —
+    which is every schema test in this suite, and
+    `tests/schema/test_guardrails.py` calls this function directly for exactly
+    that reason, so the next divergence fails a test instead of sitting here.
     """
     from wl_preproc.schema import core, coverage, request
 
@@ -60,6 +85,7 @@ def _assert_known_tables_are_real() -> None:
         "Montage": core.Montage,
         "Block": core.Block,
         "AcquisitionSystem": core.AcquisitionSystem,
+        "Request": request.Request,
         "Activation": request.Activation,
         "Segment": core.Segment,
         "RejectedSegment": core.RejectedSegment,
@@ -70,6 +96,27 @@ def _assert_known_tables_are_real() -> None:
     assert tables.keys() == _PARENTS.keys(), (
         "the stage-name graph and the real schema tables have drifted apart: "
         f"{sorted(tables.keys() ^ _PARENTS.keys())}"
+    )
+
+    if not all(module.schema.is_activated() for module in (core, coverage, request)):
+        return
+
+    stage_of = {table.full_table_name: name for name, table in tables.items()}
+    drifted = []
+    for name, table in tables.items():
+        # Parents outside the map are deliberately dropped, not reported: this
+        # graph is restricted to the tables the preview covers, and every one
+        # of them is anchored by `pipeline.Session` (or `trial.Trial`), which
+        # this preview never deletes.
+        actual = {stage_of[parent] for parent in table.parents() if parent in stage_of}
+        if actual != set(_PARENTS[name]):
+            drifted.append(
+                f"{name}: declared {sorted(_PARENTS[name])}, actual {sorted(actual)}"
+            )
+    assert not drifted, (
+        "the declared parent graph and the real foreign keys have drifted "
+        "apart; this module's graph must be kept in sync with the `->` lines "
+        "in wl_preproc/schema/{core,coverage,request}.py:\n  " + "\n  ".join(drifted)
     )
 
 

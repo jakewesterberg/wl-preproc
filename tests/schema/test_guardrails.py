@@ -60,11 +60,18 @@ def _iter_tables_recursive(module_name, table):
     attribute for a table.
 
     Only DUNDERS are skipped, not every underscore-prefixed name. This skipped
-    anything starting with `_` until 2026-08-14, which meant a Part table named
-    with a single leading underscore — a perfectly legal DataJoint declaration,
-    and a natural spelling for one an Element considers internal — was invisible
-    to the bare-longblob sweep. That is the same blind spot the recursion itself
-    exists to close, one level down.
+    anything starting with `_` until 2026-08-14, which meant a `dj.Part`
+    reachable from its master only under a single-underscore name -- an alias,
+    a rename, a compatibility shim -- was invisible to the bare-longblob sweep.
+    That is the same blind spot the recursion itself exists to close, one level
+    down, and it is pinned by
+    `test_the_part_sweep_reaches_a_part_table_bound_to_an_underscore_name`.
+
+    That test's docstring also records the correction to this one: an Element
+    *declaring* `class _Internal(dj.Part)` is NOT the case at issue, because
+    DataJoint never declares such a class in the first place
+    (`datajoint/schemas.py:261` requires an uppercase initial), so it has no
+    heading and this walker would raise on it rather than sweep it.
     """
     yield module_name, table.__qualname__, table
     for name in dir(table):
@@ -73,6 +80,94 @@ def _iter_tables_recursive(module_name, table):
         obj = getattr(table, name)
         if isinstance(obj, type) and issubclass(obj, dj.Part):
             yield from _iter_tables_recursive(module_name, obj)
+
+
+def test_the_part_sweep_reaches_a_part_table_bound_to_an_underscore_name(dj_conn, prefix):
+    """The guard the `_iter_tables_recursive` fix did not have.
+
+    That walker skipped every `_`-prefixed name until 2026-08-14, so a `dj.Part`
+    reachable only under a name starting with a single underscore was invisible
+    to the bare-longblob sweep. Reverting the fix left the whole suite green --
+    no Element exposes one today -- so the fix was correct and completely
+    unexercised, which is the same manufactured confidence the allow-list
+    assertion above exists to prevent, one level down.
+
+    **The probe is built by rebinding, not by declaring `class _Internal`, and
+    that is a finding rather than a convenience.** DataJoint's schema decorator
+    only treats a nested class as a Part if its name starts with an UPPERCASE
+    letter (`datajoint/schemas.py:261`, `if part[0].isupper()`). A nested class
+    literally named `_Internal` is therefore never declared at all: `_master`
+    stays None, `table_name` is None, and touching `.heading` raises "Table
+    `_Internal` is not properly configured" -- verified live on 2.3.2. So the
+    scenario named in `_iter_tables_recursive`'s docstring, an Element
+    *declaring* an underscore-named Part, cannot occur, and if one ever did
+    appear the walker would raise on it rather than sweep it. What CAN occur,
+    and is what this pins, is a properly declared Part reachable from its
+    master under an underscore name: an alias, a rename, a compatibility shim.
+    `Public` is the control -- without it, a walker that had stopped finding
+    Part tables at all would be indistinguishable from one that skips
+    underscores.
+    """
+    schema = dj.Schema(f"{prefix}pw")
+
+    @schema
+    class SweepProbe(dj.Manual):
+        definition = """
+        # master for the Part-table sweep probe
+        n : int
+        """
+
+        class Public(dj.Part):
+            definition = """
+            # a conventionally named part, the control
+            -> master
+            i : int
+            """
+
+        class Internal(dj.Part):
+            definition = """
+            # declared normally, then reachable only under an underscore name
+            -> master
+            j : int
+            """
+
+    try:
+        part = SweepProbe.Internal
+        SweepProbe._Internal = part
+        del SweepProbe.Internal
+
+        found = {table for _, _, table in _iter_tables_recursive("probe", SweepProbe)}
+        assert SweepProbe.Public in found, "the walker no longer finds Part tables at all"
+        assert part in found, (
+            "a Part table reachable only under a `_`-prefixed name was not "
+            "reached -- only DUNDERS may be skipped, or its attributes go "
+            "unswept by the bare-longblob guard above"
+        )
+    finally:
+        # In `finally` for the reason test_daemon.py gives: a bare call here
+        # leaks the probe schema into the shared, session-scoped container for
+        # the rest of the run if an assertion above raises first.
+        schema.drop()
+
+
+def test_the_delete_previews_parent_graph_matches_the_real_foreign_keys(all_tables):
+    """`wl_preproc/cli/deleting.py` hand-declares each table's parents and says
+    they "must be kept in sync" with the `->` lines in the schema modules. Its
+    own guard compared only the *key set*, which is structurally blind to a
+    wrong value — and one was already sitting there: the foreign key added to
+    `Activation` on 2026-08-14 made `Request` its second parent while the map
+    still said `("Montage",)`.
+
+    Called from here because the guard's parent half needs
+    `connection.dependencies`, and so cannot run in `wlpp delete`'s
+    no-database case (`tests/test_cli_guardrails.py` runs it as a bare
+    subprocess). `all_tables` has the schemas activated, so this is the place
+    where it does run, against DataJoint's own dependency graph rather than
+    against a restatement of the declaration.
+    """
+    from wl_preproc.cli.deleting import _assert_known_tables_are_real
+
+    _assert_known_tables_are_real()
 
 
 @pytest.fixture(scope="module")

@@ -11,3 +11,15 @@ scratch/
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# Not committed, deliberately. CI installs with `pip install -e ".[dev]"`,
+# which ignores lockfiles entirely -- so a committed uv.lock cannot fail, and
+# a thing that cannot fail cannot guard. Worse, it answers the wrong question
+# confidently: it records a resolved SHA for every git dependency, including
+# any that pyproject.toml leaves on a moving ref, so an auditor asking "are
+# our git deps pinned?" reads the lockfile and concludes yes. pyproject.toml
+# is the single source of truth for that, and is where the pins live.
+# The deliberate change that would make a lockfile meaningful here is moving
+# CI to `uv sync --locked` (or adding a `uv lock --check` step); do that
+# first, then commit the lock.
+uv.lock
