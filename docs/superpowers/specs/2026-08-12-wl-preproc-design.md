@@ -479,11 +479,23 @@ needs no table migration — but only if it is in place before any row is writte
 > affected tables*; tables that do not exist have no rows. Declaring them fresh in Phase 2 with
 > the fix already in place is exactly as safe as declaring them now.
 
-> **`element-event` has the same defect, in the same release, and it IS activated.** Found
-> 2026-08-13 during Phase 1c-1's guardrail review. Three bare `longblob` attributes ship in the
-> version this project pins: `element_event.event.Event.Attribute.attribute_blob`,
-> `element_event.trial.Block.Attribute.attribute_blob` and
-> `element_event.trial.Trial.Attribute.attribute_blob`.
+> **The adopted Elements have the same defect, and it is an idiom rather than an accident.**
+> Found 2026-08-13 during Phase 1c-1's guardrail work. **Every `*.Attribute` part table in the
+> Elements declares `attribute_blob` as a bare `longblob`.** Four ship in the versions this
+> project pins:
+>
+> | Attribute | Element |
+> |---|---|
+> | `element_event.event.Event.Attribute.attribute_blob` | element-event |
+> | `element_event.trial.Block.Attribute.attribute_blob` | element-event |
+> | `element_event.trial.Trial.Attribute.attribute_blob` | element-event |
+> | `element_session.session_with_datetime.Session.Attribute.attribute_blob` | element-session |
+>
+> **`element-lab` and `element-animal` have none — because they have no `.Attribute` part table
+> at all.** That is what makes this a pattern to check rather than a list to memorise:
+> **adopting any further Element means checking its `*.Attribute` tables first.** The fourth was
+> found only because the guard swept every activated module rather than the two already known
+> to offend.
 >
 > **Nothing writes to them today, which is the only reason this is a hazard rather than an
 > incident.** They are nullable per-event/per-trial attribute columns, and this pipeline does
