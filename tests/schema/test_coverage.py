@@ -1,6 +1,4 @@
 # tests/schema/test_coverage.py
-import datetime
-
 import pytest
 
 PREFIX = "t_"

@@ -53,11 +53,60 @@ class ParamSet(dj.Manual):
         `(paramset_type, param_hash)`, not on `params`) untouched, which would
         desynchronise the two and break the invariant `register()` and every
         downstream reader rely on. So immutability is enforced here, in code,
-        rather than left to the unique index, which cannot see this case."""
+        rather than left to the unique index, which cannot see this case.
+
+        Blanket by design: every non-key column here (`param_hash`, `params`)
+        is part of this row's content-addressed identity, so nothing on this
+        table is a mutable-metadata exception. Revisit this if that ever
+        changes (e.g. a column added later that is genuinely just metadata)."""
         raise dj.DataJointError(
             "ParamSet rows are immutable once registered (spec section 5.3): "
             "call register() with the edited params instead of updating this row."
         )
+
+    def insert(self, rows, replace=False, **kwargs):
+        """Refuse `replace=True`. `update1` alone does not close this: DataJoint
+        dispatches `insert`/`insert1`/`update1` as three separate entries in
+        `datajoint.user_tables.supported_class_attrs`, so blocking one does
+        nothing to the others — and `Table.insert1` is exactly
+        `self.insert((row,), **kwargs)`, so overriding `insert` here covers
+        both call spellings with one guard.
+
+        This bypass is worse than the one `update1` closes: `replace=True`
+        compiles to `REPLACE INTO`, which overwrites `params` AND `param_hash`
+        together, so the row stays internally consistent — no stale hash, no
+        detectable symptom. A `paramset_idx` would simply, silently start
+        meaning different parameters than every computed row already produced
+        against it. `register()`'s own insert never sets `replace`, so it is
+        unaffected by this guard."""
+        if replace:
+            raise dj.DataJointError(
+                "ParamSet rows are immutable once registered (spec section 5.3): "
+                "insert(replace=True) would silently overwrite an existing row's "
+                "params and param_hash together, leaving nothing to detect it "
+                "happened. Call register() with the new params instead."
+            )
+        super().insert(rows, replace=replace, **kwargs)
+
+
+# register()'s allocate-then-insert step reads the current max paramset_idx
+# and writes max+1 with no lock, so concurrent registration of DIFFERENT
+# params under the same paramset_type (spec section 11.3 expects concurrent
+# requests) can race for the same index. A bounded retry resolves it -- see
+# register()'s docstring -- rather than a lock, which DataJoint's Manual
+# tables have no first-class support for anyway.
+_MAX_REGISTER_ATTEMPTS = 10
+
+
+def _insert_new(row: dict) -> None:
+    """The single write register() uses to claim a fresh paramset_idx.
+
+    Split out from register() purely so tests can simulate the concurrent-
+    registration collision race by making this one call raise a duplicate-key
+    error, without reaching into DataJoint's table-class dispatch machinery
+    to intercept insert1 directly. See test_paramset.py.
+    """
+    ParamSet.insert1(row, skip_duplicates=False)
 
 
 def register(paramset_type: str, params: dict) -> int:
@@ -66,25 +115,55 @@ def register(paramset_type: str, params: dict) -> int:
     This never asks "does this paramset exist?" and then writes. The hash is the
     identity, so an insert of an identical paramset is a duplicate and is
     skipped — the same reasoning wl.works applies to content-addressed rows.
+
+    Index allocation below is a read (the current max) then a write (max+1),
+    with no lock between them, so two callers registering DIFFERENT params
+    under the same paramset_type can read the same snapshot and compute the
+    same paramset_idx. Critically, the insert that claims it must NOT use
+    skip_duplicates=True: that would translate the primary-key collision into
+    a silent no-op, discarding the loser's row under no index at all, and the
+    final re-read below would then fetch1() zero rows and raise unrelated-
+    looking `fetch1`-requires-exactly-one-tuple noise instead of a clear
+    error. So the collision is left to raise DuplicateError, which is caught:
+    if the other writer happened to register the SAME content (the identical-
+    params race), that is not contention, just a lost race to write something
+    equivalent -- return their index, same as the fast path above. If they
+    registered DIFFERENT content, retry the allocation against a fresh
+    snapshot, bounded, so genuine contention fails loudly rather than
+    spinning forever.
     """
     digest = content_hash(params)
     existing = ParamSet & {"paramset_type": paramset_type, "param_hash": digest}
     if existing:
         return int(existing.fetch1("paramset_idx"))
 
-    # to_arrays, not fetch: DataJoint 2.3.2 deprecates bare fetch() (it warns on
-    # every call), and this project's suite must stay at zero warnings.
-    used = (ParamSet & {"paramset_type": paramset_type}).to_arrays("paramset_idx")
-    idx = int(max(used) + 1) if len(used) else 0
-    ParamSet.insert1(
-        {
-            "paramset_type": paramset_type,
-            "paramset_idx": idx,
-            "param_hash": digest,
-            "params": params,
-        },
-        skip_duplicates=True,
-    )
+    for _ in range(_MAX_REGISTER_ATTEMPTS):
+        # to_arrays, not fetch: DataJoint 2.3.2 deprecates bare fetch() (it
+        # warns on every call), and this project's suite must stay at zero
+        # warnings.
+        used = (ParamSet & {"paramset_type": paramset_type}).to_arrays("paramset_idx")
+        idx = int(max(used) + 1) if len(used) else 0
+        try:
+            _insert_new(
+                {
+                    "paramset_type": paramset_type,
+                    "paramset_idx": idx,
+                    "param_hash": digest,
+                    "params": params,
+                }
+            )
+            break
+        except dj.errors.DuplicateError:
+            existing = ParamSet & {"paramset_type": paramset_type, "param_hash": digest}
+            if existing:
+                return int(existing.fetch1("paramset_idx"))
+            continue  # someone else's different params claimed `idx` first
+    else:
+        raise dj.DataJointError(
+            f"paramset registration contention: exhausted {_MAX_REGISTER_ATTEMPTS} "
+            f"attempts to allocate an index for paramset_type={paramset_type!r}"
+        )
+
     return int(
         (ParamSet & {"paramset_type": paramset_type, "param_hash": digest}).fetch1(
             "paramset_idx"
