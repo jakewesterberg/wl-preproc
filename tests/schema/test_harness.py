@@ -26,6 +26,7 @@ def test_schema_shim_is_applied(dj_conn):
 TYPE_VOCABULARY = {
     "an_int": "int",
     "a_small_int": "tinyint",
+    "an_unsigned_int": "int unsigned",
     "a_float": "float",
     "a_double": "double",
     "a_string": "varchar(64)",

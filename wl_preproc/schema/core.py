@@ -67,7 +67,7 @@ class Segment(dj.Manual):
     # segment, which is globally unique by construction (32-bit counter at 1 Hz).
     # Key: (subject, session_datetime, system, segment_barcode).
     -> AcquisitionSystem
-    segment_barcode : int
+    segment_barcode : int unsigned  # spec 4.1: 32-bit counter, full 0..2**32-1 range
     ---
     start_s   : double
     end_s     : double

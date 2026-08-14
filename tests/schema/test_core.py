@@ -67,6 +67,42 @@ def test_segment_is_keyed_on_system_and_barcode(core):
     }
 
 
+def test_a_block_round_trips_with_and_without_works_block_id(core, a_session):
+    """`works_block_id = null : varchar(64)` is exercised in both directions: one
+    row that leaves it at its null default, one that sets it."""
+    core.Block.insert1(
+        {
+            **a_session,
+            "block_id": 1,
+            "task_type": "rf_map",
+            "start_s": 0.0,
+            "end_s": 300.0,
+        },
+        skip_duplicates=True,
+    )
+    core.Block.insert1(
+        {
+            **a_session,
+            "block_id": 2,
+            "task_type": "attention",
+            "start_s": 300.0,
+            "end_s": 900.0,
+            "works_block_id": "abc-123",
+        },
+        skip_duplicates=True,
+    )
+    without_id = (core.Block & {**a_session, "block_id": 1}).fetch1()
+    with_id = (core.Block & {**a_session, "block_id": 2}).fetch1()
+
+    assert without_id["task_type"] == "rf_map"
+    assert without_id["start_s"] == pytest.approx(0.0)
+    assert without_id["end_s"] == pytest.approx(300.0)
+    assert without_id["works_block_id"] is None
+
+    assert with_id["task_type"] == "attention"
+    assert with_id["works_block_id"] == "abc-123"
+
+
 def test_a_segment_round_trips(core, a_session):
     core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
     row = {
@@ -80,7 +116,43 @@ def test_a_segment_round_trips(core, a_session):
     core.Segment.insert1(row, skip_duplicates=True)
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
     assert got["segment_barcode"] == 1_000_000
+    assert got["start_s"] == pytest.approx(0.0)
     assert got["end_s"] == pytest.approx(12.0)
+    assert got["n_samples"] == 360_000
+
+
+def test_segment_barcode_holds_the_full_unsigned_32_bit_range(core, a_session):
+    """segment_barcode : int unsigned. A signed `int` caps at 2,147,483,647 --
+    half the ~136-year window spec section 4.1 claims for a 32-bit counter at
+    1 Hz (2**32 seconds), and DataJoint 2.3.2 has no `uint32` core type, so the
+    native MySQL passthrough spelling is the only way to get the full range.
+
+    Pins the true maximum, 4_294_967_295 (2**32 - 1), rather than merely "some
+    value above the signed boundary", and checks both that it round-trips
+    intact and that the declared column type is actually unsigned -- a column
+    that silently clipped to signed range would still round-trip small values
+    fine, so the boundary value is the assertion that actually proves the
+    fix.
+    """
+    core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
+    barcode = 4_294_967_295
+    row = {
+        **a_session,
+        "system": "spikeglx",
+        "segment_barcode": barcode,
+        "start_s": 0.0,
+        "end_s": 1.0,
+        "n_samples": 30_000,
+    }
+    core.Segment.insert1(row, skip_duplicates=True)
+    got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
+    assert got["segment_barcode"] == barcode
+
+    declared = core.Segment.heading["segment_barcode"].type
+    assert "unsigned" in declared.lower(), (
+        f"segment_barcode declared as {declared!r}; expected an unsigned "
+        "integer type covering the full 32-bit range"
+    )
 
 
 def test_only_known_systems_are_accepted(core, a_session):
@@ -122,3 +194,8 @@ def test_rejected_segment_records_why(core, a_session):
         skip_duplicates=True,
     )
     assert len(core.RejectedSegment & a_session) == 1
+    got = (
+        core.RejectedSegment
+        & {**a_session, "system": "rhs", "file_path": "rhs/2027-03-14_03_rhs/amplifier.dat"}
+    ).fetch1()
+    assert got["reason"] == "no decodable barcode"
