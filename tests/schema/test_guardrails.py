@@ -96,21 +96,30 @@ def all_tables_including_elements(all_tables):
     return tables
 
 
-# Spec section 5.1.1 (amended 2026-08-13): the pinned element_event release
-# declares three attributes as bare `longblob` -- the same defect class
-# element-array-ephys is refused outright for (14 attributes, upstream issue
-# #230), just at far smaller scale, which is why element_event is adopted
-# anyway for this phase. Allow-listed by fully-qualified name, never by
-# module: a NEW bare longblob anywhere this sweep reaches -- in element_event
-# or anywhere else -- must still trip this test. Do not add to this set
-# without a corresponding spec amendment; see test_no_table_declares_a_bare_
-# longblob's second assertion, which requires every entry here to actually be
-# found by the sweep.
+# Spec section 5.1.1 (amended 2026-08-13): this is not four unlucky columns,
+# it is an Elements idiom -- every `*.Attribute` part table in the pinned
+# release declares `attribute_blob` as a bare `longblob`. element_lab and
+# element_animal have zero occurrences not because they are safer, but
+# because neither declares a `.Attribute` part table at all. Nothing in this
+# pipeline writes to any of the four today, which is why this is a hazard
+# rather than an incident -- but anything that later writes an array to one
+# destroys it silently, so per-session/per-block/per-trial/per-event array
+# attributes must go in a custom table declaring `<blob>`, never in these.
+#
+# Allow-listed by fully-qualified name, never by module: a NEW bare longblob
+# anywhere this sweep reaches -- in element_event, element_session, or
+# anywhere else -- must still trip this test. A fifth entry, if one is ever
+# found, is very likely the same `*.Attribute` idiom in a newly-adopted
+# Element -- check that pattern first. Do not add to this set without a
+# corresponding spec amendment; see test_no_table_declares_a_bare_longblob's
+# second assertion, which requires every entry here to actually be found by
+# the sweep.
 _KNOWN_UPSTREAM_BARE_LONGBLOBS = frozenset(
     {
         "element_event.event.Event.Attribute.attribute_blob",
         "element_event.trial.Block.Attribute.attribute_blob",
         "element_event.trial.Trial.Attribute.attribute_blob",
+        "element_session.session_with_datetime.Session.Attribute.attribute_blob",
     }
 )
 
