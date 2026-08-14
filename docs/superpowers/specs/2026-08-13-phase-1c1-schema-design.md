@@ -302,6 +302,43 @@ selection rather than the montage, per §11.3's *"dedupe on `(selection, task ty
 Recorded here rather than in the plan because it is a boundary of the design, not a defect in the
 code that implements it.
 
+## 9.2 Four decisions the review gates settled, that 1c-2 and 1c-3 inherit
+
+Recorded here because each is a *boundary* a later sub-project will meet, and the reasoning is
+not recoverable from the code that resulted.
+
+**Idempotency keys are caller-scoped.** `_reject_key_reuse` compares `(task_type, origin,
+payload, requested_by)`. A key presented by a *different* requester is a collision and raises —
+not a retry. Both 1c-2 and 1c-3 take keys from outside this process, which is the only place
+reuse can happen, so the check is at the door rather than inside either caller.
+
+**The residual that a `selection_hash` would close.** A key whose original submission deduped
+onto a pre-existing `Activation` records nowhere *which selection it asked for*, so only the
+four fields above can be compared — a reused key that asked for a different block set is
+accepted. The final review argued for adding `Activation.selection_hash` in 1c-1 while the
+table is empty, citing §6's "free before there is data". **Declined**: §6's argument is about a
+*correctness deadline* — the blob fix must precede the first row — and a nullable column has
+none. 1c-3 lands before the lab starts, so it is also pre-data, and adding the column then is
+exactly as cheap. **1c-3 owns this**, and it is the same column §9.1 already needs for
+derivative dedupe, so the two arrive together or not at all.
+
+**Dependencies are commit-pinned, and no lockfile backs them.** All five git dependencies —
+four `element-*` plus `wl-sync` — pin to SHAs in `pyproject.toml`, which is what CI installs
+from. A `uv.lock` was generated and then removed: nothing consumes it (CI runs `pip install -e`),
+so it could neither fail nor guard, and it recorded a resolved SHA for the one dependency that
+was still unpinned — so reading it produced exactly the false confidence the pins exist to
+prevent. Moving CI to `uv sync --locked` is the deliberate change that would make a lockfile
+meaningful; until then, the pins are the whole mechanism. This matters beyond hygiene: §6's blob
+allow-list is keyed to attribute names in specific upstream revisions, so an unpinned upstream
+commit changes a guard's verdict with no change here.
+
+**The blob sweep does not mirror DataJoint's own Part rule.** DataJoint only promotes a nested
+class to a `Part` when its name starts with an uppercase letter (`schemas.py`, `part[0].isupper()`),
+so `class _Internal(dj.Part)` never becomes a table. The sweep in `test_guardrails.py`
+deliberately does *not* copy that rule, because doing so would skip a real escape path: a
+properly declared Part reachable only through an underscore-named alias or compatibility shim.
+The sweep is therefore wider than DataJoint's own, on purpose.
+
 ## 10. Open questions this design does not close
 
 - **§13 item 5** — the tolerance for the ingest-time task-PC vs sync-box clock cross-check. It
