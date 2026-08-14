@@ -17,20 +17,18 @@ import datajoint as dj
 import numpy as np
 import pytest
 
-PREFIX = "t_"
-
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[2] / "wl_preproc"
 
 
 @pytest.fixture(scope="module")
-def all_tables(dj_conn):
+def all_tables(dj_conn, prefix):
     from wl_preproc.schema import core, coverage, paramset, pipeline, request
 
-    pipeline.activate(prefix=PREFIX)
-    core.activate(prefix=PREFIX)
-    coverage.activate(prefix=PREFIX)
-    paramset.activate(prefix=PREFIX)
-    request.activate(prefix=PREFIX)
+    pipeline.activate(prefix=prefix)
+    core.activate(prefix=prefix)
+    coverage.activate(prefix=prefix)
+    paramset.activate(prefix=prefix)
+    request.activate(prefix=prefix)
 
     tables = []
     for module in (core, coverage, paramset, request):
@@ -60,10 +58,17 @@ def _iter_tables_recursive(module_name, table):
     classes are identified structurally (`issubclass(obj, dj.Part)`), not by
     name or `hasattr` duck-typing, so this cannot mistake an unrelated nested
     attribute for a table.
+
+    Only DUNDERS are skipped, not every underscore-prefixed name. This skipped
+    anything starting with `_` until 2026-08-14, which meant a Part table named
+    with a single leading underscore — a perfectly legal DataJoint declaration,
+    and a natural spelling for one an Element considers internal — was invisible
+    to the bare-longblob sweep. That is the same blind spot the recursion itself
+    exists to close, one level down.
     """
     yield module_name, table.__qualname__, table
     for name in dir(table):
-        if name.startswith("_"):
+        if name.startswith("__") and name.endswith("__"):
             continue
         obj = getattr(table, name)
         if isinstance(obj, type) and issubclass(obj, dj.Part):

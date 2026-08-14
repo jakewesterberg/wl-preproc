@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datajoint as dj
 
-from wl_preproc.schema import core, pipeline
+from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
 schema = dj.Schema()
 
@@ -45,7 +45,7 @@ class TrialCoverage(dj.Manual):
     """
 
 
-def activate(prefix: str = "wlpp") -> None:
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}coverage`. Idempotent."""
     core.activate(prefix=prefix)
     if not schema.is_activated():

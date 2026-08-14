@@ -16,10 +16,12 @@ section 8.3.1's re-fire requirement somewhere to live: re-firing is re-submittin
 
 **Dedupe is structural, never a lock.** Nothing here asks whether a run is in
 flight. Two requests naming the same selection resolve to the same
-``Activation`` key; the second insert is a duplicate and is skipped, and
-``populate()`` then computes that key exactly once. The idempotency key
-distinguishes a network retry from a new request, which is its documented job,
-and is *not* what prevents a second run.
+``Activation`` key; the second insert is skipped because the selection already
+has an activation — *not* because the idempotency keys matched, which they do
+not have to — and ``populate()`` then computes that key exactly once. The
+idempotency key distinguishes a network retry from a new request, which is its
+documented job, and is *not* what prevents a second run. Reusing one for a
+different request is refused rather than absorbed; see ``_reject_key_reuse``.
 
 **``submit()`` only ever produces canonical activations.** The dedupe above
 returns on ANY existing ``Activation`` row for the selection, so a second
@@ -39,7 +41,7 @@ from __future__ import annotations
 
 import datajoint as dj
 
-from wl_preproc.schema import core
+from wl_preproc.schema import DEFAULT_PREFIX, core
 
 schema = dj.Schema()
 
@@ -72,7 +74,15 @@ class Activation(dj.Manual):
     activation_id : int
     ---
     role        : enum('canonical','derivative')
-    request_key : varchar(64)   # provenance: which request produced this
+    # Provenance: which request produced this. A projected foreign key, and
+    # deliberately BELOW the divider -- a plain `-> Request` would drag
+    # idempotency_key into this table's primary key and contradict section 5.2
+    # exactly the way making Activation `Computed` would. Declared as a bare
+    # `varchar(64)` until 2026-08-14, which made section 4.3's provenance claim
+    # a convention rather than a constraint: an Activation could name a Request
+    # that does not exist, verified. Confirmed on DataJoint 2.3.2 that this form
+    # declares below the divider and leaves the primary key untouched.
+    -> Request.proj(request_key='idempotency_key')
     created_at  : datetime
     supersedes = null : int     # a regenerated canonical points at the old one
     """
@@ -85,9 +95,89 @@ class ActivationBlock(dj.Manual):
     # sort, so two activations over different block sets produce genuinely
     # different units and nothing may imply otherwise.
     # Key: (subject, session_datetime, montage_id, activation_id, block_id).
+    # NOT ENFORCED HERE: both foreign keys reach the same Session, so a block
+    # is guaranteed to belong to the right session -- and to nothing narrower.
+    # Nothing stops pairing an activation with a block lying outside its
+    # montage's [start_s, end_s) window, which is a block the sort must not
+    # cover. The check needs Montage.start_s/end_s against Block.start_s/end_s
+    # and so cannot be a foreign key. Nothing writes this table in 1c-1; the
+    # responder (1c-3) is its first writer and owns enforcing the window.
     -> Activation
     -> core.Block
     """
+
+
+def _payload_differs(stored, given) -> bool:
+    """True if two `<blob>` payloads are not the same value.
+
+    `stored != given` is the right comparison for the JSON-shaped payloads
+    this boundary actually carries — two dicts built in different key orders
+    are the same request, and `!=` says so where a serialized-bytes comparison
+    would not. But `!=` on a payload containing a numpy array returns an array
+    rather than a bool, and `bool()` of that raises, so the fallback compares
+    exactly what the column would store.
+    """
+    try:
+        return bool(stored != given)
+    except (ValueError, TypeError):
+        from datajoint.blob import pack
+
+        return pack(stored) != pack(given)
+
+
+def _reject_key_reuse(
+    stored: dict,
+    *,
+    idempotency_key: str,
+    task_type: str,
+    origin: str,
+    payload: dict,
+    selection_key: dict,
+) -> None:
+    """Raise if an existing `Request` under this key is a different request.
+
+    `Request.insert1(..., skip_duplicates=True)` used to make a reused key a
+    silent no-op *on Request only* — execution continued, so a second
+    `Activation` was created naming a key whose recorded payload belongs to
+    somebody else's request, and the second ask went unrecorded entirely. That
+    contradicts section 4.2's "records what was asked", and both future
+    consumers take keys from outside this process, which is exactly where
+    reuse happens.
+
+    **What cannot be checked here.** The selection is compared against the
+    activations this key actually produced. If the original submission deduped
+    onto a pre-existing `Activation` (see
+    `test_two_requests_for_one_selection_yield_one_activation`), no row names
+    that request at all, so there is nothing recorded to compare a selection
+    against and only `(task_type, origin, payload)` is checked. Closing that
+    needs a selection recorded on `Request` or `Activation`; adding a column
+    nothing consumes was declined for 1c-1 and is equally free in 1c-3, which
+    is pre-data too.
+    """
+    conflicts = []
+    if stored["task_type"] != task_type:
+        conflicts.append(f"task_type {stored['task_type']!r} vs {task_type!r}")
+    if stored["origin"] != origin:
+        conflicts.append(f"origin {stored['origin']!r} vs {origin!r}")
+    if _payload_differs(stored["payload"], payload):
+        conflicts.append("payload differs from the one already recorded")
+
+    produced = (Activation & {"request_key": idempotency_key}).keys()
+    if produced and not any(
+        all(row[attr] == value for attr, value in selection_key.items()) for row in produced
+    ):
+        asked_before = [{attr: row[attr] for attr in selection_key} for row in produced]
+        conflicts.append(f"selection {selection_key} vs {asked_before}")
+
+    if conflicts:
+        raise dj.DataJointError(
+            f"idempotency key {idempotency_key!r} is already recorded against a "
+            "different request, so this is key reuse rather than a retry: "
+            + "; ".join(conflicts)
+            + ". Accepting it would leave this ask unrecorded (section 4.2: Request "
+            "records what was asked) and point its Activation at the earlier ask's "
+            "payload. Mint a new idempotency key."
+        )
 
 
 def submit(
@@ -107,6 +197,21 @@ def submit(
     Always writes ``role='canonical'`` at ``activation_id=0`` — the only value
     the dedupe below can ever produce, since it returns early on any
     pre-existing ``Activation`` for the selection. See the module docstring.
+
+    **Never call this from inside a transaction.** DataJoint transactions do
+    not nest — ``Connection.start_transaction`` raises outright if one is
+    already open — and this function opens its own, because the whole point is
+    that the ``Request`` and its ``Activation`` land together or not at all.
+    So ``submit()`` is the outermost unit of work, and neither the ingest
+    watcher (1c-2) nor the responder (1c-3) may wrap it in a transaction of
+    their own to bundle it with other writes. That constraint is checked below
+    rather than left to a plan, for the same reason the ``is_activated()``
+    guard is: the failure otherwise surfaces from inside DataJoint as a
+    connection-level complaint that says nothing about which call was wrong.
+
+    Reusing an ``idempotency_key`` for a *different* request raises
+    ``DataJointError``; an identical resubmission is a retry and returns the
+    same key. See ``_reject_key_reuse``, including what it cannot check.
     """
     if not schema.is_activated():
         # Both future entry points (the ingest watcher and the responder) call
@@ -119,6 +224,13 @@ def submit(
             "Request/Activation tables are not yet bound to a database."
         )
 
+    if dj.conn().in_transaction:
+        raise dj.DataJointError(
+            "submit() opens its own transaction and DataJoint transactions do "
+            "not nest, so it cannot be called from inside one. Call it as its "
+            "own unit of work; see submit()'s docstring."
+        )
+
     import datetime as _dt
 
     selection_key = {
@@ -126,17 +238,34 @@ def submit(
     }
 
     with dj.conn().transaction:
-        Request.insert1(
-            {
-                "idempotency_key": idempotency_key,
-                "task_type": task_type,
-                "origin": origin,
-                "payload": payload,
-                "requested_by": requested_by,
-                "requested_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
-            },
-            skip_duplicates=True,
-        )
+        # Read before writing, rather than `insert1(..., skip_duplicates=True)`:
+        # skip_duplicates cannot tell a retry from key reuse, and silently chose
+        # "retry" for both. See _reject_key_reuse.
+        prior = Request & {"idempotency_key": idempotency_key}
+        if prior:
+            _reject_key_reuse(
+                prior.fetch1(),
+                idempotency_key=idempotency_key,
+                task_type=task_type,
+                origin=origin,
+                payload=payload,
+                selection_key=selection_key,
+            )
+        else:
+            # No skip_duplicates: the only duplicate reachable here is another
+            # writer inserting the same key between the read above and this
+            # write, which must fail loudly and roll back the whole submission
+            # rather than quietly proceed on somebody else's Request row.
+            Request.insert1(
+                {
+                    "idempotency_key": idempotency_key,
+                    "task_type": task_type,
+                    "origin": origin,
+                    "payload": payload,
+                    "requested_by": requested_by,
+                    "requested_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                }
+            )
 
         existing = Activation & selection_key
         if existing:
@@ -159,7 +288,7 @@ def submit(
         return key
 
 
-def activate(prefix: str = "wlpp") -> None:
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}request`. Idempotent."""
     core.activate(prefix=prefix)
     if not schema.is_activated():

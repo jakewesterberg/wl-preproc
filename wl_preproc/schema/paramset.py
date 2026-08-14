@@ -5,8 +5,24 @@ Section 5.3: computed tables are keyed on (…, paramset_idx), so re-running wit
 new parameters ADDS rows rather than overwriting. Three sortings of one session
 with different drift settings coexist permanently with full provenance.
 
-Paramsets are immutable once used, and the content hash enforces it
-structurally: an edit yields a different hash, which is a different paramset.
+Paramsets are immutable once used. The content hash does **not** enforce that,
+and this module's first draft claimed it did — parent spec section 5.3 now
+quotes that sentence back as wrong. The hash makes *registration* idempotent
+and nothing more: the unique index is on `(paramset_type, param_hash)`, not on
+`params`, so a plain `update1` rewrites `params` while leaving `param_hash`
+describing the parameters that used to be there. That is worse than a
+permitted edit, because every provenance claim keyed on the hash silently
+becomes false.
+
+What actually enforces immutability is a refusal on the table itself:
+`ParamSet.update1` raises, and `ParamSet.insert` refuses `replace=True` (a
+separate dispatch entry, and the more dangerous of the two — `REPLACE INTO`
+rewrites `params` and `param_hash` together, leaving nothing inconsistent to
+detect). Both are below, with their reasoning. Their disclosed limit: they
+hold at the DataJoint layer only. Raw SQL, or a `dj.FreeTable` handle to the
+same physical table, bypasses both — enforcing this in the CLI alone would
+have left the hole open to every caller that is not the CLI, which is most of
+them.
 """
 
 from __future__ import annotations
@@ -16,7 +32,7 @@ import json
 
 import datajoint as dj
 
-from wl_preproc.schema import pipeline
+from wl_preproc.schema import DEFAULT_PREFIX, pipeline
 
 schema = dj.Schema()
 
@@ -171,7 +187,7 @@ def register(paramset_type: str, params: dict) -> int:
     )
 
 
-def activate(prefix: str = "wlpp") -> None:
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind this table to `{prefix}paramset`. Idempotent."""
     pipeline.activate(prefix=prefix)
     if not schema.is_activated():

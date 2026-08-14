@@ -22,6 +22,10 @@ from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.protocol import HealthResponse, JobRequest
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
 
+# `wl_preproc.schema.__init__` is deliberately import-cheap (a constant and
+# nothing else), so this costs no datajoint import for `wlpp schemas export`.
+from wl_preproc.schema import DEFAULT_PREFIX
+
 EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "session_manifest": SessionManifest,
     "behavior_camera_sidecar": BehaviorCameraSidecar,
@@ -69,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     delete.add_argument("--confirm", default=None)
 
     daemon_p = subparsers.add_parser("daemon", help="run the populate daemon once")
-    daemon_p.add_argument("--prefix", default="wlpp")
+    # DEFAULT_PREFIX, not a second literal: the prefix carries its own
+    # separator and a copy here is exactly how `wlpplab` would come back.
+    daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     try:
         args = parser.parse_args(argv)

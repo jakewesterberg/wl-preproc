@@ -25,10 +25,22 @@ dependencies = [
     # its issue #230 is unfixed and its tables silently destroy array data
     # under 2.x. See spec section 5.1.1 and the Phase 2 precondition recorded
     # there.
-    "element-lab @ git+https://github.com/datajoint/element-lab.git@main",
-    "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@compat-fixes",
-    "element-session @ git+https://github.com/datajoint/element-session.git@main",
-    "element-event @ git+https://github.com/datajoint/element-event.git@main",
+    #
+    # COMMIT PINS, not branches, as the 1c-1 design spec section 2 requires.
+    # Resolved 2026-08-14 with `git ls-remote <url> <ref>`; the branch each SHA
+    # came from is kept beside it so the next bump is a one-line re-resolve.
+    # Branches were live refs here until then, and that is not theoretical: the
+    # blob allow-list in tests/schema/test_guardrails.py is keyed to four
+    # fully-qualified attribute names in specific upstream revisions, so an
+    # upstream commit could change that guard's verdict with no change in this
+    # repo -- and element-animal tracks a PERSONAL FORK's branch following an
+    # open PR (element-animal #51), which disappears the day that PR merges and
+    # the branch is deleted, taking `pip install -e .` with it. Re-resolve
+    # deliberately, and re-run the suite when you do.
+    "element-lab @ git+https://github.com/datajoint/element-lab.git@830e1a85790f89bd7221c09f69b704c7185eef7a",  # main
+    "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@0d1ae2463785f19fb74f4a4b4e3710a294153e51",  # compat-fixes
+    "element-session @ git+https://github.com/datajoint/element-session.git@fed82e43a8e49ea9b36ee3b812bea64b36552356",  # main
+    "element-event @ git+https://github.com/datajoint/element-event.git@e2cf2874a073ee19dcfd020e5904443c91b78c8c",  # main
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the

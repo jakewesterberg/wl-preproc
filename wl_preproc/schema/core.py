@@ -12,7 +12,7 @@ from __future__ import annotations
 import datajoint as dj
 
 from wl_preproc.contracts.paths import SYSTEMS
-from wl_preproc.schema import pipeline
+from wl_preproc.schema import DEFAULT_PREFIX, pipeline
 
 schema = dj.Schema()
 
@@ -88,7 +88,7 @@ class RejectedSegment(dj.Manual):
     """
 
 
-def activate(prefix: str = "wlpp") -> None:
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}core`. Idempotent."""
     pipeline.activate(prefix=prefix)
     if not schema.is_activated():

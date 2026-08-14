@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datajoint as dj
 
-from wl_preproc.schema import core, coverage, paramset, request
+from wl_preproc.schema import DEFAULT_PREFIX, core, coverage, paramset, request
 
 # `reserved_time` is stamped once, at reservation, and never heartbeated while
 # a stage runs -- so this is an upper bound on how long any single stage may
@@ -128,7 +128,9 @@ def _stale_reserved_keys(job, older_than_s: int) -> list[dict]:
     return stale.keys()
 
 
-def reap_stale_jobs(prefix: str = "wlpp", older_than_s: int = _DEFAULT_STALE_THRESHOLD_S) -> int:
+def reap_stale_jobs(
+    prefix: str = DEFAULT_PREFIX, older_than_s: int = _DEFAULT_STALE_THRESHOLD_S
+) -> int:
     """Clear job reservations left behind by a crashed populate.
 
     A crashed populate leaves its key marked reserved in a table's `~~` job
@@ -185,7 +187,7 @@ def reap_stale_jobs(prefix: str = "wlpp", older_than_s: int = _DEFAULT_STALE_THR
 
 
 def count_stale_jobs(
-    prefix: str = "wlpp", older_than_s: int = _DEFAULT_STALE_THRESHOLD_S
+    prefix: str = DEFAULT_PREFIX, older_than_s: int = _DEFAULT_STALE_THRESHOLD_S
 ) -> int | None:
     """Count the reservations `reap_stale_jobs` would free, without freeing
     them.
@@ -212,8 +214,25 @@ def count_stale_jobs(
     return sum(len(_stale_reserved_keys(job, older_than_s)) for job in _activated_job_tables())
 
 
-def run_once(prefix: str = "wlpp") -> dict:
-    """One pass of the runner. Returns what it did, for the daily report."""
+def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
+    """One pass of the runner. Returns what it did, for the daily report.
+
+    `populated` counts KEYS computed, not tables attempted, and `errors`
+    carries the per-key failures `suppress_errors=True` collects rather than
+    raises. Both were wrong until 2026-08-14, and wrong in the direction that
+    cannot be noticed: `populate()` returns `{"success_count", "error_list"}`
+    and the return value was discarded, so `errors` only ever caught
+    exceptions that escaped -- which is precisely what `suppress_errors=True`
+    exists to prevent -- and a stage failing on every one of its keys printed
+    `errors: none`. 1c-2's daily report is specified to be built on this dict,
+    so a silent all-clear here becomes a silent all-clear there.
+
+    `suppress_errors=True` is kept, not dropped: one stage failing must not
+    stop the others, which is the same reason the `try` below survives. The
+    `try` now catches only what `suppress_errors` genuinely cannot -- a
+    failure in `populate()` itself rather than in one of its keys (a dropped
+    connection, a key_source that will not resolve).
+    """
     request.activate(prefix=prefix)
     coverage.activate(prefix=prefix)
     paramset.activate(prefix=prefix)
@@ -222,8 +241,10 @@ def run_once(prefix: str = "wlpp") -> dict:
     populated, errors = 0, []
     for table in _computed_tables():
         try:
-            table.populate(reserve_jobs=True, suppress_errors=True)
-            populated += 1
+            result = table.populate(reserve_jobs=True, suppress_errors=True)
+            populated += int(result["success_count"])
+            # error_list entries are (key, error) -- datajoint/autopopulate.py.
+            errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")
 

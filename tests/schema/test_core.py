@@ -5,15 +5,13 @@ import pytest
 
 from wl_preproc.contracts.paths import SYSTEMS
 
-PREFIX = "t_"
-
 
 @pytest.fixture(scope="module")
-def core(dj_conn):
+def core(dj_conn, prefix):
     from wl_preproc.schema import core, pipeline
 
-    pipeline.activate(prefix=PREFIX)
-    core.activate(prefix=PREFIX)
+    pipeline.activate(prefix=prefix)
+    core.activate(prefix=prefix)
     return core
 
 
@@ -174,12 +172,23 @@ def test_only_known_systems_are_accepted(core, a_session):
         core.AcquisitionSystem.insert1({**a_session, "system": "spikeglex"})
 
 
-def test_system_enum_matches_the_frozen_contract(core):
+def test_system_enum_matches_the_frozen_contract(core, enum_values):
     """SYSTEMS is a frozen interface (section 3.5, directory layout). The schema
-    must not drift from it."""
+    must not drift from it — in either direction.
+
+    The enum is parsed and compared as a SET. Until 2026-08-14 this looped
+    `assert system in declared` over the raw declaration string, which is a
+    substring test wearing an exactness claim: `enum('spikeglxx','rhs')` would
+    have passed it, and so would a schema carrying a third acquisition system
+    the frozen contract no longer names. Neither is a hypothetical — a typo in
+    the enum and a stale value left behind after a contract edit are the two
+    ways this drifts.
+    """
     declared = core.AcquisitionSystem.heading["system"].type
-    for system in SYSTEMS:
-        assert system in declared, f"{system} missing from the schema's enum"
+    assert enum_values(declared) == set(SYSTEMS), (
+        f"the schema's enum {enum_values(declared)} and the frozen SYSTEMS "
+        f"contract {set(SYSTEMS)} have drifted apart"
+    )
 
 
 def test_rejected_segment_records_why(core, a_session):

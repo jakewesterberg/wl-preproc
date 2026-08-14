@@ -1,15 +1,12 @@
 # tests/schema/test_paramset.py
 import pytest
 
-PREFIX = "t_"
-
-
 @pytest.fixture(scope="module")
-def ps(dj_conn):
+def ps(dj_conn, prefix):
     from wl_preproc.schema import paramset, pipeline
 
-    pipeline.activate(prefix=PREFIX)
-    paramset.activate(prefix=PREFIX)
+    pipeline.activate(prefix=prefix)
+    paramset.activate(prefix=prefix)
     return paramset
 
 

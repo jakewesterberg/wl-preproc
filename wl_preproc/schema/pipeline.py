@@ -1,5 +1,11 @@
 # wl_preproc/schema/pipeline.py
-"""The linking module, and the only place a schema is activated.
+"""The linking module, and the only place an *Element* is activated.
+
+(It is not the only place a *schema* is activated: ``core``, ``coverage``,
+``paramset`` and ``request`` each call ``schema.activate(...)`` for their own
+custom tables. What is centralised here is the adopted Elements, whose
+activation order is load-bearing because they resolve each other's foreign
+keys through this module.)
 
 DataJoint Elements resolve their foreign keys through a *linking module*: a
 namespace that supplies the tables they reference by name. Scattering
@@ -16,6 +22,7 @@ only a round-trip can. It arrives in Phase 2, once that is fixed, and the Phase
 
 from __future__ import annotations
 
+from wl_preproc.schema import DEFAULT_PREFIX
 from wl_preproc.schema._compat import apply_datajoint_compat
 
 apply_datajoint_compat()
@@ -37,11 +44,15 @@ Session = session.Session
 _activated: set[str] = set()
 
 
-def activate(prefix: str = "wlpp") -> None:
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Activate the adopted Elements, in dependency order.
 
     Idempotent: activating an already-activated prefix is a no-op, so a test
     suite may call this repeatedly against one database.
+
+    `prefix` supplies its own separator — the f-strings below concatenate it
+    directly, so `DEFAULT_PREFIX` is `"wlpp_"`, not `"wlpp"`. See
+    `wl_preproc/schema/__init__.py`.
     """
     global Session, Subject
 

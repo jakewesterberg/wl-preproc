@@ -4,8 +4,6 @@ import itertools
 
 import pytest
 
-PREFIX = "t_"
-
 # submit()'s dedupe is keyed on exactly (subject, session_datetime, montage_id) —
 # that is the load-bearing, intentional behaviour under test in
 # test_two_requests_for_one_selection_yield_one_activation. But it means any two
@@ -26,12 +24,12 @@ _montage_ids = itertools.count()
 
 
 @pytest.fixture(scope="module")
-def req(dj_conn):
+def req(dj_conn, prefix):
     from wl_preproc.schema import core, pipeline, request
 
-    pipeline.activate(prefix=PREFIX)
-    core.activate(prefix=PREFIX)
-    request.activate(prefix=PREFIX)
+    pipeline.activate(prefix=prefix)
+    core.activate(prefix=prefix)
+    request.activate(prefix=prefix)
     return request
 
 
@@ -122,13 +120,106 @@ def test_two_requests_for_one_selection_yield_one_activation(req, selection):
 
 
 def test_a_retry_of_the_same_idempotency_key_is_not_a_second_request(req, selection):
-    first = req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
-    second = req.submit("k-5", "neural", "wl_works", selection, {}, "jake")
+    """The accept branch of submit()'s key-reuse check: same key, same
+    (task_type, origin, payload), same selection, so it is a network retry and
+    proceeds."""
+    payload = {"raw": "as received", "n": 3}
+    first = req.submit("k-5", "neural", "wl_works", selection, payload, "jake")
+    second = req.submit("k-5", "neural", "wl_works", selection, payload, "jake")
     # the property a network retry actually depends on: the same call, made
     # twice, must resolve to the same activation, not merely leave Request
     # alone
     assert first == second
     assert len(req.Request & {"idempotency_key": "k-5"}) == 1
+    # and the recorded ask is untouched by the retry
+    assert (req.Request & {"idempotency_key": "k-5"}).fetch1("payload") == payload
+
+
+def test_reusing_an_idempotency_key_for_a_different_request_is_refused(req, selection):
+    """The refuse branch. `Request.insert1(..., skip_duplicates=True)` made the
+    second call a silent no-op *on Request only* — execution continued, so the
+    second ask went unrecorded (contradicting section 4.2's "records what was
+    asked") while its Activation pointed at a `request_key` whose stored
+    payload belongs to the first ask. Both future consumers take keys from
+    outside this process, which is exactly where reuse happens."""
+    import datajoint as dj
+
+    req.submit("k-11", "neural", "wl_works", selection, {"raw": "first"}, "jake")
+
+    with pytest.raises(dj.DataJointError, match="key reuse"):
+        req.submit("k-11", "neural", "wl_works", selection, {"raw": "SECOND"}, "jake")
+
+    # the recorded ask is the first one, unmodified, and there is still only one
+    assert len(req.Request & {"idempotency_key": "k-11"}) == 1
+    assert (req.Request & {"idempotency_key": "k-11"}).fetch1("payload") == {"raw": "first"}
+
+    # a differing task_type or origin is the same conflict, on the same key
+    with pytest.raises(dj.DataJointError, match="task_type"):
+        req.submit("k-11", "behavior", "wl_works", selection, {"raw": "first"}, "jake")
+    with pytest.raises(dj.DataJointError, match="origin"):
+        req.submit("k-11", "neural", "cli", selection, {"raw": "first"}, "jake")
+
+
+def test_reusing_an_idempotency_key_for_a_different_selection_is_refused(req, selection):
+    """The selection is part of "the same ask", and it is not stored on Request,
+    so it is checked against the activations the key actually produced."""
+    import datajoint as dj
+
+    from wl_preproc.schema import core
+
+    payload = {"raw": "same payload, different session"}
+    req.submit("k-12", "neural", "wl_works", selection, payload, "jake")
+
+    other = {
+        "subject": selection["subject"],
+        "session_datetime": selection["session_datetime"],
+        "montage_id": next(_montage_ids),
+    }
+    core.Montage.insert1({**other, "start_s": 0.0, "end_s": 12.0}, skip_duplicates=True)
+
+    with pytest.raises(dj.DataJointError, match="selection"):
+        req.submit("k-12", "neural", "wl_works", other, payload, "jake")
+
+    # nothing was written for the rejected ask: the whole submission rolls back
+    assert len(req.Activation & {"request_key": "k-12"}) == 1
+    assert len(req.Activation & other) == 0
+
+
+def test_activation_cannot_name_a_request_that_does_not_exist(req, selection):
+    """Section 4.3's provenance claim, as structure rather than convention.
+    `request_key` was a bare varchar(64) until 2026-08-14, so this insert
+    succeeded — verified — and an Activation could name a Request that was
+    never made."""
+    import datetime
+
+    import datajoint as dj
+
+    with pytest.raises(dj.DataJointError):
+        req.Activation.insert1(
+            {
+                **selection,
+                "activation_id": 7,
+                "role": "canonical",
+                "request_key": "no-such-request",
+                "created_at": datetime.datetime(2027, 6, 1, 10, 0),
+            }
+        )
+
+
+def test_request_key_is_a_foreign_key_and_stays_out_of_the_primary_key(req):
+    """The projected form, `-> Request.proj(request_key='idempotency_key')`,
+    below the divider: integrity without dragging `idempotency_key` into
+    Activation's key, which is what section 4.3 asks for and what making
+    Activation `Computed` would have broken."""
+    assert "request_key" in req.Activation.heading.names
+    assert "request_key" not in req.Activation.primary_key
+    assert set(req.Activation.primary_key) == {
+        "subject",
+        "session_datetime",
+        "montage_id",
+        "activation_id",
+    }
+    assert req.Request.full_table_name in req.Activation.parents()
 
 
 def test_a_failure_between_the_two_inserts_leaves_neither(req, selection, monkeypatch):
@@ -197,3 +288,22 @@ def test_submit_before_activate_raises_a_clear_error(req, selection, monkeypatch
     monkeypatch.setattr(request.schema, "is_activated", lambda: False)
     with pytest.raises(dj.DataJointError, match="activate"):
         req.submit("k-10", "neural", "wl_works", selection, {}, "jake")
+
+
+def test_submit_refuses_to_run_inside_a_transaction(req, selection):
+    """submit()'s hardest constraint, and the one that most directly binds both
+    future consumers: it opens its own transaction, DataJoint transactions do
+    not nest, so it can never be called from inside one. Guarded for the same
+    reason the is_activated() guard above is — otherwise the failure surfaces
+    from inside DataJoint as a connection-level complaint that names nothing
+    the caller did wrong. It was stated only in a plan, which is not a place
+    1c-2 or 1c-3 will read it from."""
+    import datajoint as dj
+
+    conn = dj.conn()
+    with conn.transaction:
+        with pytest.raises(dj.DataJointError, match="do not nest"):
+            req.submit("k-13", "neural", "wl_works", selection, {}, "jake")
+
+    # the outer transaction stayed usable and nothing was written
+    assert len(req.Request & {"idempotency_key": "k-13"}) == 0
