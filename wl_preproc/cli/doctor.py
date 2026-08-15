@@ -14,6 +14,21 @@ import shutil
 _MIN_SCRATCH_FREE_GIB = 800
 
 
+def scratch_headroom(path: str = "/") -> tuple[int, bool]:
+    """Free GiB at `path`, and whether it clears the floor.
+
+    Extracted from `run_checks` so the daily report reuses this rather than
+    reimplementing it — two definitions of "enough disk" that could disagree is
+    exactly the drift worth preventing while there is still only one.
+
+    `/` rather than a dedicated scratch mount remains a proxy: there is no
+    scratch-root configuration to check instead, since SessionLayout takes its
+    root as a caller-supplied argument rather than a resolved constant.
+    """
+    free_gib = shutil.disk_usage(path).free // 2**30
+    return free_gib, free_gib >= _MIN_SCRATCH_FREE_GIB
+
+
 def run_checks() -> list[str]:
     """Run each check, print a line per check, and return the failures."""
     failures: list[str] = []
@@ -50,11 +65,10 @@ def run_checks() -> list[str]:
     # otherwise — and it is a real threshold, not a bound that can only ever
     # read "ok": a disk with less free space than one session needs while
     # processing is not actually ready, whatever else is true of it.
-    usage = shutil.disk_usage("/")
-    free_gib = usage.free // 2**30
+    free_gib, headroom_ok = scratch_headroom()
     report(
         "scratch headroom",
-        free_gib >= _MIN_SCRATCH_FREE_GIB,
+        headroom_ok,
         f"{free_gib} GiB free on / (proxy for the scratch mount; "
         f"floor is {_MIN_SCRATCH_FREE_GIB} GiB, one dual-probe session's worth)",
     )

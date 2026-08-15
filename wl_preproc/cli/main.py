@@ -89,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
         "claiming a check that did not run",
     )
 
+    report_parser = subparsers.add_parser("report", help="write the daily status report")
+    report_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
+    report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -185,6 +190,23 @@ def main(argv: list[str] | None = None) -> int:
             # arriving through the front door instead of a stalled transfer.
             print(f"error: {args.root} was not fully scanned: {result.root_error}")
             return 1
+        return 0
+
+    if args.group == "report":
+        # `Path` is not re-imported here, for the identical reason the
+        # `ingest` branch above states in full: it is already a module-level
+        # import (line 16), used unconditionally by `schemas export`'s own
+        # `--out` argument, and a second `from pathlib import Path` anywhere
+        # in main()'s body would make the compiler treat `Path` as local to
+        # the WHOLE function rather than just this branch -- raising
+        # UnboundLocalError at the earlier, unconditional
+        # `export.add_argument("--out", ..., type=Path)` call for every
+        # subcommand, not just `report`. This is exactly the defect Task 8
+        # found and fixed for `ingest`; the brief for this task repeated it.
+        from wl_preproc.cli.report import write_report
+
+        path = write_report(Path(args.out), Path(args.root), prefix=args.prefix)
+        print(path.read_text(), end="")
         return 0
 
     return 2

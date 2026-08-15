@@ -71,3 +71,15 @@ def test_ingest_requires_a_root_argument():
     combined = (result.stdout + result.stderr).lower()
     assert result.returncode == 2, f"expected argparse's usage error, got {result.returncode}"
     assert "traceback" not in combined
+
+
+def test_report_requires_a_root_argument():
+    """The mirror of `test_ingest_requires_a_root_argument` for `wlpp report`:
+    `--root` has no default there either (the stalled-transfers section walks
+    it directly), and argparse rejects the missing argument before `report`
+    ever tries to connect to a database — no DB needed to prove it."""
+    result = _run("report")
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode == 2, f"expected argparse's usage error, got {result.returncode}"
+    assert "traceback" not in combined
+    assert "--root" in combined
