@@ -191,8 +191,16 @@ difference **visible in the record** rather than assumed.
 ### 5.3 What verification costs, since it is not free
 
 Verification re-hashes every listed file on the server and compares against the declared size
-and hash. blake3 runs at roughly 1–3 GB/s on the target hardware, so a 360 GB dual-probe
-session costs about **2–6 minutes** — once, at ingest.
+and hash. **Measured 2026-08-15 on this machine**: `blake3` 1.0.9 at **1.83 GB/s**
+single-threaded against stdlib `blake2b`'s 1.15 GB/s, so a 360 GB dual-probe session costs
+about **3.3 minutes** — once, at ingest. In practice the NVMe read is the real floor, so this
+is roughly disk-bound rather than CPU-bound.
+
+`blake3` becomes a dependency for this. It is not a free choice made for speed: §4.6's
+behaviour-camera sidecar — a frozen interface — already specifies `checksum: <blake3>`, so the
+project committed to the algorithm before this sub-project existed, and hashing the same data
+two different ways in one pipeline would be worse than adding the wheel. Wheels are published
+for cp311 and cp313, which is what CI runs.
 
 That is worth paying, and worth stating why: rsync verifies *in flight*, not *at rest*. A file
 that transferred correctly and then met a bad block on the scratch array passes every check
