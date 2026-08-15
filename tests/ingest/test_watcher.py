@@ -121,8 +121,18 @@ def test_an_incomplete_and_quiet_session_reports_stalled(root):
 
 def test_a_future_schema_version_quarantines(root):
     """Declared since 1c-1 and never once compared against SCHEMA_VERSION. A
-    manifest claiming version 7 parses cleanly today."""
+    manifest claiming version 7 parses cleanly today.
+
+    A dedicated subject: `manifest_schema_version` runs AFTER
+    `already_ingested` (deliberately -- see `_evaluate_session`'s own
+    docstring on why that check and `subject_unrepresentable`, unlike
+    `session_id_mismatch`, stay below it), so this test's own outcome
+    depends on "pico" not already being ingested, the same dependency
+    `test_a_corrupted_file_quarantines_as_checksum_mismatch` already carries
+    and is fixed the same way.
+    """
     tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "futrekey")
     manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
     manifest_path.write_text(
         manifest_path.read_text().replace("schema_version: 1", "schema_version: 7")
@@ -158,7 +168,16 @@ def test_a_subject_name_too_long_for_element_animal_quarantines(root):
 
 
 def test_a_session_id_disagreeing_with_its_directory_quarantines(root):
-    """Silently trusting either one files the session under a wrong identity."""
+    """Silently trusting either one files the session under a wrong identity.
+
+    No dedicated subject needed, unlike its neighbors above and below:
+    `session_id_mismatch` runs BEFORE `already_ingested` (round 3 review --
+    see `_evaluate_session`'s own docstring for why, and
+    `test_an_already_landed_identity_with_a_mismatched_directory_still_
+    quarantines` below for the regression this specifically closes), so this
+    test's outcome cannot depend on "pico"'s landed state regardless of
+    which subject the manifest declares.
+    """
     tmp_path, prefix, session_dir = root
     manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
     manifest_path.write_text(
@@ -171,6 +190,42 @@ def test_a_session_id_disagreeing_with_its_directory_quarantines(root):
     assert (ingest.Quarantine & {"session_dir": session_dir}).fetch1(
         "reason"
     ) == "session_id_mismatch"
+
+
+def test_an_already_landed_identity_with_a_mismatched_directory_still_quarantines(root):
+    """Round 3 review, Critical: round 2's fix moved `already_ingested` to
+    run FIRST, immediately after the parse -- correct for `manifest_schema_
+    version` and `subject_unrepresentable` (see `_evaluate_session`'s own
+    docstring), wrong for `session_id_mismatch`, since moved back below it.
+    `already_ingested` keys on `(subject, session_datetime)` alone, never on
+    the directory, so a directory whose manifest declares an ALREADY-LANDED
+    identity used to return ALREADY before `session_id_mismatch` ever ran --
+    silently disabling the one check that exists specifically to catch a
+    renamed or duplicated session directory.
+
+    A genuine revert-control, not a hypothetical: land a session normally,
+    then rewrite that SAME manifest's `session_id` to no longer match the
+    directory it sits in, leaving `subject`/`started_at` untouched so
+    `already_ingested`'s key is unaffected, and rescan. With `session_id_
+    mismatch` running before `already_ingested` (this fix), this quarantines
+    correctly; under round 2's order the identical probe silently returned
+    ALREADY instead, with zero Quarantine rows written -- confirmed live by
+    reverting just this ordering and rerunning this exact test.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "revctrl")
+    scan_once(tmp_path, prefix=prefix)  # lands under session_id "2027-03-14_01"
+
+    manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
+    manifest_path.write_text(
+        manifest_path.read_text().replace(str(CI_RECIPE.session_id), "2027-03-14_09")
+    )
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "session_id_mismatch"
 
 
 def test_an_unparseable_manifest_quarantines_with_no_session_key(root):
@@ -187,13 +242,17 @@ def test_an_unparseable_manifest_quarantines_with_no_session_key(root):
 
 
 def test_a_corrupted_file_quarantines_as_checksum_mismatch(root):
-    """A dedicated subject: unlike the manifest-level rejections above (schema
-    version, subject length, session_id mismatch, an unparseable file), which
-    all quarantine at a check `_scan_one` runs BEFORE `already_ingested` is
-    ever consulted, a checksum mismatch is only found by `verify_session`,
-    which runs AFTER it. This test's own outcome therefore depends on
-    "pico" not already being ingested — a dependency on file-wide state this
-    file was just corrected away from elsewhere (see
+    """A dedicated subject: `verify_session`, where a checksum mismatch is
+    found, runs well after `already_ingested` -- and, as of round 3 review,
+    that is no longer true of every manifest-level rejection uniformly.
+    `session_id_mismatch` (and the newer `session_dir_unrepresentable`) run
+    BEFORE `already_ingested`, since neither depends on a global that can
+    drift after landing; `manifest_schema_version` and
+    `subject_unrepresentable` stay AFTER it, deliberately, since both do
+    (see `_evaluate_session`'s own docstring for the full reasoning). This
+    test's own check runs later still, so it depends on "pico" not already
+    being ingested regardless -- a dependency on file-wide state this file
+    was corrected away from elsewhere (see
     `test_a_directory_without_a_manifest_is_ignored_entirely`'s docstring),
     so it gets the same fix here rather than staying merely-currently-safe.
     """
@@ -446,8 +505,11 @@ def test_an_unreadable_manifest_quarantines_rather_than_raising(root):
 
 
 def test_paramset_registration_contention_defers_rather_than_quarantining(root, monkeypatch):
-    """`register_session_params` raises a bare `dj.DataJointError` — not the
-    `ValueError` every other rejection here raises — when
+    """`register_session_params` raises `paramset.ContentionExhausted` — not
+    the `ValueError` every other rejection here raises, and (since round 2
+    review) not the bare `dj.DataJointError` this docstring originally said
+    either; see `test_a_datajoint_error_that_is_not_contention_quarantines_
+    not_defers` below for exactly why that was narrowed — when
     `paramset.register`'s bounded retry loop (`_MAX_REGISTER_ATTEMPTS`, in
     `wl_preproc/schema/paramset.py`) exhausts every attempt to allocate a
     fresh `paramset_idx` under real concurrent registration. That is a
@@ -473,7 +535,7 @@ def test_paramset_registration_contention_defers_rather_than_quarantining(root, 
     genuinely unlucky racing writers rather than one.
 
     A dedicated subject, even though this path structurally never reaches
-    `land_session` (the forced `DataJointError` fires before it): reaching
+    `land_session` (the forced `ContentionExhausted` fires before it): reaching
     `register_session_params` at all still requires `already_ingested()` to
     say no first, which depends on nothing else in the whole file having
     landed "pico" — a dependency this test hit for real while it was being
@@ -572,26 +634,37 @@ def test_a_datajoint_error_that_is_not_contention_quarantines_not_defers(root, m
 
 
 def test_a_mixed_key_type_params_file_quarantines_the_one_session_not_its_sibling(root):
-    """Critical 1(a): `params:\\n  0: 0.5\\n  gain: 2` — a per-channel setting
-    written beside a named one — passes `SessionParams` validation cleanly,
-    because `params` is a bare, deliberately unconstrained `dict` (see
-    `SessionParams`'s own docstring). It then reaches `paramset.register`'s
-    `content_hash`, whose `json.dumps(params, sort_keys=True)` cannot sort a
-    dict with both int and str keys — confirmed directly, not assumed:
+    """Critical 1(a), UPDATED by round 3 review's Important 4: `params:\\n
+    0: 0.5\\n  gain: 2` — a per-channel setting written beside a named one —
+    passes `SessionParams` validation cleanly, because `params` is a bare,
+    deliberately unconstrained `dict` (see `SessionParams`'s own docstring).
+    It then reaches `paramset.register`'s `content_hash`, whose
+    `json.dumps(params, sort_keys=True)` cannot sort a dict with both int
+    and str keys — confirmed directly, not assumed:
     `json.dumps({0: 0.5, "gain": 2}, sort_keys=True)` raises `TypeError:
-    "'<' not supported between instances of 'str' and 'int'"`. Also
-    confirmed directly that `SessionParams.model_validate` accepts this
-    params dict unchanged, key types and all — it is not rejected at the
-    envelope level either.
+    "'<' not supported between instances of 'str' and 'int'"`.
 
-    Uncaught, this escaped `_evaluate_session` entirely and, being inside
-    `scan_once`'s dict comprehension, would have aborted the *whole* scan —
-    proven here with a genuine second, healthy session generated fresh (not
+    At round 2, nothing caught this before `paramset.register` itself, so it
+    escaped `_evaluate_session` entirely and reached `_scan_one`'s outer
+    boundary, quarantining as the generic `unexpected_failure`. Round 3's
+    Important 4 fix (`register_session_params` now calls
+    `paramset.content_hash(declared.params)` itself, proactively, as part of
+    its own validation) catches this SAME `TypeError` earlier and more
+    specifically — mixed int/str keys are just as unserializable as a
+    YAML-typed `datetime.date` (Important 4's own example), and both go
+    through the identical `json.dumps` call — so this now quarantines as
+    `params_invalid`, a strictly more informative outcome than before. The
+    sibling-survives proof this test was written for is unaffected either
+    way, so it stays: a genuine second, healthy session generated fresh (not
     copied) right next to the broken one, via `CI_RECIPE.model_copy` with a
     different `session_id` and a dedicated `subject` — both stamped
     automatically by `generate_session`/`write_manifest`, so the sibling's
     directory name and its own manifest's `session_id` agree by
-    construction, with no separate fix-up needed.
+    construction, with no separate fix-up needed. See the standalone outer-
+    boundary proof below
+    (`test_a_genuinely_unclassified_failure_still_reaches_the_outer_
+    boundary`) for a scenario that does NOT depend on which specific checks
+    happen to exist today.
     """
     tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "badkey")
@@ -609,10 +682,42 @@ def test_a_mixed_key_type_params_file_quarantines_the_one_session_not_its_siblin
 
     assert result.outcomes[session_dir] is Outcome.QUARANTINED
     row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
-    assert row["reason"] == "unexpected_failure"
-    assert row["detail"]["error_type"] == "TypeError"
+    assert row["reason"] == "params_invalid"
 
     assert result.outcomes[sibling_dir] is Outcome.INGESTED
+
+
+def test_a_genuinely_unclassified_failure_still_reaches_the_outer_boundary(root, monkeypatch):
+    """The outer boundary's own proof, independent of any specific check:
+    round 2's original proof for this
+    (`test_a_mixed_key_type_params_file_quarantines_the_one_session_not_its_
+    sibling`, above) stopped proving it once round 3's Important 4 fix gave
+    that scenario a more specific home (`params_invalid`) -- exactly the
+    kind of thing that keeps happening as this module grows more named,
+    specific checks over time. A test for "the boundary catches whatever is
+    LEFT OVER" needs a failure injected somewhere no check could ever name,
+    not a scenario that might migrate to a specific reason next round too.
+    `landing.land_session` is monkeypatched directly to raise a synthetic,
+    clearly-labelled RuntimeError -- not a real failure mode this module
+    anticipates at all, which is the point.
+    """
+    from wl_preproc.ingest import landing as landing_module
+
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "unclassk")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated: nobody anticipated this")
+
+    monkeypatch.setattr(landing_module, "land_session", boom)
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "unexpected_failure"
+    assert row["detail"]["error_type"] == "RuntimeError"
+    assert "nobody anticipated" in row["detail"]["error"]
 
 
 def test_an_overlong_paramset_type_quarantines_as_params_invalid(root):
@@ -892,3 +997,166 @@ def test_cli_ingest_reports_a_root_fault_and_exits_non_zero(tmp_path, dj_conn, p
         os.chmod(unreadable, original_mode)
 
     assert exit_code == 1
+
+
+# --- Round 3 review ----------------------------------------------------
+#
+# Two Criticals (the two remaining after round 2's boundary and narrowed
+# catch both held under fresh attack: a real `DROP TABLE ...quarantine` and a
+# double-fault case where the inner handler's own quarantine raises too),
+# one review-owned mistake in round 2's own I2 fix, and the seven Important/
+# also-fix items that came with them.
+
+
+def test_a_session_dir_over_the_ingestion_column_limit_quarantines_cleanly(
+    tmp_path, dj_conn, prefix
+):
+    """Critical: `Ingestion.session_dir : varchar(255)`
+    (`wl_preproc/schema/ingest.py`) had no check at source, unlike
+    `Quarantine.session_dir` (the identical width, but a primary key
+    `landing.quarantine()` already clamps defensively -- see that
+    function's own docstring). A session at a path over 255 characters --
+    reachable by a deep enough storage-root layout, not a hypothetical --
+    used to reach `land_session`'s own insert, raise a raw
+    `pymysql.err.DataError`, get caught only by `_scan_one`'s generic outer
+    boundary, and quarantine as `unexpected_failure` FOREVER: `session_dir`
+    does not shorten between polls, and `already_ingested` can never say
+    True for a session that has never once landed, so nothing about a later
+    scan would ever change the outcome. A completely valid, complete
+    session parked permanently behind an unclassified reason. Fixed with a
+    dedicated, source-level check (`landing.INGESTION_SESSION_DIR_MAX_LEN`)
+    and its own named reason, the identical precedent
+    `subject_unrepresentable` and `PARAMSET_TYPE_MAX_LEN` already set.
+
+    Constructs a GENUINE `session_dir` over 255 characters via a deeply
+    nested root, not a synthetic string: `SessionId`'s own format is short
+    and fixed, so the only way to make the FULL PATH long is to nest the
+    root deeply -- which `generate_session`/`SessionLayout` are fully
+    agnostic to; nothing else in this pipeline assumes a shallow storage
+    root.
+    """
+    ingest.activate(prefix=prefix)
+    deep_root = tmp_path
+    for _ in range(20):
+        if len(str(deep_root / CI_RECIPE.session_id)) > 255:
+            break
+        deep_root = deep_root / ("nested_dir_" + "x" * 30)
+    else:
+        pytest.fail("could not construct a session_dir over 255 characters")
+
+    generate_session(deep_root, CI_RECIPE)
+    session_dir = str(SessionLayout(deep_root, CI_RECIPE.session_id).dir)
+    assert len(session_dir) > 255
+
+    result = scan_once(deep_root, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir[:255]}).fetch1()
+    assert row["reason"] == "session_dir_unrepresentable"
+    assert row["detail"]["untruncated_session_dir"] == session_dir
+
+
+def test_the_manifest_hash_matches_the_files_real_bytes_even_with_crlf_endings(root):
+    """Critical (I1 correction): I1's original round-2 fix replaced
+    `blake3_file(path)` with `blake3(text.encode("utf-8"))`, reasoning about
+    the UTF-8 codec round-tripping losslessly -- true, but the wrong layer.
+    `Path.read_text()`'s default `newline=None` enables universal-newline
+    translation ABOVE the codec: `\\r\\n` and bare `\\r` collapse to `\\n` in
+    the decoded string regardless of encoding validity. Confirmed directly,
+    not assumed: a manifest written with `\\r\\n` line endings, read back and
+    re-encoded, produces DIFFERENT bytes -- and a different blake3 digest --
+    than the file's own real bytes, identically on 3.11.15 and 3.13.9.
+    SpikeGLX and Intan both run on Windows, so a CRLF-authored manifest is
+    not a hypothetical this pipeline can assume away. Fixed by hashing the
+    raw bytes `read_bytes()` returns, decoded separately for parsing.
+
+    Reads the file's OWN bytes directly, via `Path.read_bytes()`, as an
+    independent oracle -- not a re-derivation of `watcher.py`'s own hashing
+    logic, which would prove nothing if that logic were what was wrong.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "crlfkey")
+    manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
+    manifest_path.write_bytes(manifest_path.read_bytes().replace(b"\n", b"\r\n"))
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.INGESTED
+    stored_hash = (ingest.Ingestion & {"session_dir": session_dir}).fetch1("manifest_hash")
+
+    import blake3
+
+    real_bytes_hash = blake3.blake3(manifest_path.read_bytes()).hexdigest()
+    assert stored_hash == real_bytes_hash
+
+
+def test_a_yaml_date_typed_params_value_quarantines_as_params_invalid(root):
+    """Important 4: `params:\\n  calibrated_on: 2027-03-14` is typed by
+    YAML's SafeLoader as a real `datetime.date`, not a `str` -- confirmed
+    directly: `yaml.safe_load("calibrated_on: 2027-03-14")` returns
+    `{"calibrated_on": datetime.date(2027, 3, 14)}`. `SessionParams` accepts
+    it unchanged (`params` is a bare dict on purpose), and it used to die
+    inside `paramset.register`'s own `content_hash` with "Object of type
+    date is not JSON serializable" -- landing in `_scan_one`'s generic
+    `unexpected_failure` catch-all rather than `params_invalid`, which
+    already exists to name exactly this class of problem
+    (`register_session_params` already owns "validating" the params file).
+    Fixed by extending `register_session_params`'s own guard to prove
+    `params` is JSON-serializable, using the identical call `register()`
+    itself makes, before ever calling `register()`.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "datekey")
+    (SessionLayout(tmp_path, CI_RECIPE.session_id).dir / "session_params.yaml").write_text(
+        "paramset_type: clustering\nparams:\n  calibrated_on: 2027-03-14\n"
+    )
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "params_invalid"
+
+
+def test_cli_ingest_still_prints_outcomes_found_before_a_root_fault(monkeypatch, capsys):
+    """Also-fix: `main.py` used to return before ever printing
+    `result.outcomes` whenever `root_error` was set -- discarding real,
+    already-written `Ingestion`/`Quarantine` rows from the one report an
+    operator would actually see, exactly what a MID-WALK fault produces
+    (`_candidate_dirs`' own docstring: `root.iterdir()`'s `next()` can raise
+    AFTER already yielding some children, not just before yielding any).
+
+    Reproducing a genuine mid-walk fault needs a directory entry to vanish
+    between being listed and being iterated to -- not reliably
+    constructible with real filesystem operations (the same difficulty
+    `discover.py`'s own docstring documents for the analogous `rglob` race),
+    so this monkeypatches `scan_once` itself to return a `ScanResult`
+    carrying both a real outcome and a `root_error` together, proving
+    `main()`'s OWN handling of that return value in isolation from
+    `scan_once`'s internal mechanics. Patches
+    `wl_preproc.ingest.watcher.scan_once` specifically, not some
+    `wl_preproc.cli.main`-level attribute: `main()`'s own `from
+    wl_preproc.ingest.watcher import scan_once` is a LOCAL import inside the
+    `ingest` branch, re-resolved from the `watcher` module's own namespace
+    every time that branch runs, so patching the module's attribute is what
+    actually reaches it -- the identical technique
+    `test_the_session_key_check_goes_through_landings_own_helper` already
+    uses for `landing.manifest_session_key`.
+    """
+    from wl_preproc.cli.main import main
+    from wl_preproc.ingest import watcher
+
+    def fake_scan_once(root, prefix, verify):
+        return watcher.ScanResult(
+            outcomes={"/scratch/2027-03-14_01": watcher.Outcome.INGESTED},
+            root_error="OSError: simulated mid-walk fault",
+        )
+
+    monkeypatch.setattr(watcher, "scan_once", fake_scan_once)
+
+    exit_code = main(["ingest", "--root", "/scratch"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "2027-03-14_01" in captured.out
+    assert "ingested" in captured.out

@@ -45,6 +45,16 @@ QUARANTINE_REASONS: frozenset[str] = frozenset(
         # cleanly and then fails at the insert. Caught as a manifest problem
         # rather than surfacing as a MySQL error mid-landing.
         "subject_unrepresentable",
+        # The identical shape one column over: Ingestion.session_dir is
+        # varchar(255), and a storage root nested deep enough produces a
+        # session_dir string this long with nothing else about the session
+        # being wrong at all. Named and checked at source (Task 8's watcher,
+        # `landing.INGESTION_SESSION_DIR_MAX_LEN`) specifically so a
+        # completely valid session does not land in `unexpected_failure`
+        # forever -- session_dir does not shorten between polls, so an
+        # unclassified catch-all quarantine would never resolve on its own,
+        # unlike a genuinely transient condition.
+        "session_dir_unrepresentable",
         # The watcher's outer exception boundary (wl_preproc/ingest/watcher.py,
         # `_scan_one`): every failure above is a known, classified shape this
         # pipeline anticipates and names. This one is not -- a session-params

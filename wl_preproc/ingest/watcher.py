@@ -167,21 +167,50 @@ def _evaluate_session(
     the boundary that turns an escape here into a quarantine rather than a
     crash of the whole scan.
 
-    Check order, and why `already_ingested` sits second, immediately after
-    the parse: an already-landed session must be a no-op on every later
-    scan (design section 8.3). `already_ingested` used to run after
-    schema_version/subject-length/session_id, so a session that had already
-    landed under an OLDER `SCHEMA_VERSION` wrote a fresh
-    `manifest_schema_version` Quarantine row on every subsequent poll after a
-    version bump, while its `Ingestion` row stayed -- the identical session
-    listed under both Ingested and Quarantined, contradicting section 9.
-    `already_ingested` only needs `subject` and `started_at`, both already
-    validated (type-correct, present) by the base parse -- neither needs
-    schema_version, subject length, or session_id to have been checked
-    first.
+    Check order, corrected in round 3 review after an over-broad round-2
+    fix: `session_id_mismatch` and the `session_dir`-length check just below
+    it both run BEFORE `already_ingested`; `manifest_schema_version` and
+    `subject_unrepresentable` both run AFTER it. This is not one rule
+    ("early checks first") -- it is two different, deliberately separate
+    reasons landing on two different answers:
+
+    - `already_ingested` keys on `(subject, session_datetime)` alone, never
+      on the directory. Round 2 moved it to run immediately after the parse
+      so an already-landed session is a true no-op on every later scan
+      (design section 8.3): `manifest_schema_version` reads a CODE-level
+      constant (`SCHEMA_VERSION`) that is deliberately bumped over the
+      pipeline's own deployed lifetime, so a session landed under an OLDER
+      version used to fail it freshly on every poll after a version bump,
+      while its `Ingestion` row stayed -- the same session listed under
+      both Ingested and Quarantined, contradicting section 9.
+      `subject_unrepresentable` is the identical shape for the SAME reason,
+      one layer down: `landing.SUBJECT_MAX_LEN` is a property of an
+      installed dependency (element-animal), not of this directory, and
+      could in principle narrow under a future dependency bump the same way
+      `SCHEMA_VERSION` deliberately widens. Both stay after
+      `already_ingested` on purpose: an already-landed session must never
+      be re-judged against a global that has moved on without it.
+    - `session_id_mismatch` and the `session_dir`-length check are not
+      globals at all -- they are properties of THIS directory and THIS
+      manifest, fixed for as long as the directory exists, and moving
+      `already_ingested` above them was the actual round-2 bug: it keys on
+      identity, not on path, so a directory whose manifest happened to
+      declare an ALREADY-landed identity (a renamed or duplicated session
+      directory -- precisely the case `session_id_mismatch` exists to
+      catch) returned ALREADY before that check ever ran, silently
+      disabling it. Proven live with a revert-control: the identical probe
+      (an already-landed identity, a manifest claiming a different
+      `session_id` than the directory it sits in) gave `quarantined` under
+      the pre-round-2 order and `already` under round 2's, with zero
+      Quarantine rows written either way in the broken case. Neither of
+      these two needs a database or `SCHEMA_VERSION` to evaluate, so
+      nothing is lost by running them first, and the identity confusion
+      they exist to catch cannot be un-caught by something that happens to
+      have already landed under the WRONG identity.
     """
     try:
-        text = (session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
+        raw = (session_dir / MANIFEST_FILENAME).read_bytes()
+        text = raw.decode("utf-8")
         manifest = SessionManifest.from_yaml(text)
     except Exception as exc:
         # The read sits INSIDE this guard, not outside it: invalid UTF-8
@@ -193,11 +222,73 @@ def _evaluate_session(
         # not left to _scan_one's outer boundary and its generic
         # unexpected_failure -- because this IS a known, anticipated shape
         # with an informative name, unlike what that boundary exists for.
+        #
+        # read_bytes(), decoded separately, not read_text(encoding="utf-8"):
+        # read_text()'s default newline=None enables universal-newline
+        # translation ABOVE the codec layer, collapsing \r\n and bare \r to
+        # \n in the returned str regardless of encoding validity -- a
+        # transformation the UTF-8 round-trip reasoning that justified
+        # text.encode("utf-8") at landing time (see the land_session call
+        # below) never accounted for. Proven end to end on a CRLF-authored
+        # manifest, identically on 3.11.15 and 3.13.9: the stored hash and
+        # the real file's own blake3 came out completely different. SpikeGLX
+        # and Intan both run on Windows, so CRLF manifests are not a
+        # hypothetical this pipeline can assume away. `raw`, the untranslated
+        # bytes, is what `Ingestion.manifest_hash` is hashed from -- see
+        # `wl_preproc/schema/ingest.py`'s own declaration, "blake3 of the
+        # manifest FILE'S BYTES", literally.
         landing.quarantine(
             str(session_dir),
             reason="manifest_invalid",
             detail={"error": str(exc)[:2000]},
             prefix=prefix,
+            now=now,
+        )
+        return Outcome.QUARANTINED
+
+    if manifest.session_id != session_dir.name:
+        landing.quarantine(
+            str(session_dir),
+            reason="session_id_mismatch",
+            detail={"manifest": manifest.session_id, "directory": session_dir.name},
+            prefix=prefix,
+            subject=manifest.subject,
+            session_dt=manifest.started_at,
+            now=now,
+        )
+        return Outcome.QUARANTINED
+
+    if len(str(session_dir)) > landing.INGESTION_SESSION_DIR_MAX_LEN:
+        # Ingestion.session_dir : varchar(255) (wl_preproc/schema/ingest.py),
+        # a plain provenance column with no length check of its own before
+        # this. Unlike Quarantine.session_dir (the identical width, but a
+        # PRIMARY KEY that landing.quarantine() already clamps defensively --
+        # see that function's docstring), a session this long reaching
+        # land_session's own insert would raise a raw pymysql.err.DataError,
+        # caught only by _scan_one's generic outer boundary and quarantined
+        # as unexpected_failure -- forever, on every single poll, since
+        # nothing about a directory's own path shortens on a later scan and
+        # already_ingested can never say True for a session that has never
+        # once landed. A completely valid, complete session parked behind an
+        # unclassified reason it can never age out of deserves the same
+        # source-level, specifically-named treatment `subject_unrepresentable`
+        # and PARAMSET_TYPE_MAX_LEN already get, not a permanent stay in the
+        # catch-all. Checked here, alongside session_id_mismatch: both are
+        # properties of this directory alone, need no database, and (see
+        # this function's own docstring) are safe to check before
+        # already_ingested for the identical reason.
+        landing.quarantine(
+            str(session_dir),
+            reason="session_dir_unrepresentable",
+            detail={
+                "session_dir": str(session_dir),
+                "len": len(str(session_dir)),
+                "max_len": landing.INGESTION_SESSION_DIR_MAX_LEN,
+                "note": "Ingestion.session_dir : varchar(255)",
+            },
+            prefix=prefix,
+            subject=manifest.subject,
+            session_dt=manifest.started_at,
             now=now,
         )
         return Outcome.QUARANTINED
@@ -228,18 +319,6 @@ def _evaluate_session(
                 "note": "element-animal declares subject : varchar(8)",
             },
             prefix=prefix,
-            session_dt=manifest.started_at,
-            now=now,
-        )
-        return Outcome.QUARANTINED
-
-    if manifest.session_id != session_dir.name:
-        landing.quarantine(
-            str(session_dir),
-            reason="session_id_mismatch",
-            detail={"manifest": manifest.session_id, "directory": session_dir.name},
-            prefix=prefix,
-            subject=manifest.subject,
             session_dt=manifest.started_at,
             now=now,
         )
@@ -297,7 +376,10 @@ def _evaluate_session(
         manifest,
         discover_topology(layout, manifest),
         integrity,
-        _blake3.blake3(text.encode("utf-8")).hexdigest(),
+        # `raw`, not `text.encode("utf-8")`: see the manifest-read guard's
+        # own comment above for why the two are not the same bytes whenever
+        # the file was authored with \r\n or bare \r line endings.
+        _blake3.blake3(raw).hexdigest(),
         prefix=prefix,
         now=now,
     )
@@ -315,22 +397,29 @@ def _scan_one(
     `_evaluate_session` handles every check the brief and prior review rounds
     named explicitly -- an unreadable or malformed manifest, a bad
     schema_version, an unrepresentable subject, a session_id mismatch, a
-    checksum mismatch, an invalid params file, contention exhaustion -- each
-    with its own specific, informative Quarantine reason (or DEFERRED). What
-    it does not, and structurally cannot, enumerate in advance is everything
-    ELSE that can go wrong: a `session_params.yaml` with a mixed int/str key
-    in `params` that `SessionParams` accepts (a bare, deliberately
-    unconstrained `dict`) but that `json.dumps(..., sort_keys=True)` cannot
-    sort, a manifest read racing a concurrent delete, a `DataJointError` that
-    is not `ContentionExhausted`, anything not yet anticipated. This feeds a
-    dict comprehension in `scan_once`, exactly like `_candidate_dirs` above
-    it: an exception escaping ONE session here would abort that
-    comprehension and lose every OTHER session in the same root, which is
-    the identical worst-blast-radius shape this whole module was hardened
-    against at three named sites already. This is the fourth and fifth: the
-    reasoning that closed those reaches every unguarded call in
-    `_evaluate_session`'s body at once, rather than requiring a fourth,
-    fifth, and Nth specific guard for each new way something can fail.
+    session_dir too long for Ingestion's own column, a checksum mismatch, an
+    invalid params file, contention exhaustion -- each with its own specific,
+    informative Quarantine reason (or DEFERRED). What it does not, and
+    structurally cannot, enumerate in advance is everything ELSE that can go
+    wrong: a `session_params.yaml` value YAML resolves to something
+    `json.dumps` cannot serialize (a mixed int/str key, a bare date scalar --
+    both now caught earlier, as `params_invalid`, but the NEXT unanticipated
+    shape will not be), a manifest read racing a concurrent delete, a
+    `DataJointError` that is not `ContentionExhausted`, anything not yet
+    named. This feeds a dict comprehension in `scan_once`, exactly like
+    `_candidate_dirs` above it: an exception escaping ONE session here would
+    abort that comprehension and lose every OTHER session in the same root,
+    the identical worst-blast-radius shape `_candidate_dirs`'s own three
+    guarded calls were hardened against first. The same reasoning reaches
+    every unguarded call in `_evaluate_session`'s body at once here, rather
+    than requiring a new, specific guard for each new way something can
+    fail — which is exactly why this boundary exists at all: not every
+    failure mode can be anticipated and named in advance, and new ones keep
+    surfacing as this module gets exercised harder. Both `session_dir_
+    unrepresentable` and the params-serialisability check `register_
+    session_params` now runs were found exactly this way, in round 3
+    review, by asking what else could still reach this boundary that
+    deserved a more specific name instead.
 
     Quarantined, not deferred: an unrecognised failure is exactly what
     `Outcome.DEFERRED` is not -- there is no reason to believe it is

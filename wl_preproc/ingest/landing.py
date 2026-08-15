@@ -98,6 +98,21 @@ SUBJECT_MAX_LEN = 8
 QUARANTINE_SUBJECT_MAX_LEN = 32
 QUARANTINE_SESSION_DIR_MAX_LEN = 255
 
+# `Ingestion.session_dir`'s own column (`ingest.py`), a SEPARATE constant
+# from `QUARANTINE_SESSION_DIR_MAX_LEN` above even though both happen to
+# read 255 today: two different tables' columns that could diverge
+# independently, the identical reasoning that keeps SUBJECT_MAX_LEN and
+# QUARANTINE_SUBJECT_MAX_LEN apart despite element-animal's Subject and this
+# table's Quarantine both describing a "subject". Unlike Quarantine.session_dir
+# -- a primary key `quarantine()` itself clamps defensively, since it must
+# always be written and truncation is the only option available -- there is
+# no equivalent clamp for Ingestion.session_dir: truncating a session's
+# permanent identity in the row that IS its provenance record would silently
+# misname it forever, not degrade gracefully. So this is a REJECT threshold,
+# checked by Task 8's watcher before land_session is ever called, not a
+# write-time clamp.
+INGESTION_SESSION_DIR_MAX_LEN = 255
+
 
 def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     """The one place an aware datetime becomes the naive UTC value DataJoint's
@@ -340,26 +355,33 @@ def quarantine(
     - `session_dir` (`QUARANTINE_SESSION_DIR_MAX_LEN`, 255) IS this table's
       primary key and cannot be null, so it is truncated rather than
       omitted -- the only structurally available option for a value that
-      must be written and cannot fit. Two different session directories
-      sharing an identical 255-character prefix would collide under this
-      truncation, but that requires two paths differing only after 255
-      identical characters, which no real storage-root layout in this
-      project approaches; a session pathological enough to reach even
-      one such collision already needs an operator's attention for the
-      length itself. `replace=True` means a second write under the same
-      truncated key describes its own latest failure rather than raising a
-      second, different exception -- so even a genuine collision degrades to
-      "one row instead of two", not a crash.
+      must be written and cannot fit. Round 3 review corrected the actual
+      risk here: two session directories sharing an identical 255-character
+      prefix is pathological and not worth engineering around further. What
+      actually bites, and is fixed below, is that the full path used to be
+      recorded NOWHERE once truncated -- the row carried a truncated primary
+      key and a `detail` of whatever the caller passed, with nothing that
+      let an operator reading the daily report recover which directory it
+      actually named. So `detail` gets an `untruncated_session_dir` key
+      added, but only when truncation actually happened -- every other
+      quarantine call's `detail` is passed through byte-for-byte, unchanged,
+      exactly as the caller built it. `replace=True` still means a second
+      write under the same truncated key describes its own latest failure
+      rather than raising a second, different exception.
     """
     ingest.activate(prefix=prefix)
     subject_fits = subject is None or len(subject) <= QUARANTINE_SUBJECT_MAX_LEN
     clamped_subject = subject if subject_fits else None
+    truncated_session_dir = session_dir[:QUARANTINE_SESSION_DIR_MAX_LEN]
+    stored_detail = detail
+    if len(session_dir) > QUARANTINE_SESSION_DIR_MAX_LEN:
+        stored_detail = {**detail, "untruncated_session_dir": session_dir}
     ingest.Quarantine.insert1(
         {
-            "session_dir": session_dir[:QUARANTINE_SESSION_DIR_MAX_LEN],
+            "session_dir": truncated_session_dir,
             "failed_at": _now(now),
             "reason": reason,
-            "detail": detail,
+            "detail": stored_detail,
             "subject": clamped_subject,
             "session_dt": to_naive_utc(session_dt) if session_dt is not None else None,
         },

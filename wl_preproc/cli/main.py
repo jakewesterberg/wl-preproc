@@ -166,6 +166,16 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.ingest.watcher import scan_once
 
         result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
+        # Outcomes are printed FIRST, unconditionally, before root_error is
+        # even inspected: a mid-walk fault (root.iterdir()'s own next() call
+        # raising after already yielding some children -- see
+        # _candidate_dirs) still leaves scan_once processing every candidate
+        # collected before the fault, real Ingestion/Quarantine rows and
+        # all. Returning early on root_error used to discard every one of
+        # those from this report -- real work that happened, silently
+        # dropped from the one place an operator would see it.
+        for session_dir, outcome in sorted(result.outcomes.items()):
+            print(f"  [{outcome}] {session_dir}")
         if result.root_error is not None:
             # An unreadable, missing, or mistyped --root produces the same
             # empty outcomes dict a genuinely empty root does -- exit 0, no
@@ -173,10 +183,8 @@ def main(argv: list[str] | None = None) -> int:
             # unmounted NAS, or an ACL slip on the storage root silently
             # reporting success is exactly "a session simply never appears"
             # arriving through the front door instead of a stalled transfer.
-            print(f"error: could not list {args.root}: {result.root_error}")
+            print(f"error: {args.root} was not fully scanned: {result.root_error}")
             return 1
-        for session_dir, outcome in sorted(result.outcomes.items()):
-            print(f"  [{outcome}] {session_dir}")
         return 0
 
     return 2

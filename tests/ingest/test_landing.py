@@ -228,15 +228,40 @@ def test_quarantine_truncates_a_session_dir_too_long_for_the_primary_key(activat
     `pymysql` error without this fix. The row is found at the TRUNCATED key,
     proving the value that was actually written, not merely that no
     exception escaped.
+
+    Round 3 review: the real risk here was never two paths colliding on a
+    shared 255-character prefix (pathological) — it was the full path being
+    recorded NOWHERE once truncated, leaving an operator reading this row
+    with a truncated key and no way to recover which directory it actually
+    named. `detail["untruncated_session_dir"]` is what closes that; checked
+    here directly rather than merely inferred from the fix existing.
     """
     oversized_dir = "/scratch/" + ("q" * (QUARANTINE_SESSION_DIR_MAX_LEN + 10))
-    quarantine(oversized_dir, reason="manifest_invalid", detail={}, prefix=activated)
+    quarantine(
+        oversized_dir, reason="manifest_invalid", detail={"error": "x"}, prefix=activated
+    )
 
     truncated = oversized_dir[:QUARANTINE_SESSION_DIR_MAX_LEN]
     assert len(truncated) == QUARANTINE_SESSION_DIR_MAX_LEN
     row = (ingest.Quarantine & {"session_dir": truncated}).fetch1()
     assert row["reason"] == "manifest_invalid"
+    assert row["detail"]["error"] == "x"  # the caller's own detail survives untouched
+    assert row["detail"]["untruncated_session_dir"] == oversized_dir
     assert len(ingest.Quarantine & {"session_dir": oversized_dir}) == 0
+
+
+def test_quarantine_leaves_detail_untouched_when_session_dir_fits(activated):
+    """The companion proof: `untruncated_session_dir` must appear ONLY when
+    truncation actually happened, not on every call — otherwise the ordinary
+    case (the overwhelming majority of quarantines) would carry a redundant,
+    always-identical key for no reason.
+    """
+    quarantine(
+        "/scratch/2027-03-14_96", reason="manifest_invalid", detail={"error": "y"}, prefix=activated
+    )
+
+    row = (ingest.Quarantine & {"session_dir": "/scratch/2027-03-14_96"}).fetch1()
+    assert row["detail"] == {"error": "y"}
 
 
 # --- Beyond the brief ---------------------------------------------------

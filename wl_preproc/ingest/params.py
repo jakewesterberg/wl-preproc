@@ -15,15 +15,24 @@ docstring for why a raw `OSError` must never be the one left uncaught there.
 "Validating" includes a declared `paramset_type` that is too long for
 `ParamSet.paramset_type : varchar(32)` -- a value `SessionParams` (an
 unconstrained `str`) accepts cleanly and the database would not, the same
-shape as `subject_unrepresentable` one layer up in Task 8's watcher.
+shape as `subject_unrepresentable` one layer up in Task 8's watcher -- and,
+as of round 3 review, whether `params` itself is JSON-serializable at all: a
+YAML scalar SafeLoader resolves implicitly to something `json.dumps` cannot
+handle (a bare, unquoted `2027-03-14` becomes a real `datetime.date`, not a
+`str`) validates against `SessionParams`'s deliberately unconstrained `dict`
+just as cleanly as an oversized `paramset_type` validates against its
+unconstrained `str`.
 
 That guarantee covers the read-and-validate step only, not the whole
 function. The registration call after it, `paramset.register`
 (`wl_preproc/schema/paramset.py`), is not wrapped by it: that function's own
 contention-exhaustion path -- a designed-for retry loop, not a hypothetical,
-see its docstring and `_MAX_REGISTER_ATTEMPTS` -- raises a bare
-`dj.DataJointError` after 10 failed attempts to allocate an index, and this
-module neither catches nor converts it.
+see its docstring and `_MAX_REGISTER_ATTEMPTS` -- raises a dedicated
+`paramset.ContentionExhausted`, and this module neither catches nor converts
+it. (Task 8's watcher used to catch this class by its bare DataJoint root,
+`dj.DataJointError`; round 2 review narrowed that to `ContentionExhausted`
+specifically, since the root catches DataJoint's entire error tree. See
+`wl_preproc/ingest/watcher.py`'s `Outcome.DEFERRED` docstring.)
 """
 
 from __future__ import annotations
@@ -84,12 +93,27 @@ def register_session_params(
     *catches* exactly this exception class --
     `except (OSError, RuntimeError) as exc: ... f"unreadable: {exc}"` -- and
     reports it as a labelled, contained outcome; it never lets it propagate.
-    Task 8's watcher (`_scan_one`) catches only `ValueError` around the call
-    to this function, so an uncaught OSError here would escape `_scan_one`,
-    escape `scan_once`'s dict comprehension over every session directory in
-    the root, and abort the entire scan -- not just this one session. That is
-    the identical unguarded-filesystem-call defect `sentinel.py` and
-    `discover.py` were each fixed for earlier in this same phase.
+    At the time this fix was made, Task 8's watcher (`_scan_one`, since
+    renamed `_evaluate_session`) caught only `ValueError` around the call to
+    this function and had no outer boundary at all, so an uncaught OSError
+    here would have escaped it entirely, escaped `scan_once`'s dict
+    comprehension over every session directory in the root, and aborted the
+    entire scan -- not just this one session. That is the identical
+    unguarded-filesystem-call defect `sentinel.py` and `discover.py` were
+    each fixed for earlier in this same phase.
+
+    Round 2 review later added exactly such an outer boundary
+    (`wl_preproc/ingest/watcher.py`'s `_scan_one`, wrapping the renamed
+    `_evaluate_session`), so an uncaught OSError here would no longer abort
+    the whole scan even without this fix -- it would quarantine this one
+    session as the boundary's generic `unexpected_failure` instead. That
+    downgrades the FAILURE MODE this fix originally closed, but does not
+    remove the reason to keep it: `unexpected_failure` is a strictly worse
+    diagnosis than `params_invalid` for a plain permissions fault or a
+    transient NFS read error on a params file, exactly the same
+    wrong-drawer misclassification the outer boundary itself exists to
+    catch as a last resort, not to make into the ordinary path for
+    something this specific and this already-named.
 
     It is worse here than a misclassification would be there, which is why
     the fix is "raise" and not "swallow to the same answer an absent file
@@ -131,6 +155,30 @@ def register_session_params(
             return None
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         declared = SessionParams.model_validate(loaded)
+        # `params` is deliberately unconstrained (see SessionParams's own
+        # docstring) -- pydantic never inspects its VALUES, only the
+        # envelope's own two fields, so a value YAML's SafeLoader resolves
+        # implicitly to something json.dumps cannot serialize validates
+        # cleanly here. `calibrated_on: 2027-03-14` is the concrete case:
+        # SafeLoader resolves that unquoted, ISO-8601-shaped scalar to a real
+        # datetime.date, not a str -- confirmed directly, not assumed
+        # (`yaml.safe_load("calibrated_on: 2027-03-14")` returns
+        # `{"calibrated_on": datetime.date(2027, 3, 14)}`). Uncaught, this
+        # died inside paramset.register's own content_hash with "Object of
+        # type date is not JSON serializable" -- a plainly diagnosable
+        # params-file defect landing in _scan_one's generic
+        # unexpected_failure catch-all instead of this module's own
+        # params_invalid, which already exists to name exactly this class of
+        # problem.
+        #
+        # Proven here with the IDENTICAL call register() will make later
+        # (`paramset.content_hash(declared.params)`), not a reimplementation
+        # of json.dumps's own argument list that could quietly drift from
+        # it -- the same reasoning deviation 4 (wl_preproc/ingest/watcher.py)
+        # gives for going through landing.manifest_session_key instead of
+        # rebuilding a session key inline. The return value is discarded;
+        # only whether it raises matters here.
+        paramset.content_hash(declared.params)
     except (OSError, yaml.YAMLError, ValidationError, TypeError) as exc:
         raise ValueError(f"{PARAMS_FILENAME} is not valid: {exc}") from exc
 
