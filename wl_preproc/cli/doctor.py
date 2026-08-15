@@ -21,9 +21,19 @@ def scratch_headroom(path: str = "/") -> tuple[int, bool]:
     reimplementing it — two definitions of "enough disk" that could disagree is
     exactly the drift worth preventing while there is still only one.
 
-    `/` rather than a dedicated scratch mount remains a proxy: there is no
-    scratch-root configuration to check instead, since SessionLayout takes its
-    root as a caller-supplied argument rather than a resolved constant.
+    The `/` DEFAULT is a proxy, and only for callers with nothing better:
+    there is no scratch-root configuration to check instead, since
+    SessionLayout takes its root as a caller-supplied argument rather than a
+    resolved constant. That is true of `run_checks` below -- `wlpp doctor` is
+    handed no path at all -- and false of any caller that already holds a
+    storage root, which should pass it. `wl_preproc/cli/report.py` does; it
+    used to accept the default and report `/`'s free space under a heading
+    claiming to track the scratch disk.
+
+    Raises whatever `os.statvfs` raises for a missing or unsearchable `path`.
+    A caller that must produce output regardless -- again, the report -- is
+    the one that has to decide what an unmeasurable disk renders as, and it
+    must never be a number.
     """
     free_gib = shutil.disk_usage(path).free // 2**30
     return free_gib, free_gib >= _MIN_SCRATCH_FREE_GIB

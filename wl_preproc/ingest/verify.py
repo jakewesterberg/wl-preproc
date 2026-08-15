@@ -154,8 +154,17 @@ def verify_session(
                 mismatches.append(Mismatch(system, entry.path, "missing"))
             except (OSError, RuntimeError) as exc:
                 # candidate.is_file() swallows ENOENT/ENOTDIR/EBADF/ELOOP on its
-                # own but not EACCES (pathlib._IGNORED_ERRNOS, identical on 3.11
-                # and 3.13); candidate.stat() and blake3_file's open()+read()
+                # own but not EACCES -- pathlib's own ignored-errno table, whose
+                # CONTENTS are those same four errnos on both of this project's
+                # interpreters but whose module path is NOT: `pathlib._IGNORED_
+                # ERRNOS` on 3.11, where an earlier version of this comment
+                # stopped, and `pathlib._abc._IGNORED_ERRNOS` on 3.13, where the
+                # 3.11 name does not exist at all. Verified on 3.11.15 and
+                # 3.13.12 rather than assumed, and stated the same way
+                # watcher.py's `_candidate_dirs` states it -- which is also why
+                # neither module references that table by name in code, and
+                # catches the one errno neither version swallows instead;
+                # candidate.stat() and blake3_file's open()+read()
                 # are raw passthroughs that swallow nothing at all. A file that
                 # raises here is not "missing" (the manifest is contradicted by
                 # an absence), nor "size"/"blake3" (the check ran and

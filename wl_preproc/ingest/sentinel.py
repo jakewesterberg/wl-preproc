@@ -121,17 +121,21 @@ def last_change_at(session_dir) -> datetime.datetime:
     simultaneously and recurs identically on every subsequent scan for as
     long as it is misconfigured. `newest` is only ever raised by `max()`,
     never lowered, so whatever this line returns is not one input among
-    several folded into a real computation -- it becomes the walk's
-    permanent floor, since any real file's mtime predates "now" and can
-    only pull a fresh fallback back down toward the truth, never further
-    from it, while an ancient fallback is already below anything the walk
-    could find and is left untouched. A false "stalled" from the ancient
-    fallback is a spurious report that clears itself the moment the fault
-    is fixed and a later scan succeeds; "just touched" would instead make a
-    whole storage root's worth of dead transfers read as merely active for
-    as long as the misconfiguration lasts -- the exact invisible dead
-    transfer this module exists to surface, not one narrow race away from
-    it.
+    several folded into a real computation -- it is the walk's floor, and a
+    floor that `max()` cannot lower is the whole argument for which
+    direction it points. Every real mtime the walk can find is older than
+    "now", so a "just touched" fallback would sit ABOVE all of them and be
+    returned unchanged: the fabricated value wins, and no amount of real
+    evidence the walk goes on to collect can pull it back toward the truth.
+    An ancient fallback is the exact opposite -- it sits below anything the
+    walk could find, so the first real mtime replaces it outright and it
+    survives only when the walk genuinely found nothing. A false "stalled"
+    from the ancient fallback is a spurious report that clears itself the
+    moment the fault is fixed and a later scan succeeds; "just touched"
+    would instead make a whole storage root's worth of dead transfers read
+    as merely active for as long as the misconfiguration lasts -- the exact
+    invisible dead transfer this module exists to surface, not one narrow
+    race away from it.
     """
     try:
         newest = session_dir.stat().st_mtime

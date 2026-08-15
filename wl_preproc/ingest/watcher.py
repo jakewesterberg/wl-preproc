@@ -89,6 +89,16 @@ def _candidate_dirs(root: Path) -> tuple[list[Path], Exception | None]:
     radius anywhere in this phase, since everything downstream depends on
     this function returning at all.
 
+    Two callers, not one, despite the underscore: `scan_once` below, and
+    `wl_preproc/cli/report.py`'s stalled-transfer walk, which had its own
+    unguarded copy of these same three calls until review found that `wlpp
+    ingest` returned 0 and `wlpp report` crashed on the identical root --
+    writing no dated file at all and losing the stalled alarm with it. Reused
+    rather than duplicated because the guards are the function: a second copy
+    is a second place for them to be missing. It stays underscored because it
+    is package-internal, not public API; a caller outside `wl_preproc` should
+    be using `scan_once`.
+
     Returns `(candidates, root_fault)`. Four calls here can raise, and not
     identically:
 

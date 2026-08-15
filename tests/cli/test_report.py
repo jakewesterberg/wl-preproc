@@ -13,15 +13,48 @@ state, and the report says so in its own text rather than leaving that silent.
 from __future__ import annotations
 
 import datetime
+import os
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from wl_preproc.cli.report import build_report, write_report
+from wl_preproc.contracts.paths import MANIFEST_FILENAME, SessionLayout
 from wl_preproc.ingest.watcher import Outcome, scan_once
 from wl_preproc.schema import ingest
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.session import generate_session
+
+
+def _section(body: str, heading: str) -> str:
+    """The slice of the report under one `##` heading, and nothing else.
+
+    Every assertion below that means "this appears in section X" goes through
+    this rather than searching the whole document, because searching the whole
+    document is how a test stops testing anything: `test_it_counts_what_was_
+    ingested` asserted a session id appeared *somewhere* in the report, and a
+    mutation making every session quarantine instead of land left it green --
+    the id simply moved to the Quarantined section. A report whose whole job
+    is to put facts under the right heading cannot be tested by a search that
+    ignores headings.
+    """
+    marker = f"\n## {heading}"
+    assert marker in body, f"no section headed {heading!r} in:\n{body}"
+    return body.split(marker, 1)[1].split("\n## ", 1)[0]
+
+
+def _declared_count(section: str) -> int:
+    """The number in a section's own `## ... — N` heading."""
+    return int(section.split("—", 1)[1].split("\n", 1)[0].strip())
+
+
+def _line_for(section: str, needle: str) -> str:
+    """The one line of `section` naming `needle`, so an assertion about one
+    session's rendering cannot be satisfied by a different session's line."""
+    lines = [line for line in section.splitlines() if needle in line]
+    assert len(lines) == 1, f"expected exactly one line naming {needle!r}, got {lines}"
+    return lines[0]
 
 
 @pytest.fixture
@@ -58,12 +91,36 @@ def scanned(tmp_path, dj_conn, prefix):
 
 
 def test_it_counts_what_was_ingested(scanned):
+    """Ingested means ingested, not "mentioned anywhere in the report".
+
+    This test asserted an unconditional heading plus `str(CI_RECIPE.session_id)
+    in body` -- a search of the whole document -- and review proved it vacuous
+    by mutation: making `_evaluate_session` quarantine instead of land, so
+    nothing is ever ingested at all, left every test in this file green,
+    because the path simply appeared under Quarantined instead. So the
+    assertions here are against the Ingested section alone, and against the
+    count rather than mere presence: this session's own directory, once, under
+    that heading, with the heading's declared number matching the lines
+    actually printed beneath it.
+    """
     root, prefix = scanned("rptcnt1")
+    # Resolved, because `_candidate_dirs` resolves `root` before the watcher
+    # records a `session_dir` -- so this is the exact string that landed.
+    landed = str((root / CI_RECIPE.session_id).resolve())
 
     body = build_report(root, prefix=prefix)
 
-    assert "Ingested (24 h)" in body
-    assert str(CI_RECIPE.session_id) in body
+    ingested = _section(body, "Ingested")
+    assert ingested.count(landed) == 1, (
+        f"{landed} is not listed under Ingested -- it is somewhere else in the "
+        f"report, or nowhere:\n{body}"
+    )
+    declared = _declared_count(ingested)
+    assert declared >= 1
+    bullets = [line for line in ingested.splitlines() if line.startswith("- ")]
+    assert declared == len(bullets), (
+        f"the heading claims {declared} ingested sessions and prints {len(bullets)}"
+    )
 
 
 def test_it_names_the_categories_it_cannot_yet_count(scanned):
@@ -78,48 +135,135 @@ def test_it_names_the_categories_it_cannot_yet_count(scanned):
         assert missing in body.lower()
 
 
-def test_a_quarantined_session_appears_with_its_reason(scanned):
+def test_a_quarantined_session_appears_with_everything_needed_to_act_on_it(scanned):
+    """Path and reason alone are not enough to do anything with.
+
+    Spec section 9 justifies `subject`/`session_dt` existing at all with "a
+    quarantine report naming an animal and a date is far more useful than one
+    naming a path", and this report printed neither. `detail` was not printed
+    either, though for `checksum_mismatch` it holds the offending file paths,
+    which is the entire point of section 5.4 -- without them the row says a
+    transfer was corrupt and not which file to re-copy.
+
+    `failed_at` is written as naive UTC here rather than `datetime.now()`'s
+    naive LOCAL time: it is what the section's window is now measured against,
+    so a row whose timestamp is silently offset by the test host's timezone is
+    testing a different age than it looks like it is.
+    """
     root, prefix = scanned("rptqar1")
     ingest.Quarantine.insert1(
         {
             "session_dir": str(root / "2027-03-14_77"),
-            "failed_at": datetime.datetime.now(),
+            "failed_at": datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
             "reason": "checksum_mismatch",
-            "detail": {},
-            "subject": None,
-            "session_dt": None,
+            "detail": {
+                "mismatches": [
+                    {"system": "spikeglx", "path": "probe0.imec0.ap.bin", "problem": "blake3"},
+                    {"system": "bcam", "path": "frames.mp4", "problem": "size"},
+                ]
+            },
+            "subject": "rptqar2",
+            "session_dt": datetime.datetime(2027, 3, 14, 9, 0),
         }
     )
 
     body = build_report(root, prefix=prefix)
 
-    assert "checksum_mismatch" in body
-    assert "2027-03-14_77" in body
+    quarantined = _section(body, "Quarantined")
+    line = _line_for(quarantined, "2027-03-14_77")
+    assert "checksum_mismatch" in line
+    assert "rptqar2" in line, "the animal is not named"
+    assert "2027-03-14 09:00" in line, "the session's own date is not named"
+    detail = _line_for(quarantined, "probe0.imec0.ap.bin")
+    assert "frames.mp4" in detail, "only one of the two offending files was surfaced"
+    assert "blake3" in detail and "size" in detail
 
 
-def test_a_stalled_transfer_appears(scanned):
+def test_the_quarantine_section_is_windowed_and_marks_recent_rows(scanned):
+    """Quarantined rendered the entire table, unrestricted and forever, while
+    Ingested was windowed to 24 h -- so a `failed_at` from two years ago was
+    still listed as news, and the section only ever grew.
+
+    Section 9 rules that a quarantine row is history and that a session
+    quarantined, then fixed and re-ingested, keeps its row with nothing
+    marking it resolved. That is deliberate and this test does not fight it:
+    it checks the two things that make history readable instead -- a bounded
+    window with what falls outside it counted rather than silently dropped,
+    and a visible mark on what is recent, so a week-old quarantine sitting
+    beside an Ingested line for the same session reads as the repair story it
+    is rather than as a contradiction.
+    """
+    root, prefix = scanned("rptqwn1")
+    at = datetime.datetime.now(datetime.UTC)
+    ages = {"30": datetime.timedelta(hours=2), "31": datetime.timedelta(days=3), "32": datetime.timedelta(days=900)}
+    for suffix, age in ages.items():
+        ingest.Quarantine.insert1(
+            {
+                "session_dir": str(root / f"2027-03-14_{suffix}"),
+                "failed_at": (at - age).replace(tzinfo=None),
+                "reason": "manifest_invalid",
+                "detail": {"error": f"probe aged {age}"},
+                "subject": None,
+                "session_dt": None,
+            }
+        )
+
+    body = build_report(root, prefix=prefix, now=at)
+
+    quarantined = _section(body, "Quarantined")
+    assert "2027-03-14_32" not in quarantined, "a row from 900 days ago is still listed"
+    assert "older row(s) not shown" in quarantined, (
+        "rows outside the window are dropped with nothing saying they exist"
+    )
+    fresh = _line_for(quarantined, "2027-03-14_30")
+    aging = _line_for(quarantined, "2027-03-14_31")
+    assert "(new)" in fresh
+    assert "(new)" not in aging, "a three-day-old row is marked as new"
+    assert quarantined.index(fresh) < quarantined.index(aging), "not newest first"
+
+
+def test_a_stalled_transfer_appears_with_the_systems_still_missing(scanned):
+    """Design section 4.3 asks for stalled transfers to be reported "with the
+    systems still missing", and the report printed only the path -- so
+    `sentinel.missing_systems()` had no consumer at all, and two stalled
+    sessions missing different systems rendered identically. With five
+    possible systems that is the difference between knowing a transfer
+    stalled and knowing which rig to go look at, which is why this test uses
+    two sessions stalled on different systems rather than one.
+
+    A second, distinct subject too ("rptstl2", not "pico"): these directories
+    are never landed through `scan_once` here (only `build_report`'s own
+    filesystem walk reads them), so a shared subject could not collide with
+    anything today -- but there is no reason to leave "pico" sitting in this
+    file's tree at all when the fixture above exists precisely to remove it,
+    and a future change to `build_report` that starts consulting
+    `already_ingested` for the stalled check would silently reintroduce the
+    exact hazard `scanned` was built to close.
+    """
     root, prefix = scanned("rptstl1")
-    # A second, distinct subject too ("rptstl2", not "pico"): this directory
-    # is never landed through `scan_once` here (only `build_report`'s own
-    # filesystem walk reads it), so a shared subject could not collide with
-    # anything today -- but there is no reason to leave "pico" sitting in
-    # this file's tree at all when the fixture above exists precisely to
-    # remove it, and a future change to `build_report` that starts consulting
-    # `already_ingested` for the stalled check would silently reintroduce the
-    # exact hazard `scanned` was built to close.
     generate_session(
         root,
         CI_RECIPE.model_copy(update={"session_id": "2027-03-14_05", "subject": "rptstl2"}),
     )
-    from wl_preproc.contracts.paths import SessionLayout
-
+    generate_session(
+        root,
+        CI_RECIPE.model_copy(update={"session_id": "2027-03-14_04", "subject": "rptstl3"}),
+    )
     SessionLayout(root, "2027-03-14_05").done_marker("spikeglx").unlink()
+    SessionLayout(root, "2027-03-14_04").done_marker("bcam").unlink()
     later = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5)
 
     body = build_report(root, prefix=prefix, now=later)
 
-    assert "Stalled transfers" in body
-    assert "2027-03-14_05" in body
+    stalled = _section(body, "Stalled transfers")
+    assert _declared_count(stalled) == 2
+    for session_id, system in (("2027-03-14_05", "spikeglx"), ("2027-03-14_04", "bcam")):
+        line = _line_for(stalled, session_id)
+        assert "missing:" in line, f"{session_id} is listed with no systems at all: {line}"
+        # Equality, not containment: the point is that these two lines differ,
+        # so a rendering that named every expected system for both -- or the
+        # same system for both -- would satisfy a substring check.
+        assert line.split("missing:")[1].strip() == system
 
 
 def test_it_writes_a_dated_file_and_returns_its_path(scanned, tmp_path):
@@ -137,8 +281,6 @@ def test_it_writes_a_dated_file_and_returns_its_path(scanned, tmp_path):
         root,
         CI_RECIPE.model_copy(update={"session_id": "2027-03-14_06", "subject": "rptwrt2"}),
     )
-    from wl_preproc.contracts.paths import SessionLayout
-
     SessionLayout(root, "2027-03-14_06").done_marker("spikeglx").unlink()
     out = tmp_path / "reports"
 
@@ -146,6 +288,197 @@ def test_it_writes_a_dated_file_and_returns_its_path(scanned, tmp_path):
 
     assert path == out / "2027-03-15.md"
     assert path.read_text().startswith("# wl-preproc")
+
+
+def test_the_24h_window_does_not_move_with_the_callers_utc_offset(tmp_path, dj_conn, prefix):
+    """`since` was formatted `%Y-%m-%d %H:%M:%S` straight off an aware `now`,
+    which drops the offset without ever applying it, and then compared against
+    `ingested_at` -- stored naive UTC, like every datetime in this schema.
+
+    So the window moved by the caller's whole offset: 11 h at +13:00, 35 h at
+    -11:00. A session ingested 12 h ago simply vanished from a report
+    generated in New Zealand, and "ingested in the last 24 h" -- the report's
+    own first line, and the reason `Ingestion` has a timestamp column at all
+    (spec section 8.2) -- quietly meant something else. Routed through
+    `landing.to_naive_utc`, the one conversion every other datetime in this
+    codebase goes through.
+    """
+    ingest.activate(prefix=prefix)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    generate_session(root, CI_RECIPE.model_copy(update={"subject": "rpttz01"}))
+    landed = str((root / CI_RECIPE.session_id).resolve())
+    now = datetime.datetime.now(datetime.UTC)
+    scan_once(root, prefix=prefix, now=now - datetime.timedelta(hours=12))
+
+    # The same instant, expressed at +13:00 -- the widest offset a real caller
+    # can have, and the direction that shrinks the window rather than widening
+    # it, so the failure is a dropped row rather than an extra one.
+    body = build_report(root, prefix=prefix, now=now.astimezone(datetime.timezone(datetime.timedelta(hours=13))))
+
+    assert landed in _section(body, "Ingested"), (
+        "a session ingested 12 h ago is missing from the 24 h window because the "
+        "caller's clock carried an offset"
+    )
+
+
+def test_a_missing_root_reports_the_fault_instead_of_crashing(scanned):
+    """The four filesystem faults below are the whole reason this section
+    exists, and `scan_once` already survives every one of them: review
+    compared the two on identical input and found `wlpp ingest` returning 0
+    where `wlpp report` raised, which means no dated file is written and the
+    stalled alarm is lost -- with a genuinely stalled session under the same
+    root. `build_report` now walks through the same guarded `_candidate_dirs`
+    the scan does, so the two agree by construction rather than by review.
+
+    This one also carries the disk check: `scratch_headroom()` was called with
+    no argument, measuring `/` -- which always succeeds, so a root that does
+    not exist still produced a confident "N GiB free (ok)" line under a
+    heading this file's docstring uses to claim it answers "when did scratch
+    start filling up?". Passing the root makes an unmeasurable disk say so.
+    """
+    root, prefix = scanned("rptmis1")
+    missing = root.parent / "no-such-storage-root"
+
+    body = build_report(missing, prefix=prefix)
+
+    assert scan_once(missing, prefix=prefix).root_error is not None, "premise: the scan sees it too"
+    assert body.startswith("# wl-preproc")
+    stalled = _section(body, "Stalled transfers")
+    assert "was not fully scanned" in stalled
+    assert "FileNotFoundError" in stalled
+    disk = _section(body, "Disk")
+    assert "not measured" in disk
+    assert "GiB free" not in disk, "a root that does not exist reported free space"
+
+
+def test_an_unsearchable_root_still_produces_a_report(scanned):
+    """Mode 0600: readable, so `iterdir()` succeeds, but not searchable, so
+    every `child.is_dir()` raises EACCES. `scan_once` returns cleanly with no
+    candidates and no root fault -- a per-child fault is not a root fault --
+    and so must this."""
+    root, prefix = scanned("rptsrc1")
+    original = root.stat().st_mode
+
+    os.chmod(root, 0o600)
+    try:
+        result = scan_once(root, prefix=prefix)
+        body = build_report(root, prefix=prefix)
+    finally:
+        os.chmod(root, original)
+
+    assert result.outcomes == {} and result.root_error is None, "premise"
+    assert body.startswith("# wl-preproc")
+    stalled = _section(body, "Stalled transfers")
+    assert _declared_count(stalled) == 0
+    assert "was not fully scanned" not in stalled, "a per-child fault is not a root fault"
+
+
+def test_an_unreadable_root_reports_the_fault_instead_of_crashing(scanned):
+    """Mode 000: `iterdir()` itself fails -- on 3.13 at the call, on 3.11 at
+    the first `next()`, which `_candidate_dirs` handles either way. That is a
+    root fault, and an empty Stalled section that does not say so is
+    indistinguishable from a root holding no stalled transfer."""
+    root, prefix = scanned("rptunr1")
+    original = root.stat().st_mode
+
+    os.chmod(root, 0o000)
+    try:
+        result = scan_once(root, prefix=prefix)
+        body = build_report(root, prefix=prefix)
+    finally:
+        os.chmod(root, original)
+
+    assert result.root_error is not None, "premise: the scan sees it too"
+    assert body.startswith("# wl-preproc")
+    stalled = _section(body, "Stalled transfers")
+    assert "was not fully scanned" in stalled
+    assert "PermissionError" in stalled
+
+
+def test_one_unreadable_child_does_not_take_down_the_whole_report(scanned):
+    """The row that matters most: an rsync run as the wrong user, or one ACL
+    slip, on ONE session directory. `(child / MANIFEST_FILENAME).is_file()`
+    stats a path inside that child, so it raises EACCES even though the
+    directory itself is perfectly real -- and unguarded, that one child used
+    to take down the entire report, including the stalled session sitting
+    beside it that the report exists to surface."""
+    root, prefix = scanned("rptchd1")
+    generate_session(
+        root,
+        CI_RECIPE.model_copy(update={"session_id": "2027-03-14_05", "subject": "rptchd2"}),
+    )
+    SessionLayout(root, "2027-03-14_05").done_marker("spikeglx").unlink()
+    blocked = root / "2027-03-14_09"
+    blocked.mkdir()
+    (blocked / MANIFEST_FILENAME).write_text("session_id: 2027-03-14_09\n")
+    original = blocked.stat().st_mode
+    later = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5)
+
+    os.chmod(blocked, 0o000)
+    try:
+        result = scan_once(root, prefix=prefix)
+        body = build_report(root, prefix=prefix, now=later)
+    finally:
+        os.chmod(blocked, original)
+
+    assert len(result.outcomes) == 2 and result.root_error is None, "premise"
+    stalled = _section(body, "Stalled transfers")
+    assert _line_for(stalled, "2027-03-14_05"), "the stalled session beside it was lost"
+    assert "2027-03-14_09" not in stalled, "an unreadable child is skipped, not guessed at"
+
+
+def test_a_relative_root_still_reports_absolute_paths_in_every_section(scanned, monkeypatch):
+    """A relative `--root` used to make two sections disagree about the same
+    storage root: Stalled printed whatever `iterdir()` yielded from the
+    unresolved path, while Ingested printed the absolute `session_dir` the
+    watcher recorded through `_candidate_dirs`' own `root.resolve()`. Reusing
+    that function is what makes them agree."""
+    root, prefix = scanned("rptrel1")
+    generate_session(
+        root,
+        CI_RECIPE.model_copy(update={"session_id": "2027-03-14_05", "subject": "rptrel2"}),
+    )
+    SessionLayout(root, "2027-03-14_05").done_marker("spikeglx").unlink()
+    later = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5)
+    monkeypatch.chdir(root.parent)
+
+    body = build_report(Path(root.name), prefix=prefix, now=later)
+
+    stalled = _section(body, "Stalled transfers")
+    printed = _line_for(stalled, "2027-03-14_05").split("`")[1]
+    assert Path(printed).is_absolute()
+    assert printed == str((root / "2027-03-14_05").resolve())
+    assert str(root.resolve()) in _section(body, "Ingested")
+
+
+def test_a_session_id_mismatch_is_stall_checked_against_the_directory_that_exists(scanned):
+    """`SessionLayout(root, manifest.session_id)` built the layout from the
+    MANIFEST's id rather than the directory's own name. Those agree for every
+    session `wlpp ingest` would land -- a mismatch is a `session_id_mismatch`
+    quarantine before anything else looks at it -- but this walk deliberately
+    does not filter on quarantine state, so a mismatching directory was
+    stall-checked against a path that does not exist. `last_change_at` falls
+    back to `datetime.min` for a missing directory by design, so the session
+    reported as stalled unconditionally and forever, naming a directory
+    nobody could go look at, while the complete session actually on disk went
+    unexamined."""
+    root, prefix = scanned("rptmsm1")
+    generate_session(
+        root,
+        CI_RECIPE.model_copy(update={"session_id": "2027-03-14_07", "subject": "rptmsm2"}),
+    )
+    (root / "2027-03-14_07").rename(root / "2027-03-14_08")
+    later = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5)
+
+    body = build_report(root, prefix=prefix, now=later)
+
+    stalled = _section(body, "Stalled transfers")
+    assert "2027-03-14_08" not in stalled, (
+        "a complete session was reported stalled because it was checked against "
+        "the path its manifest names rather than the one it sits in"
+    )
+    assert "2027-03-14_07" not in stalled
 
 
 def _table_snapshot(table):

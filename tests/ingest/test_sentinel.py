@@ -149,13 +149,52 @@ def test_last_change_at_skips_a_dangling_symlink(session):
     runs only on incomplete sessions, directories that are by definition
     still being written to, so this is the ordinary case rather than an edge
     one: one vanished entry must not crash the scan for every session after
-    it."""
+    it.
+
+    Asserting only `result.tzinfo is datetime.UTC` proved nothing, and review
+    caught it by proof: that is true of every value this function can return,
+    on every path through it, so deleting the inner per-candidate guard
+    (sentinel.py's `except OSError: continue` around `candidate.stat()`)
+    while keeping the outer one left the whole 366-test suite green. The two
+    guards are not redundant. Without the inner one, the dangling entry's
+    OSError escapes to the outer `except OSError: pass`, which ABANDONS the
+    walk and keeps whatever `newest` held at that moment -- here the
+    backdated directory's own mtime -- so a session actively receiving files
+    reports two weeks of quiet against a 2 h threshold and lands in the daily
+    report as a stalled transfer.
+
+    So the layout is the assertion: the dangling symlink sits at the top
+    level and the only fresh file one level down, because `rglob("*")` yields
+    every entry of a directory before descending into its subdirectories
+    (verified directly on 3.11.15 and 3.13.12, whose glob implementations are
+    otherwise unrelated). The walk must therefore survive the symlink to
+    reach the fresh file at all, and the returned mtime says whether it did.
+    """
     layout, manifest = session
+    layout.done_marker("spikeglx").unlink()  # incomplete, as this function's callers are
+    now = datetime.datetime.now(datetime.UTC)
+    old = int((now - datetime.timedelta(days=14)).timestamp())
+    fresh = int((now - datetime.timedelta(minutes=1)).timestamp())
+
+    still_arriving = layout.system_dir("spikeglx") / "probe0.imec0.ap.bin.partial"
+    still_arriving.write_bytes(b"a transfer in progress")
     (layout.dir / "dangling").symlink_to(layout.dir / "does-not-exist")
+    for path in [layout.dir, *layout.dir.rglob("*")]:
+        if not path.is_symlink():
+            os.utime(path, (old, old))
+    os.utime(still_arriving, (fresh, fresh))
 
     result = last_change_at(layout.dir)
 
     assert result.tzinfo is datetime.UTC
+    assert result == datetime.datetime.fromtimestamp(fresh, tz=datetime.UTC), (
+        "the walk stopped at the dangling symlink instead of skipping it, so the "
+        "newest mtime it returned is the backdated directory's, not the file still "
+        "being written"
+    )
+    # The consequence, not just the value: this session is one minute quiet,
+    # not two weeks quiet, and must not be reported as a stalled transfer.
+    assert is_stalled(layout, manifest, now=now) is False
 
 
 def test_a_permission_error_checking_the_marker_reads_as_absent(session, monkeypatch):
