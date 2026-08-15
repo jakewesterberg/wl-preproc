@@ -517,31 +517,64 @@ def test_no_code_path_writes_activation_supersedes():
     different codebase-wide invariant by source scan rather than by trusting
     prose (review round 2, Minor). This is the same shape for a second one.
 
-    Matches the quoted-and-colon form `"supersedes":` / `'supersedes':` --
-    the shape a dict literal being passed to `insert`/`insert1`/`update1`
-    would use to WRITE the column, which is how every DataJoint write in
-    this codebase is spelled. Deliberately does not match a bare READ
-    (`row["supersedes"]`, `.fetch1("supersedes")` -- neither has a colon
-    immediately after the closing quote) or the schema declaration itself
-    (`supersedes = null : int`, inside `Activation`'s `definition` string,
-    names the bare word with no quote characters around it at all) --
-    confirmed this pattern does not already fire against the committed
-    source before being relied on here.
+    Three write shapes, matched by three patterns, none of which is a bare
+    substring search (review round 3, Minor: a round-2 draft matched only
+    the dict-literal form and missed the other two, both genuine writes
+    that would have passed with the suite green):
+
+    - ``dict_key_write`` — ``"supersedes":`` / ``'supersedes':``, a dict
+      literal passed to ``insert``/``insert1``/``update1``, which is how
+      every DataJoint write in this codebase not covered by the two shapes
+      below is spelled.
+    - ``subscript_write`` — ``row["supersedes"] =`` / ``row['supersedes'] =``,
+      requiring the ``=`` immediately (mod whitespace) after the closing
+      bracket and rejecting a second ``=`` right after (so ``==`` — a read
+      and a comparison, e.g. ``row["supersedes"] == None`` — does not
+      match; neither does ``<=``/``>=``, whose character before ``=`` is
+      never ``]`` or whitespace-after-``]``).
+    - ``keyword_write`` — ``supersedes=``, but ONLY when immediately (mod
+      whitespace) preceded by ``(`` or ``,``, i.e. a function-call keyword
+      argument (``dict(supersedes=x)``, ``f(a=1, supersedes=x)``) — NOT a
+      bare ``supersedes = value`` at the start of a line, which is exactly
+      the shape of the schema declaration itself (`supersedes = null :
+      int`, inside `Activation`'s `definition` string): that line has no
+      preceding `(` or `,` on it, so this pattern does not fire on it. A
+      broader `supersedes\\s*=` (no preceding-character requirement) was
+      tried first and DID fire on the declaration — rejected for that
+      reason, not adopted and then special-cased.
+
+    None of the three matches a bare READ (`row["supersedes"]` alone,
+    `.fetch1("supersedes")`) or the docstring prose in `submit_derivative`
+    and this test itself, both of which discuss `supersedes` at length using
+    RST double-backticks, never a Python quote character next to an `=` or
+    `[`. Confirmed all three patterns fire on their intended shape and stay
+    silent against the committed source before being relied on here.
     """
+    import re
+
+    dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
+    subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
+    keyword_write = re.compile(r"""[(,]\s*supersedes\s*=(?!=)""")
+
     offenders = []
     for path in SOURCE_ROOT.rglob("*.py"):
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
-            if '"supersedes":' in stripped or "'supersedes':" in stripped:
+            if (
+                dict_key_write.search(stripped)
+                or subscript_write.search(stripped)
+                or keyword_write.search(stripped)
+            ):
                 rel = path.relative_to(SOURCE_ROOT.parent)
                 offenders.append(f"{rel}:{lineno}: {stripped[:70]}")
     assert not offenders, (
-        "a source line assigns 'supersedes' as a dict key; Activation."
-        "supersedes must remain unwritten by every code path -- a "
-        "derivative never supersedes a canonical, and nothing regenerates a "
-        "canonical yet either:\n  " + "\n  ".join(offenders)
+        "a source line writes 'supersedes' (as a dict key, a subscript "
+        "assignment, or a keyword argument); Activation.supersedes must "
+        "remain unwritten by every code path -- a derivative never "
+        "supersedes a canonical, and nothing regenerates a canonical yet "
+        "either:\n  " + "\n  ".join(offenders)
     )
 
 

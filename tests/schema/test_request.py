@@ -83,6 +83,69 @@ def _commit_rival_activation(*, request, row: dict, request_key: str, selection_
         conn.close()
 
 
+# Review round 3, Important 1's precondition: >=3 concurrent submitters on
+# one montage, >=2 losing with distinct selections. This file's single-rival
+# tests above cannot reach it -- that rival's raw-connection insert
+# (autocommit=True) acquires its lock, writes, and releases before this
+# process's own attempt even starts, so there is no window where two
+# transactions simultaneously HOLD conflicting lock requests, which a real
+# InnoDB deadlock needs. Reaching it needs genuinely overlapping execution:
+# separate OS processes, never threads (this project has retracted threaded
+# database findings twice). A plain subprocess -- not multiprocessing.Process
+# -- so nothing here depends on this test module being importable/picklable
+# by a spawned child; each worker is a fully independent interpreter running
+# this script, talking back to the parent only over stdout. Rendezvoused at
+# a file-based barrier (each worker touches a marker, then waits for every
+# worker's marker to exist) so all three enter submit_derivative's retry
+# loop as close to simultaneously as the OS allows.
+_CONCURRENT_DERIVATIVE_WORKER = r'''
+import datetime
+import json
+import os
+import time
+
+import datajoint as dj
+
+dj.config["database.host"] = os.environ["WLPP_HOST"]
+dj.config["database.port"] = int(os.environ["WLPP_PORT"])
+dj.config["database.user"] = os.environ["WLPP_USER"]
+dj.config["database.password"] = os.environ["WLPP_PASSWORD"]
+dj.config["safemode"] = False
+
+from wl_preproc.schema import core, pipeline, request
+
+prefix = os.environ["WLPP_PREFIX"]
+pipeline.activate(prefix=prefix)
+core.activate(prefix=prefix)
+request.activate(prefix=prefix)
+
+selection = json.loads(os.environ["WLPP_SELECTION"])
+selection["session_datetime"] = datetime.datetime.fromisoformat(selection["session_datetime"])
+
+barrier_dir = os.environ["WLPP_BARRIER_DIR"]
+worker_id = os.environ["WLPP_WORKER_ID"]
+n_workers = int(os.environ["WLPP_N_WORKERS"])
+with open(os.path.join(barrier_dir, "ready-" + worker_id), "w") as f:
+    f.write("1")
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    if len([n for n in os.listdir(barrier_dir) if n.startswith("ready-")]) >= n_workers:
+        break
+    time.sleep(0.01)
+
+try:
+    result = request.submit_derivative(
+        idempotency_key=os.environ["WLPP_KEY"], task_type="neural", origin="wl_works",
+        selection=selection, block_ids=json.loads(os.environ["WLPP_BLOCK_IDS"]), payload={},
+    )
+    print("OK " + str(result["activation_id"]))
+except Exception as e:  # noqa: BLE001 -- must report ANY exception type back
+    # to the parent, including an untyped one; that is exactly the failure
+    # mode under test.
+    print("ERROR " + type(e).__module__ + "." + type(e).__name__ + ": " + str(e))
+'''
+
+
 @pytest.fixture(scope="module")
 def req(dj_conn, prefix):
     from wl_preproc.schema import core, pipeline, request
@@ -860,6 +923,103 @@ def test_derivative_allocation_gives_up_after_sustained_contention(selection, pr
     # nothing was written for the exhausted submission -- rolled back whole
     assert len(request.Request & {"idempotency_key": "race-c-mine"}) == 0
     assert len(request.Activation & {"role": "derivative"} & selection) == 0
+
+
+def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, prefix, tmp_path):
+    """Review round 3, Important 1: proves the exact-primary-key locking-read
+    fix under the >=3-submitter, >=2-distinct-selection precondition a
+    range-shaped locking read deadlocks on. See the module-level comment
+    above _CONCURRENT_DERIVATIVE_WORKER for why this needs separate
+    processes (never threads) and a file-based barrier rather than
+    multiprocessing or the single-rival tests above.
+
+    This is a regression test for a real bug, not merely a new-code
+    exerciser: run against the range-shaped first draft of this fix (see
+    request.py's own account, "2. Index allocation retries..."), this exact
+    test reliably deadlocked -- one worker's process printed
+    "ERROR pymysql.err.OperationalError: (1213, 'Deadlock found ...')",
+    a type neither `except dj.errors.DuplicateError` nor any caller
+    catching `dj.DataJointError` would ever see. Against the exact-key fix,
+    all three succeed with distinct activation_ids and nothing deadlocks."""
+    import datajoint as dj
+
+    import json
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    barrier_dir = tmp_path / "barrier"
+    barrier_dir.mkdir()
+
+    n_workers = 3
+    env_base = {
+        **os.environ,
+        "WLPP_HOST": str(dj.config["database.host"]),
+        "WLPP_PORT": str(dj.config["database.port"]),
+        "WLPP_USER": str(dj.config["database.user"]),
+        "WLPP_PASSWORD": str(dj.config["database.password"]),
+        "WLPP_PREFIX": prefix,
+        "WLPP_BARRIER_DIR": str(barrier_dir),
+        "WLPP_N_WORKERS": str(n_workers),
+        "WLPP_SELECTION": json.dumps(
+            {**selection, "session_datetime": selection["session_datetime"].isoformat()}
+        ),
+    }
+
+    processes = []
+    for i in range(n_workers):
+        env = {
+            **env_base,
+            "WLPP_WORKER_ID": str(i),
+            "WLPP_KEY": f"deadlock-{i}",
+            "WLPP_BLOCK_IDS": json.dumps([i + 1]),  # three genuinely distinct selections
+        }
+        processes.append(
+            subprocess.Popen(
+                [sys.executable, "-c", _CONCURRENT_DERIVATIVE_WORKER],
+                env=env,
+                cwd=str(repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+
+    outputs = []
+    for p in processes:
+        try:
+            stdout, stderr = p.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            stdout, stderr = p.communicate()
+            stdout = (stdout or "") + "\nERROR [KILLED AFTER 60s TIMEOUT]"
+        # The worker's own OK/ERROR line is the last such line in stdout --
+        # a bare subprocess (nothing here runs under pytest) also carries
+        # DataJoint's own connection log and element_lab's deprecation
+        # notice on stdout, ahead of it.
+        result_line = next(
+            (
+                line
+                for line in reversed((stdout or "").splitlines())
+                if line.startswith("OK ") or line.startswith("ERROR ")
+            ),
+            None,
+        )
+        outputs.append((p.returncode, result_line, stdout, stderr))
+
+    failures = [
+        (rc, line, out, err)
+        for rc, line, out, err in outputs
+        if rc != 0 or line is None or not line.startswith("OK ")
+    ]
+    assert not failures, f"a concurrent derivative submission failed: {failures}"
+
+    ids = sorted(int(line.split()[1]) for _, line, _, _ in outputs)
+    assert ids == [1, 2, 3], (
+        f"all three distinct selections must each get their own activation_id: {ids}"
+    )
 
 
 def test_activation_block_gets_one_row_per_distinct_block_id(selection, prefix):

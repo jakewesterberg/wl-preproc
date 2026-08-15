@@ -14,14 +14,22 @@ behaves differently from automatic mode" — so the 12-hour canonical trigger
 submits a request with ``origin='auto'`` like everything else. It also gives
 section 8.3.1's re-fire requirement somewhere to live: re-firing is re-submitting.
 
-**Dedupe is structural, never a lock.** Nothing here asks whether a run is in
-flight. Two requests naming the same selection resolve to the same
-``Activation`` key; the second insert is skipped because the selection already
-has an activation — *not* because the idempotency keys matched, which they do
-not have to — and ``populate()`` then computes that key exactly once. The
-idempotency key distinguishes a network retry from a new request, which is its
-documented job, and is *not* what prevents a second run. Reusing one for a
-different request is refused rather than absorbed; see ``_reject_key_reuse``.
+**Dedupe is structural, not a lock, with one narrow exception.** Nothing here
+asks whether a run is in flight as its primary mechanism. Two requests naming
+the same selection resolve to the same ``Activation`` key; the second insert
+is skipped because the selection already has an activation — *not* because
+the idempotency keys matched, which they do not have to — and ``populate()``
+then computes that key exactly once. The idempotency key distinguishes a
+network retry from a new request, which is its documented job, and is *not*
+what prevents a second run. Reusing one for a different request is refused
+rather than absorbed; see ``_reject_key_reuse``. The exception:
+``submit_derivative``'s retry loop takes a real, single-row lock on an exact
+primary key when recovering from a genuine allocation collision, to tell a
+rival's identical selection from a different one for real under concurrent
+submission — see ``_locking_read_one``. That lock exists only to make the
+structural lookup trustworthy when two submissions genuinely overlap in
+time; it is not how dedupe works in the common, sequential case, which
+remains a lookup.
 
 **``submit()`` only ever produces canonical activations.** The dedupe above
 returns on any existing CANONICAL ``Activation`` row for the selection, so a
@@ -96,12 +104,23 @@ class Activation(dj.Manual):
     # Null for a canonical activation, whose identity is (session, montage)
     # per section 8.3. Set for a derivative, whose identity is its block set --
     # which is why section 11.3's "a request whose (selection, task type) is
-    # already in flight returns the running one" can be a lookup here rather
-    # than a lock. 1c-1 deferred this column to 1c-3 on the grounds that both
-    # are pre-data and adding it later is equally cheap; 1c-2 then recorded a
-    # residual that only this column closes -- a reused idempotency key whose
-    # first submission deduped onto an existing activation recorded nowhere
-    # which selection it had asked for.
+    # already in flight returns the running one" is a lookup here in the
+    # common, uncontested case. The one exception: submit_derivative's
+    # concurrent-collision retry takes a real, single-row lock on the exact
+    # colliding activation_id to compare this column for real (see
+    # _locking_read_one) -- that lock exists to make the lookup trustworthy
+    # under real concurrency, not as the dedupe mechanism itself. 1c-1
+    # deferred this column to 1c-3 on the grounds that both are pre-data and
+    # adding it later is equally cheap; 1c-2 then recorded a residual this
+    # column narrows but does not fully close -- it lets a reused key be
+    # compared on selection when THAT key's own submission produced the
+    # activation being compared against, but not when the key's first
+    # submission instead deduped onto a pre-existing activation created
+    # under a different key, in which case no row names the key at all and
+    # there is nothing to compare the hash against. Corrected 2026-08-15 by
+    # review: an earlier version of this comment claimed full closure,
+    # disproven with three sequential calls and no race; see
+    # _reject_key_reuse's docstring for the full account.
     selection_hash = null : varchar(64)
     """
 
@@ -272,11 +291,17 @@ def _reject_key_reuse(
         conflicts.append("payload differs from the one already recorded")
 
     # .to_dicts(), not .keys(): keys() returns primary-key columns only, and
-    # selection_key may now name selection_hash -- a secondary column, added
-    # so submit_derivative's reused-key check can see it too (see the
-    # docstring paragraph above). Harmless for submit()'s canonical callers:
-    # their selection_key never names a column outside the primary key, so
-    # the extra columns fetched here simply go unread.
+    # selection_key may now name a column outside the primary key --
+    # selection_hash for submit_derivative's callers (see the docstring
+    # paragraph above), and role for submit()'s own (canonical_
+    # selection_key, added in review round 2's asymmetry fix). Both DEPEND
+    # on the wider fetch, not merely tolerate it: verified live that
+    # reverting to .keys() raises KeyError: 'role' the moment submit()
+    # compares a reused key against a produced row, since role sits below
+    # Activation's divider and .keys() never returns it. An earlier version
+    # of this comment said the extra columns "simply go unread" for
+    # submit()'s callers -- true when written, false since round 2 added
+    # role, and this correction (round 3) is why it no longer says that.
     produced = (Activation & {"request_key": idempotency_key}).to_dicts()
     if produced and not any(
         all(row[attr] == value for attr, value in selection_key.items()) for row in produced
@@ -441,9 +466,10 @@ def submit(
 # submissions on the same montage can race for the same id -- section 11.3
 # expects exactly this ("concurrent runs are legitimate and expected"). A
 # bounded retry resolves it, mirroring paramset.register's own retry loop;
-# see submit_derivative's docstring ("2. Index allocation...") for why the
-# two reads inside that retry cannot be DataJoint's normal (non-locking)
-# read here, unlike in paramset.register.
+# see submit_derivative's docstring ("2. Index allocation...") and
+# _locking_read_one's for why the re-check inside that retry is an
+# exact-primary-key locking read and a local increment, never a range read,
+# unlike in paramset.register.
 _MAX_DERIVATIVE_ALLOCATE_ATTEMPTS = 10
 
 
@@ -467,39 +493,90 @@ def _insert_new_derivative(row: dict) -> None:
     Activation.insert1(row, skip_duplicates=False)
 
 
-def _locking_read(query_expression) -> list[dict]:
-    """`query_expression`'s rows, read via `LOCK IN SHARE MODE` rather than
-    DataJoint's normal (non-locking) read.
+def _locking_read_one(key: dict) -> dict | None:
+    """The `Activation` row at the exact primary key `key`, read via
+    `LOCK IN SHARE MODE` rather than DataJoint's normal (non-locking) read
+    — or `None` if no such row exists.
 
-    DataJoint opens every transaction with `START TRANSACTION WITH
-    CONSISTENT SNAPSHOT` (confirmed in the installed 2.3.2 package,
-    `datajoint/adapters/mysql.py`), which fixes an ordinary SELECT's view of
-    the database to what existed when the transaction opened. Verified live
-    against a real MySQL 8.0 instance before writing this: inside an open
-    transaction, a plain SELECT did not see a row a SEPARATE connection
-    committed afterward, while the identical query with `LOCK IN SHARE MODE`
-    appended did — and the INSERT-level uniqueness check that raises
-    `DuplicateError` is unaffected either way, since it is never
-    snapshot-limited. `submit_derivative`'s retry loop needs to see a
-    rival's just-committed row for real, to tell "identical selection, not
-    contention" from "genuine contention" the way section 11.3 requires —
-    which a plain re-read cannot do under this project's actual transaction
-    semantics, and which the same-connection trick
-    `tests/schema/test_paramset.py` uses for `paramset.register`'s own retry
-    test cannot expose either: a single connection always sees its own
-    writes, committed or not, regardless of isolation level.
+    `key` must supply every attribute of `Activation.primary_key`: an exact
+    equality match on the primary key, which InnoDB locks with a
+    record-only lock (`REC_NOT_GAP`) and no gap — confirmed against
+    `performance_schema.data_locks` on a live MySQL 8.0 instance.
 
-    Built on `make_sql()` — DataJoint's own SELECT-generation — rather than
-    hand-written SQL, so quoting, datetime formatting, and NULL comparisons
-    stay exactly what DataJoint would already produce for this query;
-    `LOCK IN SHARE MODE` is the only part added here. DataJoint has no
-    locking-read method of its own to call instead (checked: no `for_update`
-    argument or equivalent anywhere in its public API), which is why this
-    drops to `dj.conn().query()`, the same primitive `Connection.transaction`
-    itself is built on.
+    **This is deliberately the only shape this helper accepts, after a
+    range-shaped first version of this fix deadlocked under real
+    concurrency.** That version took an arbitrary `QueryExpression` and was
+    called on a primary-key PREFIX — this montage's rows, unbounded on
+    `activation_id` — to recompute the current max during a retry. A
+    locking read that is not an exact unique-index match takes InnoDB
+    next-key locks across the whole range it scans, up to and including the
+    supremum pseudo-record, REGARDLESS of how selective an additional
+    non-indexed filter in the same query is: `selection_hash` is not
+    indexed, so filtering on it narrows what is *returned*, not what is
+    *locked* — confirmed directly. Two concurrent losers each taking that
+    same range lock (compatible with each other; gap locks never conflict
+    with other gap locks) and then both trying to INSERT into that gap
+    (which needs an insert-intention lock, which DOES conflict with a held
+    gap lock) deadlock on each other. Reproduced three ways, ending in two
+    genuinely concurrent OS processes: one succeeded, the other died with a
+    real MySQL error 1213 ("Deadlock found"). Confirmed separately that
+    `FOR UPDATE` in place of `LOCK IN SHARE MODE` does not help — gap locks
+    do not conflict with each other regardless of which locking read mode
+    took them, only with insert-intention, so it deadlocks identically.
+
+    **The exception type made this worse than a slow retry.** DataJoint's
+    MySQL adapter translates a fixed list of error codes into `dj.errors.*`
+    (1062, 1217, 1451, 1452, 3730, 1064, 1146, 1364, 1054, 2006, 2013) and
+    lets everything else — including 1213 (deadlock) and 1205 (lock wait
+    timeout) — pass through unchanged. A deadlock here would have escaped
+    as a raw `pymysql.err.OperationalError`: not caught by `except
+    dj.errors.DuplicateError` in `submit_derivative`'s retry loop, and not
+    recognized by any caller catching `dj.DataJointError` either — the exact
+    convention this module's own guards use (see `submit_derivative`'s
+    docstring on why a dedicated exception type was not borrowed from
+    `paramset.ContentionExhausted` for its own exhausted-retries case). An
+    untyped exception escaping from underneath section 11.3's dedupe, for
+    exactly the concurrent case this retry exists to handle, would have
+    defeated the whole point of adding it.
+
+    **The fix needs no range read at all.** The exact `activation_id` that
+    just collided is already known — it is what `submit_derivative` just
+    tried and failed to insert — so this reads that ONE row (guaranteed to
+    exist, since a `DuplicateError` on that exact key just proved it does)
+    and the caller compares its `selection_hash` directly. Choosing the
+    next candidate on a genuine collision is then a local `+= 1` in
+    `submit_derivative`, not a re-read: every id already known to exist at
+    the time of the very first allocation read is strictly less than the
+    id that just collided (that is what made `max(...) + 1` equal to it),
+    so incrementing past a value just proven occupied cannot re-collide
+    with anything already seen, and a further collision if a THIRD
+    submitter also raced for it is caught the identical way, one exact-key
+    lock at a time. Verified this resolves the deadlock: the same
+    concurrent-loser scenario, rebuilt against this shape, had every loser
+    succeed at consecutive fresh ids, no deadlock, no lock wait timeout.
+
+    **What this helper does NOT do.** It bypasses DataJoint's type codecs
+    entirely — a raw `dj.conn().query()` cursor, not `to_dicts()` — so a
+    blob column would come back as raw bytes rather than the unpacked
+    value. Harmless for `Activation` today, which has no blob column, but a
+    trap for a future caller who reuses this helper against a table that
+    has one. Kept intentionally narrow — `Activation`-only, exact-primary-
+    key-only, one row only — so a future misuse in the shape that caused
+    this bug is not just documented against but structurally harder to
+    reach: there is no parameter here that accepts an arbitrary query.
     """
-    cursor = dj.conn().query(query_expression.make_sql() + " LOCK IN SHARE MODE", as_dict=True)
-    return list(cursor.fetchall())
+    missing = set(Activation.primary_key) - set(key)
+    if missing:
+        raise ValueError(
+            f"_locking_read_one needs every Activation.primary_key attribute; "
+            f"missing {sorted(missing)} from the given key {sorted(key)}"
+        )
+    exact_key = {k: key[k] for k in Activation.primary_key}
+    cursor = dj.conn().query(
+        (Activation & exact_key).make_sql() + " LOCK IN SHARE MODE", as_dict=True
+    )
+    rows = list(cursor.fetchall())
+    return rows[0] if rows else None
 
 
 def submit_derivative(
@@ -557,29 +634,58 @@ def submit_derivative(
     selection concurrently is the ordinary shape of "legitimate and
     expected" concurrent runs section 11.3 describes, not an error. If the
     rival's selection differs, this is genuine contention over the same id
-    for two different asks, so the allocation retries against a fresh read
-    of the current max, so the second researcher's distinct, legitimate
-    submission gets its own id rather than being destroyed outright.
+    for two different asks, so the allocation retries with the next
+    candidate id, so the second researcher's distinct, legitimate submission
+    gets its own id rather than being destroyed outright.
+
+    **The re-check is an exact-primary-key locking read
+    (``_locking_read_one``), never a range read, and the next candidate on a
+    genuine collision is a local increment, never a re-read of the max.** A
+    range-shaped first version of this fix — locking-reading this montage's
+    rows (``Activation & montage_key``, an unbounded primary-key prefix) to
+    recheck the rival and recompute the max — passed every test in this
+    file and still deadlocked under real concurrency: a locking read that
+    is not an exact unique-index match takes InnoDB next-key locks across
+    the whole range it scans, regardless of how selective an additional
+    non-indexed filter (``selection_hash``) in the same query is. Two
+    losers taking that same compatible gap lock and then both trying to
+    INSERT into it — which needs an insert-intention lock, which DOES
+    conflict with a held gap lock — deadlock on each other. Reproduced with
+    genuinely concurrent OS processes: one succeeded, the other died with a
+    real MySQL error 1213. Worse than the deadlock itself: DataJoint's
+    adapter does not translate error 1213 or 1205 (lock wait timeout), so
+    either would have escaped as a raw ``pymysql.err.OperationalError`` —
+    caught by neither ``except dj.errors.DuplicateError`` above nor by any
+    caller catching ``dj.DataJointError``, defeating section 11.3 for
+    exactly the concurrent case this retry exists to handle. See
+    ``_locking_read_one``'s own docstring for the full account, including
+    why ``FOR UPDATE`` does not help either, and why the exact-key shape
+    needs no range read at all: the id that just collided is already known,
+    so the next candidate is a plain ``+= 1``, not a query — verified this
+    resolves the deadlock, with every loser in the same concurrent scenario
+    succeeding at a fresh id instead.
 
     Two differences from ``paramset.register``'s version of this loop, both
     because ``submit_derivative`` runs its whole body inside one open
     transaction and ``paramset.register`` does not. First: ``paramset.
     register``'s retries are free fresh reads — each attempt is its own
     auto-committing statement, so a plain re-read there already sees the
-    latest committed state. Here, DataJoint opens every transaction with
-    ``START TRANSACTION WITH CONSISTENT SNAPSHOT`` (confirmed in the
+    latest committed state (confirmed directly, including the
+    ``autocommit=False`` counterfactual — see ``paramset.py``'s own module
+    docstring for that account). Here, DataJoint opens every transaction
+    with ``START TRANSACTION WITH CONSISTENT SNAPSHOT`` (confirmed in the
     installed 2.3.2 package), which fixes an ordinary SELECT's view of the
     database for the whole transaction's lifetime — verified live against a
     real MySQL 8.0 instance that a plain re-read here would still show the
     pre-collision state even after a genuinely separate connection commits a
-    rival row, while a locking read (``LOCK IN SHARE MODE``) sees it. Both
-    re-reads inside the retry therefore go through ``_locking_read`` instead
-    of DataJoint's normal query interface; see its own docstring for the
-    live verification and why the same-connection trick
+    rival row, while a locking read on the exact colliding row sees it. The
+    re-check therefore goes through ``_locking_read_one`` instead of
+    DataJoint's normal query interface; the same-connection trick
     ``tests/schema/test_paramset.py`` uses for ``paramset.register``'s own
     retry test could not have caught a plain re-read being wrong here (a
     single connection always sees its own writes, which is exactly what
-    would hide this). Second: exhausting the bound raises a bare
+    would hide this) — this function's own tests use a genuinely separate
+    connection instead. Second: exhausting the bound raises a bare
     ``DataJointError`` here rather than a dedicated exception type, matching
     this module's own existing convention (the ``is_activated()`` and
     ``in_transaction`` guards above raise the same way) rather than
@@ -703,8 +809,10 @@ def submit_derivative(
         # warnings -- the same reason paramset.register reads its own max
         # this way. An ordinary (non-locking) read is correct for this FIRST
         # attempt -- nothing has raced this transaction yet in the
-        # overwhelmingly common case -- unlike the retries below; see
-        # _locking_read's docstring for why those cannot use this same read.
+        # overwhelmingly common case -- unlike the retry below, which reads
+        # one exact row rather than a range; see _locking_read_one's
+        # docstring for why a range read here deadlocks under real
+        # concurrency.
         used = (Activation & montage_key).to_arrays("activation_id")
         activation_id = int(max(used) + 1) if len(used) else 1
 
@@ -723,21 +831,24 @@ def submit_derivative(
                 break
             except dj.errors.DuplicateError:
                 # See this function's docstring, "2. Index allocation
-                # retries...", for why both reads below must be locking
-                # reads rather than DataJoint's normal query interface.
-                rival = _locking_read(Activation & selection_key)
-                if rival:
+                # retries...", and _locking_read_one's own docstring for why
+                # this must be an exact-primary-key locking read of the one
+                # row that just collided -- never a range read over this
+                # montage -- and why the next candidate below is a local
+                # increment rather than a re-read of the max.
+                rival = _locking_read_one(key)
+                if rival is not None and rival["selection_hash"] == digest:
                     # The rival that won this id shares this exact
                     # selection: not contention, just a lost race to write
                     # something equivalent. Return their key, same as the
                     # sequential dedupe above -- section 11.3.
-                    return {k: rival[0][k] for k in Activation.primary_key}
-                # The rival claimed this id for a DIFFERENT selection.
-                # Genuine contention: retry against a fresh (locking) read
-                # of the current max rather than the stale one that chose
-                # the id that just collided.
-                used = [row["activation_id"] for row in _locking_read(Activation & montage_key)]
-                activation_id = max(used) + 1 if used else 1
+                    return {k: rival[k] for k in Activation.primary_key}
+                # The rival claimed this id for a DIFFERENT selection (or,
+                # in principle, vanished -- handled the same way either way):
+                # genuine contention. Try the next id; see _locking_read_
+                # one's docstring for why this is safe without a range
+                # re-read of the max.
+                activation_id += 1
                 continue
         else:
             raise dj.DataJointError(
