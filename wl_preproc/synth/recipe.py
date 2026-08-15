@@ -3,6 +3,7 @@ call with thirty keyword arguments."""
 
 from __future__ import annotations
 
+import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -10,6 +11,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.contracts.paths import SYSTEMS
 from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S
+
+# The synthetic package's one fixed "session started" instant. peripherals.py
+# stamps it into the manifest's started_at, syncbox.py into the log header's
+# written_at, and session.py derives the DONE marker's transfer_finished_at
+# from it plus a recipe's own duration_s. Defined once and imported by all
+# three for the reason synth/rhs.py imports SPIKE_TEMPLATE_UV from
+# spikeglx.py rather than redeclaring it: a second copy free to drift from
+# this one would eventually describe a transfer that finishes before the
+# session it is transferring even starts, and nothing would catch that.
+SYNTH_EPOCH = datetime.datetime(2027, 3, 14, 9, 0, tzinfo=datetime.timezone.utc)
 
 
 class Fault(str, Enum):

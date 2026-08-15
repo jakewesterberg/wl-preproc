@@ -7,7 +7,6 @@ a format nothing else speaks.
 
 from __future__ import annotations
 
-import datetime
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,11 +15,10 @@ import yaml
 
 from wl_preproc.contracts.manifest import SCHEMA_VERSION, SessionManifest, StartedAtSource
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar, VideoFile
-from wl_preproc.synth.recipe import SessionRecipe
+from wl_preproc.synth.recipe import SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.truth import GroundTruth
 
 CAMERA_FPS = 200.0
-_EPOCH = datetime.datetime(2027, 3, 14, 9, 0, tzinfo=datetime.timezone.utc)
 
 
 def write_manifest(path: Path, recipe: SessionRecipe) -> None:
@@ -29,7 +27,7 @@ def write_manifest(path: Path, recipe: SessionRecipe) -> None:
         session_id=recipe.session_id,
         subject=recipe.subject,
         rig=recipe.rig,
-        started_at=_EPOCH,
+        started_at=SYNTH_EPOCH,
         started_at_source=StartedAtSource.BEHAVIORAL_CONTROL,
         expected_systems=list(recipe.systems),
         acquisition_build_id=f"blake3:synth{recipe.seed:08x}",

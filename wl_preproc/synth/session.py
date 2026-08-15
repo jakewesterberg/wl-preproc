@@ -17,20 +17,12 @@ from wl_preproc.synth.peripherals import (
     write_manifest,
     write_task_file,
 )
-from wl_preproc.synth.recipe import Fault, SessionRecipe
+from wl_preproc.synth.recipe import Fault, SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.rhs import write_rhs
 from wl_preproc.synth.spikeglx import write_spikeglx
 from wl_preproc.synth.syncbox import write_syncbox_log
 from wl_preproc.synth.timeline import build_timeline
 from wl_preproc.synth.truth import GroundTruth
-
-# Matches the epoch peripherals.py stamps into the manifest's started_at and
-# syncbox.py stamps into the log header's written_at: this generator's fake
-# session always starts at the same synthetic wall-clock instant. The DONE
-# marker's transfer_finished_at is derived from it plus the recipe's own
-# duration_s, never datetime.now() -- two runs of the same recipe must produce
-# identical trees (test_generation_is_byte_identical_for_one_seed).
-_EPOCH = datetime.datetime(2027, 3, 14, 9, 0, tzinfo=datetime.timezone.utc)
 
 
 def _write_done_marker(layout: SessionLayout, system: str, finished_at: datetime.datetime) -> None:
@@ -67,7 +59,7 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
     write_manifest(layout.manifest_path, recipe)
 
     rng = np.random.default_rng(recipe.seed + 2)
-    finished_at = _EPOCH + datetime.timedelta(seconds=recipe.duration_s)
+    finished_at = SYNTH_EPOCH + datetime.timedelta(seconds=recipe.duration_s)
 
     for system in recipe.systems:
         directory = layout.system_dir(system)

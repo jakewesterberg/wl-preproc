@@ -1,8 +1,9 @@
+import pytest
 from wl_sync.session import SessionId
 
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SessionLayout
-from wl_preproc.synth.recipe import CI_RECIPE, Fault
+from wl_preproc.synth.recipe import CI_RECIPE, STIM_RECIPE, Fault
 from wl_preproc.synth.session import generate_session
 
 
@@ -63,15 +64,25 @@ def test_generation_is_byte_identical_for_one_seed(tmp_path):
     assert a.read_bytes() == b.read_bytes()
 
 
-def test_every_system_declares_the_files_it_wrote(tmp_path):
+@pytest.mark.parametrize("recipe", [CI_RECIPE, STIM_RECIPE], ids=["ci", "stim"])
+def test_every_system_declares_the_files_it_wrote(tmp_path, recipe):
     """The marker must list what is actually on disk. A marker listing nothing
-    would satisfy verification trivially, which is the failure this catches."""
+    would satisfy verification trivially, which is the failure this catches.
+
+    Parametrized over CI_RECIPE and STIM_RECIPE rather than CI_RECIPE alone:
+    CI_RECIPE's systems (syncbox, spikeglx, bcam) are all flat, single-file
+    directories, so a shallow glob in _write_done_marker would pass this test
+    just as well as a correct rglob. STIM_RECIPE is the one recipe that
+    includes `rhs`, the one system whose writer emits a nested subdirectory
+    (wl_preproc/synth/rhs.py: `out = dir_path / f"{recipe.session_id}_rhs"`),
+    so it is the case that actually exercises the docstring's claim.
+    """
     from wl_preproc.contracts.done import DoneMarker
 
-    generate_session(tmp_path, CI_RECIPE)
-    layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
+    generate_session(tmp_path, recipe)
+    layout = SessionLayout(tmp_path, recipe.session_id)
 
-    for system in CI_RECIPE.systems:
+    for system in recipe.systems:
         marker = DoneMarker.from_yaml(layout.done_marker(system).read_text())
         system_dir = layout.system_dir(system)
         on_disk = {
