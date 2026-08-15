@@ -38,10 +38,10 @@ def read_marker(layout: SessionLayout, system: str) -> tuple[MarkerState, DoneMa
     path = layout.done_marker(system)
     if not path.exists():
         return MarkerState.ABSENT, None
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return MarkerState.EMPTY, None
     try:
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            return MarkerState.EMPTY, None
         return MarkerState.PARSED, DoneMarker.from_yaml(text)
     except Exception:
         return MarkerState.INVALID, None
@@ -70,10 +70,20 @@ def last_change_at(session_dir) -> datetime.datetime:
 
     The directory's own mtime is included, so a session whose only activity was
     creating an empty subdirectory still counts as recently touched.
+
+    A candidate can stop existing between being listed by `rglob` and being
+    `stat`'d — a dangling symlink, or a transfer's own write-to-temp-then-rename
+    landing mid-walk — and this function runs only on incomplete sessions,
+    directories that are by definition still being written to. That is the
+    ordinary case here, not an edge one, so one vanished entry is skipped
+    rather than allowed to crash the scan for every session after it.
     """
     newest = session_dir.stat().st_mtime
     for candidate in session_dir.rglob("*"):
-        newest = max(newest, candidate.stat().st_mtime)
+        try:
+            newest = max(newest, candidate.stat().st_mtime)
+        except OSError:
+            continue
     return datetime.datetime.fromtimestamp(newest, tz=datetime.UTC)
 
 

@@ -16,6 +16,7 @@ from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.ingest.sentinel import (
     MarkerState,
     is_stalled,
+    last_change_at,
     missing_systems,
     read_marker,
     session_complete,
@@ -36,6 +37,26 @@ def test_a_generated_session_is_complete(session):
     layout, manifest = session
     assert session_complete(layout, manifest) is True
     assert missing_systems(layout, manifest) == []
+
+
+def test_a_valid_marker_parses_with_its_contents_intact(session):
+    """Nothing before this checked what a *successful* parse returns:
+    session_complete and missing_systems only ever ask whether a marker is
+    ABSENT or INVALID, so PARSED and EMPTY are interchangeable to both of
+    them. This is the one place PARSED itself, and the DoneMarker it carries,
+    are checked directly — against a marker generate_session actually wrote,
+    not a hand-built one."""
+    layout, manifest = session
+
+    state, marker = read_marker(layout, "spikeglx")
+
+    assert state is MarkerState.PARSED
+    assert marker is not None
+    assert marker.system == "spikeglx"
+    assert marker.files, "the generator must have hashed at least one real file"
+    system_dir = layout.system_dir("spikeglx")
+    for entry in marker.files:
+        assert (system_dir / entry.path).stat().st_size == entry.bytes
 
 
 def test_a_missing_marker_makes_it_incomplete(session):
@@ -80,6 +101,20 @@ def test_a_corrupt_marker_is_invalid_rather_than_absent(session):
     assert session_complete(layout, manifest) is False
 
 
+def test_a_marker_with_invalid_utf8_bytes_is_invalid_rather_than_crashing(session):
+    """A process killed mid-write, or disk corruption, can leave bytes that
+    are not valid UTF-8 at all — a different failure than bytes that decode
+    fine but parse as bad YAML, which is all the corrupt-marker test above
+    exercises. Both are "the transfer finished and wrote something wrong":
+    read_marker must land on INVALID for either, and must never let the
+    decode error itself escape."""
+    layout, manifest = session
+    layout.done_marker("spikeglx").write_bytes(b"schema_version: 1\nsystem: spikeglx\xff\x80\xfe")
+
+    assert read_marker(layout, "spikeglx")[0] is MarkerState.INVALID
+    assert session_complete(layout, manifest) is False
+
+
 def test_stalled_only_when_incomplete_and_quiet(session):
     layout, manifest = session
     layout.done_marker("spikeglx").unlink()
@@ -103,3 +138,19 @@ def test_a_recently_touched_incomplete_session_is_not_stalled(session):
     just_now = datetime.datetime.now(datetime.UTC)
 
     assert is_stalled(layout, manifest, now=just_now) is False
+
+
+def test_last_change_at_skips_a_dangling_symlink(session):
+    """`Path.stat()` follows symlinks, so a dangling one raises
+    FileNotFoundError — the same failure a transfer's own
+    write-to-temp-then-rename produces if it lands mid-walk. last_change_at
+    runs only on incomplete sessions, directories that are by definition
+    still being written to, so this is the ordinary case rather than an edge
+    one: one vanished entry must not crash the scan for every session after
+    it."""
+    layout, manifest = session
+    (layout.dir / "dangling").symlink_to(layout.dir / "does-not-exist")
+
+    result = last_change_at(layout.dir)
+
+    assert result.tzinfo is datetime.UTC
