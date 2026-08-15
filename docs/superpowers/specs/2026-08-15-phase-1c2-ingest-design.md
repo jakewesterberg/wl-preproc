@@ -462,3 +462,19 @@ Everything except `landing.py` and the report is filesystem logic and tests with
   to 1c-4, which computes the fit; the watcher records nothing about it.
 - **§13 item 9** — reopened 2026-08-15, resolution proposed and not ratified. It gates the
   canonical activation, **not** this sub-project (§2).
+
+- **A landed `Ingestion` row has no correction path, and that was not deliberate.** §8.3 requires
+  `scan_once` over an already-ingested session to be a no-op, and the watcher checks
+  `already_ingested` *before* landing — so once the row exists, nothing re-runs: not verification,
+  not topology discovery, not landing. §9 gives a repair story for a *quarantined* session ("fixed
+  and re-ingested simply produces the real rows") and there is no analogous sentence for a landed
+  one. So a session that ingested successfully but recorded a wrong `integrity`, `topology` or
+  `manifest_hash` — because a `DONE` marker was empty when it should not have been, say — cannot
+  be corrected by any command this phase ships, and `wlpp delete` is preview-only by design.
+
+  **Found 2026-08-15 by Task 6's review, and left open on purpose.** The fix is either a
+  re-ingest path or a supported way to remove an `Ingestion` row, and nothing consumes either
+  yet. This project's standing rule is that nothing is invented before it has a consumer, so the
+  gap is recorded rather than filled. **Whichever sub-project first needs to correct a landed
+  session owns closing it** — most likely 1c-4, which is the first to compute anything from these
+  rows and therefore the first to care that they are right.
