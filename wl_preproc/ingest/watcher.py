@@ -167,46 +167,62 @@ def _evaluate_session(
     the boundary that turns an escape here into a quarantine rather than a
     crash of the whole scan.
 
-    Check order, corrected in round 3 review after an over-broad round-2
-    fix: `session_id_mismatch` and the `session_dir`-length check just below
-    it both run BEFORE `already_ingested`; `manifest_schema_version` and
-    `subject_unrepresentable` both run AFTER it. This is not one rule
-    ("early checks first") -- it is two different, deliberately separate
-    reasons landing on two different answers:
+    Check order, corrected TWICE now, each time by asking the same one
+    question of each check: is this a property of THIS directory and THIS
+    manifest, fixed for as long as the directory exists -- or does it read
+    something that can legitimately change out from under an ALREADY-landed
+    session between one scan and the next? The first group is safe to check
+    before `already_ingested`; the second is not, because re-judging an
+    already-landed session against a global that has moved on without it
+    reproduces the identical design-section-9 contradiction (the same
+    session listed under both Ingested and Quarantined, rewritten on every
+    poll, forever) no matter which specific check does the re-judging.
 
-    - `already_ingested` keys on `(subject, session_datetime)` alone, never
-      on the directory. Round 2 moved it to run immediately after the parse
-      so an already-landed session is a true no-op on every later scan
-      (design section 8.3): `manifest_schema_version` reads a CODE-level
-      constant (`SCHEMA_VERSION`) that is deliberately bumped over the
-      pipeline's own deployed lifetime, so a session landed under an OLDER
-      version used to fail it freshly on every poll after a version bump,
-      while its `Ingestion` row stayed -- the same session listed under
-      both Ingested and Quarantined, contradicting section 9.
-      `subject_unrepresentable` is the identical shape for the SAME reason,
-      one layer down: `landing.SUBJECT_MAX_LEN` is a property of an
-      installed dependency (element-animal), not of this directory, and
-      could in principle narrow under a future dependency bump the same way
-      `SCHEMA_VERSION` deliberately widens. Both stay after
-      `already_ingested` on purpose: an already-landed session must never
-      be re-judged against a global that has moved on without it.
-    - `session_id_mismatch` and the `session_dir`-length check are not
-      globals at all -- they are properties of THIS directory and THIS
-      manifest, fixed for as long as the directory exists, and moving
-      `already_ingested` above them was the actual round-2 bug: it keys on
-      identity, not on path, so a directory whose manifest happened to
-      declare an ALREADY-landed identity (a renamed or duplicated session
-      directory -- precisely the case `session_id_mismatch` exists to
-      catch) returned ALREADY before that check ever ran, silently
-      disabling it. Proven live with a revert-control: the identical probe
-      (an already-landed identity, a manifest claiming a different
-      `session_id` than the directory it sits in) gave `quarantined` under
-      the pre-round-2 order and `already` under round 2's, with zero
-      Quarantine rows written either way in the broken case. Neither of
-      these two needs a database or `SCHEMA_VERSION` to evaluate, so
-      nothing is lost by running them first, and the identity confusion
-      they exist to catch cannot be un-caught by something that happens to
-      have already landed under the WRONG identity.
+    - `already_ingested` itself keys on `(subject, session_datetime)` alone,
+      never on the directory or its path. Round 2 moved it to run
+      immediately after the parse so an already-landed session is a true
+      no-op on every later scan (design section 8.3).
+    - `manifest_schema_version` and `subject_unrepresentable` stay AFTER it:
+      `SCHEMA_VERSION` is a CODE-level constant deliberately bumped over the
+      pipeline's own deployed lifetime, and `landing.SUBJECT_MAX_LEN` is a
+      property of an installed dependency (element-animal) that could in
+      principle narrow under a future bump the same way `SCHEMA_VERSION`
+      deliberately widens -- both are moving globals an already-landed
+      session must never be re-judged against.
+    - `session_dir_unrepresentable`'s length check joined this group in
+      round 4 review, corrected from an earlier, WRONG placement above
+      `already_ingested`: `len(str(session_dir))` reads the FULL PATH, which
+      is a function of the operator-supplied `--root` -- ALSO a moving
+      global, not a directory-local fact, exactly like `SCHEMA_VERSION`.
+      Reproduced live: a session landed under a short root, then the whole
+      storage root moved (a remount, a different mount point, an archive
+      move) to a path long enough to trip this check, with the session
+      itself completely untouched, used to re-quarantine on every
+      subsequent poll even though it already had a valid `Ingestion` row --
+      verbatim the section 9 contradiction this whole reordering exists to
+      prevent, reopened by the very check meant to prevent a DIFFERENT
+      instance of it. See
+      `test_a_session_dir_too_long_after_the_root_moved_is_still_a_no_op`
+      below, the regression test for exactly this.
+    - `session_id_mismatch` is the one check that genuinely belongs BEFORE
+      `already_ingested`, and stays there: it compares `manifest.session_id`
+      against `session_dir.name` -- both fixed properties of the directory
+      itself, not of the path leading to it, and not something an operator
+      moving the storage root changes at all. Moving `already_ingested`
+      above it was round 2's own bug: `already_ingested` keys on identity,
+      not on path, so a directory whose manifest happened to declare an
+      ALREADY-landed identity (a renamed or duplicated session directory --
+      precisely the case this check exists to catch) returned ALREADY
+      before it ever ran, silently disabling it. Proven live with a
+      revert-control: the identical probe (an already-landed identity, a
+      manifest claiming a different `session_id` than the directory it sits
+      in) quarantines correctly with this check running first and silently
+      returned ALREADY, with zero Quarantine rows, when `already_ingested`
+      ran first instead. Nothing is lost by running this one check before
+      `already_ingested`, since it needs no database and reads nothing that
+      can drift -- and the identity confusion it exists to catch cannot be
+      un-caught by something that happens to have already landed under the
+      WRONG identity.
     """
     try:
         raw = (session_dir / MANIFEST_FILENAME).read_bytes()
@@ -258,6 +274,10 @@ def _evaluate_session(
         )
         return Outcome.QUARANTINED
 
+    session_key = landing.manifest_session_key(manifest)
+    if landing.already_ingested(session_key, prefix=prefix):
+        return Outcome.ALREADY
+
     if len(str(session_dir)) > landing.INGESTION_SESSION_DIR_MAX_LEN:
         # Ingestion.session_dir : varchar(255) (wl_preproc/schema/ingest.py),
         # a plain provenance column with no length check of its own before
@@ -273,10 +293,22 @@ def _evaluate_session(
         # unclassified reason it can never age out of deserves the same
         # source-level, specifically-named treatment `subject_unrepresentable`
         # and PARAMSET_TYPE_MAX_LEN already get, not a permanent stay in the
-        # catch-all. Checked here, alongside session_id_mismatch: both are
-        # properties of this directory alone, need no database, and (see
-        # this function's own docstring) are safe to check before
-        # already_ingested for the identical reason.
+        # catch-all.
+        #
+        # Checked AFTER already_ingested, not alongside session_id_mismatch
+        # above -- moved here in round 4 review after living above it
+        # through round 3. len(str(session_dir)) is the FULL PATH, a
+        # function of the operator-supplied --root, which is a moving global
+        # exactly like SCHEMA_VERSION: an already-landed session, unmoved
+        # itself, can newly trip this check purely because the STORAGE ROOT
+        # moved to a longer path (a remount, a different mount point, an
+        # archive move) -- reproduced live, and the identical section-9
+        # contradiction this function's own docstring describes for
+        # SCHEMA_VERSION and subject length. session_id_mismatch is
+        # different in kind, not just position: it compares session_dir.name
+        # (the directory's own basename, unaffected by where its ancestors
+        # sit) against manifest.session_id, neither of which a root move
+        # touches at all.
         landing.quarantine(
             str(session_dir),
             reason="session_dir_unrepresentable",
@@ -292,10 +324,6 @@ def _evaluate_session(
             now=now,
         )
         return Outcome.QUARANTINED
-
-    session_key = landing.manifest_session_key(manifest)
-    if landing.already_ingested(session_key, prefix=prefix):
-        return Outcome.ALREADY
 
     if manifest.schema_version != SCHEMA_VERSION:
         landing.quarantine(

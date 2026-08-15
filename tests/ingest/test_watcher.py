@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import datetime
 import os
+import shutil
 from pathlib import Path
 
 import pytest
 
 from wl_preproc.contracts.paths import SessionLayout
+from wl_preproc.ingest import landing
 from wl_preproc.ingest.watcher import Outcome, scan_once
 from wl_preproc.schema import ingest
 from wl_preproc.synth.recipe import CI_RECIPE
@@ -345,9 +347,13 @@ def test_nothing_ever_writes_a_request_row(root):
 #
 # Five tests below, proving three of Task 8's mandated deviations from the
 # brief's own reference implementation (the unguarded `_candidate_dirs`, the
-# manifest read sitting outside its own try, and `register_session_params`'s
-# uncaught `dj.DataJointError`) rather than merely asserting the happy path
-# the brief's own eleven tests above already cover.
+# manifest read sitting outside its own try, and `register_session_params`
+# raising a bare `dj.DataJointError` on contention exhaustion, LEFT uncaught
+# by `params.py`, and needing a catch at the watcher layer -- narrowed by
+# round 2 review to the dedicated `paramset.ContentionExhausted` this file's
+# own tests catch by name below, not the bare `dj.DataJointError` root this
+# comment originally, and now stale-ly, named) rather than merely asserting
+# the happy path the brief's own eleven tests above already cover.
 #
 # The fourth deviation — building the session key through
 # `landing.manifest_session_key` instead of inline — was claimed here, in an
@@ -700,16 +706,41 @@ def test_a_genuinely_unclassified_failure_still_reaches_the_outer_boundary(root,
     `landing.land_session` is monkeypatched directly to raise a synthetic,
     clearly-labelled RuntimeError -- not a real failure mode this module
     anticipates at all, which is the point.
+
+    A healthy sibling, added in round 4 review: `_scan_one`'s own docstring
+    gives BLAST RADIUS -- one session's unclassified failure must not cost
+    any OTHER session in the same scan -- as the reason this boundary exists
+    at all, and this test, before this fix, proved only that the boundary
+    catches SOMETHING, not that it protects anyone else while doing it.
+    Confirmed live: narrowing the boundary's own `except Exception` clause
+    to something that does not match (e.g. `except ZeroDivisionError`) fails
+    every single-session boundary test in this file trivially -- `scan_once`
+    itself raises uncaught, crashing the test -- but says nothing about
+    blast radius, since none of them have a second session whose survival
+    is even checked. `land_session` is faked to fail ONLY for the targeted
+    subject and to delegate to the real implementation for anyone else, so
+    the sibling lands for real, through the real code path, not a second
+    fake.
     """
     from wl_preproc.ingest import landing as landing_module
 
     tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "unclassk")
 
-    def boom(*args, **kwargs):
-        raise RuntimeError("simulated: nobody anticipated this")
+    sibling_recipe = CI_RECIPE.model_copy(
+        update={"session_id": "2027-03-14_05", "subject": "boundsib"}
+    )
+    generate_session(tmp_path, sibling_recipe)
+    sibling_dir = str(SessionLayout(tmp_path, sibling_recipe.session_id).dir)
 
-    monkeypatch.setattr(landing_module, "land_session", boom)
+    real_land_session = landing_module.land_session
+
+    def boom_for_the_target_only(layout, manifest, *args, **kwargs):
+        if manifest.subject == "unclassk":
+            raise RuntimeError("simulated: nobody anticipated this")
+        return real_land_session(layout, manifest, *args, **kwargs)
+
+    monkeypatch.setattr(landing_module, "land_session", boom_for_the_target_only)
 
     result = scan_once(tmp_path, prefix=prefix)
 
@@ -718,6 +749,8 @@ def test_a_genuinely_unclassified_failure_still_reaches_the_outer_boundary(root,
     assert row["reason"] == "unexpected_failure"
     assert row["detail"]["error_type"] == "RuntimeError"
     assert "nobody anticipated" in row["detail"]["error"]
+
+    assert result.outcomes[sibling_dir] is Outcome.INGESTED
 
 
 def test_an_overlong_paramset_type_quarantines_as_params_invalid(root):
@@ -787,7 +820,15 @@ def test_an_already_ingested_session_is_a_no_op_even_after_a_schema_version_bump
     `manifest_schema_version` Quarantine row on every subsequent poll after
     a version bump, while its `Ingestion` row stayed — the same session
     listed under both Ingested and Quarantined, contradicting section 9.
-    `already_ingested` is now the second check, immediately after the parse.
+    `already_ingested` now runs immediately after `session_id_mismatch` --
+    the one check that genuinely belongs before it, since it reads only the
+    directory's own basename, not a global that can drift -- and before
+    every check that DOES read one (`schema_version`, subject length, and,
+    since round 4 review, `session_dir` length too). Deliberately not
+    pinned to an ordinal position ("the second check", "the third check"):
+    that phrasing has already gone stale twice as checks were added and
+    reordered around it, which is exactly what
+    `_evaluate_session`'s own docstring exists to describe precisely instead.
     """
     tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "orderky")
@@ -1034,6 +1075,14 @@ def test_a_session_dir_over_the_ingestion_column_limit_quarantines_cleanly(
     root deeply -- which `generate_session`/`SessionLayout` are fully
     agnostic to; nothing else in this pipeline assumes a shallow storage
     root.
+
+    Unaffected by round 4 review moving this check's position (below
+    `already_ingested` now, not alongside `session_id_mismatch` -- see
+    `_evaluate_session`'s own docstring): this session has never landed, so
+    `already_ingested` returns False regardless and this check is reached
+    either way. See `test_a_session_dir_too_long_after_the_root_moved_is_
+    still_a_no_op` below for the case that DOES depend on the reordering --
+    an already-landed session whose root moves.
     """
     ingest.activate(prefix=prefix)
     deep_root = tmp_path
@@ -1051,33 +1100,106 @@ def test_a_session_dir_over_the_ingestion_column_limit_quarantines_cleanly(
     result = scan_once(deep_root, prefix=prefix)
 
     assert result.outcomes[session_dir] is Outcome.QUARANTINED
-    row = (ingest.Quarantine & {"session_dir": session_dir[:255]}).fetch1()
+    # The stored key is landing._clamp_key(session_dir, ...), not a naive
+    # session_dir[:255] slice -- round 4 review's fix for the truncation-
+    # collision issue -- so the expected key is computed the same way,
+    # rather than this test re-slicing and silently drifting from what
+    # quarantine() actually stores.
+    clamped = landing._clamp_key(session_dir, landing.QUARANTINE_SESSION_DIR_MAX_LEN)
+    row = (ingest.Quarantine & {"session_dir": clamped}).fetch1()
     assert row["reason"] == "session_dir_unrepresentable"
     assert row["detail"]["untruncated_session_dir"] == session_dir
 
 
-def test_the_manifest_hash_matches_the_files_real_bytes_even_with_crlf_endings(root):
+def test_a_session_dir_too_long_after_the_root_moved_is_still_a_no_op(root):
+    """Critical (round 4 review): `session_dir_unrepresentable`'s length
+    check used to run BEFORE `already_ingested`, alongside
+    `session_id_mismatch` -- correct for `session_id_mismatch`, which
+    compares basenames, a property of the directory itself fixed for as
+    long as it exists, but WRONG for the length check.
+    `len(str(session_dir))` reads the FULL PATH, a function of the
+    operator-supplied `--root` -- a moving global exactly like
+    `SCHEMA_VERSION`, not a directory-local fact like a basename. A session
+    landed under a short root, then the whole storage root moved (a
+    remount, a different mount point, an archive move) to a longer path
+    with the session itself completely untouched, used to re-quarantine on
+    every subsequent poll even though it already had a valid `Ingestion`
+    row -- verbatim the same design-section-9 contradiction ("the same
+    session listed under both Ingested and Quarantined") round 3's own
+    Item 1 fix closed for `session_id_mismatch`'s wrong position, reopened
+    by this check's own wrong position instead.
+
+    Simulated with a real copy of an already-landed session's directory
+    tree into a deeply nested path, not a synthetic scenario: the copy
+    carries the identical manifest (same subject, same `started_at`) that
+    is already in `Ingestion`, and only the FULL PATH it now sits under
+    changed -- `shutil.copytree`, not `shutil.move`, so the original,
+    already-landed copy under the short root stays put and is not scanned
+    again by this test (it is not even under `deep_root`, so
+    `_candidate_dirs(deep_root)` cannot see it).
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "movedkey")
+    scan_once(tmp_path, prefix=prefix)  # lands under the short root
+
+    deep_root = tmp_path / "moved"
+    for _ in range(20):
+        if len(str(deep_root / CI_RECIPE.session_id)) > 255:
+            break
+        deep_root = deep_root / ("nested_dir_" + "x" * 30)
+    else:
+        pytest.fail("could not construct a session_dir over 255 characters")
+
+    shutil.copytree(
+        SessionLayout(tmp_path, CI_RECIPE.session_id).dir,
+        SessionLayout(deep_root, CI_RECIPE.session_id).dir,
+    )
+    moved_session_dir = str(SessionLayout(deep_root, CI_RECIPE.session_id).dir)
+    assert len(moved_session_dir) > 255
+
+    result = scan_once(deep_root, prefix=prefix)
+
+    assert result.outcomes[moved_session_dir] is Outcome.ALREADY
+    clamped = landing._clamp_key(moved_session_dir, landing.QUARANTINE_SESSION_DIR_MAX_LEN)
+    assert len(ingest.Quarantine & {"session_dir": clamped}) == 0
+
+
+@pytest.mark.parametrize(
+    ("line_ending", "dedicated_subject"),
+    [(b"\r\n", "crlfkey"), (b"\r", "crkey")],
+    ids=["crlf", "bare-cr"],
+)
+def test_the_manifest_hash_matches_the_files_real_bytes_with_non_lf_endings(
+    root, line_ending, dedicated_subject
+):
     """Critical (I1 correction): I1's original round-2 fix replaced
     `blake3_file(path)` with `blake3(text.encode("utf-8"))`, reasoning about
     the UTF-8 codec round-tripping losslessly -- true, but the wrong layer.
     `Path.read_text()`'s default `newline=None` enables universal-newline
-    translation ABOVE the codec: `\\r\\n` and bare `\\r` collapse to `\\n` in
-    the decoded string regardless of encoding validity. Confirmed directly,
-    not assumed: a manifest written with `\\r\\n` line endings, read back and
-    re-encoded, produces DIFFERENT bytes -- and a different blake3 digest --
-    than the file's own real bytes, identically on 3.11.15 and 3.13.9.
-    SpikeGLX and Intan both run on Windows, so a CRLF-authored manifest is
-    not a hypothetical this pipeline can assume away. Fixed by hashing the
-    raw bytes `read_bytes()` returns, decoded separately for parsing.
+    translation ABOVE the codec: `\\r\\n` AND bare `\\r` both collapse to
+    `\\n` in the decoded string regardless of encoding validity. Confirmed
+    directly, not assumed: a manifest written with either line ending, read
+    back and re-encoded, produces DIFFERENT bytes -- and a different blake3
+    digest -- than the file's own real bytes, identically on 3.11.15 and
+    3.13.9. SpikeGLX and Intan both run on Windows, so a non-LF-authored
+    manifest is not a hypothetical this pipeline can assume away. Fixed by
+    hashing the raw bytes `read_bytes()` returns, decoded separately for
+    parsing.
+
+    Parametrized over both non-LF forms Python's universal-newline
+    translation recognises (round 4 review: the tree only covered CRLF;
+    bare CR is translated identically and was equally broken before this
+    fix, confirmed independently) -- not just CRLF, which is the common
+    case but not the only one.
 
     Reads the file's OWN bytes directly, via `Path.read_bytes()`, as an
     independent oracle -- not a re-derivation of `watcher.py`'s own hashing
     logic, which would prove nothing if that logic were what was wrong.
     """
     tmp_path, prefix, session_dir = root
-    _use_dedicated_subject(tmp_path, "crlfkey")
+    _use_dedicated_subject(tmp_path, dedicated_subject)
     manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
-    manifest_path.write_bytes(manifest_path.read_bytes().replace(b"\n", b"\r\n"))
+    manifest_path.write_bytes(manifest_path.read_bytes().replace(b"\n", line_ending))
 
     result = scan_once(tmp_path, prefix=prefix)
 

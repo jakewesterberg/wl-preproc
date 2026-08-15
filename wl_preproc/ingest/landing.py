@@ -56,6 +56,7 @@ called from inside another one.
 from __future__ import annotations
 
 import datetime
+import hashlib
 
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SessionLayout
@@ -305,6 +306,46 @@ def land_session(
     return key
 
 
+def _clamp_key(value: str, max_len: int) -> str:
+    """Shorten `value` to at most `max_len` characters, folding a short
+    digest of the FULL, untruncated value into the tail so two different
+    values sharing a long common prefix produce DIFFERENT results, not the
+    same one.
+
+    A naive `value[:max_len]` slice -- what this function replaced -- is
+    exactly the wrong choice for what this project's own nested-storage-root
+    layout makes ROUTINE, not pathological, and round 2/3 review reasoned
+    about it backwards: `session_dir_unrepresentable`
+    (`wl_preproc/ingest/watcher.py`) fires only for a session whose storage
+    root is already close to or past `max_len` characters long, and every
+    OTHER session under that SAME root shares that identical over-long
+    prefix -- their entire distinguishing suffix (a short session_id,
+    `/2027-03-14_01` versus `/2027-03-14_02`) sits PAST the point a plain
+    slice ever reaches. Confirmed directly: a 305-character path and a
+    sibling differing only in its final 14 characters truncate to the
+    IDENTICAL first 255 characters. Under the OLD scheme, `replace=True`
+    then silently collapsed two real sessions' quarantine records into
+    one, with only the last-scanned session's `untruncated_session_dir`
+    recoverable -- the other's real path gone from the table entirely, not
+    merely shortened in it.
+
+    A digest of the FULL string breaks that tie: two different full values
+    produce different digests with overwhelming probability
+    (`digest_size=8`, 64 bits -- the same size `paramset.content_hash`
+    already uses for an unrelated short-string-to-stable-identifier
+    problem), so `replace=True` on the resulting key keeps meaning "the same
+    directory, scanned again" rather than "some other directory sharing this
+    root's long prefix". Deterministic in `value` alone, so re-quarantining
+    the identical directory on a later scan still produces the identical
+    clamped key and still updates the same row, exactly as before this fix.
+    """
+    if len(value) <= max_len:
+        return value
+    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).hexdigest()
+    suffix = f"~{digest}"
+    return value[: max_len - len(suffix)] + suffix
+
+
 def quarantine(
     session_dir: str,
     reason: str,
@@ -353,32 +394,27 @@ def quarantine(
       `test_an_unparseable_manifest_quarantines_with_no_session_key`); an
       oversized subject is the same honest admission for a different reason.
     - `session_dir` (`QUARANTINE_SESSION_DIR_MAX_LEN`, 255) IS this table's
-      primary key and cannot be null, so it is truncated rather than
-      omitted -- the only structurally available option for a value that
-      must be written and cannot fit. Round 3 review corrected the actual
-      risk here: two session directories sharing an identical 255-character
-      prefix is pathological and not worth engineering around further. What
-      actually bites, and is fixed below, is that the full path used to be
-      recorded NOWHERE once truncated -- the row carried a truncated primary
-      key and a `detail` of whatever the caller passed, with nothing that
-      let an operator reading the daily report recover which directory it
-      actually named. So `detail` gets an `untruncated_session_dir` key
-      added, but only when truncation actually happened -- every other
-      quarantine call's `detail` is passed through byte-for-byte, unchanged,
-      exactly as the caller built it. `replace=True` still means a second
-      write under the same truncated key describes its own latest failure
-      rather than raising a second, different exception.
+      primary key and cannot be null, so it is shortened via `_clamp_key`
+      (above) rather than omitted -- the only structurally available option
+      for a value that must be written and cannot fit, made DISTINGUISHABLE
+      rather than merely short, for the reason `_clamp_key`'s own docstring
+      gives in full. The full path is also, separately, still recorded in
+      `detail["untruncated_session_dir"]`, but only when clamping actually
+      happened -- every other quarantine call's `detail` is passed through
+      byte-for-byte, unchanged, exactly as the caller built it. `replace=True`
+      still means a second write under the same clamped key describes its
+      own latest failure rather than raising a second, different exception.
     """
     ingest.activate(prefix=prefix)
     subject_fits = subject is None or len(subject) <= QUARANTINE_SUBJECT_MAX_LEN
     clamped_subject = subject if subject_fits else None
-    truncated_session_dir = session_dir[:QUARANTINE_SESSION_DIR_MAX_LEN]
+    clamped_session_dir = _clamp_key(session_dir, QUARANTINE_SESSION_DIR_MAX_LEN)
     stored_detail = detail
-    if len(session_dir) > QUARANTINE_SESSION_DIR_MAX_LEN:
+    if clamped_session_dir != session_dir:
         stored_detail = {**detail, "untruncated_session_dir": session_dir}
     ingest.Quarantine.insert1(
         {
-            "session_dir": truncated_session_dir,
+            "session_dir": clamped_session_dir,
             "failed_at": _now(now),
             "reason": reason,
             "detail": stored_detail,

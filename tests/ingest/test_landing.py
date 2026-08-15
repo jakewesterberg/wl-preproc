@@ -18,6 +18,7 @@ from wl_preproc.ingest.landing import (
     QUARANTINE_SESSION_DIR_MAX_LEN,
     QUARANTINE_SUBJECT_MAX_LEN,
     SUBJECT_MAX_LEN,
+    _clamp_key,
     already_ingested,
     land_session,
     manifest_session_key,
@@ -221,29 +222,35 @@ def test_quarantine_omits_a_subject_too_long_for_its_own_column(activated):
 
 def test_quarantine_truncates_a_session_dir_too_long_for_the_primary_key(activated):
     """`session_dir` IS `Quarantine`'s primary key and cannot be null, so an
-    oversized one is truncated rather than omitted — the only structurally
+    oversized one is shortened rather than omitted — the only structurally
     available option for a value that must be written and cannot fit. A 265-
     character `session_dir` — one already this test's own point, not a
     hypothetical Task 8's review reproduced live — raised the identical raw
-    `pymysql` error without this fix. The row is found at the TRUNCATED key,
-    proving the value that was actually written, not merely that no
-    exception escaped.
+    `pymysql` error without this fix. The row is found at the SHORTENED key
+    `landing._clamp_key` actually produces (round 4 review: a plain
+    `session_dir[:255]` slice, which is what this test originally checked
+    against, is no longer what gets stored — see that function's own
+    docstring for why a naive slice was the wrong fix), proving the value
+    that was actually written, not merely that no exception escaped.
 
-    Round 3 review: the real risk here was never two paths colliding on a
-    shared 255-character prefix (pathological) — it was the full path being
-    recorded NOWHERE once truncated, leaving an operator reading this row
-    with a truncated key and no way to recover which directory it actually
-    named. `detail["untruncated_session_dir"]` is what closes that; checked
-    here directly rather than merely inferred from the fix existing.
+    Round 3 review recorded that the full path used to be recorded NOWHERE
+    once truncated, leaving an operator reading this row with a shortened
+    key and no way to recover which directory it actually named.
+    `detail["untruncated_session_dir"]` is what closes that; checked here
+    directly rather than merely inferred from the fix existing.
     """
     oversized_dir = "/scratch/" + ("q" * (QUARANTINE_SESSION_DIR_MAX_LEN + 10))
     quarantine(
         oversized_dir, reason="manifest_invalid", detail={"error": "x"}, prefix=activated
     )
 
-    truncated = oversized_dir[:QUARANTINE_SESSION_DIR_MAX_LEN]
-    assert len(truncated) == QUARANTINE_SESSION_DIR_MAX_LEN
-    row = (ingest.Quarantine & {"session_dir": truncated}).fetch1()
+    clamped = _clamp_key(oversized_dir, QUARANTINE_SESSION_DIR_MAX_LEN)
+    assert len(clamped) == QUARANTINE_SESSION_DIR_MAX_LEN
+    assert clamped != oversized_dir[:QUARANTINE_SESSION_DIR_MAX_LEN], (
+        "test setup bug: the digest suffix must actually change the naive-slice result "
+        "for this to be testing the round 4 fix rather than the round 3 one"
+    )
+    row = (ingest.Quarantine & {"session_dir": clamped}).fetch1()
     assert row["reason"] == "manifest_invalid"
     assert row["detail"]["error"] == "x"  # the caller's own detail survives untouched
     assert row["detail"]["untruncated_session_dir"] == oversized_dir
@@ -252,7 +259,7 @@ def test_quarantine_truncates_a_session_dir_too_long_for_the_primary_key(activat
 
 def test_quarantine_leaves_detail_untouched_when_session_dir_fits(activated):
     """The companion proof: `untruncated_session_dir` must appear ONLY when
-    truncation actually happened, not on every call — otherwise the ordinary
+    clamping actually happened, not on every call — otherwise the ordinary
     case (the overwhelming majority of quarantines) would carry a redundant,
     always-identical key for no reason.
     """
@@ -262,6 +269,48 @@ def test_quarantine_leaves_detail_untouched_when_session_dir_fits(activated):
 
     row = (ingest.Quarantine & {"session_dir": "/scratch/2027-03-14_96"}).fetch1()
     assert row["detail"] == {"error": "y"}
+
+
+def test_quarantine_gives_two_paths_sharing_a_long_prefix_distinct_stored_keys(activated):
+    """Round 4 review, Important: the naive `session_dir[:255]` slice round 3
+    shipped is made ROUTINE, not pathological, by round 3's OWN
+    `session_dir_unrepresentable` check (`wl_preproc/ingest/watcher.py`),
+    which fires only for a session sitting under a storage root whose own
+    path is already close to or past 255 characters — and EVERY other
+    session under that SAME root shares that identical over-long prefix,
+    differing only in a short suffix (their own session_id) that a naive
+    slice never even reaches. Confirmed directly: two paths sharing a
+    290-character common prefix, differing only in their final 14
+    characters, produce an IDENTICAL `[:255]` slice.
+
+    Before this fix, `replace=True` silently collapsed both real sessions'
+    quarantine records into the ONE row the shared truncated key names,
+    with only the last-scanned session's `untruncated_session_dir`
+    recoverable — the other's real path gone from the table entirely. Two
+    distinct rows, each naming its own real path, is what this test
+    requires; `_clamp_key`'s own docstring gives the mechanism (a digest of
+    the full path folded into the tail).
+    """
+    common_prefix = "/deep_shared_root/" + ("x" * 280)
+    path_a = common_prefix + "/2027-03-14_01"
+    path_b = common_prefix + "/2027-03-14_02"
+    assert len(path_a) > QUARANTINE_SESSION_DIR_MAX_LEN
+    assert path_a[:QUARANTINE_SESSION_DIR_MAX_LEN] == path_b[:QUARANTINE_SESSION_DIR_MAX_LEN], (
+        "test setup bug: the two paths must actually share the full 255-character "
+        "naive-slice prefix, or this is not testing the collision case at all"
+    )
+
+    quarantine(path_a, reason="manifest_invalid", detail={"which": "a"}, prefix=activated)
+    quarantine(path_b, reason="manifest_invalid", detail={"which": "b"}, prefix=activated)
+
+    clamped_a = _clamp_key(path_a, QUARANTINE_SESSION_DIR_MAX_LEN)
+    clamped_b = _clamp_key(path_b, QUARANTINE_SESSION_DIR_MAX_LEN)
+    assert clamped_a != clamped_b
+
+    row_a = (ingest.Quarantine & {"session_dir": clamped_a}).fetch1()
+    row_b = (ingest.Quarantine & {"session_dir": clamped_b}).fetch1()
+    assert row_a["detail"] == {"which": "a", "untruncated_session_dir": path_a}
+    assert row_b["detail"] == {"which": "b", "untruncated_session_dir": path_b}
 
 
 # --- Beyond the brief ---------------------------------------------------
