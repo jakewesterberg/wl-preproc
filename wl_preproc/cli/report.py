@@ -81,6 +81,25 @@ def build_report(
     from wl_preproc.schema import ingest
 
     at = now or datetime.datetime.now(datetime.UTC)
+    if at.tzinfo is None or at.utcoffset() is None:
+        # Identical coercion to `scan_once`'s own (wl_preproc/ingest/watcher.py),
+        # and needed for the identical reason: the stalled-transfers loop below
+        # passes `at` straight through to `is_stalled`, which subtracts it from
+        # `last_change_at`'s always-aware return -- raising `TypeError: can't
+        # subtract offset-naive and offset-aware datetimes` the moment any
+        # INCOMPLETE session sits under `root`, not merely a stalled one
+        # (`is_stalled` only short-circuits before that subtraction for a
+        # COMPLETE session). Found in review: this report's own shipped test
+        # suite already passed a naive `now`
+        # (`test_it_writes_a_dated_file_and_returns_its_path`) and stayed
+        # green only because that fixture's `root` happened to hold no
+        # incomplete session at the time -- a gap in the fixture, not proof
+        # the crash could not happen. `.replace`, not `.astimezone()`:
+        # `.astimezone()` on a naive input assumes the *system* timezone, not
+        # UTC, silently shifting the caller's intended instant -- the same
+        # warning `landing.to_naive_utc`'s own docstring gives for the
+        # opposite direction.
+        at = at.replace(tzinfo=datetime.UTC)
     ingest.activate(prefix=prefix)
 
     since = at - datetime.timedelta(hours=24)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 
+import numpy as np
 import pytest
 
 from wl_preproc.cli.report import build_report, write_report
@@ -123,6 +124,22 @@ def test_a_stalled_transfer_appears(scanned):
 
 def test_it_writes_a_dated_file_and_returns_its_path(scanned, tmp_path):
     root, prefix = scanned("rptwrt1")
+    # An incomplete session under `root`, alongside the naive `now` below:
+    # `build_report`'s stalled-transfers walk calls `is_stalled(..., now=at)`
+    # for every session directory holding a valid manifest, and `is_stalled`
+    # short-circuits False only for a COMPLETE session -- an incomplete one
+    # falls through to `now - last_change_at(...)`, which raises TypeError
+    # when `now` is naive (`last_change_at` always returns tz-aware UTC).
+    # Without this, a naive `now` alone proves nothing: this exact test
+    # passed with one before `build_report` gained the coercion, because
+    # nothing under `root` was ever incomplete for it to reach.
+    generate_session(
+        root,
+        CI_RECIPE.model_copy(update={"session_id": "2027-03-14_06", "subject": "rptwrt2"}),
+    )
+    from wl_preproc.contracts.paths import SessionLayout
+
+    SessionLayout(root, "2027-03-14_06").done_marker("spikeglx").unlink()
     out = tmp_path / "reports"
 
     path = write_report(out, root, prefix=prefix, now=datetime.datetime(2027, 3, 15, 7, 0))
@@ -131,15 +148,106 @@ def test_it_writes_a_dated_file_and_returns_its_path(scanned, tmp_path):
     assert path.read_text().startswith("# wl-preproc")
 
 
+def _table_snapshot(table):
+    """A deterministic, order-independent snapshot of every row and column
+    `table` currently holds, for an exact before/after equality check.
+
+    Sorted by primary key alone (stringified for uniform comparability),
+    never by a whole row: MySQL gives no ordering guarantee across two
+    separate queries with no `ORDER BY`, and every row's own set of primary
+    keys is, by definition, unique -- so sorting on it never needs to fall
+    back to comparing a later, possibly-unorderable column (`Ingestion.
+    topology` is a dict, and `sorted()` comparing two dicts with `<` raises
+    TypeError; sorting by primary key alone never reaches that comparison).
+    The returned dicts still carry every column, key and non-key alike, so
+    comparing two snapshots (via `_deep_equal`, below -- not bare `==`, see
+    its own docstring) catches a changed VALUE on an existing row (an
+    `insert(replace=True)`, which `ingest.quarantine()` uses by design -- see
+    `wl_preproc/ingest/landing.py`) exactly as it catches an added or removed
+    row.
+    """
+    key_fields = table.primary_key
+    return sorted(table.to_dicts(), key=lambda row: tuple(str(row[f]) for f in key_fields))
+
+
+def _deep_equal(a, b) -> bool:
+    """`==` that does not choke on a NumPy array anywhere inside a snapshot.
+
+    This suite shares one database across every test file (`tests/conftest.py`,
+    one prefix per process), and `tests/schema/test_guardrails.py`'s own
+    `test_every_blob_attribute_round_trips_an_array` deliberately plants a
+    real 64x64 `float32` array into `ingest.Quarantine.detail` -- `Quarantine`
+    has no foreign key, so that test round-trips it "for real" -- with no
+    cleanup afterward, by design (that file's own docstring: "This inserts
+    into the REAL tables"). Found by running this test under `pytest
+    tests/schema tests/ingest tests/cli`: bare `==` on two snapshots
+    containing that row raised `ValueError: The truth value of an array with
+    more than one element is ambiguous`, not a clean pass or fail -- because
+    `numpy.ndarray.__eq__` returns an array of booleans, and Python's dict/
+    list equality cannot collapse that into one verdict. Every value this
+    report's OWN tables ever store (str, datetime, a dict of strings) never
+    hits this path; a different test's fixture, sharing this suite's one
+    database, does -- and this snapshot must still compare cleanly around it
+    rather than assume it will never be there.
+    """
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return isinstance(a, np.ndarray) and isinstance(b, np.ndarray) and np.array_equal(a, b)
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_deep_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(_deep_equal(x, y) for x, y in zip(a, b, strict=True))
+    return a == b
+
+
 def test_the_report_opens_no_write_transaction(scanned):
     """The same read-only guarantee `wlpp doctor` carries, so anyone can run it
-    at any time without considering what else is running."""
+    at any time without considering what else is running.
+
+    `in_transaction is False` alone proved nothing, and review caught it by
+    proof rather than argument: it put a real `ingest.Quarantine.insert1(...)`
+    inside `build_report` and this test still passed. DataJoint 2.3.2's
+    `insert()`/`insert1()` call `self.connection.query()` directly and never
+    touch `Connection._in_transaction` -- confirmed against
+    `tests/schema/test_daemon.py`'s own two-test pair, which records the
+    identical shape for `populate()`: `in_transaction` is only ever `True`
+    between an explicit `start_transaction()`/`commit_transaction()`, which is
+    what the three-part make's own `insert` phase uses and what a plain,
+    bare `insert1()` call -- every write this ingest pipeline actually makes
+    -- does not. So `in_transaction is False` is equally true of a function
+    that writes and one that does not, and is kept here only because it is
+    still a real, if incomplete, part of the read-only claim -- not because
+    it is sufficient on its own.
+
+    What actually proves nothing was written: an exact snapshot of every row
+    `build_report` could plausibly touch, taken before and compared after.
+    `ingest.Ingestion`/`ingest.Quarantine` are what `build_report` itself
+    queries; `pipeline.Session`/`pipeline.Subject`/`core.AcquisitionSystem`
+    are what `landing.land_session` would write if a future change ever
+    called it from here by mistake -- the report imports none of those
+    modules today, so this also catches that specific regression shape
+    before it could ship.
+    """
     import datajoint as dj
 
+    from wl_preproc.schema import core, pipeline
+
     root, prefix = scanned("rpttxn1")
+    core.activate(prefix=prefix)
+
+    tables = (
+        ingest.Ingestion,
+        ingest.Quarantine,
+        pipeline.Session,
+        pipeline.Subject,
+        core.AcquisitionSystem,
+    )
+    before = [_table_snapshot(table) for table in tables]
+
     build_report(root, prefix=prefix)
 
     assert dj.conn().in_transaction is False
+    after = [_table_snapshot(table) for table in tables]
+    assert _deep_equal(after, before), "build_report wrote or changed at least one row"
 
 
 def test_a_deferred_session_is_named_as_such_rather_than_invisible(
