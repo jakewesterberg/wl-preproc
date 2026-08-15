@@ -6,11 +6,20 @@ component cannot measure (spec section 2). Nothing is lost, because a paramset's
 identity is its content hash — whenever the request is eventually made it
 resolves to this same set.
 
-`register_session_params`'s exception contract: `None` only for a file that is
-verifiably absent; `ValueError` for every other way this can fail, including an
-I/O fault -- a permissions error, a transient NFS read error -- reading or even
-stat-ing the file, not just a malformed one. See that function's docstring for
-why a raw `OSError` must never be the one left uncaught.
+`register_session_params`'s exception contract, precisely scoped: reading and
+validating the file returns `None` only when it is verifiably absent, and
+raises `ValueError` for every other way *that step* can fail, including an
+I/O fault -- a permissions error, a transient NFS read error -- reading or
+even stat-ing the file, not just a malformed one. See that function's
+docstring for why a raw `OSError` must never be the one left uncaught there.
+
+That guarantee covers the read-and-validate step only, not the whole
+function. The registration call after it, `paramset.register`
+(`wl_preproc/schema/paramset.py`), is not wrapped by it: that function's own
+contention-exhaustion path -- a designed-for retry loop, not a hypothetical,
+see its docstring and `_MAX_REGISTER_ATTEMPTS` -- raises a bare
+`dj.DataJointError` after 10 failed attempts to allocate an index, and this
+module neither catches nor converts it.
 """
 
 from __future__ import annotations
