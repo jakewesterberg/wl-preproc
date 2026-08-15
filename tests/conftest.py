@@ -61,12 +61,29 @@ def table_snapshot():
     table currently holds, for an exact before/after equality check.
 
     Moved here from `tests/cli/test_report.py` (Phase 1c-3, Task 1): Task 5
-    needs the identical helper from `tests/responder/`, and a fixture -- not a
-    module-level import -- is how it gets to both, for the same reason
-    `enum_values` above is a fixture rather than a constant: a `conftest.py`
-    is not importable by name, and there are two of them in this suite, both
-    called `conftest`. Every consuming test takes this as a parameter and
-    calls it, exactly as it would `enum_values`.
+    needs the identical helper from `tests/responder/` too.
+
+    Two reasons this lives at `tests/conftest.py` specifically, as a fixture,
+    rather than staying in `tests/cli/test_report.py` as an importable
+    module-level function:
+
+    - Pytest fixtures resolve upward through parent directories only, never
+      sideways between siblings -- the same reason the `prefix` fixture above
+      lives here rather than in `tests/schema/conftest.py` (see its own
+      docstring). A fixture defined in `tests/cli/` would not be visible to
+      `tests/responder/`; one defined here is visible to both, and to
+      `tests/schema/` and `tests/ingest/` besides.
+    - Calling the *function* directly, even successfully imported, does not
+      work: confirmed directly (`from tests.conftest import table_snapshot`
+      then calling it raises `Failed: Fixture "table_snapshot" called
+      directly...`) -- pytest wraps a `@pytest.fixture`-decorated function in
+      a `_pytest.fixtures.FixtureFunctionDefinition`, and that type's own
+      `__call__` refuses direct invocation outside pytest's fixture-
+      resolution machinery. So this was never going to be reachable as a
+      plain importable function regardless of where it lived; only the
+      fixture-parameter form -- the same shape `enum_values` above already
+      uses -- works at all. Every consuming test takes this as a parameter
+      and calls it, exactly as it would `enum_values`.
 
     Returns the callable, not a snapshot itself: the whole point is calling it
     twice -- once before and once after the code under test -- so a single

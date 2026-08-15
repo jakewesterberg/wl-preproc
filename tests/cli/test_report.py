@@ -395,6 +395,45 @@ def test_an_unreadable_root_reports_the_fault_instead_of_crashing(scanned):
     assert "PermissionError" in stalled
 
 
+def test_a_walk_fault_does_not_suppress_a_real_disk_reading(scanned):
+    """Mode 000 again, but checking the Disk section this time, not just
+    Stalled: `_candidate_dirs.iterdir()` needs to list `root`'s own entries,
+    which needs execute permission on `root` itself, but `scratch_headroom`'s
+    `shutil.disk_usage` -> `os.statvfs` needs only search permission on
+    `root`'s PARENT to reach it -- not on `root` itself. So a root the walk
+    cannot list can still be measured for free space, and this project has
+    already shipped a version of `build_report` that got that wrong: review
+    found that folding the walk fault and the disk fault into one
+    `Readings.root_error` field made the Disk section read "not measured"
+    using the WALK's `PermissionError` for a disk probe that had, in fact,
+    succeeded -- confirmed by a direct before/after comparison against
+    `01f9010` (pre-extraction), which showed a real "N GiB free" line for
+    this exact root. That is the precise inversion `scratch_headroom`'s own
+    docstring forbids: an unmeasurable disk must never render as a number,
+    and -- the direction this test guards -- a MEASURED disk must never
+    render as unmeasured because of an unrelated fault.
+    """
+    root, prefix = scanned("rptwlk1")
+    original = root.stat().st_mode
+
+    os.chmod(root, 0o000)
+    try:
+        result = scan_once(root, prefix=prefix)
+        body = build_report(root, prefix=prefix)
+    finally:
+        os.chmod(root, original)
+
+    assert result.root_error is not None, "premise: the walk itself is faulted"
+    stalled = _section(body, "Stalled transfers")
+    assert "was not fully scanned" in stalled, "the walk fault must still be reported"
+    disk = _section(body, "Disk")
+    assert "GiB free" in disk, (
+        "a root the walk cannot list can still be measured for free space -- "
+        "the walk fault must not suppress a disk probe that succeeded"
+    )
+    assert "not measured" not in disk
+
+
 def test_one_unreadable_child_does_not_take_down_the_whole_report(scanned):
     """The row that matters most: an rsync run as the wrong user, or one ACL
     slip, on ONE session directory. `(child / MANIFEST_FILENAME).is_file()`
@@ -503,9 +542,19 @@ def test_gather_readings_does_not_write(scanned, table_snapshot, deep_equal):
     rows, exactly as test_the_report_opens_no_write_transaction does.
 
     `table_snapshot`/`deep_equal` come in as fixtures, not an import from
-    `tests.conftest`: there is no `tests/__init__.py`, so `tests` is not an
-    importable package -- the same reason `tests/schema/conftest.py`'s
-    `enum_values` is a fixture rather than a module constant.
+    `tests.conftest`. Importing the name works fine -- `tests.conftest` is a
+    PEP 420 namespace package even with no `tests/__init__.py`, confirmed
+    directly (`from tests.conftest import table_snapshot` succeeds) -- but
+    calling the imported object does not: once decorated with
+    `@pytest.fixture`, it is a `_pytest.fixtures.FixtureFunctionDefinition`,
+    and pytest's own `__call__` on that type refuses direct invocation
+    outside its fixture-resolution machinery (`Failed: Fixture "..." called
+    directly...`, also confirmed directly). So the fixture form is not a
+    workaround for an import limitation that isn't there; it is the only
+    form that works at all, and it happens to be the same shape
+    `tests/schema/conftest.py`'s `enum_values` already uses -- a
+    session-scoped fixture returning a callable, taken by consuming tests as
+    a parameter and called by name.
     """
     root, prefix = scanned("rptgth2")
     from wl_preproc.cli.report import gather_readings

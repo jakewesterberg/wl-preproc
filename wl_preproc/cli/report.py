@@ -195,10 +195,11 @@ class Readings:
     ingested: list[dict]
     quarantined: list[dict]
     stalled: list[tuple[Path, list[str]]]
+    walk_error: str | None
     stale_jobs: int | None
     free_gib: int
     headroom_ok: bool
-    root_error: str | None
+    disk_error: str | None
 
 
 def gather_readings(
@@ -305,19 +306,26 @@ def gather_readings(
             # stalled and knowing which rig to go look at.
             stalled.append((child, missing_systems(layout, manifest)))
 
-    # `root_error` mirrors `ScanResult.root_error` (wl_preproc/ingest/watcher.py)
+    # `walk_error` mirrors `ScanResult.root_error` (wl_preproc/ingest/watcher.py)
     # exactly -- same construction, `f"{type}: {message}"` or `None` -- for the
     # identical reason: "this root is genuinely empty/fine" and "this root
-    # could not be read at all" must never render identically. It is set from
-    # the walk fault first because that is the more foundational failure --
-    # nothing under `root` could be trusted, not just the disk number -- and
-    # only from the disk fault when the walk itself succeeded (a real, if
-    # narrower, gap: `_candidate_dirs` needs to list `root`'s own entries,
-    # which `scratch_headroom`'s `statvfs` does not, so a `root` whose contents
-    # cannot be listed but can still be `stat`-ed -- e.g. `chmod 000` -- fails
-    # the walk while the disk reads fine, and that reading is kept rather than
-    # suppressed by an unrelated fault).
-    root_error = f"{type(root_fault).__name__}: {root_fault}" if root_fault is not None else None
+    # could not be read at all" must never render identically.
+    #
+    # Kept as its own field rather than merged with the disk fault below (an
+    # earlier version of this function did merge them into one `root_error`,
+    # and review caught it by direct before/after comparison): `_candidate_
+    # dirs` needs to list `root`'s own entries (`iterdir`, which needs
+    # execute permission on `root` itself), while `scratch_headroom`'s
+    # `statvfs` needs only search permission on `root`'s PARENT to reach it
+    # -- not on `root` itself. So a `chmod 000` root fails the walk while the
+    # disk still reads fine, and the merged version rendered that real
+    # reading as "not measured", using the WALK's `PermissionError` for a
+    # disk probe that had, in fact, succeeded. That is the exact inversion
+    # `scratch_headroom`'s own docstring forbids ("must never fall back to a
+    # number" runs the other way here too: a measured disk must never fall
+    # back to looking unmeasured because of an unrelated fault). See
+    # `test_a_walk_fault_does_not_suppress_a_real_disk_reading`.
+    walk_error = f"{type(root_fault).__name__}: {root_fault}" if root_fault is not None else None
     try:
         # `root`, not `/`. `doctor.py` justifies the `/` proxy with "there is
         # no scratch-root configuration to check instead", which is true of
@@ -328,26 +336,29 @@ def gather_readings(
         # different disk than the one the question is about, on any host where
         # scratch is its own mount. `doctor`'s behaviour is unchanged.
         free_gib, headroom_ok = scratch_headroom(str(root))
+        disk_error = None
     except OSError as exc:
         # A missing, unreadable, or unsearchable root reaches `statvfs` too,
         # and the whole point of the guarded walk above is that such a root
         # still produces a report. An unmeasurable disk says so; it must never
         # fall back to a number, and least of all to one reading "(ok)" --
         # `free_gib=0, headroom_ok=False` are placeholders `build_report`
-        # never renders on their own, only ever behind `root_error`.
+        # never renders on their own, only ever behind `disk_error`. Set
+        # independently of `walk_error`, never as a fallback for it -- see
+        # the comment above.
         free_gib, headroom_ok = 0, False
-        if root_error is None:
-            root_error = f"{type(exc).__name__}: {exc}"
+        disk_error = f"{type(exc).__name__}: {exc}"
 
     return Readings(
         at=at,
         ingested=recent,
         quarantined=quarantined,
         stalled=stalled,
+        walk_error=walk_error,
         stale_jobs=count_stale_jobs(),
         free_gib=free_gib,
         headroom_ok=headroom_ok,
-        root_error=root_error,
+        disk_error=disk_error,
     )
 
 
@@ -374,8 +385,8 @@ def build_report(
     q_new_since = landing.to_naive_utc(at - datetime.timedelta(hours=_QUARANTINE_NEW_HOURS))
     older_quarantines = len(ingest.Quarantine & f"failed_at <= '{q_since:%Y-%m-%d %H:%M:%S}'")
 
-    if readings.root_error is not None:
-        disk = f"- scratch (`{root}`): **not measured** — {readings.root_error}"
+    if readings.disk_error is not None:
+        disk = f"- scratch (`{root}`): **not measured** — {readings.disk_error}"
     else:
         disk = (
             f"- scratch (`{root}`): {readings.free_gib} GiB free "
@@ -403,10 +414,10 @@ def build_report(
         ]
 
     lines += ["", f"## Stalled transfers — {len(readings.stalled)}", ""]
-    if readings.root_error is not None:
+    if readings.walk_error is not None:
         # `_candidate_dirs` separates a per-child fault from one that
         # stopped it listing `root` at all -- only the second kind reaches
-        # here (as `readings.root_error`). The first kind is a known gap,
+        # here (as `readings.walk_error`). The first kind is a known gap,
         # not a covered one: a session directory that cannot be read is
         # skipped silently inside `_candidate_dirs` itself, by both `wlpp
         # ingest` (via `scan_once`) and `wlpp report` (via this same walk)
@@ -425,7 +436,7 @@ def build_report(
         # holding no stalled transfer -- the same silence
         # `ScanResult.root_error` exists to break for the scan.
         lines += [
-            f"- **`{root}` was not fully scanned: {readings.root_error}** — "
+            f"- **`{root}` was not fully scanned: {readings.walk_error}** — "
             "the count above covers only what could be read.",
         ]
     lines += [
