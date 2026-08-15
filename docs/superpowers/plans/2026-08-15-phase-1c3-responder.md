@@ -719,7 +719,26 @@ Expected: FAIL — no module.
 
 - [ ] **Step 3: Implement**
 
-`accept` runs in one transaction: insert-if-absent `Montage` from `metadata.montage_boundaries`, insert-if-absent `Block` from `metadata.blocks` with `works_block_id`, then `submit` or `submit_derivative` depending on whether the selection names blocks. Session identity comes from `metadata.subject` plus the selection's `session_datetime`, normalised through `landing.to_naive_utc`, **the same conversion every other datetime in this codebase goes through** — two call sites converting differently is how two equal keys stop being equal.
+**`accept` must NOT wrap this in a transaction of its own.** Both `submit` and
+`submit_derivative` guard on `dj.conn().in_transaction` and raise, because DataJoint
+transactions do not nest — and `submit()`'s own docstring states directly that neither the
+ingest watcher nor the responder may wrap it to bundle it with other writes. The plan said
+"one transaction" here and was wrong; Task 4's review caught it before this task was
+dispatched. Structure it as: insert-if-absent `Montage` from `metadata.montage_boundaries`,
+insert-if-absent `Block` from `metadata.blocks` with `works_block_id`, **each idempotent on its
+own**, and then call `submit` or `submit_derivative` outside any transaction of yours.
+
+That is not a weakening. Those inserts are idempotent by construction — the same property 1c-2
+relies on for having no lock — so a partial `accept` followed by a retry converges on the same
+rows, which is what a transaction would have bought and is the same reasoning `landing.py`
+already records for the ingest path.
+
+**`accept` also owns the montage window.** `ActivationBlock`'s own comment says *"the responder
+(1c-3) is its first writer and owns enforcing the window"*, and `submit_derivative` currently
+accepts a block at `[20.0, 24.0)` against a montage of `[0.0, 12.0)`. No other task in this
+plan mentions it, so it would have shipped unowned with the comment reading as satisfied.
+Reject a selection naming a block outside its montage's `[start_s, end_s)` with a `ValueError`
+naming the offending block, and test it. Session identity comes from `metadata.subject` plus the selection's `session_datetime`, normalised through `landing.to_naive_utc`, **the same conversion every other datetime in this codebase goes through** — two call sites converting differently is how two equal keys stop being equal.
 
 Raise `ValueError` with a plain message for a request whose selection is missing a required key, whose montage boundaries are absent when no montage exists, or whose subject exceeds `landing.SUBJECT_MAX_LEN`.
 

@@ -223,9 +223,18 @@ flight returns the running one instead of starting a second."* Dedupe is a looku
 `selection_hash`, and it is structural rather than a lock — the same shape 1c-1 used for canonical
 activations and for paramset registration.
 
-**The residual 1c-2 recorded closes here.** A reused idempotency key whose original submission
-deduped onto a pre-existing activation could not be compared on selection, because nothing recorded
-which selection it asked for. `selection_hash` is that record.
+**The residual 1c-2 recorded is narrowed here, and does not fully close.** `selection_hash` lets
+a reused key be compared on selection *when that key's own submission produced an activation*. It
+cannot reach the case 1c-2 actually described — a key whose **first** submission deduped onto a
+pre-existing activation — because in that case no `Activation` row names the `Request` at all, so
+there is nothing to compare the hash against. The record lives on a row that does not exist.
+
+**Corrected 2026-08-15 by Task 4's review**, which reproduced it with three ordinary sequential
+calls and no race. An earlier draft of this section claimed the residual closed, and the
+implementation faithfully carried that claim into two docstrings before the review caught it.
+Closing it properly needs the `Request` row to record the selection it asked for, independently
+of whether an activation resulted — which is a change to `Request`, not to `Activation`, and is
+left open rather than smuggled in here.
 
 ---
 
