@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from wl_sync.log import SyncBoxLogHeader
 
+from wl_preproc.contracts.done import DoneMarker
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.protocol import HealthResponse, JobRequest
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
@@ -28,6 +29,7 @@ from wl_preproc.schema import DEFAULT_PREFIX
 
 EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "session_manifest": SessionManifest,
+    "done_marker": DoneMarker,
     "behavior_camera_sidecar": BehaviorCameraSidecar,
     "syncbox_log_header": SyncBoxLogHeader,
     "health_response": HealthResponse,
@@ -76,6 +78,21 @@ def main(argv: list[str] | None = None) -> int:
     # DEFAULT_PREFIX, not a second literal: the prefix carries its own
     # separator and a copy here is exactly how `wlpplab` would come back.
     daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
+    ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    ingest_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    ingest_parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="skip checksum verification; records integrity as 'skipped' rather than "
+        "claiming a check that did not run",
+    )
+
+    report_parser = subparsers.add_parser("report", help="write the daily status report")
+    report_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
+    report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     try:
         args = parser.parse_args(argv)
@@ -136,6 +153,60 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {err}")
         else:
             print("errors: none")
+        return 0
+
+    if args.group == "ingest":
+        # `Path` is not re-imported here: it is already a module-level import
+        # above (line 16), used unconditionally by `schemas export`'s own
+        # `--out` argument. A second `from pathlib import Path` inside this
+        # branch would make the compiler treat `Path` as local to the whole
+        # `main()` function rather than shadowing it only here -- Python
+        # decides a name's scope for an entire function from every assignment
+        # anywhere in its body, not per-branch -- which raises
+        # `UnboundLocalError` on the *earlier*, unconditional
+        # `export.add_argument("--out", ..., type=Path)` call before this
+        # branch is ever reached, for every subcommand, not just `ingest`.
+        # Found by running the full suite after adding this branch: every CLI
+        # guardrail test failed with exactly that traceback.
+        from wl_preproc.ingest.watcher import scan_once
+
+        result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
+        # Outcomes are printed FIRST, unconditionally, before root_error is
+        # even inspected: a mid-walk fault (root.iterdir()'s own next() call
+        # raising after already yielding some children -- see
+        # _candidate_dirs) still leaves scan_once processing every candidate
+        # collected before the fault, real Ingestion/Quarantine rows and
+        # all. Returning early on root_error used to discard every one of
+        # those from this report -- real work that happened, silently
+        # dropped from the one place an operator would see it.
+        for session_dir, outcome in sorted(result.outcomes.items()):
+            print(f"  [{outcome}] {session_dir}")
+        if result.root_error is not None:
+            # An unreadable, missing, or mistyped --root produces the same
+            # empty outcomes dict a genuinely empty root does -- exit 0, no
+            # output either way, unless this is checked. A typo, an
+            # unmounted NAS, or an ACL slip on the storage root silently
+            # reporting success is exactly "a session simply never appears"
+            # arriving through the front door instead of a stalled transfer.
+            print(f"error: {args.root} was not fully scanned: {result.root_error}")
+            return 1
+        return 0
+
+    if args.group == "report":
+        # `Path` is not re-imported here, for the identical reason the
+        # `ingest` branch above states in full: it is already a module-level
+        # import (line 16), used unconditionally by `schemas export`'s own
+        # `--out` argument, and a second `from pathlib import Path` anywhere
+        # in main()'s body would make the compiler treat `Path` as local to
+        # the WHOLE function rather than just this branch -- raising
+        # UnboundLocalError at the earlier, unconditional
+        # `export.add_argument("--out", ..., type=Path)` call for every
+        # subcommand, not just `report`. This is exactly the defect Task 8
+        # found and fixed for `ingest`; the brief for this task repeated it.
+        from wl_preproc.cli.report import write_report
+
+        path = write_report(Path(args.out), Path(args.root), prefix=args.prefix)
+        print(path.read_text(), end="")
         return 0
 
     return 2

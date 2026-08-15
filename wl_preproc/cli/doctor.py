@@ -14,6 +14,31 @@ import shutil
 _MIN_SCRATCH_FREE_GIB = 800
 
 
+def scratch_headroom(path: str = "/") -> tuple[int, bool]:
+    """Free GiB at `path`, and whether it clears the floor.
+
+    Extracted from `run_checks` so the daily report reuses this rather than
+    reimplementing it — two definitions of "enough disk" that could disagree is
+    exactly the drift worth preventing while there is still only one.
+
+    The `/` DEFAULT is a proxy, and only for callers with nothing better:
+    there is no scratch-root configuration to check instead, since
+    SessionLayout takes its root as a caller-supplied argument rather than a
+    resolved constant. That is true of `run_checks` below -- `wlpp doctor` is
+    handed no path at all -- and false of any caller that already holds a
+    storage root, which should pass it. `wl_preproc/cli/report.py` does; it
+    used to accept the default and report `/`'s free space under a heading
+    claiming to track the scratch disk.
+
+    Raises whatever `os.statvfs` raises for a missing or unsearchable `path`.
+    A caller that must produce output regardless -- again, the report -- is
+    the one that has to decide what an unmeasurable disk renders as, and it
+    must never be a number.
+    """
+    free_gib = shutil.disk_usage(path).free // 2**30
+    return free_gib, free_gib >= _MIN_SCRATCH_FREE_GIB
+
+
 def run_checks() -> list[str]:
     """Run each check, print a line per check, and return the failures."""
     failures: list[str] = []
@@ -50,11 +75,10 @@ def run_checks() -> list[str]:
     # otherwise — and it is a real threshold, not a bound that can only ever
     # read "ok": a disk with less free space than one session needs while
     # processing is not actually ready, whatever else is true of it.
-    usage = shutil.disk_usage("/")
-    free_gib = usage.free // 2**30
+    free_gib, headroom_ok = scratch_headroom()
     report(
         "scratch headroom",
-        free_gib >= _MIN_SCRATCH_FREE_GIB,
+        headroom_ok,
         f"{free_gib} GiB free on / (proxy for the scratch mount; "
         f"floor is {_MIN_SCRATCH_FREE_GIB} GiB, one dual-probe session's worth)",
     )

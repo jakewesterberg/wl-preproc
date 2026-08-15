@@ -60,3 +60,26 @@ def test_doctor_runs_and_reports_checks():
     combined = result.stdout + result.stderr
     for check in ("database", "scratch", "stale jobs"):
         assert check.lower() in combined.lower(), check
+
+
+def test_ingest_requires_a_root_argument():
+    """`--root` has no default, and proving that needs no database: argparse
+    rejects the missing argument before `wlpp ingest` ever tries to connect to
+    one — the same reasoning `test_delete_refuses_without_explicit_confirmation`
+    above relies on for `delete`'s own refusal path."""
+    result = _run("ingest")
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode == 2, f"expected argparse's usage error, got {result.returncode}"
+    assert "traceback" not in combined
+
+
+def test_report_requires_a_root_argument():
+    """The mirror of `test_ingest_requires_a_root_argument` for `wlpp report`:
+    `--root` has no default there either (the stalled-transfers section walks
+    it directly), and argparse rejects the missing argument before `report`
+    ever tries to connect to a database — no DB needed to prove it."""
+    result = _run("report")
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode == 2, f"expected argparse's usage error, got {result.returncode}"
+    assert "traceback" not in combined
+    assert "--root" in combined
