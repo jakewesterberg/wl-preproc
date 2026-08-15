@@ -13,6 +13,7 @@ import pytest
 import yaml
 from wl_sync.session import SessionId
 
+from wl_preproc.contracts.done import blake3_file
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.ingest.sentinel import MarkerState, read_marker
@@ -196,6 +197,133 @@ def test_a_corrupt_marker_downgrades_rather_than_silently_verifying(session):
 
     assert integrity is Integrity.DECLARED_ONLY
     assert mismatches == []
+
+
+# --- Beyond the brief, round 2: FileEntry.path's contract-level validator
+# (contracts/done.py) rejects `..` and absolute strings, but it sees a bare
+# string with no filesystem access and no knowledge of any particular
+# system_dir -- it cannot see a *symlink* planted inside a real system
+# directory whose target, once resolved, is outside the tree, even though the
+# declared path itself is clean and relative. This transfer runs as
+# `rsync -a`, which preserves source-side symlinks verbatim unless
+# `--safe-links` is passed, so a leftover convenience link on a rig -- pointing
+# at a shared calibration file, an old mount, anything -- reaches this
+# function with no malice at all, the same accident shape as the reversed
+# `relpath` call that justified the string-level check in the first place.
+# Both tests below use a real symlink, not a monkeypatch: the whole point is
+# what the real filesystem does when asked to resolve one.
+
+
+def test_a_symlink_escaping_the_system_directory_is_caught(session, tmp_path):
+    """The declared path is clean, relative, and `..`-free -- it would pass
+    FileEntry.path's own validator -- but the file it names is a symlink
+    pointing entirely outside the session tree. The planted target's size and
+    hash are made to match what gets declared exactly, so if the containment
+    check did not run, or ran after the size/hash comparison instead of
+    before it, this would read VERIFIED with an empty mismatch list, the
+    exact silent failure mode the review reproduced against the pre-fix
+    code."""
+    layout, manifest = session
+    system_dir = layout.system_dir("spikeglx")
+
+    outside = tmp_path / "outside_the_session_tree.dat"
+    payload = b"planted entirely outside system_dir, on purpose"
+    outside.write_bytes(payload)
+
+    link = system_dir / "sneaky.dat"
+    link.symlink_to(outside)
+    expected_resolved = link.resolve()
+    assert not expected_resolved.is_relative_to(system_dir.resolve()), (
+        "test setup bug: the symlink must actually resolve outside system_dir"
+    )
+
+    marker_path = layout.done_marker("spikeglx")
+    raw = yaml.safe_load(marker_path.read_text())
+    raw["files"].append(
+        {"path": "sneaky.dat", "bytes": len(payload), "blake3": blake3_file(outside)}
+    )
+    marker_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    integrity, mismatches = verify_session(layout, manifest)
+
+    assert integrity is Integrity.VERIFIED
+    assert len(mismatches) == 1
+    assert mismatches[0].system == "spikeglx"
+    assert mismatches[0].path == "sneaky.dat"
+    assert mismatches[0].problem == f"escapes_system_dir: {expected_resolved}"
+
+
+def test_a_symlink_loop_is_reported_not_raised(session):
+    """Found while implementing the escape check above, not asked for: proving
+    resolve() is safe to call unconditionally meant checking what it does on
+    every input it might realistically see, and a self-referential symlink
+    pair is one of them. `Path.resolve()`'s default strict=False swallows
+    OSError internally (confirmed by reading posixpath._joinrealpath's
+    source, not assumed) for a missing or permission-denied path -- but a
+    genuine symlink loop is the one case pathlib deliberately reports instead
+    of swallowing, and it does so as RuntimeError, not OSError. Confirmed
+    empirically to be a live 3.11-vs-3.13 gap the same shape as the rglob one
+    discover.py already documents: on this project's 3.11 floor, a two-symlink
+    loop makes resolve() raise RuntimeError, uncaught by a bare
+    `except OSError` -- which would abort this entire scan over one broken
+    symlink, not just misreport the one entry. On 3.13 the same loop raises
+    nothing and resolve() returns the unresolved path, which falls through to
+    is_file() correctly returning False. The assertion below only pins what
+    is true on both: no exception escapes, and exactly one mismatch is
+    reported for the one broken entry -- not the exact problem string, which
+    is version-dependent by the above."""
+    layout, manifest = session
+    system_dir = layout.system_dir("spikeglx")
+
+    loop_a = system_dir / "loop_a.dat"
+    loop_b = system_dir / "loop_b.dat"
+    loop_a.symlink_to(loop_b)
+    loop_b.symlink_to(loop_a)
+
+    marker_path = layout.done_marker("spikeglx")
+    raw = yaml.safe_load(marker_path.read_text())
+    raw["files"].append({"path": "loop_a.dat", "bytes": 0, "blake3": "0" * 64})
+    marker_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    integrity, mismatches = verify_session(layout, manifest)
+
+    assert integrity is Integrity.VERIFIED
+    assert len(mismatches) == 1
+    assert mismatches[0].system == "spikeglx"
+    assert mismatches[0].path == "loop_a.dat"
+    assert mismatches[0].problem == "missing" or mismatches[0].problem.startswith(
+        "unreadable: Symlink loop"
+    )
+
+
+def test_a_non_encodable_path_still_reports_missing_rather_than_crashing(session):
+    """A regression this round's own reordering created and then had to close,
+    found while checking the two edge cases the round-3 review named as
+    harmless and told me not to fix: an empty-string path (unaffected --
+    still resolves to system_dir itself, still falls through to "missing")
+    and a NUL-byte path, which was *not* unaffected. Before this round,
+    candidate.is_file() ran first, and pathlib.Path.is_file has its own
+    `except ValueError: return False` for a non-encodable path -- confirmed
+    from source. candidate.resolve() now runs first and has no equivalent
+    catch -- also confirmed from source, then empirically, since resolve()
+    raises ValueError directly for the identical input. Run against the
+    pre-ValueError-clause code, this exact scenario raised uncaught out of
+    verify_session, silently turning a case the review explicitly signed off
+    on as harmless into a crash, purely as a side effect of the ordering this
+    round introduces for an unrelated reason. This test exists so that
+    regression cannot return unnoticed."""
+    layout, manifest = session
+    marker_path = layout.done_marker("spikeglx")
+    raw = yaml.safe_load(marker_path.read_text())
+    raw["files"].append({"path": "bad\x00name.dat", "bytes": 0, "blake3": "0" * 64})
+    marker_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    integrity, mismatches = verify_session(layout, manifest)
+
+    assert integrity is Integrity.VERIFIED
+    assert [m.problem for m in mismatches] == ["missing"]
+    assert mismatches[0].system == "spikeglx"
+    assert mismatches[0].path == "bad\x00name.dat"
 
 
 # --- Beyond the brief: the filesystem calls verify_session makes on a file it
