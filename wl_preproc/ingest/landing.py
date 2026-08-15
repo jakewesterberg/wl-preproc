@@ -307,10 +307,10 @@ def land_session(
 
 
 def _clamp_key(value: str, max_len: int) -> str:
-    """Shorten `value` to at most `max_len` characters, folding a short
-    digest of the FULL, untruncated value into the tail so two different
-    values sharing a long common prefix produce DIFFERENT results, not the
-    same one.
+    """Shorten `value` to AT MOST `max_len` characters -- unconditionally,
+    for any `max_len` -- folding a digest of the FULL, untruncated value
+    into the tail so two different values sharing a long common prefix
+    produce DIFFERENT results, not the same one.
 
     A naive `value[:max_len]` slice -- what this function replaced -- is
     exactly the wrong choice for what this project's own nested-storage-root
@@ -330,18 +330,58 @@ def _clamp_key(value: str, max_len: int) -> str:
     merely shortened in it.
 
     A digest of the FULL string breaks that tie: two different full values
-    produce different digests with overwhelming probability
-    (`digest_size=8`, 64 bits -- the same size `paramset.content_hash`
-    already uses for an unrelated short-string-to-stable-identifier
-    problem), so `replace=True` on the resulting key keeps meaning "the same
-    directory, scanned again" rather than "some other directory sharing this
-    root's long prefix". Deterministic in `value` alone, so re-quarantining
-    the identical directory on a later scan still produces the identical
-    clamped key and still updates the same row, exactly as before this fix.
+    produce different digests with overwhelming probability. At full
+    strength (`digest_size=8`, 64 bits -- reused from `paramset.
+    content_hash`'s own `hashlib.blake2b` call for a similarly-shaped
+    short-string-to-stable-identifier problem, though that function uses
+    `digest_size=16`/128 bits for a different reason: its input is
+    arbitrary user-supplied params content, not a bounded filesystem path,
+    and collision cost there is a silently-merged paramset rather than a
+    quarantine row an operator can still find via `untruncated_session_dir`)
+    the birthday-bound collision probability across 10,000 distinct
+    directories sharing one over-long root is `10_000**2 / (2 * 2**64)` ≈
+    2.7e-12 -- confirmed by direct computation, not eyeballed. `replace=True`
+    on the resulting key keeps meaning "the same directory, scanned again"
+    rather than "some other directory sharing this root's long prefix", and
+    is deterministic in `value` alone: re-quarantining the identical
+    directory on a later scan still produces the identical clamped key and
+    still updates the same row, exactly as before this fix.
+
+    TOTAL for every `max_len`, including ones far below what a 17-character
+    suffix (`"~"` plus 16 hex digits) needs -- an earlier version of this
+    function was not: `value[: max_len - len(suffix)] + suffix` with
+    `max_len < len(suffix)` gives a NEGATIVE slice start, which Python reads
+    as "all but the last `|max_len - len(suffix)|` characters", not
+    "nothing" -- confirmed directly, `max_len=8` against that version
+    returned a 108-character string, LONGER than the input was ever allowed
+    to become. `QUARANTINE_SESSION_DIR_MAX_LEN` (255) and
+    `QUARANTINE_SUBJECT_MAX_LEN` (32) both clear the 17-character floor
+    safely, but `SUBJECT_MAX_LEN` (8) -- unused by this function today, but
+    a real, already-defined constant in this same module -- would not have,
+    and a broken clamp is exactly the `DataError` at insert this whole
+    function exists to prevent, not a smaller version of it. Below the
+    floor, the digest itself shrinks to whatever hex budget remains after
+    reserving one character for the `"~"` separator, rather than staying
+    fixed size and blowing the budget; collision resistance degrades
+    gracefully with the space available down to `max_len=3` (a 1-byte/2-hex
+    digest), and degrades to a plain, unadorned slice below that, since
+    there is no room left for any digest at all. `max_len <= 0` returns the
+    empty string, the only value that can honestly claim to be "at most
+    zero characters".
     """
+    if max_len <= 0:
+        return ""
     if len(value) <= max_len:
         return value
-    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).hexdigest()
+    # Reserve one character for "~", then give the digest whatever hex
+    # budget remains, capped at 16 (the full digest_size=8 described above).
+    # digest_size is in BYTES, so the hex budget halves and floors -- an odd
+    # remainder is not a valid digest_size and is simply left unused.
+    hex_budget = max(0, min(16, max_len - 1))
+    digest_size = hex_budget // 2
+    if digest_size <= 0:
+        return value[:max_len]
+    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=digest_size).hexdigest()
     suffix = f"~{digest}"
     return value[: max_len - len(suffix)] + suffix
 

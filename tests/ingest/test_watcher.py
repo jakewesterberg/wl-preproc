@@ -245,16 +245,21 @@ def test_an_unparseable_manifest_quarantines_with_no_session_key(root):
 
 def test_a_corrupted_file_quarantines_as_checksum_mismatch(root):
     """A dedicated subject: `verify_session`, where a checksum mismatch is
-    found, runs well after `already_ingested` -- and, as of round 3 review,
-    that is no longer true of every manifest-level rejection uniformly.
-    `session_id_mismatch` (and the newer `session_dir_unrepresentable`) run
-    BEFORE `already_ingested`, since neither depends on a global that can
-    drift after landing; `manifest_schema_version` and
-    `subject_unrepresentable` stay AFTER it, deliberately, since both do
-    (see `_evaluate_session`'s own docstring for the full reasoning). This
-    test's own check runs later still, so it depends on "pico" not already
-    being ingested regardless -- a dependency on file-wide state this file
-    was corrected away from elsewhere (see
+    found, runs well after `already_ingested` -- and that is no longer true
+    of every manifest-level rejection uniformly. `session_id_mismatch` is
+    the ONE check that runs BEFORE `already_ingested`, since it depends on
+    nothing that can drift out from under an already-landed session -- it
+    compares only the directory's own basename against the manifest.
+    `manifest_schema_version`, `subject_unrepresentable`, and (moved there
+    in round 4 review, after living above `already_ingested` through round
+    3 -- see `_evaluate_session`'s own docstring for why that was itself a
+    bug) `session_dir_unrepresentable` all stay AFTER it, deliberately,
+    since each reads something that CAN drift: a deployed `SCHEMA_VERSION`,
+    an installed dependency's column width, or the full path under an
+    operator-supplied `--root`. This test's own check runs later still, so
+    it depends on "pico" not already being ingested regardless -- a
+    dependency on file-wide state this file was corrected away from
+    elsewhere (see
     `test_a_directory_without_a_manifest_is_ignored_entirely`'s docstring),
     so it gets the same fix here rather than staying merely-currently-safe.
     """

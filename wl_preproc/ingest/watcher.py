@@ -223,6 +223,32 @@ def _evaluate_session(
       can drift -- and the identity confusion it exists to catch cannot be
       un-caught by something that happens to have already landed under the
       WRONG identity.
+
+    This is not exhaustive, and round 5 review found the gap: the manifest
+    READ/PARSE itself -- below, before any of the four checks above -- also
+    sits above `already_ingested`, and its bytes CAN change out from under
+    an already-landed session (disk corruption, a post-landing edit), which
+    reproduces the identical section-9 contradiction on every poll.
+    Confirmed live: land a session, then corrupt that session's OWN manifest
+    file, then poll twice more -- a fresh `manifest_invalid` Quarantine row
+    is written on EVERY poll while the `Ingestion` row from the original,
+    successful landing stays, so the one session is genuinely listed under
+    both. Unlike every check above, this one cannot be moved: `already_
+    ingested`'s own key (`manifest_session_key`, `subject` and
+    `session_datetime`) is DERIVED from the parsed manifest, so checking it
+    before the parse has succeeded is not merely a worse ordering, it is not
+    an operation that can be performed at all -- there is no key to check
+    yet. Accepted as a residual, not fixed, for this round: a manifest that
+    was readable at landing time and becomes unreadable afterward is
+    arguably a different kind of event from the other three (pipeline-side
+    drift against an unchanged session) -- it means something about THAT
+    file, on disk, right now, is actually wrong, and an ongoing alarm on
+    every poll until an operator addresses it is not obviously the wrong
+    behaviour the way silently re-quarantining a perfectly good session is.
+    That argument has not been reviewed, and this residual has not been
+    weighed against design section 9 as carefully as the four cases above
+    were -- recorded here precisely so it is not mistaken for a closed
+    question.
     """
     try:
         raw = (session_dir / MANIFEST_FILENAME).read_bytes()

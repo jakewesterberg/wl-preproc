@@ -220,7 +220,7 @@ def test_quarantine_omits_a_subject_too_long_for_its_own_column(activated):
     assert row["subject"] is None
 
 
-def test_quarantine_truncates_a_session_dir_too_long_for_the_primary_key(activated):
+def test_quarantine_clamps_a_session_dir_too_long_for_the_primary_key(activated):
     """`session_dir` IS `Quarantine`'s primary key and cannot be null, so an
     oversized one is shortened rather than omitted — the only structurally
     available option for a value that must be written and cannot fit. A 265-
@@ -311,6 +311,47 @@ def test_quarantine_gives_two_paths_sharing_a_long_prefix_distinct_stored_keys(a
     row_b = (ingest.Quarantine & {"session_dir": clamped_b}).fetch1()
     assert row_a["detail"] == {"which": "a", "untruncated_session_dir": path_a}
     assert row_b["detail"] == {"which": "b", "untruncated_session_dir": path_b}
+
+
+def test_clamp_key_never_exceeds_max_len_even_below_the_digest_floor(activated):
+    """Round 5 review: an earlier version of `_clamp_key` was not total
+    below `max_len=17` (the width of `"~"` plus the 16 hex digits a full
+    `digest_size=8` digest produces) -- `value[: max_len - len(suffix)] +
+    suffix` with `max_len < len(suffix)` gives a NEGATIVE slice start,
+    which Python reads as "all but the last `N` characters", not "nothing".
+    Confirmed directly (before writing this test's assertion, not assumed):
+    `max_len=8` against that version returned a 108-character string --
+    LONGER than the input was ever allowed to become.
+
+    `QUARANTINE_SESSION_DIR_MAX_LEN` (255) and `QUARANTINE_SUBJECT_MAX_LEN`
+    (32) both clear the floor safely, which is why this shipped unnoticed
+    for two review rounds -- but `SUBJECT_MAX_LEN` (8), unused by this
+    function today but a real, already-defined constant in this same
+    module, would not have, and a broken clamp produces exactly the
+    `DataError` at insert `_clamp_key` exists to prevent, not a smaller
+    version of it. Every `max_len` this module actually declares is
+    exercised, plus the boundary values (`17`, `16`, the digest floor
+    itself) and the pathological ones (`0`, negative) `_clamp_key`'s own
+    docstring now promises to handle.
+    """
+    long_value = "/" + ("q" * 400)  # longer than every max_len below
+    for max_len in (
+        QUARANTINE_SESSION_DIR_MAX_LEN,  # 255
+        QUARANTINE_SUBJECT_MAX_LEN,  # 32
+        17,
+        16,
+        SUBJECT_MAX_LEN,  # 8 -- the reviewer's own named broken case
+        3,
+        2,
+        1,
+        0,
+        -5,
+    ):
+        result = _clamp_key(long_value, max_len)
+        assert len(result) <= max(max_len, 0), (
+            f"max_len={max_len}: expected len(result) <= {max(max_len, 0)}, "
+            f"got {len(result)} ({result!r})"
+        )
 
 
 # --- Beyond the brief ---------------------------------------------------
