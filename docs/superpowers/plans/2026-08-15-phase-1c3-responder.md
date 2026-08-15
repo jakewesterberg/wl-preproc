@@ -586,7 +586,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Prove it does not write**
 
-Add a test that snapshots rows around `build_health` using `report.py`'s `_table_snapshot`/`_deep_equal`, then mutate `build_health` to insert a `Quarantine` row and confirm the test fails. Restore. **Do not use `in_transaction`** — DataJoint's `insert()` never touches it.
+Add a test that snapshots rows around `build_health` using `tests/conftest.py`'s `table_snapshot`/`deep_equal` — moved there in Task 1, step 3a — then mutate `build_health` to insert a `Quarantine` row and confirm the test fails. Restore. **Do not use `in_transaction`** — DataJoint's `insert()` never touches it, so it is equally `False` for a writing function and a reading one.
 
 - [ ] **Step 6: Commit**
 
