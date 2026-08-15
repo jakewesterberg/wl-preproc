@@ -234,17 +234,32 @@ def _reject_key_reuse(
     adding a column nothing consumes was declined for 1c-1 and is equally free
     in 1c-3, which is pre-data too.
 
-    **What this also checks, for a derivative.** `selection_key` is an
-    arbitrary dict compared attribute-by-attribute against each produced row,
-    so `submit_derivative` widens the check for free by naming one more
-    attribute: `selection_hash`. A key that already produced a derivative
-    `Activation` is then checked against that activation's block-set hash too,
-    not just its session and montage — closing exactly the gap 1c-2 recorded
-    against this column: the same key arriving twice with a different block
-    set. `submit()`'s canonical `selection_key` never names `selection_hash`
-    (a canonical's is always null — see `Activation`'s definition), so this
-    is inert for canonical submissions; it only fires when the caller asks
-    for it.
+    **What this also checks — and does not — for a derivative.**
+    `selection_key` is an arbitrary dict compared attribute-by-attribute
+    against each produced row, so `submit_derivative` widens the check for
+    free by naming one more attribute: `selection_hash`. This closes the gap
+    only when the key's OWN submission is what produced the row being
+    compared against — i.e., when `produced` above is non-empty because
+    THIS key's earlier call inserted a fresh derivative `Activation`, rather
+    than deduping onto one created under a different key. In that case, a
+    later call under the same key naming a different block set is now
+    caught, not just a different session or montage.
+
+    It does **not** close the residual the previous paragraph describes. If
+    the key's first submission instead deduped onto a pre-existing
+    derivative created by some OTHER key, no row names this key at all —
+    `produced` is empty, exactly as above — and a second call under this key
+    with a *different* block set is silently accepted, allocating its own
+    activation, rather than refused. That is the same hole the previous
+    paragraph describes, for a derivative rather than a canonical, and this
+    column alone cannot close it: closing it needs a selection recorded on
+    `Request` itself, which remains out of scope here, exactly as the
+    previous paragraph already says.
+
+    `submit()`'s canonical `selection_key` never names `selection_hash` (a
+    canonical's is always null — see `Activation`'s definition), so this
+    paragraph is inert for canonical submissions; it only fires when a caller
+    (only `submit_derivative` does) asks for it.
     """
     conflicts = []
     if stored["task_type"] != task_type:
@@ -340,6 +355,22 @@ def submit(
     selection_key = {
         k: selection[k] for k in ("subject", "session_datetime", "montage_id")
     }
+    # role="canonical" added alongside the fix below (Task 4, review round 2):
+    # a bare selection_key names only the three montage attributes, which a
+    # derivative sharing that montage satisfies trivially. Before
+    # submit_derivative existed there was nothing else a produced row could
+    # be, so the gap was invisible; now, the same key used first for
+    # submit_derivative() and then for submit() found its own derivative row
+    # in _reject_key_reuse's `produced`, matched on those three attributes,
+    # and was accepted as a retry it never was -- creating a second
+    # Activation (a canonical one, at activation_id 0) under a key that had
+    # already produced a derivative. `role` closes it the same way
+    # submit_derivative's `selection_hash` addition closes the analogous gap
+    # in the other direction: naming one more attribute in the same generic,
+    # already-generic comparison. See _reject_key_reuse's docstring and
+    # test_reusing_a_derivative_key_for_submit_is_refused /
+    # test_reusing_a_submit_key_for_a_derivative_is_refused.
+    canonical_selection_key = {**selection_key, "role": "canonical"}
 
     with dj.conn().transaction:
         # Read before writing, rather than `insert1(..., skip_duplicates=True)`:
@@ -354,7 +385,7 @@ def submit(
                 origin=origin,
                 payload=payload,
                 requested_by=requested_by,
-                selection_key=selection_key,
+                selection_key=canonical_selection_key,
             )
         else:
             # No skip_duplicates: the only duplicate reachable here is another
@@ -372,24 +403,23 @@ def submit(
                 }
             )
 
-        existing = Activation & {**selection_key, "role": "canonical"}
+        # role="canonical" (canonical_selection_key, built above): before
+        # submit_derivative existed, submit() was the only writer of
+        # Activation, so every row sharing selection_key was necessarily a
+        # canonical and an unscoped match could not find anything else.
+        # submit_derivative can now leave a derivative on this exact
+        # (subject, session_datetime, montage_id) with no canonical yet —
+        # see its own docstring on why activation_id 0 is reserved for
+        # exactly this reason — and an unscoped match here would fetch1()
+        # that derivative and return ITS activation_id as though it were the
+        # canonical result: caught live by
+        # test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero
+        # in tests/schema/test_request.py.
+        existing = Activation & canonical_selection_key
         if existing:
             # One fetch1() for the whole row rather than one per key
             # attribute — Activation's key has four parts, so the brief's
             # dict-comprehension form issued four SELECTs for this branch.
-            #
-            # role="canonical" — added alongside submit_derivative (Task 4).
-            # Before submit_derivative existed, submit() was the only writer
-            # of Activation, so every row sharing this selection_key was
-            # necessarily a canonical and an unscoped match could not find
-            # anything else. submit_derivative can now leave a derivative on
-            # this exact (subject, session_datetime, montage_id) with no
-            # canonical yet — see its own docstring on why activation_id 0 is
-            # reserved for exactly this reason — and an unscoped match here
-            # would fetch1() that derivative and return ITS activation_id as
-            # though it were the canonical result: caught live by
-            # test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero
-            # in tests/schema/test_request.py.
             row = existing.fetch1()
             return {k: row[k] for k in Activation.primary_key}
 
@@ -404,6 +434,72 @@ def submit(
             skip_duplicates=True,
         )
         return key
+
+
+# submit_derivative's allocate-then-insert step reads the current max
+# activation_id and writes max+1 with no lock, so concurrent derivative
+# submissions on the same montage can race for the same id -- section 11.3
+# expects exactly this ("concurrent runs are legitimate and expected"). A
+# bounded retry resolves it, mirroring paramset.register's own retry loop;
+# see submit_derivative's docstring ("2. Index allocation...") for why the
+# two reads inside that retry cannot be DataJoint's normal (non-locking)
+# read here, unlike in paramset.register.
+_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS = 10
+
+
+def _insert_new_derivative(row: dict) -> None:
+    """The single write submit_derivative uses to claim a fresh activation_id.
+
+    Split out from submit_derivative purely so tests can simulate the
+    concurrent-allocation collision race by making this one call raise a
+    duplicate-key error, without reaching into DataJoint's table-class
+    dispatch machinery to intercept insert1 directly. Exactly
+    `paramset._insert_new`'s reason for existing, and `paramset.register`'s
+    own test (`test_register_recovers_from_a_concurrent_index_collision`)
+    already demonstrates one way to exercise the seam it creates: a
+    same-connection call that plants a rival row before calling through to
+    the real insert. submit_derivative's own tests additionally use a
+    genuinely separate connection for this, because the same-connection
+    trick cannot exercise the locking-read fix `_locking_read` exists for —
+    a single connection always sees its own writes regardless of isolation
+    level, which is exactly what would hide a bug there. See test_request.py.
+    """
+    Activation.insert1(row, skip_duplicates=False)
+
+
+def _locking_read(query_expression) -> list[dict]:
+    """`query_expression`'s rows, read via `LOCK IN SHARE MODE` rather than
+    DataJoint's normal (non-locking) read.
+
+    DataJoint opens every transaction with `START TRANSACTION WITH
+    CONSISTENT SNAPSHOT` (confirmed in the installed 2.3.2 package,
+    `datajoint/adapters/mysql.py`), which fixes an ordinary SELECT's view of
+    the database to what existed when the transaction opened. Verified live
+    against a real MySQL 8.0 instance before writing this: inside an open
+    transaction, a plain SELECT did not see a row a SEPARATE connection
+    committed afterward, while the identical query with `LOCK IN SHARE MODE`
+    appended did — and the INSERT-level uniqueness check that raises
+    `DuplicateError` is unaffected either way, since it is never
+    snapshot-limited. `submit_derivative`'s retry loop needs to see a
+    rival's just-committed row for real, to tell "identical selection, not
+    contention" from "genuine contention" the way section 11.3 requires —
+    which a plain re-read cannot do under this project's actual transaction
+    semantics, and which the same-connection trick
+    `tests/schema/test_paramset.py` uses for `paramset.register`'s own retry
+    test cannot expose either: a single connection always sees its own
+    writes, committed or not, regardless of isolation level.
+
+    Built on `make_sql()` — DataJoint's own SELECT-generation — rather than
+    hand-written SQL, so quoting, datetime formatting, and NULL comparisons
+    stay exactly what DataJoint would already produce for this query;
+    `LOCK IN SHARE MODE` is the only part added here. DataJoint has no
+    locking-read method of its own to call instead (checked: no `for_update`
+    argument or equivalent anywhere in its public API), which is why this
+    drops to `dj.conn().query()`, the same primitive `Connection.transaction`
+    itself is built on.
+    """
+    cursor = dj.conn().query(query_expression.make_sql() + " LOCK IN SHARE MODE", as_dict=True)
+    return list(cursor.fetchall())
 
 
 def submit_derivative(
@@ -435,27 +531,61 @@ def submit_derivative(
     shape ``submit()`` uses for canonical dedupe, keyed on the hash instead
     of on (session, montage) alone.
 
-    **2. Index allocation lets a collision raise.** A derivative needs a real
-    ``activation_id`` allocator — ``submit()`` can pin ``0`` only because its
-    dedupe returns early on ANY existing canonical, so it never allocates a
-    second one. Here, ``activation_id`` is read as the current max for this
-    montage and written as ``max + 1``, inside this same transaction, with NO
+    **2. Index allocation retries on a real collision, resolving it the way
+    section 11.3 requires.** A derivative needs a real ``activation_id``
+    allocator — ``submit()`` can pin ``0`` only because its dedupe returns
+    early on ANY existing canonical, so it never allocates a second one.
+    Here, ``activation_id`` is read as the current max for this montage and
+    written as ``max + 1``, inside this same transaction, with NO
     ``skip_duplicates``: a primary-key collision must raise rather than be
     silently absorbed, the identical reasoning ``paramset.register`` documents
     at length for its own index allocation — ``skip_duplicates`` cannot tell
     "someone else already claimed this id for the same selection" from
     "someone else claimed it for a DIFFERENT one", and would discard this
     submission's row under no index at all rather than surface the collision.
-    Unlike ``paramset.register``, there is no bounded retry loop: that
-    function's retries make sense because each attempt is its own
-    auto-committing statement outside any transaction; every allocation
-    attempt here already happens inside ``submit_derivative``'s one
-    transaction, so a collision means another writer committed between this
-    transaction's read of the max and its own insert, and the whole
-    submission fails loudly rather than retrying reads against a snapshot
-    that is now known stale. The caller retries by calling
-    ``submit_derivative`` again, a fresh transaction with a fresh snapshot —
-    the same way any caller recovers from a transient DataJoint error.
+
+    A raised collision is then handled the way ``paramset.register`` handles
+    its own, bounded at ``_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS`` attempts:
+    re-check whether the rival that just won this id shares this exact
+    selection (``selection_hash`` included). If it does, that is not
+    contention — just a lost race to write something equivalent — and
+    section 11.3's "returns the running one instead of starting a second"
+    applies exactly as it does for the sequential case, so the rival's key
+    is returned rather than raising. A previous version of this function
+    stopped here and let the collision raise unconditionally, which is wrong
+    for exactly this case: two researchers submitting the identical
+    selection concurrently is the ordinary shape of "legitimate and
+    expected" concurrent runs section 11.3 describes, not an error. If the
+    rival's selection differs, this is genuine contention over the same id
+    for two different asks, so the allocation retries against a fresh read
+    of the current max, so the second researcher's distinct, legitimate
+    submission gets its own id rather than being destroyed outright.
+
+    Two differences from ``paramset.register``'s version of this loop, both
+    because ``submit_derivative`` runs its whole body inside one open
+    transaction and ``paramset.register`` does not. First: ``paramset.
+    register``'s retries are free fresh reads — each attempt is its own
+    auto-committing statement, so a plain re-read there already sees the
+    latest committed state. Here, DataJoint opens every transaction with
+    ``START TRANSACTION WITH CONSISTENT SNAPSHOT`` (confirmed in the
+    installed 2.3.2 package), which fixes an ordinary SELECT's view of the
+    database for the whole transaction's lifetime — verified live against a
+    real MySQL 8.0 instance that a plain re-read here would still show the
+    pre-collision state even after a genuinely separate connection commits a
+    rival row, while a locking read (``LOCK IN SHARE MODE``) sees it. Both
+    re-reads inside the retry therefore go through ``_locking_read`` instead
+    of DataJoint's normal query interface; see its own docstring for the
+    live verification and why the same-connection trick
+    ``tests/schema/test_paramset.py`` uses for ``paramset.register``'s own
+    retry test could not have caught a plain re-read being wrong here (a
+    single connection always sees its own writes, which is exactly what
+    would hide this). Second: exhausting the bound raises a bare
+    ``DataJointError`` here rather than a dedicated exception type, matching
+    this module's own existing convention (the ``is_activated()`` and
+    ``in_transaction`` guards above raise the same way) rather than
+    borrowing ``paramset.ContentionExhausted``, which names a different
+    module's registration path and would be a strange type for a caller of
+    this function to have to catch.
 
     Zero is reserved for canonical even when none has been submitted yet for
     this montage: a montage with no ``Activation`` rows at all allocates its
@@ -502,6 +632,20 @@ def submit_derivative(
             "submit_derivative() opens its own transaction and DataJoint "
             "transactions do not nest, so it cannot be called from inside "
             "one. Call it as its own unit of work; see submit()'s docstring."
+        )
+
+    if not block_ids:
+        # Checked before opening the transaction, alongside the two guards
+        # above: block_ids=[] is not a smaller selection, it is not a
+        # selection at all. Without this, selection_hash("neural", [])
+        # still produces a stable digest, so it would silently succeed —
+        # writing a role='derivative' Activation with zero ActivationBlock
+        # rows, a derivative covering nothing, which section 8.3's "any
+        # hand-picked subset" does not describe (review round 2, Minor).
+        raise dj.DataJointError(
+            "submit_derivative() needs at least one block id: block_ids=[] "
+            "would create a derivative covering nothing, which is not a "
+            "valid selection."
         )
 
     import datetime as _dt
@@ -557,20 +701,51 @@ def submit_derivative(
         # paragraph. to_arrays(), not fetch(): DataJoint 2.3.2 deprecates
         # bare fetch() outright, and this project's suite must stay at zero
         # warnings -- the same reason paramset.register reads its own max
-        # this way.
+        # this way. An ordinary (non-locking) read is correct for this FIRST
+        # attempt -- nothing has raced this transaction yet in the
+        # overwhelmingly common case -- unlike the retries below; see
+        # _locking_read's docstring for why those cannot use this same read.
         used = (Activation & montage_key).to_arrays("activation_id")
         activation_id = int(max(used) + 1) if len(used) else 1
 
-        key = {**montage_key, "activation_id": activation_id}
-        Activation.insert1(
-            {
-                **key,
-                "role": "derivative",
-                "request_key": idempotency_key,
-                "created_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
-                "selection_hash": digest,
-            }
-        )
+        for _ in range(_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS):
+            key = {**montage_key, "activation_id": activation_id}
+            try:
+                _insert_new_derivative(
+                    {
+                        **key,
+                        "role": "derivative",
+                        "request_key": idempotency_key,
+                        "created_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                        "selection_hash": digest,
+                    }
+                )
+                break
+            except dj.errors.DuplicateError:
+                # See this function's docstring, "2. Index allocation
+                # retries...", for why both reads below must be locking
+                # reads rather than DataJoint's normal query interface.
+                rival = _locking_read(Activation & selection_key)
+                if rival:
+                    # The rival that won this id shares this exact
+                    # selection: not contention, just a lost race to write
+                    # something equivalent. Return their key, same as the
+                    # sequential dedupe above -- section 11.3.
+                    return {k: rival[0][k] for k in Activation.primary_key}
+                # The rival claimed this id for a DIFFERENT selection.
+                # Genuine contention: retry against a fresh (locking) read
+                # of the current max rather than the stale one that chose
+                # the id that just collided.
+                used = [row["activation_id"] for row in _locking_read(Activation & montage_key)]
+                activation_id = max(used) + 1 if used else 1
+                continue
+        else:
+            raise dj.DataJointError(
+                f"submit_derivative: exhausted {_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS} "
+                f"attempts to allocate an activation_id for {montage_key!r} -- "
+                "either sustained genuine contention or a stuck retry loop."
+            )
+
         ActivationBlock.insert(
             [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
         )

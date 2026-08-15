@@ -23,6 +23,66 @@ import pytest
 _montage_ids = itertools.count()
 
 
+def _raw_connection():
+    """A second, genuinely independent connection to the same database --
+    literal pymysql, not another dj.Connection -- for tests that need to
+    commit a rival row mid-race, for real, on a connection wholly separate
+    from the one submit_derivative's own transaction runs on.
+
+    Used by the concurrent-allocation tests below (review round 2, Important
+    2). A same-connection trick -- the shape
+    tests/schema/test_paramset.py's own test_register_recovers_from_a_
+    concurrent_index_collision uses for paramset.register's retry loop --
+    cannot exercise request.py's locking-read fix: a single connection
+    always sees its own writes, committed or not, regardless of isolation
+    level, which is exactly what would hide a plain (non-locking) re-read
+    being wrong inside an already-open transaction. Literal pymysql rather
+    than threads, per this project's own standing caution: threaded database
+    probes have had to be retracted twice here. A second, already-connected,
+    sequential connection making its write BEFORE the function under test
+    attempts its own reproduces the race deterministically instead.
+    """
+    import datajoint as dj
+    import pymysql
+
+    return pymysql.connect(
+        host=dj.config["database.host"],
+        port=int(dj.config["database.port"]),
+        user=dj.config["database.user"],
+        password=dj.config["database.password"],
+        autocommit=True,
+    )
+
+
+def _commit_rival_activation(*, request, row: dict, request_key: str, selection_hash: str) -> None:
+    """Insert an Activation row directly, via a SEPARATE raw connection,
+    committing immediately (autocommit=True) and independently of whatever
+    transaction the caller under test currently has open. `row` supplies
+    subject/session_datetime/montage_id/activation_id; `request_key` must
+    already exist in Request (Activation's foreign key) or this raises."""
+    conn = _raw_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {request.Activation.full_table_name}
+                (subject, session_datetime, montage_id, activation_id,
+                 role, request_key, created_at, selection_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    row["subject"],
+                    row["session_datetime"],
+                    row["montage_id"],
+                    row["activation_id"],
+                    "derivative",
+                    request_key,
+                    datetime.datetime(2027, 6, 1, 11, 0),
+                    selection_hash,
+                ),
+            )
+    finally:
+        conn.close()
+
+
 @pytest.fixture(scope="module")
 def req(dj_conn, prefix):
     from wl_preproc.schema import core, pipeline, request
@@ -555,10 +615,18 @@ def test_reusing_a_derivative_idempotency_key_for_a_different_block_set_is_refus
     test_reusing_an_idempotency_key_for_a_different_selection_is_refused
     above): reusing a key with different block_ids is a collision, not a
     retry, and the running activation must not be handed back to a caller who
-    asked for different blocks. This is the exact shape
-    Activation.selection_hash was added to make detectable -- closing the
-    residual 1c-2 recorded against that column (see _reject_key_reuse's
-    docstring, "What this also checks, for a derivative")."""
+    asked for different blocks.
+
+    This covers the case where the key's OWN first submission is what
+    produced the derivative Activation below (`first`, naming request_key=
+    "dv-9" directly) -- see _reject_key_reuse's docstring, "What this also
+    checks -- and does not -- for a derivative". It does NOT cover the case
+    where the first submission under a key instead deduped onto a
+    pre-existing derivative created by some OTHER key: that shape stays
+    open, the same pre-existing residual _reject_key_reuse's "What cannot be
+    checked here" paragraph already describes for canonical, now also true
+    for derivative -- not closed by this test or by Activation.selection_hash
+    alone."""
     import datajoint as dj
 
     from wl_preproc.schema import request
@@ -580,3 +648,294 @@ def test_reusing_a_derivative_idempotency_key_for_a_different_block_set_is_refus
     assert (request.Activation & first).fetch1("selection_hash") == (
         request.selection_hash("neural", [1, 2])
     )
+
+
+def test_reusing_a_submit_key_for_a_derivative_is_refused(selection, prefix):
+    """One direction of the cross-entry-point asymmetry (review round 2,
+    Important 3): submit() then submit_derivative() under the same key. This
+    direction already worked before this round -- submit_derivative's
+    selection_key names selection_hash, always null on a canonical row, so it
+    could never match -- pinned here so the resolved behaviour is symmetric
+    and explicit on both sides rather than true by accident on one."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    canonical = request.submit(
+        idempotency_key="asym-1", task_type="neural", origin="cli",
+        selection=selection, payload={},
+    )
+
+    with pytest.raises(dj.DataJointError, match="selection"):
+        request.submit_derivative(
+            idempotency_key="asym-1", task_type="neural", origin="cli",
+            selection=selection, block_ids=[1, 2], payload={},
+        )
+
+    # the canonical is unaffected, and no derivative was created under this key
+    assert len(request.Activation & canonical) == 1
+    assert len(request.Activation & {"request_key": "asym-1"}) == 1
+
+
+def test_reusing_a_derivative_key_for_submit_is_refused(selection, prefix):
+    """The other direction (review round 2, Important 3): submit_derivative()
+    then submit() under the same key. Before the role="canonical" fix to
+    submit()'s canonical_selection_key, this direction was silently
+    ACCEPTED: submit()'s reuse check named only the three montage attributes,
+    which the derivative row (same montage) satisfied trivially, so
+    _reject_key_reuse found no conflict and submit() went on to insert a
+    second, canonical Activation under a key that had already produced a
+    derivative -- two activations under one idempotency key, contradicting
+    the same "this ask would go unrecorded" reasoning the refusal message
+    itself gives. Resolved in the direction that already held for
+    submit()-then-submit_derivative (test_reusing_a_submit_key_for_a_
+    derivative_is_refused above): a canonical ask and a derivative ask are
+    different asks even when they share a montage, so reusing a key across
+    them is refused, symmetrically, in both directions."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    derivative = request.submit_derivative(
+        idempotency_key="asym-2", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+
+    with pytest.raises(dj.DataJointError, match="selection"):
+        request.submit(
+            idempotency_key="asym-2", task_type="neural", origin="wl_works",
+            selection=selection, payload={},
+        )
+
+    # the derivative is unaffected, and no canonical was created under this
+    # key -- in particular, no row at activation_id=0 for this montage
+    assert len(request.Activation & derivative) == 1
+    assert len(request.Activation & {"request_key": "asym-2"}) == 1
+    assert len(request.Activation & {**selection, "role": "canonical"}) == 0
+
+
+def test_a_concurrent_identical_selection_returns_the_rival_not_a_collision(selection, prefix, monkeypatch):
+    """Review round 2, Important 2, case (a): two callers submit the SAME
+    selection concurrently, under different idempotency keys. Both pass
+    their own pre-check (neither sees the other's not-yet-committed row) and
+    both attempt to claim the id this test's own allocation read computes.
+    Reproduced with a genuinely separate connection (see _raw_connection's
+    docstring for why this, not threads and not the same-connection trick
+    test_paramset.py uses for paramset.register's own retry test).
+
+    Section 11.3: a request whose selection is already in flight returns the
+    running one instead of starting a second -- true here even though "in
+    flight" means "committed by a rival between this transaction's read and
+    its own insert attempt," not merely "already fully committed before this
+    transaction even started" (the ordinary, sequential case every other
+    dedupe test in this file already covers)."""
+    from wl_preproc.schema import request
+
+    request.Request.insert1(
+        {
+            "idempotency_key": "race-a-rival",
+            "task_type": "neural",
+            "origin": "wl_works",
+            "payload": {},
+            "requested_by": None,
+            "requested_at": datetime.datetime(2027, 6, 1, 10, 0),
+        },
+        skip_duplicates=True,
+    )
+    digest = request.selection_hash("neural", [1, 2])  # the SAME selection
+
+    real_insert = request._insert_new_derivative
+    calls = {"n": 0}
+
+    def racing_insert(row):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A SEPARATE, real connection commits the rival -- the identical
+            # selection -- at the exact id this call is about to attempt,
+            # for real, before this call's own insert is attempted.
+            _commit_rival_activation(
+                request=request, row=row, request_key="race-a-rival", selection_hash=digest
+            )
+        real_insert(row)
+
+    monkeypatch.setattr(request, "_insert_new_derivative", racing_insert)
+
+    result = request.submit_derivative(
+        idempotency_key="race-a-mine", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+
+    assert calls["n"] == 1, "must return the rival's key on the FIRST collision, not retry past it"
+    assert result["activation_id"] == 1  # the rival's row -- this montage's first activation
+    assert (request.Activation & result).fetch1("request_key") == "race-a-rival"
+    # only the rival's row exists -- my own submission did not create a second one
+    assert len(request.Activation & {"role": "derivative"} & selection) == 1
+    # my own Request row is still recorded even though my Activation attempt
+    # lost the race -- the audit trail is not deduped, same as the
+    # sequential canonical case (test_two_requests_for_one_selection_yield_
+    # one_activation)
+    assert len(request.Request & {"idempotency_key": "race-a-mine"}) == 1
+
+
+def test_a_concurrent_different_selection_retries_to_a_fresh_id(selection, prefix, monkeypatch):
+    """Review round 2, Important 2, case (b) -- the likelier and more
+    consequential case: two researchers picking DIFFERENT block sets on one
+    montage, racing for the same allocated id. Before this fix, this
+    collision raised outright: the loser's legitimate, distinct submission
+    was destroyed and its Activation never created at all. That is precisely
+    what paramset.register's own retry loop exists to prevent for
+    paramset_idx, and section 11.3 protects a losing-but-distinct submission
+    exactly as much as an identical one -- "concurrent runs are legitimate
+    and expected."""
+    from wl_preproc.schema import request
+
+    request.Request.insert1(
+        {
+            "idempotency_key": "race-b-rival",
+            "task_type": "neural",
+            "origin": "wl_works",
+            "payload": {},
+            "requested_by": None,
+            "requested_at": datetime.datetime(2027, 6, 1, 10, 0),
+        },
+        skip_duplicates=True,
+    )
+    rival_digest = request.selection_hash("neural", [3])  # a DIFFERENT selection
+
+    real_insert = request._insert_new_derivative
+    calls = {"n": 0}
+
+    def racing_insert(row):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            _commit_rival_activation(
+                request=request, row=row, request_key="race-b-rival", selection_hash=rival_digest
+            )
+        real_insert(row)
+
+    monkeypatch.setattr(request, "_insert_new_derivative", racing_insert)
+
+    result = request.submit_derivative(
+        idempotency_key="race-b-mine", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+
+    assert calls["n"] == 2, "must retry exactly once past the simulated collision"
+    assert result["activation_id"] == 2, "must land on a fresh id, not the rival's"
+    rival_row = (request.Activation & {**selection, "activation_id": 1}).fetch1()
+    assert rival_row["request_key"] == "race-b-rival", "the rival's row must survive untouched"
+    mine_row = (request.Activation & result).fetch1()
+    assert mine_row["request_key"] == "race-b-mine"
+    assert mine_row["selection_hash"] == request.selection_hash("neural", [1, 2])
+    # BOTH activations exist -- the loser's legitimate, distinct submission
+    # was not destroyed by the rival's collision
+    assert len(request.Activation & {"role": "derivative"} & selection) == 2
+    # and its own ActivationBlock rows were written under the fresh id
+    assert len(request.ActivationBlock & result) == 2
+
+
+def test_derivative_allocation_gives_up_after_sustained_contention(selection, prefix, monkeypatch):
+    """The bound on the retry loop: if every attempt collides against a
+    DIFFERENT selection (sustained, not resolved), submit_derivative must
+    fail loudly rather than spin forever -- the same shape
+    paramset.ContentionExhausted exists for, though raised here as a bare
+    DataJointError (see submit_derivative's docstring, "2. Index allocation
+    retries...", for why a dedicated exception type was not borrowed from
+    paramset for this)."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    def always_collide(row):
+        raise dj.errors.DuplicateError("simulated sustained contention")
+
+    monkeypatch.setattr(request, "_insert_new_derivative", always_collide)
+
+    with pytest.raises(dj.DataJointError, match="exhausted"):
+        request.submit_derivative(
+            idempotency_key="race-c-mine", task_type="neural", origin="wl_works",
+            selection=selection, block_ids=[1, 2], payload={},
+        )
+
+    # nothing was written for the exhausted submission -- rolled back whole
+    assert len(request.Request & {"idempotency_key": "race-c-mine"}) == 0
+    assert len(request.Activation & {"role": "derivative"} & selection) == 0
+
+
+def test_activation_block_gets_one_row_per_distinct_block_id(selection, prefix):
+    """Review round 2, Important 4: the third of submit_derivative's three
+    documented differences -- writing ActivationBlock -- had zero test
+    coverage. Deleting the entire ActivationBlock.insert(...) call left the
+    suite at 29 passed; the only hit for ActivationBlock anywhere under
+    tests/ was a comment. Duplicated and unsorted on purpose, so this also
+    covers "duplicates collapse" and "the count matches", not just presence:
+    the written rows must mirror what selection_hash itself canonicalises
+    block_ids to (sorted(set(...))), or the two could silently disagree
+    about what "this selection" even contains."""
+    from wl_preproc.schema import request
+
+    key = request.submit_derivative(
+        idempotency_key="ab-1", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[2, 1, 2, 1], payload={},
+    )
+
+    assert len(request.ActivationBlock & key) == 2, (
+        "duplicates must collapse to one row per distinct block id"
+    )
+    assert set((request.ActivationBlock & key).to_arrays("block_id")) == {1, 2}
+
+
+def test_an_empty_block_set_is_refused(selection, prefix):
+    """Review round 2, Minor: block_ids=[] would silently create a
+    role='derivative' Activation covering nothing -- selection_hash("neural",
+    []) is a perfectly stable digest (it hashes an empty list like any
+    other), so nothing else in this module would have caught it. Rejected
+    before the transaction opens, so nothing is written at all."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    with pytest.raises(dj.DataJointError, match="block"):
+        request.submit_derivative(
+            idempotency_key="empty-1", task_type="neural", origin="wl_works",
+            selection=selection, block_ids=[], payload={},
+        )
+
+    assert len(request.Request & {"idempotency_key": "empty-1"}) == 0
+    assert len(request.Activation & {"role": "derivative"} & selection) == 0
+
+
+def test_submit_derivative_before_activate_raises_a_clear_error(req, selection, monkeypatch):
+    """Review round 2, Minor: submit_derivative's own guards were untested --
+    deleting either left the suite passing, unlike submit()'s equivalent
+    guards, which each already have a test. Mirrors test_submit_before_
+    activate_raises_a_clear_error."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    monkeypatch.setattr(request.schema, "is_activated", lambda: False)
+    with pytest.raises(dj.DataJointError, match="activate"):
+        req.submit_derivative(
+            idempotency_key="dv-guard-1", task_type="neural", origin="wl_works",
+            selection=selection, block_ids=[1, 2], payload={},
+        )
+
+
+def test_submit_derivative_refuses_to_run_inside_a_transaction(req, selection):
+    """The half of the guard pair the review flagged especially:
+    submit_derivative opens its own transaction, and DataJoint transactions
+    do not nest, so it must refuse to run inside one -- mirrors submit()'s
+    own test_submit_refuses_to_run_inside_a_transaction."""
+    import datajoint as dj
+
+    conn = dj.conn()
+    with conn.transaction:
+        with pytest.raises(dj.DataJointError, match="do not nest"):
+            req.submit_derivative(
+                idempotency_key="dv-guard-2", task_type="neural", origin="wl_works",
+                selection=selection, block_ids=[1, 2], payload={},
+            )
+
+    # the outer transaction stayed usable and nothing was written
+    assert len(req.Request & {"idempotency_key": "dv-guard-2"}) == 0

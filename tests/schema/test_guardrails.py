@@ -506,6 +506,45 @@ def test_no_bare_delete_call_anywhere_in_the_source():
     )
 
 
+def test_no_code_path_writes_activation_supersedes():
+    """`Activation.supersedes` is asserted, in prose only, to be written
+    nowhere in this codebase: `submit()` never sets it (regenerating a
+    canonical over an old one is not implemented yet), and
+    `submit_derivative`'s own docstring says a derivative never supersedes a
+    canonical. That was a codebase-wide invariant resting entirely on
+    docstrings staying true, in a project whose own `test_no_bare_delete_
+    call_anywhere_in_the_source` (immediately above) already enforces a
+    different codebase-wide invariant by source scan rather than by trusting
+    prose (review round 2, Minor). This is the same shape for a second one.
+
+    Matches the quoted-and-colon form `"supersedes":` / `'supersedes':` --
+    the shape a dict literal being passed to `insert`/`insert1`/`update1`
+    would use to WRITE the column, which is how every DataJoint write in
+    this codebase is spelled. Deliberately does not match a bare READ
+    (`row["supersedes"]`, `.fetch1("supersedes")` -- neither has a colon
+    immediately after the closing quote) or the schema declaration itself
+    (`supersedes = null : int`, inside `Activation`'s `definition` string,
+    names the bare word with no quote characters around it at all) --
+    confirmed this pattern does not already fire against the committed
+    source before being relied on here.
+    """
+    offenders = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if '"supersedes":' in stripped or "'supersedes':" in stripped:
+                rel = path.relative_to(SOURCE_ROOT.parent)
+                offenders.append(f"{rel}:{lineno}: {stripped[:70]}")
+    assert not offenders, (
+        "a source line assigns 'supersedes' as a dict key; Activation."
+        "supersedes must remain unwritten by every code path -- a "
+        "derivative never supersedes a canonical, and nothing regenerates a "
+        "canonical yet either:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_every_table_documents_its_key_in_schema(all_tables):
     """Section 10: primary key changes require drop-and-repopulate, so the keys
     are documented where they are declared rather than in a separate file that
