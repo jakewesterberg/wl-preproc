@@ -479,6 +479,34 @@ needs no table migration — but only if it is in place before any row is writte
 > affected tables*; tables that do not exist have no rows. Declaring them fresh in Phase 2 with
 > the fix already in place is exactly as safe as declaring them now.
 
+> **The adopted Elements have the same defect, and it is an idiom rather than an accident.**
+> Found 2026-08-13 during Phase 1c-1's guardrail work. **Every `*.Attribute` part table in the
+> Elements declares `attribute_blob` as a bare `longblob`.** Four ship in the versions this
+> project pins:
+>
+> | Attribute | Element |
+> |---|---|
+> | `element_event.event.Event.Attribute.attribute_blob` | element-event |
+> | `element_event.trial.Block.Attribute.attribute_blob` | element-event |
+> | `element_event.trial.Trial.Attribute.attribute_blob` | element-event |
+> | `element_session.session_with_datetime.Session.Attribute.attribute_blob` | element-session |
+>
+> **`element-lab` and `element-animal` have none — because they have no `.Attribute` part table
+> at all.** That is what makes this a pattern to check rather than a list to memorise:
+> **adopting any further Element means checking its `*.Attribute` tables first.** The fourth was
+> found only because the guard swept every activated module rather than the two already known
+> to offend.
+>
+> **Nothing writes to them today, which is the only reason this is a hazard rather than an
+> incident.** They are nullable per-event/per-trial attribute columns, and this pipeline does
+> not populate them. **Anything that later writes a numpy array to one will silently destroy
+> it** — the same failure that keeps `element-array-ephys` out, arriving through a module the
+> design does adopt. If per-trial or per-event array attributes are ever wanted, they must go
+> in a custom table declaring `<blob>`, never in these.
+>
+> They are allow-listed by name in `tests/schema/test_guardrails.py` rather than hidden, so a
+> *new* upstream bare `longblob` still trips the guard.
+
 > **PHASE 2 PRECONDITION — do not activate `element-array-ephys` until issue #230 is resolved,
 > upstream or here.** Its 14 `longblob` attributes declare perfectly and then silently destroy
 > every waveform, LFP trace and metrics array written to them. **An activation test cannot see
@@ -554,7 +582,11 @@ Follows the `element-array-ephys` pattern: `paramset_idx` (int) with a content-h
 
 Computed tables are keyed on `(…, paramset_idx)`, so **re-running with new parameters adds rows rather than overwriting**. Three sortings of one session with different drift settings coexist permanently with full provenance.
 
-**Paramsets are immutable once used.** The content hash enforces this structurally — an edit yields a different hash, which is a *new* paramset. The CLI refuses in-place modification. Lab defaults are themselves versioned paramsets, so "what were our defaults in March 2027" stays answerable.
+**Paramsets are immutable once used.** Registering identical parameters is idempotent, because the content hash *is* the identity: an edit yields a different hash and is therefore a *new* paramset rather than a mutation of the old one. Lab defaults are themselves versioned paramsets, so "what were our defaults in March 2027" stays answerable.
+
+> **Corrected 2026-08-13, disproved during Phase 1c-1.** This paragraph read *"The content hash enforces this structurally — an edit yields a different hash, which is a new paramset. The CLI refuses in-place modification."* **The hash enforces no such thing.** It makes *registration* idempotent, and nothing more: the unique index is on `(paramset_type, param_hash)`, not on the parameters themselves, so an in-place `update1` on `params` **succeeds** and leaves the row internally inconsistent — the stored hash still describing the old parameters while the stored parameters are new. That is worse than a permitted edit, because every provenance claim keyed on the hash silently becomes false.
+>
+> **What actually enforces it** is a refusal on the table itself, added in 1c-1: `ParamSet.update1` raises. That is stronger than the "CLI refuses" this paragraph originally promised, and it is honest about its limit — it holds at the DataJoint layer, and a raw SQL statement or a `FreeTable` handle to the same physical table would still bypass it. Enforcing in the CLI alone would have left the hole open to every caller that is not the CLI, which is most of them.
 
 ### 5.4 Manual triggering
 

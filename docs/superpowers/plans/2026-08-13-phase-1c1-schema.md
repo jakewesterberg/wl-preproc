@@ -22,6 +22,13 @@
 - **No bare `.delete()` anywhere in the codebase.** §10. Task 6 makes this a CI assertion.
 - **Every table gets a docstring comment line** (`# …` as the first line of `definition`) documenting its key, per §10's "keys documented in-schema".
 - **Determinism and idempotence:** activating an already-activated schema must be a no-op, so the suite can run repeatedly against one container.
+- **DataJoint 2.3.2 does not wrap every MySQL error.** `datajoint/adapters/mysql.py`'s `translate_error` maps only a closed set of errnos (1062, 1217/1451/1452/3730, 1064, 1146, 1364, 1054, plus connection-loss codes) into `DataJointError` subclasses. **Errno 1265 — "Data truncated for column", which is what strict-mode MySQL returns for an invalid `enum` value — is not among them**, so the raw `pymysql.err.DataError` propagates unchanged. A test asserting `pytest.raises(dj.DataJointError)` on a bad enum insert will fail. Found in Task 3; corrected there and recorded here because Tasks 4 and 5 assert on exception classes too.
+- **element-lab's `Lab` is `(lab, lab_name, address, time_zone)`.** There is no `institution` attribute, and `time_zone` is required. Found in Task 3; the identical wrong dict was in Task 5's fixture and is corrected.
+- **`.fetch()` is deprecated in DataJoint 2.x** and emits a `DeprecationWarning` on every call, which breaks the zero-warnings requirement. Use `.to_arrays(...)`, `.to_dicts(...)` or `.to_pandas(...)`. **`.fetch1()` is unaffected** and stays. Found in Task 4.
+- **DataJoint transactions do not nest.** `with dj.conn().transaction:` inside another one raises `DataJointError: Nested connections are not supported`. **`request.submit()` opens a transaction, so it can never be called from inside one** — which constrains 1c-2's ingest watcher and 1c-3's responder, both of which call it. Verified 2026-08-13 against a live database, along with the rest of the transaction behaviour `submit()` depends on: a raise between the two inserts rolls back the first; a successful block commits; `skip_duplicates=True` inside a transaction still keeps the original row; and **`return` from inside the `with` block commits rather than aborting**, which is what makes `submit()`'s early-return dedupe path correct.
+- **ONE schema prefix per process — the whole test suite uses `"t_"`.** Each Element module holds a single process-lifetime `schema` object; once bound to a name, activating it under a *different* name raises `DataJointError: The schema is already activated for schema …`. `pipeline.activate`'s own idempotence guard does not catch this, because it only short-circuits a repeat of the *same* prefix — a different one passes straight through into the error.
+
+> **Corrected 2026-08-13 during execution, and it invalidated this plan's original test structure.** Tasks 2–7 were each written with their own prefix (`t1_`, `core_`, `cov_`, `ps_`, `req_`, `guard_`, `daemon_`). Verified against a live MySQL: `pipeline.activate(prefix="a_")` succeeds and `pipeline.activate(prefix="b_")` immediately after raises. Every test module after the first to run in a pytest process would have failed, and the failure would have looked like a schema bug rather than a fixture-design bug. All prefixes are now `"t_"`; the per-module `is_activated()` / `_activated` guards then make every call after the first a no-op, which is what the original design wanted and did not get.
 
 ---
 
@@ -314,7 +321,7 @@ import pytest
 def test_all_four_elements_activate(dj_conn):
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t1_")
+    pipeline.activate(prefix="t_")
     for name in ("lab", "subject", "session", "event"):
         assert getattr(pipeline, name) is not None, name
 
@@ -322,7 +329,7 @@ def test_all_four_elements_activate(dj_conn):
 def test_session_table_exists_and_is_keyed_as_elements_expects(dj_conn):
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t2_")
+    pipeline.activate(prefix="t_")
     assert set(pipeline.session.Session.primary_key) == {"subject", "session_datetime"}
 
 
@@ -349,8 +356,8 @@ def test_activation_is_idempotent(dj_conn):
     """The suite activates repeatedly against one container."""
     from wl_preproc.schema import pipeline
 
-    pipeline.activate(prefix="t3_")
-    pipeline.activate(prefix="t3_")
+    pipeline.activate(prefix="t_")
+    pipeline.activate(prefix="t_")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -395,7 +402,7 @@ Experimenter = User
 
 # Names element-animal and element-session resolve against this module.
 Subject = subject.Subject
-Session = None  # rebound by activate(); element-event resolves it from here
+Session = session.Session
 
 _activated: set[str] = set()
 
@@ -436,10 +443,23 @@ def activate(prefix: str = "wlpp") -> None:
 > `.venv/bin/python -c "import inspect, element_event.trial as t; print(inspect.signature(t.activate))"`
 > and adjust. Record what you found in your report.
 
-> **`Session` is rebound rather than imported.** `element-event` resolves `Session`
-> from this module's namespace, but it does not exist until `element-session` is
-> activated. Assigning `None` up front and rebinding inside `activate()` is what
-> makes the order work; importing it at module scope cannot.
+> **Corrected 2026-08-13 during execution — the paragraph that stood here was wrong.**
+> It read: *"`Session` is rebound rather than imported. `element-event` resolves `Session`
+> from this module's namespace, but it does not exist until `element-session` is activated.
+> Assigning `None` up front and rebinding inside `activate()` is what makes the order work;
+> importing it at module scope cannot."*
+>
+> **`session.Session` exists at import time**, exactly as `subject.Subject` does — verified
+> directly. And `Session = None` does not merely fail to help, it actively breaks the first
+> activation: `element_session.session_with_datetime` declares four tables that reference
+> `Session` (`SessionDirectory`, `SessionExperimenter`, `SessionNote`, `ProjectSession`), and
+> `Schema.activate()` merges the linking module's `__dict__` **over** each table's own
+> declaration context — so a stale `None` in `pipeline` shadows the correctly-bound class
+> that `element-session` already had.
+>
+> **Bind it eagerly:** `Session = session.Session`, alongside `Subject`. The instruction not
+> to "clean this up" was mine and it was wrong; it is recorded because the wrong version is
+> what a reader would otherwise reconstruct from the same reasoning.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -477,7 +497,7 @@ import pytest
 
 from wl_preproc.contracts.paths import SYSTEMS
 
-PREFIX = "core_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -494,7 +514,9 @@ def a_session(core):
     from wl_preproc.schema import pipeline
 
     pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "Westerberg", "institution": "x", "address": "y"},
+        # element-lab's Lab is (lab, lab_name, address, time_zone) — corrected
+        # 2026-08-13; there is no `institution` attribute and time_zone is required.
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
         skip_duplicates=True,
     )
     pipeline.subject.Subject.insert1(
@@ -560,7 +582,8 @@ def test_only_known_systems_are_accepted(core, a_session):
     creating a silent third acquisition system."""
     import datajoint as dj
 
-    with pytest.raises(dj.DataJointError):
+    # datajoint 2.3.2 does not wrap errno 1265; see Global Constraints.
+    with pytest.raises(pymysql.err.DataError):
         core.AcquisitionSystem.insert1({**a_session, "system": "spikeglex"})
 
 
@@ -723,7 +746,7 @@ import datetime
 
 import pytest
 
-PREFIX = "cov_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -766,7 +789,7 @@ def test_coverage_states_are_exactly_full_partial_absent(cov):
 # tests/schema/test_paramset.py
 import pytest
 
-PREFIX = "ps_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -1000,7 +1023,7 @@ import datetime
 
 import pytest
 
-PREFIX = "req_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")
@@ -1018,7 +1041,9 @@ def selection(req):
     from wl_preproc.schema import core, pipeline
 
     pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "W", "institution": "x", "address": "y"},
+        # element-lab's Lab is (lab, lab_name, address, time_zone). There is no
+        # `institution` attribute — corrected 2026-08-13 after Task 3 hit it.
+        {"lab": "wl", "lab_name": "W", "address": "y", "time_zone": "UTC"},
         skip_duplicates=True,
     )
     pipeline.subject.Subject.insert1(
@@ -1212,7 +1237,9 @@ class ActivationBlock(dj.Manual):
 
 
 def _next_activation_id(selection: dict) -> int:
-    existing = (Activation & selection).fetch("activation_id")
+    # .fetch() is deprecated in DataJoint 2.x and emits a DeprecationWarning on
+    # every call; .to_arrays() is its replacement. .fetch1() is unaffected.
+    existing = (Activation & selection).to_arrays("activation_id")
     return int(max(existing) + 1) if len(existing) else 0
 
 
@@ -1320,7 +1347,7 @@ import pathlib
 import numpy as np
 import pytest
 
-PREFIX = "guard_"
+PREFIX = "t_"
 
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[2] / "wl_preproc"
 
@@ -1358,37 +1385,55 @@ def test_no_table_declares_a_bare_longblob(all_tables):
     )
 
 
+def _synthetic_key(table) -> dict:
+    """A primary key of the right shape, for a table with no foreign keys."""
+    key = {}
+    for name in table.primary_key:
+        declared = (table.heading[name].type or "").lower()
+        if "char" in declared:
+            key[name] = f"blobprobe-{name}"[:32]
+        elif "int" in declared:
+            key[name] = 99
+        else:  # pragma: no cover - a new key type should fail loudly, not silently
+            raise AssertionError(f"unhandled key type for {name}: {declared}")
+    return key
+
+
 def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
-    """The test whose absence upstream is currently paying for."""
-    import datajoint as dj
+    """The test whose absence upstream is currently paying for.
 
-    schema = dj.Schema(f"{PREFIX}roundtrip")
-
-    @schema
-    class Probe(dj.Manual):
-        definition = """
-        # one row per blob attribute discovered in the pipeline
-        n : int
-        ---
-        arr : <blob>
-        """
-
+    This inserts into the REAL tables. An earlier draft built a stand-in table
+    with its own `<blob>` and round-tripped through that once per discovered
+    attribute — which only proves `<blob>` works in general, something
+    `test_harness.py` already establishes, and says nothing about the attributes
+    actually declared here. Corrected 2026-08-13 before dispatch.
+    """
     blob_attrs = [
-        (m, t, a)
-        for m, t, table in all_tables
-        for a in table.heading.names
-        if getattr(table.heading[a], "is_blob", False)
+        (module_name, table_name, table, attr)
+        for module_name, table_name, table in all_tables
+        for attr in table.heading.names
+        if getattr(table.heading[attr], "is_blob", False)
     ]
     assert blob_attrs, "no blob attributes found — this test would pass vacuously"
 
     arr = np.arange(4096, dtype=np.float32).reshape(64, 64)
-    for i, _ in enumerate(blob_attrs):
-        Probe.insert1({"n": i, "arr": arr})
-        got = (Probe & f"n={i}").fetch1("arr")
-        assert isinstance(got, np.ndarray), f"{blob_attrs[i]} did not return an array"
+    exercised = []
+    for module_name, table_name, table, attr in blob_attrs:
+        assert not table.parents(), (
+            f"{module_name}.{table_name} has a foreign key, so a synthetic row "
+            "cannot be inserted without building its parents first. Extend this "
+            "test to construct them — do not skip the table, or the attribute "
+            "goes unverified and this guard stops guarding."
+        )
+        key = _synthetic_key(table)
+        table.insert1({**key, attr: arr}, skip_duplicates=True)
+        got = (table & key).fetch1(attr)
+        assert isinstance(got, np.ndarray), f"{table_name}.{attr} returned {type(got).__name__}"
         assert got.shape == arr.shape and got.dtype == arr.dtype
         assert np.array_equal(got, arr)
-    schema.drop()
+        exercised.append(f"{table_name}.{attr}")
+
+    assert exercised, "no blob attribute was actually round-tripped"
 
 
 def test_no_bare_delete_call_anywhere_in_the_source():
@@ -1478,7 +1523,7 @@ import datajoint as dj
 import numpy as np
 import pytest
 
-PREFIX = "daemon_"
+PREFIX = "t_"
 
 
 @pytest.fixture(scope="module")

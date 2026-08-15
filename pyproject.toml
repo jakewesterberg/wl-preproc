@@ -11,7 +11,45 @@ dependencies = [
     # session identity, the barcode codec and the log format, and vendoring copies
     # of them here would create a second definition free to drift from the one the
     # hardware actually implements.
-    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@main",
+    #
+    # A COMMIT PIN, not a branch, for the reason the Elements below are pinned --
+    # and here the exposure is wired directly into a CI gate rather than a test:
+    # `wlpp schemas export` re-exports SyncBoxLogHeader from wl-sync into
+    # docs/schemas (wl_preproc/cli/main.py), and CI's "Exported schemas are
+    # current" step re-runs that export and `git diff --exit-code`s the
+    # directory. On a moving ref, a commit to wl-sync main changes this repo's
+    # published contract -- or reds CI on an unrelated PR -- with no change in
+    # this repo at all. Resolved 2026-08-14 with `git ls-remote <url> main`.
+    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@90b931e8d4714a0b199510d5ccb8813114bb076e",  # main
+    "datajoint>=2.3,<3",
+    # The Elements are mid-migration to DataJoint 2.x and no fork is taken.
+    # element-animal pins to the open PR that does its migration, which is zero
+    # divergence by construction; the other three already activate cleanly on
+    # 2.3 in the specific sense of .activate(db_name) — that is NOT a claim
+    # that they need no compatibility handling. element_session raises
+    # AttributeError on a bare import without wl_preproc.schema._compat's
+    # shim; element_event's event and trial submodules do too once imported
+    # directly (bare `import element_event` alone does not trigger it). See
+    # that module's docstring. element-array-ephys is deliberately absent —
+    # its issue #230 is unfixed and its tables silently destroy array data
+    # under 2.x. See spec section 5.1.1 and the Phase 2 precondition recorded
+    # there.
+    #
+    # COMMIT PINS, not branches, as the 1c-1 design spec section 2 requires.
+    # Resolved 2026-08-14 with `git ls-remote <url> <ref>`; the branch each SHA
+    # came from is kept beside it so the next bump is a one-line re-resolve.
+    # Branches were live refs here until then, and that is not theoretical: the
+    # blob allow-list in tests/schema/test_guardrails.py is keyed to four
+    # fully-qualified attribute names in specific upstream revisions, so an
+    # upstream commit could change that guard's verdict with no change in this
+    # repo -- and element-animal tracks a PERSONAL FORK's branch following an
+    # open PR (element-animal #51), which disappears the day that PR merges and
+    # the branch is deleted, taking `pip install -e .` with it. Re-resolve
+    # deliberately, and re-run the suite when you do.
+    "element-lab @ git+https://github.com/datajoint/element-lab.git@830e1a85790f89bd7221c09f69b704c7185eef7a",  # main
+    "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@0d1ae2463785f19fb74f4a4b4e3710a294153e51",  # compat-fixes
+    "element-session @ git+https://github.com/datajoint/element-session.git@fed82e43a8e49ea9b36ee3b812bea64b36552356",  # main
+    "element-event @ git+https://github.com/datajoint/element-event.git@e2cf2874a073ee19dcfd020e5904443c91b78c8c",  # main
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
@@ -34,7 +72,7 @@ dependencies = [
 # their own emitted session in tests/synth/, and Intan is checked past merely
 # opening: the amplifier stream is reshaped correctly and the Stim stream's gain
 # is the stim step size the header declares.
-dev = ["pytest>=8.0", "spikeinterface>=0.101"]
+dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.15,<5"]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
@@ -48,3 +86,14 @@ include = ["wl_preproc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/conftest.py is the root conftest, so it imports datajoint at
+# collection time for every test in the suite, not only the schema tests.
+# datajoint itself raises two warnings on import/first-config-read that this
+# project has no control over. Each entry below matches the exact message
+# (as a startswith-regex, per Python's warnings module) and the exact module
+# that raises it — not category alone — so an unrelated DeprecationWarning or
+# UserWarning from anywhere else in the suite still surfaces.
+filterwarnings = [
+    "ignore:datajoint.migrate is deprecated and is scheduled for removal in DataJoint 2.4 or 2.5. Complete your schema migrations while on DataJoint 2.3 or earlier.:DeprecationWarning:datajoint$",
+    "ignore:No datajoint.json found. Using defaults and environment variables. Run :UserWarning:datajoint\\.settings$",
+]

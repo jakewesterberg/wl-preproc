@@ -22,6 +22,10 @@ from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.protocol import HealthResponse, JobRequest
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
 
+# `wl_preproc.schema.__init__` is deliberately import-cheap (a constant and
+# nothing else), so this costs no datajoint import for `wlpp schemas export`.
+from wl_preproc.schema import DEFAULT_PREFIX
+
 EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "session_manifest": SessionManifest,
     "behavior_camera_sidecar": BehaviorCameraSidecar,
@@ -60,6 +64,19 @@ def main(argv: list[str] | None = None) -> int:
     generate.add_argument("--out", required=True, type=Path)
     generate.add_argument("--profile", choices=["ci", "benchmark", "stim"], default="ci")
 
+    subparsers.add_parser("doctor", help="check this host's readiness")
+
+    delete = subparsers.add_parser("delete", help="delete a session's rows from a stage down")
+    delete.add_argument("--session", required=True)
+    delete.add_argument("--from-stage", required=True)
+    delete.add_argument("--no-dry-run", action="store_true")
+    delete.add_argument("--confirm", default=None)
+
+    daemon_p = subparsers.add_parser("daemon", help="run the populate daemon once")
+    # DEFAULT_PREFIX, not a second literal: the prefix carries its own
+    # separator and a copy here is exactly how `wlpplab` would come back.
+    daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -81,6 +98,44 @@ def main(argv: list[str] | None = None) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
         truth = generate_session(args.out, recipe)
         print(f"{args.out / recipe.session_id}: {len(truth.trials)} trials")
+        return 0
+
+    if args.group == "doctor":
+        from wl_preproc.cli.doctor import run_checks
+
+        failures = run_checks()
+        return 1 if failures else 0
+
+    if args.group == "delete":
+        from wl_preproc.cli.deleting import plan_cascade
+
+        cascade = plan_cascade(args.session, args.from_stage)
+        print(f"cascade from {args.from_stage} for session {args.session}:")
+        for line in cascade:
+            print(f"  {line}")
+        if not args.no_dry_run:
+            print("\nthis was a DRY RUN — nothing was deleted.")
+            print("re-run with --no-dry-run --confirm <session-id> to proceed.")
+            return 0
+        if args.confirm != args.session:
+            print("\nrefusing: --confirm must repeat the session id exactly.")
+            return 2
+        print("\nthis build never performs a real delete (see the design spec, "
+              "section 10): the cascade above is preview-only.")
+        return 0
+
+    if args.group == "daemon":
+        from wl_preproc.daemon import run_once
+
+        report = run_once(prefix=args.prefix)
+        print(f"populated: {report['populated']}")
+        print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
+        if report["errors"]:
+            print("errors:")
+            for err in report["errors"]:
+                print(f"  {err}")
+        else:
+            print("errors: none")
         return 0
 
     return 2

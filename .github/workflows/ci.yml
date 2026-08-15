@@ -57,3 +57,9 @@ jobs:
           python -m wl_preproc.cli.main schemas export --out docs/schemas
           git diff --exit-code -- docs/schemas \
             || { echo "docs/schemas is stale — run: wlpp schemas export"; exit 1; }
+
+      - name: Guardrails
+        # Section 10 states these as rules; a rule nothing enforces decays. The
+        # blob check is the one that matters: under DataJoint 2.x a bare
+        # longblob silently destroys array data, and only a round-trip sees it.
+        run: python -m pytest tests/schema/test_guardrails.py -v

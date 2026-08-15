@@ -276,6 +276,69 @@ the three-part make runs compute outside the transaction; the two blob tests in 
 - **MySQL backup** — §10 calls it a first-class component. It is ops rather than schema, and it
   wants the server, which does not exist yet.
 
+## 9.1 A limit found in execution: `submit()` only makes canonical activations
+
+**Found 2026-08-13 during Task 5's review, and it contradicts parent-spec §8.3.**
+
+§4.4's dedupe returns on any existing `Activation` for `(subject, session_datetime, montage_id)`.
+That is exactly right for a **canonical** activation, which §8.3 defines as *"exactly one current
+per (session, montage)"*. It is wrong for a **derivative**, which §8.3 defines as *"any
+hand-picked subset… unbounded, additive"* — a caller asking for one would silently receive the
+canonical activation's key instead, with no error.
+
+Two things follow, and both are recorded rather than patched:
+
+- **`submit()` takes no block set**, so `ActivationBlock` has no writer. Since unit identity is a
+  product of the block set (§8.3), a derivative is not even expressible without one.
+- **`supersedes` has no reachable writer**, so a regenerated canonical cannot point at the one it
+  replaces — which §8.3 requires for enrichment to survive.
+
+**1c-1's `submit()` is therefore narrowed to what it can honour**: canonical activations only,
+with `activation_id` pinned at `0` and a test asserting it, so the day the dedupe key changes the
+change is visible rather than silent. **Derivative support belongs to 1c-3**, the responder, which
+is where a hand-picked block set actually arrives — and it needs a dedupe rule keyed on the
+selection rather than the montage, per §11.3's *"dedupe on `(selection, task type)`"*.
+
+Recorded here rather than in the plan because it is a boundary of the design, not a defect in the
+code that implements it.
+
+## 9.2 Four decisions the review gates settled, that 1c-2 and 1c-3 inherit
+
+Recorded here because each is a *boundary* a later sub-project will meet, and the reasoning is
+not recoverable from the code that resulted.
+
+**Idempotency keys are caller-scoped.** `_reject_key_reuse` compares `(task_type, origin,
+payload, requested_by)`. A key presented by a *different* requester is a collision and raises —
+not a retry. Both 1c-2 and 1c-3 take keys from outside this process, which is the only place
+reuse can happen, so the check is at the door rather than inside either caller.
+
+**The residual that a `selection_hash` would close.** A key whose original submission deduped
+onto a pre-existing `Activation` records nowhere *which selection it asked for*, so only the
+four fields above can be compared — a reused key that asked for a different block set is
+accepted. The final review argued for adding `Activation.selection_hash` in 1c-1 while the
+table is empty, citing §6's "free before there is data". **Declined**: §6's argument is about a
+*correctness deadline* — the blob fix must precede the first row — and a nullable column has
+none. 1c-3 lands before the lab starts, so it is also pre-data, and adding the column then is
+exactly as cheap. **1c-3 owns this**, and it is the same column §9.1 already needs for
+derivative dedupe, so the two arrive together or not at all.
+
+**Dependencies are commit-pinned, and no lockfile backs them.** All five git dependencies —
+four `element-*` plus `wl-sync` — pin to SHAs in `pyproject.toml`, which is what CI installs
+from. A `uv.lock` was generated and then removed: nothing consumes it (CI runs `pip install -e`),
+so it could neither fail nor guard, and it recorded a resolved SHA for the one dependency that
+was still unpinned — so reading it produced exactly the false confidence the pins exist to
+prevent. Moving CI to `uv sync --locked` is the deliberate change that would make a lockfile
+meaningful; until then, the pins are the whole mechanism. This matters beyond hygiene: §6's blob
+allow-list is keyed to attribute names in specific upstream revisions, so an unpinned upstream
+commit changes a guard's verdict with no change here.
+
+**The blob sweep does not mirror DataJoint's own Part rule.** DataJoint only promotes a nested
+class to a `Part` when its name starts with an uppercase letter (`schemas.py`, `part[0].isupper()`),
+so `class _Internal(dj.Part)` never becomes a table. The sweep in `test_guardrails.py`
+deliberately does *not* copy that rule, because doing so would skip a real escape path: a
+properly declared Part reachable only through an underscore-named alias or compatibility shim.
+The sweep is therefore wider than DataJoint's own, on purpose.
+
 ## 10. Open questions this design does not close
 
 - **§13 item 5** — the tolerance for the ingest-time task-PC vs sync-box clock cross-check. It
