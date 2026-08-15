@@ -172,3 +172,32 @@ def test_a_vanished_directory_does_not_crash_the_whole_scan(session, monkeypatch
 
     assert set(topology) == set(SYSTEMS)
     assert topology["rhs"] is SystemState.ABSENT
+
+
+def test_a_permission_error_on_is_dir_does_not_crash_the_whole_scan(session, monkeypatch):
+    """Round-3 finding: `is_dir()` swallows ENOENT/ENOTDIR/EBADF/ELOOP on its
+    own but not EACCES, so a bare permission error checking `directory`
+    still raises -- and unlike the `rglob`/`iterdir` exposures, this one is
+    not Python-3.11-specific; it reproduces identically on 3.13, the version
+    the preprocessing server actually runs. Left unguarded it would crash
+    `discover_topology` for every system, not just the one that raced. As in
+    the previous test, the dict coming back complete for every system is the
+    assertion that matters -- reaching it at all is most of the proof."""
+    layout, manifest = session
+    rhs_dir = layout.system_dir("rhs")
+    rhs_dir.mkdir()
+    (rhs_dir / "amplifier.dat").write_bytes(b"0" * 16)
+
+    real_is_dir = Path.is_dir
+
+    def failing_is_dir(self):
+        if self == rhs_dir:
+            raise PermissionError(f"simulated: permission denied for {self}")
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", failing_is_dir)
+
+    topology = discover_topology(layout, manifest)
+
+    assert set(topology) == set(SYSTEMS)
+    assert topology["rhs"] is SystemState.ABSENT
