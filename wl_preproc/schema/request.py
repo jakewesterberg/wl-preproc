@@ -24,17 +24,22 @@ documented job, and is *not* what prevents a second run. Reusing one for a
 different request is refused rather than absorbed; see ``_reject_key_reuse``.
 
 **``submit()`` only ever produces canonical activations.** The dedupe above
-returns on ANY existing ``Activation`` row for the selection, so a second
-``activation_id`` is never allocated — every activation this function writes
-is ``activation_id=0``. That is correct for a canonical activation (parent
-spec section 8.3: exactly one current per (session, montage)) and wrong for a
-derivative (section 8.3: "any hand-picked subset… unbounded, additive"), which
-needs a real allocator and a block set to key on. ``submit()``'s selection
-carries no block set, so it has no way to form a derivative — accepting a
-``role`` parameter here would silently hand back the canonical activation's
-key for any caller that asked for a derivative. So the parameter is gone
-rather than half-supported; making derivatives real belongs to the responder
-(design spec section 9.1), once it can supply a block set.
+returns on any existing CANONICAL ``Activation`` row for the selection, so a
+second ``activation_id`` is never allocated — every activation this function
+writes is ``activation_id=0``. That is correct for a canonical activation
+(parent spec section 8.3: exactly one current per (session, montage)) and
+wrong for a derivative (section 8.3: "any hand-picked subset… unbounded,
+additive"), which needs a real allocator and a block set to key on.
+``submit()``'s selection carries no block set, so it has no way to form a
+derivative — accepting a ``role`` parameter here would silently hand back the
+canonical activation's key for any caller that asked for a derivative. So the
+parameter is gone rather than half-supported; making derivatives real belongs
+to the responder (design spec section 9.1), once it can supply a block set —
+which is what ``submit_derivative``, below, does. Because a derivative can
+now exist on a selection with no canonical yet, the dedupe's own query is
+scoped to ``role="canonical"`` (added alongside ``submit_derivative`` —
+before it existed, every ``Activation`` row sharing a selection was
+necessarily a canonical, so the scope was implicit rather than written down).
 """
 
 from __future__ import annotations
@@ -228,6 +233,18 @@ def _reject_key_reuse(
     Closing that needs a selection recorded on `Request` or `Activation`;
     adding a column nothing consumes was declined for 1c-1 and is equally free
     in 1c-3, which is pre-data too.
+
+    **What this also checks, for a derivative.** `selection_key` is an
+    arbitrary dict compared attribute-by-attribute against each produced row,
+    so `submit_derivative` widens the check for free by naming one more
+    attribute: `selection_hash`. A key that already produced a derivative
+    `Activation` is then checked against that activation's block-set hash too,
+    not just its session and montage — closing exactly the gap 1c-2 recorded
+    against this column: the same key arriving twice with a different block
+    set. `submit()`'s canonical `selection_key` never names `selection_hash`
+    (a canonical's is always null — see `Activation`'s definition), so this
+    is inert for canonical submissions; it only fires when the caller asks
+    for it.
     """
     conflicts = []
     if stored["task_type"] != task_type:
@@ -239,7 +256,13 @@ def _reject_key_reuse(
     if _payload_differs(stored["payload"], payload):
         conflicts.append("payload differs from the one already recorded")
 
-    produced = (Activation & {"request_key": idempotency_key}).keys()
+    # .to_dicts(), not .keys(): keys() returns primary-key columns only, and
+    # selection_key may now name selection_hash -- a secondary column, added
+    # so submit_derivative's reused-key check can see it too (see the
+    # docstring paragraph above). Harmless for submit()'s canonical callers:
+    # their selection_key never names a column outside the primary key, so
+    # the extra columns fetched here simply go unread.
+    produced = (Activation & {"request_key": idempotency_key}).to_dicts()
     if produced and not any(
         all(row[attr] == value for attr, value in selection_key.items()) for row in produced
     ):
@@ -273,7 +296,9 @@ def submit(
 
     Always writes ``role='canonical'`` at ``activation_id=0`` — the only value
     the dedupe below can ever produce, since it returns early on any
-    pre-existing ``Activation`` for the selection. See the module docstring.
+    pre-existing CANONICAL ``Activation`` for the selection (a derivative on
+    the same selection, with no canonical yet, does not count — see the
+    dedupe's own comment). See the module docstring.
 
     **Never call this from inside a transaction.** DataJoint transactions do
     not nest — ``Connection.start_transaction`` raises outright if one is
@@ -347,11 +372,24 @@ def submit(
                 }
             )
 
-        existing = Activation & selection_key
+        existing = Activation & {**selection_key, "role": "canonical"}
         if existing:
             # One fetch1() for the whole row rather than one per key
             # attribute — Activation's key has four parts, so the brief's
             # dict-comprehension form issued four SELECTs for this branch.
+            #
+            # role="canonical" — added alongside submit_derivative (Task 4).
+            # Before submit_derivative existed, submit() was the only writer
+            # of Activation, so every row sharing this selection_key was
+            # necessarily a canonical and an unscoped match could not find
+            # anything else. submit_derivative can now leave a derivative on
+            # this exact (subject, session_datetime, montage_id) with no
+            # canonical yet — see its own docstring on why activation_id 0 is
+            # reserved for exactly this reason — and an unscoped match here
+            # would fetch1() that derivative and return ITS activation_id as
+            # though it were the canonical result: caught live by
+            # test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero
+            # in tests/schema/test_request.py.
             row = existing.fetch1()
             return {k: row[k] for k in Activation.primary_key}
 
@@ -364,6 +402,177 @@ def submit(
                 "created_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
             },
             skip_duplicates=True,
+        )
+        return key
+
+
+def submit_derivative(
+    idempotency_key: str,
+    task_type: str,
+    origin: str,
+    selection: dict,
+    block_ids: list[int],
+    payload: dict,
+    requested_by: str | None = None,
+) -> dict:
+    """Record a request and the derivative activation its block set selects.
+
+    Mirrors ``submit()``'s structure — the activation guard, the no-nesting
+    guard, ``_reject_key_reuse``, one transaction — and differs in exactly
+    three places, below. See the module docstring's "``submit()`` only ever
+    produces canonical activations" paragraph for why ``submit()`` itself
+    cannot do this: its selection carries no block set, so it has nothing to
+    key a derivative's identity on.
+
+    **1. The dedupe is on the selection, not the key.**
+    ``digest = selection_hash(task_type, block_ids)`` is this derivative's
+    identity (parent spec section 8.3: a derivative's identity is its block
+    set, unlike a canonical's, which is its (session, montage)). Before
+    inserting anything, an existing ``Activation`` already carrying that hash
+    for this session and montage is returned as-is — section 11.3's "a
+    request whose (selection, task type) is already in flight returns the
+    running one instead of starting a second" — the same structural-lookup
+    shape ``submit()`` uses for canonical dedupe, keyed on the hash instead
+    of on (session, montage) alone.
+
+    **2. Index allocation lets a collision raise.** A derivative needs a real
+    ``activation_id`` allocator — ``submit()`` can pin ``0`` only because its
+    dedupe returns early on ANY existing canonical, so it never allocates a
+    second one. Here, ``activation_id`` is read as the current max for this
+    montage and written as ``max + 1``, inside this same transaction, with NO
+    ``skip_duplicates``: a primary-key collision must raise rather than be
+    silently absorbed, the identical reasoning ``paramset.register`` documents
+    at length for its own index allocation — ``skip_duplicates`` cannot tell
+    "someone else already claimed this id for the same selection" from
+    "someone else claimed it for a DIFFERENT one", and would discard this
+    submission's row under no index at all rather than surface the collision.
+    Unlike ``paramset.register``, there is no bounded retry loop: that
+    function's retries make sense because each attempt is its own
+    auto-committing statement outside any transaction; every allocation
+    attempt here already happens inside ``submit_derivative``'s one
+    transaction, so a collision means another writer committed between this
+    transaction's read of the max and its own insert, and the whole
+    submission fails loudly rather than retrying reads against a snapshot
+    that is now known stale. The caller retries by calling
+    ``submit_derivative`` again, a fresh transaction with a fresh snapshot —
+    the same way any caller recovers from a transient DataJoint error.
+
+    Zero is reserved for canonical even when none has been submitted yet for
+    this montage: a montage with no ``Activation`` rows at all allocates its
+    first derivative at ``1``, not ``0``. ``submit()`` always targets
+    ``activation_id=0`` with ``skip_duplicates=True`` for its canonical row;
+    if a derivative had already claimed ``0``, a later canonical submission
+    would silently no-op against the derivative's row instead of inserting
+    its own, and hand its caller a key that names somebody else's derivative
+    under the role it asked for. Reserving ``0`` keeps that collision
+    unreachable regardless of which kind of activation a montage sees first —
+    a derivative may legitimately be requested before any canonical exists.
+
+    **3. What gets written.** ``role='derivative'``, ``selection_hash=digest``,
+    and one ``ActivationBlock`` row per distinct block id — sorted and
+    de-duplicated the same way ``selection_hash`` itself canonicalises
+    ``block_ids``, since ``ActivationBlock`` carries no columns beyond its
+    primary key: a block is either in the selection or it is not, and there
+    is nothing multiplicity could mean here.
+
+    **A derivative never supersedes a canonical.** ``supersedes`` is written
+    nowhere in this function, and nowhere else in this codebase. It exists on
+    ``Activation`` for a regenerated canonical to point at the one it
+    replaces (see ``Activation``'s definition) — a relationship that only
+    ever holds between two canonicals. A derivative's provenance is fully
+    carried by ``request_key`` and ``selection_hash``; it replaces nothing,
+    and no code path should ever write its ``supersedes``.
+
+    Returns the ``Activation`` key. Reusing an ``idempotency_key`` for a
+    different request — now including one that names a different block set —
+    raises ``DataJointError``; see ``_reject_key_reuse``.
+    """
+    if not schema.is_activated():
+        # Same reasoning as submit()'s guard: without this, calling before
+        # activate() fails inside the transaction below with DataJoint's
+        # "Cannot declare new tables inside a transaction", which says
+        # nothing about which call was actually wrong.
+        raise dj.DataJointError(
+            "request.activate(prefix) must run before submit_derivative() — "
+            "the Request/Activation tables are not yet bound to a database."
+        )
+
+    if dj.conn().in_transaction:
+        raise dj.DataJointError(
+            "submit_derivative() opens its own transaction and DataJoint "
+            "transactions do not nest, so it cannot be called from inside "
+            "one. Call it as its own unit of work; see submit()'s docstring."
+        )
+
+    import datetime as _dt
+
+    montage_key = {
+        k: selection[k] for k in ("subject", "session_datetime", "montage_id")
+    }
+    digest = selection_hash(task_type, block_ids)
+    selection_key = {**montage_key, "selection_hash": digest}
+
+    with dj.conn().transaction:
+        # Read before writing, rather than `insert1(..., skip_duplicates=True)`:
+        # skip_duplicates cannot tell a retry from key reuse. See
+        # _reject_key_reuse, including what the derivative-specific
+        # selection_hash comparison closes.
+        prior = Request & {"idempotency_key": idempotency_key}
+        if prior:
+            _reject_key_reuse(
+                prior.fetch1(),
+                idempotency_key=idempotency_key,
+                task_type=task_type,
+                origin=origin,
+                payload=payload,
+                requested_by=requested_by,
+                selection_key=selection_key,
+            )
+        else:
+            # No skip_duplicates: the only duplicate reachable here is another
+            # writer inserting the same key between the read above and this
+            # write, which must fail loudly and roll back the whole
+            # submission rather than quietly proceed on somebody else's
+            # Request row.
+            Request.insert1(
+                {
+                    "idempotency_key": idempotency_key,
+                    "task_type": task_type,
+                    "origin": origin,
+                    "payload": payload,
+                    "requested_by": requested_by,
+                    "requested_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                }
+            )
+
+        existing = Activation & selection_key
+        if existing:
+            # One fetch1() for the whole row rather than one per key
+            # attribute, matching submit()'s own dedupe branch above.
+            row = existing.fetch1()
+            return {k: row[k] for k in Activation.primary_key}
+
+        # max(existing activation_id for this montage) + 1, reserving 0 for
+        # canonical -- see this function's "Zero is reserved" docstring
+        # paragraph. to_arrays(), not fetch(): DataJoint 2.3.2 deprecates
+        # bare fetch() outright, and this project's suite must stay at zero
+        # warnings -- the same reason paramset.register reads its own max
+        # this way.
+        used = (Activation & montage_key).to_arrays("activation_id")
+        activation_id = int(max(used) + 1) if len(used) else 1
+
+        key = {**montage_key, "activation_id": activation_id}
+        Activation.insert1(
+            {
+                **key,
+                "role": "derivative",
+                "request_key": idempotency_key,
+                "created_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                "selection_hash": digest,
+            }
+        )
+        ActivationBlock.insert(
+            [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
         )
         return key
 

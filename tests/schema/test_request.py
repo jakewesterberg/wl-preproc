@@ -65,6 +65,17 @@ def selection(req):
     montage_id = next(_montage_ids)
     core.Montage.insert1({**key, "montage_id": montage_id, "start_s": 0.0, "end_s": 12.0},
                          skip_duplicates=True)
+    # ActivationBlock's `-> core.Block` (request.py) is a real foreign key, so
+    # submit_derivative's block_ids must name rows that already exist. Three
+    # covers every block_ids value Task 4's tests use ([1, 2], [2, 1], [1, 3]).
+    # skip_duplicates=True because this fixture runs once per test but
+    # (subject, session_datetime) -- unlike montage_id -- is the same tuple
+    # every time, so block_id 1-3 only actually get inserted on the first call.
+    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0)), start=1):
+        core.Block.insert1(
+            {**key, "block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s},
+            skip_duplicates=True,
+        )
     return {**key, "montage_id": montage_id}
 
 
@@ -429,3 +440,143 @@ def test_submit_refuses_to_run_inside_a_transaction(req, selection):
 
     # the outer transaction stayed usable and nothing was written
     assert len(req.Request & {"idempotency_key": "k-13"}) == 0
+
+
+def test_a_derivative_gets_its_own_activation_id(selection, prefix):
+    from wl_preproc.schema import request
+
+    canonical = request.submit(
+        idempotency_key="dv-1", task_type="neural", origin="cli",
+        selection=selection, payload={},
+    )
+    derivative = request.submit_derivative(
+        idempotency_key="dv-2", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+
+    assert derivative["activation_id"] != canonical["activation_id"]
+    assert (request.Activation & derivative).fetch1("role") == "derivative"
+
+
+def test_the_same_selection_returns_the_running_one(selection, prefix):
+    """Section 11.3: "a request whose (selection, task type) is already in
+    flight returns the running one instead of starting a second." Structural,
+    not a lock — the same shape canonical dedupe already uses.
+
+    The brief's own final assertion reads `len(request.Activation &
+    {"role": "derivative"}) == 1` -- a bare, table-wide role filter. That
+    only holds if this is the only test in the module that has ever created a
+    derivative row, which is not true here: test_a_derivative_gets_its_own_
+    activation_id, immediately above, creates one of its own, and by
+    definition-order execution (pytest's default, confirmed live) it runs
+    first. Scoped to `first` instead -- the same shape
+    test_two_requests_for_one_selection_yield_one_activation already uses for
+    submit()'s own dedupe two-request test -- so this test asserts what it
+    actually means (no second Activation for THIS selection) rather than a
+    global count this file's own header comment already explains cannot be
+    test-order-independent (see `_montage_ids`)."""
+    from wl_preproc.schema import request
+
+    first = request.submit_derivative(
+        idempotency_key="dv-3", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+    second = request.submit_derivative(
+        idempotency_key="dv-4", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[2, 1], payload={},
+    )
+
+    assert second == first
+    assert len(request.Activation & first) == 1
+
+
+def test_a_different_block_set_is_a_different_activation(selection, prefix):
+    from wl_preproc.schema import request
+
+    a = request.submit_derivative(
+        idempotency_key="dv-5", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+    b = request.submit_derivative(
+        idempotency_key="dv-6", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 3], payload={},
+    )
+
+    assert a != b
+
+
+def test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero(selection, prefix):
+    """0 is reserved for canonical even when none has been submitted yet for
+    this montage. If a derivative claimed 0 first, a later submit() for the
+    same montage would silently no-op onto the derivative's row --
+    Activation.insert1(..., skip_duplicates=True) at activation_id=0 treats
+    an existing row at that key as "already done" -- and hand its caller a
+    key that names somebody else's derivative under the role it asked for,
+    instead of ever inserting a canonical row at all."""
+    from wl_preproc.schema import request
+
+    derivative = request.submit_derivative(
+        idempotency_key="dv-7", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1], payload={},
+    )
+    assert derivative["activation_id"] != 0
+
+    canonical = request.submit(
+        idempotency_key="dv-8", task_type="neural", origin="cli",
+        selection=selection, payload={},
+    )
+    assert canonical["activation_id"] == 0
+    assert (request.Activation & canonical).fetch1("role") == "canonical"
+
+
+def test_a_retry_of_a_derivative_idempotency_key_returns_the_running_activation(selection, prefix):
+    """The accept branch of the reuse check, now widened to also compare the
+    block set (see test_reusing_a_derivative_idempotency_key_for_a_different_
+    block_set_is_refused below): the identical key, resubmitted with the
+    identical block set, is still a retry and returns the same activation
+    rather than being refused."""
+    from wl_preproc.schema import request
+
+    first = request.submit_derivative(
+        idempotency_key="dv-10", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+    second = request.submit_derivative(
+        idempotency_key="dv-10", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+    assert first == second
+    assert len(request.Request & {"idempotency_key": "dv-10"}) == 1
+
+
+def test_reusing_a_derivative_idempotency_key_for_a_different_block_set_is_refused(selection, prefix):
+    """The block set is part of "the same ask" for a derivative exactly as
+    the selection is for submit() (see
+    test_reusing_an_idempotency_key_for_a_different_selection_is_refused
+    above): reusing a key with different block_ids is a collision, not a
+    retry, and the running activation must not be handed back to a caller who
+    asked for different blocks. This is the exact shape
+    Activation.selection_hash was added to make detectable -- closing the
+    residual 1c-2 recorded against that column (see _reject_key_reuse's
+    docstring, "What this also checks, for a derivative")."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    first = request.submit_derivative(
+        idempotency_key="dv-9", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1, 2], payload={},
+    )
+
+    with pytest.raises(dj.DataJointError, match="selection"):
+        request.submit_derivative(
+            idempotency_key="dv-9", task_type="neural", origin="wl_works",
+            selection=selection, block_ids=[1, 3], payload={},
+        )
+
+    # the first ask's activation is unaffected, unmodified, and still the
+    # only derivative on this montage
+    assert len(request.Activation & {"role": "derivative"} & selection) == 1
+    assert (request.Activation & first).fetch1("selection_hash") == (
+        request.selection_hash("neural", [1, 2])
+    )
