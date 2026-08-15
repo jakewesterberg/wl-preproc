@@ -8,6 +8,8 @@ as coverage rather than as a refusal here.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from wl_sync.session import SessionId
 
@@ -79,3 +81,31 @@ def test_systems_with_data_includes_undeclared(session):
     assert systems_with_data(discover_topology(layout, manifest)) == sorted(
         [*CI_RECIPE.systems, "rhs"]
     )
+
+
+def test_undeclared_content_survives_a_subdirectory_vanishing_mid_walk(session, monkeypatch):
+    """`_has_content` walks with `rglob`, and on Python 3.11 (this project's
+    floor) the scandir it opens on each subdirectory already discovered is
+    guarded only against PermissionError -- unlike `Path.is_file()`, it does
+    not swallow that subdirectory vanishing before being descended into.
+    That is the same write-to-temp-then-rename race `sentinel.last_change_at`
+    already documents for this tree, one layer deeper than a single
+    `.stat()`, and it is fixed upstream only in Python 3.13's rewritten
+    glob.py. A transfer actively writing an undeclared system's directory is
+    the ordinary case here, not an edge one, so losing this race must end
+    the scan rather than crash discovery."""
+    layout, manifest = session
+    rhs_dir = layout.system_dir("rhs")
+    rhs_dir.mkdir()
+    (rhs_dir / "amplifier.dat").write_bytes(b"0" * 16)
+
+    real_rglob = Path.rglob
+
+    def vanishing_rglob(self, pattern):
+        if self == rhs_dir:
+            raise FileNotFoundError(f"simulated: {self} removed mid-walk")
+        yield from real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", vanishing_rglob)
+
+    assert discover_topology(layout, manifest)["rhs"] is SystemState.ABSENT

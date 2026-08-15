@@ -26,12 +26,33 @@ def _has_content(layout: SessionLayout, system: str) -> bool:
 
     An empty directory is not a recording; counting it as one would create an
     AcquisitionSystem row for a device that produced nothing.
+
+    `rglob` walks by opening each subdirectory it has already discovered in
+    turn, and on Python 3.11 that inner `scandir` is only guarded against
+    `PermissionError` -- unlike `Path.is_file()`/`Path.is_dir()`, it does not
+    swallow the directory itself vanishing between being listed and being
+    descended into. That is the same write-to-temp-then-rename race
+    `sentinel.last_change_at` already documents for this tree, one layer
+    deeper than a single `.stat()` (fixed upstream in 3.13's rewritten
+    `glob.py`, which catches `OSError` at that point; still live on the 3.11
+    floor this project supports). One vanished subdirectory ends the walk
+    rather than crashing the caller; any qualifying file already seen by
+    then still counts.
     """
     directory = layout.system_dir(system)
     if not directory.is_dir():
         return False
     marker = layout.done_marker(system)
-    return any(p.is_file() and p != marker for p in directory.rglob("*"))
+    entries = directory.rglob("*")
+    while True:
+        try:
+            candidate = next(entries)
+        except StopIteration:
+            return False
+        except OSError:
+            continue
+        if candidate.is_file() and candidate != marker:
+            return True
 
 
 def discover_topology(
