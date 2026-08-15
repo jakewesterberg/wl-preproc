@@ -83,17 +83,16 @@ def test_systems_with_data_includes_undeclared(session):
     )
 
 
-def test_undeclared_content_survives_a_subdirectory_vanishing_mid_walk(session, monkeypatch):
-    """`_has_content` walks with `rglob`, and on Python 3.11 (this project's
-    floor) the scandir it opens on each subdirectory already discovered is
-    guarded only against PermissionError -- unlike `Path.is_file()`, it does
-    not swallow that subdirectory vanishing before being descended into.
-    That is the same write-to-temp-then-rename race `sentinel.last_change_at`
-    already documents for this tree, one layer deeper than a single
-    `.stat()`, and it is fixed upstream only in Python 3.13's rewritten
-    glob.py. A transfer actively writing an undeclared system's directory is
-    the ordinary case here, not an edge one, so losing this race must end
-    the scan rather than crash discovery."""
+def test_top_level_content_survives_a_failed_recursive_walk(session, monkeypatch):
+    """`_has_content`'s recursive walk can raise before yielding anything --
+    on Python 3.11 (this project's floor) the `scandir` it opens on a
+    subdirectory it has already discovered is guarded only against
+    PermissionError, unlike `Path.is_file()`. Losing that race must not
+    turn a real recording into ABSENT: a file sitting directly in the
+    directory has to survive even when the walk that would have found it
+    dies first. `systems_with_data` is checked too, since that is the
+    concrete consequence -- a dropped AcquisitionSystem row, not just a
+    wrong enum value."""
     layout, manifest = session
     rhs_dir = layout.system_dir("rhs")
     rhs_dir.mkdir()
@@ -101,11 +100,37 @@ def test_undeclared_content_survives_a_subdirectory_vanishing_mid_walk(session, 
 
     real_rglob = Path.rglob
 
-    def vanishing_rglob(self, pattern):
+    def failing_rglob(self, pattern):
         if self == rhs_dir:
-            raise FileNotFoundError(f"simulated: {self} removed mid-walk")
+            raise FileNotFoundError(f"simulated: {self} unreadable mid-walk")
         yield from real_rglob(self, pattern)
 
-    monkeypatch.setattr(Path, "rglob", vanishing_rglob)
+    monkeypatch.setattr(Path, "rglob", failing_rglob)
+
+    topology = discover_topology(layout, manifest)
+
+    assert topology["rhs"] is SystemState.UNDECLARED
+    assert "rhs" in systems_with_data(topology)
+
+
+def test_a_failed_recursive_walk_over_a_truly_empty_directory_is_still_absent(
+    session, monkeypatch
+):
+    """The fallback that recovers top-level content (previous test) must not
+    turn every failed walk into a false UNDECLARED: an undeclared directory
+    that genuinely holds nothing has to read as ABSENT even when the walk
+    that would have confirmed that also raises."""
+    layout, manifest = session
+    rhs_dir = layout.system_dir("rhs")
+    rhs_dir.mkdir()
+
+    real_rglob = Path.rglob
+
+    def failing_rglob(self, pattern):
+        if self == rhs_dir:
+            raise FileNotFoundError(f"simulated: {self} unreadable mid-walk")
+        yield from real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", failing_rglob)
 
     assert discover_topology(layout, manifest)["rhs"] is SystemState.ABSENT

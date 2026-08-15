@@ -8,6 +8,7 @@ device that was not recorded is silence.
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SYSTEMS, SessionLayout
@@ -27,32 +28,43 @@ def _has_content(layout: SessionLayout, system: str) -> bool:
     An empty directory is not a recording; counting it as one would create an
     AcquisitionSystem row for a device that produced nothing.
 
-    `rglob` walks by opening each subdirectory it has already discovered in
-    turn, and on Python 3.11 that inner `scandir` is only guarded against
-    `PermissionError` -- unlike `Path.is_file()`/`Path.is_dir()`, it does not
-    swallow the directory itself vanishing between being listed and being
-    descended into. That is the same write-to-temp-then-rename race
-    `sentinel.last_change_at` already documents for this tree, one layer
-    deeper than a single `.stat()` (fixed upstream in 3.13's rewritten
-    `glob.py`, which catches `OSError` at that point; still live on the 3.11
-    floor this project supports). One vanished subdirectory ends the walk
-    rather than crashing the caller; any qualifying file already seen by
-    then still counts.
+    `rglob` can raise partway through if a subdirectory it has already
+    discovered is removed before being scanned -- on Python 3.11 (this
+    project's floor) the inner `scandir` it opens is guarded only against
+    `PermissionError`, unlike `Path.is_file()`/`Path.is_dir()`. Fixed
+    upstream in 3.13's rewritten `glob.py`, so the real exposure is CI's
+    3.11 leg and developer machines, not the preprocessing server, which
+    runs 3.13. `sentinel.last_change_at`'s own `rglob` line has the
+    identical exposure and is still open -- out of scope for this module,
+    tracked separately.
+
+    Swallowing the failure and simply returning False would trade a crash
+    for something worse: a recording sitting in plain sight in `directory`
+    would silently read as ABSENT instead of UNDECLARED, and
+    `systems_with_data` would drop a real AcquisitionSystem row over nothing
+    but unlucky scan timing -- exactly what this module exists to prevent.
+    So a failed recursive walk falls back to one cheap, non-recursive
+    listing of `directory` itself: a file sitting directly in it still
+    counts even when whatever actually vanished was deeper in the tree.
+
+    A recording that exists *only* under a subdirectory that is itself the
+    one lost to the race is the one shape this does not recover. That is a
+    deliberately modest fix rather than a hardened traversal: the exposure
+    above is CI's 3.11 leg and developer machines, and a full recovery would
+    mean not using `rglob` at all.
     """
     directory = layout.system_dir(system)
     if not directory.is_dir():
         return False
     marker = layout.done_marker(system)
-    entries = directory.rglob("*")
-    while True:
-        try:
-            candidate = next(entries)
-        except StopIteration:
-            return False
-        except OSError:
-            continue
-        if candidate.is_file() and candidate != marker:
-            return True
+
+    def qualifies(candidate: Path) -> bool:
+        return candidate.is_file() and candidate != marker
+
+    try:
+        return any(qualifies(p) for p in directory.rglob("*"))
+    except OSError:
+        return any(qualifies(p) for p in directory.iterdir())
 
 
 def discover_topology(
