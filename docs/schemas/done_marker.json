@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "blake3": {
+          "title": "Blake3",
+          "type": "string"
+        },
+        "bytes": {
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "blake3"
+      ],
+      "title": "FileEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "files": {
+      "items": {
+        "$ref": "#/$defs/FileEntry"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "system": {
+      "title": "System",
+      "type": "string"
+    },
+    "transfer_finished_at": {
+      "format": "date-time",
+      "title": "Transfer Finished At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "system",
+    "transfer_finished_at",
+    "files"
+  ],
+  "title": "DoneMarker",
+  "type": "object"
+}

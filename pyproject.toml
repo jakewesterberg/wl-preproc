@@ -50,6 +50,12 @@ dependencies = [
     "element-animal @ git+https://github.com/akshay-jaggi/element-animal.git@0d1ae2463785f19fb74f4a4b4e3710a294153e51",  # compat-fixes
     "element-session @ git+https://github.com/datajoint/element-session.git@fed82e43a8e49ea9b36ee3b812bea64b36552356",  # main
     "element-event @ git+https://github.com/datajoint/element-event.git@e2cf2874a073ee19dcfd020e5904443c91b78c8c",  # main
+    # blake3 rather than hashlib.blake2b: spec section 4.6's behaviour-camera
+    # sidecar is a frozen interface that already specifies `checksum: <blake3>`,
+    # so the algorithm was committed to before ingest existed. Measured
+    # 2026-08-15 at 1.83 GB/s vs blake2b's 1.15 GB/s; a 360 GB session verifies
+    # in ~3.3 min. Wheels published for cp311 and cp313, which is what CI runs.
+    "blake3>=1.0,<2",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the

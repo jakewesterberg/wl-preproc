@@ -61,3 +61,24 @@ def test_generation_is_byte_identical_for_one_seed(tmp_path):
     a = next((first / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
     b = next((second / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
     assert a.read_bytes() == b.read_bytes()
+
+
+def test_every_system_declares_the_files_it_wrote(tmp_path):
+    """The marker must list what is actually on disk. A marker listing nothing
+    would satisfy verification trivially, which is the failure this catches."""
+    from wl_preproc.contracts.done import DoneMarker
+
+    generate_session(tmp_path, CI_RECIPE)
+    layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
+
+    for system in CI_RECIPE.systems:
+        marker = DoneMarker.from_yaml(layout.done_marker(system).read_text())
+        system_dir = layout.system_dir(system)
+        on_disk = {
+            str(p.relative_to(system_dir))
+            for p in system_dir.rglob("*")
+            if p.is_file() and p.name != "DONE"
+        }
+        assert {entry.path for entry in marker.files} == on_disk
+        for entry in marker.files:
+            assert (system_dir / entry.path).stat().st_size == entry.bytes

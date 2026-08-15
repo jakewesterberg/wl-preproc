@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from wl_sync.log import SyncBoxLogHeader
 
+from wl_preproc.contracts.done import DoneMarker
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.protocol import HealthResponse, JobRequest
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
@@ -28,6 +29,7 @@ from wl_preproc.schema import DEFAULT_PREFIX
 
 EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "session_manifest": SessionManifest,
+    "done_marker": DoneMarker,
     "behavior_camera_sidecar": BehaviorCameraSidecar,
     "syncbox_log_header": SyncBoxLogHeader,
     "health_response": HealthResponse,
