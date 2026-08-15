@@ -45,6 +45,18 @@ QUARANTINE_REASONS: frozenset[str] = frozenset(
         # cleanly and then fails at the insert. Caught as a manifest problem
         # rather than surfacing as a MySQL error mid-landing.
         "subject_unrepresentable",
+        # The watcher's outer exception boundary (wl_preproc/ingest/watcher.py,
+        # `_scan_one`): every failure above is a known, classified shape this
+        # pipeline anticipates and names. This one is not -- a session-params
+        # dict with mixed int/str keys that json.dumps(sort_keys=True) cannot
+        # sort, a genuinely unclassified DataJoint fault, anything else that
+        # slips past every earlier, specific check. Recorded rather than
+        # raised, so it costs one session, not every session in the same
+        # scan -- and recorded under its own name rather than folded into
+        # `params_invalid` or another existing reason, because collapsing an
+        # unanticipated failure into a reason that implies a specific, known
+        # cause would misdiagnose it the next time someone reads this table.
+        "unexpected_failure",
     }
 )
 

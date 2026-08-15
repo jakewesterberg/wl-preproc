@@ -15,6 +15,8 @@ from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.ingest.discover import SystemState, discover_topology
 from wl_preproc.ingest.landing import (
+    QUARANTINE_SESSION_DIR_MAX_LEN,
+    QUARANTINE_SUBJECT_MAX_LEN,
     SUBJECT_MAX_LEN,
     already_ingested,
     land_session,
@@ -174,6 +176,67 @@ def test_quarantining_twice_updates_rather_than_raising(activated):
     row = (ingest.Quarantine & {"session_dir": "/scratch/2027-03-14_98"}).fetch1()
 
     assert row["reason"] == "checksum_mismatch"
+
+
+# --- Round 2 review (Task 8, Critical 1) ---------------------------------
+#
+# Task 8's watcher calls `quarantine` with `subject=manifest.subject` and
+# `session_dir=str(session_dir)` from branches that run before its own
+# length checks (a schema_version bump reaching a session with an oversized
+# subject, for one) — a value that reaches this function has NOT necessarily
+# already been checked against the columns it is about to be inserted into.
+# `Quarantine.subject : varchar(32)` and `Quarantine.session_dir :
+# varchar(255)` (wl_preproc/schema/ingest.py) are enforced here, at the one
+# place every quarantine write funnels through, rather than by auditing every
+# call site's position relative to a check that could move — which it did,
+# in the very same review round that found this (Important 2 reorders
+# _evaluate_session's own checks).
+
+
+def test_quarantine_omits_a_subject_too_long_for_its_own_column(activated):
+    """`subject` is not part of `Quarantine`'s key (see the module's own
+    docstring: "NOT keyed on (subject, session_datetime)"), so an oversized
+    one is OMITTED rather than truncated — the same treatment an
+    unparseable manifest's missing subject already gets
+    (`test_quarantine_records_a_directory_with_no_session_key` above), for
+    the same reason: a truncated value looks like real, if short,
+    provenance, and two different oversized subjects sharing a 32-character
+    prefix would render identically. Without this fix, the insert below
+    raised a raw `pymysql` data-truncation error rather than reaching this
+    assertion at all — confirmed while writing this test, by temporarily
+    reverting `quarantine`'s clamp.
+    """
+    oversized = "z" * (QUARANTINE_SUBJECT_MAX_LEN + 8)
+    quarantine(
+        "/scratch/2027-03-14_97",
+        reason="manifest_schema_version",
+        detail={},
+        subject=oversized,
+        prefix=activated,
+    )
+    row = (ingest.Quarantine & {"session_dir": "/scratch/2027-03-14_97"}).fetch1()
+
+    assert row["subject"] is None
+
+
+def test_quarantine_truncates_a_session_dir_too_long_for_the_primary_key(activated):
+    """`session_dir` IS `Quarantine`'s primary key and cannot be null, so an
+    oversized one is truncated rather than omitted — the only structurally
+    available option for a value that must be written and cannot fit. A 265-
+    character `session_dir` — one already this test's own point, not a
+    hypothetical Task 8's review reproduced live — raised the identical raw
+    `pymysql` error without this fix. The row is found at the TRUNCATED key,
+    proving the value that was actually written, not merely that no
+    exception escaped.
+    """
+    oversized_dir = "/scratch/" + ("q" * (QUARANTINE_SESSION_DIR_MAX_LEN + 10))
+    quarantine(oversized_dir, reason="manifest_invalid", detail={}, prefix=activated)
+
+    truncated = oversized_dir[:QUARANTINE_SESSION_DIR_MAX_LEN]
+    assert len(truncated) == QUARANTINE_SESSION_DIR_MAX_LEN
+    row = (ingest.Quarantine & {"session_dir": truncated}).fetch1()
+    assert row["reason"] == "manifest_invalid"
+    assert len(ingest.Quarantine & {"session_dir": oversized_dir}) == 0
 
 
 # --- Beyond the brief ---------------------------------------------------

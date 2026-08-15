@@ -36,6 +36,39 @@ from wl_preproc.schema import DEFAULT_PREFIX, pipeline
 
 schema = dj.Schema()
 
+# Read directly from ParamSet's own declaration below (`paramset_type :
+# varchar(32)`), not assumed -- the same discipline landing.SUBJECT_MAX_LEN
+# documents for element-animal's `subject` column. Task 8's watcher imports
+# this to reject an over-length paramset_type before ever calling register(),
+# the same shape as the subject_unrepresentable check it already runs: a
+# value that validates against SessionParams (an unconstrained str) but
+# cannot fit the column it is about to be inserted into.
+PARAMSET_TYPE_MAX_LEN = 32
+
+
+class ContentionExhausted(dj.DataJointError):
+    """register()'s bounded retry loop exhausted every attempt to allocate a
+    fresh paramset_idx under real concurrent registration -- a designed-for,
+    transient condition (see register()'s own docstring and
+    `_MAX_REGISTER_ATTEMPTS`), not a defect in what was asked to be
+    registered.
+
+    A dedicated subclass, not a bare `dj.DataJointError`: `DataJointError` is
+    the *root* of DataJoint's entire error tree -- `AccessError`,
+    `MissingTableError`, `IntegrityError`, `QuerySyntaxError`,
+    `DuplicateError` all derive from it (confirmed against the installed
+    2.3.2 package). Task 8's watcher needs to catch exactly the transient,
+    self-clearing condition this type names and defer that one session to
+    the next scan -- silently retrying forever is the correct response only
+    because contention is guaranteed to clear. A `dj.ParamSet` dropped out
+    from under a live prefix, a stale connection, a genuine access fault --
+    every other member of that tree -- is a permanent condition an identical
+    catch would defer identically and silently, forever, which is the
+    opposite of correct: see `wl_preproc/ingest/watcher.py`'s
+    `Outcome.DEFERRED` docstring for why that distinction matters enough to
+    need its own type rather than a message-text match.
+    """
+
 
 def content_hash(params: dict) -> str:
     """A stable hash of a parameter mapping.
@@ -145,8 +178,8 @@ def register(paramset_type: str, params: dict) -> int:
     params race), that is not contention, just a lost race to write something
     equivalent -- return their index, same as the fast path above. If they
     registered DIFFERENT content, retry the allocation against a fresh
-    snapshot, bounded, so genuine contention fails loudly rather than
-    spinning forever.
+    snapshot, bounded, so genuine contention raises `ContentionExhausted`
+    rather than spinning forever.
     """
     digest = content_hash(params)
     existing = ParamSet & {"paramset_type": paramset_type, "param_hash": digest}
@@ -175,7 +208,7 @@ def register(paramset_type: str, params: dict) -> int:
                 return int(existing.fetch1("paramset_idx"))
             continue  # someone else's different params claimed `idx` first
     else:
-        raise dj.DataJointError(
+        raise ContentionExhausted(
             f"paramset registration contention: exhausted {_MAX_REGISTER_ATTEMPTS} "
             f"attempts to allocate an index for paramset_type={paramset_type!r}"
         )

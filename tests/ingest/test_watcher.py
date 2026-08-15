@@ -229,12 +229,20 @@ def test_a_directory_without_a_manifest_is_ignored_entirely(root):
     subject or corrupts something first so it cannot land at all; this was
     the one that did neither.
     """
-    tmp_path, prefix, _ = root
+    tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "ignorkey")
     (tmp_path / "some_scratch_dir").mkdir()
 
     result = scan_once(tmp_path, prefix=prefix)
 
+    # Round 2 review (Important 4): asserting only that the scratch dir is
+    # absent leaves this test vacuous against a mutation that breaks the
+    # REAL session's own outcome (e.g. a _scan_one that always returns
+    # INCOMPLETE right after the parse, never reaching topology, verification,
+    # params, or landing) -- it would still pass, since it never checks what
+    # actually happened to the one directory that IS a session. Asserting
+    # INGESTED closes that.
+    assert result.outcomes[session_dir] is Outcome.INGESTED
     assert str(tmp_path / "some_scratch_dir") not in result.outcomes
 
 
@@ -256,13 +264,21 @@ def test_nothing_ever_writes_a_request_row(root):
     """
     from wl_preproc.schema import request
 
-    tmp_path, prefix, _ = root
+    tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "noreqkey")
     request.activate(prefix=prefix)
     before = len(request.Request()), len(request.Activation())
 
-    scan_once(tmp_path, prefix=prefix)
+    result = scan_once(tmp_path, prefix=prefix)
 
+    # Round 2 review (Important 4): this test was vacuous against a mutation
+    # making _scan_one return INCOMPLETE immediately after the parse, before
+    # topology, verification, params, or landing ever run -- the row counts
+    # below would still hold (trivially, since nothing ran), so nothing here
+    # actually proved the watcher reached the code path that would call
+    # submit() if it were ever going to. Asserting INGESTED first proves this
+    # scan did the whole job land_session does, not none of it.
+    assert result.outcomes[session_dir] is Outcome.INGESTED
     assert (len(request.Request()), len(request.Activation())) == before
 
 
@@ -272,13 +288,18 @@ def test_nothing_ever_writes_a_request_row(root):
 # brief's own reference implementation (the unguarded `_candidate_dirs`, the
 # manifest read sitting outside its own try, and `register_session_params`'s
 # uncaught `dj.DataJointError`) rather than merely asserting the happy path
-# the brief's own eleven tests above already cover. The fourth deviation —
-# building the session key through `landing.manifest_session_key` instead of
-# inline — has no dedicated test of its own: every test above that lands and
-# then re-scans (`test_scanning_twice_reports_already_the_second_time`) or
-# checks `already_ingested` indirectly already exercises the one key-building
-# path there is, since `_scan_one` has no second, inline way left to diverge
-# from it.
+# the brief's own eleven tests above already cover.
+#
+# The fourth deviation — building the session key through
+# `landing.manifest_session_key` instead of inline — was claimed here, in an
+# earlier version of this comment, to have "no dedicated test of its own"
+# because `already_ingested`'s own defensive normalization makes the two
+# implementations behaviourally indistinguishable. Round 2 review (Important
+# 5) confirmed the behavioural half of that but corrected the conclusion: a
+# STRUCTURAL test can still tell them apart, and does, in the "Round 2"
+# section below (`test_the_session_key_check_goes_through_landings_own_
+# helper`). The claim that the property was untestable was simply wrong; the
+# reasoning for why a behavioural test could not see it was right.
 
 
 def test_a_permission_fault_on_one_sibling_does_not_crash_the_whole_scan(root):
@@ -302,6 +323,13 @@ def test_a_permission_fault_on_one_sibling_does_not_crash_the_whole_scan(root):
     `(child / MANIFEST_FILENAME).is_file()` that actually raises, since
     resolving a path *inside* the blocked directory needs search permission
     on it. Either way, both calls sit in the same guarded block.
+
+    `result.root_error is None` (added in round 2 review, Important 7) is
+    the companion half of the proof: this is a PER-CHILD fault, not a
+    root-level one, and the two must not be confused with each other --
+    `root_error` exists specifically to distinguish "root itself is fine,
+    one entry under it is not" (this test) from "root itself could not be
+    read" (the next test).
     """
     tmp_path, prefix, session_dir = root
     _use_dedicated_subject(tmp_path, "sibkey")
@@ -316,9 +344,10 @@ def test_a_permission_fault_on_one_sibling_does_not_crash_the_whole_scan(root):
 
     assert result.outcomes[session_dir] is Outcome.INGESTED
     assert str(blocked) not in result.outcomes
+    assert result.root_error is None
 
 
-def test_an_unreadable_root_yields_an_empty_scan_rather_than_raising(root):
+def test_an_unreadable_root_is_reported_distinctly_not_as_an_empty_scan(root):
     """`root.iterdir()` is a raw passthrough that swallows nothing on its own
     — confirmed empirically to behave differently across this project's two
     supported interpreters: on 3.11 it is a generator (the call itself never
@@ -330,6 +359,16 @@ def test_an_unreadable_root_yields_an_empty_scan_rather_than_raising(root):
     already generated is never reached at all here, by construction: nothing
     under an unlistable root can be found, so nothing lands and no dedicated
     subject is needed.
+
+    Round 2 review (Important 7): an empty `outcomes` dict alone does not
+    distinguish this from a root that is genuinely empty -- `wlpp ingest
+    --root /typo/path` and `--root <empty dir>` were byte-identical before
+    `ScanResult.root_error` existed: exit 0, no output either way, silently
+    reporting success for a typo, an unmounted NAS, or an ACL slip on the
+    storage root. `root_error` is what a caller (the CLI, see
+    `test_cli_ingest_reports_a_root_fault_and_exits_non_zero` below) checks
+    to tell the two apart; see the companion test right after this one for
+    the genuinely-empty case that must NOT set it.
     """
     tmp_path, prefix, _ = root
     original_mode = tmp_path.stat().st_mode
@@ -340,6 +379,23 @@ def test_an_unreadable_root_yields_an_empty_scan_rather_than_raising(root):
         os.chmod(tmp_path, original_mode)
 
     assert result.outcomes == {}
+    assert result.root_error is not None
+
+
+def test_a_genuinely_empty_root_has_no_root_error(tmp_path, dj_conn, prefix):
+    """The companion proof Important 7 asks for: an empty-but-perfectly-
+    readable root must not ALSO look like a root-level fault, or every
+    quiet night with nothing new to ingest would wrongly report an error.
+    Deliberately does not use the `root` fixture -- that fixture generates a
+    real CI_RECIPE session, and this test needs a root with nothing in it at
+    all.
+    """
+    ingest.activate(prefix=prefix)
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes == {}
+    assert result.root_error is None
 
 
 def test_a_manifest_with_invalid_utf8_bytes_quarantines_rather_than_crashing(root):
@@ -458,3 +514,381 @@ def test_paramset_registration_contention_defers_rather_than_quarantining(root, 
     assert result.outcomes[session_dir] is Outcome.DEFERRED
     assert calls["n"] == 10, "expected every one of _MAX_REGISTER_ATTEMPTS to collide"
     assert len(ingest.Quarantine & {"session_dir": session_dir}) == 0
+
+
+# --- Round 2 review ---------------------------------------------------------
+#
+# Two Criticals, closed together because they share one mandate: "the
+# mandate told you to close a blast-radius hole at three named sites — where
+# else does that reasoning reach?" It reaches `_scan_one` itself (Critical 1
+# — no outer exception boundary around per-session processing) and the
+# specific catch that produces DEFERRED (Critical 2 — `except
+# dj.DataJointError` is DataJoint's entire error tree, not just the one
+# transient condition it was meant for). Plus all seven Important findings
+# and the two named Minors.
+
+
+def test_a_datajoint_error_that_is_not_contention_quarantines_not_defers(root, monkeypatch):
+    """Critical 2: `except dj.DataJointError` would also swallow
+    `AccessError`, `MissingTableError`, `IntegrityError`, `QuerySyntaxError`,
+    `DuplicateError` — everything in DataJoint's error tree, since
+    `DataJointError` is its root (confirmed against the installed 2.3.2
+    package: `dj.DataJointError.__mro__` is `(DataJointError, Exception,
+    BaseException, object)`).
+
+    Proven with a permanent condition a bare-`DataJointError` catch cannot
+    distinguish from genuine, self-clearing contention:
+    `paramset.register` itself raises a plain `dj.DataJointError` that is
+    NOT `ContentionExhausted`. This must quarantine (`unexpected_failure`),
+    not defer — silently deferring a permanent condition forever, with no
+    `Quarantine` row and no `Ingestion` row, means the session is visible in
+    NO section of any report built from these tables: not Ingested (no row),
+    not Quarantined (no row), not Stalled (`is_stalled` short-circuits False
+    because the session genuinely is complete). It would just retry forever,
+    invisibly, on every poll.
+    """
+    import datajoint as dj
+
+    from wl_preproc.schema import paramset
+
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "permkey")
+    (SessionLayout(tmp_path, CI_RECIPE.session_id).dir / "session_params.yaml").write_text(
+        "paramset_type: perm-fail-probe\nparams:\n  probe: true\n"
+    )
+    paramset.activate(prefix=prefix)
+
+    def always_fail(paramset_type, params):
+        raise dj.DataJointError("simulated permanent condition, not contention")
+
+    monkeypatch.setattr(paramset, "register", always_fail)
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "unexpected_failure"
+    assert row["detail"]["error_type"] == "DataJointError"
+
+
+def test_a_mixed_key_type_params_file_quarantines_the_one_session_not_its_sibling(root):
+    """Critical 1(a): `params:\\n  0: 0.5\\n  gain: 2` — a per-channel setting
+    written beside a named one — passes `SessionParams` validation cleanly,
+    because `params` is a bare, deliberately unconstrained `dict` (see
+    `SessionParams`'s own docstring). It then reaches `paramset.register`'s
+    `content_hash`, whose `json.dumps(params, sort_keys=True)` cannot sort a
+    dict with both int and str keys — confirmed directly, not assumed:
+    `json.dumps({0: 0.5, "gain": 2}, sort_keys=True)` raises `TypeError:
+    "'<' not supported between instances of 'str' and 'int'"`. Also
+    confirmed directly that `SessionParams.model_validate` accepts this
+    params dict unchanged, key types and all — it is not rejected at the
+    envelope level either.
+
+    Uncaught, this escaped `_evaluate_session` entirely and, being inside
+    `scan_once`'s dict comprehension, would have aborted the *whole* scan —
+    proven here with a genuine second, healthy session generated fresh (not
+    copied) right next to the broken one, via `CI_RECIPE.model_copy` with a
+    different `session_id` and a dedicated `subject` — both stamped
+    automatically by `generate_session`/`write_manifest`, so the sibling's
+    directory name and its own manifest's `session_id` agree by
+    construction, with no separate fix-up needed.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "badkey")
+    (SessionLayout(tmp_path, CI_RECIPE.session_id).dir / "session_params.yaml").write_text(
+        "paramset_type: clustering\nparams:\n  0: 0.5\n  gain: 2\n"
+    )
+
+    sibling_recipe = CI_RECIPE.model_copy(
+        update={"session_id": "2027-03-14_02", "subject": "goodsib"}
+    )
+    generate_session(tmp_path, sibling_recipe)
+    sibling_dir = str(SessionLayout(tmp_path, sibling_recipe.session_id).dir)
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "unexpected_failure"
+    assert row["detail"]["error_type"] == "TypeError"
+
+    assert result.outcomes[sibling_dir] is Outcome.INGESTED
+
+
+def test_an_overlong_paramset_type_quarantines_as_params_invalid(root):
+    """Critical 1(b): the identical shape as `subject_unrepresentable`, one
+    layer down. `ParamSet.paramset_type : varchar(32)`
+    (`wl_preproc/schema/paramset.py`); `SessionParams.paramset_type` is an
+    unconstrained `str`, so a longer value validates cleanly there and would
+    otherwise fail only at `paramset.register`'s own insert, as a raw
+    `pymysql.err.DataError` `_evaluate_session` does not name or expect.
+    Closed at source in `params.py`, against `paramset.PARAMSET_TYPE_MAX_LEN`
+    — read directly from `ParamSet`'s own declaration, not assumed.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "longtype")
+    overlong = "x" * 40
+    (SessionLayout(tmp_path, CI_RECIPE.session_id).dir / "session_params.yaml").write_text(
+        f"paramset_type: {overlong}\nparams:\n  n_blocks: 4\n"
+    )
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "params_invalid"
+    assert overlong in row["detail"]["error"]
+
+
+def test_an_oversized_subject_with_a_bad_schema_version_does_not_crash_the_scan(root):
+    """Critical 1(c): the `manifest_schema_version` branch passes
+    `subject=manifest.subject` to `quarantine()` unconditionally, and runs
+    BEFORE the subject-length check (`landing.SUBJECT_MAX_LEN`, 8) —  which
+    rejects a subject over 8 characters, narrower than the 32-character
+    limit `Quarantine.subject` itself declares. A subject between 9 and 32
+    characters combined with a bad `schema_version` was already handled
+    correctly (quarantined as `manifest_schema_version`, subject recorded);
+    this proves the boundary above THAT — a subject over Quarantine's OWN
+    32-character column, reaching `quarantine()` before element-animal's
+    narrower 8-character check ever gets a chance to run — no longer raises
+    a raw `pymysql.err.DataError` out of the `manifest_schema_version`
+    branch. `row["subject"] is None`, not a 32-character truncation: see
+    `landing.quarantine`'s own docstring for why an oversized subject is
+    omitted rather than truncated (a truncated value looks like real,
+    if short, provenance, and this table is not keyed on it either way).
+    """
+    tmp_path, prefix, session_dir = root
+    oversized = "y" * 40
+    manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
+    text = manifest_path.read_text()
+    text = text.replace(f"subject: {CI_RECIPE.subject}", f"subject: {oversized}")
+    text = text.replace("schema_version: 1", "schema_version: 7")
+    manifest_path.write_text(text)
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "manifest_schema_version"
+    assert row["subject"] is None
+    assert row["detail"]["declared"] == 7
+
+
+def test_an_already_ingested_session_is_a_no_op_even_after_a_schema_version_bump(root):
+    """Important 2: design section 8.3 says a scan over an already-ingested
+    session must be a no-op. `already_ingested` used to run AFTER
+    schema_version/subject-length/session_id, so a session that had already
+    landed under an OLDER `SCHEMA_VERSION` wrote a fresh
+    `manifest_schema_version` Quarantine row on every subsequent poll after
+    a version bump, while its `Ingestion` row stayed — the same session
+    listed under both Ingested and Quarantined, contradicting section 9.
+    `already_ingested` is now the second check, immediately after the parse.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "orderky")
+    scan_once(tmp_path, prefix=prefix)  # lands under today's SCHEMA_VERSION
+
+    manifest_path = SessionLayout(tmp_path, CI_RECIPE.session_id).manifest_path
+    manifest_path.write_text(
+        manifest_path.read_text().replace("schema_version: 1", "schema_version: 7")
+    )
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.ALREADY
+    assert len(ingest.Quarantine & {"session_dir": session_dir}) == 0
+
+
+def test_disabling_verify_lands_with_integrity_skipped(root):
+    """Important 3: `--no-verify` (`verify=False`) had zero coverage —
+    surviving mutant: forcing `enabled=True` regardless of the `verify`
+    parameter."""
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "noverky")
+
+    result = scan_once(tmp_path, prefix=prefix, verify=False)
+
+    assert result.outcomes[session_dir] is Outcome.INGESTED
+    row = (ingest.Ingestion & {"session_dir": session_dir}).fetch1()
+    assert row["integrity"] == "skipped"
+
+
+def test_enabling_verify_lands_with_integrity_verified(root):
+    """Important 3, the other direction — pins that `verify=True` (the
+    default) still actually verifies, so the test above proves a real
+    behavioural difference rather than `verify_session` simply always
+    returning the same thing."""
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "verkey")
+
+    result = scan_once(tmp_path, prefix=prefix, verify=True)
+
+    assert result.outcomes[session_dir] is Outcome.INGESTED
+    row = (ingest.Ingestion & {"session_dir": session_dir}).fetch1()
+    assert row["integrity"] == "verified"
+
+
+def test_cli_no_verify_flag_flows_through_to_skipped_integrity(root):
+    """Important 3's other surviving mutant: inverting the CLI's own
+    `verify=not args.no_verify` translation (`wl_preproc/cli/main.py`) is
+    invisible to the two tests above, since they call `scan_once` directly
+    and know nothing about `--no-verify`. Calls `main()` in-process, not via
+    `subprocess.run` — the pattern every other CLI test in this suite that
+    needs no live database uses — specifically so this reuses the `dj_conn`
+    fixture's already-configured `dj.config` rather than needing to plumb
+    connection info into a child process, which no CLI test in this project
+    does today. `main()` itself never calls `sys.exit`; argparse's own
+    `SystemExit` is caught internally and turned into a return value, so this
+    is safe to call directly without ending the test process.
+    """
+    from wl_preproc.cli.main import main
+
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "clivfky")
+
+    exit_code = main(["ingest", "--root", str(tmp_path), "--prefix", prefix, "--no-verify"])
+
+    assert exit_code == 0
+    row = (ingest.Ingestion & {"session_dir": session_dir}).fetch1()
+    assert row["integrity"] == "skipped"
+
+
+def test_the_session_key_check_goes_through_landings_own_helper(root, monkeypatch):
+    """Important 5, correcting this file's own earlier claim (see the
+    updated comment above `test_a_permission_fault_on_one_sibling_does_not_
+    crash_the_whole_scan`): deviation 4 built `session_key` inline in the
+    brief (`{"subject": ..., "session_datetime": manifest.started_at}`);
+    this watcher instead calls `landing.manifest_session_key`, so the key
+    checked here and the key `land_session` writes with cannot independently
+    diverge. `already_ingested` normalizes defensively on its own, so a
+    BEHAVIOURAL test genuinely cannot tell the two implementations apart —
+    confirmed directly, matching `test_already_ingested_survives_a_non_utc_
+    session_time_zone`'s own technique of forcing a non-UTC session
+    `time_zone`, both implementations still find the row.
+
+    What CAN tell them apart is structural: spy on `manifest_session_key`
+    itself during the SECOND scan specifically — the one that returns
+    ALREADY and therefore never reaches `land_session`, which calls the same
+    helper a second time on its own during the first, landing scan. Exactly
+    one call during that second scan can only come from `_evaluate_session`'s
+    own check; zero would mean it reverted to building the key inline.
+    """
+    from wl_preproc.ingest import landing
+
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "spykey")
+    scan_once(tmp_path, prefix=prefix)  # first scan: lands (helper called twice)
+
+    real_key_fn = landing.manifest_session_key
+    calls = {"n": 0}
+
+    def spy(manifest):
+        calls["n"] += 1
+        return real_key_fn(manifest)
+
+    monkeypatch.setattr(landing, "manifest_session_key", spy)
+
+    result = scan_once(tmp_path, prefix=prefix)  # second scan: ALREADY
+
+    assert result.outcomes[session_dir] is Outcome.ALREADY
+    assert calls["n"] == 1
+
+
+def test_an_invalid_params_file_quarantines_at_the_watcher_level(root):
+    """Important 6: `params_invalid` had no watcher-level test — only
+    `params.py`'s own unit-level tests exercise `register_session_params`
+    directly. This proves the reason is actually reachable end to end
+    through `scan_once`, using the same envelope-level typo
+    `tests/ingest/test_params.py::test_an_unknown_top_level_key_is_rejected`
+    exercises at the function level.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "pinvkey")
+    (SessionLayout(tmp_path, CI_RECIPE.session_id).dir / "session_params.yaml").write_text(
+        "paramset_type: clustering\nparams:\n  n_blocks: 4\nnblocks: 4\n"
+    )
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.QUARANTINED
+    row = (ingest.Quarantine & {"session_dir": session_dir}).fetch1()
+    assert row["reason"] == "params_invalid"
+
+
+def test_a_relative_root_still_records_an_absolute_session_dir(root):
+    """Minor: a relative `--root` used to record a `session_dir` with no
+    directory information in it at all — `scan_once(Path("."))` stored just
+    `"2027-03-14_01"` — and that string is `Quarantine`'s own PRIMARY KEY, so
+    the identical session scanned from two different working directories
+    would collect two different rows. `_candidate_dirs` now resolves `root`
+    before walking it. Proven by calling with a bare relative `Path(".")`
+    from inside `tmp_path` and confirming the ABSOLUTE `session_dir` this
+    test already has from the fixture is the key `scan_once` actually used —
+    if resolution did not happen, `result.outcomes[session_dir]` would raise
+    `KeyError`, not merely disagree.
+    """
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "relkey")
+
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    try:
+        result = scan_once(Path("."), prefix=prefix)
+    finally:
+        os.chdir(original_cwd)
+
+    assert result.outcomes[session_dir] is Outcome.INGESTED
+
+
+def test_a_naive_now_does_not_crash_the_scan(root):
+    """Minor: `is_stalled` subtracts from `last_change_at`'s always-aware
+    return, so a naive `now` raised `TypeError` deep inside it before this
+    fix — `landing`'s own `_now` tolerates a naive value fine (`to_naive_utc`
+    returns it unchanged, since a naive value is already what DataJoint's
+    columns store), but `scan_once` did not normalize before using `now` for
+    this one in-memory comparison, which genuinely needs an aware value.
+
+    The naive value is built from a UTC-sourced instant with its tzinfo
+    stripped (`datetime.now(UTC).replace(tzinfo=None)`), not
+    `datetime.now()` (naive local time): coercing a naive value to UTC via
+    `.replace(tzinfo=UTC)` (matching `scan_once`'s own fix — see its
+    docstring for why not `.astimezone()`) reconstructs the intended instant
+    correctly only if the naive value's wall-clock numbers were already
+    UTC's; built from local time instead, the test's own correctness would
+    depend on the machine's local timezone offset, which is exactly the kind
+    of environment-dependent flakiness this suite avoids elsewhere.
+    """
+    tmp_path, prefix, session_dir = root
+    SessionLayout(tmp_path, CI_RECIPE.session_id).done_marker("spikeglx").unlink()
+    naive_later = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) + datetime.timedelta(
+        hours=3
+    )
+    assert naive_later.tzinfo is None
+
+    result = scan_once(tmp_path, prefix=prefix, now=naive_later)
+
+    assert result.outcomes[session_dir] is Outcome.STALLED
+
+
+def test_cli_ingest_reports_a_root_fault_and_exits_non_zero(tmp_path, dj_conn, prefix):
+    """Important 7, at the CLI boundary: `scan_once` reporting `root_error`
+    is only useful if something actually surfaces it. `wlpp ingest --root
+    /typo/path` used to exit 0 with no output, identical to a genuinely
+    empty root — this proves the fix prints the fault and exits non-zero
+    instead. In-process `main()` call, not subprocess, for the same
+    dj.config-reuse reason `test_cli_no_verify_flag_flows_through_to_
+    skipped_integrity` above gives.
+    """
+    from wl_preproc.cli.main import main
+
+    ingest.activate(prefix=prefix)
+    unreadable = tmp_path / "nope"
+    unreadable.mkdir()
+    original_mode = unreadable.stat().st_mode
+    os.chmod(unreadable, 0o000)
+    try:
+        exit_code = main(["ingest", "--root", str(unreadable), "--prefix", prefix])
+    finally:
+        os.chmod(unreadable, original_mode)
+
+    assert exit_code == 1

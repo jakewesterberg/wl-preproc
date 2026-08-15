@@ -15,9 +15,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
-import datajoint as dj
+import blake3 as _blake3
 
-from wl_preproc.contracts.done import blake3_file
 from wl_preproc.contracts.manifest import SCHEMA_VERSION, SessionManifest
 from wl_preproc.contracts.paths import MANIFEST_FILENAME, SessionLayout
 from wl_preproc.ingest import landing
@@ -26,6 +25,7 @@ from wl_preproc.ingest.params import register_session_params
 from wl_preproc.ingest.sentinel import is_stalled, session_complete
 from wl_preproc.ingest.verify import verify_session
 from wl_preproc.schema import DEFAULT_PREFIX
+from wl_preproc.schema.paramset import ContentionExhausted
 
 
 class Outcome(StrEnum):
@@ -34,9 +34,9 @@ class Outcome(StrEnum):
     INCOMPLETE = "incomplete"
     STALLED = "stalled"
     QUARANTINED = "quarantined"
-    # `register_session_params` raises a bare `dj.DataJointError` -- not the
-    # `ValueError` every other rejection in `_scan_one` raises -- when
-    # `paramset.register`'s bounded retry loop
+    # `register_session_params` raises `ContentionExhausted` -- not the
+    # `ValueError` every other rejection in `_evaluate_session` raises --
+    # when `paramset.register`'s bounded retry loop
     # (`wl_preproc/schema/paramset.py`, `_MAX_REGISTER_ATTEMPTS`) exhausts
     # every attempt to allocate a fresh `paramset_idx` under real concurrent
     # registration. That is a database contention condition, not a defect in
@@ -50,15 +50,34 @@ class Outcome(StrEnum):
     # treatment. Deliberately distinct from QUARANTINED (a session-caused
     # defect a human must triage) and from INCOMPLETE/STALLED (which
     # describe the session's own on-disk state, not the pipeline's). See
-    # `_scan_one`'s params-registration branch.
+    # `_evaluate_session`'s params-registration branch.
+    #
+    # This is safe ONLY because the catch that produces it is narrow
+    # (`except ContentionExhausted`, not `except dj.DataJointError`, which
+    # is the root of DataJoint's entire error tree). DEFERRED has no
+    # visible row anywhere -- no Ingestion, no Quarantine -- and a
+    # permanent condition wrongly caught here would retry forever, silently,
+    # invisible to every report section. See `_scan_one`'s outer boundary,
+    # which is what every OTHER unclassified failure reaches instead.
     DEFERRED = "deferred"
 
 
 class ScanResult(NamedTuple):
     outcomes: dict[str, Outcome]
+    # None for the ordinary case: root listed cleanly, whether or not it held
+    # anything. Set to a description of whatever stopped `_candidate_dirs`
+    # from listing `root` itself (as opposed to one child faulting) --
+    # distinguishing "this root is genuinely empty" from "this root could not
+    # be read at all", which an empty `outcomes` dict cannot: `wlpp ingest
+    # --root /typo/path` and `--root <empty dir>` would otherwise be
+    # byte-identical, exit 0, no output. A typo, an unmounted NAS, or an ACL
+    # slip on the storage root reporting silent success is exactly "a
+    # weekend's recording simply never appears" arriving through the front
+    # door instead of as a stalled transfer.
+    root_error: str | None = None
 
 
-def _candidate_dirs(root: Path) -> list[Path]:
+def _candidate_dirs(root: Path) -> tuple[list[Path], Exception | None]:
     """Immediate children holding a manifest. Not every directory under a
     storage root is a session, and a scratch folder must not become a
     quarantine row.
@@ -70,8 +89,20 @@ def _candidate_dirs(root: Path) -> list[Path]:
     radius anywhere in this phase, since everything downstream depends on
     this function returning at all.
 
-    Three calls here can raise, and not identically:
+    Returns `(candidates, root_fault)`. Four calls here can raise, and not
+    identically:
 
+    - `root.resolve()`: default `strict=False` swallows `OSError` from a
+      missing or permission-denied path component (confirmed by reading
+      `posixpath._joinrealpath`'s source, then empirically -- see verify.py's
+      own extensive documentation of this exact call), but not a genuine
+      symlink loop, which it reports as `RuntimeError` instead, and does so
+      only on this project's 3.11 floor -- on 3.13 the identical loop returns
+      the unresolved path rather than raising at all. Resolved so
+      `result.outcomes`' keys, and every `session_dir` this module writes to
+      `Quarantine`/`Ingestion`, are absolute and meaningful regardless of the
+      caller's current working directory -- a relative `--root` used to
+      record a `session_dir` with no directory information in it at all.
     - `root.iterdir()` is a raw passthrough that swallows nothing on its own,
       and confirmed directly (not assumed) to behave differently across this
       project's two supported interpreters: on 3.11 it is a generator, so the
@@ -89,27 +120,33 @@ def _candidate_dirs(root: Path) -> list[Path]:
       user, an ACL slip -- still raises there even though the directory
       itself is real.
 
-    A fault on `root.iterdir()` itself, or on any later `next()`, stops the
-    walk and returns whatever `candidates` already holds -- the empty list if
-    nothing was found yet, which is the honest answer for "nothing could be
-    listed this pass," not a crash. A fault checking one child skips only
-    that child and keeps going. Either way, a session invisible to one scan
-    because of a transient or permissions fault is picked up by the next one,
-    exactly like a session that simply has not finished transferring yet --
-    losing the *whole* scan over it would not be.
+    A fault on `root.resolve()`, `root.iterdir()` itself, or any later
+    `next()`, stops the walk and returns whatever `candidates` already holds
+    (empty if nothing was found yet) alongside the fault that stopped it --
+    `scan_once` turns that into `ScanResult.root_error`. A fault checking one
+    child skips only that child and keeps going, and never touches
+    `root_fault`: that is a per-session failure `_scan_one` already reports
+    through `outcomes`, not a root-level one.
     """
+    try:
+        resolved = root.resolve()
+    except (OSError, RuntimeError) as exc:
+        return [], exc
+
     candidates: list[Path] = []
     try:
-        iterator = iter(root.iterdir())
-    except OSError:
-        return []
+        iterator = iter(resolved.iterdir())
+    except OSError as exc:
+        return [], exc
 
+    root_fault: Exception | None = None
     while True:
         try:
             child = next(iterator)
         except StopIteration:
             break
-        except OSError:
+        except OSError as exc:
+            root_fault = exc
             break
         try:
             if child.is_dir() and (child / MANIFEST_FILENAME).is_file():
@@ -117,27 +154,45 @@ def _candidate_dirs(root: Path) -> list[Path]:
         except OSError:
             continue
 
-    return sorted(candidates)
+    return sorted(candidates), root_fault
 
 
-def _scan_one(
+def _evaluate_session(
     session_dir: Path,
     prefix: str,
     verify: bool,
     now: datetime.datetime,
 ) -> Outcome:
+    """Every check for one session directory. May raise: `_scan_one` below is
+    the boundary that turns an escape here into a quarantine rather than a
+    crash of the whole scan.
+
+    Check order, and why `already_ingested` sits second, immediately after
+    the parse: an already-landed session must be a no-op on every later
+    scan (design section 8.3). `already_ingested` used to run after
+    schema_version/subject-length/session_id, so a session that had already
+    landed under an OLDER `SCHEMA_VERSION` wrote a fresh
+    `manifest_schema_version` Quarantine row on every subsequent poll after a
+    version bump, while its `Ingestion` row stayed -- the identical session
+    listed under both Ingested and Quarantined, contradicting section 9.
+    `already_ingested` only needs `subject` and `started_at`, both already
+    validated (type-correct, present) by the base parse -- neither needs
+    schema_version, subject length, or session_id to have been checked
+    first.
+    """
     try:
         text = (session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
         manifest = SessionManifest.from_yaml(text)
     except Exception as exc:
-        # The read used to sit outside this guard, so invalid UTF-8 bytes or
-        # a permissions fault on the manifest itself raised before
-        # SessionManifest.from_yaml was ever reached -- the identical defect
-        # already fixed in sentinel.py's read_marker, which wraps its own
-        # read_text() and parse in one broad except for the same reason.
-        # Bringing the read inside the guard means an unreadable manifest
-        # quarantines like any other invalid one instead of crashing the scan
-        # for every other session in `root`.
+        # The read sits INSIDE this guard, not outside it: invalid UTF-8
+        # bytes or a permissions fault on the manifest itself used to raise
+        # before SessionManifest.from_yaml was ever reached, mirroring the
+        # identical fix already made in sentinel.py's read_marker, which
+        # wraps its own read_text() and parse in one broad except for the
+        # same reason. Handled here, specifically, as manifest_invalid --
+        # not left to _scan_one's outer boundary and its generic
+        # unexpected_failure -- because this IS a known, anticipated shape
+        # with an informative name, unlike what that boundary exists for.
         landing.quarantine(
             str(session_dir),
             reason="manifest_invalid",
@@ -146,6 +201,10 @@ def _scan_one(
             now=now,
         )
         return Outcome.QUARANTINED
+
+    session_key = landing.manifest_session_key(manifest)
+    if landing.already_ingested(session_key, prefix=prefix):
+        return Outcome.ALREADY
 
     if manifest.schema_version != SCHEMA_VERSION:
         landing.quarantine(
@@ -188,18 +247,6 @@ def _scan_one(
 
     layout = SessionLayout(session_dir.parent, manifest.session_id)
 
-    # Through landing's own helper, not built inline: manifest.started_at is
-    # timezone-aware and DataJoint's `datetime` columns are naive, and
-    # `manifest_session_key` -- which `land_session` itself calls -- is the
-    # one place that conversion happens. A second, independent
-    # implementation of "the key for this manifest" here is exactly how it
-    # would eventually disagree with land_session's own, and if it ever did,
-    # this check would never find what land_session actually wrote and the
-    # session would re-ingest forever.
-    session_key = landing.manifest_session_key(manifest)
-    if landing.already_ingested(session_key, prefix=prefix):
-        return Outcome.ALREADY
-
     if not session_complete(layout, manifest):
         return (
             Outcome.STALLED
@@ -233,12 +280,16 @@ def _scan_one(
             now=now,
         )
         return Outcome.QUARANTINED
-    except dj.DataJointError:
+    except ContentionExhausted:
         # See Outcome.DEFERRED's own docstring: a database contention
         # condition, not a defect in this session's params file, so this
         # session is left for the next scan_once call to retry from scratch
         # rather than quarantined -- no Quarantine row, and the rest of this
-        # scan continues unaffected.
+        # scan continues unaffected. Narrow on purpose: every OTHER
+        # DataJointError -- and everything else that is not a ValueError --
+        # is deliberately left to propagate to _scan_one's outer boundary,
+        # which quarantines it as unexpected_failure instead of silently
+        # deferring a condition that might never clear.
         return Outcome.DEFERRED
 
     landing.land_session(
@@ -246,11 +297,74 @@ def _scan_one(
         manifest,
         discover_topology(layout, manifest),
         integrity,
-        blake3_file(layout.manifest_path),
+        _blake3.blake3(text.encode("utf-8")).hexdigest(),
         prefix=prefix,
         now=now,
     )
     return Outcome.INGESTED
+
+
+def _scan_one(
+    session_dir: Path,
+    prefix: str,
+    verify: bool,
+    now: datetime.datetime,
+) -> Outcome:
+    """The boundary around `_evaluate_session`.
+
+    `_evaluate_session` handles every check the brief and prior review rounds
+    named explicitly -- an unreadable or malformed manifest, a bad
+    schema_version, an unrepresentable subject, a session_id mismatch, a
+    checksum mismatch, an invalid params file, contention exhaustion -- each
+    with its own specific, informative Quarantine reason (or DEFERRED). What
+    it does not, and structurally cannot, enumerate in advance is everything
+    ELSE that can go wrong: a `session_params.yaml` with a mixed int/str key
+    in `params` that `SessionParams` accepts (a bare, deliberately
+    unconstrained `dict`) but that `json.dumps(..., sort_keys=True)` cannot
+    sort, a manifest read racing a concurrent delete, a `DataJointError` that
+    is not `ContentionExhausted`, anything not yet anticipated. This feeds a
+    dict comprehension in `scan_once`, exactly like `_candidate_dirs` above
+    it: an exception escaping ONE session here would abort that
+    comprehension and lose every OTHER session in the same root, which is
+    the identical worst-blast-radius shape this whole module was hardened
+    against at three named sites already. This is the fourth and fifth: the
+    reasoning that closed those reaches every unguarded call in
+    `_evaluate_session`'s body at once, rather than requiring a fourth,
+    fifth, and Nth specific guard for each new way something can fail.
+
+    Quarantined, not deferred: an unrecognised failure is exactly what
+    `Outcome.DEFERRED` is not -- there is no reason to believe it is
+    transient, and treating it as if it were would retry it forever,
+    silently, with no visible row in any report. `unexpected_failure` is a
+    real `QUARANTINE_REASONS` member (`wl_preproc/schema/ingest.py`) with the
+    exception type and message recorded in `detail`, for a human to triage
+    and, ideally, turn into a new named, specific check the next time this
+    shape of failure recurs.
+
+    The quarantine write itself is wrapped too: if THAT is what fails (an
+    oversized `session_dir` even after `landing.quarantine`'s own
+    truncation, a genuine loss of database connectivity), this must not
+    raise a second, different exception out of the boundary that exists
+    specifically to stop one session's failure from taking down the scan --
+    that failure is swallowed, and the session is reported QUARANTINED
+    without a row existing for it. That is a worse outcome than a row that
+    exists, but a strictly better one than losing every sibling session in
+    the same root over it.
+    """
+    try:
+        return _evaluate_session(session_dir, prefix, verify, now)
+    except Exception as exc:
+        try:
+            landing.quarantine(
+                str(session_dir),
+                reason="unexpected_failure",
+                detail={"error_type": type(exc).__name__, "error": str(exc)[:2000]},
+                prefix=prefix,
+                now=now,
+            )
+        except Exception:
+            pass
+        return Outcome.QUARANTINED
 
 
 def scan_once(
@@ -261,9 +375,25 @@ def scan_once(
 ) -> ScanResult:
     """One pass. Safe to run concurrently with itself — see `landing`."""
     at = now or datetime.datetime.now(datetime.UTC)
+    if at.tzinfo is None or at.utcoffset() is None:
+        # landing's own `_now`/`to_naive_utc` tolerate a naive `now` (a naive
+        # value is already what DataJoint's columns store), but this
+        # function's one in-memory use of it -- `is_stalled`'s subtraction
+        # from `last_change_at`'s always-aware return -- needs `at` itself to
+        # be aware, and raised TypeError deep inside it otherwise, crashing
+        # every session in the same scan rather than just the stalled check.
+        # Coerced with `.replace`, not `.astimezone()`: `.astimezone()` on a
+        # naive input assumes the *system* timezone, not UTC, which would
+        # silently shift a caller's intended instant -- the identical warning
+        # `landing.to_naive_utc`'s own docstring gives for the opposite
+        # direction.
+        at = at.replace(tzinfo=datetime.UTC)
+
+    candidates, root_fault = _candidate_dirs(Path(root))
     return ScanResult(
         outcomes={
             str(session_dir): _scan_one(session_dir, prefix, verify, at)
-            for session_dir in _candidate_dirs(Path(root))
-        }
+            for session_dir in candidates
+        },
+        root_error=f"{type(root_fault).__name__}: {root_fault}" if root_fault else None,
     )

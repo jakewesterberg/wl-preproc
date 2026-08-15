@@ -79,6 +79,25 @@ SUBJECT_BIRTH_DATE_UNKNOWN = datetime.date(1900, 1, 1)
 # ever calling `land_session` with a subject this table cannot hold.
 SUBJECT_MAX_LEN = 8
 
+# `ingest.Quarantine`'s OWN columns, read directly from its declaration
+# (wl_preproc/schema/ingest.py) -- deliberately separate constants from
+# SUBJECT_MAX_LEN above, which is a different table's different, narrower
+# limit (element-animal's `pipeline.Subject.subject : varchar(8)`).
+# Quarantine.subject is a wider, best-effort provenance column
+# (`varchar(32)`), not the landing decision. Both are enforced inside
+# `quarantine()` itself, not by its callers: the checks Task 8's watcher runs
+# BEFORE calling `quarantine()` (schema_version, session_id) can reach it with
+# an oversized `subject` before SUBJECT_MAX_LEN is ever consulted -- a
+# manifest with schema_version wrong AND a 40-character subject quarantines
+# on the schema_version branch first, passing that subject straight through
+# -- and `session_dir` is the primary key on every single call, with no
+# length check anywhere else in this pipeline at all. A single defended choke
+# point is simpler and more robust than auditing every call site's position
+# relative to a check that could move (see check-order history in
+# wl_preproc/ingest/watcher.py's `_scan_one`).
+QUARANTINE_SUBJECT_MAX_LEN = 32
+QUARANTINE_SESSION_DIR_MAX_LEN = 255
+
 
 def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     """The one place an aware datetime becomes the naive UTC value DataJoint's
@@ -293,15 +312,55 @@ def quarantine(
     `ingest.Quarantine`), but there is no reason for it to carry a different,
     silently-wrong-for-non-UTC value than `manifest_session_key` would have
     produced for the same manifest.
+
+    Both string columns are clamped to what they can actually hold before the
+    insert is attempted, rather than left to raise a raw `pymysql` `DataError`.
+    Every check-branch caller in `wl_preproc/ingest/watcher.py`'s
+    `_evaluate_session` (schema_version, subject length, session_id, ...)
+    calls this function directly, with no per-call guard of its own, on the
+    reasoning that quarantining is itself the failure-handling path and
+    should not need a second one at every call site -- clamping here, once,
+    is what makes that reasoning actually hold. `_scan_one`'s OUTER boundary
+    does additionally wrap its own, separate call to this function (see that
+    module), but only as a second, more general line of defense against
+    whatever else could still fail there (a lost database connection, for
+    instance) -- not a substitute for this function being safe on its own
+    against the two specific, anticipated overflow shapes below. The two
+    columns are not equally safe to clamp:
+
+    - `subject` (`QUARANTINE_SUBJECT_MAX_LEN`, 32) is not part of this
+      table's key -- see `ingest.Quarantine`'s own docstring, "NOT keyed on
+      (subject, session_datetime)" -- so it is OMITTED rather than truncated
+      when it does not fit. A truncated subject is worse than a missing one:
+      it looks like real, if short, provenance, and two different oversized
+      subjects sharing a 32-character prefix would render identically. `None`
+      is what this column already means for "unparseable" (see
+      `test_an_unparseable_manifest_quarantines_with_no_session_key`); an
+      oversized subject is the same honest admission for a different reason.
+    - `session_dir` (`QUARANTINE_SESSION_DIR_MAX_LEN`, 255) IS this table's
+      primary key and cannot be null, so it is truncated rather than
+      omitted -- the only structurally available option for a value that
+      must be written and cannot fit. Two different session directories
+      sharing an identical 255-character prefix would collide under this
+      truncation, but that requires two paths differing only after 255
+      identical characters, which no real storage-root layout in this
+      project approaches; a session pathological enough to reach even
+      one such collision already needs an operator's attention for the
+      length itself. `replace=True` means a second write under the same
+      truncated key describes its own latest failure rather than raising a
+      second, different exception -- so even a genuine collision degrades to
+      "one row instead of two", not a crash.
     """
     ingest.activate(prefix=prefix)
+    subject_fits = subject is None or len(subject) <= QUARANTINE_SUBJECT_MAX_LEN
+    clamped_subject = subject if subject_fits else None
     ingest.Quarantine.insert1(
         {
-            "session_dir": session_dir,
+            "session_dir": session_dir[:QUARANTINE_SESSION_DIR_MAX_LEN],
             "failed_at": _now(now),
             "reason": reason,
             "detail": detail,
-            "subject": subject,
+            "subject": clamped_subject,
             "session_dt": to_naive_utc(session_dt) if session_dt is not None else None,
         },
         replace=True,

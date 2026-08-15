@@ -166,6 +166,15 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.ingest.watcher import scan_once
 
         result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
+        if result.root_error is not None:
+            # An unreadable, missing, or mistyped --root produces the same
+            # empty outcomes dict a genuinely empty root does -- exit 0, no
+            # output either way, unless this is checked. A typo, an
+            # unmounted NAS, or an ACL slip on the storage root silently
+            # reporting success is exactly "a session simply never appears"
+            # arriving through the front door instead of a stalled transfer.
+            print(f"error: could not list {args.root}: {result.root_error}")
+            return 1
         for session_dir, outcome in sorted(result.outcomes.items()):
             print(f"  [{outcome}] {session_dir}")
         return 0

@@ -12,6 +12,10 @@ raises `ValueError` for every other way *that step* can fail, including an
 I/O fault -- a permissions error, a transient NFS read error -- reading or
 even stat-ing the file, not just a malformed one. See that function's
 docstring for why a raw `OSError` must never be the one left uncaught there.
+"Validating" includes a declared `paramset_type` that is too long for
+`ParamSet.paramset_type : varchar(32)` -- a value `SessionParams` (an
+unconstrained `str`) accepts cleanly and the database would not, the same
+shape as `subject_unrepresentable` one layer up in Task 8's watcher.
 
 That guarantee covers the read-and-validate step only, not the whole
 function. The registration call after it, `paramset.register`
@@ -129,6 +133,23 @@ def register_session_params(
         declared = SessionParams.model_validate(loaded)
     except (OSError, yaml.YAMLError, ValidationError, TypeError) as exc:
         raise ValueError(f"{PARAMS_FILENAME} is not valid: {exc}") from exc
+
+    # ParamSet.paramset_type : varchar(32) (wl_preproc/schema/paramset.py).
+    # SessionParams.paramset_type is an unconstrained str, the identical shape
+    # already handled for `subject` against element-animal's own column
+    # (`landing.SUBJECT_MAX_LEN`, `reason="subject_unrepresentable"`): a value
+    # that validates cleanly here can still be too long for the table it is
+    # about to be inserted into. Checked here, inside the validation step,
+    # rather than left for `paramset.register()`'s own insert to discover as a
+    # raw pymysql.err.DataError -- which Task 8's watcher does not special-case
+    # and would otherwise have to.
+    if len(declared.paramset_type) > paramset.PARAMSET_TYPE_MAX_LEN:
+        raise ValueError(
+            f"{PARAMS_FILENAME}'s paramset_type {declared.paramset_type!r} is "
+            f"{len(declared.paramset_type)} characters, over the "
+            f"{paramset.PARAMSET_TYPE_MAX_LEN}-character column "
+            "(ParamSet.paramset_type : varchar(32))"
+        )
 
     paramset.activate(prefix=prefix)
     return paramset.register(declared.paramset_type, declared.params)
