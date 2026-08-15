@@ -49,11 +49,18 @@ _QUARANTINE_NEW_HOURS = 24
 
 # `detail` is the column that makes a quarantine row actionable -- for
 # `checksum_mismatch` it holds the offending file paths, which is the whole
-# point of spec section 5.4 -- and it was not rendered at all. It is a blob, so
-# it can hold anything a caller put there (including, in this project's own
-# shared test database, a real 64x64 NumPy array a schema guardrail test plants
-# in `Quarantine.detail` on purpose). These bound what one row can do to the
-# report: a summary an operator can act on, never the whole payload.
+# point of spec section 5.4 -- and it was not rendered at all. It is a blob,
+# so it can hold anything a caller put there, including a real NumPy array:
+# this project's own shared test database has exactly one such row in
+# `Quarantine.detail`, planted on purpose by
+# `tests/schema/test_guardrails.py::test_every_blob_attribute_round_trips_
+# an_array`. `_compact`/`_detail_summary` below are written to be safe
+# against it regardless -- see their own docstrings -- but no test
+# currently exercises the renderer against that row: its `failed_at` is
+# fixed at 2026-01-01, which ages out of `_QUARANTINE_WINDOW_DAYS` above
+# long before this function ever queries `Quarantine`, in any test
+# collection order. These bound what one row can do to the report either
+# way: a summary an operator can act on, never the whole payload.
 _DETAIL_MAX_CHARS = 400
 _DETAIL_MAX_ITEMS = 6
 
@@ -311,13 +318,25 @@ def build_report(
 
     lines += ["", f"## Stalled transfers — {len(stalled)}", ""]
     if root_fault is not None:
-        # `_candidate_dirs` separates a per-child fault (skipped, and already
-        # a per-session outcome for `wlpp ingest`) from one that stopped it
-        # listing `root` at all. The second kind means this count is whatever
-        # could be read, not the whole root, and saying nothing would render a
-        # storage root that could not be opened identically to one holding no
-        # stalled transfer -- the same silence `ScanResult.root_error` exists
-        # to break for the scan.
+        # `_candidate_dirs` separates a per-child fault from one that
+        # stopped it listing `root` at all -- only the second kind reaches
+        # here. The first kind is a known gap, not a covered one: a session
+        # directory that cannot be read is skipped silently inside
+        # `_candidate_dirs` itself, by both `wlpp ingest` (via `scan_once`)
+        # and `wlpp report` (via this same walk) -- no `Quarantine` row, no
+        # `Ingestion` row, no line anywhere in this report naming it. That
+        # is exactly the failure design section 4.3 built the whole
+        # stalled-transfer alarm to catch -- "a weekend's recording simply
+        # never appears, with nothing anywhere saying so" -- still true of
+        # this one path. The silence is `_candidate_dirs`'s own to fix, not
+        # this function's; named here rather than fixed here, so the next
+        # reader does not mistake it for handled.
+        #
+        # The second kind -- handled below -- means this count is whatever
+        # could be read, not the whole root, and saying nothing would
+        # render a storage root that could not be opened identically to one
+        # holding no stalled transfer -- the same silence
+        # `ScanResult.root_error` exists to break for the scan.
         lines += [
             f"- **`{root}` was not fully scanned: "
             f"{type(root_fault).__name__}: {root_fault}** — "
