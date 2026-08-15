@@ -83,7 +83,7 @@ def test_gather_readings_does_not_write(scanned):
     gather_readings(root, prefix=prefix)
     after = [table_snapshot(t) for t in watched]
 
-    assert _deep_equal(after, before), "gather_readings wrote or changed at least one row"
+    assert deep_equal(after, before), "gather_readings wrote or changed at least one row"
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
