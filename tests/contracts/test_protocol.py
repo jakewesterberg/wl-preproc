@@ -64,6 +64,19 @@ def test_health_response_rejects_unknown_key():
         HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdcit": "ok"})
 
 
+def test_an_unknown_verdict_is_rejected():
+    """wl.works validates verdict against exactly four values and refuses the
+    whole response otherwise, so a bare `str` here means a typo ships and
+    fails at their end rather than ours. Plan 10 section 1.1."""
+    with pytest.raises(ValidationError):
+        HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdict": "okay"})
+
+
+@pytest.mark.parametrize("verdict", ["ok", "degraded", "down", "unknown"])
+def test_every_verdict_wl_works_accepts_validates_here(verdict):
+    assert HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdict": verdict}).verdict == verdict
+
+
 def test_job_request_carries_the_metadata_bundle():
     """wl-preproc cannot fetch from wl.works, so metadata must arrive inbound."""
     request = JobRequest(

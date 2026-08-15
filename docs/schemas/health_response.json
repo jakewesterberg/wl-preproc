@@ -67,6 +67,12 @@
       "type": "array"
     },
     "verdict": {
+      "enum": [
+        "ok",
+        "degraded",
+        "down",
+        "unknown"
+      ],
       "title": "Verdict",
       "type": "string"
     }

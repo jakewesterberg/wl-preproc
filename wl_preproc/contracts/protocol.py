@@ -12,11 +12,20 @@ controls its UI. We refuse to emit markup at all rather than relying on that.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 SCHEMA_VERSION = 1
+
+Verdict = Literal["ok", "degraded", "down", "unknown"]
+"""The four values wl.works validates against, per its Plan 10 section 1.1.
+
+This host emits only three of them. `unknown` is what *wl.works* records when
+a host goes silent past its `stale_after_seconds` -- it is their word for our
+absence, and we are never in a position to assert it about ourselves. See
+`responder/health.py`.
+"""
 
 _MARKUP_RE = re.compile(r"[<>&]")
 
@@ -67,7 +76,7 @@ class HealthResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    verdict: str
+    verdict: Verdict
     readings: list[Reading]
     actions: list[Action]
 
