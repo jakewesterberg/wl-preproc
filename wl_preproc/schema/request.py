@@ -39,6 +39,9 @@ rather than half-supported; making derivatives real belongs to the responder
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import datajoint as dj
 
 from wl_preproc.schema import DEFAULT_PREFIX, core
@@ -85,6 +88,16 @@ class Activation(dj.Manual):
     -> Request.proj(request_key='idempotency_key')
     created_at  : datetime
     supersedes = null : int     # a regenerated canonical points at the old one
+    # Null for a canonical activation, whose identity is (session, montage)
+    # per section 8.3. Set for a derivative, whose identity is its block set --
+    # which is why section 11.3's "a request whose (selection, task type) is
+    # already in flight returns the running one" can be a lookup here rather
+    # than a lock. 1c-1 deferred this column to 1c-3 on the grounds that both
+    # are pre-data and adding it later is equally cheap; 1c-2 then recorded a
+    # residual that only this column closes -- a reused idempotency key whose
+    # first submission deduped onto an existing activation recorded nowhere
+    # which selection it had asked for.
+    selection_hash = null : varchar(64)
     """
 
 
@@ -105,6 +118,30 @@ class ActivationBlock(dj.Manual):
     -> Activation
     -> core.Block
     """
+
+
+def selection_hash(task_type: str, block_ids: list[int]) -> str:
+    """Content hash of a derivative's identity: its task type and block set.
+
+    Sorted and de-duplicated first, because the block set is a *set*: two
+    requests naming the same blocks in a different order, or naming the same
+    block twice, are the same selection, and hashing them differently would
+    start a second run for work already in flight (section 11.3). `set(...)`
+    is what collapses a repeat; `sorted()` alone would not, since `[1, 1, 2]`
+    is already sorted and stays three elements long.
+
+    Same primitive and digest size as `paramset.content_hash` -- blake2b at
+    digest_size=16 -- and the same canonicalisation,
+    `json.dumps(..., sort_keys=True, separators=(",", ":"))`, read from that
+    function rather than assumed: this project has already spent a review
+    round on a digest-size claim that drifted from the code it described.
+    """
+    payload = json.dumps(
+        {"task_type": task_type, "block_ids": sorted(set(block_ids))},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
 
 
 def _canonicalise(value):

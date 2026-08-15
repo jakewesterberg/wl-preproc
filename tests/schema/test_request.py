@@ -366,6 +366,52 @@ def test_submit_before_activate_raises_a_clear_error(req, selection, monkeypatch
         req.submit("k-10", "neural", "wl_works", selection, {}, "jake")
 
 
+def test_selection_hash_is_order_independent():
+    """The block set is a set. Two requests naming the same blocks in a
+    different order are the same selection, and if they hash differently the
+    dedupe in section 11.3 silently starts a second run."""
+    from wl_preproc.schema.request import selection_hash
+
+    assert selection_hash("neural", [3, 1, 2]) == selection_hash("neural", [1, 2, 3])
+
+
+def test_selection_hash_separates_task_types():
+    from wl_preproc.schema.request import selection_hash
+
+    assert selection_hash("neural", [1, 2]) != selection_hash("export", [1, 2])
+
+
+def test_selection_hash_deduplicates_repeated_block_ids():
+    """The block set is a *set*: naming the same block twice is one block, not
+    two. A caller that accumulates block ids across, say, paginated results
+    and does not itself de-duplicate must still land on the same selection as
+    one that does -- otherwise the same logical selection would silently carry
+    two different identities depending on how the caller happened to build its
+    list, and section 11.3's in-flight lookup would miss the match.
+    `sorted()` alone would not catch this: `[1, 1, 2]` is already sorted and
+    stays three elements long, so de-duplication has to be a deliberate
+    `set(...)`, not a side effect of sorting."""
+    from wl_preproc.schema.request import selection_hash
+
+    assert selection_hash("neural", [1, 1, 2]) == selection_hash("neural", [1, 2])
+
+
+def test_canonical_activations_leave_selection_hash_null(selection, prefix):
+    """A canonical activation's identity is (session, montage) per section 8.3.
+    Giving it a selection hash would create a second identity for the same
+    thing."""
+    from wl_preproc.schema import request
+
+    key = request.submit(
+        idempotency_key="sel-null-1",
+        task_type="neural",
+        origin="cli",
+        selection=selection,
+        payload={},
+    )
+    assert (request.Activation & key).fetch1("selection_hash") is None
+
+
 def test_submit_refuses_to_run_inside_a_transaction(req, selection):
     """submit()'s hardest constraint, and the one that most directly binds both
     future consumers: it opens its own transaction, DataJoint transactions do
