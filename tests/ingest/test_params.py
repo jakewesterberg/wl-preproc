@@ -7,6 +7,8 @@ is the failure this whole file exists to prevent.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from wl_preproc.contracts.paths import SessionLayout
@@ -109,3 +111,68 @@ def test_malformed_yaml_raises_rather_than_defaulting(layout):
 
     with pytest.raises(ValueError):
         register_session_params(session_layout, prefix=prefix)
+
+
+def test_an_unreadable_params_file_raises_valueerror_not_oserror(layout):
+    """A permissions fault or a transient NFS error reading the file must
+    produce the same *kind* of loud, contained failure a malformed file does
+    -- not an uncaught OSError.
+
+    This matters beyond this one function: Task 8's watcher catches only
+    `ValueError` around this call, so an uncaught OSError would escape
+    `_scan_one`, escape `scan_once`'s dict comprehension over every session
+    directory in the storage root, and abort the *entire* scan rather than
+    quarantine just this one session. A previous version of this test's
+    corresponding code left OSError unguarded; this is the regression test
+    for that fix.
+
+    A real `os.chmod`, not a `Path` monkeypatch: pathlib's internals changed
+    substantially between 3.11 and 3.13 -- confirmed directly, not assumed:
+    the ignored-errno table this project's other guards already depend on
+    (`sentinel.py`, `discover.py`) moved from a `pathlib`-module-level tuple
+    on 3.11 to a `pathlib._abc` submodule on 3.13, evidence of a real
+    restructure, not a cosmetic one. A patch aimed at the `Path` class is not
+    guaranteed to sit on whichever internal code path either version actually
+    executes. An unreadable file on a real filesystem has no such gap.
+
+    Permissions are restored in `finally`, before this function returns
+    control either way, so a failing assertion here cannot leave behind a
+    file that `tmp_path`'s own cleanup -- or a later test -- cannot read.
+    """
+    session_layout, prefix = layout
+    path = session_layout.dir / PARAMS_FILENAME
+    path.write_text("paramset_type: clustering\nparams:\n  n_blocks: 4\n")
+    os.chmod(path, 0o000)
+    try:
+        with pytest.raises(ValueError):
+            register_session_params(session_layout, prefix=prefix)
+    finally:
+        os.chmod(path, 0o644)
+
+
+def test_an_unsearchable_session_directory_raises_valueerror_not_oserror(layout):
+    """The other named call site: `path.exists()` itself can raise, not just
+    `path.read_text()`.
+
+    Confirmed empirically before writing this test, not assumed: chmod 0o000
+    on the *file* leaves `Path.exists()` returning True (only `read_text()`
+    fails, covered above) -- reaching a path's final component with `stat()`
+    needs no read permission on the file itself. Chmod 0o000 on the
+    *directory* containing it is what makes `exists()` raise, because `stat()`
+    cannot even traverse into a directory without search (execute) permission.
+    Both are the same `except (OSError, ...)` in `register_session_params`,
+    but only this one actually exercises `path.exists()`'s own raise.
+
+    Permissions are restored in `finally` before this function returns
+    control either way, same reasoning as the test above.
+    """
+    session_layout, prefix = layout
+    (session_layout.dir / PARAMS_FILENAME).write_text(
+        "paramset_type: clustering\nparams:\n  n_blocks: 4\n"
+    )
+    os.chmod(session_layout.dir, 0o000)
+    try:
+        with pytest.raises(ValueError):
+            register_session_params(session_layout, prefix=prefix)
+    finally:
+        os.chmod(session_layout.dir, 0o755)
