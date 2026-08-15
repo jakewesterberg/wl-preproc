@@ -332,8 +332,9 @@ Quarantine (Manual)
   ---
   failed_at    : datetime
   reason       : enum('manifest_invalid','manifest_schema_version',
-                      'session_id_mismatch','checksum_mismatch',
-                      'params_invalid')
+                      'session_id_mismatch','subject_unrepresentable',
+                      'session_dir_unrepresentable','checksum_mismatch',
+                      'params_invalid','unexpected_failure')
   detail       : <blob>
   subject      : varchar(32) null    # best effort, may be null
   session_dt   : datetime null       # best effort, may be null
@@ -349,6 +350,29 @@ Two consequences follow, and both are wanted. The `Session` hierarchy contains *
 that validated**, so every downstream query is honest without a filter nobody remembers to
 write. And a quarantined session that is later fixed and re-ingested simply produces the real
 rows, with the quarantine row left as history rather than something to clean up.
+
+**Three reasons were added during implementation, and each records a lesson.**
+`subject_unrepresentable` and `session_dir_unrepresentable` exist because element-animal declares
+`subject : varchar(8)` and this table declares `session_dir : varchar(255)`, while the manifest's
+`subject` and the operator's `--root` are both unbounded strings. An unbounded value meeting a
+narrow column raises a `DataError` from inside the insert, which is a crash rather than a
+quarantine — so both are length-checked before they can reach one.
+
+`unexpected_failure` is the outer boundary's reason: `scan_once` evaluates each session inside a
+comprehension, so an exception escaping one session would lose every other session in the same
+root. Anything not matching a named reason is caught there and recorded rather than raised. It is
+structurally last, and every named reason is tested at the watcher level, so it collects only what
+nothing else claims — but **it is a catch-all, and a reason appearing there frequently is a signal
+that it deserves a name of its own**, not that the boundary is working.
+
+**Where a check sits relative to `already_ingested` is load-bearing, and got this wrong twice.**
+A check above it must test a property of *this directory and this manifest* that is fixed for as
+long as the directory exists — `session_id` versus the directory's basename qualifies. A check
+that depends on anything mutable must sit below, or an already-landed session starts quarantining
+on every poll while keeping its `Ingestion` row, and appears under both Ingested and Quarantined,
+contradicting this section. Two things caught this way: `schema_version`, which fails for
+untouched sessions the day `SCHEMA_VERSION` is bumped, and the `session_dir` length check, which
+depends on the operator-supplied `--root` and so changes when a storage root is remounted or moved.
 
 `subject` and `session_dt` are recorded when they could be parsed, because a quarantine report
 naming an animal and a date is far more useful than one naming a path — but they are nullable,
