@@ -186,6 +186,24 @@ def register(paramset_type: str, params: dict) -> int:
     if existing:
         return int(existing.fetch1("paramset_idx"))
 
+    # STANDING CONSTRAINT, established 2026-08-15 by Phase 1c-3 Task 4's review:
+    # the re-read below is correct ONLY because this function is never called
+    # from inside a transaction.
+    #
+    # DataJoint sets pymysql `autocommit: True` ("DataJoint manages transactions
+    # explicitly"), so each statement here is its own transaction with a fresh
+    # read view, and the `except DuplicateError` re-read genuinely sees a rival
+    # connection's commit. Reproduced on MySQL 8.0.46, both directions.
+    #
+    # Inside `dj.conn().transaction`, DataJoint issues START TRANSACTION WITH
+    # CONSISTENT SNAPSHOT, and the identical re-read MISSES that commit --
+    # verified with the autocommit=False counterfactual. The loop would then
+    # exhaust every attempt against a row it cannot see rather than deduping
+    # onto it. `request.submit_derivative` hit exactly this and had to take an
+    # explicit locking read instead.
+    #
+    # The only caller today, `wl_preproc/ingest/params.py`, does not wrap this.
+    # Nothing enforces that, so it is written down rather than assumed.
     for _ in range(_MAX_REGISTER_ATTEMPTS):
         # to_arrays, not fetch: DataJoint 2.3.2 deprecates bare fetch() (it
         # warns on every call), and this project's suite must stay at zero
