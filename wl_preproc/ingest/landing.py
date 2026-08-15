@@ -352,9 +352,10 @@ def _clamp_key(value: str, max_len: int) -> str:
     function was not: `value[: max_len - len(suffix)] + suffix` with
     `max_len < len(suffix)` gives a NEGATIVE slice start, which Python reads
     as "all but the last `|max_len - len(suffix)|` characters", not
-    "nothing" -- confirmed directly, `max_len=8` against that version
-    returned a 108-character string, LONGER than the input was ever allowed
-    to become. `QUARANTINE_SESSION_DIR_MAX_LEN` (255) and
+    "nothing" -- confirmed directly against the exact 401-character fixture
+    this module's own test uses (`"/" + "q" * 400`), `max_len=8` against
+    that version returned a 409-character string, LONGER than the input was
+    ever allowed to become. `QUARANTINE_SESSION_DIR_MAX_LEN` (255) and
     `QUARANTINE_SUBJECT_MAX_LEN` (32) both clear the 17-character floor
     safely, but `SUBJECT_MAX_LEN` (8) -- unused by this function today, but
     a real, already-defined constant in this same module -- would not have,

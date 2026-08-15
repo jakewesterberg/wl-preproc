@@ -319,9 +319,11 @@ def test_clamp_key_never_exceeds_max_len_even_below_the_digest_floor(activated):
     `digest_size=8` digest produces) -- `value[: max_len - len(suffix)] +
     suffix` with `max_len < len(suffix)` gives a NEGATIVE slice start,
     which Python reads as "all but the last `N` characters", not "nothing".
-    Confirmed directly (before writing this test's assertion, not assumed):
-    `max_len=8` against that version returned a 108-character string --
-    LONGER than the input was ever allowed to become.
+    Confirmed directly against THIS test's own `long_value` fixture below
+    (not assumed, and not carried over from an illustrative probe built on a
+    differently-sized value): `max_len=8` against that version returned a
+    409-character string -- LONGER than the input was ever allowed to
+    become.
 
     `QUARANTINE_SESSION_DIR_MAX_LEN` (255) and `QUARANTINE_SUBJECT_MAX_LEN`
     (32) both clear the floor safely, which is why this shipped unnoticed

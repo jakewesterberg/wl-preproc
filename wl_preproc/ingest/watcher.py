@@ -238,17 +238,20 @@ def _evaluate_session(
     `session_datetime`) is DERIVED from the parsed manifest, so checking it
     before the parse has succeeded is not merely a worse ordering, it is not
     an operation that can be performed at all -- there is no key to check
-    yet. Accepted as a residual, not fixed, for this round: a manifest that
-    was readable at landing time and becomes unreadable afterward is
-    arguably a different kind of event from the other three (pipeline-side
-    drift against an unchanged session) -- it means something about THAT
-    file, on disk, right now, is actually wrong, and an ongoing alarm on
-    every poll until an operator addresses it is not obviously the wrong
-    behaviour the way silently re-quarantining a perfectly good session is.
-    That argument has not been reviewed, and this residual has not been
-    weighed against design section 9 as carefully as the four cases above
-    were -- recorded here precisely so it is not mistaken for a closed
-    question.
+    yet.
+
+    Design section 9 has already weighed this and settled it: **the parse is
+    accepted as a standing exception, and the residual is accepted with
+    it.** That section's own reasoning, restated here rather than merely
+    cross-referenced, is why: a manifest that was readable at landing time
+    and becomes unreadable afterward means something about THAT file, on
+    disk, right now, is actually wrong -- a different kind of event from the
+    other three exceptions above (pipeline-side drift against an unchanged
+    session), and an ongoing alarm on every poll until an operator addresses
+    it is genuinely worth having, not a bug to route around. The cost is one
+    `Quarantine` row rewritten per poll, not a wrong verdict. This is
+    settled, not open -- the next reader should not reopen it, only extend
+    the same reasoning to whatever check they are adding next.
     """
     try:
         raw = (session_dir / MANIFEST_FILENAME).read_bytes()
