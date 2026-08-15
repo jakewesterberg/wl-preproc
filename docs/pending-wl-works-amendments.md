@@ -1,13 +1,33 @@
 # Amendments to wl-works
 
-**One amendment is outstanding** (opened 2026-08-15). The 2026-08-12 batch is closed and its
-record is kept below, because
+**Nothing is outstanding.** Both batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
 
 ---
 
-# OUTSTANDING — item 9, the block and montage precondition
+# CLOSED — item 9, the block and montage precondition
+
+**Applied 2026-08-15** on `wl-works` `main` at `156fb6f`, "docs: wl-preproc has ruled its half
+of the block-authorship question". Committed locally and **not pushed** — that repository's
+remote belongs to another worker, who handles its publication.
+
+**Every precondition below was re-run before writing, and one of them mattered.** `main` had
+moved from `de4329f` to `d5be699` between deferral and application, exactly the case the
+checklist was written for. Both anchors were confirmed still present and unique;
+`git log de4329f..main` over both target files came back empty, so the other worker had touched
+neither. Both edits are pure appends — 35 insertions, zero deletions — and the item count in
+`waiting-on.md` was recounted from the source list at 36 before and 36 after, confirming no
+count moved and no recount was owed elsewhere.
+
+**The item was narrowed, not closed, and that was deliberate.** wl-preproc ruled its own half;
+whether wl.works accepts the split is theirs to answer, and the entry says so with its owner
+unchanged. Closing an item on their behalf would have been the same unilateral move that made
+this amendment necessary in the first place.
+
+---
+
+## The original deferral
 
 **Opened 2026-08-15 while designing Phase 1c-2.** Full context in the design spec's §14.1.
 
