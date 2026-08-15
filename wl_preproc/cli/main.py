@@ -79,6 +79,16 @@ def main(argv: list[str] | None = None) -> int:
     # separator and a copy here is exactly how `wlpplab` would come back.
     daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
+    ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    ingest_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    ingest_parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="skip checksum verification; records integrity as 'skipped' rather than "
+        "claiming a check that did not run",
+    )
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -138,6 +148,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {err}")
         else:
             print("errors: none")
+        return 0
+
+    if args.group == "ingest":
+        # `Path` is not re-imported here: it is already a module-level import
+        # above (line 16), used unconditionally by `schemas export`'s own
+        # `--out` argument. A second `from pathlib import Path` inside this
+        # branch would make the compiler treat `Path` as local to the whole
+        # `main()` function rather than shadowing it only here -- Python
+        # decides a name's scope for an entire function from every assignment
+        # anywhere in its body, not per-branch -- which raises
+        # `UnboundLocalError` on the *earlier*, unconditional
+        # `export.add_argument("--out", ..., type=Path)` call before this
+        # branch is ever reached, for every subcommand, not just `ingest`.
+        # Found by running the full suite after adding this branch: every CLI
+        # guardrail test failed with exactly that traceback.
+        from wl_preproc.ingest.watcher import scan_once
+
+        result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
+        for session_dir, outcome in sorted(result.outcomes.items()):
+            print(f"  [{outcome}] {session_dir}")
         return 0
 
     return 2
