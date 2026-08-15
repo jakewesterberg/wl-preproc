@@ -995,6 +995,50 @@ a section that repository requires of every spec. §8.3 above already answered t
 of question for montage boundaries by refusing to guess; a block is *less* safe to infer than
 a montage, because an event code carries no `task_type`, no template and no experiment link.
 
+> **Amended 2026-08-15 by the Phase 1c-2 design session — the third option, which this
+> section did not consider and wl-works had explicitly left open.**
+>
+> The paragraph above refuses *"wl-preproc proposes rows for wl.works to adopt"*, and that
+> refusal stands. But Plan 11 §3.2 names **three** possibilities, not two, and declines to
+> refuse the third in terms this section never quoted:
+>
+> > *"A block boundary decoded from a strobe is a **measurement**, not an authorship claim —
+> > closer to row 27's transcription of `log_cmd.txt` and row 29's transcription of a
+> > `.spectrashop` header than to a person writing a notebook entry. **Whether it lands in
+> > this table or in one wl-preproc owns is the actual question.**"*
+>
+> **It lands in one wl-preproc owns, and that table already exists.** `core.Block` was
+> declared in 1c-1 with `works_block_id=null : varchar(64)` — a nullable pointer at the
+> authored record — and `core.Montage` beside it. So the split needs no new structure:
+> wl-preproc records the **measurement**, wl.works keeps the **authored record**
+> (`label`, `position`, `createdBy`, task and template links), and `works_block_id` is the
+> link, asserted when a human writes the row and never before.
+>
+> This satisfies Plan 14 §3.3 the same way rows 27 and 29 already do — an actor-less job
+> writes its own table and never an authored record — and it removes a precondition this
+> pipeline could not have satisfied. **The third row of the table above changes**:
+>
+> | ELN state | Behaviour, from 2026-08-15 |
+> |---|---|
+> | Rows exist, boundaries agree | Unchanged. `works_block_id` is set. |
+> | Rows exist, boundaries disagree in count or position | Unchanged. QC hard-fail, §4.2 req 2. |
+> | **Rows absent** | **No longer quarantines.** The canonical activation selects over
+> wl-preproc's measured blocks; `works_block_id` stays null and the block is reported as
+> *unlinked*. An unwritten ELN entry delays a link, not a pipeline. |
+>
+> **Why this matters beyond tidiness:** under the old third row, a session ingested before
+> anyone typed its block rows quarantined, so the automatic canonical NWB — the entire point
+> of the 12-hour delay in item 10 — could not fire for any session whose ELN entry lagged the
+> recording. Plan 11 §3.2 warned of exactly this from its own side: *"If nobody has created
+> the block rows by then, it has nothing to select over."*
+>
+> **Status: proposed, not ratified.** The matching amendment to Plan 11 §3.2 and
+> `docs/ops/waiting-on.md` is drafted and deferred in
+> [`docs/pending-wl-works-amendments.md`](../../pending-wl-works-amendments.md) — wl-works'
+> tree was on a dirty feature branch belonging to another worker. Item 9 stays **open** until
+> it lands. If wl.works rejects the split, `core.Block` and `core.Montage` are unaffected;
+> only who fills them changes, and both tables are pre-data so nothing migrates.
+
 **Item 10 — the delay is 12 hours.** Data landing at 18:00 activates at 06:00 and a sort
 exists mid-morning, which is §8.3's "a sort exists by morning" read literally.
 
@@ -1271,10 +1315,10 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 6 | ~~DataJoint `make` fetch/compute/insert splitting API~~ **Closed 2026-08-13** — it is the **three-part make**: `make_fetch` / `make_compute` / `make_insert`, with the expensive phase outside the transaction and a re-fetch-and-compare guard inside it. Verified empirically on 0.14.9 and 2.3.2 rather than read from docs. §10 | ~~Phase 1~~ |
 | 7 | MUAe and compression-strategy citations | Phase 2 |
 | 8 | Event code range allocation finalized against real tasks | Phase 0 |
-| 9 | ~~Who creates `animal_session_block` rows, and when~~ **Closed 2026-08-13** — the session planner creates them in wl.works; wl-preproc cross-validates its decoded boundaries and **never writes**. An absent row quarantines and reports, carrying the decoded boundaries as a decision aid. §8.3.1 | ~~Phase 0~~ |
+| 9 | Who creates `animal_session_block` rows, and when. **wl-preproc's half is closed** (2026-08-13, §8.3.1): it never writes, it cross-validates decoded boundaries, and it quarantines on absence — a ruling that needs nothing from wl.works. **The cross-repo half is open, and was never carried back** (found 2026-08-15 while designing 1c-2): nothing in wl.works commits it to authoring montage or block rows, or to when, and Plan 11 §3.2 still reads *"neither taken… Owner: whoever plans 11a"*. **A resolution is proposed and not ratified** (2026-08-15, §8.3.1's amendment): wl-preproc owns the *measurement* in `core.Block`/`core.Montage`, wl.works keeps the *authored record*, and `works_block_id` links them — the third option Plan 11 §3.2 named and declined to refuse. Absence then reports an unlinked block instead of quarantining. Text deferred in `docs/pending-wl-works-amendments.md`; **item stays open until it lands there** | Phase 0 |
 | 10 | ~~The X-hour canonical delay value~~ **Closed 2026-08-13 — 12 hours.** The tight end of the range: it buys morning availability and pays in regeneration, and it makes automatic re-firing of a quarantined activation load-bearing rather than optional. §8.3.1 | ~~Phase 0~~ |
 | 11 | Whether `seed` and `device` are pinned to the activation or may differ across its probe runs. wl.works flags this as unsettled; **wl-preproc is the machine that would pin them**, so this is answerable from here | Phase 2 |
-| 12 | Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11). **Narrowed 2026-08-13 by item 9's closure**: no machine creates a block, so this is now only about the activation row itself | Phase 1 |
+| 12 | Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11). **Narrowed 2026-08-13 by item 9's ruling**: no machine creates a block, so this is now only about the activation row itself. The narrowing survives item 9's 2026-08-15 reopening, because it rests on wl-preproc's own half, which did close | Phase 1 |
 | 13 | Who renders the "checked good" verdict (§8.5), and whether it is entered here or in wl.works. **Nothing in wl.works models it and it was declined rather than folded in**, so if it lives there it needs a row somebody designs | Phase 3 |
 | 14 | Chunk shape and per-dataset compression settings that keep the NWB efficiently range-readable (§8.1.2). Measurable on synthetic files before January | Phase 3 |
 | 15 | Whether the derived-vs-recorded channel map comparison (§11.6) should ever *block* a session or only warn. Blocking makes wl.works' pinout a hard dependency of preprocessing | Phase 2 |
@@ -1314,3 +1358,48 @@ wl-works requires that a design amending another document carry a ledger of what
 - **Plan 23.** Its §8 accepts the concurrent-read-during-append risk explicitly. §11.5 here mitigates it on this side without changing anything there, so its acceptance is untouched and simply stops being load-bearing.
 
 **One form is new and is flagged rather than assumed acceptable:** these amendments cite a spec in a *different repository* by path. Every prior cross-reference there is a sibling link that a reader can follow. A cross-repo path cannot be followed and cannot be checked by any tooling in that repository, so it will decay silently — the exact failure mode `AGENTS.md` warns about for citations into `next-session.md`. Whoever plans 11a, 20b or 24b should decide whether the wl.works↔wl-preproc protocol document (§11.2) becomes the shared artifact both repositories cite instead.
+
+### 14.1 One amendment is outstanding, and it is a consequence of §8.3.1 rather than a correction to it
+
+**Found 2026-08-15, designing Phase 1c-2.** Ledger items 4 and 6 above flagged item 9 in
+wl-works correctly on 2026-08-12: Plan 11 §3.2 carries the flag and `docs/ops/waiting-on.md`
+carries the entry, both still reading *"neither taken… Owner: whoever plans 11a"*. That was
+right, and it is still right — nobody there has decided.
+
+What happened next was not carried back. On 2026-08-13 §8.3.1 ruled **wl-preproc's** half —
+it never writes block rows, it cross-validates, it quarantines on absence — and §13 recorded
+item 9 as *Closed* with its phase struck through. The ruling is sound and self-contained;
+§8.3.1's own words are that it *"requires nothing of wl.works."* But marking the item closed
+concealed what the ruling created: because wl-preproc will not author these rows and cannot
+reach wl.works to fetch them, **`animal_session_block` and the montage boundaries became a
+blocking precondition for every automatic activation**, and nothing in either repository
+commits wl.works to producing them or says by when.
+
+Plan 11 §3.2 already names this trap from its own side — *"The canonical session NWB is
+generated automatically some hours after the data lands… If nobody has created the block rows
+by then, it has nothing to select over."* The two documents now describe the same gap from
+opposite ends, and neither one owns closing it.
+
+**The amendment to make**, against the entry that already exists rather than a new one:
+
+- **Plan 11 §3.2** — append a dated block recording that wl-preproc has ruled its half (never
+  writes; cross-validates; quarantines on absence), so the open question there narrows from
+  *"who writes these rows"* to *"wl.works writes them, and the remaining question is by when
+  relative to data landing."*
+- **`docs/ops/waiting-on.md`** — the existing block-creation item gains the same narrowing,
+  and gains the consequence in plain words: until it is answered, every ingested session
+  quarantines and no canonical activation fires.
+- **Montage boundaries travel with it.** §8.3 refused to guess them for the same reason, so
+  `item_insertion` is subject to the identical precondition and the amendment should say so
+  rather than leaving montages to be discovered as a second instance of one problem.
+
+**Not executed in this session.** The wl-works working tree was on `row-30b-chat-ingest-impl`
+with a dirty index, and that repository's remote belongs to another worker. The text and its
+preconditions are held in [`docs/pending-wl-works-amendments.md`](../../pending-wl-works-amendments.md),
+which is the same mechanism the 2026-08-12 deferral used and which records the re-verification
+to run before applying — `main` moves under this repository, and the anchors must be re-read
+rather than trusted.
+
+**This does not block Phase 1c-2 from being designed**, only from reaching `submit()`. The
+watcher's ingest half — sentinel, transfer verification, manifest validation, topology
+discovery, and the `Subject`/`Session`/`AcquisitionSystem` rows — depends on none of it.
