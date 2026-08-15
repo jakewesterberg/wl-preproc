@@ -374,6 +374,20 @@ contradicting this section. Two things caught this way: `schema_version`, which 
 untouched sessions the day `SCHEMA_VERSION` is bumped, and the `session_dir` length check, which
 depends on the operator-supplied `--root` and so changes when a storage root is remounted or moved.
 
+**The rule has exactly one forced exception, and stating it is the point.** Reading and parsing
+the manifest also sits above `already_ingested`, and a manifest's bytes *can* change under a
+landed session — corrupt one and it re-quarantines as `manifest_invalid` on every poll while its
+`Ingestion` row persists, which is the contradiction above. It cannot be moved: `already_ingested`
+is keyed on `(subject, session_datetime)`, and both come *from the parse*. So the parse is
+accepted as a standing exception, and the residual is accepted with it — a session whose manifest
+is corrupted after landing is genuinely worth reporting, and the noise is one row rewritten per
+poll rather than a wrong verdict.
+
+That exception is written down because this rule was first stated as though it had none, in this
+section, and in the docstring of the code implementing it. A rule presented as complete is what
+the next person pattern-matches a new check against; two checks were already placed wrongly before
+the rule existed at all.
+
 `subject` and `session_dt` are recorded when they could be parsed, because a quarantine report
 naming an animal and a date is far more useful than one naming a path — but they are nullable,
 and nothing may key on them.
