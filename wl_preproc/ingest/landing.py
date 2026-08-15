@@ -29,11 +29,28 @@ Two idempotence shapes coexist below, deliberately different:
   fails differently must end up describing its latest failure, not its
   first -- see `quarantine`'s own docstring.
 
-Neither needs a transaction. Each insert stands on its own primary key, so a
-partial run followed by a re-run (by the same watcher, or a second one racing
-it) converges on the same rows without one. A transaction here would add
-rollback semantics that buy nothing and would forbid this being called from
-inside another one.
+Combined, these two shapes leave a real inconsistency behind after a genuine
+race with differing topology, and it deserves naming explicitly rather than
+leaving each half documented only in isolation: `Ingestion.topology` freezes
+at whichever call landed first, while `AcquisitionSystem` keeps unioning in
+every system any racing call ever observed. So after such a race,
+`Ingestion.topology["rhs"]` can go on reading `"absent"` indefinitely even
+once a real `AcquisitionSystem` row for `rhs` exists -- contradicting
+`topology`'s own declared promise in `schema/ingest.py` ("the full per-system
+state map, read as a unit") from that moment on. This is documentation, not a
+fix: closing it for real needs a lock or a cross-table transaction, and the
+design spec excludes a lock deliberately (section 13). `topology` is
+authoritative for a session landed by exactly one call -- which is every
+session, absent an actual race -- and after a race it is evidence of what the
+*first* call saw, not a live cross-table guarantee. `AcquisitionSystem` (and,
+downstream, `Segment`/`RejectedSegment`) is what reflects what is currently
+true; `topology` does not update to match it.
+
+Neither idempotence shape needs a transaction. Each insert stands on its own
+primary key, so a partial run followed by a re-run (by the same watcher, or a
+second one racing it) converges on the same rows without one. A transaction
+here would add rollback semantics that buy nothing and would forbid this being
+called from inside another one.
 """
 
 from __future__ import annotations
@@ -78,11 +95,14 @@ def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     them to UTC. For a value already in UTC that happens to be harmless. For
     any other offset it is not: the row files under the wrong wall-clock time,
     hours from where the session actually happened, with nothing to signal
-    that it happened.
+    that it happened. (This is the INSERT path specifically. The restriction
+    path -- `table & {...}` -- goes through a different DataJoint code path
+    with a different failure mode; see `already_ingested`'s docstring, which
+    is where that one actually matters.)
 
     Every key this module builds from a manifest goes through this one
-    function -- see `session_key` below -- rather than each call site
-    converting it separately, because two call sites that convert this
+    function -- see `manifest_session_key` below -- rather than each call
+    site converting it separately, because two call sites that convert this
     differently is exactly how two "equal" keys stop being equal to each
     other. See `already_ingested`'s docstring for what that costs.
 
@@ -97,9 +117,20 @@ def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     return value.astimezone(datetime.UTC).replace(tzinfo=None)
 
 
-def session_key(manifest: SessionManifest) -> dict:
+def manifest_session_key(manifest: SessionManifest) -> dict:
     """The (subject, session_datetime) key every session-scoped table uses,
     built the one way this module builds it.
+
+    Named `manifest_session_key`, not `session_key`, specifically so it does
+    not share a name with `already_ingested`'s `session_key` PARAMETER (that
+    parameter name is mandated by this task's interface and is not this
+    function's to rename). Shadowing a module-level function with a same-named
+    local is harmless by itself, but a future edit inside that function
+    reaching for this helper by its old name would silently resolve to the
+    dict parameter instead and fail with `TypeError: 'dict' object is not
+    callable` -- a needless trap for one function to leave lying around for
+    the next person to step in, closed by giving the two truly different
+    names.
 
     Task 8's watcher needs this identical key to ask `already_ingested`
     whether a session has already been landed. If it built the key a
@@ -121,14 +152,37 @@ def _now(now: datetime.datetime | None) -> datetime.datetime:
 def already_ingested(session_key: dict, prefix: str = DEFAULT_PREFIX) -> bool:
     """An Ingestion row is what marks a session done.
 
-    `session_datetime` is normalized through `to_naive_utc` here too, rather
-    than trusting the caller to have built `session_key` with the function of
-    the same name above -- so a caller that passed a manifest's aware
-    `started_at` straight through still matches what `land_session` actually
-    wrote, instead of silently never matching and re-ingesting the same
-    session on every single scan. Cheap insurance against exactly the
-    disagreement described in `to_naive_utc`'s docstring, rather than a
-    second place that same conversion could be gotten wrong.
+    `session_datetime` is normalized through `to_naive_utc` here too, in case
+    the caller built `session_key` some other way than `manifest_session_key`
+    -- e.g. straight off a manifest's aware `started_at`. What this
+    specifically protects against on this RESTRICTION path is narrower than
+    what `to_naive_utc` protects the INSERT path against, and is worth
+    stating precisely rather than by analogy: an earlier version of this
+    docstring named the insert-path risk here too, which review caught as the
+    wrong risk for this particular call site.
+
+    DataJoint's dict-restriction (`table & {...}`) serializes a datetime via
+    bare `str()` (`datajoint/condition.py`'s `prep_value`) -- unlike
+    `pymysql.converters.escape_datetime` on the insert path, this does NOT
+    drop an aware value's UTC-offset suffix. MySQL's own literal parser then
+    resolves that suffix against `@@session.time_zone` before comparing it to
+    the naive column -- confirmed directly against a live container: forcing
+    `SET time_zone='+05:00'` makes the identical literal string parse to a
+    value five hours later. Under a UTC session tz -- including this
+    project's own testcontainers image, whose session tz reports `SYSTEM` and
+    resolves to UTC -- a `+00:00` suffix shifts nothing, so the restriction
+    matches correctly whether or not this normalization runs at all:
+    confirmed by calling the restriction with the normalization removed under
+    that default tz, which still finds the row every time. Under any OTHER
+    session tz -- a real, uncontrolled production possibility this module
+    cannot rule out -- the identical aware value parses to a genuinely
+    different instant than what was actually stored, and the restriction
+    silently stops matching. Converting to naive here removes the offset
+    suffix outright, which sidesteps the tz-dependent parse entirely rather
+    than depending on it resolving to UTC. See
+    `test_already_ingested_survives_a_non_utc_session_time_zone`, which
+    forces a non-UTC session tz to exercise this for real rather than relying
+    on the container's default to happen to be UTC.
     """
     ingest.activate(prefix=prefix)
     key = dict(session_key)
@@ -169,7 +223,7 @@ def land_session(
     ingest.activate(prefix=prefix)
     core.activate(prefix=prefix)
 
-    key = session_key(manifest)
+    key = manifest_session_key(manifest)
 
     # element-animal's Subject, verified against the installed package:
     #   subject : varchar(8)          <- 8 characters, and the manifest's is unbounded
@@ -237,8 +291,8 @@ def quarantine(
     as every other datetime this module writes -- it is best-effort
     provenance on a row that is not keyed by it (see the module docstring on
     `ingest.Quarantine`), but there is no reason for it to carry a different,
-    silently-wrong-for-non-UTC value than `session_key` would have produced
-    for the same manifest.
+    silently-wrong-for-non-UTC value than `manifest_session_key` would have
+    produced for the same manifest.
     """
     ingest.activate(prefix=prefix)
     ingest.Quarantine.insert1(

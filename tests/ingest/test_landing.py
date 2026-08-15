@@ -18,8 +18,8 @@ from wl_preproc.ingest.landing import (
     SUBJECT_MAX_LEN,
     already_ingested,
     land_session,
+    manifest_session_key,
     quarantine,
-    session_key,
 )
 from wl_preproc.ingest.verify import Integrity
 from wl_preproc.schema import core, ingest, pipeline
@@ -39,10 +39,11 @@ def landed(tmp_path, activated):
 
     `tests/schema/test_core.py`'s `a_session` fixture inserts
     `pipeline.Session` at exactly `(subject="pico", session_datetime=
-    2027-03-14 09:00:00)` — the same naive value `session_key` derives from
-    CI_RECIPE's manifest, since both ultimately stamp `SYNTH_EPOCH`. That
-    module's own `test_rejected_segment_records_why` then inserts a
-    `core.AcquisitionSystem` row for `system="rhs"` under that identical key.
+    2027-03-14 09:00:00)` — the same naive value `manifest_session_key`
+    derives from CI_RECIPE's manifest, since both ultimately stamp
+    `SYNTH_EPOCH`. That module's own `test_rejected_segment_records_why`
+    then inserts a `core.AcquisitionSystem` row for `system="rhs"` under
+    that identical key.
     Landing this fixture's session under "pico" too would be invisible when
     the full suite happens to collect `tests/ingest/` before `tests/schema/`
     (today's default alphabetical order), but reversed collection —
@@ -124,7 +125,7 @@ def test_already_ingested_is_false_before_and_true_after(tmp_path, activated):
     manifest = SessionManifest.from_yaml(layout.manifest_path.read_text()).model_copy(
         update={"subject": "keytest"}
     )
-    key = session_key(manifest)
+    key = manifest_session_key(manifest)
 
     assert already_ingested(key, prefix=activated) is False
 
@@ -222,7 +223,18 @@ def test_quarantining_twice_updates_rather_than_raising(activated):
 #
 # 5. `already_ingested` normalizes an aware `session_datetime` defensively
 #    (see its docstring) rather than trusting every caller to have built the
-#    key through `session_key`. That fallback has no test of its own above.
+#    key through `manifest_session_key`. That fallback's first test
+#    (`test_already_ingested_tolerates_an_aware_session_datetime`, since
+#    replaced) asserted `already_ingested` found an aware-keyed row under
+#    this project's own testcontainers image and called that proof — but
+#    that image's session time_zone resolves to UTC, and review found the
+#    same assertion passes identically with the normalization removed
+#    entirely. `test_already_ingested_survives_a_non_utc_session_time_zone`
+#    below replaces it, forcing a non-UTC session tz to exercise the actual
+#    risk (see that test's own docstring, and `already_ingested`'s, for the
+#    mechanism — DataJoint's dict-restriction keeps an aware value's offset
+#    suffix, unlike the insert path, and MySQL resolves it against
+#    `@@session.time_zone`).
 
 
 def test_landing_twice_with_different_content_is_still_idempotent(tmp_path, activated):
@@ -294,27 +306,52 @@ def test_subject_max_len_matches_the_declared_column(activated):
     assert declared == f"varchar({SUBJECT_MAX_LEN})"
 
 
-def test_already_ingested_tolerates_an_aware_session_datetime(tmp_path, activated):
-    """`already_ingested`'s own defensive normalization (see its docstring):
-    a caller that built its key from a manifest's aware `started_at` directly
-    — skipping `session_key`/`to_naive_utc` — must still match what
-    `land_session` actually wrote, rather than silently never matching and
-    re-ingesting the same session on every scan.
+def test_already_ingested_survives_a_non_utc_session_time_zone(tmp_path, activated, dj_conn):
+    """`already_ingested`'s defensive normalization (see its docstring) exists
+    for a narrower, more specific risk than "any aware datetime" — and a first
+    version of this test could not tell the difference, which review caught.
+
+    DataJoint's dict-restriction (`table & {...}`) serializes a datetime via
+    bare `str()`, which — unlike the insert path — keeps an aware value's
+    UTC-offset suffix. MySQL's own literal parser resolves that suffix
+    against `@@session.time_zone` before comparing to the naive column. This
+    project's own testcontainers image reports session tz `SYSTEM`, which
+    resolves to UTC, so a `+00:00` suffix shifts nothing there — an earlier
+    version of this test built an aware key and asserted `already_ingested`
+    found it, which passed identically whether or not the normalization ran
+    at all (confirmed directly: calling the restriction with the
+    normalization removed, under this same container, still finds the row
+    every time). That is not a test of the normalization; it is a test of
+    the container's default tz happening to make the normalization
+    unnecessary.
+
+    So this test forces the one condition where the two behaviours actually
+    diverge: a session `time_zone` that is not UTC, a real, uncontrolled
+    production possibility this module cannot rule out. `dj.conn()` is the
+    ONE persistent connection this whole pytest session shares (this
+    project's `dj_conn` fixture is session-scoped), so the original tz is
+    captured and restored in `finally` — an unrestored `SET time_zone` here
+    would leak into every test that runs afterward, in this file and beyond.
     """
-    generate_session(tmp_path, CI_RECIPE)
-    layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
-    manifest = SessionManifest.from_yaml(layout.manifest_path.read_text()).model_copy(
-        update={"subject": "awarekey"}
-    )
-    land_session(
-        layout,
-        manifest,
-        discover_topology(layout, manifest),
-        Integrity.VERIFIED,
-        "abc123",
-        prefix=activated,
-    )
+    original_tz = dj_conn.query("SELECT @@session.time_zone").fetchone()[0]
+    try:
+        generate_session(tmp_path, CI_RECIPE)
+        layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
+        manifest = SessionManifest.from_yaml(layout.manifest_path.read_text()).model_copy(
+            update={"subject": "tzkey"}
+        )
+        land_session(
+            layout,
+            manifest,
+            discover_topology(layout, manifest),
+            Integrity.VERIFIED,
+            "abc123",
+            prefix=activated,
+        )
 
-    aware_key = {"subject": manifest.subject, "session_datetime": manifest.started_at}
+        dj_conn.query("SET time_zone = '+05:00'")
+        aware_key = {"subject": manifest.subject, "session_datetime": manifest.started_at}
 
-    assert already_ingested(aware_key, prefix=activated) is True
+        assert already_ingested(aware_key, prefix=activated) is True
+    finally:
+        dj_conn.query(f"SET time_zone = '{original_tz}'")

@@ -11,6 +11,18 @@ it wrongly for any backfill.
 unparseable manifest, and the manifest is precisely what yields that key — so a
 key-addressed row cannot represent the failures that most need recording. The
 path is available in every case, because the watcher is standing in it.
+
+`Ingestion.topology`'s comment below promises "the full per-system state map,
+read as a unit" — true for a session landed by exactly one call, which is
+every session absent an actual race. `wl_preproc/ingest/landing.py`'s
+`land_session` is idempotent by construction rather than locked (design spec
+section 13 excludes a lock deliberately), and after a genuine race with
+differing topology this column freezes at whichever call landed first while
+`core.AcquisitionSystem` keeps unioning in every system any racing call ever
+saw — so this column can go on describing a system as absent after a real
+`AcquisitionSystem` row for it already exists. See `landing.py`'s module
+docstring for the mechanism. Read `topology` as a unit for the ordinary,
+race-free case; it is not a live cross-table guarantee.
 """
 
 from __future__ import annotations
