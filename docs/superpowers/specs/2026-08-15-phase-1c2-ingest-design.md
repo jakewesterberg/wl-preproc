@@ -374,7 +374,7 @@ contradicting this section. Two things caught this way: `schema_version`, which 
 untouched sessions the day `SCHEMA_VERSION` is bumped, and the `session_dir` length check, which
 depends on the operator-supplied `--root` and so changes when a storage root is remounted or moved.
 
-**The rule has exactly one forced exception, and stating it is the point.** Reading and parsing
+**The rule has two forced exceptions, and stating them is the point.** Reading and parsing
 the manifest also sits above `already_ingested`, and a manifest's bytes *can* change under a
 landed session — corrupt one and it re-quarantines as `manifest_invalid` on every poll while its
 `Ingestion` row persists, which is the contradiction above. It cannot be moved: `already_ingested`
@@ -383,10 +383,22 @@ accepted as a standing exception, and the residual is accepted with it — a ses
 is corrupted after landing is genuinely worth reporting, and the noise is one row rewritten per
 poll rather than a wrong verdict.
 
-That exception is written down because this rule was first stated as though it had none, in this
-section, and in the docstring of the code implementing it. A rule presented as complete is what
-the next person pattern-matches a new check against; two checks were already placed wrongly before
-the rule existed at all.
+**The second exception is `session_id_mismatch`, and it was found the same way the first was —
+by someone checking whether "exactly one" was true.** That check was placed above
+`already_ingested` on the reasoning that it compares a directory's own basename against its own
+manifest, both fixed properties of the directory. The manifest is not fixed: edit a landed
+session's `session_id`, or rename the directory, and it quarantines on every poll thereafter with
+its `Ingestion` row intact — the same contradiction. It is accepted for the same reason the parse
+is: the alarm is arguably right, and the cost is one row rewritten per poll rather than a wrong
+verdict.
+
+This rule was stated as having no exceptions, then as having one, and both times the number was
+wrong. That is worth more than either correction. **A rule presented as complete is what the next
+person pattern-matches a new check against** — and two checks were placed wrongly before this rule
+existed at all, which is what it was written to prevent. If a third exception appears, the honest
+conclusion is not a third amendment but that the two groups are the wrong shape, and what actually
+governs is whether a check's inputs can change after landing — which is a question to ask of each
+input, not a group to sort a check into.
 
 `subject` and `session_dt` are recorded when they could be parsed, because a quarantine report
 naming an animal and a date is far more useful than one naming a path — but they are nullable,
