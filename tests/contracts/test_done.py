@@ -57,6 +57,25 @@ def test_rejects_unknown_system():
         )
 
 
+def test_rejects_a_path_traversal_component():
+    """verify.py joins `path` onto a system directory unchecked
+    (`system_dir / entry.path`), so a `..` component is not hypothetical: a
+    transfer script with a reversed `relpath` call can emit exactly this,
+    with no malice involved, and walk the read straight out of the system
+    directory."""
+    with pytest.raises(ValidationError):
+        FileEntry(path="../../etc/passwd", bytes=1024, blake3="9f2c")
+
+
+def test_rejects_an_absolute_path():
+    """The sharper variant of the traversal above: an absolute path needs no
+    `..` at all. `Path.__truediv__` discards the left operand entirely when
+    the right one is absolute, so `system_dir / "/etc/passwd"` *is*
+    `/etc/passwd` — silently, with `system_dir` playing no role."""
+    with pytest.raises(ValidationError):
+        FileEntry(path="/etc/passwd", bytes=1024, blake3="9f2c")
+
+
 def test_blake3_file_matches_the_reference_digest(tmp_path):
     """Pinned against blake3's own digest of the same bytes, so a chunking bug
     in the streaming read cannot pass. A self-consistent test that hashed the

@@ -26,7 +26,7 @@ class Integrity(StrEnum):
 class Mismatch(NamedTuple):
     system: str
     path: str
-    problem: str  # "missing" | "size" | "blake3" | "unreadable"
+    problem: str  # "missing" | "size" | "blake3" | "unreadable: <the OSError>"
 
 
 def verify_session(
@@ -64,6 +64,25 @@ def verify_session(
     topology = discover_topology(layout, manifest)
     for system, state in sorted(topology.items()):
         if state not in (SystemState.PRESENT, SystemState.UNDECLARED):
+            # discover_topology's PENDING collapses two different reasons a
+            # declared system isn't "marked" into one state, because spec
+            # section 7's job for that module — "only PENDING blocks ingest"
+            # — does not need to tell them apart: an ABSENT marker (transfer
+            # not finished, nothing to check yet) and an INVALID one
+            # (transfer finished and wrote something unreadable, including a
+            # marker that failed FileEntry.path's own containment check —
+            # contracts/done.py) both land here identically. Verification
+            # does need to tell them apart: an INVALID marker is a system
+            # whose integrity is unknowable, the same situation an EMPTY
+            # marker already downgrades a session for, and silently treating
+            # it as "nothing to check yet" would render VERIFIED on a session
+            # that had a system nothing was actually able to check — worse
+            # than merely incomplete information, an active misstatement.
+            if (
+                state is SystemState.PENDING
+                and read_marker(layout, system)[0] is MarkerState.INVALID
+            ):
+                saw_empty = True
             continue
 
         marker_state, marker = read_marker(layout, system)
@@ -84,7 +103,7 @@ def verify_session(
                     mismatches.append(Mismatch(system, entry.path, "size"))
                 elif blake3_file(candidate) != entry.blake3:
                     mismatches.append(Mismatch(system, entry.path, "blake3"))
-            except OSError:
+            except OSError as exc:
                 # candidate.is_file() swallows ENOENT/ENOTDIR/EBADF/ELOOP on its
                 # own but not EACCES (pathlib._IGNORED_ERRNOS, identical on 3.11
                 # and 3.13); candidate.stat() and blake3_file's open()+read()
@@ -94,7 +113,18 @@ def verify_session(
                 # disagreed) — the check could not run at all, and that is a
                 # different claim from either, so it gets its own name rather
                 # than being folded into one of theirs.
-                mismatches.append(Mismatch(system, entry.path, "unreadable"))
+                #
+                # The exception is bound and its text kept rather than thrown
+                # away: Task 8 surfaces `problem` directly in a quarantine
+                # record for a human to triage, and errno is exactly what
+                # separates "chmod a directory, minutes, self-service" (EACCES)
+                # from "the storage array has a bad block, escalate to infra"
+                # (EIO) — the latter being this module's own opening scenario,
+                # a file that "met a bad block on the scratch array." Collapsing
+                # both to the bare string "unreadable" would hide the one piece
+                # of information that tells those two apart, for free, sitting
+                # right here at the catch site.
+                mismatches.append(Mismatch(system, entry.path, f"unreadable: {exc}"))
 
     integrity = Integrity.DECLARED_ONLY if saw_empty else Integrity.VERIFIED
     return integrity, mismatches

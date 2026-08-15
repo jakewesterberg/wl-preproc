@@ -11,7 +11,7 @@ rather than silently treated as verified.
 from __future__ import annotations
 
 import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import blake3 as _blake3
 import yaml
@@ -28,6 +28,42 @@ class FileEntry(BaseModel):
     path: str  # relative to the system directory
     bytes: int
     blake3: str
+
+    @field_validator("path")
+    @classmethod
+    def _relative_and_contained(cls, value: str) -> str:
+        """Every consumer of `DoneMarker.files` joins `path` onto a system
+        directory unchecked (`verify.py`: `system_dir / entry.path`), so what
+        this rejects is not hypothetical. Two shapes, both reachable with no
+        malice at all — a transfer script with a reversed `relpath` call, or
+        one that emits an absolute path by accident:
+
+        - `..` anywhere in the path walks back out of the system directory.
+        - an absolute path is worse and needs no `..`: `Path.__truediv__`
+          discards the left operand entirely when the right one is absolute,
+          so `system_dir / "/etc/passwd"` *is* `/etc/passwd`, silently.
+
+        Checked once here rather than at each call site, because a check any
+        one consumer forgets to add is a check that does not exist — the
+        contract is the one place that protects all of them at once, present
+        and future.
+
+        This cannot see a *symlink* planted inside a real system directory
+        that a clean, `..`-free relative path resolves through to somewhere
+        outside it — that is a property of what is actually on disk at
+        verify time, not of this string, and no amount of string validation
+        here can close it. What this closes is the string-only escape: no
+        `..`, no absolute path, full stop, for every consumer, forever.
+        """
+        parsed = PurePosixPath(value)
+        if parsed.is_absolute():
+            raise ValueError(
+                f"path must be relative to the system directory, got an absolute "
+                f"path: {value!r}"
+            )
+        if ".." in parsed.parts:
+            raise ValueError(f"path must not contain '..' components: {value!r}")
+        return value
 
 
 class DoneMarker(BaseModel):
