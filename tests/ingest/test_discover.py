@@ -134,3 +134,41 @@ def test_a_failed_recursive_walk_over_a_truly_empty_directory_is_still_absent(
     monkeypatch.setattr(Path, "rglob", failing_rglob)
 
     assert discover_topology(layout, manifest)["rhs"] is SystemState.ABSENT
+
+
+def test_a_vanished_directory_does_not_crash_the_whole_scan(session, monkeypatch):
+    """The `is_dir()` check and the two read attempts inside `_has_content`
+    are not atomic, so `directory` itself -- not merely something under it
+    -- can be gone by the time both `rglob()` and the non-recursive
+    `iterdir()` fallback run, and both raise. Unguarded, that second failure
+    would propagate out of `_has_content` into `discover_topology`, which
+    has no try/except around this call: one system's bad timing would crash
+    the scan for every system, not just misclassify the one that raced. The
+    dict coming back complete for every system -- not the `ABSENT` value
+    alone -- is the assertion that actually matters here, since the whole
+    scan's availability is what was at risk."""
+    layout, manifest = session
+    rhs_dir = layout.system_dir("rhs")
+    rhs_dir.mkdir()
+    (rhs_dir / "amplifier.dat").write_bytes(b"0" * 16)
+
+    real_rglob = Path.rglob
+    real_iterdir = Path.iterdir
+
+    def failing_rglob(self, pattern):
+        if self == rhs_dir:
+            raise FileNotFoundError(f"simulated: {self} removed before rglob")
+        yield from real_rglob(self, pattern)
+
+    def failing_iterdir(self):
+        if self == rhs_dir:
+            raise FileNotFoundError(f"simulated: {self} removed before iterdir")
+        yield from real_iterdir(self)
+
+    monkeypatch.setattr(Path, "rglob", failing_rglob)
+    monkeypatch.setattr(Path, "iterdir", failing_iterdir)
+
+    topology = discover_topology(layout, manifest)
+
+    assert set(topology) == set(SYSTEMS)
+    assert topology["rhs"] is SystemState.ABSENT

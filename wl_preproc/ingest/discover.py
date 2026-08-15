@@ -47,9 +47,21 @@ def _has_content(layout: SessionLayout, system: str) -> bool:
     listing of `directory` itself: a file sitting directly in it still
     counts even when whatever actually vanished was deeper in the tree.
 
-    A recording that exists *only* under a subdirectory that is itself the
-    one lost to the race is the one shape this does not recover. That is a
-    deliberately modest fix rather than a hardened traversal: the exposure
+    The fallback listing is guarded the same way, for the same reason. The
+    `is_dir()` check above and these two calls are not atomic, so `directory`
+    itself -- not merely something under it -- can be what vanished, and
+    then `iterdir()` fails too. Left unguarded, that second failure would
+    propagate out of this function into `discover_topology`, which has no
+    try/except around this call: one system's bad timing would crash the
+    scan for every system, not just misclassify the one that raced. `False`
+    is the honest answer once `directory` itself is gone -- there is nothing
+    left on disk to lose.
+
+    This function is guaranteed to never raise. The one thing it can still
+    get wrong: a recording that exists *only* under a subdirectory that is
+    itself the one lost to the race reads as ABSENT rather than UNDECLARED,
+    since the fallback only lists `directory`'s immediate children. That is
+    a deliberately modest fix rather than a hardened traversal: the exposure
     above is CI's 3.11 leg and developer machines, and a full recovery would
     mean not using `rglob` at all.
     """
@@ -64,7 +76,10 @@ def _has_content(layout: SessionLayout, system: str) -> bool:
     try:
         return any(qualifies(p) for p in directory.rglob("*"))
     except OSError:
-        return any(qualifies(p) for p in directory.iterdir())
+        try:
+            return any(qualifies(p) for p in directory.iterdir())
+        except OSError:
+            return False
 
 
 def discover_topology(
