@@ -184,34 +184,66 @@ def test_a_permission_error_checking_the_marker_reads_as_absent(session, monkeyp
     assert missing_systems(layout, manifest) == ["spikeglx"]
 
 
-def test_last_change_at_survives_a_failed_stat_on_the_directory_itself(session, monkeypatch):
-    """Round-3 finding, narrower than the rglob gap below: the very first
-    line -- session_dir.stat() -- was unguarded too. `Path.stat()` is a bare
-    `os.stat()` with no swallowing of anything, on any Python version, so
-    any OSError there propagated straight out. Unlike the rglob fallback
-    below, there is no already-known real timestamp to prefer here -- the
-    directory itself is what could not be read -- so the fallback is "just
-    touched": chosen so a transient failure to observe this directory does
-    not manufacture a false stall report from data this function never
-    actually saw."""
+def test_last_change_at_falls_back_to_ancient_under_an_ancestor_permission_fault(session):
+    """Round-4 finding: round 3 shipped "just touched" as the fallback for a
+    failed leading session_dir.stat(); it should have been ancient
+    (datetime.min). A permission fault on the session directory itself does
+    not even reach this branch -- stat() only needs search permission on the
+    *parent*, not the target (proven in the companion test below) -- so what
+    actually triggers this is an ancestor-level fault: a broken NFS export,
+    an ACL misconfiguration, an autofs hiccup at the storage root. That is a
+    standing condition hitting every sibling session at once, not a narrow
+    one-directory race, and newest is only ever raised by max(), never
+    lowered, so this fallback is not one input among several -- it becomes
+    the walk's permanent floor. A false "stalled" clears itself the moment
+    the fault is fixed; "just touched" would instead make a whole storage
+    root's worth of dead transfers read as merely active for as long as the
+    misconfiguration lasts -- the exact invisible dead transfer this module
+    exists to surface.
+
+    This must be a real os.chmod, not a Path.stat monkeypatch: Python 3.13's
+    rewritten glob.py calls os.scandir on raw path strings, bypassing any
+    patched Path method entirely, so a monkeypatch would let the real,
+    unpatched walk find real, fresh files on 3.13 and overwrite the fallback
+    via max() before the assertion ever ran -- passing for the wrong reason
+    on exactly the interpreter the preprocessing server runs."""
     layout, manifest = session
     layout.done_marker("spikeglx").unlink()
-    real_stat = Path.stat
+    old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=10)).timestamp()
+    os.utime(layout.dir, (old, old))
 
-    def failing_stat(self, *, follow_symlinks=True):
-        if self == layout.dir:
-            raise PermissionError(f"simulated: permission denied for {self}")
-        return real_stat(self, follow_symlinks=follow_symlinks)
+    parent = layout.dir.parent
+    original_mode = parent.stat().st_mode
+    os.chmod(parent, 0o000)
+    try:
+        result = last_change_at(layout.dir)
+        stalled = is_stalled(layout, manifest, now=datetime.datetime.now(datetime.UTC))
+    finally:
+        os.chmod(parent, original_mode)
 
-    monkeypatch.setattr(Path, "stat", failing_stat)
+    assert result == datetime.datetime.min.replace(tzinfo=datetime.UTC)
+    assert stalled is True
 
-    before = datetime.datetime.now(datetime.UTC)
-    result = last_change_at(layout.dir)
-    after = datetime.datetime.now(datetime.UTC)
 
-    assert result.tzinfo is datetime.UTC
-    assert before <= result <= after, "fallback must be 'just touched', not an arbitrary timestamp"
-    assert is_stalled(layout, manifest, now=after) is False
+def test_a_permission_fault_on_the_session_directory_itself_still_finds_its_real_mtime(session):
+    """Companion to the test above, proving the specific claim its docstring
+    makes rather than asserting it: stat() needs search permission on the
+    *parent*, not the target, so denying all permissions on the session
+    directory itself does not reach the ancient-fallback branch at all --
+    the leading stat() still succeeds and returns the real mtime. (rglob's
+    later attempt to list the directory's own now-unreadable contents finds
+    nothing, silently, via pathlib's own PermissionError handling -- not a
+    failure this function's guards need to intervene on.)"""
+    layout, manifest = session
+    real_mtime = layout.dir.stat().st_mtime
+    original_mode = layout.dir.stat().st_mode
+    os.chmod(layout.dir, 0o000)
+    try:
+        result = last_change_at(layout.dir)
+    finally:
+        os.chmod(layout.dir, original_mode)
+
+    assert result == datetime.datetime.fromtimestamp(real_mtime, tz=datetime.UTC)
 
 
 def test_last_change_at_falling_walk_keeps_a_genuine_stall_visible(session, monkeypatch):

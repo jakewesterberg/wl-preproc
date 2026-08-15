@@ -86,16 +86,9 @@ def last_change_at(session_dir) -> datetime.datetime:
     creating an empty subdirectory still counts as recently touched.
 
     Every filesystem call here is guarded, and this function is guaranteed to
-    never raise -- but each fallback prefers whatever real timestamp is
-    already known over inventing one, unlike `discover._has_content`'s
-    guards. This feeds an *alarm* (`is_stalled`), where the two directions of
-    being wrong are not equivalent: an artificially fresh answer makes a
-    genuinely stalled session look merely active and delays a report that
-    should fire, while an artificially ancient one manufactures a false
-    alarm for a session that is actually fine. Neither is the honest answer
-    the way `False` is for `_has_content` -- there, nothing left on disk
-    really does mean no content; here, a missing data point does not mean
-    "very fresh" or "very stale," it means unknown.
+    never raise. This feeds an *alarm* (`is_stalled`), and the two guards
+    below do not resolve the same direction, because the two ways of being
+    wrong here are not equivalent.
 
     A candidate can stop existing between being listed by `rglob` and being
     `stat`'d — a dangling symlink, or a transfer's own write-to-temp-then-rename
@@ -108,29 +101,42 @@ def last_change_at(session_dir) -> datetime.datetime:
     Python-3.11-only `rglob` gap `discover._has_content` documents in full: a
     subdirectory it has already discovered can be removed before being
     scanned. A failed walk here keeps whatever `newest` already holds rather
-    than resetting it: the directory's own real mtime if the walk failed
-    before finding anything newer, or whatever newer candidate it had
-    already found if it failed partway through -- never a "nothing found"
-    sentinel, which would read as maximally fresh here (a `max()` seed of 0)
-    only by accident of implementation, and manufacture the false-negative
-    direction of error above.
+    than resetting it, so it never has to invent a value: real progress
+    already made survives as-is. This must never be a "nothing found"
+    sentinel -- that would read as maximally fresh here by accident of
+    implementation (an unset `max()` seed of 0) and delay a report that
+    should fire.
 
-    The initial `session_dir.stat()` is a narrower case: unlike everything
-    above, a descendant of a directory this function has already confirmed
-    exists, this is the directory itself -- confirmed reachable by
-    `session_complete`'s marker reads moments before `is_stalled` calls this,
-    so the window for it to have vanished in between is much tighter, and
-    unlike the `rglob` fallback there is no already-known real timestamp to
-    prefer instead. Guarded the same way regardless: "just touched" is
-    chosen over "ancient" because nothing real is being discarded in favor
-    of it here, only guessed in the absence of any data at all, and a
-    session that has genuinely vanished simply stops appearing in the next
-    full scan rather than depending on this one guess.
+    The initial `session_dir.stat()` is different in kind, not degree, and
+    its fallback is deliberately the opposite direction: ancient
+    (`datetime.min`), not fresh. A permission fault on the session directory
+    itself does not even reach this line: `stat()` only needs search
+    permission on the *parent*, not the target, so `session_dir.stat()`
+    still succeeds and this function still returns the directory's real
+    mtime in that case. What actually reaches this line is an
+    *ancestor*-level fault instead: a broken NFS export, an ACL
+    misconfiguration, an autofs hiccup at the storage root. That is not a
+    one-directory race, the shape everything else in this function defends
+    against -- it is a standing condition that hits every sibling session
+    simultaneously and recurs identically on every subsequent scan for as
+    long as it is misconfigured. `newest` is only ever raised by `max()`,
+    never lowered, so whatever this line returns is not one input among
+    several folded into a real computation -- it becomes the walk's
+    permanent floor, since any real file's mtime predates "now" and can
+    only pull a fresh fallback back down toward the truth, never further
+    from it, while an ancient fallback is already below anything the walk
+    could find and is left untouched. A false "stalled" from the ancient
+    fallback is a spurious report that clears itself the moment the fault
+    is fixed and a later scan succeeds; "just touched" would instead make a
+    whole storage root's worth of dead transfers read as merely active for
+    as long as the misconfiguration lasts -- the exact invisible dead
+    transfer this module exists to surface, not one narrow race away from
+    it.
     """
     try:
         newest = session_dir.stat().st_mtime
     except OSError:
-        newest = datetime.datetime.now(tz=datetime.UTC).timestamp()
+        newest = datetime.datetime.min.replace(tzinfo=datetime.UTC).timestamp()
     try:
         for candidate in session_dir.rglob("*"):
             try:
