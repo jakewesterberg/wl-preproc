@@ -62,7 +62,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Event codes | **16-bit** parallel + strobe |
 | Code routing | Full 16 bits to Pi and NI; **strobe only** to Intan RHS |
 | Trial truth | Codes own timing; task file owns parameters; cross-validated, hard-fail on mismatch |
-| NI hardware | **PXIe-6363** (32 waveform DI) — *not* the 6341 (8 DI) |
+| NI hardware | **PXIe-6353** (32 waveform DI) — *not* the 6341 (8 DI) |
 | Intan | RHS stim/record + I/O expander (16 DI / 16 DO / 8 AI / 8 AO) |
 | Eye | ohDPI (OpenIris, 2× FLIR BFS-U3-16S2M-CS @ 500 Hz), Pi-triggered |
 | Eye detection | **Both** Engbert–Kliegl and U'n'Eye, always, as separate paramset-keyed rows |
@@ -231,7 +231,7 @@ Trials can be as short as 3 s, so a single-trial segment always clears the one-b
 | Destination | Lines | Rationale |
 |---|---|---|
 | Sync box (Pi) | 16 data + strobe | Sole recorder on training sessions |
-| NI (PXIe-6363) | 16 data + strobe | 32 waveform DI available |
+| NI (PXIe-6353) | 16 data + strobe | 32 waveform DI available |
 | Intan RHS | strobe only | 16 DI ceiling cannot fit 16 + strobe + barcode |
 
 **The rule that makes strobe-only safe:** *every session type must have at least one device recording full code content.* Intan may be strobe-only because the Pi is always present. This does **not** generalize back to the Pi, which is the sole recorder on training days.
@@ -1293,8 +1293,26 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 
 **Purchasing recommendations arising from this design:**
 
-- **NI PXIe-6363**, not the 6341 (8 waveform DI cannot fit 16-bit codes + strobe + barcode). Avoid USB NI devices for digital input — SpikeGLX warns of digital buffer overruns.
-- **NI PCIe-6363 for the task PC** — a separate board from the recording PXIe-6363 above, on a different machine. 48 DIO, of which port 0's 32 lines are hardware-timed, so all 17 emitted lines (§4.4) fit on P0 alone. Same X-series family as the recording card: one driver stack, one pinout convention. **Do not spec the PCIe-6321 or 6323** — both were discontinued 31 Dec 2024, and the 6323 is what NIMH's own DAQ-toolbox documentation uses in its examples, which makes it an easy default to inherit by accident. **Lead time from NI is 12–13 weeks**, so this is the purchasing item on this list with the least slack against January.
+- **NI PXIe-6353**, not the 6341 (8 waveform DI cannot fit 16-bit codes + strobe + barcode). Avoid USB NI devices for digital input — SpikeGLX warns of digital buffer overruns.
+- **NI PCIe-6343 for the task PC** — a separate board from the recording PXIe-6353 above, on a different machine. 48 DIO, of which port 0's 32 lines (`P0.<0..31>`) are hardware-timed, so all 17 emitted lines (§4.4) fit on P0 alone. Same X-series family as the recording card: one driver stack, one pinout convention. **Do not spec the PCIe-6321 or 6323** — both were discontinued 31 Dec 2024, and the 6323 is what NIMH's own DAQ-toolbox documentation uses in its examples, which makes it an easy default to inherit by accident. **This is the purchasing item on this list with the least slack against January**; re-confirm the lead time when ordering rather than carrying the 6363's 12–13 week figure across (see the correction below).
+
+> **Card models corrected 2026-08-16**, from **PXIe-6363**/**PCIe-6363** to **PXIe-6353**
+> (recording) and **PCIe-6343** (task PC). Both substitutes clear the requirement this section
+> exists to protect, verified against vendor specifications rather than assumed: the PXIe-6353 has
+> *"48 5V TTL DIO lines with 32 hardware-timed up to 10 MHz"*, and the PCIe-6343 has *"48 total
+> digital I/O channels, with 32 (`P0.<0..31>`)"*. The X Series manual establishes Port 0 as the
+> correlated-DIO port — *"You can acquire digital waveforms on the Port 0 DIO lines."*
+>
+> **The only material difference from the 6363 is analog input rate** — 1.25 MS/s (6353) and
+> 500 kS/s (6343) against the 6363's 2 MS/s — and **nothing in this design depends on it**: §4.5
+> aligns SpikeGLX through *one NI digital line*, and §4.2's 16 code lines plus strobe are digital.
+> The assignment is also the right way round, since the faster card is the one that digitises and
+> the slower one only emits.
+>
+> **The 12–13 week lead time was measured for the 6363 and has not been re-derived for these
+> models.** It is carried here as an order of magnitude, not a fact. Re-confirm at the point of
+> ordering — a number carried across a model change rather than re-measured is the defect class
+> this document tracks.
 - **The task PC is Windows x64.** Not a preference — NIMH MonkeyLogic ships its DAQ layer only as `mdqmex.mexw64`, so there is no other target.
 - **Raspberry Pi 5** per rig, plus one for bench PIO development. Not Pi 4 — `pigpio` is Pi-4-only and unmaintained (§4.3).
 - **Intan I/O expander** at the main rig; base RHS suffices at a satellite rig (barcode + strobe = 2 lines).

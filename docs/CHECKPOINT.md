@@ -95,10 +95,12 @@ their side.
    with `read_intan` today, so it plans against them directly rather than around them.
 2. **Phase 2 onward** — see spec §12.
 
-**Not software, and on a clock: order the PCIe-6363.** §12. Lead time from NI is 12–13 weeks,
-the longest of any purchase on that list, and nothing in the software queue moves that date.
-Ordered the day this line was written, it arrives mid-November — which leaves the narrowest
-margin of anything on the list against January, and it narrows by a day for every day it waits.
+**Not software, and on a clock: order the NI cards.** §12. **Models corrected 2026-08-16** to
+**PXIe-6353** (recording) and **PCIe-6343** (task PC) — both verified to carry the 32 hardware-timed
+Port 0 lines the design needs, differing from the 6363 only in analog input rate, which nothing here
+depends on. This is the longest lead item on that list and nothing in the software queue moves the
+date. **The 12–13 week figure was measured for the 6363 and has not been re-derived for these
+models** — re-confirm at ordering rather than carrying it across.
 
 ---
 
@@ -229,9 +231,9 @@ leaves something behind that does:
 
 - **Item 4 is closed (2026-08-13).** MonkeyLogic declares behavioral-code lines multiline
   with no cap, so **the 16-bit protocol was never at risk** and no frozen contract moved.
-  What it left behind is a *procurement clock*: the task-PC board is an **NI PCIe-6363 with a
-  12–13 week lead time from NI** (§12), which is the least slack of any purchase on that list
-  against January. The 6321/6323 went end-of-life 31 Dec 2024 — and the 6323 is the board
+  What it left behind is a *procurement clock*: the task-PC board is an **NI PCIe-6343** (§12,
+  corrected 2026-08-16 from the 6363), whose lead time is the least slack of any purchase on that
+  list against January and wants re-confirming for the corrected model. The 6321/6323 went end-of-life 31 Dec 2024 — and the 6323 is the board
   NIMH's own documentation uses in its examples, so it is easy to inherit by accident.
 - **Items 9 and 10 are closed (2026-08-13), and together they hand Phase 1c a requirement.**
   Block rows are created by the session planner in wl.works; wl-preproc cross-validates its
