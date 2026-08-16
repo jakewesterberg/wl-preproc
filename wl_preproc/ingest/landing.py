@@ -117,7 +117,50 @@ INGESTION_SESSION_DIR_MAX_LEN = 255
 
 def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     """The one place an aware datetime becomes the naive UTC value DataJoint's
-    `datetime` type actually stores.
+    `datetime` type actually stores -- truncated to whole seconds, because
+    that is the only resolution those columns have.
+
+    **Sub-second components are TRUNCATED here, not carried through.** Every
+    column this project converts a datetime for is a bare DataJoint
+    `datetime` -- `Session.session_datetime`, `Ingestion.session_datetime`/
+    `ingested_at`, `Quarantine.failed_at`/`session_dt` -- which is MySQL
+    `DATETIME` with no fractional-seconds precision. A row read back out of
+    any of them therefore always has `microsecond == 0`. Leaving the
+    fractional part on the way IN made this function's output compare unequal
+    to its own stored value, which is the exact failure its "one conversion,
+    not two" reasoning below exists to prevent -- and it bit two call sites,
+    not one:
+
+    - `responder/jobs.py::_require_landed_session` restricts
+      `pipeline.Session` on this value in PYTHON, before MySQL ever sees it.
+      Measured live over a real socket against a session landed at
+      `2027-08-04 09:00:00`: `...T09:00:00.123+00:00` came back `422 "session
+      mtx/2027-08-04T09:00:00.123000 is not yet on record on this host ...
+      Resend once the transfer has completed"` -- an operator sent hunting
+      for a transfer that finished weeks ago, and a remedy that can never
+      work. `Date.prototype.toISOString()` ALWAYS emits milliseconds, so the
+      most ordinary client implementation hits this on every request.
+    - `already_ingested` (below) restricts `ingest.Ingestion` the same way. A
+      manifest `started_at` carrying a sub-second component would make a
+      landed session look unlanded forever, and every scan would re-land it.
+
+    **Truncate, not reject.** A client sending `.123` is emitting its own
+    serialisation artefact, not naming a different session; a session is
+    identified at second resolution, so there is nothing for the caller to
+    fix and refusing would break the likeliest client over noise.
+
+    **Truncate, not round -- and this is where it deliberately differs from
+    MySQL.** MySQL ROUNDS a fractional value into a no-precision `DATETIME`,
+    half-up at `.5` -- measured directly against a live 8.0 container:
+    `09:00:00.499999` stores as `09:00:00`, and `.500000`, `.600000` and
+    `.999999` all store as `09:00:0`**`1`**. A restriction literal
+    `'2027-08-04 09:00:00.600000'` then matches ZERO of those rows while
+    `'2027-08-04 09:00:01'` matches them. Copying that rounding here would
+    reproduce the same split from the other side: `.600` would look up a
+    second the session was never filed under. Because this value is
+    normalised ONCE, up front, and then used for BOTH the lookup and the
+    insert, truncation is self-consistent -- and MySQL is never handed a
+    fractional value to round in the first place.
 
     `SessionManifest.started_at` is required timezone-aware (a validator on
     that model enforces it); element-session's `session_datetime` is a bare
@@ -146,10 +189,13 @@ def to_naive_utc(value: datetime.datetime) -> datetime.datetime:
     *system* timezone, not UTC (Python's own documented behaviour), which
     would silently corrupt a value that was already correctly naive UTC --
     such as one a caller read back out of the database and passed back in.
+    (It is still truncated: a naive value carrying microseconds is exactly as
+    unstorable as an aware one, and `already_ingested`'s caller can hand this
+    function either.)
     """
     if value.tzinfo is None or value.utcoffset() is None:
-        return value
-    return value.astimezone(datetime.UTC).replace(tzinfo=None)
+        return value.replace(microsecond=0)
+    return value.astimezone(datetime.UTC).replace(tzinfo=None, microsecond=0)
 
 
 def manifest_session_key(manifest: SessionManifest) -> dict:
@@ -218,6 +264,18 @@ def already_ingested(session_key: dict, prefix: str = DEFAULT_PREFIX) -> bool:
     `test_already_ingested_survives_a_non_utc_session_time_zone`, which
     forces a non-UTC session tz to exercise this for real rather than relying
     on the container's default to happen to be UTC.
+
+    The SECOND thing that normalization does here is strip any sub-second
+    component, and on this path that is not defensive at all -- it is what
+    makes the restriction able to match. `Ingestion.session_datetime` is a
+    bare second-resolution `DATETIME`, so a stored row always has
+    `microsecond == 0`; a `session_key` built from a manifest whose
+    `started_at` carried microseconds would restrict on a value no row can
+    ever equal, and this function would answer `False` for a session it
+    landed itself -- forever, on every scan, re-landing it each pass. That
+    failure is silent, unlike the responder's half of the same defect, which
+    at least surfaces as a `422`. See `to_naive_utc`'s own docstring and
+    `test_a_sub_second_started_at_lands_once_and_is_then_seen_as_landed`.
     """
     ingest.activate(prefix=prefix)
     key = dict(session_key)

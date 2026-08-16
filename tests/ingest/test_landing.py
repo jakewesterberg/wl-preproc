@@ -9,6 +9,8 @@ same rows in either order.
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from wl_preproc.contracts.manifest import SessionManifest
@@ -535,3 +537,64 @@ def test_already_ingested_survives_a_non_utc_session_time_zone(tmp_path, activat
         assert already_ingested(aware_key, prefix=activated) is True
     finally:
         dj_conn.query(f"SET time_zone = '{original_tz}'")
+
+
+def test_a_sub_second_started_at_lands_once_and_is_then_seen_as_landed(tmp_path, activated):
+    """The final gate's C-NEW, this module's half of it.
+
+    `responder/jobs.py::_require_landed_session` and `already_ingested` are
+    two call sites of one conversion, and the same asymmetry sits under both:
+    `to_naive_utc` compares in PYTHON, `Ingestion.session_datetime` is a bare
+    second-resolution `DATETIME`, so a stored row always has
+    `microsecond == 0`. A manifest `started_at` carrying any fractional part
+    therefore built a key that could never match what was written for it --
+    and unlike the responder's, this half fails silently and permanently:
+    `_evaluate_session` asks `already_ingested` on every scan, so the session
+    would look unlanded **forever** and be re-landed on each pass rather than
+    returning one visible `422`.
+
+    `.600` specifically, and the second assertion is what makes that choice
+    load-bearing. MySQL ROUNDS a fractional literal into a `DATETIME`: before
+    this fix the insert stored `09:00:01` while the restriction asked for
+    `09:00:00.600`, so the two disagreed about which SECOND the session even
+    belonged to. Truncating in `to_naive_utc` -- used for both the key that
+    is written and the key that is looked up -- is what makes the row land on
+    the second the manifest actually names. A rounding implementation would
+    satisfy the `already_ingested` half here and still store the wrong
+    second, which is why the stored value is asserted and not just the
+    verdict.
+    """
+    generate_session(tmp_path, CI_RECIPE)
+    layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
+    manifest = SessionManifest.from_yaml(layout.manifest_path.read_text()).model_copy(
+        update={
+            "subject": "subsec",
+            "started_at": datetime.datetime(
+                2027, 8, 4, 9, 0, 0, 600000, tzinfo=datetime.UTC
+            ),
+        }
+    )
+    key = manifest_session_key(manifest)
+
+    assert key["session_datetime"].microsecond == 0, (
+        "the key every session-scoped table is written under must already be "
+        "at the resolution those columns store"
+    )
+    assert already_ingested(key, prefix=activated) is False
+
+    land_session(
+        layout,
+        manifest,
+        discover_topology(layout, manifest),
+        Integrity.VERIFIED,
+        "abc123",
+        prefix=activated,
+    )
+
+    assert already_ingested(key, prefix=activated) is True, (
+        "a landed session must not look unlanded on the very next scan"
+    )
+    stored = (ingest.Ingestion & {"subject": "subsec"}).fetch1("session_datetime")
+    assert stored == datetime.datetime(2027, 8, 4, 9, 0, 0), (
+        "truncated to the second the manifest names, not rounded up past it"
+    )

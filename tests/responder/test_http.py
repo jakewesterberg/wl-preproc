@@ -1584,6 +1584,80 @@ def test_a_job_for_a_session_that_never_landed_is_422_not_a_retryable_500(
     )
 
 
+def test_a_sub_second_session_datetime_finds_the_session_landed_at_that_second(
+    start_server, landed_session, prefix
+):
+    """The final gate's C-NEW: the previous fix inverted, end to end.
+
+    Moving session-existence off MySQL's foreign key and into Python moved
+    the comparison to BEFORE the type coercion MySQL used to do for free.
+    `landing.to_naive_utc` did not strip microseconds and
+    `Session.session_datetime` is a bare second-resolution `DATETIME`, so a
+    stored row always has `microsecond == 0` and a request carrying any
+    fractional part could NEVER match -- the session landed at this exact
+    second came back `422 "… is not yet on record on this host … Resend once
+    the transfer has completed"`, sending an operator after a transfer that
+    finished weeks ago. That is C1's own defect inverted: a status whose
+    prescribed remedy cannot work.
+
+    **The trigger is the ordinary case.** `Date.prototype.toISOString()`
+    ALWAYS emits milliseconds, and `docs/ops/lab-host-protocol.md`'s own
+    `session_datetime` contract accepts a `Z` suffix, a numeric offset or
+    none at all, over a `selection` the exported schema leaves free-form. If
+    wl.works' timestamps carry sub-second precision, `POST /jobs` was
+    entirely non-functional.
+
+    Goes over a real socket through the real production seam rather than
+    calling `accept()` directly, because the wire is where the defect is
+    reachable: JSON has no datetime type, so a client's fractional seconds
+    arrive as part of a string this host parses itself.
+
+    `.600` is the second case on purpose, and it is not redundant with
+    `.123`: MySQL ROUNDS a fractional literal into a `DATETIME`, so before
+    the session check moved into Python, `.600` became `09:00:01`, missed
+    the foreign key and was a retryable `500`. Truncation in
+    `to_naive_utc` -- used for BOTH the lookup and the insert -- is what
+    makes it a `200` naming the second the session actually landed at, and
+    a rounding implementation would fail this half while passing `.123`.
+    """
+    from wl_preproc.responder import jobs as jobs_module
+
+    subject = "htpsubs"
+    naive_dt = datetime.datetime(2027, 6, 10, 9, 0)
+    landed_session(subject, naive_dt)
+
+    def accept_fn(request):
+        return jobs_module.accept(request, prefix=prefix)
+
+    base = start_server(TOKEN, _health_ok, accept_fn)
+
+    for i, iso in enumerate(
+        [
+            "2027-06-10T09:00:00.123+00:00",  # what toISOString() emits
+            "2027-06-10T09:00:00.000123+00:00",  # what a Postgres timestamptz carries
+            "2027-06-10T09:00:00.600+00:00",  # the case MySQL would have rounded UP
+            # No offset at all, which this document's own contract accepts.
+            # `fromisoformat` parses it NAIVE, so it reaches the other branch
+            # of `to_naive_utc` -- the one that returns its input rather than
+            # converting it. Stripping only the aware branch would leave this
+            # spelling broken and every test above still green.
+            "2027-06-10T09:00:00.123",
+        ]
+    ):
+        payload = _real_job_payload(
+            subject=subject, session_datetime_iso=iso, idempotency_key=f"htpsubs-k{i}"
+        )
+        status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+
+        assert status == 200, f"{iso} names the session landed at 09:00:00; got {body}"
+        activation = json.loads(body)["activation"]
+        assert activation["session_datetime"] == "2027-06-10T09:00:00", (
+            "the activation key must name the whole second the session landed at, "
+            f"not the fractional value the client happened to serialise: {activation}"
+        )
+        assert activation["subject"] == subject
+
+
 # --------------------------------------------------------------------------
 # The lock. Review Important 2: the prior `serve()` test below proves
 # end-to-end wiring but passes even with the lock deleted entirely, or with

@@ -334,6 +334,19 @@ than something one side can do quietly.
 - **`selection`** requires `session_datetime` and `montage_id`. `session_datetime` arrives
   as an ISO-8601 string (JSON has no datetime type); a `Z` suffix, a numeric offset, or no
   offset at all are all accepted, and the value is normalised to naive UTC on this side.
+  **A sub-second component is accepted and truncated to whole seconds** — a session is
+  identified at second resolution here, and every column this host stores one in is a MySQL
+  `DATETIME` with no fractional precision. So `…T09:00:00.123Z`, `…T09:00:00.000123Z` and
+  `…T09:00:00Z` all name the same session, and the `activation` this host returns always
+  names the whole second. **Send whatever your serialiser emits** —
+  `Date.prototype.toISOString()` always writes milliseconds and a Postgres `timestamptz`
+  keeps microseconds; neither needs trimming on your side. Truncated, not rounded:
+  `…T09:00:00.600Z` names `09:00:00`, never `09:00:01` — which matters because MySQL, left
+  to do this itself, rounds half-up and would have filed it under the next second.
+  Measured over a real socket against a session landed at `2027-08-04 09:00:00`: ten
+  spellings — four whole-second (`+00:00`, `Z`, no offset, `11:00:00+02:00`) and six
+  fractional (`.000`, `.123`, `.000123`, `.600`, `.999999`, and `.123` at `+02:00`) — every
+  one `200` with `"session_datetime": "2027-08-04T09:00:00"`.
   `block_ids`, when present and non-empty, makes the request a **derivative** activation
   over that hand-picked block set; absent or empty makes it the **canonical** activation
   for `(session, montage)`.
@@ -442,7 +455,7 @@ once its data transfer has landed and been ingested. Between those two moments �
 hours, sometimes overnight — a job posted for that session is refused:
 
 ```json
-{"error": "session Sam/2027-06-15T09:00:00 is not yet on record on this host: …"}
+{"error": "session pico/2027-06-15T09:00:00 is not yet on record on this host: …"}
 ```
 
 The full message, which is one line on the wire:
@@ -563,8 +576,19 @@ are worth keeping distinct in the client.
 The short version of the distinction, which is the single most useful thing in this
 document for whoever writes that client:
 
-> **`408` and `500`: retry.** **`409`: stop, and tell a person.** **`4xx` otherwise: fix
-> the request or the credential; retrying changes nothing.**
+> **`408` and `500`: retry, on the retry loop's own schedule.**
+> **`422` naming a session this host has not ingested yet: resend the identical request —
+> unchanged, same key — once the transfer lands. There is nothing to fix and nobody to
+> tell; this is the ordinary case, not an error in what you sent.**
+> **`409`: stop, and tell a person.**
+> **Every other `4xx`: fix the request or the credential; retrying changes nothing.**
+
+The not-yet-ingested `422` is the one `4xx` that is not the caller's mistake to correct,
+which is why it is called out here rather than left inside the general `4xx` rule. Tell it
+apart by its message, which always begins `session <subject>/<session_datetime> is not yet
+on record on this host`; the status table above and *`422` is the caller's mistake* below
+both say the same. Resending it in a tight loop is still wrong — the resend belongs on the
+timescale a data transfer takes, not on the timescale a `500` retry does.
 
 ---
 
@@ -690,8 +714,10 @@ The responder also needs whatever DataJoint configuration the rest of the pipeli
 ### Exit codes
 
 Re-derived by running the shipped CLI, one subprocess per row, rather than read off the
-source. `2` means **refusing to start**: the invocation or the configuration is wrong and
-nothing was bound. `1` means it tried and the OS said no.
+source — most recently 2026-08-16, in full rather than row by row. `2` means **refusing to
+start**: the invocation or the configuration is wrong and nothing was bound. `1` means it
+tried and the OS said no. `0` means it never tried, and asking for help is the only way to
+reach it in practice.
 
 | Code | Cause | What the journal shows |
 |---|---|---|
@@ -701,19 +727,30 @@ nothing was bound. `1` means it tried and the OS said no.
 | `2` | `--root=` with nothing after it — `--root=${WLPP_ROOT}` with `WLPP_ROOT` unset expands to exactly this | the same message, with `''` — **not** the working directory, which is what an earlier version silently served |
 | `2` | `--port` outside 0–65535 | `wlpp responder: error: argument --port: 99999 is not a TCP port (must be 0-65535)` |
 | `2` | `--port` not an integer | `wlpp responder: error: argument --port: invalid tcp_port value: 'abc'` |
-| `2` | `--port` or `--root` absent; an unrecognised flag; no subcommand | argparse's own message — `wlpp responder: error: the following arguments are required: --port` |
+| `2` | `--port` or `--root` absent | `wlpp responder: error: the following arguments are required: --port` (or `--root`) |
+| `2` | An unrecognised flag; no subcommand at all | argparse's own message, prefixed `wlpp:` rather than `wlpp responder:` because the top-level parser is what raises it — `wlpp: error: unrecognized arguments: --nope`, `wlpp: error: the following arguments are required: group` |
 | `1` | The bind failed | `error: responder failed on port 8420: <the OS's own errno text>` — measured as `[Errno 48] Address already in use` on the development machine; Linux reports that same condition as errno 98. A restart racing the previous process is the usual cause; a privileged port with no capability to bind it arrives on this same path |
-| `0` | Only if `serve_forever()` returns, which nothing in this CLI asks it to | — in practice the process ends on a signal instead |
+| `0` | `--help`, on any subcommand or on `wlpp` itself | argparse's own help text on stdout. Measured across all 11 `--help` forms this CLI has; every one exits `0` |
+| `0` | Otherwise only if `serve_forever()` returns, which nothing in this CLI asks it to | — in practice a running responder ends on a signal instead |
 
-Checked in that order: argument parsing first, then the token, then `--root`. Two things
-wrong at once reports the first of those three, not both.
+**The order the checks run in, which decides what you see when two things are wrong at
+once.** There are **four** gates, not three, and the two token checks are not adjacent:
+
+1. **Argument parsing** (argparse: `--port` range and type, required flags, unknown flags,
+   the subcommand itself). Wins over everything below — measured, a bad `--port` *and* an
+   unset token *and* a missing `--root` together report only the `--port` error.
+2. **`WLPP_RESPONDER_TOKEN` unset or empty.** Measured, this beats a broken `--root`.
+3. **`--root`.**
+4. **A non-ASCII `WLPP_RESPONDER_TOKEN`** — raised from inside `make_handler`, which
+   `serve()` calls, so it runs **after** `--root` has already passed. Measured: a non-ASCII
+   token together with a `--root` that does not exist reports the **`--root`** error, not
+   the token one. It is still before any socket is bound, and it is still exit `2`.
+
+So "the token" is not one gate: an unset token is refused before `--root` and a non-ASCII
+one after it. The guard lives in `make_handler` by a deliberate Task 9 ruling — one place
+for it, not a CLI copy free to drift — which is why the two halves sit where they do.
 
 No row prints a traceback. Every one is a single line an operator reads in a journal.
-
-One measured oddity worth knowing if you script this CLI rather than running it from a
-unit: **`wlpp responder --help` prints its help and exits `2`, not `0`.** Nothing about
-starting the responder depends on it, and it is recorded here rather than fixed in this
-wave.
 
 ---
 
@@ -767,6 +804,15 @@ Written 2026-08-16 against the shipped responder in `wl_preproc/responder/`
 and error body above was measured against a real `ThreadingHTTPServer` running the shipped
 handler, not read off a design document. Design: [Phase 1c-3
 §7](../superpowers/specs/2026-08-15-phase-1c3-responder-design.md).
+
+**Revised 2026-08-16, after review found three of its claims false.** All three had been
+written from reasoning about the source rather than from running it, which is the failure
+mode the paragraph above exists to prevent — one of them (`--help` exiting `2`) was true
+when written and made false by a fix one commit later, with no sweep of the document
+describing it. Each revision was re-measured: the exit-code table and the check-ordering
+list by running the shipped CLI once per row in its own subprocess, and the
+`session_datetime` sub-second contract by POSTing every spelling of one landed session's
+timestamp to a real `ThreadingHTTPServer`.
 
 **Proposed to wl.works, not written into it.** If they accept it, the natural home is
 `docs/ops/lab-host-protocol.md` in that repository, with this copy kept in step. Amendments
