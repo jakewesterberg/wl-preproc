@@ -205,7 +205,12 @@ condition drove a non-`ok` verdict, or the ingest count when everything is fine.
 
 ### 6.1 What a request produces
 
-A validated `JobRequest` yields, in one transaction:
+A validated `JobRequest` yields the following. **Not in one transaction** — an earlier draft of
+this section said so, and both `submit()` and `submit_derivative()` guard on `in_transaction` and
+raise, because DataJoint transactions do not nest and `submit()`'s own docstring forbids the
+responder wrapping it. Each insert is idempotent on its own instead, so a partial `accept()`
+followed by a retry converges on the same rows — the property the ingest path already relies on
+for having no lock. Corrected 2026-08-15 by Task 4's review, before Task 7 was dispatched:
 
 1. `Montage` rows from `metadata.montage_boundaries`, if absent. **This is §1's finding in code** —
    the boundaries are wl.works' authored record arriving inbound, so recording them is not guessing.
@@ -326,6 +331,36 @@ that forbids a bare `.delete()`.
   schema; `activate(create_tables=True)` will not `ALTER` a column.
 
 ---
+
+### 6.3 `accept()` writes `Block.start_s`/`end_s`, which are specified as a measurement
+
+**Found 2026-08-16 by Task 7's review, and left open rather than patched late in a phase.**
+
+The two tables `accept()` records are not symmetric, and §6.1's justification silently treats them
+as if they were.
+
+`core.Montage`'s own comment says it is *"Sourced from wl.works `item_insertion` and nothing
+else"* — so recording an inbound montage boundary is exactly right, and is the finding §1 is built
+on. But `core.Block`'s comment says the opposite: its boundaries are *"decoded from event codes and
+cross-validated against those rows"*, and parent spec §4.2 requirement 2 — part of §3.5's **frozen**
+interface set — says the same.
+
+So `Block.start_s`/`end_s` are specified as **wl-preproc's measurement**, cross-checked against
+wl.works' authored rows. `accept()` writes wl.works' *asserted* numbers into them, `skip_duplicates`
+makes that permanent, and `accept()` is the only writer of `core.Block` in the codebase. **The
+decoder, when it is built, will find the slot occupied and skip it — and the cross-validation §4.2
+requires will have nothing left to compare against.**
+
+**Why it is recorded rather than fixed here.** The clean resolutions each cost more than this phase
+should spend: a separate column for the asserted boundary changes a table two sub-projects already
+build on; having `accept()` write only `block_id`, `task_type` and `works_block_id` needs those
+boundary columns to become nullable, which is a schema change to satisfy a consumer that does not
+exist yet; and treating wl.works' numbers as authoritative would contradict a frozen interface.
+
+**Whoever builds the decoder owns this**, and `responder/jobs.py` names it at the point of the
+write so it is met as a known conflict rather than a silent one. The likely answer is that
+`works_block_id` being set is itself the signal that a row is asserted-not-yet-decoded — but that
+is the decoder's design to make, with the real event-code data in front of it.
 
 ## 12. Open questions this design does not close
 
