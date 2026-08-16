@@ -517,14 +517,12 @@ def test_no_code_path_writes_activation_supersedes():
     different codebase-wide invariant by source scan rather than by trusting
     prose (review round 2, Minor). This is the same shape for a second one.
 
-    Three write shapes, matched by three patterns, none of which is a bare
-    substring search (review round 3, Minor: a round-2 draft matched only
-    the dict-literal form and missed the other two, both genuine writes
-    that would have passed with the suite green):
+    Four write shapes, matched by three patterns plus one exclusion, none
+    of which is a bare substring search:
 
     - ``dict_key_write`` — ``"supersedes":`` / ``'supersedes':``, a dict
       literal passed to ``insert``/``insert1``/``update1``, which is how
-      every DataJoint write in this codebase not covered by the two shapes
+      every DataJoint write in this codebase not covered by the shapes
       below is spelled.
     - ``subscript_write`` — ``row["supersedes"] =`` / ``row['supersedes'] =``,
       requiring the ``=`` immediately (mod whitespace) after the closing
@@ -532,29 +530,44 @@ def test_no_code_path_writes_activation_supersedes():
       and a comparison, e.g. ``row["supersedes"] == None`` — does not
       match; neither does ``<=``/``>=``, whose character before ``=`` is
       never ``]`` or whitespace-after-``]``).
-    - ``keyword_write`` — ``supersedes=``, but ONLY when immediately (mod
-      whitespace) preceded by ``(`` or ``,``, i.e. a function-call keyword
-      argument (``dict(supersedes=x)``, ``f(a=1, supersedes=x)``) — NOT a
-      bare ``supersedes = value`` at the start of a line, which is exactly
-      the shape of the schema declaration itself (`supersedes = null :
-      int`, inside `Activation`'s `definition` string): that line has no
-      preceding `(` or `,` on it, so this pattern does not fire on it. A
-      broader `supersedes\\s*=` (no preceding-character requirement) was
-      tried first and DID fire on the declaration — rejected for that
-      reason, not adopted and then special-cased.
+    - ``keyword_write`` — bare ``supersedes=`` (not ``==``), matched
+      anywhere in the line: a same-line keyword argument
+      (``dict(supersedes=x)``, ``f(a=1, supersedes=x)``) AND, since review
+      round 4 found a round-3 draft missed it, a keyword argument alone on
+      its own continuation line (``supersedes=x,``) — the same shape
+      ``request.py``'s own ``submit()`` already uses for real with
+      ``skip_duplicates=True,`` on its own line inside a multi-line
+      ``insert1(...)`` call. A round-3 draft of this pattern required an
+      immediately preceding ``(`` or ``,`` specifically to reject the
+      schema declaration (``supersedes = null : int``, inside
+      ``Activation``'s ``definition`` string) — which also silently
+      rejected every OTHER shape with nothing but leading whitespace before
+      ``supersedes``, continuation-line keyword arguments included, since a
+      line-by-line scan cannot see the open paren or comma on the
+      PREVIOUS line that makes such a line valid Python.
+    - ``ddl_declaration`` is not a write pattern but the one exclusion
+      ``keyword_write`` needs: the schema declaration is the only bare
+      ``supersedes = value`` shape that must not be flagged, and it is
+      uniquely identifiable by the `` : type`` that always follows a
+      declared attribute's default value in DataJoint's DDL syntax — a
+      keyword argument never has a bare colon-and-type immediately after
+      its value. Checked directly that this line matches
+      ``ddl_declaration`` and therefore stays excluded even under the
+      widened ``keyword_write``.
 
-    None of the three matches a bare READ (`row["supersedes"]` alone,
+    None of the four matches a bare READ (`row["supersedes"]` alone,
     `.fetch1("supersedes")`) or the docstring prose in `submit_derivative`
     and this test itself, both of which discuss `supersedes` at length using
     RST double-backticks, never a Python quote character next to an `=` or
-    `[`. Confirmed all three patterns fire on their intended shape and stay
+    `[`. Confirmed all patterns fire on their intended shape and stay
     silent against the committed source before being relied on here.
     """
     import re
 
     dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
     subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
-    keyword_write = re.compile(r"""[(,]\s*supersedes\s*=(?!=)""")
+    keyword_write = re.compile(r"""supersedes\s*=(?!=)""")
+    ddl_declaration = re.compile(r"""^supersedes\s*=\s*\S+\s*:""")
 
     offenders = []
     for path in SOURCE_ROOT.rglob("*.py"):
@@ -565,7 +578,7 @@ def test_no_code_path_writes_activation_supersedes():
             if (
                 dict_key_write.search(stripped)
                 or subscript_write.search(stripped)
-                or keyword_write.search(stripped)
+                or (keyword_write.search(stripped) and not ddl_declaration.match(stripped))
             ):
                 rel = path.relative_to(SOURCE_ROOT.parent)
                 offenders.append(f"{rel}:{lineno}: {stripped[:70]}")

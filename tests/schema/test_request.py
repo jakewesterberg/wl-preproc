@@ -925,22 +925,101 @@ def test_derivative_allocation_gives_up_after_sustained_contention(selection, pr
     assert len(request.Activation & {"role": "derivative"} & selection) == 0
 
 
-def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, prefix, tmp_path):
-    """Review round 3, Important 1: proves the exact-primary-key locking-read
-    fix under the >=3-submitter, >=2-distinct-selection precondition a
-    range-shaped locking read deadlocks on. See the module-level comment
-    above _CONCURRENT_DERIVATIVE_WORKER for why this needs separate
-    processes (never threads) and a file-based barrier rather than
-    multiprocessing or the single-rival tests above.
+def test_locking_read_one_takes_a_record_only_lock_no_gap(selection, prefix):
+    """Review round 4, Important 1: the deterministic guard for the deadlock
+    round 3 fixed, replacing reliance on the probabilistic 3-process test
+    below for detection. That test's own measured detection rate against
+    the true pre-fix (range-shaped) code -- see its docstring -- is far
+    below "reliable"; this test needs no concurrency and no timing at all,
+    and asserts the exact InnoDB lock shape that fixes the deadlock
+    directly, via performance_schema.data_locks, inside one open
+    transaction.
 
-    This is a regression test for a real bug, not merely a new-code
-    exerciser: run against the range-shaped first draft of this fix (see
-    request.py's own account, "2. Index allocation retries..."), this exact
-    test reliably deadlocked -- one worker's process printed
-    "ERROR pymysql.err.OperationalError: (1213, 'Deadlock found ...')",
-    a type neither `except dj.errors.DuplicateError` nor any caller
-    catching `dj.DataJointError` would ever see. Against the exact-key fix,
-    all three succeed with distinct activation_ids and nothing deadlocks."""
+    Against the range-shaped first draft of this fix (`Activation &
+    montage_key`, a primary-key PREFIX), performance_schema.data_locks
+    showed lock modes including a plain "S" (not "S,REC_NOT_GAP") and a row
+    locked at the 'supremum pseudo-record' -- the gap lock that lets two
+    losers deadlock on each other's insert-intention lock; see
+    _locking_read_one's own docstring for the full account. Against the
+    shipped exact-key read, every RECORD lock on `activation` is
+    'S,REC_NOT_GAP' and no supremum row ever appears -- asserted below, and
+    reproduced failing against the range shape in this round's own
+    verification (see the report)."""
+    import datajoint as dj
+
+    from wl_preproc.schema import request
+
+    seed = request.submit_derivative(
+        idempotency_key="lock-shape-seed", task_type="neural", origin="wl_works",
+        selection=selection, block_ids=[1], payload={},
+    )
+
+    conn = dj.conn()
+    conn.start_transaction()
+    try:
+        rival = request._locking_read_one(seed)
+        assert rival is not None, "the seed row must exist to be locked"
+
+        cursor = dj.conn().query(
+            """
+            SELECT dl.LOCK_TYPE, dl.LOCK_MODE, dl.LOCK_DATA
+            FROM performance_schema.data_locks dl
+            JOIN performance_schema.threads t ON dl.THREAD_ID = t.THREAD_ID
+            WHERE t.PROCESSLIST_ID = CONNECTION_ID()
+              AND dl.OBJECT_SCHEMA = %s
+              AND dl.OBJECT_NAME = 'activation'
+            """,
+            (f"{prefix}request",),
+            as_dict=True,
+        )
+        rows = list(cursor.fetchall())
+    finally:
+        conn.commit_transaction()
+
+    record_locks = [r for r in rows if r["LOCK_TYPE"] == "RECORD"]
+    assert record_locks, f"expected at least one RECORD lock from _locking_read_one; got {rows}"
+    for r in record_locks:
+        assert r["LOCK_MODE"] == "S,REC_NOT_GAP", (
+            f"expected a record-only shared lock (no gap); got LOCK_MODE={r['LOCK_MODE']!r} "
+            f"on LOCK_DATA={r['LOCK_DATA']!r} -- a gap lock here is exactly what deadlocks "
+            "two losers on each other's insert-intention lock"
+        )
+        assert r["LOCK_DATA"] != "supremum pseudo-record", (
+            "a lock on the supremum pseudo-record means a gap (next-key) lock was taken, "
+            "not a record-only one"
+        )
+
+
+def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, prefix, tmp_path):
+    """An end-to-end smoke test of the real concurrent path under the
+    >=3-submitter, >=2-distinct-selection shape a range-shaped locking read
+    deadlocks on -- NOT the reliable regression guard for that bug. That is
+    `test_locking_read_one_takes_a_record_only_lock_no_gap`, above: fully
+    deterministic, no concurrency, asserting the exact InnoDB lock shape
+    directly via `performance_schema.data_locks`.
+
+    This test's own `ids == [1, 2, 3]` assertion is close to deterministic
+    -- each of the three submissions has run in this process's own
+    verification with no observed failure of THAT specific assertion -- but
+    what it is not is a reliable catcher of the range-shaped regression
+    itself: measured directly (review round 4) by looping this exact
+    scenario against the TRUE pre-fix code, 8 deadlocks in 40 runs, plus 10
+    standalone runs of this test with 10/10 passing anyway (the >=2-loser
+    precondition this needs was reached only ~42% of the time even with the
+    barrier, and even when reached the race did not always resolve into a
+    deadlock) -- roughly 16% combined detection, meaning a CI run would go
+    green on a reintroduced range lock about four times in five. An earlier
+    version of this docstring claimed the opposite ("reliably deadlocked"),
+    which the same measurement disproved; kept here, corrected, as a
+    record of a claim this project's own review caught contradicting a
+    measurement in the same task's report.
+
+    See the module-level comment above _CONCURRENT_DERIVATIVE_WORKER for
+    why this needs separate processes (never threads) and a file-based
+    barrier rather than multiprocessing or the single-rival tests above.
+    Against the exact-key fix, all three submissions succeed with distinct
+    activation_ids and nothing deadlocks -- which is what this test still
+    verifies, honestly described as a smoke test rather than a gate."""
     import datajoint as dj
 
     import json
@@ -1099,3 +1178,24 @@ def test_submit_derivative_refuses_to_run_inside_a_transaction(req, selection):
 
     # the outer transaction stayed usable and nothing was written
     assert len(req.Request & {"idempotency_key": "dv-guard-2"}) == 0
+
+
+def test_locking_read_one_rejects_an_incomplete_key(req):
+    """Review round 4, Minor: the ValueError guard inside _locking_read_one
+    had zero coverage -- deleting it left the suite passing (403/403), so it
+    was the docstring's claim of narrowing ("Activation-only, exact-primary-
+    key-only, one row only"), not anything enforcing it, that a reader had
+    to take on trust rather than see verified. Pins the guard directly: a
+    key missing activation_id must be refused before ever reaching a query,
+    with no live montage or collision needed to exercise it."""
+    from wl_preproc.schema import request
+
+    with pytest.raises(ValueError, match="primary_key"):
+        request._locking_read_one(
+            {
+                "subject": "pico",
+                "session_datetime": datetime.datetime(2027, 6, 1, 10, 0),
+                "montage_id": 0,
+                # activation_id deliberately omitted
+            }
+        )

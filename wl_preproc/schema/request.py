@@ -486,9 +486,10 @@ def _insert_new_derivative(row: dict) -> None:
     same-connection call that plants a rival row before calling through to
     the real insert. submit_derivative's own tests additionally use a
     genuinely separate connection for this, because the same-connection
-    trick cannot exercise the locking-read fix `_locking_read` exists for —
-    a single connection always sees its own writes regardless of isolation
-    level, which is exactly what would hide a bug there. See test_request.py.
+    trick cannot exercise the locking-read fix `_locking_read_one` exists
+    for — a single connection always sees its own writes regardless of
+    isolation level, which is exactly what would hide a bug there. See
+    test_request.py.
     """
     Activation.insert1(row, skip_duplicates=False)
 
@@ -525,10 +526,15 @@ def _locking_read_one(key: dict) -> dict | None:
     took them, only with insert-intention, so it deadlocks identically.
 
     **The exception type made this worse than a slow retry.** DataJoint's
-    MySQL adapter translates a fixed list of error codes into `dj.errors.*`
-    (1062, 1217, 1451, 1452, 3730, 1064, 1146, 1364, 1054, 2006, 2013) and
-    lets everything else — including 1213 (deadlock) and 1205 (lock wait
-    timeout) — pass through unchanged. A deadlock here would have escaped
+    MySQL adapter translates a fixed set of error codes into `dj.errors.*`
+    — read from the adapter's own translation table
+    (`datajoint/adapters/mysql.py`'s `match err:` block) rather than
+    enumerated here, since a copied list is exactly the kind of claim this
+    project has already found drifting from the code it described more than
+    once — and lets everything else, including 1213 (deadlock) and 1205
+    (lock wait timeout), pass through unchanged; confirmed directly against
+    the installed 2.3.2 package that neither appears in that block. A
+    deadlock here would have escaped
     as a raw `pymysql.err.OperationalError`: not caught by `except
     dj.errors.DuplicateError` in `submit_derivative`'s retry loop, and not
     recognized by any caller catching `dj.DataJointError` either — the exact
