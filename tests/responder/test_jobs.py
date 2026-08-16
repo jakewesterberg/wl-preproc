@@ -168,12 +168,15 @@ def test_accept_is_idempotent_on_the_same_key(landed_session, prefix):
     not merely for realism: DataJoint's blob codec drops a datetime's tzinfo
     on its first round trip through the database (confirmed directly against
     this project's installed datajoint -- pack/unpack an aware value and it
-    comes back naive), so a payload built from the raw, still-aware value on
-    a SECOND call would compare unequal to the first call's now-naive stored
+    comes back naive), so a payload holding the raw, still-aware value on a
+    SECOND call would compare unequal to the first call's now-naive stored
     copy and `_reject_key_reuse` would refuse this exact retry as key reuse.
-    This test fails loudly (a `DataJointError` mentioning "payload") if
-    `accept()` stores that raw value instead of normalising it the same way
-    on every call.
+    `accept()` avoids this by never storing a live datetime object in the
+    payload at all -- `model_dump(mode="json")` renders it to a
+    deterministic ISO-8601 string first (review round 1, I1), and a string
+    carries no tzinfo for the blob codec to drop in the first place. This
+    test fails loudly (a `DataJointError` mentioning "payload") if that
+    normalisation is ever removed.
     """
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import core
@@ -554,3 +557,311 @@ def test_session_datetime_is_normalised_through_to_naive_utc(landed_session, pre
         len(core.Montage & {"subject": subject, "session_datetime": naive_dt, "montage_id": 0})
         == 1
     )
+
+
+# --- Review round 1 (2026-08-16): two Criticals and two Importants, all in
+# territory the original 12 tests above could not reach. ---
+
+
+def test_a_rejected_request_leaves_no_montage_or_block_row_and_a_correction_then_succeeds(
+    landed_session, prefix
+):
+    """C1: validate before writing, not after. The first draft inserted
+    Montage/Block and only then checked the window, so a rejected request
+    permanently planted the very Block row that caused its own rejection --
+    skip_duplicates=True then discarded every later correction, so the
+    request that FIXED the boundary was rejected too, citing the stale
+    values it refused to replace. Reproduces the reviewer's own two-request
+    scenario exactly: block 9 at [20, 24) against montage [0, 12) is
+    rejected, and a second request naming block 9 at the CORRECTED [2, 6)
+    must not still see the first, rejected [20, 24) permanently on file.
+    """
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    subject = "jbres01"
+    naive_dt = datetime.datetime(2027, 5, 14, 9, 0)
+    landed_session(subject, naive_dt)
+
+    bad_job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbres01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[
+            {
+                "block_id": 9,
+                "task_type": "GARBAGE",
+                "start_s": 20.0,
+                "end_s": 24.0,
+                "works_block_id": "wb-bad",
+            }
+        ],
+        block_ids=[9],
+    )
+    with pytest.raises(ValueError, match="block 9"):
+        accept(bad_job, prefix=prefix)
+
+    session_key = {"subject": subject, "session_datetime": naive_dt}
+    assert len(core.Montage & {**session_key, "montage_id": 0}) == 0, (
+        "a rejected request must not plant the Montage row it was rejected over"
+    )
+    assert len(core.Block & {**session_key, "block_id": 9}) == 0, (
+        "a rejected request must not plant the Block row it was rejected over"
+    )
+    assert len(schema_request.Request & {"idempotency_key": "jbres01-k1"}) == 0
+
+    corrected_job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbres01-k2",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[
+            {
+                "block_id": 9,
+                "task_type": "neural",
+                "start_s": 2.0,
+                "end_s": 6.0,
+                "works_block_id": "wb-good",
+            }
+        ],
+        block_ids=[9],
+    )
+    key = accept(corrected_job, prefix=prefix)  # must not raise
+
+    block_row = (core.Block & {**session_key, "block_id": 9}).fetch1()
+    assert block_row["task_type"] == "neural"
+    assert block_row["start_s"] == pytest.approx(2.0)
+    assert block_row["end_s"] == pytest.approx(6.0)
+    assert (schema_request.Activation & key).fetch1("role") == "derivative"
+
+
+def test_accept_coerces_an_iso8601_string_session_datetime(landed_session, prefix):
+    """C2: real wire traffic carries `session_datetime` as a plain `str` --
+    JSON has no datetime type, and `docs/schemas/job_request.json` declares
+    `selection` as a bare object with no `session_datetime` property, so
+    pydantic coerces nothing inside it. Every other test in this file hands
+    `accept()` a live `datetime.datetime` directly; this is the one that
+    proves the actual wire shape works too.
+    """
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+
+    subject = "jbstr01"
+    naive_dt = datetime.datetime(2027, 5, 15, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime="2027-05-15T09:00:00Z",  # a plain string, not a datetime
+        montage_id=0,
+        idempotency_key="jbstr01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+    )
+
+    key = accept(job, prefix=prefix)
+
+    assert key["session_datetime"] == naive_dt
+    assert (
+        len(core.Montage & {"subject": subject, "session_datetime": naive_dt, "montage_id": 0})
+        == 1
+    )
+
+
+def test_accept_rejects_a_session_datetime_that_is_neither_a_datetime_nor_a_string(
+    landed_session, prefix
+):
+    """Before C2's fix this reached `to_naive_utc` and raised a bare
+    `AttributeError` -- outside `accept()`'s documented `ValueError`
+    contract, and something Task 8's handler never expected from a request
+    that validated cleanly against `JobRequest`'s own schema."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbbad01"
+    naive_dt = datetime.datetime(2027, 5, 16, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=12345,  # neither a datetime nor a string
+        montage_id=0,
+        idempotency_key="jbbad01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+    )
+
+    with pytest.raises(ValueError, match="session_datetime"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_normalises_an_aware_datetime_anywhere_in_the_stored_payload(
+    landed_session, prefix
+):
+    """I1: the tzinfo-drop finding is not scoped to `selection.
+    session_datetime` -- any aware datetime anywhere in the stored payload
+    reproduces the identical defect on a retry. Here it's nested inside
+    `parameters` instead, a field `accept()` never reads for its own logic
+    but still stores verbatim as evidence.
+    """
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    subject = "jbpar01"
+    naive_dt = datetime.datetime(2027, 5, 23, 9, 0)
+    landed_session(subject, naive_dt)
+    aware_param = datetime.datetime(2027, 5, 23, 8, 0, tzinfo=datetime.UTC)
+    job = JobRequest(
+        domain="neural",
+        selection={"session_datetime": naive_dt.replace(tzinfo=datetime.UTC), "montage_id": 0},
+        parameters={"calibrated_on": aware_param},
+        idempotency_key="jbpar01-k1",
+        metadata=MetadataBundle(
+            blocks=[],
+            montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+            probes=[],
+            experimenter="jw",
+            subject=subject,
+            task_types=[],
+        ),
+    )
+
+    first = accept(job, prefix=prefix)
+    second = accept(job, prefix=prefix)  # identical resubmission -- must not raise
+
+    assert first == second
+    assert len(schema_request.Request & {"idempotency_key": "jbpar01-k1"}) == 1
+
+
+def test_accept_rejects_an_out_of_range_montage_id(landed_session, prefix):
+    """I2: `core.Montage.montage_id` is a signed `tinyint` (-128..127)."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbrng01"
+    naive_dt = datetime.datetime(2027, 5, 17, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=99999,
+        idempotency_key="jbrng01-k1",
+        montage_boundaries=[{"montage_id": 99999, "start_s": 0.0, "end_s": 12.0}],
+    )
+
+    with pytest.raises(ValueError, match="montage_id"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_rejects_an_out_of_range_block_id(landed_session, prefix):
+    """I2: `core.Block.block_id` is a signed `smallint` (-32768..32767)."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbrng02"
+    naive_dt = datetime.datetime(2027, 5, 18, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbrng02-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[{"block_id": 999999, "task_type": "neural", "start_s": 0.0, "end_s": 4.0}],
+    )
+
+    with pytest.raises(ValueError, match="block_id"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_rejects_an_oversized_task_type(landed_session, prefix):
+    """I2: `core.Block.task_type` is `varchar(32)`."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbrng03"
+    naive_dt = datetime.datetime(2027, 5, 19, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbrng03-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[{"block_id": 1, "task_type": "x" * 33, "start_s": 0.0, "end_s": 4.0}],
+    )
+
+    with pytest.raises(ValueError, match="task_type"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_rejects_an_oversized_works_block_id(landed_session, prefix):
+    """I2: `core.Block.works_block_id` is `varchar(64)`."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbrng04"
+    naive_dt = datetime.datetime(2027, 5, 20, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbrng04-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[
+            {
+                "block_id": 1,
+                "task_type": "neural",
+                "start_s": 0.0,
+                "end_s": 4.0,
+                "works_block_id": "x" * 65,
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="works_block_id"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_rejects_a_non_finite_start_s_or_end_s(landed_session, prefix):
+    """I2: `start_s`/`end_s` are `double` -- unbounded in magnitude for any
+    realistic session-time-seconds value, but a non-finite float (here,
+    infinity) or a wrong type is exactly the "syntactically fine Python
+    value, wrong for the column" case this whole guard class exists for."""
+    from wl_preproc.responder.jobs import accept
+
+    subject = "jbrng05"
+    naive_dt = datetime.datetime(2027, 5, 21, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbrng05-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": float("inf")}],
+    )
+
+    with pytest.raises(ValueError, match="end_s"):
+        accept(job, prefix=prefix)
+
+
+def test_accept_rejects_an_unknown_block_id(landed_session, prefix):
+    """I4: a `block_ids` entry naming no `Block` anywhere -- neither already
+    on record nor supplied in this same request's `metadata.blocks` -- is a
+    `ValueError`, not silently excluded from the window check nor left to
+    surface later as `ActivationBlock`'s own foreign-key error."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    subject = "jbunk01"
+    naive_dt = datetime.datetime(2027, 5, 22, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbunk01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        block_ids=[7],  # no Block anywhere named 7
+    )
+
+    with pytest.raises(ValueError, match="no Block on record"):
+        accept(job, prefix=prefix)
+
+    assert len(schema_request.Request & {"idempotency_key": "jbunk01-k1"}) == 0
