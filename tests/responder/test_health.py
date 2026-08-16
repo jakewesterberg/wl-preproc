@@ -153,6 +153,34 @@ def test_an_unreachable_database_is_down(scanned, monkeypatch):
     assert health.actions == []
 
 
+def test_the_down_path_never_publishes_actions_even_if_some_exist(scanned, monkeypatch):
+    """Round-2 review finding: `_TABLE_DOMAINS` (`responder/actions.py`) is empty
+    today, so `actions=[]` and `actions=available_actions(prefix=prefix)`
+    evaluate identically on the down path -- swapping one for the other on the
+    branch above left the entire suite green, because there was never a
+    computed stage in play to tell the two forms apart. That is the same
+    "the empty-today case cannot be the only guard" hazard Task 6's own brief
+    raised for `available_actions` itself, recurring at this second call site.
+
+    `_stage_domains` is forced to report `neural` as available -- something
+    genuinely would be publishable if `build_health` called `available_actions`
+    here -- so this fails on the literal call-site swap, not only in the
+    principle. Database unreachability wins regardless: every action, once
+    triggered, ultimately becomes an inserted request row (spec section
+    11.3), and a health check that could not itself reach the database has no
+    basis for claiming any of them are currently actionable.
+    """
+    root, prefix = scanned("rspdwac")
+    monkeypatch.setattr("wl_preproc.responder.actions._stage_domains", lambda prefix: {"neural"})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr("wl_preproc.cli.report.gather_readings", boom)
+    health = build_health(root, prefix=prefix)
+    assert health.actions == [], "the down path must never publish actions, even if some exist"
+
+
 def test_this_host_never_claims_unknown(scanned, monkeypatch):
     """`unknown` is what wl.works records when a host goes silent past its
     stale_after_seconds. It is their word for our absence and we are never in
