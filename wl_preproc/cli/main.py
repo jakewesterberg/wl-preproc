@@ -52,6 +52,27 @@ def export_schemas(out_dir: Path) -> list[Path]:
     return written
 
 
+def tcp_port(value: str) -> int:
+    """`--port`'s `type=`: an int in 0-65535, refused by argparse at parse
+    time if it is not.
+
+    Named `tcp_port` because argparse puts a `type=` callable's `__name__`
+    into its own message for a non-integer ("invalid tcp_port value: 'x'").
+
+    Without this, `--port 99999` and `--port -1` both reached
+    `socket.bind()` four frames inside `socketserver` and came out as
+    `OverflowError: bind(): port must be 0-65535.` plus a traceback and exit
+    1 — a plausible typo in the very systemd unit the `--port`-required
+    ruling exists to protect, answered with an interpreter dump. `0` stays
+    legal: it asks the OS for an ephemeral port, which is what the responder
+    tests bind with.
+    """
+    port = int(value)  # argparse turns a ValueError here into its own message
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"{value} is not a TCP port (must be 0-65535)")
+    return port
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wlpp")
     subparsers = parser.add_subparsers(dest="group", required=True)
@@ -102,7 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     # identically in the systemd unit, the protocol document (Task 10) and
     # whatever wl.works is configured with, and a default invites two of
     # those three to disagree silently.
-    responder_parser.add_argument("--port", required=True, type=int, help="TCP port to bind")
+    # `type=tcp_port`, not `type=int`: see that function. An out-of-range
+    # port is refused here, by argparse, in argparse's own words -- not
+    # forty lines later as an OverflowError traceback out of socketserver.
+    responder_parser.add_argument(
+        "--port", required=True, type=tcp_port, help="TCP port to bind (0-65535)"
+    )
     responder_parser.add_argument("--root", required=True, help="directory holding session dirs")
     responder_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
 
@@ -274,7 +300,35 @@ def main(argv: list[str] | None = None) -> int:
             # traceback ending in a raise deep inside make_handler.
             print(f"error: refusing to start: {exc}")
             return 2
-        return 0  # pragma: no cover - serve() blocks forever on success
+        except OSError as exc:
+            # The bind failed. `OSError`, not just the `ValueError` above,
+            # because "a ValueError traceback is not a CLI error message"
+            # (controller override 3) is a principle and not a list of one
+            # exception type -- and the commonest responder restart failure
+            # there is lands here: `[Errno 48] Address already in use`, a
+            # systemd restart racing the old process's socket, previously a
+            # raw traceback ending in `socketserver.TCPServer.server_bind`.
+            # A privileged port with no capability to bind it arrives the
+            # same way.
+            #
+            # Exit 1, not the 2 the refusals above use: 2 in this CLI means
+            # "refusing -- the invocation or configuration is wrong", and a
+            # correct invocation hits this when something ELSE holds the
+            # port. It tried and failed, which is `doctor`'s exit 1. The
+            # port is named because it is what an operator has to go free.
+            #
+            # The message says "bind" although this catch spans the whole of
+            # `serve()`, and that is accurate rather than sloppy:
+            # `socketserver.BaseServer._handle_request_noblock` catches
+            # `OSError` from `get_request()` itself and returns, so a
+            # per-request accept failure never reaches here. What reaches
+            # here is `ThreadingHTTPServer.__init__` failing to bind.
+            print(f"error: could not bind port {args.port}: {exc}")
+            return 1
+        # Reached only if `serve_forever()` returns, which it does only on an
+        # explicit `shutdown()` no caller here issues; in practice this
+        # process ends on a signal instead.
+        return 0
 
     return 2
 
