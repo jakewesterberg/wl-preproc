@@ -135,7 +135,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
-        return int(exc.code or 2)
+        # `exc.code or 2` was wrong for the one status argparse raises that is
+        # not a failure: `--help` and `--version` exit 0, and `0 or 2` is 2, so
+        # EVERY subcommand's --help returned 2. Enough to fail a wrapper or a CI
+        # step written as `wlpp --help || exit 1`, and enough to make the
+        # protocol document's exit-code table describe a bug. `None` (a bare
+        # `raise SystemExit`) still means 2; argparse's own usage errors already
+        # carry 2 themselves.
+        return 2 if exc.code is None else int(exc.code)
 
     if args.group == "schemas" and args.action == "export":
         for path in export_schemas(args.out):

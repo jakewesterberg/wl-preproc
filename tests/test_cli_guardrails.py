@@ -159,6 +159,39 @@ def test_report_requires_a_root_argument():
     assert "--root" in combined
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--help"], id="top-level"),
+        pytest.param(["responder", "--help"], id="responder"),
+        pytest.param(["report", "--help"], id="report"),
+        pytest.param(["ingest", "--help"], id="ingest"),
+        pytest.param(["schemas", "export", "--help"], id="schemas-export"),
+    ],
+)
+def test_help_exits_zero(argv):
+    """`--help` is a success, not a usage error.
+
+    `main()` caught argparse's `SystemExit` as `int(exc.code or 2)`, and
+    argparse exits **0** for `--help` — so `0 or 2` returned 2 for every
+    subcommand, the same status a genuine usage error returns. That is enough
+    to fail a wrapper or a CI step written `wlpp --help || exit 1`, and it is
+    indistinguishable from the real refusals the protocol document's exit-code
+    table describes.
+
+    Parametrised across a top-level and four subcommand forms because the
+    defect was in the one `except` every subcommand's parsing passes through:
+    a single case would prove the catch handles one path, not that the status
+    is right for all of them. The usage-error tests above are the other half —
+    together they pin that 0 and 2 stay distinguishable.
+    """
+    result = _run(*argv)
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, f"--help must exit 0, got {result.returncode}: {combined}"
+    assert "usage:" in combined.lower()
+    assert "traceback" not in combined.lower()
+
+
 # ---------------------------------------------------------------------------
 # Task 9: `wlpp responder`
 # ---------------------------------------------------------------------------
