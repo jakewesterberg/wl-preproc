@@ -91,7 +91,7 @@ class KeyReuseError(dj.DataJointError):
     watcher's, and ``tests/schema/test_request.py``'s NINE
     ``pytest.raises(dj.DataJointError, match=...)`` assertions that land on
     this raise site (lines 283, 291, 293, 335, 359, 384, 702, 732, 767; the
-    other eight in that file are not key reuse) — keeps catching it
+    other seven in that file are not key reuse) — keeps catching it
     unchanged, so narrowing the responder's seam changes nothing downstream
     of it. Verified both ways: all nine pass with this type, and all nine
     also pass with the raise reverted to the base class, which is exactly

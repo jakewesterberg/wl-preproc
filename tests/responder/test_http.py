@@ -41,6 +41,7 @@ broken, the test confirmed failing, the code restored.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hmac
 import json
@@ -96,6 +97,28 @@ def start_server():
     yield _start
 
     for httpd in started:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@contextlib.contextmanager
+def _serving(handler_cls):
+    """A real `ThreadingHTTPServer` bound to an ephemeral port running
+    `handler_cls` verbatim, torn down on exit -- for the handful of tests
+    below that need a handler subclass `start_server` has no parameter for
+    (one whose `handle_one_request` raises unconditionally, one that calls
+    `send_error` with a code `_SEND_ERROR_BODIES` does not list). Yields
+    the bound port. `start_server`'s own `_start` is not reused here
+    because its only subclassing hook is `timeout`; a second parameter for
+    every future one-off shape would grow it past what any test actually
+    needs generically.
+    """
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield httpd.server_address[1]
+    finally:
         httpd.shutdown()
         httpd.server_close()
 
@@ -475,17 +498,27 @@ def test_any_foreign_method_token_is_401_json_not_stdlibs_html_501(start_server,
 
 
 @pytest.mark.parametrize(
-    ("label", "request_bytes", "expected_status"),
+    ("label", "request_bytes", "expected_status", "expected_body"),
     [
-        ("malformed request line", b"GARBAGE\r\n\r\n", None),
-        ("bad http version", b"GET /health HTTP/9.9.9\r\n\r\n", None),
-        ("http 2.0", b"GET /health HTTP/2.0\r\n\r\n", None),
-        ("oversized header", b"GET /health HTTP/1.1\r\nX-Big: " + b"a" * 70000 + b"\r\n\r\n", 431),
-        ("over-long request line", b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n", 414),
+        ("malformed request line", b"GARBAGE\r\n\r\n", None, {"error": "bad request"}),
+        ("bad http version", b"GET /health HTTP/9.9.9\r\n\r\n", None, {"error": "bad request"}),
+        ("http 2.0", b"GET /health HTTP/2.0\r\n\r\n", None, {"error": "http version not supported"}),
+        (
+            "oversized header",
+            b"GET /health HTTP/1.1\r\nX-Big: " + b"a" * 70000 + b"\r\n\r\n",
+            431,
+            {"error": "request header fields too large"},
+        ),
+        (
+            "over-long request line",
+            b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n",
+            414,
+            {"error": "request line too long"},
+        ),
     ],
 )
 def test_stdlibs_own_framing_errors_answer_in_json_never_markup(
-    start_server, label, request_bytes, expected_status
+    start_server, label, request_bytes, expected_status, expected_body
 ):
     """Review round 2's Minor 6, the half no `do_*` alias could ever have
     reached: `BaseHTTPRequestHandler` calls `send_error` from inside
@@ -514,6 +547,27 @@ def test_stdlibs_own_framing_errors_answer_in_json_never_markup(
     echoing the caller's bytes -- and that is what is asserted. Conveying a
     status code on those two paths would mean overriding stdlib's version
     semantics, which is a different change from this one.
+
+    **`expected_body` pins `_SEND_ERROR_BODIES` -- review round 3's Minor 3.**
+    Every case above used to check only `"error" in parsed`, which
+    `_SEND_ERROR_FALLBACK_BODY` (`{"error": "request rejected"}`) satisfies
+    just as well as any of the four real entries: replacing the whole
+    `_SEND_ERROR_BODIES` table with `{}` left 67 tests passing, this one
+    among them, because nothing checked which body came back, only that
+    SOME body with an `"error"` key did. `expected_body` traces each case to
+    the specific status `send_error` is actually called with, derived from
+    `http.server.BaseHTTPRequestHandler.parse_request`'s own source rather
+    than assumed: "malformed request line" and "bad http version" both hit
+    the SAME `send_error(400, "Bad request ...")` call (one via the
+    `len(words)` check, one via the version-parse `except`), so both pin
+    `{"error": "bad request"}`; "http 2.0" is the one case that reaches
+    `send_error(505, ...)` (`version_number >= (2, 0)`), pinning
+    `{"error": "http version not supported"}`; "oversized header" and
+    "over-long request line" pin the 431 and 414 bodies respectively. All
+    four real table entries are covered between them, so replacing the
+    table with `{}` now fails every parametrization: each one still gets
+    *a* JSON body with an `"error"` key (`_SEND_ERROR_FALLBACK_BODY`), but
+    the wrong one.
     """
     base = start_server(TOKEN, _unused, _unused)
     port = int(base.rsplit(":", 1)[1])
@@ -528,12 +582,53 @@ def test_stdlibs_own_framing_errors_answer_in_json_never_markup(
 
     body = raw.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in raw else raw
     parsed = json.loads(body)
-    assert "error" in parsed
+    assert parsed == expected_body, f"{label}: expected body {expected_body!r}, got {parsed!r}"
 
     if expected_status is not None:
         assert f" {expected_status} " in _status_line(raw), (
             f"{label}: expected {expected_status}, got {_status_line(raw)!r}"
         )
+
+
+def test_send_errors_fallback_body_is_used_for_a_code_the_table_does_not_list():
+    """The fifth string review round 3's Minor 3 named as untested:
+    `_SEND_ERROR_FALLBACK_BODY` (`{"error": "request rejected"}`), what
+    `send_error`'s override falls back to for a status code
+    `_SEND_ERROR_BODIES` does not enumerate -- "anything else stdlib might
+    route through `send_error` in a future Python", per that constant's own
+    comment. Nothing today drives `send_error` with such a code over a real
+    socket: `parse_request`/`handle_one_request` raise only
+    400/414/431/505/501 (confirmed at source), and 501 is special-cased
+    before the table lookup even runs. So this string had zero test
+    coverage of its own -- `test_stdlibs_own_framing_errors_answer_in_json_
+    never_markup`'s five real cases can only ever reach the four entries
+    the table actually has.
+
+    Pinned directly, over a real socket, the same "subclass the shipped
+    handler" shape `test_a_real_escape_past_every_guard_prints_cpython3s_
+    own_banner` above uses -- here to reach a `send_error` call stdlib
+    itself never makes, by having `do_GET` call it directly with a code
+    that is not `501` and not one of the four listed.
+    """
+    handler_cls = make_handler(TOKEN, _health_ok, _unused)
+
+    class UnlistedCodeHandler(handler_cls):
+        def do_GET(self) -> None:
+            # Bypasses this module's own auth/routing on purpose -- this
+            # test is about send_error's fallback lookup, not about what
+            # reaches it in production (nothing does; see docstring above).
+            self.send_error(599, "made up for this test, not a real stdlib code")
+
+    with _serving(UnlistedCodeHandler) as port:
+        raw = _raw_http_response(
+            port,
+            f"GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode(),
+        )
+
+    assert raw, "no response at all"
+    assert " 599 " in _status_line(raw), f"expected 599, got {_status_line(raw)!r}"
+    body = raw.split(b"\r\n\r\n", 1)[1]
+    assert json.loads(body) == {"error": "request rejected"}
 
 
 def test_the_server_header_never_discloses_the_python_version(start_server):
@@ -756,7 +851,7 @@ def test_a_malformed_or_oversized_content_length_is_422_not_a_hang(start_server,
 # --------------------------------------------------------------------------
 
 
-def test_the_shipped_handler_carries_the_production_request_timeout(start_server):
+def test_the_shipped_handler_carries_the_production_request_timeout():
     """The structural half. Every behavioural timeout test below shortens
     `timeout` to run fast, so without this one the whole mechanism could
     ship with `timeout = None` -- stdlib's default, i.e. block forever --
@@ -884,7 +979,73 @@ def test_a_timeout_produces_no_traceback_on_stderr(start_server, capfd):
     time.sleep(0.2)  # let both handler threads finish writing their log lines
     captured = capfd.readouterr()
     assert "Traceback (most recent call last)" not in captured.err, captured.err
-    assert "Exception happened during processing of request" not in captured.err, captured.err
+    assert "Exception occurred during processing of request" not in captured.err, captured.err
+
+
+def test_a_real_escape_past_every_guard_prints_cpython3s_own_banner(capfd):
+    """Mutation proof for review round 3's Important 1.
+
+    `test_a_timeout_produces_no_traceback_on_stderr`'s second assertion
+    named the string `"Exception happened during processing of request"`
+    -- Python 2's `SocketServer.py` wording. CPython 3's own
+    `socketserver.BaseServer.handle_error` prints `"Exception occurred
+    during processing of request from"` instead: confirmed by reading
+    `inspect.getsource(socketserver.BaseServer.handle_error)` directly on
+    both CI Pythons, 3.11 and 3.13 (identical source on both, not merely
+    the same behaviour). The old literal has zero hits in either
+    interpreter's stdlib, so that assertion could not fail under any
+    input, despite its own docstring calling it stdlib's "own banner,
+    which is what actually prints when a handler raises past every guard."
+
+    Forces a REAL escape to prove the corrected literal actually is one --
+    not read off the source and trusted, but produced and observed. A
+    subclass of the shipped handler whose `handle_one_request` raises
+    unconditionally bypasses `_authorized`, both `try` blocks in
+    `do_GET`/`do_POST`, and `BaseHTTPRequestHandler.handle_one_request`'s
+    own `except TimeoutError` -- the identical escape shape the non-ASCII
+    token bug took by accident before round 1's Critical fix, reproduced
+    here on purpose. Traced at source: `finish_request` instantiates the
+    handler, whose `BaseRequestHandler.__init__` runs `self.handle()` (->
+    this override) inside a bare `try/finally`, so the raise propagates
+    out of `__init__` itself, back through `finish_request`, into
+    `ThreadingMixIn.process_request_thread`'s `except Exception:
+    self.handle_error(...)` -- the only remaining catch, and stdlib's own,
+    unoverridden `BaseServer.handle_error`, which prints the banner and a
+    traceback, then keeps serving.
+    """
+    handler_cls = make_handler(TOKEN, _health_ok, _unused)
+
+    class ForcedEscapeHandler(handler_cls):
+        def handle_one_request(self) -> None:
+            raise RuntimeError("forced escape -- review round 3's Important 1")
+
+    with _serving(ForcedEscapeHandler) as port:
+        with socket.create_connection(("127.0.0.1", port), timeout=3.0):
+            pass  # handle_one_request raises before reading anything at all
+        time.sleep(0.3)  # let the handler thread finish printing
+
+    captured = capfd.readouterr()
+
+    # The escape really happened, and really looks like what both
+    # assertions in test_a_timeout_produces_no_traceback_on_stderr claim to
+    # detect.
+    assert "Traceback (most recent call last)" in captured.err
+    assert "RuntimeError: forced escape" in captured.err
+    assert "Exception occurred during processing of request from" in captured.err
+
+    # The OLD literal, searched for in the SAME captured output a real
+    # escape just produced: not there. This is what proves
+    # test_a_timeout_produces_no_traceback_on_stderr's pre-fix assertion
+    # would have silently passed on exactly this input rather than
+    # catching it.
+    assert "Exception happened during processing of request" not in captured.err
+
+    # The CORRECTED literal, applied the same way (`assert ... not in
+    # captured.err`) test_a_timeout_produces_no_traceback_on_stderr applies
+    # it: on this same real-escape input it DOES fail. That is what makes
+    # it a live marker rather than a decoration.
+    with pytest.raises(AssertionError):
+        assert "Exception occurred during processing of request" not in captured.err
 
 
 # --------------------------------------------------------------------------
@@ -1084,6 +1245,36 @@ def test_an_unexpected_bug_from_accept_fn_is_500_not_a_crash(start_server):
     assert status == 500
     assert "Traceback" not in body.decode("utf-8")
     assert json.loads(body)["error"].startswith("AttributeError:")
+
+
+def test_a_timeout_error_from_accept_fn_is_500_not_408(start_server):
+    """Review round 3's Minor 2. `do_POST` used to wrap `_parse_job_request()`
+    and `self._accept_fn(request)` in the SAME `try`, so `except
+    TimeoutError` caught a `TimeoutError` from either one and answered 408
+    for both -- even though the branch's own comment, `_parse_job_request`'s
+    docstring and the module docstring's status table all scope 408 to "the
+    body never arrived within `_REQUEST_TIMEOUT_S`", a claim only true of
+    the first call. A `TimeoutError` out of `accept_fn` would have told
+    wl.works ITS body arrived late, when in fact it arrived completely and
+    something downstream of parsing was slow (or timed out) instead --
+    discarding the real diagnostic.
+
+    `_parse_job_request()` now runs in its own `try`, scoped exactly to the
+    body read, so a `TimeoutError` from `accept_fn` falls through to the
+    generic `except Exception` below and answers `500`, the same as any
+    other infrastructure fault `accept_fn` can raise -- proven here, not
+    assumed from the diff: before the fix this test failed with the wrong
+    status (408); after it, 500.
+    """
+
+    def accept_fn(request):
+        raise TimeoutError("simulated: accept_fn itself timed out, not the body read")
+
+    base = start_server(TOKEN, _health_ok, accept_fn)
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=_valid_job_payload())
+    assert status == 500, f"expected 500, got {status} -- body {body!r}"
+    assert "Traceback" not in body.decode("utf-8")
+    assert json.loads(body)["error"].startswith("TimeoutError:")
 
 
 def test_nothing_ever_returns_a_traceback_regardless_of_input(start_server):

@@ -631,8 +631,73 @@ def make_handler(
                 return
             # Only _JOBS_PATH answers POST (see _PATH_METHODS) -- reached
             # only when self.path == _JOBS_PATH.
+            #
+            # Two separate `try` blocks, not one -- review round 3's Minor 2.
+            # A single `try` wrapping both calls used to let `except
+            # TimeoutError` below catch a TimeoutError raised by EITHER
+            # `_parse_job_request()` OR `self._accept_fn(request)`, but the
+            # branch's own comment, `_parse_job_request`'s docstring and the
+            # module docstring's status table all scope it to "the body
+            # never arrived within _REQUEST_TIMEOUT_S" -- a claim true only
+            # of the first call. Measured pre-fix: a bare TimeoutError from
+            # `accept_fn` answered 408, telling wl.works its own body
+            # arrived late when in fact it arrived completely and something
+            # downstream of parsing was slow instead -- discarding the real
+            # diagnostic. Splitting the `try` scopes `except TimeoutError`
+            # to exactly what its own comment already claimed.
             try:
                 request = self._parse_job_request()
+            except ValueError as exc:
+                # json.JSONDecodeError, UnicodeDecodeError, a non-digit or
+                # oversized Content-Length, and pydantic.ValidationError are
+                # ALL ValueError subclasses (confirmed directly against this
+                # project's installed Python/pydantic) -- one branch, not
+                # several. See the module docstring's table.
+                self._send_json(422, _error_body(exc))
+                return
+            except TimeoutError:
+                # The body never arrived within _REQUEST_TIMEOUT_S -- review
+                # round 2's Important 3, scope corrected by round 3's Minor
+                # 2 (see this method's own comment above -- accept_fn no
+                # longer shares this branch). NOT covered by the ValueError
+                # branch above: `socket.timeout` has been an alias of
+                # `TimeoutError` since 3.10 and `TimeoutError` is an
+                # `OSError` (confirmed directly on 3.11 and 3.13), so it
+                # would otherwise fall to the generic 500 below -- or,
+                # worse, on a request-line read it never reaches this
+                # module at all and CPython's own `handle_one_request`
+                # catches it, logs one line and closes the socket with NO
+                # HTTP RESPONSE AT ALL, which is the same client-visible
+                # shape as the hang this timeout exists to end. 408 is the
+                # status RFC 9110 section 15.5.9 defines for exactly this
+                # ("did not produce a request within the time that the
+                # server was prepared to wait").
+                #
+                # Writing this 408 to a peer that has already stalled may
+                # ITSELF fail, and what happens next depends on how --
+                # review round 3's Minor 5 corrected an earlier version of
+                # this comment, which said only that the failure
+                # "propagates out of do_POST into stdlib's except
+                # TimeoutError, which logs and closes"; true for a further
+                # TimeoutError, false for the likelier outcome on a peer
+                # that has been silent for 30 s. Checked directly against
+                # `BaseHTTPRequestHandler.handle_one_request`'s own source:
+                # its `try` catches `except TimeoutError` ONLY. A second
+                # TimeoutError on this write IS caught there -- logs one
+                # line, closes, no traceback. A `BrokenPipeError` or a
+                # `ConnectionResetError` (the peer has already closed or
+                # reset the connection) is NOT a TimeoutError, is caught by
+                # nothing in `handle_one_request`, and so escapes past it
+                # and past this handler entirely, into
+                # `socketserver.BaseServer`'s own `handle_error`, which
+                # prints a full traceback to stderr and continues serving.
+                # Neither is guarded here; both are pre-existing on every
+                # write path this handler has, not introduced by this one,
+                # and are parked -- correcting what this comment claims
+                # about them is this round's job, fixing them is not.
+                self._send_json(408, {"error": "request timed out"})
+                return
+            try:
                 result = self._accept_fn(request)
             except ConflictError as exc:
                 # Review Important 3 -- see module docstring's "Why key
@@ -643,44 +708,24 @@ def make_handler(
                 # row order, nothing more.
                 self._send_json(409, {"error": str(exc)})
             except ValueError as exc:
-                # json.JSONDecodeError, UnicodeDecodeError, a non-digit or
-                # oversized Content-Length, pydantic.ValidationError, and
-                # jobs.accept's own ValueError are ALL ValueError subclasses
-                # (confirmed directly against this project's installed
-                # Python/pydantic) -- one branch, not several. See the
-                # module docstring's table.
+                # jobs.accept's own ValueError contract -- see the module
+                # docstring's table. Its own `except ValueError` clause now
+                # that round 3's Minor 2 split the try, not the one above,
+                # but the same status and the same body shape: a
+                # well-formed body `accept_fn` refuses is exactly as much
+                # "the caller's mistake" as a body that fails pydantic.
                 self._send_json(422, _error_body(exc))
-            except TimeoutError:
-                # The body never arrived within _REQUEST_TIMEOUT_S -- review
-                # round 2's Important 3. NOT covered by the ValueError branch
-                # above: `socket.timeout` has been an alias of `TimeoutError`
-                # since 3.10 and `TimeoutError` is an `OSError` (confirmed
-                # directly on 3.11 and 3.13), so it would otherwise fall to
-                # the generic 500 below -- or, worse, on a request-line read
-                # it never reaches this module at all and CPython's own
-                # `handle_one_request` catches it, logs one line and closes
-                # the socket with NO HTTP RESPONSE AT ALL, which is the same
-                # client-visible shape as the hang this timeout exists to
-                # end. 408 is the status RFC 9110 section 15.5.9 defines for
-                # exactly this ("did not produce a request within the time
-                # that the server was prepared to wait").
-                #
-                # Writing this 408 to a peer that has already stalled may
-                # ITSELF time out. That is deliberately not guarded: the
-                # exception propagates out of do_POST into stdlib's
-                # `except TimeoutError`, which logs and closes -- the right
-                # outcome for a peer that is no longer reading, and one
-                # fewer nested guard here than a second try/except would add.
-                self._send_json(408, {"error": "request timed out"})
             except Exception as exc:  # noqa: BLE001 -- see module docstring's table
                 # Any dj.DataJointError that is not KeyReuseError (the seam
                 # deliberately leaves those alone -- a lost connection is a
                 # retryable infrastructure fault, not a conflict), a
                 # KeyReuseError that bypassed the seam entirely (defense in
                 # depth -- see "Only through the translation seam" in the
-                # module docstring), a raw untranslated pymysql error, or a
-                # genuine bug -- all land here, all become a HANDLED 500
-                # with a safe body.
+                # module docstring), a raw untranslated pymysql error, a
+                # TimeoutError raised by accept_fn itself rather than by the
+                # body read (round 3's Minor 2 -- this branch, not 408, is
+                # its answer now), or a genuine bug -- all land here, all
+                # become a HANDLED 500 with a safe body.
                 self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
             else:
                 self._send_json(200, {"activation": result, "accepted": True})
