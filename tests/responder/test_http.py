@@ -18,6 +18,25 @@ already does.
 **Review round 1 (2026-08-16)** found one Critical and six Important issues,
 all addressed here alongside the fixes in `handler.py`/`server.py`. Each new
 test below names which finding it covers.
+
+**Review round 2 (2026-08-16)** found a regression round 1 introduced (the
+`409` seam catching the root of DataJoint's whole error tree), four
+residuals, and two prose defects. Two of its findings are about THIS file
+rather than the modules it tests, and both are the same defect in different
+clothes -- a test that passes while proving nothing:
+
+- `test_serve_refuses_to_start_on_a_non_ascii_token`'s docstring claimed the
+  refusal leaves "no server left running and no port left bound", but
+  `pytest.raises(ValueError)` was its only assertion, which a guard placed
+  AFTER the socket bind satisfies just as well. It now records constructor
+  calls. That is this phase's third test whose NAME asserted a property its
+  body never checked.
+- `test_serve_shares_one_lock_held_for_the_whole_call_and_released_on_error`
+  proved release-on-raise for `accept_fn` only; mutating `locked_health_fn`
+  to leak the lock left all 45 tests passing. It now checks both callables.
+
+Every test added or changed in round 2 was mutation-proven: the code was
+broken, the test confirmed failing, the code restored.
 """
 
 from __future__ import annotations
@@ -53,8 +72,20 @@ TOKEN = "test-bearer-token-1"
 def start_server():
     started: list[ThreadingHTTPServer] = []
 
-    def _start(token: str, health_fn, accept_fn) -> str:
+    def _start(token: str, health_fn, accept_fn, *, timeout: float | None = None) -> str:
+        """`timeout`, when given, subclasses the class `make_handler`
+        returns purely to shorten `BaseHTTPRequestHandler.timeout` -- the
+        socket timeout review round 2's Important 3 added. It is a CLASS
+        attribute read by `socketserver.StreamRequestHandler.setup()`, so
+        overriding it needs no signature change anywhere in `handler.py` and
+        lets the timeout tests below run in a quarter of a second instead of
+        the shipped 30. Every other behaviour is inherited verbatim; the
+        SHIPPED value is pinned separately and structurally by
+        `test_the_shipped_handler_carries_the_production_request_timeout`.
+        """
         handler_cls = make_handler(token, health_fn, accept_fn)
+        if timeout is not None:
+            handler_cls = type("FastTimeoutHandler", (handler_cls,), {"timeout": timeout})
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
@@ -380,6 +411,131 @@ def test_unsupported_verbs_authenticate_first_and_answer_in_json(start_server, m
         assert json.loads(body)["error"] in ("not found", "method not allowed")
 
 
+@pytest.mark.parametrize(
+    "method", ["CONNECT", "PROPFIND", "LINK", "FOO", "BREW", "M-SEARCH", "get"]
+)
+def test_any_foreign_method_token_is_401_json_not_stdlibs_html_501(start_server, method):
+    """Review round 2's Minor 6. Round 1 closed review Important 5 for the
+    six verbs it could name -- `PUT`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH`,
+    `TRACE`, each given its own `do_*` alias. But a method token is
+    arbitrary, so six aliases were never the class: measured against round
+    1's code, every one of these seven still reached
+    `BaseHTTPRequestHandler`'s default `send_error(501, "Unsupported method
+    (%r)")` and got an UNAUTHENTICATED HTML page -- from a module whose
+    sibling frozen contract (`contracts/protocol.py`) says "We refuse to
+    emit markup at all". The page's distinctive shape also fingerprints the
+    stack even with the version string emptied, and stdlib formats the
+    caller's own method token into both the body and the STATUS LINE's
+    reason phrase (measured: `HTTP/1.0 501 Unsupported method ('CONNECT')`).
+
+    `401`, not `501`, and identical to the six explicit aliases: those
+    already answer `401` before routing precisely so an unauthenticated
+    caller learns nothing about which verbs this host answers. A seventh,
+    unknown verb replying `501` is what would be inconsistent -- `501` says
+    "that method is not implemented here", which is the exact fact the other
+    six decline to disclose.
+
+    Sent over a raw socket rather than `urllib`, because `http.client`
+    refuses to send some of these tokens at all.
+    """
+    base = start_server(TOKEN, _unused, _unused)
+    port = int(base.rsplit(":", 1)[1])
+
+    # Probed WITH a valid token as well as without. Measured, and asserted
+    # rather than glossed: an unknown verb answers 401 either way, because
+    # `send_error` runs on paths where it cannot know whether auth passed --
+    # on `parse_request`'s failure paths `self.headers` is exactly what
+    # failed to parse. That leaves one asymmetry against the six aliased
+    # verbs, which DO run the real auth-then-route logic: authenticated
+    # `PUT /health` is 405 (see
+    # `test_unsupported_verbs_authenticate_first_and_answer_in_json`),
+    # authenticated `BREW /health` is 401. 401 is the safe direction --
+    # it discloses less, to a caller asking for a method that does not exist.
+    for token_header in ("", f"Authorization: Bearer {TOKEN}\r\n"):
+        raw = _raw_http_response(
+            port,
+            (
+                f"{method} /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                f"{token_header}Connection: close\r\n\r\n"
+            ).encode(),
+        )
+
+        assert raw, f"{method}: no response at all"
+        status_line = _status_line(raw)
+        assert " 401 " in status_line, f"{method}: expected 401, got {status_line!r}"
+        body = raw.split(b"\r\n\r\n", 1)[1]
+        assert json.loads(body) == {"error": "unauthorized"}
+        assert b"<html" not in raw.lower(), f"{method}: markup in the response: {raw[:200]!r}"
+        assert b"DOCTYPE" not in raw
+        # Neither the body NOR the status line's reason phrase may echo the
+        # caller's own token back -- stdlib's default put it in both.
+        assert method.encode() not in raw, (
+            f"{method}: the response echoes the request's method token"
+        )
+
+
+@pytest.mark.parametrize(
+    ("label", "request_bytes", "expected_status"),
+    [
+        ("malformed request line", b"GARBAGE\r\n\r\n", None),
+        ("bad http version", b"GET /health HTTP/9.9.9\r\n\r\n", None),
+        ("http 2.0", b"GET /health HTTP/2.0\r\n\r\n", None),
+        ("oversized header", b"GET /health HTTP/1.1\r\nX-Big: " + b"a" * 70000 + b"\r\n\r\n", 431),
+        ("over-long request line", b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n", 414),
+    ],
+)
+def test_stdlibs_own_framing_errors_answer_in_json_never_markup(
+    start_server, label, request_bytes, expected_status
+):
+    """Review round 2's Minor 6, the half no `do_*` alias could ever have
+    reached: `BaseHTTPRequestHandler` calls `send_error` from inside
+    `parse_request` and `handle_one_request`, BEFORE any `do_*` method
+    exists to dispatch to. All five of these produced an HTML page quoting
+    the caller's own bytes back at them; all five now answer in JSON.
+
+    **The ordering trap, checked rather than assumed.** `parse_request`
+    calls `send_error` while `self.command` is still `None`, so the override
+    must depend on nothing it has not yet set. It reaches `send_response`,
+    which reads `self.requestline` (via `log_request`) and
+    `self.request_version` (via `send_response_only`) -- both assigned in
+    `parse_request`'s first three lines. These probes are what actually
+    exercise that; a `TypeError` or `AttributeError` there would surface as
+    a traceback and an empty response.
+
+    **`expected_status is None` is a measured stdlib behaviour, not a
+    shrug.** On the two paths where `parse_request` fails before it has
+    learned the request version -- a malformed request line, and a bad
+    version string -- `self.request_version` is still the `HTTP/0.9`
+    placeholder, and stdlib's `send_response_only` and `end_headers` are
+    BOTH no-ops for HTTP/0.9. Measured directly, before this fix and after:
+    those responses carry no status line and no headers at all, only a body.
+    So there is no status code on the wire to assert. What this fix changes
+    for them is the body -- a fixed JSON object instead of an HTML page
+    echoing the caller's bytes -- and that is what is asserted. Conveying a
+    status code on those two paths would mean overriding stdlib's version
+    semantics, which is a different change from this one.
+    """
+    base = start_server(TOKEN, _unused, _unused)
+    port = int(base.rsplit(":", 1)[1])
+
+    raw = _raw_http_response(port, request_bytes)
+
+    assert raw, f"{label}: no response at all"
+    assert b"<html" not in raw.lower(), f"{label}: markup in the response: {raw[:200]!r}"
+    assert b"DOCTYPE" not in raw, f"{label}: markup in the response: {raw[:200]!r}"
+    assert b"Traceback" not in raw
+    assert b"GARBAGE" not in raw and b"9.9.9" not in raw, f"{label}: echoes request data"
+
+    body = raw.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in raw else raw
+    parsed = json.loads(body)
+    assert "error" in parsed
+
+    if expected_status is not None:
+        assert f" {expected_status} " in _status_line(raw), (
+            f"{label}: expected {expected_status}, got {_status_line(raw)!r}"
+        )
+
+
 def test_the_server_header_never_discloses_the_python_version(start_server):
     """Review Important 5, second half. `BaseHTTPRequestHandler.
     version_string()` joins `server_version`/`sys_version` into the
@@ -533,29 +689,51 @@ def test_accept_fns_value_error_is_422_with_its_message(start_server):
     ids=["negative", "underscore", "huge-in-range", "past-sys-maxsize"],
 )
 def test_a_malformed_or_oversized_content_length_is_422_not_a_hang(start_server, content_length):
-    """Review Important 4. Each of these four `Content-Length` values used
-    to hang the request thread forever instead of answering at all -- never
-    reaching any of this module's status-code handling:
+    """Review round 1's Important 4. **Two of these four hung the request
+    thread forever; the other two answered `500` in 0.00 s.** Round 2's
+    Minor 4 corrected an earlier version of this docstring which said all
+    four "used to each hang this request's handler thread forever (never
+    responding, not even with an error)" -- the original review finding had
+    it right ("two more shapes returned 500") and round 1's prose lost it.
+    Re-measured against unfixed parsing (no `isdigit()` guard, no cap), a
+    2-byte body, a 3 s client deadline:
 
-    - `-1`: `int("-1")` succeeds, and `self.rfile.read(-1)` reads until the
-      PEER closes the connection, which a live client never does on its own.
-    - `1_2`: `int("1_2") == 12` (Python's underscore-in-int-literal grammar
-      applies to `int(str)` too), silently reinterpreting a header that is
-      not valid HTTP (`Content-Length = 1*DIGIT`, no underscore) as "read 12
-      bytes" of an actually-shorter body -- `read()` blocks waiting for
-      bytes that are never coming.
-    - `8000000000` (8 GB, in-range for a Python int): `self.rfile.read(...)`
-      tries to buffer that many bytes.
-    - `100000000000000000000` (10**20, past `sys.maxsize`): `read(...)`
-      converts its argument to a C `Py_ssize_t` internally and raises
-      `OverflowError`.
+    ```
+    CL='-1'                    -> no response at all (hang)
+    CL='1_2'                   -> no response at all (hang)
+    CL='8000000000'            -> 500 in 0.00s  OSError: [Errno 22] Invalid argument
+    CL='100000000000000000000' -> 500 in 0.00s  OverflowError: cannot fit 'int' into
+                                                an index-sized integer
+    ```
 
-    All four now get a fast, clean `422` instead -- `str.isdigit()` rejects
+    - `-1` -- **hang.** `int("-1")` succeeds, and `self.rfile.read(-1)` reads
+      until the PEER closes the connection, which a live client never does
+      on its own.
+    - `1_2` -- **hang.** `int("1_2") == 12` (Python's
+      underscore-in-int-literal grammar applies to `int(str)` too), silently
+      reinterpreting a header that is not valid HTTP (`Content-Length =
+      1*DIGIT`, no underscore) as "read 12 bytes" of an actually-shorter
+      body -- `read()` blocks waiting for bytes that are never coming.
+    - `8000000000` (8 GB, in range for a Python int) -- **`500`, not a
+      hang.** `read()` raises `OSError: [Errno 22] Invalid argument` at once.
+      Not an allocation failure, despite what an earlier version of
+      `handler.py`'s matching paragraph said: `io.BytesIO(b"hi").read(
+      8000000000)` returns immediately with no error and no allocation.
+    - `100000000000000000000` (10**20, past `sys.maxsize`) -- **`500`, not a
+      hang.** `read(...)` converts its argument to a C `Py_ssize_t`
+      internally and raises `OverflowError`.
+
+    So this fix closed two different defects at once: two genuine hangs, and
+    two host-fault `500`s for what is plainly a malformed request from the
+    caller. All four now get a fast, clean `422` -- `str.isdigit()` rejects
     the first two before `int()` is ever called (a leading `-` and an
-    underscore are both not digits), and a length cap rejects the last two
-    before `self.rfile.read(...)` is ever called with an oversized value at
-    all, regardless of whether that value would have hung, raised, or
-    merely consumed unreasonable memory.
+    underscore are both not digits), and the cap rejects the last two before
+    `self.rfile.read(...)` is ever called with them.
+
+    What this cap does NOT close is a `Content-Length` that lies while
+    staying at or under the cap; that is bounded by the socket timeout
+    instead -- see
+    `test_a_content_length_that_overstates_the_body_is_408_not_a_hang`.
     """
     base = start_server(TOKEN, _health_ok, _unused)
     port = int(base.rsplit(":", 1)[1])
@@ -569,6 +747,147 @@ def test_a_malformed_or_oversized_content_length_is_422_not_a_hang(start_server,
 
 
 # --------------------------------------------------------------------------
+# The request timeout -- review round 2's Important 3. The Content-Length
+# cap above bounds MEMORY and only memory; a plain-digit value at or below
+# the cap that overstates the body still blocks `self.rfile.read(length)`
+# until the peer closes. These two pin the mechanism that bounds THREAD
+# OCCUPANCY instead: a socket timeout, and a 408 rather than a dropped
+# connection.
+# --------------------------------------------------------------------------
+
+
+def test_the_shipped_handler_carries_the_production_request_timeout(start_server):
+    """The structural half. Every behavioural timeout test below shortens
+    `timeout` to run fast, so without this one the whole mechanism could
+    ship with `timeout = None` -- stdlib's default, i.e. block forever --
+    and every behavioural test would still pass, because each supplies its
+    own value.
+
+    `socketserver.StreamRequestHandler.setup()` calls
+    `self.connection.settimeout(self.timeout)` only when it is not `None`
+    (confirmed at source on this project's Python 3.11 and on 3.13, which
+    CI also runs), so `None` is not "some other timeout", it is no timeout
+    at all -- asserted explicitly below rather than left implicit in the
+    equality check.
+    """
+    from wl_preproc.responder import handler as handler_module
+
+    handler_cls = make_handler(TOKEN, _health_ok, _unused)
+
+    assert handler_cls.timeout is not None, (
+        "timeout is None -- StreamRequestHandler.setup() skips settimeout() entirely "
+        "for None, so the handler would block forever exactly as it did before this fix"
+    )
+    assert handler_cls.timeout == handler_module._REQUEST_TIMEOUT_S
+    assert handler_module._REQUEST_TIMEOUT_S == 30.0
+
+
+def test_a_content_length_that_overstates_the_body_is_408_not_a_hang(start_server):
+    """The behavioural half, and the point of the whole fix. `Content-Length:
+    5000` with a 2-byte body is a plain digit string well under
+    `_MAX_CONTENT_LENGTH`, so it clears BOTH of round 1's guards --
+    `str.isdigit()` passes, the cap passes -- and is handed straight to
+    `self.rfile.read(5000)`, which blocks until the peer closes. Measured
+    pre-fix: 60 such requests parked 60 handler threads on an unbounded
+    `ThreadingHTTPServer`, released only when the client finally closed.
+
+    Answering 408 rather than dropping the connection is the other half.
+    `TimeoutError` is an `OSError` (`socket.timeout` has been an alias of it
+    since 3.10), so `do_POST`'s `except ValueError` does not catch it, and
+    CPython's own `handle_one_request` has an `except TimeoutError` that
+    logs one line and closes the socket with NO HTTP RESPONSE AT ALL --
+    which is the same client-visible shape as the hang this fix exists to
+    end. `handler.py` catches it first and answers.
+
+    `timeout=0.25` on the handler class, not 30 s of real waiting: `timeout`
+    is a class attribute read in `setup()`, so a subclass sets it with no
+    signature change anywhere. The shipped value is pinned above.
+    """
+    base = start_server(TOKEN, _health_ok, _unused, timeout=0.25)
+    port = int(base.rsplit(":", 1)[1])
+
+    request = (
+        f"POST /jobs HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Authorization: Bearer {TOKEN}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: 5000\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode("utf-8") + b"{}"
+
+    started = time.monotonic()
+    raw = _raw_http_response(port, request)
+    elapsed = time.monotonic() - started
+
+    assert raw, "an overstated Content-Length got no response at all -- still a hang"
+    status_line = _status_line(raw)
+    assert " 408 " in status_line, f"expected 408, got {status_line!r}"
+    assert json.loads(raw.split(b"\r\n\r\n", 1)[1]) == {"error": "request timed out"}
+    assert b"Traceback" not in raw
+    assert elapsed < 1.0, f"the timeout did not fire promptly: {elapsed:.2f}s"
+
+
+def test_a_timeout_produces_no_traceback_on_stderr(start_server, capfd):
+    """The standing "no traceback under any input" rule, extended to the one
+    new input class this round adds. A `TimeoutError` escaping `do_POST`
+    uncaught would reach `socketserver`'s handler-error path and print a
+    real traceback to stderr -- the same failure mode the non-ASCII token
+    had before round 1's Critical fix.
+
+    Asserts the ABSENCE OF A TRACEBACK, not an empty stderr, and that
+    distinction is deliberate -- the brief for this round asked it to be
+    checked rather than assumed. Measured stderr for the two probes below,
+    verbatim:
+
+    ```
+    127.0.0.1 - - [...] "POST /jobs HTTP/1.1" 408 -
+    127.0.0.1 - - [...] Request timed out: TimeoutError('timed out')
+    ```
+
+    The first is `BaseHTTPRequestHandler`'s ordinary per-request access-log
+    line (deliberately not suppressed -- see `handler.py`'s closing
+    comment). The second is stdlib's own `log_error` on the request-LINE
+    timeout path, which never reaches this module at all. Both are single
+    lines; neither is a traceback; and an `assert captured.err == ""` here
+    would fail on entirely correct behaviour. So the assertion below names
+    the two things that WOULD indicate an unhandled exception: CPython's
+    traceback header, and `socketserver.BaseServer.handle_error`'s own
+    banner, which is what actually prints when a handler raises past every
+    guard.
+    """
+    base = start_server(TOKEN, _health_ok, _unused, timeout=0.25)
+    port = int(base.rsplit(":", 1)[1])
+
+    request = (
+        f"POST /jobs HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Authorization: Bearer {TOKEN}\r\n"
+        f"Content-Length: 5000\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode("utf-8") + b"{}"
+    raw = _raw_http_response(port, request)
+    assert " 408 " in _status_line(raw)
+
+    # A connection that sends NOTHING at all times out on the request-LINE
+    # read instead, which never reaches this module: stdlib's own
+    # handle_one_request catches that one. Included because it is the other
+    # half of "a timeout", and it must not print a traceback either.
+    with socket.create_connection(("127.0.0.1", port), timeout=3.0) as sock:
+        sock.settimeout(3.0)
+        try:
+            sock.recv(4096)
+        except OSError:
+            pass
+
+    time.sleep(0.2)  # let both handler threads finish writing their log lines
+    captured = capfd.readouterr()
+    assert "Traceback (most recent call last)" not in captured.err, captured.err
+    assert "Exception happened during processing of request" not in captured.err, captured.err
+
+
+# --------------------------------------------------------------------------
 # POST /jobs -- everything past accept()'s own ValueError contract:
 # ConflictError -> 409 (review Important 3), and 500 for everything else,
 # all handled, none a traceback.
@@ -578,10 +897,10 @@ def test_a_malformed_or_oversized_content_length_is_422_not_a_hang(start_server,
 def test_a_conflict_error_from_accept_fn_is_409(start_server):
     """`handler.py`'s OWN mapping of its own `ConflictError` type -- no
     `server.py`, no DataJoint, no database. See
-    `test_translate_accept_errors_turns_a_datajoint_error_into_a_conflict_error`
+    `test_translate_accept_errors_turns_key_reuse_into_a_conflict_error`
     and `test_a_real_key_reuse_conflict_through_the_translation_seam_is_409`
     below for the seam that actually PRODUCES a `ConflictError` from a real
-    `dj.DataJointError` in production.
+    `KeyReuseError` in production.
     """
 
     def accept_fn(request):
@@ -595,16 +914,25 @@ def test_a_conflict_error_from_accept_fn_is_409(start_server):
     }
 
 
-def test_translate_accept_errors_turns_a_datajoint_error_into_a_conflict_error(monkeypatch, prefix):
+def test_translate_accept_errors_turns_key_reuse_into_a_conflict_error(monkeypatch, prefix):
     """`server.py`'s own translation seam, tested directly -- no lock, no
-    thread, no HTTP, no real database. Review Important 3's fix: this is
-    the "four lines in the module that is permitted to import
+    thread, no HTTP, no real database. Review round 1's Important 3 fix:
+    this is the "four lines in the module that is permitted to import
     DataJoint" the review pointed at.
+
+    Half of a pair: the other half,
+    `test_translate_accept_errors_leaves_every_other_datajoint_error_alone`,
+    is what makes this one mean anything. On its own this assertion is
+    satisfied identically by a seam that catches ONLY `KeyReuseError` and by
+    one that catches the entire DataJoint error tree -- which is exactly the
+    over-broad seam review round 2 found (Important 1), and exactly what
+    this test, alone, failed to catch.
     """
     import wl_preproc.responder.server as server_module
+    from wl_preproc.schema.request import KeyReuseError
 
     def boom(request, prefix=None):
-        raise dj.DataJointError("idempotency key 'x' is already recorded against a different request")
+        raise KeyReuseError("idempotency key 'x' is already recorded against a different request")
 
     monkeypatch.setattr("wl_preproc.responder.jobs.accept", boom)
 
@@ -612,17 +940,97 @@ def test_translate_accept_errors_turns_a_datajoint_error_into_a_conflict_error(m
         server_module._translate_accept_errors(object(), prefix=prefix)
 
 
+@pytest.mark.parametrize(
+    "error_name",
+    ["LostConnectionError", "AccessError", "MissingTableError", "IntegrityError", "ThreadSafetyError"],
+)
+def test_translate_accept_errors_leaves_every_other_datajoint_error_alone(
+    monkeypatch, prefix, error_name
+):
+    """Review round 2's Important 1, the direction round 1 left unpinned.
+    `_translate_accept_errors` used to catch `dj.DataJointError` -- the ROOT
+    of DataJoint's entire error tree -- so every one of these five answered
+    `409` when driven through the real seam. `409` is documented by
+    `handler.py` as "a request that cannot succeed as sent, whose remedy is
+    outside the retry loop", so wl.works stops retrying and escalates to a
+    human.
+
+    `LostConnectionError` is the one that makes this a real regression rather
+    than a taxonomy quibble: `jobs.accept` writes inside a transaction, so a
+    MySQL restart or a LAN blip mid-POST raises it on the PRODUCTION path.
+    Pre-round-1 that was a `500`, which wl.works' retry loop handles
+    correctly; round 1's fix made it strictly worse. Each of these must now
+    propagate untouched and become `handler.py`'s handled `500` -- see
+    `test_a_lost_connection_error_through_the_real_seam_reaches_the_client_as_500`
+    for that half over a real socket.
+    """
+    import wl_preproc.responder.server as server_module
+    from wl_preproc.schema.request import KeyReuseError
+
+    error_cls = getattr(dj.errors, error_name)
+    # Asserted, not assumed: the whole point is that these ARE DataJointErrors
+    # and so WOULD have been swallowed by the previous root-level catch.
+    assert issubclass(error_cls, dj.DataJointError)
+    assert not issubclass(error_cls, KeyReuseError)
+
+    def boom(request, prefix=None):
+        raise error_cls("the database went away mid-write")
+
+    monkeypatch.setattr("wl_preproc.responder.jobs.accept", boom)
+
+    with pytest.raises(error_cls):
+        server_module._translate_accept_errors(object(), prefix=prefix)
+
+
+def test_a_lost_connection_error_through_the_real_seam_reaches_the_client_as_500(
+    start_server, monkeypatch, prefix
+):
+    """Review round 2's Important 1, end to end over a real socket through
+    the real `_translate_accept_errors` -- the production wiring, not a fake
+    `accept_fn`. A MySQL restart or a LAN blip mid-POST raises
+    `dj.errors.LostConnectionError` out of `jobs.accept`'s transaction; the
+    client must see `500` (which wl.works retries) and not `409` (which it
+    escalates to a human).
+
+    The counterpart is
+    `test_a_real_key_reuse_conflict_through_the_translation_seam_is_409`
+    below, which drives a REAL `KeyReuseError` out of a real
+    `_reject_key_reuse` against a real database and gets `409` through the
+    same seam. Together they pin both sides of the boundary end to end.
+    """
+    import wl_preproc.responder.server as server_module
+
+    def boom(request, prefix=None):
+        raise dj.errors.LostConnectionError("Connection was lost during a transaction.")
+
+    monkeypatch.setattr("wl_preproc.responder.jobs.accept", boom)
+
+    def accept_fn(request):
+        return server_module._translate_accept_errors(request, prefix=prefix)
+
+    base = start_server(TOKEN, _health_ok, accept_fn)
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=_valid_job_payload())
+
+    assert status == 500, f"a lost connection must be a retryable 500, not {status}"
+    text = body.decode("utf-8")
+    assert "Traceback" not in text
+    assert json.loads(body)["error"].startswith("LostConnectionError:")
+
+
 def test_a_datajoint_error_from_accept_fn_bypassing_translation_is_still_a_safe_500(start_server):
     """Defense in depth, not the documented mapping: `handler.py` imports
-    no DataJoint, so it cannot recognise a raw `dj.DataJointError` by name
-    at all -- `server.py`'s translation seam is what turns it into
-    `ConflictError` in production (`serve()` always wires `accept_fn`
-    through `_translate_accept_errors`), and this test deliberately
-    constructs the one shape that bypasses that seam, to prove the outcome
-    is still safe (a handled `500`, not a crash) rather than undefined.
-    See `test_a_conflict_error_from_accept_fn_is_409` for the actual `409`
-    mapping and `test_a_real_key_reuse_conflict_through_the_translation_
-    seam_is_409` for the real, translated, end-to-end path.
+    no DataJoint, so it cannot recognise a `dj.DataJointError` by name at
+    all. A bare `dj.DataJointError` is not what the seam translates anyway
+    (round 2's Important 1 narrowed that to `KeyReuseError` -- see
+    `test_translate_accept_errors_leaves_every_other_datajoint_error_alone`),
+    so this is `500` twice over: the seam declines to convert it AND the
+    handler could not recognise it if it arrived unconverted. This test
+    constructs the second shape directly -- an `accept_fn` that never went
+    through `server.py` at all -- to prove the outcome is a HANDLED `500`,
+    not a crash. See `test_a_conflict_error_from_accept_fn_is_409` for the
+    actual `409` mapping and
+    `test_a_real_key_reuse_conflict_through_the_translation_seam_is_409`
+    for the real, translated, end-to-end path.
     """
 
     def accept_fn(request):
@@ -686,7 +1094,15 @@ def test_nothing_ever_returns_a_traceback_regardless_of_input(start_server):
     itself raises an exception whose OWN message contains text that would
     look like part of a traceback, to make sure nothing downstream
     re-embeds it in a way that could be mistaken for one.
+
+    Round 2 extended the sweep past what `urllib` can construct: an
+    arbitrary method token (`BREW`, and a non-ASCII one), the four framing
+    errors stdlib raises from inside `parse_request`/`handle_one_request`
+    before any `do_*` method exists, and the `Content-Length` cap boundary
+    -- exactly `_MAX_CONTENT_LENGTH`, the largest value that clears both of
+    round 1's guards and still reaches `read()`.
     """
+    from wl_preproc.responder import handler as handler_module
 
     def accept_fn(request):
         raise RuntimeError('nested failure: File "/x.py", line 1, in <module>')
@@ -707,6 +1123,49 @@ def test_nothing_ever_returns_a_traceback_regardless_of_input(start_server):
         text = raw.decode("utf-8", errors="replace")
         assert "Traceback (most recent call last)" not in text, (url, method, status, text)
         json.loads(raw)  # every body, success or failure, is valid JSON
+
+    # Round 2's new input classes, over a raw socket because `urllib`
+    # constructs none of them: an arbitrary method token (including a
+    # non-ASCII one) and stdlib's own framing errors.
+    port = int(base.rsplit(":", 1)[1])
+    host = f"Host: 127.0.0.1:{port}\r\n"
+    auth = f"Authorization: Bearer {TOKEN}\r\n"
+    raw_probes = [
+        ("foreign verb", f"BREW /health HTTP/1.1\r\n{host}{auth}Connection: close\r\n\r\n".encode()),
+        ("non-ASCII verb", f"ÄÖ /health HTTP/1.1\r\n{host}{auth}Connection: close\r\n\r\n".encode()),
+        ("malformed request line", b"GARBAGE\r\n\r\n"),
+        ("bad http version", f"GET /health HTTP/9.9.9\r\n{host}\r\n".encode()),
+        ("http 2.0", f"GET /health HTTP/2.0\r\n{host}\r\n".encode()),
+        ("oversized header", f"GET /health HTTP/1.1\r\n{host}X-Big: ".encode() + b"a" * 70000 + b"\r\n\r\n"),
+        ("over-long request line", b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n"),
+    ]
+
+    # The Content-Length cap BOUNDARY -- exactly `_MAX_CONTENT_LENGTH`, the
+    # largest value that still clears BOTH of round 1's guards and is handed
+    # to `read()`. It needs its own server: on the shipped 30 s timeout this
+    # probe correctly outlives `_raw_http_response`'s own 3 s client
+    # deadline, which would read as "no response" here for the one reason
+    # that is not a defect. 0.25 s makes the 408 observable without changing
+    # which code path runs.
+    fast_base = start_server(TOKEN, _health_ok, accept_fn, timeout=0.25)
+    fast_port = int(fast_base.rsplit(":", 1)[1])
+    raw_probes.append(
+        (
+            "cap boundary, understated body",
+            f"POST /jobs HTTP/1.1\r\nHost: 127.0.0.1:{fast_port}\r\n{auth}"
+            f"Content-Length: {handler_module._MAX_CONTENT_LENGTH}\r\n"
+            f"Connection: close\r\n\r\n".encode() + b"{}",
+        )
+    )
+
+    for label, request_bytes in raw_probes:
+        target = fast_port if label.startswith("cap boundary") else port
+        raw = _raw_http_response(target, request_bytes)
+        assert raw, f"{label}: no response at all"
+        assert b"Traceback" not in raw, (label, raw[:300])
+        assert b"<html" not in raw.lower() and b"DOCTYPE" not in raw, (label, raw[:300])
+        payload = raw.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in raw else raw
+        json.loads(payload)  # every body, on every one of these paths, is valid JSON
 
 
 # --------------------------------------------------------------------------
@@ -843,11 +1302,13 @@ def test_the_same_request_posted_twice_over_http_returns_the_same_activation(
 def test_a_real_key_reuse_conflict_through_the_translation_seam_is_409(
     start_server, landed_session, prefix
 ):
-    """End-to-end proof of review Important 3's fix: a REAL
-    `dj.DataJointError` from `schema/request.py::_reject_key_reuse`,
-    through `server.py`'s real `_translate_accept_errors`, mapped by
-    `handler.py` to `409` -- the actual production seam, not the fake
-    `accept_fn` in `test_a_conflict_error_from_accept_fn_is_409` above.
+    """End-to-end proof of review round 1's Important 3 fix: a REAL
+    `KeyReuseError` from `schema/request.py::_reject_key_reuse`, through
+    `server.py`'s real `_translate_accept_errors`, mapped by `handler.py` to
+    `409` -- the actual production seam, not the fake `accept_fn` in
+    `test_a_conflict_error_from_accept_fn_is_409` above. The other side of
+    the boundary, over the same real seam, is
+    `test_a_lost_connection_error_through_the_real_seam_reaches_the_client_as_500`.
     """
     import wl_preproc.responder.server as server_module
 
@@ -1052,6 +1513,21 @@ def test_serve_shares_one_lock_held_for_the_whole_call_and_released_on_error(mon
         accept_fn(object())
     assert not accept_lock.locked(), "an exception from accept() must not leave the lock held"
 
+    # ...and the SAME property for health_fn -- review round 2's Important 2.
+    # Round 1 proved release-on-raise for accept_fn only, so mutating
+    # locked_health_fn into acquire / call / release-without-`try` left all
+    # 45 tests passing. Not hypothetical: `health.build_health`'s own
+    # `except Exception` wraps only `gather_readings`, while
+    # `available_actions(prefix=prefix)` touches the database entirely
+    # outside it -- a raise there leaks the process-wide lock and wedges
+    # every later request on this responder permanently, which is the exact
+    # failure this test's name promises to prevent.
+    monkeypatch.setattr("wl_preproc.responder.health.build_health", boom)
+    assert not health_lock.locked()
+    with pytest.raises(ValueError):
+        health_fn()
+    assert not health_lock.locked(), "an exception from build_health() must not leave the lock held"
+
 
 # --------------------------------------------------------------------------
 # serve() itself: real socket, real auth, wired to a real schema.
@@ -1119,19 +1595,67 @@ def test_serve_wires_health_end_to_end_on_a_real_server(monkeypatch, dj_conn, pr
         thread.join(timeout=5)
 
 
-def test_serve_refuses_to_start_on_a_non_ascii_token(tmp_path, prefix):
+def test_serve_refuses_to_start_on_a_non_ascii_token(monkeypatch, tmp_path, prefix):
     """Review Critical, the worse direction: a non-ASCII CONFIGURED token
     used to make every request fail authentication silently, correct token
     included, for as long as the process ran, with no HTTP-level error to
     diagnose ("an en-dash pasted from a document"). `serve()` now refuses
-    to start at all, loudly, before binding a socket or building anything
-    -- confirmed here that the refusal happens with no server left running
-    and no port left bound (a synchronous call that raises, not a
-    background thread that silently never becomes ready).
+    to start at all, loudly, before binding a socket or building anything.
+
+    The construction spy is review round 2's Minor 5. This test's docstring
+    already claimed "the refusal happens with no server left running and no
+    port left bound", but `pytest.raises(ValueError)` was its ONLY
+    assertion -- and that assertion is satisfied just as well by a guard
+    placed AFTER `ThreadingHTTPServer(...)`, which destroys exactly the
+    property being claimed and leaks a bound socket on every rejected
+    token. A test whose name and docstring assert a property its
+    assertions never check is this phase's third such test. Recording the
+    constructor calls is what makes the claim real.
+
+    It matters more now than it did in round 1: Minor 7 moved the guard
+    into `make_handler`, so `serve()`'s "nothing was constructed" property
+    now depends on `make_handler` being called before `ThreadingHTTPServer`
+    rather than on a raise in `serve()`'s own first statement. This test is
+    what holds that ordering in place.
     """
     import wl_preproc.responder.server as server_module
+
+    constructed = []
+    real_cls = server_module.ThreadingHTTPServer
+
+    class _RecordingServer(real_cls):
+        def __init__(self, *args, **kwargs):
+            constructed.append(args)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(server_module, "ThreadingHTTPServer", _RecordingServer)
 
     root = tmp_path / "scratch"
     root.mkdir()
     with pytest.raises(ValueError, match="non-ASCII"):
         server_module.serve(0, "en–dash-token", root, prefix)
+
+    assert constructed == [], (
+        "serve() constructed a ThreadingHTTPServer before refusing the token -- "
+        f"a socket was bound and leaked on the rejected path: {constructed!r}"
+    )
+
+
+def test_make_handler_itself_refuses_a_non_ascii_token(tmp_path):
+    """Review round 2's Minor 7: the guard belongs to `make_handler`, the
+    layer that cannot tolerate the value, not to `serve()`.
+
+    Before this, `make_handler` accepted a non-ASCII token without
+    complaint and handed back a handler that 401s every request -- INCLUDING
+    one carrying the correct token, since `hmac.compare_digest` raises
+    `TypeError` on the configured side too. Only `serve()` refused, so every
+    other caller (every test in this file among them) could build the
+    bricked handler silently. One guard, at the layer that owns the
+    constraint; `serve()` inherits it and keeps no copy of its own.
+    """
+    with pytest.raises(ValueError, match="non-ASCII"):
+        make_handler("en–dash-token", _health_ok, _unused)
+
+    # The ASCII neighbour still builds, so the guard is not simply refusing
+    # everything.
+    assert make_handler("en-dash-token", _health_ok, _unused) is not None

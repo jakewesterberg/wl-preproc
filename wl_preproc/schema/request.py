@@ -64,6 +64,42 @@ schema = dj.Schema()
 _ORIGIN_ENUM = "enum('ingest','wl_works','cli','auto')"
 
 
+class KeyReuseError(dj.DataJointError):
+    """An idempotency key reused for materially different content — see
+    ``_reject_key_reuse``, this module's only raiser. A caller's mistake that
+    resending cannot fix: the remedy is a NEW key, which is outside any retry
+    loop's power to produce (wl.works' Plan 10 section 6.1 mints one key per
+    accepted confirmation dialog and reuses it across every retry of that
+    intent, by design).
+
+    A dedicated subclass, not a bare ``dj.DataJointError``, for the same
+    reason ``paramset.ContentionExhausted`` is one: ``DataJointError`` is the
+    *root* of DataJoint's entire error tree — ``LostConnectionError``,
+    ``AccessError``, ``MissingTableError``, ``IntegrityError`` and
+    ``ThreadSafetyError`` all derive from it (confirmed against the installed
+    2.3.2 package). ``responder/server.py::_translate_accept_errors`` turns
+    exactly this type into the responder's ``409``; catching the root there
+    instead also answered ``409`` for a MySQL restart or a LAN blip mid-POST
+    (``LostConnectionError``, raised on the production write path, inside
+    ``submit()``'s transaction), telling wl.works to stop retrying and
+    escalate to a human for a fault their retry loop would have cleared on
+    its own. Every other ``dj.DataJointError`` this module raises is an
+    internal-invariant or infrastructure fault whose honest signal is ``500``.
+
+    Subclassing ``dj.DataJointError`` rather than ``Exception`` is equally
+    deliberate: every existing ``except dj.DataJointError`` — the ingest
+    watcher's, and ``tests/schema/test_request.py``'s NINE
+    ``pytest.raises(dj.DataJointError, match=...)`` assertions that land on
+    this raise site (lines 283, 291, 293, 335, 359, 384, 702, 732, 767; the
+    other eight in that file are not key reuse) — keeps catching it
+    unchanged, so narrowing the responder's seam changes nothing downstream
+    of it. Verified both ways: all nine pass with this type, and all nine
+    also pass with the raise reverted to the base class, which is exactly
+    why the responder needed its own end-to-end test rather than relying on
+    these.
+    """
+
+
 @schema
 class Request(dj.Manual):
     definition = f"""
@@ -310,7 +346,14 @@ def _reject_key_reuse(
         conflicts.append(f"selection {selection_key} vs {asked_before}")
 
     if conflicts:
-        raise dj.DataJointError(
+        # KeyReuseError, not a bare dj.DataJointError -- this is the ONE site
+        # in this module that raises it, and the only one that means "the
+        # caller must mint a new key" rather than "this host is broken". See
+        # KeyReuseError's own docstring for why the distinction has to be a
+        # type: responder/server.py's seam maps exactly this to 409, and the
+        # six other raise sites in this file (not-activated, in_transaction,
+        # empty block_ids, allocation exhaustion) must stay 500.
+        raise KeyReuseError(
             f"idempotency key {idempotency_key!r} is already recorded against a "
             "different request, so this is key reuse rather than a retry: "
             + "; ".join(conflicts)

@@ -52,9 +52,12 @@ that: `hmac.compare_digest` raises `TypeError: comparing strings with
 non-ASCII characters is not supported` for either `str` argument containing
 one, and both operands here were plain `str`. See `_authorized`'s own
 docstring for the fix (encode both sides to `bytes` first) and
-`server.py::serve`'s token validation, which now refuses to start at all on
-a non-ASCII CONFIGURED token rather than accepting one that silently bricks
-every request -- correct tokens included -- for as long as the process runs.
+`make_handler`'s own token validation, which now refuses to BUILD a handler
+at all from a non-ASCII CONFIGURED token rather than returning one that
+silently bricks every request -- correct tokens included -- for as long as
+the process runs. That guard sat in `server.py::serve` until round 2's
+Minor 7 moved it here, to the layer that cannot tolerate the value; `serve`
+inherits it and keeps no copy.
 
 ## Status codes -- every exception this boundary can see, and why
 
@@ -67,25 +70,28 @@ every request -- correct tokens included -- for as long as the process runs.
 |---|---|---|---|
 | Auth | missing/malformed-scheme/wrong `Authorization` | `401`, generic body | section 4.3; never `403` -- absence of *any* credential and presence of the *wrong* one are the same failure from the caller's side, not two |
 | Routing | path not `/health` or `/jobs` | `404` | design spec section 4.2 table: "Anything else is 404" |
-| Routing | right path, wrong method (including `GET /jobs`, `POST /health`, and every verb NEITHER endpoint answers -- `PUT`/`DELETE`/`HEAD`/`OPTIONS`/`PATCH`/`TRACE`) | `405` | section 9's own named case; a path that exists but does not answer this verb is a different fact than a path that does not exist. Every verb is explicitly handled (see `do_PUT` and its five aliases below) rather than left to fall through to `BaseHTTPRequestHandler`'s own default, which answers unauthenticated and discloses this host's interpreter version -- see "The other six verbs" below |
+| Routing | right path, wrong method (including `GET /jobs`, `POST /health`, and every verb NEITHER endpoint answers -- `PUT`/`DELETE`/`HEAD`/`OPTIONS`/`PATCH`/`TRACE`) | `405` | section 9's own named case; a path that exists but does not answer this verb is a different fact than a path that does not exist. Every verb is explicitly handled (see `do_PUT` and its five aliases below) rather than left to fall through to `BaseHTTPRequestHandler`'s own default, which answers unauthenticated and discloses this host's interpreter version -- see "Foreign verbs, and everything else stdlib answers by itself" below |
+| Routing | ANY other method token -- `CONNECT`, `PROPFIND`, `LINK`, `FOO`, `BREW`, `M-SEARCH`, lowercase `get` | `401`, generic body | reaches stdlib's `send_error(501, ...)`, which this class overrides. `401` and not `501`, matching the six aliases above exactly: an unauthenticated caller learns nothing about which verbs exist. See `send_error` below |
+| Request framing | a malformed request line, an over-long request line, an oversized header, a bad HTTP version -- all raised by stdlib inside `parse_request`/`handle_one_request`, before any `do_*` method runs | `400`/`414`/`431`/`505`, fixed JSON body | stdlib's own codes, kept; its HTML page and its `%r`-formatted echo of the caller's bytes, discarded. See `send_error` below |
+| Body read | `TimeoutError` -- the declared body never arrived within `_REQUEST_TIMEOUT_S` | `408` | RFC 9110 section 15.5.9. `socket.timeout` is an alias of `TimeoutError`, which is an `OSError` and NOT a `ValueError`, so it needs its own branch; without one it would be a `500`, and without the timeout at all it was an indefinite hang. See `_REQUEST_TIMEOUT_S` and `_parse_job_request` |
 | Body parsing | `json.JSONDecodeError` (bad JSON), `UnicodeDecodeError` (non-UTF-8 body), a non-digit or oversized `Content-Length` | `422` | all are `ValueError` -- confirmed directly against this project's installed Python/pydantic -- so a single `except ValueError` catches every one of them along with the two rows below, with no special-casing needed. See `_parse_job_request`'s own docstring for why `Content-Length` is validated with `str.isdigit()` rather than a bare `int(...)` |
 | Body parsing | `pydantic.ValidationError` from `JobRequest.model_validate` | `422`, with `.errors()` as `detail` | design spec section 4.2: "A malformed body is 422 with the pydantic error, never a traceback." `ValidationError` **is** a `ValueError` subclass in pydantic v2 -- confirmed directly -- so it falls through the identical `except ValueError` as the row above; no separate branch was needed, only a richer body for this one type |
 | `accept_fn` | `ValueError` (bad `selection` keys, an oversized subject, a block outside its montage window, an unknown block, a non-finite boundary, a malformed `session_datetime`, ...) | `422` | `responder/jobs.py::accept`'s own documented contract: "Raises `ValueError` for every rejection it owns." A well-formed JSON body asking for something `accept()` refuses is exactly as much "the caller's mistake" as a body that fails pydantic, so it shares the same status and the same catch clause |
-| `accept_fn` | `ConflictError` (this module's own type -- `dj.DataJointError` translated at `server.py`'s seam) | `409` | See "Why `DataJointError` maps to `409`" below |
-| `accept_fn` | `pymysql.err.DataError` / any other raw, untranslated `pymysql` exception, or a raw `dj.DataJointError` that reaches this module WITHOUT going through `server.py`'s translation seam | `500`, *handled* | Not a `ConflictError`, and this module still imports no DataJoint to recognise a raw `dj.DataJointError` by name -- both fall into the same generic, final `except Exception`, which is what makes either a **handled** 500 with a clean body, never an unhandled one with a real traceback |
+| `accept_fn` | `ConflictError` (this module's own type -- `schema/request.py::KeyReuseError` translated at `server.py`'s seam) | `409` | See "Why key reuse maps to `409`" below |
+| `accept_fn` | `pymysql.err.DataError` / any other raw, untranslated `pymysql` exception, or ANY `dj.DataJointError` other than `KeyReuseError` -- `LostConnectionError`, `AccessError`, `MissingTableError`, `IntegrityError`, `ThreadSafetyError` -- which `server.py`'s seam deliberately leaves untranslated | `500`, *handled* | Not a `ConflictError`, and this module still imports no DataJoint to recognise any of them by name -- they fall into the same generic, final `except Exception`, which is what makes each a **handled** 500 with a clean body, never an unhandled one with a real traceback. `500` is also the *correct* answer for every one of them: they are infrastructure faults a retry clears, and wl.works retries a `500` |
 | `accept_fn` / `health_fn` | anything else (`AttributeError`, `KeyError`, a genuine bug) | `500` | the blanket backstop. "Nothing may return a traceback to the client under any input" is unconditional, not "under every input this module's author thought of" |
 
-**Why `DataJointError` maps to `409`, not `422` or `500` -- corrected
+**Why key reuse maps to `409`, not `422` or `500` -- corrected
 2026-08-16 by review.** This module's first draft mapped it to `500`, for
 two reasons review found both wrong:
 
 1. *"This module cannot special-case it without importing DataJoint."* True
-   and irrelevant: `server.py` already imports DataJoint and already wraps
-   `jobs.accept` in a lock-holding closure before this module ever sees the
-   result (`locked_accept_fn`). That SAME seam can translate a real
-   `dj.DataJointError` into `ConflictError` -- a plain exception THIS
-   module defines with zero DataJoint dependency of its own -- so
-   `handler.py` stays exactly as DataJoint-free as before while still
+   and irrelevant: `server.py` already imports the schema layer and already
+   wraps `jobs.accept` in a lock-holding closure before this module ever
+   sees the result (`locked_accept_fn`). That SAME seam can translate a real
+   `schema/request.py::KeyReuseError` into `ConflictError` -- a plain
+   exception THIS module defines with zero DataJoint dependency of its own
+   -- so `handler.py` stays exactly as DataJoint-free as before while still
    distinguishing the case by name. See `server.py::_translate_accept_errors`.
 2. *"A caller needs a NEW idempotency key, which `422`'s 'fix and resend'
    phrasing does not capture -- so it should be `500` instead."* Correct
@@ -104,23 +110,35 @@ two reasons review found both wrong:
    wl.works' UI a basis to tell a human to reopen the confirmation dialog
    rather than to keep retrying automatically.
 
-**Only through the translation seam.** `ConflictError` is a real, catchable
-type in this module's own `except` clause, but nothing here ever raises it
-directly, and nothing here recognises a raw `dj.DataJointError` by name
-(this module still imports no DataJoint). An `accept_fn` that raised a raw
-`dj.DataJointError` WITHOUT going through `server.py`'s translation --
-`serve()` never does this, but a test can construct exactly that shape on
-purpose -- falls to the generic `except Exception` below and becomes a
-handled `500`, same as any other untranslated exception. That is deliberate
-defense in depth, not a second documented mapping: the one correct,
-intended path is `dj.DataJointError` -> `ConflictError` -> `409`, and it
-exists only because `server.py` performs that translation before this
-module ever sees the exception.
+**Only through the translation seam, and only for key reuse.**
+`ConflictError` is a real, catchable type in this module's own `except`
+clause, but nothing here ever raises it directly, and nothing here
+recognises any DataJoint exception by name (this module still imports no
+DataJoint). Two shapes therefore land on the generic `except Exception`
+below and become a handled `500`:
 
-**The other six verbs.** `GET`/`POST` are the only two `do_*` methods
-`BaseHTTPRequestHandler` would otherwise find defined here; every other
-verb (`PUT`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH`, `TRACE`, or anything else
-a client sends as a request line's method token) falls through to its own
+- an `accept_fn` that raised `KeyReuseError` WITHOUT going through
+  `server.py`'s translation -- `serve()` never does this, but a test can
+  construct exactly that shape on purpose;
+- **any other `dj.DataJointError`, even through the seam** --
+  `LostConnectionError`, `AccessError`, `MissingTableError`,
+  `IntegrityError`, `ThreadSafetyError`. Review round 2's Important 1: the
+  seam's first version caught `dj.DataJointError`, the root of that whole
+  tree, so every one of them answered `409`. `jobs.accept` writes inside a
+  transaction, so a MySQL restart or a LAN blip mid-POST raises
+  `LostConnectionError` on the production path -- and `409`, per the
+  paragraph above, is precisely the signal that tells wl.works to STOP
+  retrying and escalate to a human. Those are all infrastructure faults a
+  retry clears, so `500` is the honest answer and the seam now leaves them
+  alone.
+
+The one correct, intended `409` path is `KeyReuseError` -> `ConflictError`
+-> `409`, and it exists only because `server.py` performs that translation
+before this module ever sees the exception.
+
+**Foreign verbs, and everything else stdlib answers by itself.** `GET`/
+`POST` are the only two `do_*` methods `BaseHTTPRequestHandler` would
+otherwise find defined here; every other verb falls through to its own
 `send_error(501, "Unsupported method (...)")`, which runs BEFORE this
 module's auth check ever gets a chance to run, and which sends an HTML
 body containing `self.version_string()` -- this host's exact interpreter
@@ -129,11 +147,27 @@ header, unauthenticated. From a module whose sibling frozen contract
 (`contracts/protocol.py`) states "We refuse to emit markup at all," an
 HTML error page is already wrong in kind; doing it without checking the
 bearer token first, and with a version-fingerprintable header on literally
-every response including a `401`, compounds it. `do_PUT` and its five
-aliases below run this module's own auth-then-route logic for every one of
-those six verbs instead, and `server_version`/`sys_version` are both
-emptied so `version_string()` (used by the `Server` header on every
-response, this file's own included) discloses nothing.
+every response including a `401`, compounds it.
+
+Round 1 closed two thirds of this. `server_version`/`sys_version` are both
+emptied, so `version_string()` (used by the `Server` header on every
+response, this file's own included) discloses nothing -- that half is
+**fully** closed. `do_PUT` and its five aliases run this module's own
+auth-then-route logic for `PUT`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH` and
+`TRACE`. But six named verbs are not the class: round 2's Minor 6 measured
+`CONNECT`, `PROPFIND`, `LINK`, `FOO`, `BREW`, `M-SEARCH` and lowercase
+`get` all still getting the unauthenticated HTML 501 page, and no number of
+`do_*` aliases could ever have covered a method token that is by definition
+arbitrary. Nor would aliases reach the OTHER errors stdlib raises the same
+way, from inside `parse_request` and `handle_one_request`, before any
+`do_*` method exists to be dispatched to: `400` on a malformed request line
+or a bad HTTP version, `414` on an over-long request line, `431` on an
+oversized header, `505` on `HTTP/2.0`.
+
+`send_error` is therefore overridden to route every one of them through
+`_send_json` -- see its own docstring for what each code answers, why `501`
+becomes `401`, and the `parse_request` ordering trap the override has to
+survive.
 
 Nothing above inspects a traceback or ever sends one: every `500` body is
 `f"{type(exc).__name__}: {exc}"` -- the exact shape `responder/health.py`'s
@@ -169,12 +203,61 @@ _PATH_METHODS = {_HEALTH_PATH: "GET", _JOBS_PATH: "POST"}
 # 4.3, section 9's own named test), not merely unanswered by convention.
 _UNAUTHORIZED_BODY = {"error": "unauthorized"}
 
-# Content-Length cap -- review Important 4. A real JobRequest's metadata
-# (a session's montage boundaries and block list) is at most a few hundred
-# small JSON entries; 10 MB is generously larger than any legitimate body
-# while still being far too small for reading up to that many bytes to
-# itself become the resource-exhaustion problem this cap exists to prevent.
+# Content-Length cap -- review round 1's Important 4. A real JobRequest's
+# metadata (a session's montage boundaries and block list) is at most a few
+# hundred small JSON entries; 10 MB is generously larger than any legitimate
+# body.
+#
+# **This cap bounds MEMORY, and only memory** -- review round 2's Important
+# 3 corrected an earlier version of this comment which claimed 10 MB was
+# "far too small for reading up to that many bytes to itself become the
+# resource-exhaustion problem this cap exists to prevent". True of memory;
+# false of the resource a lying Content-Length actually exhausts, which is a
+# blocked handler THREAD. Any plain-digit value from 1 up to and including
+# _MAX_CONTENT_LENGTH that overstates the body still blocks
+# `self.rfile.read(length)` until the peer closes -- measured, 60 parked
+# requests parking 60 threads on an unbounded ThreadingHTTPServer. Thread
+# occupancy is bounded by _REQUEST_TIMEOUT_S below, not by this constant.
+# Two mechanisms, two resources; neither substitutes for the other.
 _MAX_CONTENT_LENGTH = 10_000_000
+
+# Socket timeout, in seconds, for every request this handler serves --
+# review round 2's Important 3. `BaseHTTPRequestHandler` inherits `timeout`
+# from `socketserver.StreamRequestHandler`, whose `setup()` calls
+# `self.connection.settimeout(self.timeout)` whenever it is not `None`
+# (confirmed at source on this project's Python 3.11 and on 3.13, which CI
+# also runs); the stdlib default is `None`, i.e. block forever. A class
+# attribute rather than a constructor argument because `setup()` runs from
+# inside `__init__` -- the same reason `_token`/`_health_fn`/`_accept_fn`
+# are class attributes (see `ResponderHandler`'s own comment).
+#
+# 30 s is chosen against what this endpoint actually serves: bodies here are
+# small JSON over a lab LAN, and there is no legitimate slow client to
+# break -- one known caller (wl.works) polling every few minutes. The
+# process runs unattended on a lab host from January 2027, so a request that
+# can park a handler thread until the peer feels like closing is worth
+# closing behaviourally even though it is bounded (the lock is NOT held
+# during the body read, so the responder keeps serving) and even though it
+# predates round 1 rather than being introduced by it.
+_REQUEST_TIMEOUT_S = 30.0
+
+# Fixed bodies for the error codes `BaseHTTPRequestHandler` raises through
+# `send_error()` itself, before or outside any `do_*` method -- review round
+# 2's Minor 6. Keyed on the status code alone and **echoing no request data
+# whatsoever**: stdlib's own default formats the offending method token or
+# request line into both the HTML body and the response's reason phrase
+# (measured: `HTTP/1.0 501 Unsupported method ('CONNECT')`). 501 is absent
+# on purpose -- see `send_error`'s override, which answers it as 401.
+_SEND_ERROR_BODIES = {
+    400: {"error": "bad request"},
+    414: {"error": "request line too long"},
+    431: {"error": "request header fields too large"},
+    505: {"error": "http version not supported"},
+}
+
+# Anything else stdlib might route through `send_error` in a future Python:
+# still JSON, still no request data, still no markup.
+_SEND_ERROR_FALLBACK_BODY = {"error": "request rejected"}
 
 
 class ConflictError(Exception):
@@ -182,17 +265,17 @@ class ConflictError(Exception):
     never directly by this DataJoint-free module -- for a request that
     conflicts with state already on record: today, specifically,
     `schema/request.py::_reject_key_reuse` refusing an idempotency key
-    reused for materially different content. Maps to `409`, not `422` or
-    `500` -- see the module docstring's "Why `DataJointError` maps to
-    `409`" section for the full reasoning.
+    reused for materially different content, which raises that module's own
+    `KeyReuseError`. Maps to `409`, not `422` or `500` -- see the module
+    docstring's "Why key reuse maps to `409`" section for the full
+    reasoning.
 
     Deliberately a plain `Exception` subclass with no DataJoint dependency
     of its own, defined HERE rather than in `server.py`: this module owns
     the vocabulary of exceptions it maps to specific status codes (a bare
     `ValueError` -> `422`, this -> `409`, anything else -> `500`), and
-    `server.py` imports this one name to translate a real
-    `dj.DataJointError` into it at the one seam permitted to know both
-    vocabularies.
+    `server.py` imports this one name to translate a real `KeyReuseError`
+    into it at the one seam permitted to know both vocabularies.
     """
 
 
@@ -250,7 +333,32 @@ def make_handler(
     (`_parse_job_request` below) precisely because doing so needs only
     `json` and `contracts.protocol.JobRequest`, neither of which is
     DataJoint, so there is no reason to push it below this boundary.
+
+    Raises `ValueError` immediately, before building anything, if `token`
+    contains a non-ASCII character -- review round 2's Minor 7. The guard
+    lives HERE, not in `server.py::serve`, because this is the layer that
+    cannot tolerate the value: `_authorized` below compares it with
+    `hmac.compare_digest`, which raises `TypeError` for a non-ASCII `str`
+    operand, so a handler built from such a token 401s every request
+    including the correct one. `serve()` used to hold the only copy, which
+    left `make_handler` accepting the value happily for every other caller
+    (every test in `tests/responder/test_http.py` among them). `serve()`
+    inherits this refusal for free -- it calls `make_handler` before
+    constructing `ThreadingHTTPServer`, so its own "refuses before binding
+    anything" property is unchanged -- and there is deliberately no second
+    copy of the check there, because a second copy is a second place for it
+    to go missing.
     """
+    if not token.isascii():
+        raise ValueError(
+            "the configured bearer token contains a non-ASCII character; "
+            "hmac.compare_digest cannot compare it (see "
+            "ResponderHandler._authorized's own docstring), which would make "
+            "every request fail authentication silently, correct token "
+            "included -- refusing to build a handler rather than returning "
+            "one that bricks this endpoint with no HTTP-level error to "
+            "diagnose"
+        )
 
     class ResponderHandler(BaseHTTPRequestHandler):
         # Class attributes, not instance attributes set in an overridden
@@ -281,6 +389,14 @@ def make_handler(
         # host's exact interpreter patch version to an unauthenticated caller.
         server_version = ""
         sys_version = ""
+
+        # Review round 2's Important 3. Read by
+        # socketserver.StreamRequestHandler.setup(), which runs from inside
+        # __init__ -- hence a class attribute, like everything above. See
+        # _REQUEST_TIMEOUT_S's own comment for why 30 s and what it bounds
+        # (thread occupancy) as against what _MAX_CONTENT_LENGTH bounds
+        # (memory).
+        timeout = _REQUEST_TIMEOUT_S
 
         # -- auth --------------------------------------------------------
 
@@ -334,9 +450,10 @@ def make_handler(
             non-ASCII CONFIGURED token (an en-dash pasted from a document,
             say) made every request fail this exact way, correct token
             included, silently and permanently for as long as the process
-            ran. `server.py::serve` now refuses to start at all on such a
-            token rather than accepting one that bricks the endpoint with
-            no HTTP-level error to diagnose.
+            ran. `make_handler` now refuses to build a handler at all from
+            such a token rather than returning one that bricks the endpoint
+            with no HTTP-level error to diagnose -- and `server.py::serve`,
+            which calls it before binding anything, inherits that refusal.
             """
             candidate = self._bearer_token()
             if candidate is None:
@@ -367,6 +484,88 @@ def make_handler(
                 status = 500
                 body = b'{"error": "internal error"}'
             self._write_response(status, body)
+
+        def send_error(self, code, message=None, explain=None) -> None:
+            """Every error `BaseHTTPRequestHandler` raises on its own --
+            outside, or before, any `do_*` method -- routed through
+            `_send_json` instead of stdlib's HTML page. Never calls
+            `super().send_error`. Review round 2's Minor 6.
+
+            Round 1 closed the version-disclosure half of this (see
+            `server_version`/`sys_version` above) and gave the six commonest
+            foreign verbs their own `do_*` aliases. Neither closed the
+            **class**: any method token outside those six -- `CONNECT`,
+            `PROPFIND`, `LINK`, `FOO`, `BREW`, `M-SEARCH`, lowercase `get`
+            -- still reached stdlib's `send_error(501, ...)` and got an
+            unauthenticated HTML page (all seven measured directly). From a
+            module whose sibling frozen contract (`contracts/protocol.py`)
+            says "We refuse to emit markup at all", that is wrong in kind;
+            the page's distinctive shape also fingerprints the stack even
+            with the version string emptied. An override closes every such
+            path at once, including ones no `do_*` alias could reach --
+            stdlib calls `send_error` from `parse_request` and
+            `handle_one_request` too.
+
+            **501 answers 401**, with the identical `_UNAUTHORIZED_BODY` the
+            six explicit aliases already return. That is the consistent
+            answer rather than a liberty: those six answer `401` before
+            routing precisely so an unauthenticated caller learns nothing
+            about which verbs this host answers, and a seventh, unknown verb
+            replying `501` is what would be inconsistent -- it says "that
+            method is not implemented here", which is exactly the fact the
+            other six decline to disclose.
+
+            One asymmetry that leaves, stated rather than glossed: an
+            AUTHENTICATED `PUT /health` gets `405` (its `do_PUT` alias runs
+            this module's real auth-then-route logic), while an
+            authenticated `BREW /health` gets `401` -- measured both ways.
+            `send_error` cannot tell those apart, because it does not know
+            whether auth passed and cannot find out: on the `parse_request`
+            failure paths it is also called from, `self.headers` is
+            precisely what failed to parse, so calling `_authorized()` here
+            would raise on the one path this override most needs to survive.
+            `401` is the safe direction of that trade -- it discloses less,
+            to a caller who asked for a method that does not exist.
+
+            **Every other code keeps its own value** (400 malformed request
+            line, 414 over-long request line, 431 oversized header, 505 bad
+            version) with a fixed body from `_SEND_ERROR_BODIES`, keyed on
+            the code alone. `message`/`explain` are accepted and DISCARDED:
+            stdlib formats the offending method token or request line into
+            both with `%r`, and echoing attacker-controlled bytes back is
+            the thing this override exists to stop. They stay in the
+            signature because stdlib calls this positionally with two and
+            three arguments.
+
+            **The ordering trap**, checked rather than assumed:
+            `parse_request` calls `send_error` before `self.command` exists
+            (it is `None` there), so anything this path touches must already
+            be set. `_send_json` -> `_write_response` -> `send_response`
+            reads `self.requestline` (via `log_request`) and
+            `self.request_version` (via `send_response_only`); both are
+            assigned in `parse_request`'s first three lines, before any
+            `send_error` call in it. Confirmed on a live socket for all of:
+            a malformed request line, an over-long request line, an
+            oversized header, `HTTP/9.9.9`, `HTTP/2.0`, and seven foreign
+            method tokens.
+
+            **One stdlib behaviour this does NOT change**: on the two paths
+            where `parse_request` fails before it has learned the request
+            version -- a malformed request line, and a bad version string --
+            `self.request_version` is still the `HTTP/0.9` placeholder, and
+            stdlib's `send_response_only`/`end_headers` are both no-ops for
+            HTTP/0.9. Measured: those responses carry **no status line and
+            no headers at all**, only a body, before this fix and after it.
+            The improvement there is that the lone body is now a fixed JSON
+            object rather than an HTML page quoting the caller's own bytes;
+            conveying the status code on those two paths would mean
+            overriding stdlib's version semantics, which is a different
+            change from this one.
+            """
+            if code == 501:
+                self._send_json(401, _UNAUTHORIZED_BODY)
+                return
+            self._send_json(code, _SEND_ERROR_BODIES.get(code, _SEND_ERROR_FALLBACK_BODY))
 
         # -- routing --------------------------------------------------------
 
@@ -436,8 +635,8 @@ def make_handler(
                 request = self._parse_job_request()
                 result = self._accept_fn(request)
             except ConflictError as exc:
-                # Review Important 3 -- see module docstring's "Why
-                # DataJointError maps to 409" section. ConflictError and
+                # Review Important 3 -- see module docstring's "Why key
+                # reuse maps to 409" section. ConflictError and
                 # ValueError both inherit only from Exception, so their
                 # relative order below does not change which one catches
                 # what; it is ordered to match the docstring table's own
@@ -451,9 +650,34 @@ def make_handler(
                 # Python/pydantic) -- one branch, not several. See the
                 # module docstring's table.
                 self._send_json(422, _error_body(exc))
+            except TimeoutError:
+                # The body never arrived within _REQUEST_TIMEOUT_S -- review
+                # round 2's Important 3. NOT covered by the ValueError branch
+                # above: `socket.timeout` has been an alias of `TimeoutError`
+                # since 3.10 and `TimeoutError` is an `OSError` (confirmed
+                # directly on 3.11 and 3.13), so it would otherwise fall to
+                # the generic 500 below -- or, worse, on a request-line read
+                # it never reaches this module at all and CPython's own
+                # `handle_one_request` catches it, logs one line and closes
+                # the socket with NO HTTP RESPONSE AT ALL, which is the same
+                # client-visible shape as the hang this timeout exists to
+                # end. 408 is the status RFC 9110 section 15.5.9 defines for
+                # exactly this ("did not produce a request within the time
+                # that the server was prepared to wait").
+                #
+                # Writing this 408 to a peer that has already stalled may
+                # ITSELF time out. That is deliberately not guarded: the
+                # exception propagates out of do_POST into stdlib's
+                # `except TimeoutError`, which logs and closes -- the right
+                # outcome for a peer that is no longer reading, and one
+                # fewer nested guard here than a second try/except would add.
+                self._send_json(408, {"error": "request timed out"})
             except Exception as exc:  # noqa: BLE001 -- see module docstring's table
-                # dj.DataJointError NOT translated to ConflictError (defense
-                # in depth -- see "Only through the translation seam" in the
+                # Any dj.DataJointError that is not KeyReuseError (the seam
+                # deliberately leaves those alone -- a lost connection is a
+                # retryable infrastructure fault, not a conflict), a
+                # KeyReuseError that bypassed the seam entirely (defense in
+                # depth -- see "Only through the translation seam" in the
                 # module docstring), a raw untranslated pymysql error, or a
                 # genuine bug -- all land here, all become a HANDLED 500
                 # with a safe body.
@@ -465,47 +689,84 @@ def make_handler(
             """The request body as a validated `JobRequest`. Raises
             `ValueError` (via this method's own `Content-Length` checks,
             `json.loads`, `bytes.decode`, or `JobRequest.model_validate`)
-            for anything malformed -- never anything else, so `do_POST`'s
-            single `except ValueError` is a complete catch for every way
-            this can fail.
+            for anything malformed, and `TimeoutError` if the body does not
+            arrive within `_REQUEST_TIMEOUT_S` -- so `do_POST`'s
+            `except ValueError` plus `except TimeoutError` between them
+            cover every way this can fail.
 
             `Content-Length` is validated with `str.isdigit()` before
             `int(...)` is ever called on it, and the resulting integer is
             capped at `_MAX_CONTENT_LENGTH` before `self.rfile.read(...)`
-            is ever called with it -- review Important 4, three real,
-            ordinary-looking inputs that used to each hang this request's
-            handler thread forever (never responding, not even with an
-            error) rather than reaching any of this module's status-code
-            handling at all:
+            is ever called with it -- review round 1's Important 4, four
+            real, ordinary-looking inputs. **Two hung the handler thread
+            forever; the OTHER TWO answered `500` in 0.00 s.** Round 2's
+            Minor 4 corrected an earlier version of this paragraph which
+            said all four "used to each hang this request's handler thread
+            forever (never responding, not even with an error)" -- it
+            contradicted itself inside its own third bullet, which describes
+            an `OverflowError`, and an `OverflowError` produces a response.
+            Re-measured against unfixed parsing (no `isdigit()` guard, no
+            cap), a 2-byte body, a 3 s client deadline:
 
-            - `Content-Length: -1` -- `int("-1")` succeeds (`-1`), and
-              `self.rfile.read(-1)` reads until the PEER closes the
+            ```
+            CL='-1'                    -> no response at all (hang)
+            CL='1_2'                   -> no response at all (hang)
+            CL='8000000000'            -> 500 in 0.00s
+            CL='100000000000000000000' -> 500 in 0.00s
+            ```
+
+            - `Content-Length: -1` -- **hang.** `int("-1")` succeeds (`-1`),
+              and `self.rfile.read(-1)` reads until the PEER closes the
               connection, which a live HTTP client never does on its own.
-            - `Content-Length: 1_2` -- `int("1_2") == 12` (Python's
-              underscore-in-int-literal grammar applies to `int(str)` too),
-              silently reinterpreting a header that is not valid HTTP
-              (whose grammar is `Content-Length = 1*DIGIT`, no underscore)
-              as a request to read 12 bytes of what is actually a 7-byte
-              body -- `read()` then blocks waiting for 5 bytes that are
+            - `Content-Length: 1_2` -- **hang.** `int("1_2") == 12`
+              (Python's underscore-in-int-literal grammar applies to
+              `int(str)` too), silently reinterpreting a header that is not
+              valid HTTP (whose grammar is `Content-Length = 1*DIGIT`, no
+              underscore) as a request to read 12 bytes of a body that is
+              shorter than that -- `read()` then blocks for bytes that are
               never coming.
-            - `Content-Length: 100000000000000000000` (10**20) -- `int(...)`
-              itself succeeds (Python integers are arbitrary-precision), but
+            - `Content-Length: 8000000000` (8 GB, in range for a Python
+              int) -- **misclassified `500`**, not a hang. `read()` raises
+              `OSError: [Errno 22] Invalid argument` immediately. An earlier
+              version of this bullet attributed that to "the underlying
+              buffered reader trying to allocate that much"; measured, it is
+              a plain `EINVAL` on the read size, and nothing tries to
+              allocate 8 GB -- `io.BytesIO(b"hi").read(8000000000)` returns
+              at once with no error and no allocation.
+            - `Content-Length: 100000000000000000000` (10**20) --
+              **misclassified `500`**, not a hang. `int(...)` itself
+              succeeds (Python integers are arbitrary-precision), but
               `self.rfile.read(...)` converts its argument to a C
-              `Py_ssize_t` internally and raises `OverflowError` for a value
-              past `sys.maxsize` -- confirmed directly. A merely large but
-              in-range value (`8000000000`, 8 GB) instead raises `OSError`
-              from the underlying buffered reader trying to allocate that
-              much.
+              `Py_ssize_t` internally and raises `OverflowError: cannot fit
+              'int' into an index-sized integer` for a value past
+              `sys.maxsize`.
+
+            So the defect this cap fixed was two different defects: two
+            genuine hangs, and two host-fault `500`s for what is plainly a
+            malformed request from the caller (`422`).
 
             `str.isdigit()` rejects the first two outright (a leading `-`
             and an underscore are both not digits) before `int()` is ever
-            called; the cap rejects the third and fourth before
-            `self.rfile.read(...)` is ever called with an attacker- or
-            bug-controlled size, regardless of whether that size would have
-            raised, hung, or merely consumed unreasonable memory. A missing
-            header reads as `"0"` (`self.headers.get`'s own default, a
-            digit string) -- an empty body then fails at `json.loads(b"")`,
-            still a `ValueError`, just one step later.
+            called; the cap rejects the last two before
+            `self.rfile.read(...)` is ever called with them.
+
+            **What the cap does NOT bound** -- round 2's Important 3.
+            Any plain-digit `Content-Length` from 1 up to and INCLUDING
+            `_MAX_CONTENT_LENGTH` passes both checks and is passed straight
+            to `self.rfile.read(length)`; if it overstates the body, that
+            read blocks until the peer closes. So for every size in that
+            range the size *is* attacker-controlled and *is* handed to
+            `read()`. An earlier version of this docstring claimed the cap
+            "rejects the third and fourth before `self.rfile.read(...)` is
+            ever called with an attacker- or bug-controlled size" -- true
+            only of sizes above the cap. The cap bounds how much memory one
+            request can ask this host to buffer; `_REQUEST_TIMEOUT_S` is
+            what bounds how long a request can occupy a handler thread, and
+            a lying `Content-Length` under the cap is answered `408` by it.
+
+            A missing header reads as `"0"` (`self.headers.get`'s own
+            default, a digit string) -- an empty body then fails at
+            `json.loads(b"")`, still a `ValueError`, just one step later.
             """
             raw_length = self.headers.get("Content-Length", "0")
             if not raw_length.isdigit():
@@ -527,10 +788,18 @@ def make_handler(
         # method" handling, which runs before any subclass code at all and
         # sends an UNAUTHENTICATED, non-JSON HTML error page disclosing
         # this host's exact interpreter patch version (see the module
-        # docstring's "The other six verbs"). Every one of these always
-        # ends in 401, 404 or 405, never 200: _PATH_METHODS never maps any
-        # path to any of these six verbs, so _route_or_none can never
-        # return None for them.
+        # docstring's "Foreign verbs, and everything else stdlib answers by
+        # itself"). Every one of these always ends in 401, 404 or 405, never
+        # 200: _PATH_METHODS never maps any path to any of these six verbs,
+        # so _route_or_none can never return None for them.
+        #
+        # These six ALIASES are not what closes the class -- send_error's
+        # override above is (round 2's Minor 6), and it would give each of
+        # these six a 401 too if the alias were deleted. They are kept
+        # because they are strictly better for the six verbs a real client
+        # actually sends: an authenticated caller gets 404 or 405, the
+        # honest routing answer, where send_error's blanket 501-becomes-401
+        # would tell an authenticated caller nothing at all.
         def do_PUT(self) -> None:
             if not self._authorized():
                 self._send_json(401, _UNAUTHORIZED_BODY)

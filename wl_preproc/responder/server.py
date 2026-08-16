@@ -72,21 +72,38 @@ spec section 4.4: "The health endpoint's reads and the job endpoint's writes
 take the same lock") -- reason 1 above applies to any concurrent use of the
 one shared connection, reads included, not only to writes.
 
-## The `dj.DataJointError` -> `ConflictError` translation seam
+## The `KeyReuseError` -> `ConflictError` translation seam
 
 This module is the only place in `responder/` permitted to know both
-vocabularies: DataJoint's (it already imports `datajoint`) and
-`handler.py`'s own small set of exceptions that map to specific status
-codes. `_translate_accept_errors` below is that seam -- review Important 3
-found the first draft had put the reasoning for "why not `422`" in
-`handler.py` but the actual FIX nowhere, since `handler.py` cannot catch
-`dj.DataJointError` by name without importing DataJoint, which would defeat
-the entire point of it being DataJoint-free. See `handler.py`'s own "Why
-`DataJointError` maps to `409`" for the full reasoning (short version:
-wl.works reuses one idempotency key across retries of the same intent by
-design, so a `500` -- which invites a retry -- would retry with the
-identical key and hit the identical refusal forever; `409` signals a
-conflict for a human to resolve instead).
+vocabularies: the schema's (it imports `schema/request.py`'s own exception
+type) and `handler.py`'s own small set of exceptions that map to specific
+status codes. `_translate_accept_errors` below is that seam -- review round
+1's Important 3 found the first draft had put the reasoning for "why not
+`422`" in `handler.py` but the actual FIX nowhere, since `handler.py`
+cannot catch a schema-layer exception by name without importing DataJoint
+transitively, which would defeat the entire point of it being
+DataJoint-free. See `handler.py`'s own "Why key reuse maps to `409`" for
+the full reasoning (short version: wl.works reuses one idempotency key
+across retries of the same intent by design, so a `500` -- which invites a
+retry -- would retry with the identical key and hit the identical refusal
+forever; `409` signals a conflict for a human to resolve instead).
+
+**The seam catches `KeyReuseError`, not `dj.DataJointError` -- review round
+2's Important 1.** The first version of this seam caught the root of
+DataJoint's entire error tree, which made `LostConnectionError`,
+`AccessError`, `MissingTableError`, `IntegrityError` and `ThreadSafetyError`
+all answer `409` (measured, driven through this real seam). That is worse
+than the `500` it replaced for exactly the class of fault that matters most
+on the production path: `jobs.accept` writes inside a transaction, so a
+MySQL restart or a LAN blip mid-POST raises `LostConnectionError`, and a
+`409` -- which `handler.py` documents as "a request that cannot succeed as
+sent, whose remedy is outside the retry loop" -- stops wl.works retrying
+and escalates to a human for a fault a retry would have cleared. The remedy
+is a dedicated type at the one raise site that means key reuse (see
+`schema/request.py::KeyReuseError`), NOT `if type(exc) is not
+dj.DataJointError: raise`, which silently re-widens the moment anyone
+subclasses and would still map `submit()`'s own base-class invariant guards
+to `409`.
 
 ## The configured token must be ASCII
 
@@ -102,6 +119,20 @@ into a loud, immediate, at-the-source failure -- the token is operator
 input (an environment variable, per Task 9), and operator input that would
 otherwise brick the one endpoint this host exposes is exactly what a
 refusal-to-start exists for.
+
+**The check lives in `handler.py::make_handler`, not here -- review round
+2's Minor 7.** `serve()` held the only copy until then, which meant
+`make_handler` itself accepted a non-ASCII token happily and returned a
+handler that 401s every request including the correct one; every caller
+that is not `serve()` -- every test in `tests/responder/test_http.py` among
+them -- got that handler with no complaint. `make_handler` is the layer
+that cannot tolerate the value, so it is the layer that refuses it.
+`serve()` inherits the refusal because it calls `make_handler` BEFORE
+constructing `ThreadingHTTPServer`, so "refuses before binding a socket"
+still holds -- `test_serve_refuses_to_start_on_a_non_ascii_token` asserts
+that no server is ever constructed, which is what keeps that property
+honest now that the raise happens one call deeper. There is deliberately no
+second copy here: a second copy is a second place for it to go missing.
 """
 
 from __future__ import annotations
@@ -110,27 +141,33 @@ import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import datajoint as dj
-
 from wl_preproc.responder import health, jobs
 from wl_preproc.responder.handler import ConflictError, make_handler
 from wl_preproc.schema import DEFAULT_PREFIX
+from wl_preproc.schema.request import KeyReuseError
 
 
 def _translate_accept_errors(request, *, prefix: str) -> dict:
-    """`jobs.accept(request, prefix=prefix)`, translating `dj.DataJointError`
-    (and every subclass) into `handler.py`'s own `ConflictError`.
+    """`jobs.accept(request, prefix=prefix)`, translating
+    `schema/request.py`'s `KeyReuseError` -- and nothing else -- into
+    `handler.py`'s own `ConflictError`.
+
+    `KeyReuseError`, NOT its base `dj.DataJointError`: see that class's own
+    docstring and this module's "translation seam" section. Every other
+    member of DataJoint's error tree propagates untouched and becomes a
+    handled `500` in `handler.py`'s generic backstop, which is what
+    wl.works' retry loop is built to handle.
 
     A module-level function, not inlined into `locked_accept_fn` below, so
     it is directly unit-testable with no lock, no thread and no real
     database: monkeypatch `wl_preproc.responder.jobs.accept` to raise a
-    `dj.DataJointError`, call this function directly, and confirm a
-    `ConflictError` comes out instead. See this module's own docstring,
-    "The `dj.DataJointError` -> `ConflictError` translation seam".
+    `KeyReuseError`, call this function directly, and confirm a
+    `ConflictError` comes out instead -- and monkeypatch it to raise a
+    `dj.errors.LostConnectionError` to confirm one does NOT.
     """
     try:
         return jobs.accept(request, prefix=prefix)
-    except dj.DataJointError as exc:
+    except KeyReuseError as exc:
         raise ConflictError(str(exc)) from exc
 
 
@@ -148,7 +185,10 @@ def serve(
 
     Raises `ValueError` immediately, before binding anything, if `token`
     contains a non-ASCII character -- see this module's own docstring,
-    "The configured token must be ASCII".
+    "The configured token must be ASCII". The check itself lives in
+    `handler.py::make_handler`, which this function calls before
+    constructing `ThreadingHTTPServer`; there is deliberately no second copy
+    of it here.
 
     Blocks forever in `ThreadingHTTPServer.serve_forever()`. `ready`, when
     given, is set once the socket is bound and listening but before the
@@ -160,17 +200,6 @@ def serve(
     a caller needing that reads it off the constructed server, not off this
     function's return value (`None`).
     """
-    if not token.isascii():
-        raise ValueError(
-            "the configured bearer token contains a non-ASCII character; "
-            "hmac.compare_digest cannot compare it (see "
-            "handler.py::ResponderHandler._authorized's own docstring), "
-            "which would make every request fail authentication silently, "
-            "correct token included -- refusing to start rather than "
-            "accepting a token that bricks this endpoint with no HTTP-level "
-            "error to diagnose"
-        )
-
     lock = threading.Lock()
 
     def locked_health_fn():
