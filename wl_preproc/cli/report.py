@@ -11,6 +11,7 @@ Reads and never writes.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from pathlib import Path
 
@@ -179,11 +180,40 @@ def _quarantine_lines(row: dict, new_since: datetime.datetime) -> list[str]:
     return [head, f"  - {detail}"] if detail else [head]
 
 
-def build_report(
+@dataclasses.dataclass(frozen=True, slots=True)
+class Readings:
+    """Everything both renderings need, computed once.
+
+    `build_report` turns this into Markdown; the responder turns it into
+    `protocol.Reading` rows. Neither computes anything itself -- that is the
+    entire reason this type exists rather than each caller doing its own
+    queries, and it is the same move that pulled `scratch_headroom` out of
+    `doctor.run_checks()` when the report needed the same number.
+    """
+
+    at: datetime.datetime
+    ingested: list[dict]
+    quarantined: list[dict]
+    stalled: list[tuple[Path, list[str]]]
+    walk_error: str | None
+    stale_jobs: int | None
+    free_gib: int
+    headroom_ok: bool
+    disk_error: str | None
+
+
+def gather_readings(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
     now: datetime.datetime | None = None,
-) -> str:
+) -> Readings:
+    """The numbers. `build_report` and the responder's `build_health` both
+    render this rather than querying anything themselves -- see `Readings`.
+
+    Reads and never writes, the same guarantee `build_report` has always
+    carried (`test_the_report_opens_no_write_transaction`,
+    `test_gather_readings_does_not_write`).
+    """
     from wl_preproc.contracts.manifest import SessionManifest
     from wl_preproc.contracts.paths import MANIFEST_FILENAME, SessionLayout
     from wl_preproc.daemon import count_stale_jobs
@@ -243,14 +273,12 @@ def build_report(
     recent = (ingest.Ingestion & f"ingested_at > '{since:%Y-%m-%d %H:%M:%S}'").to_dicts()
 
     q_since = landing.to_naive_utc(at - datetime.timedelta(days=_QUARANTINE_WINDOW_DAYS))
-    q_new_since = landing.to_naive_utc(at - datetime.timedelta(hours=_QUARANTINE_NEW_HOURS))
     q_window = f"failed_at > '{q_since:%Y-%m-%d %H:%M:%S}'"
     quarantined = sorted(
         (ingest.Quarantine & q_window).to_dicts(),
         key=lambda row: row["failed_at"],
         reverse=True,
     )
-    older_quarantines = len(ingest.Quarantine & f"failed_at <= '{q_since:%Y-%m-%d %H:%M:%S}'")
 
     candidates, root_fault = _candidate_dirs(Path(root))
     stalled: list[tuple[Path, list[str]]] = []
@@ -278,6 +306,26 @@ def build_report(
             # stalled and knowing which rig to go look at.
             stalled.append((child, missing_systems(layout, manifest)))
 
+    # `walk_error` mirrors `ScanResult.root_error` (wl_preproc/ingest/watcher.py)
+    # exactly -- same construction, `f"{type}: {message}"` or `None` -- for the
+    # identical reason: "this root is genuinely empty/fine" and "this root
+    # could not be read at all" must never render identically.
+    #
+    # Kept as its own field rather than merged with the disk fault below (an
+    # earlier version of this function did merge them into one `root_error`,
+    # and review caught it by direct before/after comparison): `_candidate_
+    # dirs` needs to list `root`'s own entries (`iterdir`, which needs
+    # execute permission on `root` itself), while `scratch_headroom`'s
+    # `statvfs` needs only search permission on `root`'s PARENT to reach it
+    # -- not on `root` itself. So a `chmod 000` root fails the walk while the
+    # disk still reads fine, and the merged version rendered that real
+    # reading as "not measured", using the WALK's `PermissionError` for a
+    # disk probe that had, in fact, succeeded. That is the exact inversion
+    # `scratch_headroom`'s own docstring forbids ("must never fall back to a
+    # number" runs the other way here too: a measured disk must never fall
+    # back to looking unmeasured because of an unrelated fault). See
+    # `test_a_walk_fault_does_not_suppress_a_real_disk_reading`.
+    walk_error = f"{type(root_fault).__name__}: {root_fault}" if root_fault is not None else None
     try:
         # `root`, not `/`. `doctor.py` justifies the `/` proxy with "there is
         # no scratch-root configuration to check instead", which is true of
@@ -288,24 +336,73 @@ def build_report(
         # different disk than the one the question is about, on any host where
         # scratch is its own mount. `doctor`'s behaviour is unchanged.
         free_gib, headroom_ok = scratch_headroom(str(root))
-        disk = f"- scratch (`{root}`): {free_gib} GiB free {'(ok)' if headroom_ok else '(LOW)'}"
+        disk_error = None
     except OSError as exc:
         # A missing, unreadable, or unsearchable root reaches `statvfs` too,
         # and the whole point of the guarded walk above is that such a root
         # still produces a report. An unmeasurable disk says so; it must never
-        # fall back to a number, and least of all to one reading "(ok)".
-        disk = f"- scratch (`{root}`): **not measured** — {type(exc).__name__}: {exc}"
+        # fall back to a number, and least of all to one reading "(ok)" --
+        # `free_gib=0, headroom_ok=False` are placeholders `build_report`
+        # never renders on their own, only ever behind `disk_error`. Set
+        # independently of `walk_error`, never as a fallback for it -- see
+        # the comment above.
+        free_gib, headroom_ok = 0, False
+        disk_error = f"{type(exc).__name__}: {exc}"
 
-    stale = count_stale_jobs()
+    return Readings(
+        at=at,
+        ingested=recent,
+        quarantined=quarantined,
+        stalled=stalled,
+        walk_error=walk_error,
+        stale_jobs=count_stale_jobs(),
+        free_gib=free_gib,
+        headroom_ok=headroom_ok,
+        disk_error=disk_error,
+    )
+
+
+def build_report(
+    root: Path,
+    prefix: str = DEFAULT_PREFIX,
+    now: datetime.datetime | None = None,
+) -> str:
+    from wl_preproc.ingest import landing
+    from wl_preproc.schema import ingest
+
+    readings = gather_readings(root, prefix=prefix, now=now)
+    at = readings.at
+
+    # Two things `gather_readings` deliberately does not compute, because
+    # neither is a status number the responder needs -- both are markdown-
+    # display concerns of this renderer alone: `q_new_since` decides which of
+    # the ALREADY-FETCHED `readings.quarantined` rows get the "(new)" mark,
+    # and `older_quarantines` counts rows the window already excluded from
+    # that same list. Both are cheap and derived straight from `readings.at`
+    # (the second with one small COUNT query) -- neither is a second
+    # definition of anything `gather_readings` already answered.
+    q_since = landing.to_naive_utc(at - datetime.timedelta(days=_QUARANTINE_WINDOW_DAYS))
+    q_new_since = landing.to_naive_utc(at - datetime.timedelta(hours=_QUARANTINE_NEW_HOURS))
+    older_quarantines = len(ingest.Quarantine & f"failed_at <= '{q_since:%Y-%m-%d %H:%M:%S}'")
+
+    if readings.disk_error is not None:
+        disk = f"- scratch (`{root}`): **not measured** — {readings.disk_error}"
+    else:
+        disk = (
+            f"- scratch (`{root}`): {readings.free_gib} GiB free "
+            f"{'(ok)' if readings.headroom_ok else '(LOW)'}"
+        )
 
     lines = [f"# wl-preproc daily — {at:%Y-%m-%d}", ""]
 
-    lines += [f"## Ingested (24 h) — {len(recent)}", ""]
-    lines += [f"- `{row['session_dir']}` ({row['integrity']})" for row in recent] or ["- none"]
+    lines += [f"## Ingested (24 h) — {len(readings.ingested)}", ""]
+    lines += [
+        f"- `{row['session_dir']}` ({row['integrity']})" for row in readings.ingested
+    ] or ["- none"]
 
-    lines += ["", f"## Quarantined ({_QUARANTINE_WINDOW_DAYS} d) — {len(quarantined)}", ""]
-    if quarantined:
-        for row in quarantined:
+    lines += ["", f"## Quarantined ({_QUARANTINE_WINDOW_DAYS} d) — {len(readings.quarantined)}", ""]
+    if readings.quarantined:
+        for row in readings.quarantined:
             lines += _quarantine_lines(row, q_new_since)
     else:
         lines += ["- none"]
@@ -316,21 +413,22 @@ def build_report(
             f"so this section shows the last {_QUARANTINE_WINDOW_DAYS} days only._"
         ]
 
-    lines += ["", f"## Stalled transfers — {len(stalled)}", ""]
-    if root_fault is not None:
+    lines += ["", f"## Stalled transfers — {len(readings.stalled)}", ""]
+    if readings.walk_error is not None:
         # `_candidate_dirs` separates a per-child fault from one that
         # stopped it listing `root` at all -- only the second kind reaches
-        # here. The first kind is a known gap, not a covered one: a session
-        # directory that cannot be read is skipped silently inside
-        # `_candidate_dirs` itself, by both `wlpp ingest` (via `scan_once`)
-        # and `wlpp report` (via this same walk) -- no `Quarantine` row, no
-        # `Ingestion` row, no line anywhere in this report naming it. That
-        # is exactly the failure design section 4.3 built the whole
-        # stalled-transfer alarm to catch -- "a weekend's recording simply
-        # never appears, with nothing anywhere saying so" -- still true of
-        # this one path. The silence is `_candidate_dirs`'s own to fix, not
-        # this function's; named here rather than fixed here, so the next
-        # reader does not mistake it for handled.
+        # here (as `readings.walk_error`). The first kind is a known gap,
+        # not a covered one: a session directory that cannot be read is
+        # skipped silently inside `_candidate_dirs` itself, by both `wlpp
+        # ingest` (via `scan_once`) and `wlpp report` (via this same walk)
+        # -- no `Quarantine` row, no `Ingestion` row, no line anywhere in
+        # this report naming it. That is exactly the failure design section
+        # 4.3 built the whole stalled-transfer alarm to catch -- "a
+        # weekend's recording simply never appears, with nothing anywhere
+        # saying so" -- still true of this one path. The silence is
+        # `_candidate_dirs`'s own to fix, not this function's; named here
+        # rather than fixed here, so the next reader does not mistake it
+        # for handled.
         #
         # The second kind -- handled below -- means this count is whatever
         # could be read, not the whole root, and saying nothing would
@@ -338,14 +436,13 @@ def build_report(
         # holding no stalled transfer -- the same silence
         # `ScanResult.root_error` exists to break for the scan.
         lines += [
-            f"- **`{root}` was not fully scanned: "
-            f"{type(root_fault).__name__}: {root_fault}** — "
+            f"- **`{root}` was not fully scanned: {readings.walk_error}** — "
             "the count above covers only what could be read.",
         ]
     lines += [
         f"- `{path}` — missing: "
         + (", ".join(missing) if missing else "none (markers landed mid-scan)")
-        for path, missing in stalled
+        for path, missing in readings.stalled
     ] or ["- none"]
 
     lines += ["", "## Deferred (transient contention)", ""]
@@ -354,8 +451,8 @@ def build_report(
     lines += ["", "## Stuck jobs", ""]
     lines += [
         "- not checked (no schema activated in this process)"
-        if stale is None
-        else f"- {stale} stale reservation(s)"
+        if readings.stale_jobs is None
+        else f"- {readings.stale_jobs} stale reservation(s)"
     ]
 
     lines += ["", "## Disk", ""]

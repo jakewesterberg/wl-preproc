@@ -1,0 +1,223 @@
+"""`ThreadingHTTPServer` wiring, and the one lock. Design spec section 4.4,
+6.4. The only module in `responder/` that starts a server; `handler.py`
+supplies the class, `health.py`/`jobs.py` supply the two callables, this
+module ties them to a real socket and a real bearer token read from
+configuration rather than the repository (design spec section 4.3).
+
+## The lock is a correctness requirement, not only a thread-safety one
+
+`ThreadingHTTPServer` hands every request its own thread. Naively, that
+would mean two concurrent requests -- a `GET /health` and a `POST /jobs`, or
+two `POST /jobs` calls -- touching the database from two different threads
+at once. **This module serialises all of that behind one `threading.Lock`
+instead of ever letting that happen**, for two independent reasons, both
+verified this phase rather than assumed:
+
+1. **DataJoint connections are not shareable across threads.** `dj.conn()`
+   is a per-process singleton (`datajoint.instance`'s own docstring: "returns
+   the singleton connection"), and handing two threads into it concurrently
+   is not merely "racy" in the ordinary sense -- 1c-2's final review lost an
+   afternoon to a real four-thread probe that produced
+   `InternalError: Packet sequence number wrong`, and that failure was
+   **misdiagnosed as an ordinary race twice** before redoing the same probe
+   with separate OS *processes* (which do not share a connection) showed it
+   never reproduces that way, confirming the connection object itself, not
+   application logic, was what could not survive concurrent threads.
+   DataJoint 2.3.x does carry an opt-in guard for exactly this
+   (`dj.conn()` calls `_check_thread_safe()`, which raises `ThreadSafetyError`
+   instead of silently handing out the singleton) -- but it is gated on the
+   `DJ_THREAD_SAFE` environment variable, defaults to disabled, and nothing
+   in this project sets it (confirmed directly: grepping the repo finds no
+   reference, and calling `_check_thread_safe()` in this project's own
+   configuration does not raise). So today there is no safety net below this
+   lock at all; it is the only thing standing between two threads and one
+   connection, not a second layer behind one DataJoint already provides.
+2. **`responder/jobs.py::accept` validates an in-memory candidate before
+   writing it** (its own module docstring, review round 1's C1 fix): it
+   builds every `Montage`/`Block` row it would write, checks each one
+   against what is already on record plus its own other candidates, and
+   only then writes anything. That closes the earlier defect where a
+   rejected request could permanently plant the very row that caused its
+   own rejection -- but design spec section 6.4 records what it opens
+   instead: "validated" and "what is on file" can **diverge** if a second,
+   concurrent write lands in the gap between the check and the write.
+   Reproduced deterministically (a rival connection inserting an
+   out-of-window boundary between the two) -- not a hypothetical. Section
+   6.4 also records why this cannot be fixed by re-ordering: validate-after
+   -write is safe against exactly this race and unsafe against a bad first
+   payload (that is the defect C1 already fixed); validate-before-write is
+   the reverse; **neither ordering is safe against both without the ability
+   to undo a write, and no undo mechanism exists anywhere in this
+   codebase.** A single process-wide lock does not need one -- it removes
+   the second writer instead of trying to recover from it, by making every
+   `accept()` call within this one responder process run to completion,
+   database work included, before the next one starts.
+
+Reason 2 is why this lock **must not be "optimised" into a connection pool
+or a per-request connection** later, however tempting that looks purely from
+a throughput angle: a pool reintroduces the second concurrent writer that
+closes the section 6.4 race, and does so *silently* -- nothing about a
+connection pool looks wrong locally, the failure only shows up as a
+corrupted `Block` boundary sometime after two overlapping calls land. One
+known client (wl.works) polling every few minutes needs none of the
+throughput a pool would buy (design spec section 4.4), so there is no
+performance argument on the other side of this trade to begin with. Widening
+this lock's scope to more than one *process* against one schema is a real
+future need (design spec section 12, the automatic canonical trigger) --
+but section 6.4 is explicit that whatever closes that must close this race
+first, by some other means; it is not this lock's job to grow into that.
+
+`GET /health`'s reads take the same lock as `POST /jobs`'s writes (design
+spec section 4.4: "The health endpoint's reads and the job endpoint's writes
+take the same lock") -- reason 1 above applies to any concurrent use of the
+one shared connection, reads included, not only to writes.
+
+## The `KeyReuseError` -> `ConflictError` translation seam
+
+This module is the only place in `responder/` permitted to know both
+vocabularies: the schema's (it imports `schema/request.py`'s own exception
+type) and `handler.py`'s own small set of exceptions that map to specific
+status codes. `_translate_accept_errors` below is that seam -- review round
+1's Important 3 found the first draft had put the reasoning for "why not
+`422`" in `handler.py` but the actual FIX nowhere, since `handler.py`
+cannot catch a schema-layer exception by name without importing DataJoint
+transitively, which would defeat the entire point of it being
+DataJoint-free. See `handler.py`'s own "Why key reuse maps to `409`" for
+the full reasoning (short version: wl.works reuses one idempotency key
+across retries of the same intent by design, so a `500` -- which invites a
+retry -- would retry with the identical key and hit the identical refusal
+forever; `409` signals a conflict for a human to resolve instead).
+
+**The seam catches `KeyReuseError`, not `dj.DataJointError` -- review round
+2's Important 1.** The first version of this seam caught the root of
+DataJoint's entire error tree, which made `LostConnectionError`,
+`AccessError`, `MissingTableError`, `IntegrityError` and `ThreadSafetyError`
+all answer `409` (measured, driven through this real seam). That is worse
+than the `500` it replaced for exactly the class of fault that matters most
+on the production path: `jobs.accept` writes inside a transaction, so a
+MySQL restart or a LAN blip mid-POST raises `LostConnectionError`, and a
+`409` -- which `handler.py` documents as "a request that cannot succeed as
+sent, whose remedy is outside the retry loop" -- stops wl.works retrying
+and escalates to a human for a fault a retry would have cleared. The remedy
+is a dedicated type at the one raise site that means key reuse (see
+`schema/request.py::KeyReuseError`), NOT `if type(exc) is not
+dj.DataJointError: raise`, which silently re-widens the moment anyone
+subclasses and would still map `submit()`'s own base-class invariant guards
+to `409`.
+
+## The configured token must be ASCII
+
+`serve()` refuses to start at all if `token` contains a non-ASCII
+character, rather than starting a responder that silently answers nothing.
+`handler.py::ResponderHandler._authorized` compares the token with
+`hmac.compare_digest`, which raises `TypeError` for a non-ASCII `str`
+operand on EITHER side -- so a non-ASCII configured token used to make
+every single request fail this way, correct token included, with no HTTP
+response at all (see `handler.py`'s own docstring for the full incident).
+Refusing at startup turns a silent, permanent, hard-to-diagnose black hole
+into a loud, immediate, at-the-source failure -- the token is operator
+input (an environment variable, per Task 9), and operator input that would
+otherwise brick the one endpoint this host exposes is exactly what a
+refusal-to-start exists for.
+
+**The check lives in `handler.py::make_handler`, not here -- review round
+2's Minor 7.** `serve()` held the only copy until then, which meant
+`make_handler` itself accepted a non-ASCII token happily and returned a
+handler that 401s every request including the correct one; every caller
+that is not `serve()` -- every test in `tests/responder/test_http.py` among
+them -- got that handler with no complaint. `make_handler` is the layer
+that cannot tolerate the value, so it is the layer that refuses it.
+`serve()` inherits the refusal because it calls `make_handler` BEFORE
+constructing `ThreadingHTTPServer`, so "refuses before binding a socket"
+still holds -- `test_serve_refuses_to_start_on_a_non_ascii_token` asserts
+that no server is ever constructed, which is what keeps that property
+honest now that the raise happens one call deeper. There is deliberately no
+second copy here: a second copy is a second place for it to go missing.
+"""
+
+from __future__ import annotations
+
+import threading
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+from wl_preproc.responder import health, jobs
+from wl_preproc.responder.handler import ConflictError, make_handler
+from wl_preproc.schema import DEFAULT_PREFIX
+from wl_preproc.schema.request import KeyReuseError
+
+
+def _translate_accept_errors(request, *, prefix: str) -> dict:
+    """`jobs.accept(request, prefix=prefix)`, translating
+    `schema/request.py`'s `KeyReuseError` -- and nothing else -- into
+    `handler.py`'s own `ConflictError`.
+
+    `KeyReuseError`, NOT its base `dj.DataJointError`: see that class's own
+    docstring and this module's "translation seam" section. Every other
+    member of DataJoint's error tree propagates untouched and becomes a
+    handled `500` in `handler.py`'s generic backstop, which is what
+    wl.works' retry loop is built to handle.
+
+    A module-level function, not inlined into `locked_accept_fn` below, so
+    it is directly unit-testable with no lock, no thread and no real
+    database: monkeypatch `wl_preproc.responder.jobs.accept` to raise a
+    `KeyReuseError`, call this function directly, and confirm a
+    `ConflictError` comes out instead -- and monkeypatch it to raise a
+    `dj.errors.LostConnectionError` to confirm one does NOT.
+    """
+    try:
+        return jobs.accept(request, prefix=prefix)
+    except KeyReuseError as exc:
+        raise ConflictError(str(exc)) from exc
+
+
+def serve(
+    port: int,
+    token: str,
+    root: Path,
+    prefix: str = DEFAULT_PREFIX,
+    ready: threading.Event | None = None,
+) -> None:
+    """Run the responder in the foreground. Binds every interface (`("",
+    port)`) -- this host is reachable only from the lab LAN wl.works polls
+    over (design spec section 2/11.1); it does not sit behind a WireGuard
+    interface of its own the way wl.works does.
+
+    Raises `ValueError` immediately, before binding anything, if `token`
+    contains a non-ASCII character -- see this module's own docstring,
+    "The configured token must be ASCII". The check itself lives in
+    `handler.py::make_handler`, which this function calls before
+    constructing `ThreadingHTTPServer`; there is deliberately no second copy
+    of it here.
+
+    Blocks forever in `ThreadingHTTPServer.serve_forever()`. `ready`, when
+    given, is set once the socket is bound and listening but before the
+    accept loop starts -- a caller running this in a background thread (as
+    `tests/responder/test_http.py` does, to exercise this exact function
+    rather than only `make_handler`) can wait on it instead of polling or
+    guessing when the port is live. `port=0` asks the OS for an ephemeral
+    one, which is why `ready` alone does not tell a waiter *which* port --
+    a caller needing that reads it off the constructed server, not off this
+    function's return value (`None`).
+    """
+    lock = threading.Lock()
+
+    def locked_health_fn():
+        # See this module's docstring: the same lock every write below
+        # takes, and for the identical reason (one shared DataJoint
+        # connection, not per-request database traffic).
+        with lock:
+            return health.build_health(root, prefix=prefix)
+
+    def locked_accept_fn(request):
+        with lock:
+            return _translate_accept_errors(request, prefix=prefix)
+
+    handler_cls = make_handler(token, locked_health_fn, locked_accept_fn)
+    httpd = ThreadingHTTPServer(("", port), handler_cls)
+    try:
+        if ready is not None:
+            ready.set()
+        httpd.serve_forever()
+    finally:
+        httpd.server_close()

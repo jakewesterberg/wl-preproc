@@ -356,7 +356,8 @@ def _synthetic_key(table) -> dict:
             key[name] = f"blobprobe-{name}"[:32]
         elif "int" in declared:
             key[name] = 99
-        else:  # pragma: no cover - a new key type should fail loudly, not silently
+        else:
+            # A new key type should fail loudly, not silently.
             raise AssertionError(f"unhandled key type for {name}: {declared}")
     return key
 
@@ -398,7 +399,8 @@ def _synthetic_required_secondary(table, exclude: str) -> dict:
             row[name] = 99
         elif "float" in declared or "double" in declared or "decimal" in declared:
             row[name] = 0.0
-        else:  # pragma: no cover - a new secondary type should fail loudly, not silently
+        else:
+            # A new secondary type should fail loudly, not silently.
             raise AssertionError(f"unhandled type for synthetic value: {name}: {declared}")
     return row
 
@@ -503,6 +505,103 @@ def test_no_bare_delete_call_anywhere_in_the_source():
     assert not offenders, (
         "bare .delete() found; section 10 forbids it because cascades reach "
         "further than expected:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_code_path_writes_activation_supersedes():
+    """`Activation.supersedes` is asserted, in prose only, to be written
+    nowhere in this codebase: `submit()` never sets it (regenerating a
+    canonical over an old one is not implemented yet), and
+    `submit_derivative`'s own docstring says a derivative never supersedes a
+    canonical. That was a codebase-wide invariant resting entirely on
+    docstrings staying true, in a project whose own `test_no_bare_delete_
+    call_anywhere_in_the_source` (immediately above) already enforces a
+    different codebase-wide invariant by source scan rather than by trusting
+    prose (review round 2, Minor). This is the same shape for a second one.
+
+    Four write shapes, matched by three patterns plus one exclusion, none
+    of which is a bare substring search:
+
+    - ``dict_key_write`` — ``"supersedes":`` / ``'supersedes':``, a dict
+      literal passed to ``insert``/``insert1``/``update1``, which is how
+      every DataJoint write in this codebase not covered by the shapes
+      below is spelled.
+    - ``subscript_write`` — ``row["supersedes"] =`` / ``row['supersedes'] =``,
+      requiring the ``=`` immediately (mod whitespace) after the closing
+      bracket and rejecting a second ``=`` right after (so ``==`` — a read
+      and a comparison, e.g. ``row["supersedes"] == None`` — does not
+      match; neither does ``<=``/``>=``, whose character before ``=`` is
+      never ``]`` or whitespace-after-``]``).
+    - ``keyword_write`` — bare ``supersedes=`` (not ``==``), matched
+      anywhere in the line: a same-line keyword argument
+      (``dict(supersedes=x)``, ``f(a=1, supersedes=x)``) AND, since review
+      round 4 found a round-3 draft missed it, a keyword argument alone on
+      its own continuation line (``supersedes=x,``) — the same shape
+      ``request.py``'s own ``submit()`` already uses for real with
+      ``skip_duplicates=True,`` on its own line inside a multi-line
+      ``insert1(...)`` call. A round-3 draft of this pattern required an
+      immediately preceding ``(`` or ``,`` specifically to reject the
+      schema declaration (``supersedes = null : int``, inside
+      ``Activation``'s ``definition`` string) — which also silently
+      rejected every OTHER shape with nothing but leading whitespace before
+      ``supersedes``, continuation-line keyword arguments included, since a
+      line-by-line scan cannot see the open paren or comma on the
+      PREVIOUS line that makes such a line valid Python.
+    - ``ddl_declaration`` is not a write pattern but the one exclusion
+      ``keyword_write`` needs: the schema declaration is the only bare
+      ``supersedes = value`` shape that must not be flagged, and it is
+      uniquely identifiable by the `` : type`` that always follows a
+      declared attribute's default value in DataJoint's DDL syntax — a
+      keyword argument never has a bare colon-and-type immediately after
+      its value. A round-4 draft matched that default-value token with
+      ``\\S+`` (any non-whitespace), which BACKTRACKS past brackets and
+      braces to find any colon later in the line — silently re-excluding a
+      continuation-line keyword write whose *value* happens to contain one.
+      Two real, uncontrived idioms proved it (review round 5):
+      ``supersedes=candidates[0:1][0],`` and ``supersedes={1: 2}[1],``,
+      both missed, ``\\S+`` matching ``candidates[0`` or ``{1`` and landing
+      on the slice/dict colon rather than stopping where the real
+      declaration's value (``null``) actually ends. ``\\w+`` — word
+      characters only — cannot span a bracket or brace at all, so it
+      cannot backtrack into a colon inside one: it still matches the real
+      declaration's ``null`` exactly, and correctly fails to match either
+      idiom above from the first character after ``=``. Checked directly
+      that this line matches ``ddl_declaration`` and therefore stays
+      excluded even under the widened ``keyword_write``.
+
+    None of the four matches a bare READ (`row["supersedes"]` alone,
+    `.fetch1("supersedes")`) or the docstring prose in `submit_derivative`
+    and this test itself, both of which discuss `supersedes` at length using
+    RST double-backticks, never a Python quote character next to an `=` or
+    `[`. Confirmed all patterns fire on their intended shape and stay
+    silent against the committed source before being relied on here.
+    """
+    import re
+
+    dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
+    subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
+    keyword_write = re.compile(r"""supersedes\s*=(?!=)""")
+    ddl_declaration = re.compile(r"""^supersedes\s*=\s*\w+\s*:""")
+
+    offenders = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if (
+                dict_key_write.search(stripped)
+                or subscript_write.search(stripped)
+                or (keyword_write.search(stripped) and not ddl_declaration.match(stripped))
+            ):
+                rel = path.relative_to(SOURCE_ROOT.parent)
+                offenders.append(f"{rel}:{lineno}: {stripped[:70]}")
+    assert not offenders, (
+        "a source line writes 'supersedes' (as a dict key, a subscript "
+        "assignment, or a keyword argument); Activation.supersedes must "
+        "remain unwritten by every code path -- a derivative never "
+        "supersedes a canonical, and nothing regenerates a canonical yet "
+        "either:\n  " + "\n  ".join(offenders)
     )
 
 

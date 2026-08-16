@@ -8,6 +8,7 @@ from wl_preproc.contracts.protocol import (
     MetadataBundle,
     Reading,
     contains_markup,
+    plain_text,
 )
 
 # Verbatim from wl.works Plan 10 section 4.
@@ -43,6 +44,33 @@ def test_contains_markup_allows_plain(text):
     assert contains_markup(text) is False
 
 
+def test_plain_text_removes_every_markup_character():
+    result = plain_text("A&B<C>D")
+    assert not contains_markup(result), f"still contains markup: {result!r}"
+
+
+def test_plain_text_never_collapses_two_different_characters_onto_one_placeholder():
+    """Every producer of untrusted text (currently `responder/health.py`)
+    depends on this: substituting `<`, `>` and `&` onto ONE shared
+    placeholder would make `A&B` and `A<B` -- two different facts about a
+    real fault -- render identically, which is the exact rule `Reading`'s
+    own markup ban already argues from for a different reason.
+    """
+    substituted = {plain_text("A&B"), plain_text("A<B"), plain_text("A>B")}
+    assert len(substituted) == 3, f"two distinct inputs collapsed onto one output: {substituted}"
+
+
+def test_plain_text_is_a_no_op_on_text_with_no_markup():
+    assert plain_text("4 of 7 sessions") == "4 of 7 sessions"
+
+
+def test_plain_text_output_is_itself_accepted_by_reading():
+    """The whole point: the substituted text must be constructible, not just
+    markup-free in the abstract."""
+    value = plain_text("path 'A&B<C>' denied")
+    Reading(key="k", label="L", value=value, featured=False)  # must not raise
+
+
 def test_reading_rejects_markup_in_label():
     """wl.works treats this host as untrusted and renders labels as escaped text."""
     with pytest.raises(ValidationError):
@@ -62,6 +90,19 @@ def test_action_rejects_markup_in_label():
 def test_health_response_rejects_unknown_key():
     with pytest.raises(ValidationError):
         HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdcit": "ok"})
+
+
+def test_an_unknown_verdict_is_rejected():
+    """wl.works validates verdict against exactly four values and refuses the
+    whole response otherwise, so a bare `str` here means a typo ships and
+    fails at their end rather than ours. Plan 10 section 1.1."""
+    with pytest.raises(ValidationError):
+        HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdict": "okay"})
+
+
+@pytest.mark.parametrize("verdict", ["ok", "degraded", "down", "unknown"])
+def test_every_verdict_wl_works_accepts_validates_here(verdict):
+    assert HealthResponse.model_validate({**PLAN_10_EXAMPLE, "verdict": verdict}).verdict == verdict
 
 
 def test_job_request_carries_the_metadata_bundle():

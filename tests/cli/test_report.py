@@ -16,7 +16,6 @@ import datetime
 import os
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from wl_preproc.cli.report import build_report, write_report
@@ -396,6 +395,45 @@ def test_an_unreadable_root_reports_the_fault_instead_of_crashing(scanned):
     assert "PermissionError" in stalled
 
 
+def test_a_walk_fault_does_not_suppress_a_real_disk_reading(scanned):
+    """Mode 000 again, but checking the Disk section this time, not just
+    Stalled: `_candidate_dirs.iterdir()` needs to list `root`'s own entries,
+    which needs execute permission on `root` itself, but `scratch_headroom`'s
+    `shutil.disk_usage` -> `os.statvfs` needs only search permission on
+    `root`'s PARENT to reach it -- not on `root` itself. So a root the walk
+    cannot list can still be measured for free space, and this project has
+    already shipped a version of `build_report` that got that wrong: review
+    found that folding the walk fault and the disk fault into one
+    `Readings.root_error` field made the Disk section read "not measured"
+    using the WALK's `PermissionError` for a disk probe that had, in fact,
+    succeeded -- confirmed by a direct before/after comparison against
+    `01f9010` (pre-extraction), which showed a real "N GiB free" line for
+    this exact root. That is the precise inversion `scratch_headroom`'s own
+    docstring forbids: an unmeasurable disk must never render as a number,
+    and -- the direction this test guards -- a MEASURED disk must never
+    render as unmeasured because of an unrelated fault.
+    """
+    root, prefix = scanned("rptwlk1")
+    original = root.stat().st_mode
+
+    os.chmod(root, 0o000)
+    try:
+        result = scan_once(root, prefix=prefix)
+        body = build_report(root, prefix=prefix)
+    finally:
+        os.chmod(root, original)
+
+    assert result.root_error is not None, "premise: the walk itself is faulted"
+    stalled = _section(body, "Stalled transfers")
+    assert "was not fully scanned" in stalled, "the walk fault must still be reported"
+    disk = _section(body, "Disk")
+    assert "GiB free" in disk, (
+        "a root the walk cannot list can still be measured for free space -- "
+        "the walk fault must not suppress a disk probe that succeeded"
+    )
+    assert "not measured" not in disk
+
+
 def test_one_unreadable_child_does_not_take_down_the_whole_report(scanned):
     """The row that matters most: an rsync run as the wrong user, or one ACL
     slip, on ONE session directory. `(child / MANIFEST_FILENAME).is_file()`
@@ -481,58 +519,56 @@ def test_a_session_id_mismatch_is_stall_checked_against_the_directory_that_exist
     assert "2027-03-14_07" not in stalled
 
 
-def _table_snapshot(table):
-    """A deterministic, order-independent snapshot of every row and column
-    `table` currently holds, for an exact before/after equality check.
+def test_gather_readings_returns_the_values_build_report_renders(scanned):
+    """The extraction's whole point: one computation, two renderings. If these
+    two disagree the responder and the daily report will report different
+    numbers for the same question, which is the defect the doctor/report
+    headroom extraction already caught once in this project."""
+    root, prefix = scanned("rptgth1")
+    from wl_preproc.cli.report import build_report, gather_readings
 
-    Sorted by primary key alone (stringified for uniform comparability),
-    never by a whole row: MySQL gives no ordering guarantee across two
-    separate queries with no `ORDER BY`, and every row's own set of primary
-    keys is, by definition, unique -- so sorting on it never needs to fall
-    back to comparing a later, possibly-unorderable column (`Ingestion.
-    topology` is a dict, and `sorted()` comparing two dicts with `<` raises
-    TypeError; sorting by primary key alone never reaches that comparison).
-    The returned dicts still carry every column, key and non-key alike, so
-    comparing two snapshots (via `_deep_equal`, below -- not bare `==`, see
-    its own docstring) catches a changed VALUE on an existing row (an
-    `insert(replace=True)`, which `ingest.quarantine()` uses by design -- see
-    `wl_preproc/ingest/landing.py`) exactly as it catches an added or removed
-    row.
+    readings = gather_readings(root, prefix=prefix)
+    body = build_report(root, prefix=prefix)
+
+    assert f"Ingested (24 h) — {len(readings.ingested)}" in body
+    assert f"Quarantined (7 d) — {len(readings.quarantined)}" in body
+    assert f"Stalled transfers — {len(readings.stalled)}" in body
+    assert f"{readings.free_gib} GiB free" in body
+
+
+def test_gather_readings_does_not_write(scanned, table_snapshot, deep_equal):
+    """Same guarantee build_report carries. `in_transaction` cannot detect a
+    write here — DataJoint's insert() never touches it — so this snapshots
+    rows, exactly as test_the_report_opens_no_write_transaction does.
+
+    `table_snapshot`/`deep_equal` come in as fixtures, not an import from
+    `tests.conftest`. Importing the name works fine -- `tests.conftest` is a
+    PEP 420 namespace package even with no `tests/__init__.py`, confirmed
+    directly (`from tests.conftest import table_snapshot` succeeds) -- but
+    calling the imported object does not: once decorated with
+    `@pytest.fixture`, it is a `_pytest.fixtures.FixtureFunctionDefinition`,
+    and pytest's own `__call__` on that type refuses direct invocation
+    outside its fixture-resolution machinery (`Failed: Fixture "..." called
+    directly...`, also confirmed directly). So the fixture form is not a
+    workaround for an import limitation that isn't there; it is the only
+    form that works at all, and it happens to be the same shape
+    `tests/schema/conftest.py`'s `enum_values` already uses -- a
+    session-scoped fixture returning a callable, taken by consuming tests as
+    a parameter and called by name.
     """
-    key_fields = table.primary_key
-    return sorted(table.to_dicts(), key=lambda row: tuple(str(row[f]) for f in key_fields))
+    root, prefix = scanned("rptgth2")
+    from wl_preproc.cli.report import gather_readings
+    from wl_preproc.schema import core, ingest, pipeline
+
+    watched = [ingest.Ingestion, ingest.Quarantine, pipeline.Session, core.AcquisitionSystem]
+    before = [table_snapshot(t) for t in watched]
+    gather_readings(root, prefix=prefix)
+    after = [table_snapshot(t) for t in watched]
+
+    assert deep_equal(after, before), "gather_readings wrote or changed at least one row"
 
 
-def _deep_equal(a, b) -> bool:
-    """`==` that does not choke on a NumPy array anywhere inside a snapshot.
-
-    This suite shares one database across every test file (`tests/conftest.py`,
-    one prefix per process), and `tests/schema/test_guardrails.py`'s own
-    `test_every_blob_attribute_round_trips_an_array` deliberately plants a
-    real 64x64 `float32` array into `ingest.Quarantine.detail` -- `Quarantine`
-    has no foreign key, so that test round-trips it "for real" -- with no
-    cleanup afterward, by design (that file's own docstring: "This inserts
-    into the REAL tables"). Found by running this test under `pytest
-    tests/schema tests/ingest tests/cli`: bare `==` on two snapshots
-    containing that row raised `ValueError: The truth value of an array with
-    more than one element is ambiguous`, not a clean pass or fail -- because
-    `numpy.ndarray.__eq__` returns an array of booleans, and Python's dict/
-    list equality cannot collapse that into one verdict. Every value this
-    report's OWN tables ever store (str, datetime, a dict of strings) never
-    hits this path; a different test's fixture, sharing this suite's one
-    database, does -- and this snapshot must still compare cleanly around it
-    rather than assume it will never be there.
-    """
-    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
-        return isinstance(a, np.ndarray) and isinstance(b, np.ndarray) and np.array_equal(a, b)
-    if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() == b.keys() and all(_deep_equal(a[k], b[k]) for k in a)
-    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
-        return len(a) == len(b) and all(_deep_equal(x, y) for x, y in zip(a, b, strict=True))
-    return a == b
-
-
-def test_the_report_opens_no_write_transaction(scanned):
+def test_the_report_opens_no_write_transaction(scanned, table_snapshot, deep_equal):
     """The same read-only guarantee `wlpp doctor` carries, so anyone can run it
     at any time without considering what else is running.
 
@@ -559,6 +595,11 @@ def test_the_report_opens_no_write_transaction(scanned):
     called it from here by mistake -- the report imports none of those
     modules today, so this also catches that specific regression shape
     before it could ship.
+
+    `table_snapshot`/`deep_equal` come in as fixtures now (Phase 1c-3, Task
+    1) rather than the module-local `_table_snapshot`/`_deep_equal` this test
+    used to call -- moved to `tests/conftest.py` so `test_gather_readings_
+    does_not_write` (above) and Task 5's responder tests can reach them too.
     """
     import datajoint as dj
 
@@ -574,13 +615,13 @@ def test_the_report_opens_no_write_transaction(scanned):
         pipeline.Subject,
         core.AcquisitionSystem,
     )
-    before = [_table_snapshot(table) for table in tables]
+    before = [table_snapshot(table) for table in tables]
 
     build_report(root, prefix=prefix)
 
     assert dj.conn().in_transaction is False
-    after = [_table_snapshot(table) for table in tables]
-    assert _deep_equal(after, before), "build_report wrote or changed at least one row"
+    after = [table_snapshot(table) for table in tables]
+    assert deep_equal(after, before), "build_report wrote or changed at least one row"
 
 
 def test_a_deferred_session_is_named_as_such_rather_than_invisible(

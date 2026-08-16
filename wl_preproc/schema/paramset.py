@@ -76,6 +76,36 @@ def content_hash(params: dict) -> str:
     Canonicalised with sorted keys so that `{"a": 1, "b": 2}` and
     `{"b": 2, "a": 1}` are the same paramset — otherwise key order would silently
     create duplicates that differ in nothing that matters.
+
+    **`schema/request.py::selection_hash` is a second function with this
+    same body, deliberately not merged with it. Read this before changing
+    `digest_size`.** The two hash different things — a parameter mapping
+    here, a `(task_type, block_ids)` pair there — so one function taking
+    both shapes would be the worse abstraction; what they must keep
+    agreeing on is the primitive and the digest size. The columns they land
+    in are sized differently, and that makes a bump break them in opposite
+    ways:
+
+    - `ParamSet.param_hash` is `varchar(32)`. At `digest_size=16` a hex
+      digest is 32 characters — the column is exactly full, with no slack
+      at all. At `digest_size=32` it is 64, and the insert **raises**:
+      measured against a live MySQL 8, whose default `sql_mode` includes
+      `STRICT_ALL_TABLES`, the error is `pymysql.err.DataError (1406,
+      "Data too long for column 'param_hash' at row 1")`. Not a silent
+      truncation — that would need strict mode off, which nothing here
+      turns off.
+    - `Activation.selection_hash` is `varchar(64)`, so the same bump fits
+      there and changes nothing visible — while making every newly
+      computed hash stop matching the 32-character ones already on file,
+      which silently defeats `submit_derivative`'s dedupe and starts a
+      second activation for a selection already in flight.
+
+    This side fails loudly; that side fails quietly. Widening `param_hash`
+    alone would remove the loud half and leave only the quiet one.
+    `ingest/params.py` already calls this function by name rather than
+    reimplementing `json.dumps`'s argument list, for the same
+    one-definition reason — that is the merge that IS worth making, and it
+    is already made.
     """
     payload = json.dumps(params, sort_keys=True, separators=(",", ":"))
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
@@ -186,6 +216,24 @@ def register(paramset_type: str, params: dict) -> int:
     if existing:
         return int(existing.fetch1("paramset_idx"))
 
+    # STANDING CONSTRAINT, established 2026-08-15 by Phase 1c-3 Task 4's review:
+    # the re-read below is correct ONLY because this function is never called
+    # from inside a transaction.
+    #
+    # DataJoint sets pymysql `autocommit: True` ("DataJoint manages transactions
+    # explicitly"), so each statement here is its own transaction with a fresh
+    # read view, and the `except DuplicateError` re-read genuinely sees a rival
+    # connection's commit. Reproduced on MySQL 8.0.46, both directions.
+    #
+    # Inside `dj.conn().transaction`, DataJoint issues START TRANSACTION WITH
+    # CONSISTENT SNAPSHOT, and the identical re-read MISSES that commit --
+    # verified with the autocommit=False counterfactual. The loop would then
+    # exhaust every attempt against a row it cannot see rather than deduping
+    # onto it. `request.submit_derivative` hit exactly this and had to take an
+    # explicit locking read instead.
+    #
+    # The only caller today, `wl_preproc/ingest/params.py`, does not wrap this.
+    # Nothing enforces that, so it is written down rather than assumed.
     for _ in range(_MAX_REGISTER_ATTEMPTS):
         # to_arrays, not fetch: DataJoint 2.3.2 deprecates bare fetch() (it
         # warns on every call), and this project's suite must stay at zero

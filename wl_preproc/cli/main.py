@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -49,6 +50,27 @@ def export_schemas(out_dir: Path) -> list[Path]:
         path.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         written.append(path)
     return written
+
+
+def tcp_port(value: str) -> int:
+    """`--port`'s `type=`: an int in 0-65535, refused by argparse at parse
+    time if it is not.
+
+    Named `tcp_port` because argparse puts a `type=` callable's `__name__`
+    into its own message for a non-integer ("invalid tcp_port value: 'x'").
+
+    Without this, `--port 99999` and `--port -1` both reached
+    `socket.bind()` four frames inside `socketserver` and came out as
+    `OverflowError: bind(): port must be 0-65535.` plus a traceback and exit
+    1 — a plausible typo in the very systemd unit the `--port`-required
+    ruling exists to protect, answered with an interpreter dump. `0` stays
+    legal: it asks the OS for an ephemeral port, which is what the responder
+    tests bind with.
+    """
+    port = int(value)  # argparse turns a ValueError here into its own message
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"{value} is not a TCP port (must be 0-65535)")
+    return port
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,10 +116,33 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
     report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    responder_parser = subparsers.add_parser(
+        "responder", help="run the HTTP responder wl.works polls (design spec section 8/9)"
+    )
+    # No default -- controller ruling for Task 9: the port must be stated
+    # identically in the systemd unit, the protocol document (Task 10) and
+    # whatever wl.works is configured with, and a default invites two of
+    # those three to disagree silently.
+    # `type=tcp_port`, not `type=int`: see that function. An out-of-range
+    # port is refused here, by argparse, in argparse's own words -- not
+    # forty lines later as an OverflowError traceback out of socketserver.
+    responder_parser.add_argument(
+        "--port", required=True, type=tcp_port, help="TCP port to bind (0-65535)"
+    )
+    responder_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    responder_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
-        return int(exc.code or 2)
+        # `exc.code or 2` was wrong for the one status argparse raises that is
+        # not a failure: `--help` and `--version` exit 0, and `0 or 2` is 2, so
+        # EVERY subcommand's --help returned 2. Enough to fail a wrapper or a CI
+        # step written as `wlpp --help || exit 1`, and enough to make the
+        # protocol document's exit-code table describe a bug. `None` (a bare
+        # `raise SystemExit`) still means 2; argparse's own usage errors already
+        # carry 2 themselves.
+        return 2 if exc.code is None else int(exc.code)
 
     if args.group == "schemas" and args.action == "export":
         for path in export_schemas(args.out):
@@ -157,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "ingest":
         # `Path` is not re-imported here: it is already a module-level import
-        # above (line 16), used unconditionally by `schemas export`'s own
+        # above (line 17), used unconditionally by `schemas export`'s own
         # `--out` argument. A second `from pathlib import Path` inside this
         # branch would make the compiler treat `Path` as local to the whole
         # `main()` function rather than shadowing it only here -- Python
@@ -195,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "report":
         # `Path` is not re-imported here, for the identical reason the
         # `ingest` branch above states in full: it is already a module-level
-        # import (line 16), used unconditionally by `schemas export`'s own
+        # import (line 17), used unconditionally by `schemas export`'s own
         # `--out` argument, and a second `from pathlib import Path` anywhere
         # in main()'s body would make the compiler treat `Path` as local to
         # the WHOLE function rather than just this branch -- raising
@@ -209,8 +254,138 @@ def main(argv: list[str] | None = None) -> int:
         print(path.read_text(), end="")
         return 0
 
+    if args.group == "responder":
+        # `Path` is not re-imported here, for the identical reason the
+        # `ingest` and `report` branches above both state in full: it is
+        # already a module-level import (line 17 now that `os` was added
+        # above it), used unconditionally by `schemas export`'s own
+        # `--out` argument. A second `from pathlib import Path` anywhere in
+        # main()'s body makes the compiler treat `Path` as local to the
+        # WHOLE function rather than just this branch, raising
+        # `UnboundLocalError` at that earlier, unconditional call for every
+        # subcommand, not just this one. That bug has already been
+        # introduced twice in this project (Task 8's `ingest`, then
+        # `report`); this branch does not add a third instance.
+        #
+        # `os.environ` is read HERE, at dispatch time, not at module import
+        # time: a module-scope read would make the token unsettable by a
+        # test, and by a systemd unit that sets it only after this module
+        # has already been imported.
+        token = os.environ.get("WLPP_RESPONDER_TOKEN")
+        if not token:
+            # `if not token`, never `if token is None`. `os.environ.get`
+            # returns `""` for `WLPP_RESPONDER_TOKEN=` in a systemd unit --
+            # a realistic way to get here -- and an empty string passes
+            # `str.isascii()` exactly like any other ASCII string, so
+            # `token is None` would let it through into a responder that
+            # then 401s every request, including the correct one, for as
+            # long as the process runs. One message covers both an unset
+            # and an empty variable, naming it exactly once.
+            print(
+                "error: WLPP_RESPONDER_TOKEN is not set (or is empty); "
+                "refusing to start a responder with no token -- there is "
+                "no default."
+            )
+            return 2
+
+        # Fix round 2: `build_health` (via `gather_readings`) only reads
+        # `root` on the request path, never at startup, so a typo'd --root
+        # used to bind the port and serve happily -- failing per request,
+        # forever, rather than once here. Same principle already applied to
+        # the token and the port above: refuse to start rather than run
+        # broken. `Path.is_dir()` is `False` for both a missing path and a
+        # path that names a file, so this one check covers both -- and
+        # Task 10 has just shipped a document telling an operator to write a
+        # --root into a systemd unit, where a typo is exactly this mistake.
+        #
+        # Fix round 3: `not args.root` FIRST, and it is not redundant with
+        # `is_dir()`. `Path("")` is `PosixPath('.')`, whose `.is_dir()` is
+        # `True`, so `--root=` passed this check and served the working
+        # DIRECTORY OF THE PROCESS -- measured: exit 1 (it reached `serve()`
+        # and failed on the port), root handed to `serve()` == cwd. That is
+        # the identical trap the token check three statements above exists
+        # for and names in full: `ExecStart=... --root=${WLPP_ROOT}` with
+        # `WLPP_ROOT` unset expands to exactly `--root=`, in the systemd
+        # unit Task 10 shipped. An empty root is an unconfigured root, not
+        # the working directory.
+        #
+        # `.` and `./` are legitimate and stay legitimate -- `not args.root`
+        # is false for both, and `test_responder_accepts_a_relative_root`
+        # pins that. `--root " "` was already correctly refused: a directory
+        # named " " does not exist.
+        root = Path(args.root)
+        if not args.root or not root.is_dir():
+            print(
+                f"error: --root {args.root!r} does not exist or is not a "
+                "directory; refusing to start a responder with a broken "
+                "storage root."
+            )
+            return 2
+
+        # Imported here, not at module level, for the same reason `daemon`/
+        # `ingest`/`report`/`synth generate` above all do it locally:
+        # `wl_preproc.responder.server` imports `wl_preproc.responder.jobs`,
+        # which imports the schema layer and therefore DataJoint
+        # transitively -- a cost `wlpp schemas export` has no reason to pay.
+        from wl_preproc.responder.server import serve
+
+        try:
+            serve(args.port, token, root, prefix=args.prefix)
+        except ValueError as exc:
+            # `serve()` raises `ValueError` from inside `make_handler` for a
+            # non-ASCII token, before any socket is bound (responder/
+            # server.py's own docstring, "The configured token must be
+            # ASCII") -- a real refusal, just not yet shaped like a CLI
+            # error message. Caught here rather than left to propagate: an
+            # operator reading a systemd journal gets this line, not a
+            # traceback ending in a raise deep inside make_handler.
+            print(f"error: refusing to start: {exc}")
+            return 2
+        except OSError as exc:
+            # `OSError`, not just the `ValueError` above, because "a
+            # ValueError traceback is not a CLI error message" (controller
+            # override 3) is a principle and not a list of one exception
+            # type -- and the commonest responder restart failure there is
+            # lands here: `[Errno 48] Address already in use`, a systemd
+            # restart racing the old process's socket, previously a raw
+            # traceback ending in `socketserver.TCPServer.server_bind`. A
+            # privileged port with no capability to bind it arrives the
+            # same way.
+            #
+            # Exit 1, not the 2 the refusals above use: 2 in this CLI means
+            # "refusing -- the invocation or configuration is wrong", and a
+            # correct invocation hits this when something ELSE holds the
+            # port. It tried and failed, which is `doctor`'s exit 1. The
+            # port is named because it is what an operator has to go free.
+            #
+            # Fix round 2: the message below no longer claims "bind",
+            # although in practice a bind failure is overwhelmingly what
+            # reaches here. This `try` spans the whole of `serve()`, not
+            # just `ThreadingHTTPServer.__init__`, and the rest of `serve()`
+            # is not entirely inert: `socketserver.BaseServer.
+            # _handle_request_noblock` does catch `OSError` from
+            # `get_request()` and return, so a per-request accept failure
+            # never reaches here, but `serve_forever()`'s own
+            # `selector.select()` call is NOT similarly guarded -- an
+            # `OSError` there (a listening socket's file descriptor going
+            # bad from outside this process, say, after months of uptime)
+            # would reach this handler too, long after any bind, and "could
+            # not bind port N" would be a false description of it. Narrowing
+            # the `try` to just the constructor would fix that precisely,
+            # but costs a distinct exception type out of `serve()` or a
+            # split in the CLI -- more surface than a very-low-probability
+            # wrong noun deserves. The message says only what is true on
+            # both paths: this port, the OS's own error text (errno
+            # included), exit 1.
+            print(f"error: responder failed on port {args.port}: {exc}")
+            return 1
+        # Reached only if `serve_forever()` returns, which it does only on an
+        # explicit `shutdown()` no caller here issues; in practice this
+        # process ends on a signal instead.
+        return 0
+
     return 2
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised via subprocess in tests
+if __name__ == "__main__":
     raise SystemExit(main())
