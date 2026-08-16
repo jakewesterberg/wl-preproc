@@ -71,6 +71,37 @@ first, by some other means; it is not this lock's job to grow into that.
 spec section 4.4: "The health endpoint's reads and the job endpoint's writes
 take the same lock") -- reason 1 above applies to any concurrent use of the
 one shared connection, reads included, not only to writes.
+
+## The `dj.DataJointError` -> `ConflictError` translation seam
+
+This module is the only place in `responder/` permitted to know both
+vocabularies: DataJoint's (it already imports `datajoint`) and
+`handler.py`'s own small set of exceptions that map to specific status
+codes. `_translate_accept_errors` below is that seam -- review Important 3
+found the first draft had put the reasoning for "why not `422`" in
+`handler.py` but the actual FIX nowhere, since `handler.py` cannot catch
+`dj.DataJointError` by name without importing DataJoint, which would defeat
+the entire point of it being DataJoint-free. See `handler.py`'s own "Why
+`DataJointError` maps to `409`" for the full reasoning (short version:
+wl.works reuses one idempotency key across retries of the same intent by
+design, so a `500` -- which invites a retry -- would retry with the
+identical key and hit the identical refusal forever; `409` signals a
+conflict for a human to resolve instead).
+
+## The configured token must be ASCII
+
+`serve()` refuses to start at all if `token` contains a non-ASCII
+character, rather than starting a responder that silently answers nothing.
+`handler.py::ResponderHandler._authorized` compares the token with
+`hmac.compare_digest`, which raises `TypeError` for a non-ASCII `str`
+operand on EITHER side -- so a non-ASCII configured token used to make
+every single request fail this way, correct token included, with no HTTP
+response at all (see `handler.py`'s own docstring for the full incident).
+Refusing at startup turns a silent, permanent, hard-to-diagnose black hole
+into a loud, immediate, at-the-source failure -- the token is operator
+input (an environment variable, per Task 9), and operator input that would
+otherwise brick the one endpoint this host exposes is exactly what a
+refusal-to-start exists for.
 """
 
 from __future__ import annotations
@@ -79,9 +110,28 @@ import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import datajoint as dj
+
 from wl_preproc.responder import health, jobs
-from wl_preproc.responder.handler import make_handler
+from wl_preproc.responder.handler import ConflictError, make_handler
 from wl_preproc.schema import DEFAULT_PREFIX
+
+
+def _translate_accept_errors(request, *, prefix: str) -> dict:
+    """`jobs.accept(request, prefix=prefix)`, translating `dj.DataJointError`
+    (and every subclass) into `handler.py`'s own `ConflictError`.
+
+    A module-level function, not inlined into `locked_accept_fn` below, so
+    it is directly unit-testable with no lock, no thread and no real
+    database: monkeypatch `wl_preproc.responder.jobs.accept` to raise a
+    `dj.DataJointError`, call this function directly, and confirm a
+    `ConflictError` comes out instead. See this module's own docstring,
+    "The `dj.DataJointError` -> `ConflictError` translation seam".
+    """
+    try:
+        return jobs.accept(request, prefix=prefix)
+    except dj.DataJointError as exc:
+        raise ConflictError(str(exc)) from exc
 
 
 def serve(
@@ -96,6 +146,10 @@ def serve(
     over (design spec section 2/11.1); it does not sit behind a WireGuard
     interface of its own the way wl.works does.
 
+    Raises `ValueError` immediately, before binding anything, if `token`
+    contains a non-ASCII character -- see this module's own docstring,
+    "The configured token must be ASCII".
+
     Blocks forever in `ThreadingHTTPServer.serve_forever()`. `ready`, when
     given, is set once the socket is bound and listening but before the
     accept loop starts -- a caller running this in a background thread (as
@@ -106,6 +160,17 @@ def serve(
     a caller needing that reads it off the constructed server, not off this
     function's return value (`None`).
     """
+    if not token.isascii():
+        raise ValueError(
+            "the configured bearer token contains a non-ASCII character; "
+            "hmac.compare_digest cannot compare it (see "
+            "handler.py::ResponderHandler._authorized's own docstring), "
+            "which would make every request fail authentication silently, "
+            "correct token included -- refusing to start rather than "
+            "accepting a token that bricks this endpoint with no HTTP-level "
+            "error to diagnose"
+        )
+
     lock = threading.Lock()
 
     def locked_health_fn():
@@ -117,7 +182,7 @@ def serve(
 
     def locked_accept_fn(request):
         with lock:
-            return jobs.accept(request, prefix=prefix)
+            return _translate_accept_errors(request, prefix=prefix)
 
     handler_cls = make_handler(token, locked_health_fn, locked_accept_fn)
     httpd = ThreadingHTTPServer(("", port), handler_cls)
