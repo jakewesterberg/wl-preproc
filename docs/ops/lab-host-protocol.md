@@ -728,7 +728,8 @@ reach it in practice.
 | `2` | `--port` outside 0–65535 | `wlpp responder: error: argument --port: 99999 is not a TCP port (must be 0-65535)` |
 | `2` | `--port` not an integer | `wlpp responder: error: argument --port: invalid tcp_port value: 'abc'` |
 | `2` | `--port` or `--root` absent | `wlpp responder: error: the following arguments are required: --port` (or `--root`) |
-| `2` | An unrecognised flag; no subcommand at all | argparse's own message, prefixed `wlpp:` rather than `wlpp responder:` because the top-level parser is what raises it — `wlpp: error: unrecognized arguments: --nope`, `wlpp: error: the following arguments are required: group` |
+| `2` | No subcommand at all — including `wlpp --nope`, where the missing subcommand is reported and the unrecognised flag is not | `wlpp: error: the following arguments are required: group` |
+| `2` | An unrecognised flag *after* a valid subcommand | `wlpp: error: unrecognized arguments: --nope` (from `wlpp doctor --nope`). Prefixed `wlpp:` rather than `wlpp responder:` because the top-level parser collects the leftovers |
 | `1` | The bind failed | `error: responder failed on port 8420: <the OS's own errno text>` — measured as `[Errno 48] Address already in use` on the development machine; Linux reports that same condition as errno 98. A restart racing the previous process is the usual cause; a privileged port with no capability to bind it arrives on this same path |
 | `0` | `--help`, on any subcommand or on `wlpp` itself | argparse's own help text on stdout. Measured across all 11 `--help` forms this CLI has; every one exits `0` |
 | `0` | Otherwise only if `serve_forever()` returns, which nothing in this CLI asks it to | — in practice a running responder ends on a signal instead |
