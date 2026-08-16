@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -94,6 +95,17 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
     report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    responder_parser = subparsers.add_parser(
+        "responder", help="run the HTTP responder wl.works polls (design spec section 8/9)"
+    )
+    # No default -- controller ruling for Task 9: the port must be stated
+    # identically in the systemd unit, the protocol document (Task 10) and
+    # whatever wl.works is configured with, and a default invites two of
+    # those three to disagree silently.
+    responder_parser.add_argument("--port", required=True, type=int, help="TCP port to bind")
+    responder_parser.add_argument("--root", required=True, help="directory holding session dirs")
+    responder_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -157,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "ingest":
         # `Path` is not re-imported here: it is already a module-level import
-        # above (line 16), used unconditionally by `schemas export`'s own
+        # above (line 17), used unconditionally by `schemas export`'s own
         # `--out` argument. A second `from pathlib import Path` inside this
         # branch would make the compiler treat `Path` as local to the whole
         # `main()` function rather than shadowing it only here -- Python
@@ -195,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "report":
         # `Path` is not re-imported here, for the identical reason the
         # `ingest` branch above states in full: it is already a module-level
-        # import (line 16), used unconditionally by `schemas export`'s own
+        # import (line 17), used unconditionally by `schemas export`'s own
         # `--out` argument, and a second `from pathlib import Path` anywhere
         # in main()'s body would make the compiler treat `Path` as local to
         # the WHOLE function rather than just this branch -- raising
@@ -208,6 +220,61 @@ def main(argv: list[str] | None = None) -> int:
         path = write_report(Path(args.out), Path(args.root), prefix=args.prefix)
         print(path.read_text(), end="")
         return 0
+
+    if args.group == "responder":
+        # `Path` is not re-imported here, for the identical reason the
+        # `ingest` and `report` branches above both state in full: it is
+        # already a module-level import (line 17 now that `os` was added
+        # above it), used unconditionally by `schemas export`'s own
+        # `--out` argument. A second `from pathlib import Path` anywhere in
+        # main()'s body makes the compiler treat `Path` as local to the
+        # WHOLE function rather than just this branch, raising
+        # `UnboundLocalError` at that earlier, unconditional call for every
+        # subcommand, not just this one. That bug has already been
+        # introduced twice in this project (Task 8's `ingest`, then
+        # `report`); this branch does not add a third instance.
+        #
+        # `os.environ` is read HERE, at dispatch time, not at module import
+        # time: a module-scope read would make the token unsettable by a
+        # test, and by a systemd unit that sets it only after this module
+        # has already been imported.
+        token = os.environ.get("WLPP_RESPONDER_TOKEN")
+        if not token:
+            # `if not token`, never `if token is None`. `os.environ.get`
+            # returns `""` for `WLPP_RESPONDER_TOKEN=` in a systemd unit --
+            # a realistic way to get here -- and an empty string passes
+            # `str.isascii()` exactly like any other ASCII string, so
+            # `token is None` would let it through into a responder that
+            # then 401s every request, including the correct one, for as
+            # long as the process runs. One message covers both an unset
+            # and an empty variable, naming it exactly once.
+            print(
+                "error: WLPP_RESPONDER_TOKEN is not set (or is empty); "
+                "refusing to start a responder with no token -- there is "
+                "no default."
+            )
+            return 2
+
+        # Imported here, not at module level, for the same reason `daemon`/
+        # `ingest`/`report`/`synth generate` above all do it locally:
+        # `wl_preproc.responder.server` imports `wl_preproc.responder.jobs`,
+        # which imports the schema layer and therefore DataJoint
+        # transitively -- a cost `wlpp schemas export` has no reason to pay.
+        from wl_preproc.responder.server import serve
+
+        try:
+            serve(args.port, token, Path(args.root), prefix=args.prefix)
+        except ValueError as exc:
+            # `serve()` raises `ValueError` from inside `make_handler` for a
+            # non-ASCII token, before any socket is bound (responder/
+            # server.py's own docstring, "The configured token must be
+            # ASCII") -- a real refusal, just not yet shaped like a CLI
+            # error message. Caught here rather than left to propagate: an
+            # operator reading a systemd journal gets this line, not a
+            # traceback ending in a raise deep inside make_handler.
+            print(f"error: refusing to start: {exc}")
+            return 2
+        return 0  # pragma: no cover - serve() blocks forever on success
 
     return 2
 
