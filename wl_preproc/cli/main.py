@@ -290,10 +290,26 @@ def main(argv: list[str] | None = None) -> int:
         # path that names a file, so this one check covers both -- and
         # Task 10 has just shipped a document telling an operator to write a
         # --root into a systemd unit, where a typo is exactly this mistake.
+        #
+        # Fix round 3: `not args.root` FIRST, and it is not redundant with
+        # `is_dir()`. `Path("")` is `PosixPath('.')`, whose `.is_dir()` is
+        # `True`, so `--root=` passed this check and served the working
+        # DIRECTORY OF THE PROCESS -- measured: exit 1 (it reached `serve()`
+        # and failed on the port), root handed to `serve()` == cwd. That is
+        # the identical trap the token check three statements above exists
+        # for and names in full: `ExecStart=... --root=${WLPP_ROOT}` with
+        # `WLPP_ROOT` unset expands to exactly `--root=`, in the systemd
+        # unit Task 10 shipped. An empty root is an unconfigured root, not
+        # the working directory.
+        #
+        # `.` and `./` are legitimate and stay legitimate -- `not args.root`
+        # is false for both, and `test_responder_accepts_a_relative_root`
+        # pins that. `--root " "` was already correctly refused: a directory
+        # named " " does not exist.
         root = Path(args.root)
-        if not root.is_dir():
+        if not args.root or not root.is_dir():
             print(
-                f"error: --root {args.root} does not exist or is not a "
+                f"error: --root {args.root!r} does not exist or is not a "
                 "directory; refusing to start a responder with a broken "
                 "storage root."
             )
