@@ -551,9 +551,21 @@ def test_no_code_path_writes_activation_supersedes():
       uniquely identifiable by the `` : type`` that always follows a
       declared attribute's default value in DataJoint's DDL syntax — a
       keyword argument never has a bare colon-and-type immediately after
-      its value. Checked directly that this line matches
-      ``ddl_declaration`` and therefore stays excluded even under the
-      widened ``keyword_write``.
+      its value. A round-4 draft matched that default-value token with
+      ``\\S+`` (any non-whitespace), which BACKTRACKS past brackets and
+      braces to find any colon later in the line — silently re-excluding a
+      continuation-line keyword write whose *value* happens to contain one.
+      Two real, uncontrived idioms proved it (review round 5):
+      ``supersedes=candidates[0:1][0],`` and ``supersedes={1: 2}[1],``,
+      both missed, ``\\S+`` matching ``candidates[0`` or ``{1`` and landing
+      on the slice/dict colon rather than stopping where the real
+      declaration's value (``null``) actually ends. ``\\w+`` — word
+      characters only — cannot span a bracket or brace at all, so it
+      cannot backtrack into a colon inside one: it still matches the real
+      declaration's ``null`` exactly, and correctly fails to match either
+      idiom above from the first character after ``=``. Checked directly
+      that this line matches ``ddl_declaration`` and therefore stays
+      excluded even under the widened ``keyword_write``.
 
     None of the four matches a bare READ (`row["supersedes"]` alone,
     `.fetch1("supersedes")`) or the docstring prose in `submit_derivative`
@@ -567,7 +579,7 @@ def test_no_code_path_writes_activation_supersedes():
     dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
     subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
     keyword_write = re.compile(r"""supersedes\s*=(?!=)""")
-    ddl_declaration = re.compile(r"""^supersedes\s*=\s*\S+\s*:""")
+    ddl_declaration = re.compile(r"""^supersedes\s*=\s*\w+\s*:""")
 
     offenders = []
     for path in SOURCE_ROOT.rglob("*.py"):

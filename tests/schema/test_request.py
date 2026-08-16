@@ -1008,7 +1008,7 @@ def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, pref
     precondition this needs was reached only ~42% of the time even with the
     barrier, and even when reached the race did not always resolve into a
     deadlock) -- roughly 16% combined detection, meaning a CI run would go
-    green on a reintroduced range lock about four times in five. An earlier
+    green on a reintroduced range lock roughly 5 times in 6. An earlier
     version of this docstring claimed the opposite ("reliably deadlocked"),
     which the same measurement disproved; kept here, corrected, as a
     record of a claim this project's own review caught contradicting a
