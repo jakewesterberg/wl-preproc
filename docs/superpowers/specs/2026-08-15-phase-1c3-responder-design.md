@@ -71,8 +71,17 @@ member of the lab. There is no permission model on the app side. If an action sh
 triggerable by anyone who can log in, do not publish it."* A button that queues work no computed
 stage will pick up for six months is a button that teaches people to distrust the surface.
 
-**So the list is computed from which stages actually exist**, the same way `daemon._computed_tables()`
-already discovers what `populate()` can run. Today that yields nothing. When the ephys branch
+**So the list is computed from which stages actually exist** — specifically, from whatever
+`daemon._computed_tables()` returns. **That is a mapping, not a discovery**, and the distinction
+matters: that function returns a literal `[]` today, with a docstring saying the ordering lives
+there so later phases *"extend one list rather than inventing their own traversal"*. It introspects
+nothing. Today it is empty.
+
+*(An earlier draft of this sentence said the action list is derived "the same way
+`daemon._computed_tables()` already discovers what `populate()` can run", which is false — it
+discovers nothing. Corrected 2026-08-15 by Task 6's review. The wrong version is recorded rather
+than quietly replaced because it is the prose that would have seeded the same error in the
+implementation, and Task 6's dispatch had to carry an explicit correction to stop it.)* When the ephys branch
 lands, spike sorting appears in the list with no change here and no change in wl.works — which is
 exactly what *"the host publishes its own action list"* was written to buy.
 
