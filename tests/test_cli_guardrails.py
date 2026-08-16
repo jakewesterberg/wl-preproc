@@ -25,7 +25,16 @@ def _run(*args, env=None):
     # "caught" only because the agent harness timed out, and reproducing it
     # showed the same test wedged for >20s rather than failing. A hang is not a
     # failure; in CI it burns the whole job budget instead of reding one test.
-    # 30s is ~300x the 0.1s these invocations actually take.
+    # 30s was ~300x the ~0.1s these invocations took when this comment was
+    # written -- true only of the argparse refusals that existed then. This
+    # helper now also drives tests that start a real subprocess against a
+    # real database-backed `serve()`/`delete` path
+    # (`test_responder_reports_a_busy_port_without_a_traceback`,
+    # `test_delete_defaults_to_a_dry_run`), measured 2026-08-16 at
+    # 0.33-0.39s each across repeated runs of the file. Re-measure rather
+    # than trust either figure: 30s is ~75x the ~0.4s worst case observed,
+    # not 300x -- still ample margin, just a stale multiplier for this
+    # helper's current callers.
     return subprocess.run(
         [sys.executable, "-m", "wl_preproc.cli.main", *args],
         capture_output=True,
@@ -274,6 +283,43 @@ def test_responder_reports_a_busy_port_without_a_traceback(tmp_path):
     assert str(port) in combined, "the message must name the port an operator has to free"
 
 
+def test_responder_refuses_to_start_with_a_missing_root(tmp_path):
+    """Fix round 2: `wlpp responder --root /no/such/dir` used to bind and
+    serve happily. `build_health` only reads `root` on the request path (via
+    `gather_readings`), so a typo'd root previously failed per request,
+    forever, rather than once at startup -- and Task 10 has just shipped a
+    document telling an operator to write a `--root` into a systemd unit,
+    where a typo is exactly the kind of mistake this refusal exists for.
+
+    Same principle already applied to the token and the port: refuse to
+    start rather than run broken. `--port 0` so a passing run would bind an
+    ephemeral port rather than anything reserved."""
+    missing = tmp_path / "does-not-exist"
+    env = {**os.environ, "WLPP_RESPONDER_TOKEN": "abc"}
+    result = _run("responder", "--port", "0", "--root", str(missing), env=env)
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode == 2, f"expected the refusal exit code 2, got {result.returncode}"
+    assert str(missing).lower() in combined, combined
+    assert "traceback" not in combined, combined
+
+
+def test_responder_refuses_to_start_when_root_is_not_a_directory(tmp_path):
+    """The other half of the same check: `--root` naming a real path that is
+    a FILE, not a directory -- a plausible typo (one path component too
+    many, or a systemd unit edited by hand) that `Path.exists()` alone would
+    not catch, since the path is not missing, only the wrong kind of thing.
+    `Path.is_dir()` is `False` for both this case and the missing-path case
+    above, which is why one check covers both."""
+    not_a_dir = tmp_path / "a-file"
+    not_a_dir.write_text("not a directory")
+    env = {**os.environ, "WLPP_RESPONDER_TOKEN": "abc"}
+    result = _run("responder", "--port", "0", "--root", str(not_a_dir), env=env)
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode == 2, f"expected the refusal exit code 2, got {result.returncode}"
+    assert str(not_a_dir).lower() in combined, combined
+    assert "traceback" not in combined, combined
+
+
 # ---------------------------------------------------------------------------
 # Task 9: section 11.1's guardrail — wl.works opens every connection to this
 # host; this host never opens one outbound.
@@ -468,15 +514,35 @@ class _OutboundScan(ast.NodeVisitor):
             local = alias.asname or alias.name
             full = f"{module}.{alias.name}" if module else alias.name
             self._aliases[local] = full
-            # Two shapes catch different halves of `_FORBIDDEN_IMPORTS`:
-            # the `module` test for `from httpx import Client` (the module
-            # itself is forbidden, whatever name is pulled from it) and for
-            # `from requests.adapters import HTTPAdapter` (forbidden by
-            # prefix — see `_is_forbidden`), the `full` test for `from
-            # urllib import request` / `from http import client` (the
-            # module is fine on its own — `urllib.parse` is legal — but
-            # this specific name pulled from it names the forbidden
-            # submodule).
+            # The `module` clause is REDUNDANT with the `full` clause, not
+            # complementary to it — correcting what this comment claimed
+            # until 2026-08-16, that the two "catch different halves of
+            # `_FORBIDDEN_IMPORTS`". That was true only under exact
+            # membership. Once `_is_forbidden` gained prefix matching, `full`
+            # being `module + "." + alias.name` means `_is_forbidden(module)`
+            # implies `_is_forbidden(full)` in EVERY case — zero
+            # counterexamples over the exhaustive product, because whatever
+            # forbidden prefix makes `module` match makes `full` match too,
+            # one dot further in. The two cases this comment used to credit
+            # to `module` alone are both also caught by `full`: `from httpx
+            # import Client` has `full = "httpx.Client"`, itself forbidden by
+            # the same prefix rule as `module = "httpx"`; `from
+            # requests.adapters import HTTPAdapter` has `full =
+            # "requests.adapters.HTTPAdapter"`, forbidden for the identical
+            # reason `module = "requests.adapters"` already is.
+            #
+            # Kept anyway — it fails one node earlier, at the `from`
+            # statement itself, for a reader checking only this clause — but
+            # removing it was never the actual gap. Until this round NOTHING
+            # pinned this method's own flagging: deleting this whole `if` put
+            # zero of the battery's `from X import Y` rows to MISS, because
+            # every one of them pairs the import with a call on the next line
+            # that `visit_Call` (or now `visit_Attribute`) catches
+            # independently through the alias map built two lines up.
+            # `_CAUGHT["from urllib import request (bare, no call)"]` is the
+            # one row with nothing after it — the row that actually pins
+            # this `if`, either clause, because there is nothing else in that
+            # source for anything else to catch.
             if _is_forbidden(module) or _is_forbidden(full):
                 self._flag(node, f"from {module} import {alias.name}")
         self.generic_visit(node)
@@ -486,16 +552,39 @@ class _OutboundScan(ast.NodeVisitor):
         through the aliases recorded so far, or `None` for anything else —
         a call, a literal, a subscript.
 
-        Kept, rather than deleted along with `_FORBIDDEN_CALLS`, because
-        `visit_Call`'s one remaining rule is built on it: an attribute chain
-        landing inside a forbidden module has to be resolved through the
-        alias map before it can be judged.
+        Kept, rather than deleted along with `_FORBIDDEN_CALLS`, because both
+        remaining rules are built on it: `visit_Call` resolves `node.func`
+        before judging a call, and `visit_Attribute` below resolves the
+        `Attribute` node itself before judging a plain attribute reference —
+        an attribute chain landing inside a forbidden module has to be
+        resolved through the alias map before either can be judged.
 
-        `None` for a `Call` means a chain THROUGH a call's return value
-        never resolves: `socket.socket().connect(...)` is invisible here,
-        and so is any other rebind of an object a call produced. Nothing
-        chases those any more — they are all caught one statement earlier,
-        at `import socket`, which is the entire argument for the flat ban.
+        `None` for a `Call` means a chain THROUGH a call's return value never
+        resolves: `socket.socket().connect(...)` is invisible here, and so is
+        any other rebind of an object a call *produced*. Nothing chases
+        those, and that is fine — but ONLY for a module banned OUTRIGHT, like
+        `socket`: you cannot reach `socket.socket()`'s return value without
+        an `import socket` statement somewhere in the same file, and that
+        statement is caught on its own, at the import, before this method
+        ever runs on the call that follows it.
+
+        **That argument does not generalise to a module forbidden only by
+        name, like `http.client`** — this docstring claimed otherwise until
+        2026-08-16 ("they are all caught one statement earlier, at `import
+        socket`, which is the entire argument for the flat ban"), true of the
+        one module banned outright and false of the module the responder
+        actually links against. `import http` is legal by itself, so `client
+        = http.client` carries no forbidden import statement anywhere in the
+        file — and it is not a call-return rebind either: the right-hand
+        side is a plain `ast.Attribute`, which this method already resolved
+        correctly, to `"http.client"`, before this round changed anything
+        here. The gap was never in `_resolve`. It was that nothing called
+        `_resolve` on an `Attribute` standing on its own — an assignment's
+        value, a default argument, a list element, never inside a `Call` —
+        until `visit_Attribute` was added below to judge every `Attribute`
+        in the file the same way `visit_Call` already judges every `Call`.
+        Proven live before the fix: outbound HTTP 204, listener confirmed
+        receipt, this guardrail reporting "1 passed".
 
         A name this file never imported resolves to itself, so a local
         variable named after a forbidden module (`socket = ...` then
@@ -531,6 +620,51 @@ class _OutboundScan(ast.NodeVisitor):
         resolved = self._resolve(node.func)
         if _is_forbidden(resolved):
             self._flag(node, f"{resolved}(...)")
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        # Mirrors `visit_Call` exactly, and closes the escape that survived
+        # it: an `Attribute` chain landing inside a forbidden module is
+        # itself the offense, whether or not it is ever called. Before this
+        # method existed, `visit_Call` only ever resolved a *call's* `func`,
+        # so an `Attribute` appearing anywhere else in the tree — the value
+        # of a plain assignment, a function's default argument, an element
+        # of a list — was structurally invisible to this walk. `_resolve`
+        # already handled that node correctly; nothing was calling it there.
+        #
+        #     import http                    # forbidden? no. `http` is fine.
+        #     client = http.client           # ...and THIS is the escape:
+        #                                     # an Attribute, not a Call, so
+        #                                     # visit_Call never sees it.
+        #     client.HTTPConnection(host, 1) # the call that follows resolves
+        #                                     # `client` to itself (no alias
+        #                                     # recorded for a plain Assign),
+        #                                     # so visit_Call is blind here
+        #                                     # too — "client.HTTPConnection"
+        #                                     # matches no forbidden prefix.
+        #
+        # Proven end to end against a live listener before this method
+        # existed: outbound HTTP 204, listener confirmed receipt, this
+        # guardrail reporting "1 passed". See `_resolve`'s docstring for why
+        # the argument that carries the flat `socket` ban ("caught one
+        # statement earlier, at the import") does not generalise to
+        # `http.client`, and is not this method's justification — this
+        # method's justification is that `visit_Call` only ever visits a
+        # `Call`'s `func`, and an `Attribute` a program never calls is still
+        # a live reference to whatever it resolves to.
+        #
+        # Measured, not assumed, before this shipped: catches all six escape
+        # variants in `_CAUGHT` below, breaks zero of the 9 `_ALLOWED` rows,
+        # and adds zero offenders across all 47 files of `wl_preproc/` — see
+        # the module docstring on `_SCAN_ROOT` for that count's provenance.
+        # An attribute access on a module this file legitimately imports
+        # (`http.server.ThreadingHTTPServer`, `urllib.parse.urlencode`,
+        # `socketserver.ThreadingMixIn`) resolves to a dotted path that is
+        # simply not in `_FORBIDDEN_IMPORTS` by any clause, so it is ordinary
+        # code to this method exactly as it already was to `visit_Call`.
+        resolved = self._resolve(node)
+        if _is_forbidden(resolved):
+            self._flag(node, resolved)
         self.generic_visit(node)
 
 
@@ -659,6 +793,42 @@ _CAUGHT = {
     "import socket": "import socket\n",
     "socket.create_connection": "import socket as s\ns.create_connection(('h', 1))\n",
     "socket.socket().connect": "import socket\nsocket.socket().connect(('h', 1))\n",
+    # --- round 2: an Attribute standing on its own, never inside a Call
+    # `visit_Call` would ever resolve. Six variants, none carrying a
+    # forbidden import statement anywhere. The first is the exact shape
+    # planted in `health.py` and proven live end to end before
+    # `visit_Attribute` existed: outbound HTTP 204, listener confirmed
+    # receipt, guardrail reporting "1 passed, 40 deselected".
+    "module bound to a local name: client = http.client": (
+        "import http\nclient = http.client\nclient.HTTPConnection(host, 1)\n"
+    ),
+    "class bound to a local name: HC = http.client.HTTPConnection": (
+        "import http\nHC = http.client.HTTPConnection\nHC(host, 1)\n"
+    ),
+    # The same escape reached without `import http` at all — only `import
+    # http.server`'s side effect (handler.py:183, server.py:141 both do
+    # this already) puts `http.client` on the `http` package.
+    "module bound to a local name, via the import http.server side effect": (
+        "import http.server\nclient = http.client\nclient.HTTPSConnection(host)\n"
+    ),
+    "the same shape via urllib.request": (
+        "import urllib.parse\nreq = urllib.request\nreq.urlopen('http://h')\n"
+    ),
+    "a forbidden attribute as a default argument": (
+        "import http\n\n\ndef f(conn=http.client.HTTPConnection):\n    return conn\n"
+    ),
+    "a forbidden attribute as a list element": (
+        "import http\nHANDLERS = [http.client.HTTPConnection]\n"
+    ),
+    # --- pins `visit_ImportFrom`'s own flagging, which nothing did until
+    # this round (see the "I" finding in the round 2 report): every OTHER
+    # `from X import Y` row above pairs the import with a call on the next
+    # line that `visit_Call`/`visit_Attribute` catches independently through
+    # the alias map, so deleting `visit_ImportFrom`'s `if _is_forbidden(...):
+    # self._flag(...)` entirely put ZERO of those rows to MISS. This one has
+    # no call after it: the import statement is the whole offense, and it is
+    # the only row that fails if that `if` is neutered.
+    "from urllib import request (bare, no call)": "from urllib import request\n",
 }
 
 _ALLOWED = {

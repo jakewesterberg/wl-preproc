@@ -281,6 +281,24 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
+        # Fix round 2: `build_health` (via `gather_readings`) only reads
+        # `root` on the request path, never at startup, so a typo'd --root
+        # used to bind the port and serve happily -- failing per request,
+        # forever, rather than once here. Same principle already applied to
+        # the token and the port above: refuse to start rather than run
+        # broken. `Path.is_dir()` is `False` for both a missing path and a
+        # path that names a file, so this one check covers both -- and
+        # Task 10 has just shipped a document telling an operator to write a
+        # --root into a systemd unit, where a typo is exactly this mistake.
+        root = Path(args.root)
+        if not root.is_dir():
+            print(
+                f"error: --root {args.root} does not exist or is not a "
+                "directory; refusing to start a responder with a broken "
+                "storage root."
+            )
+            return 2
+
         # Imported here, not at module level, for the same reason `daemon`/
         # `ingest`/`report`/`synth generate` above all do it locally:
         # `wl_preproc.responder.server` imports `wl_preproc.responder.jobs`,
@@ -289,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.responder.server import serve
 
         try:
-            serve(args.port, token, Path(args.root), prefix=args.prefix)
+            serve(args.port, token, root, prefix=args.prefix)
         except ValueError as exc:
             # `serve()` raises `ValueError` from inside `make_handler` for a
             # non-ASCII token, before any socket is bound (responder/
@@ -301,14 +319,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: refusing to start: {exc}")
             return 2
         except OSError as exc:
-            # The bind failed. `OSError`, not just the `ValueError` above,
-            # because "a ValueError traceback is not a CLI error message"
-            # (controller override 3) is a principle and not a list of one
-            # exception type -- and the commonest responder restart failure
-            # there is lands here: `[Errno 48] Address already in use`, a
-            # systemd restart racing the old process's socket, previously a
-            # raw traceback ending in `socketserver.TCPServer.server_bind`.
-            # A privileged port with no capability to bind it arrives the
+            # `OSError`, not just the `ValueError` above, because "a
+            # ValueError traceback is not a CLI error message" (controller
+            # override 3) is a principle and not a list of one exception
+            # type -- and the commonest responder restart failure there is
+            # lands here: `[Errno 48] Address already in use`, a systemd
+            # restart racing the old process's socket, previously a raw
+            # traceback ending in `socketserver.TCPServer.server_bind`. A
+            # privileged port with no capability to bind it arrives the
             # same way.
             #
             # Exit 1, not the 2 the refusals above use: 2 in this CLI means
@@ -317,13 +335,26 @@ def main(argv: list[str] | None = None) -> int:
             # port. It tried and failed, which is `doctor`'s exit 1. The
             # port is named because it is what an operator has to go free.
             #
-            # The message says "bind" although this catch spans the whole of
-            # `serve()`, and that is accurate rather than sloppy:
-            # `socketserver.BaseServer._handle_request_noblock` catches
-            # `OSError` from `get_request()` itself and returns, so a
-            # per-request accept failure never reaches here. What reaches
-            # here is `ThreadingHTTPServer.__init__` failing to bind.
-            print(f"error: could not bind port {args.port}: {exc}")
+            # Fix round 2: the message below no longer claims "bind",
+            # although in practice a bind failure is overwhelmingly what
+            # reaches here. This `try` spans the whole of `serve()`, not
+            # just `ThreadingHTTPServer.__init__`, and the rest of `serve()`
+            # is not entirely inert: `socketserver.BaseServer.
+            # _handle_request_noblock` does catch `OSError` from
+            # `get_request()` and return, so a per-request accept failure
+            # never reaches here, but `serve_forever()`'s own
+            # `selector.select()` call is NOT similarly guarded -- an
+            # `OSError` there (a listening socket's file descriptor going
+            # bad from outside this process, say, after months of uptime)
+            # would reach this handler too, long after any bind, and "could
+            # not bind port N" would be a false description of it. Narrowing
+            # the `try` to just the constructor would fix that precisely,
+            # but costs a distinct exception type out of `serve()` or a
+            # split in the CLI -- more surface than a very-low-probability
+            # wrong noun deserves. The message says only what is true on
+            # both paths: this port, the OS's own error text (errno
+            # included), exit 1.
+            print(f"error: responder failed on port {args.port}: {exc}")
             return 1
         # Reached only if `serve_forever()` returns, which it does only on an
         # explicit `shutdown()` no caller here issues; in practice this

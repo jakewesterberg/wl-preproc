@@ -843,7 +843,7 @@ Spec §8, §9. §11.1 is not negotiable and a test should say so.
 - [ ] **Step 1: Write the failing guardrail test**
 
 ```python
-def test_nothing_in_the_responder_opens_an_outbound_connection():
+def test_nothing_in_wl_preproc_opens_an_outbound_connection():
     """Section 11.1: wl.works opens every connection and this host never
     initiates. That is a property of the code, not an intention, so it is a
     test — the same shape as the guardrail forbidding a bare .delete().
