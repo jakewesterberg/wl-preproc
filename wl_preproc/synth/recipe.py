@@ -194,3 +194,13 @@ STIM_RECIPE = SessionRecipe(
     ap_sample_rate_hz=30_000.0,
     seed=7,
 )
+
+# Recipes keyed by the CLI's own --profile name (wl_preproc/cli/main.py), so
+# a caller that wants "the ci recipe" or "the stim recipe" has one place to
+# look it up by name rather than importing three constants and building the
+# mapping itself. Phase 1c-4 adds "eye" here once an ohdpi fixture exists.
+RECIPES: dict[str, SessionRecipe] = {
+    "ci": CI_RECIPE,
+    "benchmark": BENCHMARK_RECIPE,
+    "stim": STIM_RECIPE,
+}
