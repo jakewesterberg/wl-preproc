@@ -279,16 +279,24 @@ is not written into their repository unilaterally.
 
 | Module | Responsibility |
 |---|---|
-| `responder/server.py` | `ThreadingHTTPServer` wiring, the lock, `serve(port, token, prefix)`. |
+| `responder/server.py` | `ThreadingHTTPServer` wiring, the lock, `serve(port, token, root, prefix)`. |
 | `responder/handler.py` | Routing, auth, status codes. Knows HTTP; knows nothing about DataJoint. |
 | `responder/health.py` | Verdict and readings. Reads only. |
 | `responder/actions.py` | Derives the action list from the computed stages that exist. |
 | `responder/jobs.py` | `JobRequest` → rows. The only module here that writes. |
-| `cli/main.py` | `wlpp responder --port --prefix` |
+| `cli/main.py` | `wlpp responder --port --root --prefix` |
 
 `handler.py` knowing no DataJoint is the same separation `ingest/` uses, and for the same reason:
 routing, auth and status codes are testable without a database, and there are more of those cases
 than there are of the ones that need one.
+
+*(**Corrected 2026-08-16 by Task 10.** Both rows above read `--port --prefix` / `serve(port,
+token, prefix)` with no `--root` until then, and the shipped code has taken one since Task 5:
+`build_health` reads the storage root — the disk, stall and storage-root-scan readings are all
+about that directory — so `serve()` cannot construct its `health_fn` without one and `--root` is
+required with no default. The wrong version is recorded rather than quietly replaced, per this
+document's own convention in §3: it is the prose an installer would have copied into a systemd
+unit that then fails at argument parsing.)*
 
 ---
 
