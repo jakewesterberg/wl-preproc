@@ -29,6 +29,7 @@ from pathlib import Path
 
 from wl_preproc.cli.report import Readings
 from wl_preproc.contracts.protocol import HealthResponse, Reading, Verdict, plain_text
+from wl_preproc.responder.actions import available_actions
 from wl_preproc.schema import DEFAULT_PREFIX
 
 # Every key `build_health` can emit below, and the priority order it uses to
@@ -185,6 +186,16 @@ def build_health(
         # if constructing ITS reading also raised, there would be no path
         # left that reliably answers wl.works at all. `plain_text` here for
         # the identical reason it is used below.
+        #
+        # `actions` is hardcoded `[]` here, not `available_actions(prefix=prefix)`:
+        # this branch has just declared the database unreachable, and every
+        # published action, once triggered, ultimately becomes an inserted
+        # request row (spec section 11.3: "the responder does not compute;
+        # it inserts a Manual-tier request row"). Whatever `available_actions`
+        # would report about which stages exist says nothing about whether a
+        # request could actually be accepted right now -- publishing one here
+        # would be the same overclaim `unknown` itself is refused for, one
+        # field over.
         return HealthResponse(
             verdict="down",
             readings=[
@@ -239,8 +250,11 @@ def build_health(
     readings_out.append(reading("stuck_jobs", "Stuck jobs", _stuck_jobs_value(readings)))
     readings_out.append(reading("disk_headroom", "Disk headroom", _disk_reading_value(readings)))
 
-    # Empty until Task 6 (`responder/actions.py`) wires in `available_actions`.
-    # Spec section 3: publishing an action before its stage exists is worse
-    # than publishing none, since wl.works renders every action as a button
-    # any lab member can press.
-    return HealthResponse(verdict=verdict, readings=readings_out, actions=[])
+    # `available_actions` derives this from which computed stages exist
+    # (`responder/actions.py`), not from anything computed above -- spec
+    # section 3: publishing an action before its stage exists is worse than
+    # publishing none, since wl.works renders every action as a button any
+    # lab member can press. Empty today because no stage exists yet.
+    return HealthResponse(
+        verdict=verdict, readings=readings_out, actions=available_actions(prefix=prefix)
+    )
