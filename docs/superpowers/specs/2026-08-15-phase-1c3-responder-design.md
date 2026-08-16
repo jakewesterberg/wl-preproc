@@ -154,7 +154,9 @@ across threads** — 1c-2's final review lost an afternoon to a four-thread prob
 it with subprocesses.
 
 The responder therefore serialises database work behind a single lock rather than opening a
-connection per thread. One known client polling every few minutes does not need concurrency, and a
+connection per thread. **That lock is load-bearing for correctness and not only for thread
+safety** — §6.4 records a validate-before-write race it is what closes, so anything that later
+runs two responder processes against one schema must close that race first. One known client polling every few minutes does not need concurrency, and a
 lock is a great deal easier to reason about than a connection pool. The health endpoint's reads
 and the job endpoint's writes take the same lock.
 
@@ -356,6 +358,33 @@ should spend: a separate column for the asserted boundary changes a table two su
 build on; having `accept()` write only `block_id`, `task_type` and `works_block_id` needs those
 boundary columns to become nullable, which is a schema change to satisfy a consumer that does not
 exist yet; and treating wl.works' numbers as authoritative would contradict a frozen interface.
+
+### 6.4 Validate-before-write and never-overwrite cannot both hold without an undo
+
+**Found 2026-08-16 by Task 7's re-review, and it is the same missing piece as §6.3.**
+
+`accept()` originally wrote its `Montage`/`Block` rows and then validated the window against a
+fresh read. That was immune to a race — whichever payload won `skip_duplicates` was also the one
+checked — but it meant a rejected request **planted the row it was rejected over**, and the
+correction wl.works sent next was then refused citing the values it refused to replace. That was
+Critical, and it was fixed by validating an in-memory candidate first.
+
+The fix trades one exposure for a narrower one. "Validated" and "what is on file" can now diverge
+if a concurrent write lands in between: reproduced deterministically, a rival connection inserting
+an out-of-window boundary between the check and the write leaves `accept()` returning success over
+a row it never validated.
+
+**Both horns are the same problem.** Validate-after-write is safe against races and unsafe against
+bad first payloads; validate-before-write is the reverse. Neither can be made safe against both
+without the ability to *undo* a write — and §6.3 records that no correction path exists in the
+shipped tooling at all. Adding a post-write re-validation would not close it either: on failure
+there is nothing to do but leave the bad row, which is C1 again.
+
+**What makes the shipped choice correct anyway:** §4.4's single process-wide lock serialises every
+`accept()` within one responder, so the race needs a *second writing process* against one database.
+That makes the lock **load-bearing for correctness, not merely for DataJoint's thread-safety** —
+which is why §4.4 now says so, and why anything that later runs two responders against one schema
+must close this first.
 
 **Whoever builds the decoder owns this**, and `responder/jobs.py` names it at the point of the
 write so it is met as a known conflict rather than a silent one. The likely answer is that
