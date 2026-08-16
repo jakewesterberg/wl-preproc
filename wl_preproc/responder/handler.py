@@ -309,6 +309,37 @@ def _error_body(exc: Exception) -> dict[str, Any]:
     message -- none of this project's `ValueError`s carry structured detail
     of their own (see `responder/jobs.py`, which raises every one of them
     with a fully-formed message string).
+
+    **Caller-supplied strings are reflected back unsanitised, on purpose,
+    and this is where a reader meets that.** `detail` carries pydantic's
+    `input` field, which echoes the caller's own offending value verbatim;
+    `str(exc)` for a `json.JSONDecodeError` quotes the caller's own bytes.
+    Neither is escaped, and neither goes through `contracts/protocol.py`'s
+    `plain_text` the way a `Reading.value` does. That looks inconsistent
+    beside `send_error` below, which discards stdlib's HTML page and its
+    `%r` echo of the caller's bytes and cites the protocol's markup ban to
+    justify doing so. It is not inconsistent, for two reasons that both
+    have to hold:
+
+    1. **Design spec section 4.2 requires it.** "A malformed body is `422`
+       with the pydantic error, never a traceback" -- the body **is** the
+       pydantic error, not a paraphrase of it. Sanitising `input` would
+       make the one field that says *which value was wrong* stop saying it
+       for exactly the inputs most likely to be wrong.
+    2. **This is a reflection, not a publication.** `POST /jobs` is
+       authenticated (`_authorized()` runs first, unconditionally), so the
+       only party that can put a string here is the party that gets it
+       back -- wl.works reading its own input. A `Reading.value` is the
+       opposite: `GET /health` publishes strings this host authored from
+       filesystem paths and exception text, to be rendered on a page many
+       lab members see, which is why THAT path sanitises and this one does
+       not. `send_error`'s HTML page is replaced for a different reason
+       again -- it is not JSON, and it discloses this host's interpreter
+       version.
+
+    So: do not "fix" this by piping these through `plain_text`. It would
+    break section 4.2's contract to harden a channel whose only writer is
+    also its only reader.
     """
     if isinstance(exc, ValidationError):
         return {"error": "invalid request body", "detail": exc.errors(include_url=False)}

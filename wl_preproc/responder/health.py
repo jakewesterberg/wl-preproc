@@ -121,9 +121,27 @@ def _disk_reading_value(readings: Readings) -> str:
     headroom_ok=False` as placeholders when `disk_error` is set -- values
     its own docstring says are "never rendered on their own, only ever
     behind `disk_error`" -- so `disk_error` is checked first here too, and
-    this never falls through to that placeholder pair. Phrasing matches
-    `build_report`'s Disk section exactly, since both renderings ultimately
-    describe the same measurement.
+    this never falls through to that placeholder pair.
+
+    **Wording follows `build_report`'s Disk section; the markdown does
+    not** -- an earlier version of this docstring claimed the phrasing
+    matched "exactly", and that was true of one branch and not the other:
+
+    | branch | `build_report` | here |
+    |---|---|---|
+    | measured | `{N} GiB free (ok)`/`(LOW)` | identical |
+    | fault | `**not measured** — {disk_error}` | `not measured — {disk_error}` |
+
+    The dropped `**` is deliberate and required. A `Reading.value` is
+    contracted as plain text -- `contracts/protocol.py`'s own module
+    docstring, "We refuse to emit markup at all rather than relying on
+    [wl.works escaping it]", and `docs/ops/lab-host-protocol.md`'s
+    "Strings are plain text, never markup". Note that this one is a rule
+    the PRODUCER keeps rather than one the validator enforces:
+    `_MARKUP_RE` is `[<>&]`, so a stray `**` would sail through
+    `_reject_markup` and land in wl.works' UI as literal asterisks. The
+    same applies to `build_report`'s backticked `` `{root}` ``, which has
+    no counterpart here at all.
 
     `disk_error` is an `OSError` message this host did not author -- a real
     path or a library's own text can contain `<`, `>` or `&`, which
@@ -168,8 +186,16 @@ def build_health(
     bind its own separate name at THIS module's import time and never
     observe a patch applied to `wl_preproc.cli.report`'s attribute
     afterward.
+
+    `_QUARANTINE_WINDOW_DAYS` rides the same local import, for the same
+    reason one step further on: `cli/report.py` OWNS that number, and
+    reading it here through the owning module rather than copying it means
+    a test can move the window on the owner and watch this label follow
+    (`test_the_quarantine_label_follows_the_window_it_names`). A module-
+    level binding would make that test patch this module instead, which
+    proves the copy is consistent with itself rather than with its source.
     """
-    from wl_preproc.cli.report import gather_readings
+    from wl_preproc.cli.report import _QUARANTINE_WINDOW_DAYS, gather_readings
 
     try:
         readings = gather_readings(root, prefix=prefix, now=now)
@@ -217,7 +243,24 @@ def build_health(
 
     readings_out = [
         reading("ingested_24h", "Ingested (24 h)", str(len(readings.ingested))),
-        reading("quarantined_7d", "Quarantined (7 d)", str(len(readings.quarantined))),
+        # The KEY stays pinned to the literal `quarantined_7d`: it is a wire
+        # name wl.works matches on, so it must not silently change shape the
+        # day the window does. The LABEL is rendered text describing that
+        # window, so it follows `_QUARANTINE_WINDOW_DAYS` -- the same
+        # constant `build_report` already interpolates into its own
+        # "## Quarantined (N d)" heading. Before this, `report.py` owned the
+        # number and this line hardcoded a copy of it, so changing the
+        # window moved the report's heading and left the responder's label
+        # claiming 7 -- over a number this project HAS already changed
+        # once: the Quarantined section shipped unwindowed (rendering the
+        # whole table forever) until `aacd922` introduced
+        # `_QUARANTINE_WINDOW_DAYS` at all. See that constant's own comment
+        # for why seven and not one or none.
+        reading(
+            "quarantined_7d",
+            f"Quarantined ({_QUARANTINE_WINDOW_DAYS} d)",
+            str(len(readings.quarantined)),
+        ),
         reading("stalled_transfers", "Stalled transfers", str(len(readings.stalled))),
     ]
     if readings.walk_error is not None:

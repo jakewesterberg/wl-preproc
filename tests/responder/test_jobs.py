@@ -865,3 +865,90 @@ def test_accept_rejects_an_unknown_block_id(landed_session, prefix):
         accept(job, prefix=prefix)
 
     assert len(schema_request.Request & {"idempotency_key": "jbunk01-k1"}) == 0
+
+
+def test_accept_rejects_a_session_this_host_has_never_ingested(
+    dj_conn, prefix, table_snapshot, deep_equal
+):
+    """Whole-branch review C1. A job for a `(subject, session_datetime)` with
+    no `Session` row is a `ValueError` -> `422`, raised BEFORE any write --
+    not an `IntegrityError` out of `core.Montage.insert`'s foreign key, which
+    `handler.py` maps to a `500` and `docs/ops/lab-host-protocol.md`
+    documents as retryable. A conforming client retried that forever.
+
+    **This is the ordinary case.** wl.works knows a session exists from the
+    ELN hours before its transfer lands here, so any button pressed in that
+    window arrives at exactly this state. Deliberately NOT using
+    `landed_session`: the whole point is that nothing has landed. `dj_conn`
+    and `prefix` are taken directly instead, and `accept()` activates the
+    schema itself.
+
+    **Proven by row snapshot, not by `in_transaction`.** DataJoint's
+    `insert()` calls `connection.query()` directly and never touches the
+    transaction machinery, so `in_transaction` reads `False` for a writing
+    function and a reading one alike -- this codebase has been misled by
+    that assumption four separate times. Every table `accept()` can write,
+    plus `Session` itself (which it must never create), is snapshotted
+    whole -- every row, every column -- before and after, and compared with
+    `deep_equal` rather than bare `==` (see `tests/conftest.py`).
+
+    Both halves of the message are asserted, because both are what makes the
+    422 body actionable for wl.works' UI: the subject and the session
+    datetime name WHICH session, and "not yet on record" is what lets them
+    render "that session has not arrived yet" instead of "invalid request".
+    """
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core, pipeline
+    from wl_preproc.schema import request as schema_request
+
+    schema_request.activate(prefix=prefix)
+
+    subject = "jbnoses"
+    naive_dt = datetime.datetime(2027, 5, 25, 9, 0)
+    session_key = {"subject": subject, "session_datetime": naive_dt}
+    assert len(pipeline.Session & session_key) == 0, "the premise: this session never landed"
+
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        montage_id=0,
+        idempotency_key="jbnoses-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        blocks=[
+            {
+                "block_id": 1,
+                "task_type": "rf_map",
+                "start_s": 0.0,
+                "end_s": 6.0,
+                "works_block_id": "wb-1",
+            }
+        ],
+    )
+
+    written_tables = [
+        core.Montage,
+        core.Block,
+        schema_request.Request,
+        schema_request.Activation,
+        schema_request.ActivationBlock,
+        pipeline.Session,
+    ]
+    before = [table_snapshot(table) for table in written_tables]
+
+    with pytest.raises(ValueError) as excinfo:
+        accept(job, prefix=prefix)
+
+    message = str(excinfo.value)
+    assert subject in message, "the message must name which subject"
+    assert "2027-05-25T09:00:00" in message, "the message must name which session"
+    assert "not yet on record" in message
+    assert "IntegrityError" not in message and "foreign key" not in message, (
+        "the database's own constraint text must never be what the caller reads"
+    )
+
+    after = [table_snapshot(table) for table in written_tables]
+    for table, rows_before, rows_after in zip(written_tables, before, after, strict=True):
+        assert deep_equal(rows_before, rows_after), (
+            f"{table.__name__} changed under a rejected request: "
+            f"{len(rows_before)} row(s) before, {len(rows_after)} after"
+        )

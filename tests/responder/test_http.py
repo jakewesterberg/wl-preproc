@@ -1531,6 +1531,59 @@ def test_a_real_key_reuse_conflict_through_the_translation_seam_is_409(
     assert "error" in json.loads(second_body)
 
 
+def test_a_job_for_a_session_that_never_landed_is_422_not_a_retryable_500(
+    start_server, dj_conn, prefix
+):
+    """Whole-branch review C1, end to end over a real socket through the real
+    production seam -- `server.py::_translate_accept_errors`, not a fake
+    `accept_fn`.
+
+    wl.works knows a session exists from the ELN hours before its transfer
+    lands on this host, so a button pressed in that window posts a job for a
+    `(subject, session_datetime)` with no `Session` row. `core.Montage`'s
+    foreign key used to turn that into an `IntegrityError`, which this
+    handler maps -- correctly for every other member of that family -- to a
+    `500`, which `docs/ops/lab-host-protocol.md` documents as **retryable**.
+    A conforming client therefore retried, forever, a request that cannot
+    succeed until a transfer completes.
+
+    Deliberately does NOT use `landed_session`: the absence IS the premise.
+    `dj_conn`/`prefix` are taken directly so the schema exists while the
+    session does not.
+
+    Both halves of the old failure are asserted dead: the status is `422`,
+    and the body carries neither the exception type nor the database's own
+    constraint text. That second half is not decoration -- the 500 body
+    leaked the schema name, the table name and the constraint name to
+    whatever holds the bearer token.
+    """
+    import wl_preproc.responder.server as server_module
+
+    subject = "htpnoses"
+    naive_dt = datetime.datetime(2027, 6, 9, 9, 0)
+
+    def accept_fn(request):
+        return server_module._translate_accept_errors(request, prefix=prefix)
+
+    base = start_server(TOKEN, _health_ok, accept_fn)
+    payload = _real_job_payload(
+        subject=subject,
+        session_datetime_iso=naive_dt.replace(tzinfo=datetime.UTC).isoformat(),
+        idempotency_key="htpnoses-k1",
+    )
+
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+
+    assert status == 422, "a session that has not arrived yet is the caller's answer, not a fault"
+    error = json.loads(body)["error"]
+    assert subject in error and "2027-06-09T09:00:00" in error
+    assert "not yet on record" in error
+    assert "IntegrityError" not in error, "the old, retryable shape must stay dead"
+    assert "foreign key" not in error and "CONSTRAINT" not in error, (
+        "a 500 body used to leak the schema, table and constraint names"
+    )
+
+
 # --------------------------------------------------------------------------
 # The lock. Review Important 2: the prior `serve()` test below proves
 # end-to-end wiring but passes even with the lock deleted entirely, or with

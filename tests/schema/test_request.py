@@ -98,6 +98,16 @@ def _commit_rival_activation(*, request, row: dict, request_key: str, selection_
 # a file-based barrier (each worker touches a marker, then waits for every
 # worker's marker to exist) so all three enter submit_derivative's retry
 # loop as close to simultaneously as the OS allows.
+#
+# EVERYTHING BELOW IS A DELIBERATE CODE SAMPLE, not code this file runs.
+# It is a string constant, written to a file and executed by a separate
+# interpreter -- so the `# noqa: BLE001` inside it is inert here under any
+# linter configuration, since nothing lints the inside of a string. It is
+# kept rather than deleted because this text IS real, executed Python that
+# a reader reads as source, and its trailing prose says why that particular
+# bare `except Exception` is the point of the worker rather than an
+# oversight: the child must report ANY exception type back to the parent.
+# Whoever lints this repo will not see it; whoever reads it will.
 _CONCURRENT_DERIVATIVE_WORKER = r'''
 import datetime
 import json

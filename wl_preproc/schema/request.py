@@ -195,6 +195,40 @@ def selection_hash(task_type: str, block_ids: list[int]) -> str:
     `json.dumps(..., sort_keys=True, separators=(",", ":"))`, read from that
     function rather than assumed: this project has already spent a review
     round on a digest-size claim that drifted from the code it described.
+
+    **These two functions are deliberately NOT merged, and the drift that
+    creates is asymmetric. Read this before changing `digest_size`.**
+    `ingest/params.py` refuses the same merge by name, one level up: it
+    calls `paramset.content_hash(declared.params)` rather than
+    reimplementing `json.dumps`'s argument list, precisely so the two cannot
+    drift. Here they are two functions hashing two different things --
+    a parameter mapping there, a `(task_type, block_ids)` pair here -- so
+    one function taking both shapes would be a worse abstraction than two
+    that happen to agree. What they must keep agreeing on is `digest_size`,
+    and the columns they land in do not make that symmetrical:
+
+    | | column | at digest_size=16 | at digest_size=32 |
+    |---|---|---|---|
+    | `paramset.content_hash` | `ParamSet.param_hash` `varchar(32)` | 32 hex chars, exactly full | 64 chars -- **raises** |
+    | `selection_hash` (here) | `Activation.selection_hash` `varchar(64)` | 32 chars, half empty | 64 chars -- fits |
+
+    Measured against a live MySQL 8 (`sql_mode` includes `STRICT_ALL_TABLES`
+    by default, and this project's containers run that default): the
+    over-long value raises `pymysql.err.DataError (1406, "Data too long for
+    column 'param_hash' at row 1")`. It does **not** truncate silently --
+    that would need strict mode off, which nothing here turns off.
+
+    So a `digest_size` bump breaks the two sides in opposite ways, and the
+    quiet one is this one. `paramset.register` starts raising 1406 at every
+    call: loud, immediate, impossible to miss. `submit_derivative` keeps
+    working -- and every hash it computes stops matching the 32-char hashes
+    already on file, so the dedupe above ("an existing `Activation` already
+    carrying that hash ... is returned as-is") silently stops finding them
+    and allocates a SECOND activation for a selection already in flight,
+    which is exactly the outcome section 11.3 exists to prevent. Changing
+    `digest_size` therefore means widening `param_hash` AND deciding what
+    happens to existing `selection_hash` rows; it is not a one-line edit in
+    either function.
     """
     payload = json.dumps(
         {"task_type": task_type, "block_ids": sorted(set(block_ids))},

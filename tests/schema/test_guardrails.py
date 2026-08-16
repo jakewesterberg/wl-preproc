@@ -356,7 +356,8 @@ def _synthetic_key(table) -> dict:
             key[name] = f"blobprobe-{name}"[:32]
         elif "int" in declared:
             key[name] = 99
-        else:  # pragma: no cover - a new key type should fail loudly, not silently
+        else:
+            # A new key type should fail loudly, not silently.
             raise AssertionError(f"unhandled key type for {name}: {declared}")
     return key
 
@@ -398,7 +399,8 @@ def _synthetic_required_secondary(table, exclude: str) -> dict:
             row[name] = 99
         elif "float" in declared or "double" in declared or "decimal" in declared:
             row[name] = 0.0
-        else:  # pragma: no cover - a new secondary type should fail loudly, not silently
+        else:
+            # A new secondary type should fail loudly, not silently.
             raise AssertionError(f"unhandled type for synthetic value: {name}: {declared}")
     return row
 

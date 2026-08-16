@@ -87,6 +87,18 @@ something to infer from whichever payload happened to arrive most recently.
   naming an id with no `Block` anywhere (I4) raises `ValueError` rather than
   being silently excluded from the window check.
 
+**The whole-branch review (2026-08-16) found one more, fixed here:**
+
+- **C1 -- a job for a session this host has never ingested was a `500`,
+  which the protocol document tells wl.works to retry forever.** `accept()`
+  validated montage existence, block existence, the window, subject length,
+  every column bound and the DATETIME floor -- but not that `Session`
+  itself exists, so `core.Montage.insert` hit the foreign key and the
+  resulting `IntegrityError` became a retryable `500`. Creating the session
+  is still not this function's job; DETECTING its absence now is. See
+  `_require_landed_session` for the full reasoning, the measured
+  before/after, and why the answer is `422` rather than `409`.
+
 **A design gap this task does not fix, recorded on the `Block` write below
 where it applies:** `core.Block`'s own comment says its boundaries are
 "decoded from event codes and cross-validated against those rows", and the
@@ -103,7 +115,7 @@ import math
 
 from wl_preproc.contracts.protocol import JobRequest
 from wl_preproc.ingest import landing
-from wl_preproc.schema import DEFAULT_PREFIX, core
+from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.schema import request as schema_request
 
 # The two keys `accept()` itself reads out of an arbitrary, wl.works-supplied
@@ -218,6 +230,70 @@ def _reject_non_finite(value, *, name: str) -> None:
         raise ValueError(f"{name}={value} is not a finite number")
 
 
+def _require_landed_session(session_key: dict) -> None:
+    """`ValueError` -- and so `422`, not `500` -- when no `Session` row
+    exists for this request's `(subject, session_datetime)`.
+
+    **`accept()` does not create the session, and must not.** That is
+    `ingest/landing.py`'s job, and `tests/responder/test_jobs.py`'s
+    `landed_session` fixture says so in as many words. What is new here is
+    only that the ABSENCE is detected rather than discovered by the
+    database: `core.Montage.insert` below carries a foreign key to
+    `pipeline.Session`, so without this check the very next write raises
+    `IntegrityError`, which `handler.py` maps -- correctly, for every other
+    member of that family -- to a `500`. Measured live over a real socket
+    before this check existed:
+
+    ```
+    POST /jobs, subject/session_datetime never ingested
+     -> 500 {"error": "IntegrityError: Cannot add or update a child row: a
+        foreign key constraint fails (`e2e_core`.`montage`, CONSTRAINT
+        `montage_ibfk_1` FOREIGN KEY (`subject`, `session_datetime`)
+        REFERENCES `e2e_session`.`session` ...)"}
+    ```
+
+    Three separately-correct decisions composed into one wrong answer on
+    the wire: this module does not own session existence, `handler.py` maps
+    every non-`KeyReuseError` DataJoint error to `500` deliberately (a lost
+    connection IS retryable), and `docs/ops/lab-host-protocol.md` documents
+    `500` as retryable. Together they told a conforming wl.works client to
+    retry, forever, a request that cannot succeed until something outside
+    the retry loop happens. The 500 body also leaked schema, table and
+    constraint names to the caller.
+
+    **The trigger is the ordinary case, not an exotic one.** wl.works knows
+    a session exists from the ELN hours before its data transfer lands on
+    this host, so any button pressed in that window arrives here first. The
+    honest answer is "not yet", and it belongs in the status code: `422`
+    (the server understood the request and cannot process the instructions
+    it contains), joining `accept()`'s existing `ValueError` family and the
+    protocol document's own `422` list -- no new status on the wire, no new
+    branch in their client.
+
+    `409` was the considered alternative and was ruled out: this document's
+    own meaning for it is "the remedy is outside the retry loop, tell a
+    human", which fits an ELN typo but not a transfer still in flight, and
+    it would force wl.works to parse message text to tell key reuse from a
+    session that has simply not arrived yet.
+
+    `pipeline.Session` is read as a module attribute at call time, never
+    bound by a `from ... import Session` at this module's import time:
+    `pipeline.activate()` REBINDS that global to the activated table (see
+    its own `global Session, Subject`), so a name bound earlier would point
+    at the unactivated placeholder forever.
+    """
+    if not (pipeline.Session & session_key):
+        raise ValueError(
+            f"session {session_key['subject']}/"
+            f"{session_key['session_datetime'].isoformat()} is not yet on "
+            "record on this host: no Session row exists for it, so there is "
+            "nothing to attach a montage, a block or a request to. wl.works "
+            "knows a session exists from the ELN before its data transfer "
+            "lands here; until ingest has landed it, this host cannot accept "
+            "a job for it. Resend once the transfer has completed."
+        )
+
+
 def _build_montage_rows(session_key: dict, montage_boundaries: list[dict]) -> list[dict]:
     """`Montage` rows this request WOULD write -- validated, not yet
     inserted. See `accept()`'s two-phase structure (review C1)."""
@@ -318,7 +394,11 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     Raises `ValueError` for a request that cannot be honoured: a `selection`
     missing `session_datetime` or `montage_id`; a `metadata.subject` longer
     than `landing.SUBJECT_MAX_LEN`; a `session_datetime` that is neither a
-    `datetime.datetime` nor a parseable ISO-8601 string; a `montage_id`,
+    `datetime.datetime` nor a parseable ISO-8601 string; a
+    `(subject, session_datetime)` with no `Session` row on this host yet
+    (`_require_landed_session` -- the ordinary ELN-before-transfer case,
+    which used to reach the database and come back as a `500` telling
+    wl.works to retry forever); a `montage_id`,
     `block_id`, `task_type`, `works_block_id`, `start_s` or `end_s` that
     cannot fit the column it would be written to; a `montage_id` with no
     boundary on record and none supplied in this request either; a
@@ -370,6 +450,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     candidate_blocks = {row["block_id"]: row for row in block_rows}
 
     schema_request.activate(prefix=prefix)
+
+    _require_landed_session(session_key)
 
     existing_montage_row = (
         (core.Montage & montage_key).fetch1() if (core.Montage & montage_key) else None

@@ -62,8 +62,9 @@ ones a client written against Plan 10 as it stands today would get wrong.
 | Address | the responder binds **every interface** on one TCP port |
 | Direction | **wl.works opens every connection. This host never initiates one.** |
 | Framing | HTTP/1.0 responses; **one request per TCP connection**, no keep-alive |
-| Content type | `application/json` on every response, including every error |
+| Content type | `application/json` on every response that carries headers at all — three framing-error paths carry none, see the framing note under [Status codes](#status-codes) |
 | Encoding | UTF-8; a request body that is not valid UTF-8 is `422` |
+| `Server` | present, with a single-space value (`Server:  ` on the wire) — never a version |
 
 **This host never initiates a connection**, and that is not merely an intention. Plan 10
 §11 rules out push and heartbeats from the app's side; the parent wl-preproc design §3.1
@@ -126,8 +127,13 @@ gets the honest routing answer instead (`404` or `405`); an authenticated arbitr
 still gets `401`, because the code path that answers it cannot tell whether authentication
 passed. `401` is the safe direction of that trade.
 
-**The `Server` header is deliberately empty** and no response body ever contains a Python
-traceback, a stack frame, or this host's interpreter version.
+**The `Server` header discloses no version.** Do not expect it to be *absent*: measured on
+the wire it is `Server:  ` — the header is sent on every response that carries headers at
+all, and its value is a single space. `server_version` and `sys_version` are both emptied,
+so the string the standard library joins them into has nothing in it but the separator, and
+stdlib sends the header name regardless. What it never contains is this host's interpreter
+version. No response body ever contains a Python traceback, a stack frame, or that version
+either.
 
 ### Operating the token
 
@@ -398,7 +404,7 @@ Every code this host can return, on either endpoint.
 | `408` | `POST /jobs` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
 | `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content. | **No — needs a human** |
 | `414` | both | `{"error": "request line too long"}` | Over-long request line. | No |
-| `422` | `POST /jobs` | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed or asks for something impossible. | No — fix and resend |
+| `422` | `POST /jobs` | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
 | `431` | both | `{"error": "request header fields too large"}` | Oversized header. | No |
 | `500` | both | `{"error": "<ExceptionType>: <message>"}` | This host's own fault, infrastructure included. | **Yes** |
 | `505` | both | `{"error": "http version not supported"}` | `HTTP/2.0` or later. See the framing note below. | No |
@@ -423,15 +429,41 @@ arrive as ordinary responses with a status line, as does every other code above.
   documentation links stripped), including `extra_forbidden` for an unknown field.
 - **A well-formed request this host refuses**: a `selection` missing `session_datetime` or
   `montage_id`; a `session_datetime` that is not parseable ISO-8601 or is before year 1000;
-  an oversized `subject`; a `montage_id`, `block_id`, `task_type`, `works_block_id`,
-  `start_s` or `end_s` that will not fit its column; a `montage_id` with no boundary on
-  record and none supplied in the request either; a `block_ids` entry naming no block
-  anywhere; or a `block_ids` entry naming a block outside its montage's `[start_s, end_s)`
-  window. The message names what was wrong.
+  an oversized `subject`; **a session this host has not ingested yet** (see below); a
+  `montage_id`, `block_id`, `task_type`, `works_block_id`, `start_s` or `end_s` that will
+  not fit its column; a `montage_id` with no boundary on record and none supplied in the
+  request either; a `block_ids` entry naming no block anywhere; or a `block_ids` entry
+  naming a block outside its montage's `[start_s, end_s)` window. The message names what
+  was wrong.
+
+**A session this host has not ingested yet is a `422`, and it is the ordinary case.** You
+know a session exists from the ELN the moment it is created; this host knows it exists only
+once its data transfer has landed and been ingested. Between those two moments — routinely
+hours, sometimes overnight — a job posted for that session is refused:
+
+```json
+{"error": "session Sam/2027-06-15T09:00:00 is not yet on record on this host: …"}
+```
+
+The full message, which is one line on the wire:
+
+> session `<subject>`/`<session_datetime>` is not yet on record on this host: no Session row
+> exists for it, so there is nothing to attach a montage, a block or a request to. wl.works
+> knows a session exists from the ELN before its data transfer lands here; until ingest has
+> landed it, this host cannot accept a job for it. Resend once the transfer has completed.
+
+The subject and the session datetime are always named, so this is renderable as **"that
+session has not arrived on the lab host yet"** rather than as "invalid request". It is a
+`422` and not a `409` on purpose: `409` here means *stop and tell a person*, and nobody
+needs telling — the situation resolves itself when the transfer completes. Resending later
+is the correct client behaviour; resending immediately, in a tight retry loop, is not, and
+that is exactly why this is not a `500`.
 
 **A rejected request leaves nothing behind.** Every check runs against candidate rows
 before anything is written, so a request refused over a bad boundary does not plant that
-boundary, and the corrected request that follows succeeds.
+boundary, and the corrected request that follows succeeds. That holds for the not-yet-
+ingested case too: the check runs before the first write, so nothing is left half-created
+for the real ingest to collide with when the transfer does land.
 
 ### `Content-Length` rules
 
@@ -513,7 +545,17 @@ transaction, so a MySQL restart or a LAN blip mid-request raises a connection er
 production path. Those are faults a retry clears, and the retry loop is exactly where they
 belong. Every DataJoint error other than key reuse — a lost connection, an access error, a
 missing table, an integrity error — is a `500` here, and only key reuse is translated to
-`409`. An earlier draft of the implementation mapped the whole family to `409`, which told
+`409`.
+
+**One integrity error used to reach here and no longer does.** A job naming a session this
+host has not ingested yet violated the foreign key on the first write, and that arrived as
+a `500` — which this section tells you to retry, for a request that could not succeed until
+a transfer completed. It is now caught before any write and answered `422`; see *`422` is
+the caller's mistake* above. Nothing else about this section changed, and no other integrity
+error is known to be reachable from a well-formed request: if you see one, it is genuinely
+this host's fault and a retry is genuinely the right response.
+
+An earlier draft of the implementation mapped the whole family to `409`, which told
 wl.works to stop retrying and escalate to a human for the one class of fault a retry would
 have cleared on its own; that is fixed, and the pairing above is the reason the two codes
 are worth keeping distinct in the client.
@@ -647,12 +689,31 @@ The responder also needs whatever DataJoint configuration the rest of the pipeli
 
 ### Exit codes
 
-| Code | Cause |
-|---|---|
-| `2` | Refusing to start: `WLPP_RESPONDER_TOKEN` unset or empty, or containing a non-ASCII character. |
-| `1` | The bind failed — `Address already in use` on a restart racing the previous process, or a privileged port with no capability to bind it. The port is named in the message. |
+Re-derived by running the shipped CLI, one subprocess per row, rather than read off the
+source. `2` means **refusing to start**: the invocation or the configuration is wrong and
+nothing was bound. `1` means it tried and the OS said no.
 
-Neither prints a traceback. Both are the kind of failure an operator reads in a journal.
+| Code | Cause | What the journal shows |
+|---|---|---|
+| `2` | `WLPP_RESPONDER_TOKEN` unset, or empty (`WLPP_RESPONDER_TOKEN=` in the unit file) | `error: WLPP_RESPONDER_TOKEN is not set (or is empty); refusing to start a responder with no token -- there is no default.` |
+| `2` | `WLPP_RESPONDER_TOKEN` containing a non-ASCII character | `error: refusing to start: the configured bearer token contains a non-ASCII character; …` — it would fail every request, the correct one included |
+| `2` | `--root` naming a path that does not exist, names a file, or is only whitespace | `error: --root '/srv/sesions' does not exist or is not a directory; refusing to start a responder with a broken storage root.` |
+| `2` | `--root=` with nothing after it — `--root=${WLPP_ROOT}` with `WLPP_ROOT` unset expands to exactly this | the same message, with `''` — **not** the working directory, which is what an earlier version silently served |
+| `2` | `--port` outside 0–65535 | `wlpp responder: error: argument --port: 99999 is not a TCP port (must be 0-65535)` |
+| `2` | `--port` not an integer | `wlpp responder: error: argument --port: invalid tcp_port value: 'abc'` |
+| `2` | `--port` or `--root` absent; an unrecognised flag; no subcommand | argparse's own message — `wlpp responder: error: the following arguments are required: --port` |
+| `1` | The bind failed | `error: responder failed on port 8420: <the OS's own errno text>` — measured as `[Errno 48] Address already in use` on the development machine; Linux reports that same condition as errno 98. A restart racing the previous process is the usual cause; a privileged port with no capability to bind it arrives on this same path |
+| `0` | Only if `serve_forever()` returns, which nothing in this CLI asks it to | — in practice the process ends on a signal instead |
+
+Checked in that order: argument parsing first, then the token, then `--root`. Two things
+wrong at once reports the first of those three, not both.
+
+No row prints a traceback. Every one is a single line an operator reads in a journal.
+
+One measured oddity worth knowing if you script this CLI rather than running it from a
+unit: **`wlpp responder --help` prints its help and exits `2`, not `0`.** Nothing about
+starting the responder depends on it, and it is recorded here rather than fixed in this
+wave.
 
 ---
 

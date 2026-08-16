@@ -10,6 +10,7 @@ import pytest
 
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.cli.report import Readings
+from wl_preproc.responder.actions import DOMAIN_LABELS
 from wl_preproc.responder.health import build_health
 
 
@@ -227,9 +228,44 @@ def test_this_host_never_claims_unknown(scanned, monkeypatch):
     assert degraded.verdict == "degraded"
 
 
-def test_the_action_list_is_empty_until_a_stage_exists(scanned):
+def test_the_action_list_is_empty_until_a_stage_exists(scanned, monkeypatch):
+    """Both halves, because only the second one can fail on a mutation.
+
+    The first assertion -- unpatched, `actions == []` -- is true today for a
+    reason that has nothing to do with `build_health`: `_TABLE_DOMAINS`
+    (`responder/actions.py`) is empty, so `available_actions(prefix=prefix)`
+    and a hardcoded `[]` evaluate identically. That is the exact hole the
+    down path's own sibling three tests above
+    (`test_the_down_path_never_publishes_actions_even_if_some_exist`) was
+    written to close, in its own words: swapping one form for the other
+    "left the entire suite green". It was closed there and left open here.
+
+    Mutation-proven on the SUCCESS path, which is the branch wl.works
+    actually polls: with `health.py`'s `actions=available_actions(prefix=
+    prefix)` replaced by `actions=[]`, the first assertion below still
+    passes and the second one fails. Design spec section 3's deliverable is
+    that *a stage's arrival needs no change in `build_health`* -- that is a
+    claim about the live path deriving its list, and until the second half
+    below existed nothing anywhere could fail if it stopped.
+
+    `_stage_domains` is forced to `{"neural"}` -- a domain `DOMAIN_LABELS`
+    already carries a real button label for -- rather than adding a fake
+    entry to `_TABLE_DOMAINS`, matching the down-path sibling's own
+    monkeypatch exactly.
+    """
     root, prefix = scanned("rspact1")
-    assert build_health(root, prefix=prefix).actions == []
+
+    assert build_health(root, prefix=prefix).actions == [], (
+        "nothing has a computed stage behind it yet, so nothing is publishable"
+    )
+
+    monkeypatch.setattr("wl_preproc.responder.actions._stage_domains", lambda prefix: {"neural"})
+    health = build_health(root, prefix=prefix)
+
+    assert [action.name for action in health.actions] == ["neural"], (
+        "the success path must DERIVE its action list, not hardcode one"
+    )
+    assert health.actions[0].label == DOMAIN_LABELS["neural"]
 
 
 # --- Beyond the brief: the two independent fault fields, and the featured
@@ -314,6 +350,39 @@ def test_quarantined_and_stalled_sessions_also_degrade(scanned, monkeypatch):
     stalled_health = build_health(root, prefix=prefix)
     assert stalled_health.verdict == "degraded"
     assert next(r for r in stalled_health.readings if r.key == "stalled_transfers").featured
+
+
+def test_the_quarantine_label_follows_the_window_it_names(scanned, monkeypatch):
+    """Minor M2. `cli/report.py::_QUARANTINE_WINDOW_DAYS` owns the window;
+    it is interpolated into `build_report`'s own "## Quarantined (N d)"
+    heading. This module used to hardcode a second copy of the number in
+    its label, so moving the window moved the report's heading and left
+    the responder telling wl.works "7 d" over a window that was no longer
+    seven days -- and this project HAS already moved that window once: the
+    Quarantined section shipped unwindowed until `aacd922` introduced the
+    constant at all.
+
+    The window is moved on its OWNER, not on this module's copy of it,
+    because a test that patches the copy proves only that the copy agrees
+    with itself.
+
+    The KEY is deliberately NOT expected to move: `quarantined_7d` is a
+    wire name wl.works matches on, and a key that reshapes itself the day
+    an internal window changes would break their client silently. Pinned
+    here so the two are never "fixed" together by mistake.
+    """
+    root, prefix = scanned("rspqlbl")
+    monkeypatch.setattr("wl_preproc.cli.report._QUARANTINE_WINDOW_DAYS", 30)
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings", lambda *a, **k: _base_readings()
+    )
+
+    reading = next(
+        r for r in build_health(root, prefix=prefix).readings if r.key == "quarantined_7d"
+    )
+
+    assert reading.label == "Quarantined (30 d)", "the label must follow the window it names"
+    assert reading.key == "quarantined_7d", "the wire name must not move with the window"
 
 
 def test_exactly_one_reading_is_featured_even_with_multiple_faults(scanned, monkeypatch):
