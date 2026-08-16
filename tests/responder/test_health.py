@@ -67,12 +67,19 @@ def test_a_healthy_root_is_ok(scanned, monkeypatch):
     verdict_on_this_host` below proves the disk half fires for real. This
     test's job is different: prove `ok` is reachable when NOTHING about
     THIS session or host is actually wrong. So the real `gather_readings`
-    call still runs -- the walk, the ingest count and the stalled check
-    are all genuine, scoped to this test's own fresh `root` and therefore
-    already immune to cross-test pollution (confirmed: `stalled` and
-    `walk_error` were unaffected even before this fix) -- and only the two
-    fields a shared, uncleaned database and a real disk can contaminate are
-    neutralized afterward, on the real result rather than a fabricated one.
+    call still runs -- the walk and the stalled check are genuine, scoped to
+    this test's own fresh `root`, and therefore already immune to cross-test
+    pollution regardless (confirmed: both were unaffected even before this
+    fix) -- and only the fields a shared, uncleaned database and a real disk
+    CAN contaminate are neutralized afterward, on the real result rather
+    than a fabricated one. `ingested` is NOT root-scoped either (`gather_
+    readings`' `Ingestion` query is a bare 24 h window, database-wide, same
+    as `quarantined`) -- confirmed live: a brand-new, otherwise-empty root
+    reported a nonzero count from other tests' own landed sessions (the
+    exact number is a run-order artifact, not worth pinning) -- but this
+    test never asserts a specific count, only which reading key is chosen as
+    `featured`, so that particular contamination is harmless here and left
+    unneutralized on purpose, not by oversight.
     """
     root, prefix = scanned("rsphlth1")
     from wl_preproc.cli.report import gather_readings as real_gather_readings
@@ -150,14 +157,46 @@ def test_this_host_never_claims_unknown(scanned, monkeypatch):
     """`unknown` is what wl.works records when a host goes silent past its
     stale_after_seconds. It is their word for our absence and we are never in
     a position to assert it about ourselves — claiming it would be asserting
-    knowledge of our own silence."""
+    knowledge of our own silence.
+
+    `Verdict` itself correctly permits `"unknown"` — wl.works needs to be
+    able to validate the value it records for us, so nothing type-level
+    stops `build_health` from constructing one; only this invariant does,
+    checked at every branch that can produce a verdict. A version of this
+    test that only exercised the `down` branch (raise `RuntimeError`, assert
+    `!= "unknown"`) would catch a mutation of THAT branch to `"unknown"` but
+    miss the identical mutation on the `ok` or `degraded` branch entirely —
+    confirmed live: mutating `degraded`'s literal to `"unknown"` left a
+    single-branch version of this test passing when run alone. So all three
+    reachable paths are exercised here, explicitly, by name.
+    """
     root, prefix = scanned("rspunk1")
 
     def boom(*args, **kwargs):
         raise RuntimeError("no database")
 
     monkeypatch.setattr("wl_preproc.cli.report.gather_readings", boom)
-    assert build_health(root, prefix=prefix).verdict != "unknown"
+    down = build_health(root, prefix=prefix)
+    assert down.verdict in ("ok", "degraded", "down")
+
+    monkeypatch.setattr("wl_preproc.cli.report.gather_readings", lambda *a, **k: _base_readings())
+    ok = build_health(root, prefix=prefix)
+    assert ok.verdict in ("ok", "degraded", "down")
+
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings",
+        lambda *a, **k: _base_readings(stale_jobs=3),
+    )
+    degraded = build_health(root, prefix=prefix)
+    assert degraded.verdict in ("ok", "degraded", "down")
+
+    # The three branches are also mutually exclusive premises, worth pinning
+    # alongside the invariant above rather than trusting `_base_readings`
+    # silently: this test is only checking what it claims to check if these
+    # three calls actually reached the three different branches.
+    assert down.verdict == "down"
+    assert ok.verdict == "ok"
+    assert degraded.verdict == "degraded"
 
 
 def test_the_action_list_is_empty_until_a_stage_exists(scanned):
@@ -276,7 +315,136 @@ def test_exactly_one_reading_is_featured_even_with_multiple_faults(scanned, monk
     assert any(r.key == "stuck_jobs" for r in health.readings), "the other bad reading still appears"
 
 
-def test_real_low_scratch_degrades_the_verdict_on_this_host(scanned):
+def test_a_chronic_low_disk_never_masks_an_acute_fault(scanned, monkeypatch):
+    """`not headroom_ok` is the one LEVEL in `_featured_key`'s priority
+    order -- true for as long as the real disk stays under the 800 GiB
+    floor, which on a real host can be days or weeks, not one poll -- while
+    every other condition is an EVENT. Ranking the level with or above the
+    events would let an already-known chronic condition permanently occupy
+    the one slot wl.works renders on its home page, so a NEW acute fault
+    could never surface there for as long as the disk stayed low.
+
+    Not hypothetical: this is exactly what an earlier version of this
+    module did, and it was caught empirically, not by inspection. `disk_
+    error` is deliberately left `None` here -- this test is about the
+    chronic LEVEL specifically, not the disk PROBE failing (that is
+    `test_a_disk_fault_...` above, and stays an event either way).
+    """
+    root, prefix = scanned("rspchr1")
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings",
+        lambda *a, **k: _base_readings(
+            walk_error="FileNotFoundError: root vanished", headroom_ok=False, free_gib=650
+        ),
+    )
+
+    health = build_health(root, prefix=prefix)
+
+    assert health.verdict == "degraded"
+    featured = [r for r in health.readings if r.featured]
+    assert len(featured) == 1
+    assert featured[0].key == "walk_fault", (
+        f"the chronic low-disk level masked the acute walk fault: {featured}"
+    )
+    # The chronic condition still appears, just not as the featured one --
+    # demoted, not dropped.
+    disk = next(r for r in health.readings if r.key == "disk_headroom")
+    assert "LOW" in disk.value
+
+
+def test_a_walk_fault_outranks_a_disk_fault_when_both_fire(scanned, monkeypatch):
+    """When the storage root is simply gone, `_candidate_dirs` and
+    `scratch_headroom` both fail from the same underlying cause, and
+    "Storage root scan" is the more honest description of what is actually
+    wrong than "Disk headroom: not measured" -- which reads as though the
+    problem were specific to disk space rather than the whole root being
+    unreachable.
+    """
+    root, prefix = scanned("rspwdc1")
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings",
+        lambda *a, **k: _base_readings(
+            walk_error="FileNotFoundError: root vanished",
+            disk_error="FileNotFoundError: root vanished",
+            headroom_ok=False,
+            free_gib=0,
+        ),
+    )
+
+    health = build_health(root, prefix=prefix)
+
+    featured = [r for r in health.readings if r.featured]
+    assert len(featured) == 1
+    assert featured[0].key == "walk_fault"
+
+
+# --- The producer-side sanitiser. `Reading`'s markup validator REJECTS `<`,
+# `>` and `&` outright (`contracts/protocol.py::_reject_markup`) rather than
+# sanitising them, and `health.py` interpolates text this host does not
+# author -- exception messages, filesystem paths -- at three call sites.
+# Reproduced directly against a REAL root literally named `A&B` before this
+# fix existed (no monkeypatching at all): `build_health` raised
+# `ValidationError` from inside its own `walk_fault` reading construction,
+# which is worse than any verdict it could have returned, because it means
+# wl.works gets no response at all -- after which THEY record `unknown`,
+# the one state this module exists to never cause. The three tests below
+# use monkeypatched `Readings`/exceptions instead of a literal `A&B`
+# directory only for speed and to hit each of the three call sites
+# individually; the underlying mechanism is the one proven live above. ---
+
+
+def test_markup_in_a_disk_fault_degrades_instead_of_raising(scanned, monkeypatch):
+    root, prefix = scanned("rspmrk1")
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings",
+        lambda *a, **k: _base_readings(disk_error="OSError: path 'A&B<C>' denied"),
+    )
+
+    health = build_health(root, prefix=prefix)  # must not raise
+
+    assert health.verdict == "degraded"
+    disk = next(r for r in health.readings if r.key == "disk_headroom")
+    assert "&" not in disk.value and "<" not in disk.value and ">" not in disk.value
+    assert "A" in disk.value and "denied" in disk.value, "the fault text itself must survive"
+
+
+def test_markup_in_a_walk_fault_degrades_instead_of_raising(scanned, monkeypatch):
+    root, prefix = scanned("rspmrk2")
+    monkeypatch.setattr(
+        "wl_preproc.cli.report.gather_readings",
+        lambda *a, **k: _base_readings(walk_error="PermissionError: 'A&B<C>' denied"),
+    )
+
+    health = build_health(root, prefix=prefix)  # must not raise
+
+    assert health.verdict == "degraded"
+    fault = next(r for r in health.readings if r.key == "walk_fault")
+    assert "&" not in fault.value and "<" not in fault.value and ">" not in fault.value
+    assert "A" in fault.value and "denied" in fault.value
+
+
+def test_markup_in_the_down_paths_exception_degrades_instead_of_raising(scanned, monkeypatch):
+    """The down path's own exception text is exactly as untrusted as
+    disk_error/walk_error, and it is the LAST line of defense: if
+    constructing ITS reading could also raise, there is no path left that
+    reliably answers wl.works at all.
+    """
+    root, prefix = scanned("rspmrk3")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("connection to 'A&B<C>' refused")
+
+    monkeypatch.setattr("wl_preproc.cli.report.gather_readings", boom)
+
+    health = build_health(root, prefix=prefix)  # must not raise
+
+    assert health.verdict == "down"
+    value = health.readings[0].value
+    assert "&" not in value and "<" not in value and ">" not in value
+    assert "A" in value and "refused" in value
+
+
+def test_real_low_scratch_degrades_the_verdict_on_this_host(scanned, monkeypatch):
     """Not synthetic: proves the disk-floor rule fires for real, against
     whatever `scratch_headroom` actually measures on the host running this
     suite, rather than only against a hand-built `Readings`. Skips instead
@@ -284,11 +452,31 @@ def test_real_low_scratch_degrades_the_verdict_on_this_host(scanned):
     measurement this test does not control — but on this project's own
     sandbox (confirmed directly: ~630 GiB free against an 800 GiB floor) it
     exercises the real, non-synthetic path every time it runs there.
+
+    `not headroom_ok` now ranks BELOW every event in `_featured_key`'s
+    priority order (it is the one chronic level, not an acute fault -- see
+    `health.py`'s own comment), so this test needs the same isolation
+    `test_a_healthy_root_is_ok` does: `quarantined`/`stale_jobs` from the
+    shared, uncleaned database and `walk_error` (irrelevant to what this
+    test claims, and always `None` for a healthy scan in practice, but not
+    worth leaving to chance) are neutralized on the REAL `gather_readings`
+    result, so only the real disk measurement this test is actually about
+    can drive the outcome. `free_gib`/`headroom_ok`/`disk_error` are left
+    untouched -- deliberately real, since faking them would defeat the
+    entire point of this test.
     """
     root, prefix = scanned("rspflr1")
     free_gib, headroom_ok = scratch_headroom(str(root))
     if headroom_ok:
         pytest.skip(f"this host clears the 800 GiB floor ({free_gib} GiB free)")
+
+    from wl_preproc.cli.report import gather_readings as real_gather_readings
+
+    def isolate(*args, **kwargs):
+        readings = real_gather_readings(*args, **kwargs)
+        return dataclasses.replace(readings, quarantined=[], stale_jobs=0, walk_error=None)
+
+    monkeypatch.setattr("wl_preproc.cli.report.gather_readings", isolate)
 
     health = build_health(root, prefix=prefix)
 

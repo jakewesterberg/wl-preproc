@@ -28,7 +28,7 @@ import datetime
 from pathlib import Path
 
 from wl_preproc.cli.report import Readings
-from wl_preproc.contracts.protocol import HealthResponse, Reading, Verdict
+from wl_preproc.contracts.protocol import HealthResponse, Reading, Verdict, plain_text
 from wl_preproc.schema import DEFAULT_PREFIX
 
 # Every key `build_health` can emit below, and the priority order it uses to
@@ -37,29 +37,44 @@ from wl_preproc.schema import DEFAULT_PREFIX
 # transfers, or scratch below the floor" with no stated priority among them
 # -- so this ordering is this module's own call, not the spec's, and is
 # recorded here because a real host can have two independent problems at
-# once (a wedged queue AND a full disk, say) and still needs exactly one
-# answer for which reading gets `featured=True`. wl.works takes the first
-# featured reading if more than one is marked (design spec section 5.2,
-# "Plan 10 section 4 settles the ambiguity"), so "exactly one" is not a
-# nicety -- publishing two lets their renderer choose FOR us, silently,
-# rather than us choosing.
+# once and still needs exactly one answer for which reading gets
+# `featured=True`. wl.works takes the first featured reading if more than
+# one is marked (design spec section 5.2, "Plan 10 section 4 settles the
+# ambiguity"), so "exactly one" is not a nicety -- publishing two lets their
+# renderer choose FOR us, silently, rather than us choosing.
 #
-# Disk conditions rank highest, and the two disk fault fields Task 1 split
-# apart (`walk_error`, `disk_error` -- previously one collapsed `root_error`
-# that hid a real defect: a root the walk could not list but whose free
-# space could still be measured) are treated as ONE tier here, not two,
-# because they name the same slot in the readings surface (`disk_headroom`)
-# rather than two different questions the way `walk_error` and
-# `stalled_transfers` do (see below). Within that tier: `cli/doctor.py`'s
-# 800 GiB floor is what stands between this host and a mid-sort stall on the
-# *next* session -- a worse failure than a delayed session (a stuck job or a
-# quarantined session is late; a disk that fills mid-sort can corrupt the
-# one in progress). `disk_error` -- the probe itself failing, so there is no
-# number at all -- is ranked with rather than below a confirmed-low reading:
+# The order separates EVENTS from the one LEVEL. `walk_error`, `disk_error`,
+# `stale_jobs`, `quarantined` and `stalled` are each a fact about something
+# that just happened or is currently stuck -- a countable, actionable
+# incident. `not headroom_ok` (the disk measured fine and came back low) is
+# different in kind: on a real host it can stay true for days or weeks at a
+# stretch, long after the humans running the lab already know about it.
+# Ranking it with -- let alone above -- the events would let an already-known
+# chronic condition permanently occupy the one slot wl.works renders on its
+# home page, so a NEW acute fault (the storage root vanishing, a batch of
+# jobs freshly wedged) could never surface there for as long as the disk
+# stays low. Confirmed, not hypothetical: on this project's own dev sandbox
+# the real disk sits under the 800 GiB floor, so an earlier version of this
+# ordering made `_featured_key` return `"disk_headroom"` on EVERY call,
+# always, regardless of what else was wrong (see
+# `tests/responder/test_health.py::test_a_chronic_low_disk_never_masks_an_
+# acute_fault`). So every event outranks the level; the level still ranks
+# above the ok fallback, since it is a real, standing condition a human
+# should eventually see if nothing more acute is happening.
+#
+# `disk_error` -- the probe itself failing, not merely reporting low -- is an
+# EVENT (it just started happening), so it ranks with the other events, not
+# with `not headroom_ok`, even though both name the same `disk_headroom`
+# reading slot below. It ranks ABOVE the other events except `walk_error`:
 # an unmeasured disk might already be below the floor and this host has no
 # way to rule that out, so treating "could not check" as more comfortable
 # than "checked and low" would be the same overclaim `Verdict` itself
-# refuses to make about our own silence.
+# refuses to make about our own silence. `walk_error` outranks even
+# `disk_error`: when the storage root is simply gone, `_candidate_dirs` and
+# `scratch_headroom` both fail from the very same cause, and "Storage root
+# scan" is the more honest description of what broke than "Disk headroom:
+# not measured", which reads as though the problem were specific to disk
+# space rather than the whole root being unreachable.
 def _featured_key(readings: Readings) -> str:
     """Which single reading key drove the verdict away from `ok`, or the
     ingest count when nothing did.
@@ -72,24 +87,31 @@ def _featured_key(readings: Readings) -> str:
     apart is exactly the defect `Readings`' own docstring says this project
     has already found in four separate shapes.
 
-    `readings.stale_jobs is None` ("no schema activated in this process") is
-    deliberately NOT a bad condition here, matching `wlpp doctor`'s own
-    `count_stale_jobs` precedent exactly (`report("stale jobs", True, "not
-    checked...")`): it means nothing was actually inspected, not that
-    something was inspected and found stuck, and reporting a fabricated
-    problem from an absence of a check would be the same overclaim
-    `unknown` itself is refused for.
+    `readings.stale_jobs is None` and `readings.disk_error is not None` are
+    both, in one sense, "this host does not have a number" -- and are
+    treated oppositely on purpose, not by oversight. `stale_jobs is None`
+    means no schema has been `.activate()`d in this process, so NOTHING was
+    actually inspected -- a routine, expected state for plenty of legitimate
+    callers (matching `wlpp doctor`'s own `count_stale_jobs` precedent
+    exactly: `report("stale jobs", True, "not checked...")`), and reporting
+    a fabricated problem from an absence of a check would be the same
+    overclaim `unknown` itself is refused for. `disk_error is not None`
+    means the OPPOSITE: a check was actively attempted and the attempt
+    itself failed -- a live fault, not a benign not-applicable, so it is
+    treated as one.
     """
-    if readings.disk_error is not None or not readings.headroom_ok:
-        return "disk_headroom"
     if readings.walk_error is not None:
         return "walk_fault"
+    if readings.disk_error is not None:
+        return "disk_headroom"
     if readings.stale_jobs:
         return "stuck_jobs"
     if readings.quarantined:
         return "quarantined_7d"
     if readings.stalled:
         return "stalled_transfers"
+    if not readings.headroom_ok:
+        return "disk_headroom"
     return "ingested_24h"
 
 
@@ -101,9 +123,17 @@ def _disk_reading_value(readings: Readings) -> str:
     this never falls through to that placeholder pair. Phrasing matches
     `build_report`'s Disk section exactly, since both renderings ultimately
     describe the same measurement.
+
+    `disk_error` is an `OSError` message this host did not author -- a real
+    path or a library's own text can contain `<`, `>` or `&`, which
+    `Reading`'s validator does not sanitise but outright REJECTS. Piping it
+    through `plain_text` here is what keeps a fault from turning into no
+    response at all; see `plain_text`'s own docstring in `contracts/
+    protocol.py` for why that is done here rather than as a fallback on the
+    resulting `ValidationError`.
     """
     if readings.disk_error is not None:
-        return f"not measured — {readings.disk_error}"
+        return plain_text(f"not measured — {readings.disk_error}")
     return f"{readings.free_gib} GiB free {'(ok)' if readings.headroom_ok else '(LOW)'}"
 
 
@@ -149,13 +179,19 @@ def build_health(
         # what broke, and it is `featured` by construction: it is the only
         # reading there is to choose from, so `sum(featured) == 1` still
         # holds even on this path.
+        #
+        # `str(exc)` is this path's own untrusted text -- and, unlike the
+        # walk/disk faults below, this handler is the LAST line of defense:
+        # if constructing ITS reading also raised, there would be no path
+        # left that reliably answers wl.works at all. `plain_text` here for
+        # the identical reason it is used below.
         return HealthResponse(
             verdict="down",
             readings=[
                 Reading(
                     key="database",
                     label="Database",
-                    value=f"{type(exc).__name__}: {exc}",
+                    value=plain_text(f"{type(exc).__name__}: {exc}"),
                     featured=True,
                 )
             ],
@@ -184,11 +220,20 @@ def build_health(
         # if and only if the fault is can say so. Mirrors `build_report`'s
         # own Stalled section, which prints the count AND, separately, a
         # "was not fully scanned" line when this fires.
+        #
+        # `readings.walk_error` is an exception message this host did not
+        # author -- it can legitimately contain a real filesystem path, and
+        # a path can legitimately contain `<`, `>` or `&`. `plain_text` here
+        # for the same reason `_disk_reading_value` uses it: `Reading`'s
+        # validator rejects those characters outright rather than
+        # sanitising them, and this is exactly the fault line most likely to
+        # need it -- reproduced directly against a real root named `A&B`,
+        # with no monkeypatching, before this fix existed.
         readings_out.append(
             reading(
                 "walk_fault",
                 "Storage root scan",
-                f"root not fully scanned — {readings.walk_error}",
+                plain_text(f"root not fully scanned — {readings.walk_error}"),
             )
         )
     readings_out.append(reading("stuck_jobs", "Stuck jobs", _stuck_jobs_value(readings)))

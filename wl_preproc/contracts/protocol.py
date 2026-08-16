@@ -35,6 +35,47 @@ def contains_markup(text: str) -> bool:
     return _MARKUP_RE.search(text) is not None
 
 
+# A distinct, literal substitute per character -- never one shared placeholder
+# for all three. Collapsing `<`, `>` and `&` onto a single stand-in would make
+# two different offending inputs (`A&B` and `A<B`) render identically once
+# substituted, which is the exact rule `Reading`/`Action` themselves already
+# argue from: two different facts must never render the same way. None of the
+# three substitutes contains `<`, `>` or `&` itself, so applying them in any
+# order cannot re-introduce the character it just removed, and they are named
+# after the character rather than shaped like real markup (no leading `&` or
+# trailing `;`) so a reader -- human or wl.works' own renderer -- can never
+# mistake the substitute for the markup it stands in for.
+_MARKUP_SUBSTITUTES = {"<": "(lt)", ">": "(gt)", "&": "(amp)"}
+
+
+def plain_text(text: str) -> str:
+    """`text`, safe to interpolate into a `Reading`/`Action` field that a
+    producer does not fully control -- an exception message, a filesystem
+    path -- where the content is a genuine fact worth reporting and simply
+    dropping it on a markup collision would discard the one thing the field
+    exists to carry.
+
+    Not a fallback triggered by `_reject_markup`'s `ValidationError`: a
+    fallback has to be constructible on its own, which means it has to be a
+    constant, which means it cannot carry the very fault text it was
+    handed -- and it would render a markup collision identically to a
+    genuine defect (a mistyped f-string, a raw HTML fragment pasted into a
+    label), which is the rule this module's own docstring gives for why
+    markup is refused outright rather than escaped ("We refuse to emit
+    markup at all rather than relying on that"). So this runs BEFORE
+    construction, on the specific text a producer knows is untrusted, and
+    the reading still carries the real fault -- spelled out, not hidden.
+
+    Use on interpolated, producer-supplied VALUES only. Never on `label`:
+    every `label` in this codebase is a hardcoded constant, and markup
+    appearing in a constant is a real defect that must keep failing loudly
+    at construction, exactly as `_reject_markup` already does for it.
+    """
+    for char, substitute in _MARKUP_SUBSTITUTES.items():
+        text = text.replace(char, substitute)
+    return text
+
+
 def _reject_markup(value: str) -> str:
     if contains_markup(value):
         raise ValueError(f"markup is not permitted in rendered strings: {value!r}")
