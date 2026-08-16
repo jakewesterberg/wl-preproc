@@ -1,6 +1,6 @@
 # Where this build actually is
 
-**Last updated 2026-08-13**, at `wl-preproc` commit `542bcbb`. Check `git log --oneline -1`
+**Last updated 2026-08-16**, at `wl-preproc` commit `0ac4753`. Check `git log --oneline -1`
 against that; if it has moved, this file is stale and the spec wins.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
@@ -13,7 +13,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **171 tests, no xfails** | Phase 0 contracts, Phase 1a synthetic generator, Phase 1b Intan RHS, Phase 1b2 the RHS header — all merged. |
+| **wl-preproc** | private, CI green, **593 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is the only piece of 1c left.** |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -30,8 +30,8 @@ Python; `pigpio` is gone and `piolib` sits behind an optional extra, so the whol
 with no Pi libraries installed.
 
 **wl-preproc Phase 0** — every frozen interface in spec §3.5 is executable, except the NWB
-target layout (Phase 3). Five JSON Schemas are committed under `docs/schemas/`, and CI fails
-if a model changes without re-exporting them. Two of those schemas are **published
+target layout (Phase 3). Six JSON Schemas are committed under `docs/schemas/`, and CI fails
+if a model changes without re-exporting them. Three of those schemas are **published
 contracts other projects build against**: `behavior_camera_sidecar.json` for the separate
 FLIR project, and `job_request.json` / `health_response.json` for wl.works, whose 18b tests
 run against a *fake* wl-preproc.
@@ -62,18 +62,43 @@ The strict xfail that pinned the gap is gone, having done its job.
 > failing. It is checked in the writer rather than the recipe because `model_copy(update=...)`
 > does not re-run pydantic validators.
 
+**wl-preproc Phase 1c-1** — `wl_preproc/schema/`. DataJoint 2.3.2 plus four Elements
+(lab/animal/session/event), all five git dependencies commit-pinned. Custom tables for sync,
+segments, requests and paramsets. A guardrail sweep auto-discovers every schema module and
+fails on a bare `longblob`; `wlpp delete` prints a cascade and defaults to a dry run.
+
+**wl-preproc Phase 1c-2** — `wl_preproc/ingest/`. `wlpp ingest --root` scans a storage root
+once: a session is complete when a `DONE` marker names every file with a blake3 digest, and
+**quiescence is an alarm, never a trigger** — a stalled transfer and a finished one are both
+quiet. Device absence never blocks ingest; transfer integrity does. `wlpp report` writes the
+daily status file. The watcher deliberately never calls `submit()`: landing the parent rows
+*is* the trigger, which is what let it avoid needing a montage it cannot measure.
+
+**wl-preproc Phase 1c-3** — `wl_preproc/responder/`. `wlpp responder --port --root` serves
+`GET /health` and `POST /jobs` behind a bearer token from `WLPP_RESPONDER_TOKEN` and one
+process-wide lock that is load-bearing for correctness, not only thread safety. Stdlib only —
+no web framework. An AST guardrail over the whole package enforces §11.1, that this host never
+initiates a connection. **It also ships `docs/ops/lab-host-protocol.md`**, the cross-repo
+interface contract wl.works cites from eleven places and neither repository had written:
+endpoints, status codes, the token, the verdict values, and the three timing constants their
+Plan 10 leaves unfilled. **It is proposed, not agreed** — the token and `408` are real work on
+their side.
+
 ---
 
 ## What is next
 
-1. **Phase 1c — DataJoint schemas and guardrails, ingest watcher, timebase fitting,
-   coverage, responder.** Larger than one plan; expect to split it. Its tier-B work can
-   assume reader-openable Intan fixtures: `--profile stim` sessions open with `read_intan`
-   today, so 1c plans against them directly rather than around them.
+1. **Phase 1c-4 — timebase fitting and coverage** (§4.5, §4.6). The last piece of 1c. It
+   declares this project's **first Computed table**, which turns on `count_stale_jobs` reading
+   DataJoint's internal `~jobs` tables — a path no write-detection snapshot currently covers.
+   Its tier-B work can assume reader-openable Intan fixtures: `--profile stim` sessions open
+   with `read_intan` today, so it plans against them directly rather than around them.
 2. **Phase 2 onward** — see spec §12.
 
 **Not software, and on a clock: order the PCIe-6363.** §12. Lead time from NI is 12–13 weeks,
 the longest of any purchase on that list, and nothing in the software queue moves that date.
+Ordered the day this line was written, it arrives mid-November — which leaves the narrowest
+margin of anything on the list against January, and it narrows by a day for every day it waits.
 
 ---
 
@@ -93,7 +118,12 @@ defensible call, but it is a reversal rather than a gap.
   times instead. §8.1.1.
 - **16-bit event codes** to the sync box and NI, **strobe only** to Intan RHS. §4.2.
 - **Transport is pull-only.** wl.works opens every connection; everything this machine needs
-  from the ELN arrives in the request payload. §11.
+  from the ELN arrives in the request payload. §11. **As of 1c-3 this is enforced by a test over
+  the whole package, not just intended** — and it is a tripwire against a convenient callback
+  added months from now, not a sandbox. Its documented limits are in the guardrail's own
+  docstring.
+- **The responder is stdlib-only.** No web framework, no new runtime dependency — the whole
+  HTTP surface is `http.server` plus `hmac`. Argued in the 1c-3 design spec.
 
 ---
 
@@ -159,6 +189,36 @@ defensible call, but it is a reversal rather than a gap.
   `tmp_path` rather than staying in memory.
 - **Check `git log main..<branch>` before merging, and read it.** Not doing so once
   fast-forwarded twenty unrelated commits of an unmerged feature onto `wl-works` `main`.
+- **`in_transaction` is not a read-only check.** DataJoint's `insert()` calls
+  `connection.query()` directly and never touches the transaction machinery, so
+  `in_transaction is False` is equally true of a writing function and a reading one. **This has
+  now misled five separate investigations.** To prove a function does not write, snapshot rows —
+  `tests/conftest.py` has session-scoped `table_snapshot` and `deep_equal`.
+- **A rule derived correctly, then applied one case too narrowly.** Phase 1c-3's
+  outbound-connection guardrail took three fix rounds because each closed the escape that had
+  been demonstrated and left the next one live. The reason round 2 missed round 3 was written in
+  round 2's own docstring: it stated the correct rule, then narrowed the consequence to one AST
+  node type. It converged only when *what is forbidden* changed shape rather than *which nodes
+  are visited*. **When a fix is the third of its kind, the defect is the rule's shape, not its
+  coverage.**
+- **Fixing code without sweeping the document that describes it.** Three times in one phase, a
+  status code, exit code or message changed and `docs/ops/lab-host-protocol.md` kept describing
+  the old one — once because a table was rewritten *for accuracy* and a one-line fix invalidated
+  it a commit later. Anything that changes what a client or an operator sees needs that document
+  opened in the same commit. And **re-derive a whole table rather than patching three of its
+  rows**: that caught a further defect three separate times.
+- **A test that reds by timeout is not a test.** A hang burns a CI job's whole budget instead of
+  failing one case, and it was twice reported as a pass because a harness timed out. Every
+  subprocess helper needs an explicit `timeout=`.
+- **A broad outer guard can subsume the only failure a narrow-guard test detects**, leaving the
+  suite green with the narrow guard deleted. Anywhere one is added, re-mutation-test the guards
+  it now covers.
+
+> The full defect lists — twelve tests that passed while proving nothing, seventeen instances of
+> prose asserting what the code does not support — are in
+> `docs/handoffs/2026-08-15-phase-1c2-rulings.md` and
+> `docs/handoffs/2026-08-16-phase-1c3-rulings.md`, with the rulings that produced them.
+> **The habit that finds all of them: mutate, don't read.**
 
 ---
 
@@ -188,6 +248,19 @@ leaves something behind that does:
 - **One question is out with the wl.works owner**, and nothing blocks on the answer: can the
   block-entry UI display a pipeline-supplied boundary proposal? If no, the rule above still
   holds and only the decision aid is lost.
+- **The montage precondition dissolved in 1c-3, and the requirement above is what survives it.**
+  `MetadataBundle` carries `blocks` and `montage_boundaries` **inbound with every request**, so
+  neither the watcher nor the responder needs a montage source it cannot have. **The residual is
+  exactly the automatic canonical trigger** — nothing yet re-fires an activation when the missing
+  ELN rows land, and at a 12-hour canonical delay that cannot be a manual nudge.
+- **1c-3 left three things recorded rather than closed**, all in
+  `docs/handoffs/2026-08-16-phase-1c3-rulings.md`: `GET /health` holds the process-wide lock
+  while walking each *incomplete* session's directory tree, and `POST /jobs` contends for it —
+  so the proposed 10 s health timeout is exposed to that walk and should be **re-derived on real
+  hardware before anyone raises the poll rate**; there is **no job-status endpoint**, so nothing
+  can ask what became of an activation; and the **privileged-port errno in the protocol document
+  is unmeasured** — this development machine bound port 81 without complaint, so Linux's errno 98
+  is stated as a claim about Linux and wants confirming once on the lab host.
 
 ---
 
@@ -195,12 +268,39 @@ leaves something behind that does:
 
 - Both `wl-sync` and `wl-preproc` use `uv` with a `.venv`; develop against **3.11**, the
   floor, since CI also tests 3.13.
-- **Run the suite as `.venv/bin/python -m pytest`, from the repo root.** The `.venv/bin/pytest`
-  console script cannot import `wl_preproc` in this checkout — the package resolves via the
-  working directory rather than an install, and the entry point does not put it on `sys.path`.
-  Same family as the `wl-sync` `.pth` trap below, and it cost two workers a detour each before
-  it was written down.
-- `wl-preproc` installs `wl-sync` **non-editable** from `../wl-sync` locally — an editable
-  install's `.pth` did not execute and the import silently failed.
-- Eleven amendments to the wl.works corpus are recorded in spec §14, all applied. The
-  reasoning for each lives in that repo's own specs as dated amendment blocks.
+- **The `.pth` trap is one root cause, and it was diagnosed on 2026-08-16 after two workers had
+  worked around its symptoms separately.** Every `.pth` in
+  `.venv/lib/python3.11/site-packages/` carries macOS's BSD **`UF_HIDDEN`** flag, and CPython
+  3.11+'s `site.addpackage()` has an explicit `if st.st_flags & stat.UF_HIDDEN: return` — so
+  **no `.pth` executes at all**, not the editable install's finder and not `_virtualenv.pth`.
+  `sys.meta_path` holds only the three built-ins.
+  - **`ls -la` does not show it. Only `ls -lO` prints `hidden`.**
+  - Fix: `chflags nohidden .venv/lib/python3.11/site-packages/*.pth`. **A reinstall does not
+    help** — it writes new files the same sync pass re-hides, which is what made this look like
+    a broken editable install. It recurred within minutes, twice, on the day it was found. The
+    durable fix is excluding `.venv` from whatever syncs `~/Documents/GitHub`; the tell is the
+    duplicate `__editable__… 2.pth` collision artifacts.
+  - **It hides itself well**: `python -m pytest` from the repo root is immune, because
+    `sys.path[0]` is the repo. So the suite stays green while the shipped `wlpp` console script
+    is broken, and any CLI test that shells out via `PYTHONPATH=<repo> python -m
+    wl_preproc.cli.main` cannot see it either. **Anything measuring the CLI as an operator will
+    use it must invoke the real entry point.**
+  - This supersedes two earlier notes that recorded the symptoms as separate facts: that
+    `.venv/bin/pytest` "does not put the package on `sys.path`" (it does — the `.pth` was
+    hidden), and that `wl-sync` had to be installed non-editable because "an editable install's
+    `.pth` did not execute" (same cause).
+- `wl-preproc` depends on `wl-sync` by **pinned git SHA** in `pyproject.toml`, not a local path
+  — one of the five commit pins CI enforces. Installed non-editably as a real package directory.
+- **Run the suite as `.venv/bin/python -m pytest`, from the repo root**, which is immune to the
+  above regardless of the flag's state.
+- **Twelve amendments to the wl.works corpus.** Eleven are in spec §14's table, all applied. The
+  twelfth is §14.1, raised while designing 1c-2 and **applied to their `main` locally on
+  2026-08-15** — it narrowed their open item rather than closing it, because whether they accept
+  the split is theirs to answer. The reasoning for each lives in that repo's own specs as dated
+  amendment blocks.
+  - **§14.1 is now stale in our favour and wants a decision.** It argues that
+    `animal_session_block` and the montage boundaries are *"a blocking precondition for every
+    automatic activation"*. Phase 1c-3 dissolved that: `MetadataBundle` carries both **inbound
+    with every request**, so nothing here needs to fetch them. What survives is only the
+    automatic canonical trigger. Whether to amend §14.1 — and whether to tell wl.works their
+    half of the precondition is gone — has not been decided.
