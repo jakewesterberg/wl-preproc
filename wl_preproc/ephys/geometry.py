@@ -44,7 +44,14 @@ def electrode_rows(part_number: str) -> list[dict]:
     """
     try:
         probe = build_neuropixels_probe(part_number)
-    except Exception as exc:  # probeinterface raises several types here
+    except KeyError as exc:
+        # Measured directly: `build_neuropixels_probe` raises `KeyError` for
+        # both an unknown part number and an empty one -- it looks the part
+        # number up in a plain dict of its offline table. Narrowed from a
+        # bare `except Exception`, which would relabel ANY future
+        # probeinterface bug (a TypeError from a malformed offline JSON row,
+        # an AttributeError from an API change) as "unknown probe type" --
+        # exactly the one diagnosis that sends a reader to the wrong file.
         raise UnknownProbeType(
             f"{part_number!r} is not in probeinterface's offline Neuropixels "
             f"table. Adding a probe type means adding it there, or upgrading "
