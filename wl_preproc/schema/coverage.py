@@ -19,9 +19,11 @@ _COVERAGE_ENUM = "enum('full','partial','absent')"
 
 
 @schema
-class BlockCoverage(dj.Manual):
+class BlockCoverage(dj.Computed):
     definition = f"""
-    # Coverage of one block by one system.
+    # Coverage of one block by one system. Computed, not Manual: declared
+    # Manual in 1c-1 when nothing computed it, and it is the intersection of a
+    # block's interval with this system's segment extents.
     # Key: (subject, session_datetime, block_id, system).
     -> core.Block
     -> core.AcquisitionSystem
@@ -32,10 +34,13 @@ class BlockCoverage(dj.Manual):
 
 
 @schema
-class TrialCoverage(dj.Manual):
+class TrialCoverage(dj.Computed):
     definition = f"""
     # Coverage of one trial by one system. Trial comes from element-event's
     # `trial` module — NOT its `event` module; they are separate.
+    # Computed, not Manual. It converts in 1c-4 despite belonging to 1c-5,
+    # because converting it later costs a migration and converting it now, with
+    # no row anywhere, costs nothing.
     # Key: (subject, session_datetime, trial_id, system).
     -> pipeline.trial.Trial
     -> core.AcquisitionSystem

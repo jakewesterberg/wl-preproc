@@ -101,22 +101,78 @@ def test_a_block_round_trips_with_and_without_works_block_id(core, a_session):
     assert with_id["works_block_id"] == "abc-123"
 
 
-def test_a_segment_round_trips(core, a_session):
-    core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
+def _segment_row(a_session, **overrides):
+    """A complete Segment row.
+
+    Every attribute is named because Segment became `dj.Computed` in 1c-4 and
+    gained the five that make the transform reversible (spec 4.5). A helper
+    rather than a literal per test: two copies of this dict would let one grow
+    an attribute the other lacks, and the failure is an insert error in an
+    unrelated test.
+    """
     row = {
         **a_session,
         "system": "spikeglx",
         "segment_barcode": 1_000_000,
+        "file_path": "2027-03-14_01.nidq.bin",
         "start_s": 0.0,
         "end_s": 12.0,
         "n_samples": 360_000,
+        "first_sample": 0,
+        "offset_s": -0.7,
+        "residual_us": 4.2,
+        "n_barcodes": 12,
     }
-    core.Segment.insert1(row, skip_duplicates=True)
+    row.update(overrides)
+    return row
+
+
+def _insert_segment(core, row):
+    """Insert into a Computed table from a test, saying why that is allowed.
+
+    `allow_direct_insert` is DataJoint's documented override and exists for
+    exactly this: asserting what a table STORES, separately from what its
+    `make()` decides to store. The tests that prove `make()` writes only what it
+    should are in `tests/timebase/`, and they populate rather than insert.
+    """
+    core.Segment.insert1(row, skip_duplicates=True, allow_direct_insert=True)
+
+
+def test_a_segment_round_trips(core, a_session):
+    core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
+    row = _segment_row(a_session)
+    _insert_segment(core, row)
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
     assert got["segment_barcode"] == 1_000_000
     assert got["start_s"] == pytest.approx(0.0)
     assert got["end_s"] == pytest.approx(12.0)
     assert got["n_samples"] == 360_000
+
+
+def test_a_segment_retains_what_makes_its_transform_reversible(core, a_session):
+    """Spec 4.5 requires fit parameters, residuals and native stream timestamps
+    be retained so every transform is reversible. Round-tripping them is what
+    makes that a property of the data rather than a promise in a document — and
+    a `double` that silently became a `float` would lose exactly the digits an
+    offset in seconds needs to stay microsecond-faithful."""
+    core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
+    row = _segment_row(
+        a_session,
+        segment_barcode=1_000_777,
+        first_sample=21_000,
+        offset_s=-0.700_123_456,
+        residual_us=4.25,
+        n_barcodes=12,
+    )
+    _insert_segment(core, row)
+
+    got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
+
+    assert got["file_path"] == row["file_path"]
+    assert got["first_sample"] == 21_000
+    assert got["offset_s"] == pytest.approx(-0.700_123_456, abs=1e-12)
+    assert got["residual_us"] == pytest.approx(4.25)
+    assert got["n_barcodes"] == 12
 
 
 def test_segment_barcode_holds_the_full_unsigned_32_bit_range(core, a_session):
@@ -134,15 +190,10 @@ def test_segment_barcode_holds_the_full_unsigned_32_bit_range(core, a_session):
     """
     core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
     barcode = 4_294_967_295
-    row = {
-        **a_session,
-        "system": "spikeglx",
-        "segment_barcode": barcode,
-        "start_s": 0.0,
-        "end_s": 1.0,
-        "n_samples": 30_000,
-    }
-    core.Segment.insert1(row, skip_duplicates=True)
+    row = _segment_row(
+        a_session, segment_barcode=barcode, end_s=1.0, n_samples=30_000
+    )
+    _insert_segment(core, row)
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
     assert got["segment_barcode"] == barcode
 

@@ -36,9 +36,13 @@ class Montage(dj.Manual):
 @schema
 class Block(dj.Manual):
     definition = """
-    # One run of one task. Mirrors wl.works animal_session_block; boundaries are
-    # decoded from event codes and cross-validated against those rows.
-    # Key: (subject, session_datetime, block_id).
+    # One run of one task, mirroring wl.works animal_session_block.
+    # start_s/end_s are WL.WORKS' ASSERTION, recorded here through accept() --
+    # recording an assertion is not authoring it. Closed open item 9: block rows
+    # are authored by wl.works' session planner and wl-preproc never writes
+    # them; it cross-validates and quarantines on absence. The MEASURED boundary
+    # is a different quantity and belongs to whatever decodes event codes (1c-5),
+    # in its own Computed table. Key: (subject, session_datetime, block_id).
     -> pipeline.Session
     block_id : smallint
     ---
@@ -61,18 +65,35 @@ class AcquisitionSystem(dj.Manual):
 
 
 @schema
-class Segment(dj.Manual):
+class Segment(dj.Computed):
     definition = """
-    # One recording file's extent. Keyed on the first barcode value in the
-    # segment, which is globally unique by construction (32-bit counter at 1 Hz).
-    # Key: (subject, session_datetime, system, segment_barcode).
+    # One recording file's extent, in session time. Keyed on the first barcode
+    # value in the segment, which is globally unique by construction (32-bit
+    # counter at 1 Hz) -- so discovering a previously-missed file shifts no
+    # existing key. Key: (subject, session_datetime, system, segment_barcode).
+    #
+    # Computed, not Manual: it was declared Manual in 1c-1 when nothing computed
+    # it. Every attribute below is derived from the file and the sync box's log.
     -> AcquisitionSystem
     segment_barcode : int unsigned  # spec 4.1: 32-bit counter, full 0..2**32-1 range
     ---
-    start_s   : double
-    end_s     : double
-    n_samples : bigint
+    file_path    : varchar(255)  # relative to the system directory
+    start_s      : double
+    end_s        : double
+    n_samples    : bigint
+    first_sample : bigint  # this segment's first sample index in NATIVE time
+    offset_s     : double  # session_s = native_s / timebase.scale + offset_s
+    residual_us  : double  # RMS about this segment's own offset
+    n_barcodes   : int unsigned
     """
+
+    # first_sample, offset_s and residual_us are here because spec 4.5 requires
+    # that "fit parameters, residuals, and native stream timestamps [are]
+    # retained so every transform is reversible and auditable". On the row, that
+    # is a property of the data; in a document, it is a promise. The rate half
+    # of the transform is on SystemTimebase, once per session rather than
+    # copied onto every segment -- a per-segment copy is a second definition
+    # free to drift from the one the fit produced.
 
 
 @schema

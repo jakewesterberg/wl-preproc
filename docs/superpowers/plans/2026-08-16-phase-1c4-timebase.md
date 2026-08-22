@@ -873,6 +873,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 7: Schema — Computed tables, new fields, and the Block comment
 
+> **Done 2026-08-22.** Converting `Segment` to `dj.Computed` reds two 1c-1 tests that insert
+> into it directly — DataJoint refuses direct inserts into an auto-populated table. They assert
+> what the table STORES rather than what a `make()` decides to store, which is precisely what
+> `allow_direct_insert=True` exists for, and they say so. Tests proving `make()` writes only
+> what it should are Task 8's, and they populate.
+
+
 **Files:**
 - Create: `wl_preproc/schema/timebase.py`, `tests/schema/test_timebase.py`
 - Modify: `wl_preproc/schema/core.py`, `wl_preproc/schema/coverage.py`
@@ -882,7 +889,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **This task changes declarations on tables that have no rows.** That is why it is free today and needs a migration after January — the same argument that forced the `<blob>` fix in parent spec §5.1.1.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/schema/test_timebase.py
@@ -924,12 +931,12 @@ def test_no_bare_longblob_in_the_new_schema_module():
     assert "longblob" not in timebase.TimingProvenance.definition
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/schema/test_timebase.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.schema.timebase'`
 
-- [ ] **Step 3: Declare the new tables**
+- [x] **Step 3: Declare the new tables**
 
 ```python
 # wl_preproc/schema/timebase.py
@@ -953,18 +960,18 @@ class SystemTimebase(dj.Computed):
 
 `time_source` exists because a camera system aligned by barcode is precise to one frame period (~2 ms at 500 Hz), while one aligned by an external trigger is exact. A downstream analysis that cares about 2 ms must be able to tell which it got.
 
-- [ ] **Step 4: Convert the three tables and correct the Block comment**
+- [x] **Step 4: Convert the three tables and correct the Block comment**
 
 `Block`'s comment currently reads *"boundaries are decoded from event codes and cross-validated against those rows"*, which contradicts closed open item 9 (wl-preproc **never authors** block rows). Correct it to say the boundaries are wl.works' assertion, recorded through `accept()`, and that the measured boundary is a separate quantity owned by 1c-5.
 
-- [ ] **Step 5: Run the schema tests and the guardrail sweep**
+- [x] **Step 5: Run the schema tests and the guardrail sweep**
 
 ```bash
 .venv/bin/python -m pytest tests/schema -q
 .venv/bin/python -m pytest tests/schema/test_guardrails.py -q
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
