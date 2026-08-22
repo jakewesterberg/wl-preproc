@@ -385,6 +385,60 @@ def register_electrode_config(part_number: str, electrodes: list[int]) -> str:
     return config_hash
 
 
+class EmptyElectrodeIntersection(dj.DataJointError):
+    """No electrode is common to every configuration named.
+
+    Raised rather than returning a zero-electrode config: design spec section
+    3.2.2 refuses such an activation at request time, the way an uncoverable
+    block set already is, and a zero-electrode config would let a sort be
+    requested over nothing.
+    """
+
+
+def intersect_electrode_configs(hashes: list[str]) -> str:
+    """The config holding exactly the electrodes common to every `hashes` entry.
+
+    For a canonical activation, whose segments all share one configuration,
+    this returns that same hash -- the sorted-set hash of Task 2 makes the
+    single-input case an identity rather than a copy. For a cross-montage
+    derivative it mints the intersection, which is an `ElectrodeConfig` row
+    like any other. That is the whole of design spec section 3.2.2's claim that
+    the two cases need no branch.
+    """
+    if not hashes:
+        raise EmptyElectrodeIntersection("no electrode configurations were named")
+
+    probe_types = set(
+        (ElectrodeConfig & [{"electrode_config_hash": h} for h in hashes]).to_arrays(
+            "probe_type"
+        )
+    )
+    if len(probe_types) != 1:
+        raise EmptyElectrodeIntersection(
+            f"configurations span more than one probe type: {sorted(probe_types)} -- "
+            "an intersection across probe models is not meaningful, because "
+            "electrode numbers name different physical sites on each"
+        )
+    part_number = str(probe_types.pop())
+
+    shared: set[int] | None = None
+    for h in hashes:
+        electrodes = {
+            int(e)
+            for e in (
+                ElectrodeConfig.Electrode & {"electrode_config_hash": h}
+            ).to_arrays("electrode")
+        }
+        shared = electrodes if shared is None else (shared & electrodes)
+
+    if not shared:
+        raise EmptyElectrodeIntersection(
+            f"no electrode is common to all {len(hashes)} configurations"
+        )
+
+    return register_electrode_config(part_number, sorted(shared))
+
+
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}ephys`. Idempotent."""
     core.activate(prefix=prefix)

@@ -228,3 +228,39 @@ def test_an_unknown_probe_type_fails_registration_loudly(ephys_activated):
         "registration raised but still left a ProbeType row behind, which is "
         "the zero-electrode state UnknownProbeType exists to prevent"
     )
+
+
+def test_an_intersection_is_an_ordinary_electrode_config(ephys_activated):
+    """Design spec section 3.2.2: the canonical case and the cross-montage
+    derivative case are the same shape, with no branch in the data model."""
+    ephys.register_probe_type("NP1000")
+    a = ephys.register_electrode_config("NP1000", [1, 2, 3, 4])
+    b = ephys.register_electrode_config("NP1000", [3, 4, 5, 6])
+
+    shared = ephys.intersect_electrode_configs([a, b])
+
+    assert len(ephys.ElectrodeConfig & {"electrode_config_hash": shared}) == 1
+    got = (ephys.ElectrodeConfig.Electrode & {"electrode_config_hash": shared}).to_arrays(
+        "electrode"
+    )
+    assert sorted(int(e) for e in got) == [3, 4]
+
+
+def test_intersecting_one_config_returns_that_config(ephys_activated):
+    """The canonical case: an activation whose segments all share one config
+    must resolve to that same config, not to a copy under a new hash."""
+    ephys.register_probe_type("NP1000")
+    a = ephys.register_electrode_config("NP1000", [1, 2, 3])
+    assert ephys.intersect_electrode_configs([a]) == a
+
+
+def test_an_empty_intersection_is_refused(ephys_activated):
+    """Design spec section 3.2.2: an activation whose intersection is empty is
+    refused, the way an uncoverable block set already is. Silently producing a
+    zero-electrode config would let a sort be requested over nothing."""
+    ephys.register_probe_type("NP1000")
+    a = ephys.register_electrode_config("NP1000", [1, 2])
+    b = ephys.register_electrode_config("NP1000", [3, 4])
+
+    with pytest.raises(ephys.EmptyElectrodeIntersection):
+        ephys.intersect_electrode_configs([a, b])
