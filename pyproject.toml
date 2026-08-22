@@ -56,6 +56,19 @@ dependencies = [
     # 2026-08-15 at 1.83 GB/s vs blake2b's 1.15 GB/s; a 360 GB session verifies
     # in ~3.3 min. Wheels published for cp311 and cp313, which is what CI runs.
     "blake3>=1.0,<2",
+    # Electrode geometry, and deliberately a PyPI version pin rather than a
+    # sixth git pin -- section 11's "five git dependency pins do not move"
+    # holds. This repository already treats ProbeInterface as the geometry
+    # authority: wl_preproc/synth/spikeglx.py:100 records that the SpikeGLX
+    # reader looks probe geometry up by part number in ProbeInterface's table
+    # and raises if it is absent. It is also already installed, as a transitive
+    # dependency of the spikeinterface format oracle in the dev extra.
+    #
+    # Its OFFLINE table is the one used -- build_neuropixels_probe(), backed by
+    # the bundled neuropixels_probes JSON. probeinterface.get_probe() is an
+    # ONLINE lookup against the probeinterface library repository and must
+    # never enter this path; it 404s without network access.
+    "probeinterface>=0.3,<0.4",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
