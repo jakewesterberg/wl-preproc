@@ -431,7 +431,13 @@ def test_a_system_with_one_barcode_rejects_its_files_by_name(dj_conn, prefix, tm
 
     scans = segments_module.scan_system("bcam", session_dir / "bcam")
     assert sum(len(scan.barcodes) for scan in scans) == 1, "the fixture did not bite"
-    assert not (timebase.SystemTimebase & {**session_key, "system": "bcam"})
+    # A row exists — recording that the fit was ATTEMPTED and failed. An absent
+    # row cannot distinguish that from "not reached yet", and DataJoint would
+    # re-attempt the key on every pass forever.
+    fit = (timebase.SystemTimebase & {**session_key, "system": "bcam"}).fetch1()
+    assert fit["fit_status"] == "unfittable"
+    assert fit["drift_ppm"] is None, "a zero drift is what a flawless fit looks like"
+    assert fit["n_barcodes_decoded"] == 1
 
     rejected = (core.RejectedSegment & {**session_key, "system": "bcam"}).to_dicts()
     assert [row["reason"] for row in rejected] == ["unfitted_system"]

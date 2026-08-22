@@ -1185,6 +1185,32 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 10: Provenance, tier, daemon wiring, and the `~jobs` gap
 
+> **Done 2026-08-22, and it surfaced a defect the plan could not have anticipated: the daemon
+> did not converge.** `SystemTimebase.make()` returned without inserting for a system it could
+> not fit. **DataJoint counts that as a SUCCESS and leaves the key outstanding**, so every such
+> system was re-scanned and re-decoded on every pass, forever, reporting keys "populated" each
+> time. Measured: `success_count` stayed at 2 across four consecutive passes with no row ever
+> appearing.
+>
+> The fix is a `fit_status` column — `fitted` / `no_recording` / `unfittable` — so every
+> attempted system gets exactly one row, with the fit columns NULL rather than zero where no
+> fit was reached (a stored 0.0 ppm drift with a 0.0 µs residual is precisely what a flawless
+> fit looks like). That also dissolves Task 8's reason for keying `Segment` off
+> `AcquisitionSystem`: `SystemTimebase` now records the unfittable systems too, so `Segment`
+> keys off it again and DataJoint orders the two natively.
+>
+> One steady-state rework remains and is deliberate: a system whose files are ALL rejected
+> produces no `Segment` row, so its key stays outstanding. That is what lets a corrected or
+> re-transferred file be picked up with no manual step. `test_run_once_reports_what_it_did`
+> therefore asserts *steady state is stable*, not *steady state is empty*.
+>
+> `_PROJECT_SCHEMAS` was a hand-listed tuple of four and 1c-4 adds a fifth and sixth — so the
+> one schema that can own `~jobs` tables would have been the one never swept, and
+> `count_stale_jobs` would have returned a confident zero. It is a written list still, because
+> the outbound guardrail bans `importlib` inside `wl_preproc/`; the completeness claim is
+> enforced by a test that DOES discover, so a seventh module reds the suite.
+
+
 **Files:**
 - Modify: `wl_preproc/schema/timebase.py`, `wl_preproc/daemon.py`, `wl_preproc/cli/report.py`
 - Test: `tests/schema/test_timebase.py`, `tests/schema/test_daemon.py`
@@ -1192,7 +1218,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `TimingProvenance.make()`; `daemon._computed_tables()` returning the four tables in dependency order.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/schema/test_timebase.py
@@ -1231,13 +1257,13 @@ def test_count_stale_jobs_sees_the_jobs_tables_it_reads(...):
     misses a table is worse than no snapshot, because it reads as coverage."""
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Close the `~jobs` snapshot gap**
+- [x] **Step 5: Close the `~jobs` snapshot gap**
 
 Extend the report's write-detection snapshot to include the `~jobs` tables of every activated project schema, and add a test that a `populate` failure leaving a stale job row is both counted and visible.
 
-- [ ] **Step 6: Run the full suite, export schemas, commit**
+- [x] **Step 6: Run the full suite, export schemas, commit**
 
 ```bash
 .venv/bin/python -m pytest -q

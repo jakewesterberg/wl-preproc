@@ -107,3 +107,171 @@ def test_block_does_not_claim_to_decode_its_own_boundaries(schemas):
 
     assert "decoded from event codes" not in core.Block.definition
     assert "wl.works" in core.Block.definition
+
+
+# --- TimingProvenance.make(). These need a landed, populated session. ---
+
+import datetime  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def provenance_session(dj_conn, prefix, tmp_path_factory):
+    """A landed `drift` session with every populate run, provenance last."""
+    from wl_preproc.schema import core, coverage, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+
+    timebase.activate(prefix=prefix)
+    coverage.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
+
+    root = tmp_path_factory.mktemp("provenance")
+    recipe = RECIPES["drift"]
+    generate_session(root, recipe)
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 20, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 20, 19, 0),
+            "session_dir": str(root / recipe.session_id),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    timebase.TimingProvenance.populate()
+    return session_key, recipe
+
+
+def test_tier_is_pending_not_a_passing_grade_when_inputs_are_missing(
+    schemas, provenance_session
+):
+    """Spec section 8. Tiers A/B/C each need event-code agreement or trial
+    counts, both of which are 1c-5. A tier derived from absent inputs treated
+    as passing is a FALSE CLAIM OF VALIDATION, so this phase emits 'pending'
+    and names what it could not compute — mirroring 1c-2's report, which names
+    the categories it cannot yet count rather than omitting them."""
+    _core, _coverage, timebase = schemas
+    session_key, _recipe = provenance_session
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+
+    assert row["tier"] == "pending"
+    assert row["pending_inputs"], "a pending tier that names nothing explains nothing"
+
+
+def test_tier_d_is_fully_derivable_now(schemas, dj_conn, prefix, tmp_path):
+    """Any timing check failed. Tier D needs no code agreement and no trial
+    counts, so it is the one verdict this phase can reach on its own — and
+    reaching it must not require 1c-5.
+
+    The session here has a system that decoded nothing, which is exactly a
+    failed timing check.
+    """
+    import yaml
+
+    from wl_preproc.schema import core, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+    from wl_preproc.timebase.extract import find_recordings
+
+    ingest.activate(prefix=prefix)
+    recipe = RECIPES["ci"]
+    generate_session(tmp_path, recipe)
+    session_dir = tmp_path / recipe.session_id
+
+    sidecar = find_recordings("bcam", session_dir / "bcam")[0]
+    payload = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
+    payload["digital_line"] = [0] * payload["frame_count"]
+    sidecar.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 21, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 21, 19, 0),
+            "session_dir": str(session_dir),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    timebase.TimingProvenance.populate()
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+    assert row["tier"] == "D"
+    assert row["n_rejected_segments"] >= 1
+
+
+def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
+    schemas, provenance_session
+):
+    """Spec section 4.7 requires the tier be derived, not asserted, and
+    re-derivable under different thresholds later. That is only true if every
+    input is on the row — a stored verdict with the evidence discarded can be
+    re-read but never re-judged."""
+    _core, _coverage, timebase = schemas
+    session_key, recipe = provenance_session
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+
+    assert row["n_barcodes_emitted"] > 0
+    assert row["n_systems_aligned"] == len(recipe.systems)
+    assert row["n_segments"] == len(recipe.systems)
+    assert row["n_rejected_segments"] == 0
+    assert row["worst_residual_us"] >= 0.0
+    # The largest planted magnitude, recovered through the database.
+    assert abs(row["worst_drift_ppm"]) == pytest.approx(
+        max(abs(ppm) for _s, ppm in recipe.system_drift_ppm), abs=300.0
+    )

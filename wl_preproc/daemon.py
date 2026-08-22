@@ -15,7 +15,15 @@ from __future__ import annotations
 
 import datajoint as dj
 
-from wl_preproc.schema import DEFAULT_PREFIX, core, coverage, paramset, request
+from wl_preproc.schema import (
+    DEFAULT_PREFIX,
+    core,
+    coverage,
+    ingest,
+    paramset,
+    request,
+    timebase,
+)
 
 # `reserved_time` is stamped once, at reservation, and never heartbeated while
 # a stage runs -- so this is an upper bound on how long any single stage may
@@ -28,18 +36,96 @@ _DEFAULT_STALE_THRESHOLD_S = 24 * 60 * 60  # 24h
 def _computed_tables() -> list:
     """The computed tables, in dependency order.
 
-    Empty in 1c-1: nothing computes yet. The ordering lives here so that 1c-4's
-    timebase and coverage stages, and Phase 2's sorting, extend one list rather
-    than inventing their own traversal.
+    The ordering is load-bearing rather than tidy. ``Segment.make()`` needs its
+    system's rate to already exist and ``BlockCoverage.make()`` needs the
+    segments — and neither dependency is expressed as a ``key_source``,
+    deliberately: keying ``Segment`` off ``SystemTimebase`` would mean a system
+    with no fit produced no rows at all, including the ``RejectedSegment`` rows
+    that say why (see that property's own docstring). So this list IS the
+    ordering, and nothing else enforces it.
+
+    Empty in 1c-1, because nothing computed yet. 1c-4 fills it; Phase 2's
+    sorting extends the same list rather than inventing its own traversal.
     """
-    return []
+    return [
+        timebase.SystemTimebase,
+        core.Segment,
+        coverage.BlockCoverage,
+        # Last: it counts segments and rejections, so it must run after
+        # whatever produces them or it records a session as cleaner than it is.
+        timebase.TimingProvenance,
+    ]
 
 
-_PROJECT_SCHEMAS = (core.schema, coverage.schema, paramset.schema, request.schema)
+# Every schema module this package defines, `pipeline` excepted — its tables
+# are adopted Elements rather than `@schema`-decorated classes on the module,
+# and this project does not populate them.
+#
+# This was a tuple of FOUR until 1c-4, and the omission was not theoretical.
+# `timebase`'s two tables are the first Computed tables this project has
+# declared, so the one schema that can actually own `~jobs` tables was the one
+# schema never swept for stale reservations — `count_stale_jobs` would have
+# returned a confident zero. `tests/schema/test_guardrails.py` records the same
+# shape biting once before, when `ingest` landed as a fifth module.
+#
+# It stays a written list rather than a `pkgutil` sweep because the outbound
+# guardrail bans `importlib` inside `wl_preproc/` (its ruling is recorded in
+# `tests/test_cli_guardrails.py`: banning the import closes the whole
+# dynamic-import class at a node type already visited). Static imports are also
+# what make this auditable by reading. **The completeness claim is enforced by
+# a test that DOES discover** — `test_every_schema_module_is_swept_for_job_tables`
+# — so a seventh module fails the suite rather than being silently skipped.
+_PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
+    ("core", core),
+    ("coverage", coverage),
+    ("ingest", ingest),
+    ("paramset", paramset),
+    ("request", request),
+    ("timebase", timebase),
+)
+
+
+def _project_schema_modules() -> list[tuple[str, object]]:
+    """`(name, module)` for every schema module. See `_PROJECT_SCHEMA_MODULES`."""
+    return list(_PROJECT_SCHEMA_MODULES)
+
+
+def _project_schemas() -> list[tuple[str, dj.Schema]]:
+    """The `dj.Schema` of each. See above."""
+    return [(name, module.schema) for name, module in _PROJECT_SCHEMA_MODULES]
+
+
+def activate_all(prefix: str = DEFAULT_PREFIX) -> None:
+    """Activate every schema module this package defines.
+
+    Driven off `_PROJECT_SCHEMA_MODULES` rather than a second list of its own:
+    `run_once` named three modules explicitly, and 1c-4 added two more whose
+    tables every one of its populates depends on. That omission surfaced as
+    every stage failing with an unactivated-schema error — loudly, but as three
+    confusing failures rather than as one missing line.
+    """
+    for _name, module in _project_schema_modules():
+        module.activate(prefix=prefix)
+
+
+def job_tables() -> list:
+    """Every ``~jobs`` table this project can currently see, as query objects.
+
+    Exported so the daily report's write-detection snapshot can cover them.
+    The 1c-2 handoff records that the snapshot did not, and until 1c-4 that
+    was harmless because no Computed table existed to create one. **A snapshot
+    that silently misses a table is worse than no snapshot, because it reads
+    as coverage.**
+
+    A `dj.jobs.Job` IS a table -- it subclasses `dj.Table` -- so these are
+    returned directly rather than unwrapped. There is no `.table` attribute on
+    one, which the first version of this function assumed.
+    """
+    return list(_activated_job_tables())
 
 
 def _any_schema_activated() -> bool:
-    """True if at least one of this project's four schemas has been
+    """True if at least one of this project's schemas has been
     ``.activate()``d in this process.
 
     Distinct from "``_activated_job_tables()`` yielded something": that
@@ -50,7 +136,7 @@ def _any_schema_activated() -> bool:
     activated to check in the first place". ``count_stale_jobs`` needs that
     distinction to avoid reporting the second case as if it were the first.
     """
-    return any(schema_obj.is_activated() for schema_obj in _PROJECT_SCHEMAS)
+    return any(schema_obj.is_activated() for _name, schema_obj in _project_schemas())
 
 
 def _activated_job_tables():
@@ -60,14 +146,14 @@ def _activated_job_tables():
     ``dj.Schema.jobs`` raises ``DataJointError`` outright — not "returns
     nothing" — on a schema that has not been ``.activate()``d, so each schema
     is checked with ``is_activated()`` and skipped, not queried, if it is not
-    yet live. This matters concretely: ``run_once`` activates all four
-    schemas before reaping, but a caller may invoke ``reap_stale_jobs`` or
+    yet live. This matters concretely: ``run_once`` activates every schema
+    before reaping, but a caller may invoke ``reap_stale_jobs`` or
     ``count_stale_jobs`` directly against a process that has only activated
     some of them (exactly what ``tests/schema/test_daemon.py``'s
     ``daemon_env`` fixture does — it activates ``core`` and ``request`` but
     not ``coverage``/``paramset``).
     """
-    for schema_obj in _PROJECT_SCHEMAS:
+    for _name, schema_obj in _project_schemas():
         if not schema_obj.is_activated():
             continue
         yield from schema_obj.jobs
@@ -233,9 +319,7 @@ def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
     failure in `populate()` itself rather than in one of its keys (a dropped
     connection, a key_source that will not resolve).
     """
-    request.activate(prefix=prefix)
-    coverage.activate(prefix=prefix)
-    paramset.activate(prefix=prefix)
+    activate_all(prefix=prefix)
 
     reaped = reap_stale_jobs(prefix=prefix)
     populated, errors = 0, []

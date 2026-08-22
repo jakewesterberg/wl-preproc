@@ -99,25 +99,31 @@ class Segment(dj.Computed):
 
     @property
     def key_source(self):
-        """One key per system of a session that actually landed.
+        """Systems whose clock fit has been ATTEMPTED and which had recordings.
 
-        Deliberately NOT `timebase.SystemTimebase`, although an offset is
-        fitted with that rate held fixed (spec 4.5) and this cannot run
-        usefully before it. Keying off the fit would mean a system with no fit
-        -- design spec section 10's "a system with zero decodable barcodes" --
-        produces no rows here at all, including no `RejectedSegment` rows, and
-        the diagnosis for the failure would be the one thing not recorded.
+        `SystemTimebase` rather than `AcquisitionSystem`, and it is safe to key
+        off it precisely because that table records an attempt for every system
+        -- `fit_status` of `unfittable` as readily as `fitted`. So a system with
+        no fit still reaches here and still records why each of its files could
+        not be used, which was the whole objection to keying off it.
 
-        The cost is that ordering is the caller's job rather than DataJoint's:
-        `daemon._computed_tables()` returns these in dependency order, and
-        `make()` below handles the fit being absent explicitly rather than
-        assuming the order held.
+        `no_recording` is excluded because there is nothing to scan: including
+        it would leave a key that can never insert a row, and DataJoint
+        re-attempts such a key on every pass forever (measured -- see
+        `SystemTimebase`'s `_FIT_STATUS_ENUM` comment).
 
-        Imported locally because `ingest` is a peer module.
+        > A system whose files are ALL rejected is still re-scanned each pass,
+        > for the same reason: no `Segment` row appears, so the key stays
+        > outstanding. That one is deliberate. It is what lets a corrected or
+        > re-transferred file be picked up with no manual step, which is the
+        > property closed open item 9 requires of anything waiting on data that
+        > lands late.
+
+        Imported locally because `timebase` imports this module.
         """
-        from wl_preproc.schema import ingest
+        from wl_preproc.schema import timebase
 
-        return AcquisitionSystem & ingest.Ingestion
+        return timebase.SystemTimebase & "fit_status != 'no_recording'"
 
     def make(self, key: dict) -> None:
         """One row per alignable recording, and a RejectedSegment for the rest.
@@ -137,6 +143,7 @@ class Segment(dj.Computed):
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
+        key = {k: key[k] for k in AcquisitionSystem.primary_key}
         session_dir = pathlib.Path(
             (ingest.Ingestion & session_key).fetch1("session_dir")
         )
@@ -145,11 +152,13 @@ class Segment(dj.Computed):
         if not scans:
             return
 
-        fits = (timebase.SystemTimebase & key).to_dicts()
-        # Absent rather than assumed: this table keys off AcquisitionSystem, so
-        # a system whose clock could not be fitted still reaches here -- and
-        # every one of its files is then unusable for a reason worth recording.
-        rate = segments.rate_fit_from_row(fits[0]) if fits else None
+        fit = (timebase.SystemTimebase & key).fetch1()
+        # A row exists for every attempted system, fitted or not, so the check
+        # is on the status rather than on the row's presence. An unfitted
+        # system's files are each unusable for a reason worth recording.
+        rate = (
+            segments.rate_fit_from_row(fit) if fit["fit_status"] == "fitted" else None
+        )
         reference = segments.session_reference(session_dir)
 
         accepted, rejected = [], []

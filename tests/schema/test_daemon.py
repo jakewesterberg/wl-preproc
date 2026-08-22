@@ -231,16 +231,89 @@ def test_reaper_frees_a_stale_reservation_not_a_fresh_one(daemon_env, dj_conn, p
         ReaperProbeSource.drop_quick()
 
 
-def test_run_once_reports_what_it_did(daemon_env, prefix):
-    """With nothing to compute — `_computed_tables()` is empty in 1c-1 — the
-    report must say so in values, not merely carry the right key names. Key
-    presence alone was the whole of this assertion until 2026-08-14, and a dict
-    literal with three hardcoded zeroes would have satisfied it."""
-    report = daemon_env.run_once(prefix=prefix)
-    assert set(report) == {"populated", "errors", "stale_jobs_reaped"}
-    assert report["populated"] == 0
-    assert report["errors"] == []
-    assert isinstance(report["stale_jobs_reaped"], int)
+def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
+    """The report must say what happened in VALUES, not merely carry the right
+    key names. Key presence alone was the whole of this assertion until
+    2026-08-14, and a dict literal with three hardcoded zeroes would have
+    satisfied it.
+
+    Until 1c-4 the check for that was `populated == 0`, on the premise that
+    `_computed_tables()` was empty. That premise is gone — the daemon computes
+    now — and `== 0` would have gone on passing on a hardcoded zero for the
+    rest of the project's life.
+
+    So it is checked in BOTH directions, and against a BASELINE rather than
+    against zero, because the shared test database is not drainable to zero: a
+    system whose files are all rejected produces no `Segment` row, so its key
+    stays outstanding and is re-attempted every pass. That is deliberate — it
+    is what lets a corrected file be picked up with no manual step — and it
+    means the invariant here is *steady state is stable*, not *steady state is
+    empty*. See `core.Segment.key_source`.
+    """
+    import datetime
+
+    from wl_preproc.schema import core, ingest, pipeline
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+
+    # Whatever earlier tests landed is not this test's subject: drain it, then
+    # measure the steady state twice to establish that it IS steady.
+    daemon_env.run_once(prefix=prefix)
+    first = daemon_env.run_once(prefix=prefix)
+    baseline = daemon_env.run_once(prefix=prefix)
+
+    assert set(baseline) == {"populated", "errors", "stale_jobs_reaped"}
+    assert baseline["populated"] == first["populated"], (
+        "the daemon does not reach a steady state: two consecutive idle passes "
+        f"computed {first['populated']} then {baseline['populated']} keys"
+    )
+    assert baseline["errors"] == []
+    assert isinstance(baseline["stale_jobs_reaped"], int)
+
+    recipe = RECIPES["ci"]
+    generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 22, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 22, 19, 0),
+            "session_dir": str(tmp_path / recipe.session_id),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    did_work = daemon_env.run_once(prefix=prefix)
+    assert did_work["errors"] == [], did_work["errors"]
+    assert did_work["populated"] > baseline["populated"], (
+        "landing a session computed no more keys than an idle pass"
+    )
+
+    # And back to the same steady state, not to some new one.
+    assert daemon_env.run_once(prefix=prefix)["populated"] == baseline["populated"]
 
 
 # Every probe below is declared inside `core.schema`, not a standalone one:
@@ -431,3 +504,112 @@ def test_doctor_reports_each_stale_job_state_and_reaps_nothing(
         DoctorProbeDerived.jobs.drop()
         DoctorProbeDerived.drop_quick()
         DoctorProbeSource.drop_quick()
+
+
+def test_computed_tables_is_no_longer_empty():
+    """1c-1 left this returning [] with a comment naming 1c-4 as what extends
+    it. The ordering lives there so later phases extend one list rather than
+    inventing their own traversal."""
+    from wl_preproc import daemon
+
+    assert daemon._computed_tables() != []
+
+
+def test_computed_tables_are_in_dependency_order():
+    """Ordering is load-bearing rather than tidy. `Segment.make()` needs its
+    system's rate to already exist, and `BlockCoverage.make()` needs the
+    segments — and neither dependency is expressed as a `key_source`, precisely
+    so that a system with no fit still records why (see `Segment.key_source`).
+    So this list IS the ordering, and nothing else enforces it."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import core, coverage, timebase
+
+    names = [table.__name__ for table in daemon._computed_tables()]
+
+    assert names.index(timebase.SystemTimebase.__name__) < names.index(core.Segment.__name__)
+    assert names.index(core.Segment.__name__) < names.index(coverage.BlockCoverage.__name__)
+    assert names.index(core.Segment.__name__) < names.index(
+        timebase.TimingProvenance.__name__
+    )
+
+
+def test_every_schema_module_is_swept_for_job_tables():
+    """`_PROJECT_SCHEMAS` was a hand-listed tuple of four. This project has
+    already been bitten by exactly that shape once: `tests/schema/
+    test_guardrails.py` records that a hardcoded module tuple silently swept
+    nothing from `ingest` when it landed as a fifth module, while the suite
+    stayed green.
+
+    It bit again here. 1c-4 adds `timebase`, whose two tables are the FIRST
+    Computed tables this project has declared — so a hand-listed tuple missing
+    it would mean the one schema that can actually have `~jobs` tables is the
+    one never checked for stale reservations. Discovered by construction now,
+    so a sixth module needs no one to remember this file.
+    """
+    import pkgutil
+
+    import wl_preproc.schema
+    from wl_preproc import daemon
+
+    expected = {
+        name
+        for _finder, name, _ispkg in pkgutil.iter_modules(wl_preproc.schema.__path__)
+        if not name.startswith("_") and name != "pipeline"
+    }
+    assert {name for name, _schema in daemon._project_schemas()} == expected
+
+
+def test_count_stale_jobs_sees_the_jobs_tables_it_reads(dj_conn, prefix, tmp_path):
+    """This is the FIRST Computed table this project has ever declared, which
+    makes live a path that was inert: `count_stale_jobs` reads DataJoint's
+    internal `~jobs` tables, and the 1c-2 handoff records that the report's
+    write-detection snapshot does not cover them. A snapshot that silently
+    misses a table is worse than no snapshot, because it reads as coverage.
+
+    A reservation is left behind deliberately and must be BOTH counted by
+    `count_stale_jobs` AND visible in `job_tables()` — the accessor the report's
+    snapshot now uses. Counted but invisible is the exact shape of the gap.
+    """
+    from wl_preproc import daemon
+    from wl_preproc.schema import timebase
+
+    timebase.activate(prefix=prefix)
+
+    # A throwaway Computed table inside the newly-discovered schema, so the
+    # reservation exists in exactly the module a hand-listed tuple would miss.
+    @timebase.schema
+    class JobsProbeSource(dj.Manual):
+        definition = """
+        # throwaway source for the ~jobs visibility probe
+        n : int
+        """
+
+    @timebase.schema
+    class JobsProbeDerived(dj.Computed):
+        definition = """
+        # throwaway computed table for the ~jobs visibility probe
+        -> JobsProbeSource
+        ---
+        doubled : int
+        """
+
+        def make(self, key):
+            self.insert1({**key, "doubled": key["n"] * 2})
+
+    try:
+        JobsProbeSource.insert1({"n": 1})
+        jobs = JobsProbeDerived.jobs
+        jobs.refresh()
+        assert jobs.reserve({"n": 1}), "expected the one pending job to reserve cleanly"
+
+        assert daemon.count_stale_jobs(prefix=prefix, older_than_s=0) >= 1
+
+        # The gap this closes: counted but invisible. `job_tables()` is what
+        # the report's write-detection snapshot covers, so a reservation the
+        # counter can see and the snapshot cannot is the exact failure shape.
+        visible = daemon.job_tables()
+        assert visible, "count_stale_jobs read job tables the snapshot cannot see"
+        assert any(len(table) >= 1 for table in visible)
+    finally:
+        JobsProbeDerived.drop_quick()
+        JobsProbeSource.drop_quick()
