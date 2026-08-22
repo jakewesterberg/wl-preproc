@@ -462,6 +462,19 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 3: Raise the camera frame rate, and give the camera a digital line
 
+> **Done 2026-08-22, with one addition.** Step 5 adds `digital_line`; the design spec's §13,
+> which that step cites, names **two** missing fields — the line "and... nor a frame-rate
+> field". `frame_rate_hz` is added alongside it, on the same optional-because-published
+> terms, because a per-frame line is useless without the rate that sampled it and Task 5's
+> `extract_bcam` would otherwise have to assume `synth.CAMERA_FPS` — the fixture's rate, not
+> the camera's. §13 now records the status of both.
+>
+> The camera also gains `BCAM_PRE_ROLL_S = 0.85`, the fourth distinct tick origin design spec
+> §10 asks for, checked against `IDLE_MIN_US` rather than chosen. Frame counts include it, so
+> `camera_frame_count()` exists to keep `session.py` and the emitter from holding two copies of
+> that arithmetic. `write_camera_sidecar` gained `truth` and `drift_ppm` to render the line.
+
+
 **Files:**
 - Modify: `wl_preproc/synth/peripherals.py`, `wl_preproc/contracts/sidecar.py`
 - Test: `tests/synth/test_peripherals.py`, `tests/contracts/test_sidecar.py`
@@ -471,7 +484,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why this task exists.** `CAMERA_FPS` is `200.0` today. Against a 5 ms bit slot that is **exactly 1.0 samples per bit** — below the floor, so the shipped fixture cannot decode a barcode at all. The spec is written against ≥400 Hz. **This is a fixture that contradicts the design, found before implementation rather than during it.**
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/synth/test_peripherals.py
@@ -498,12 +511,12 @@ def test_camera_fps_has_margin_over_the_floor():
     assert CAMERA_FPS >= 1.25 * min_sample_rate_hz()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/synth/test_peripherals.py -v`
 Expected: FAIL — `assert 200.0 >= 400.0`
 
-- [ ] **Step 3: Raise the rate and record why**
+- [x] **Step 3: Raise the rate and record why**
 
 ```python
 # wl_preproc/synth/peripherals.py
@@ -515,13 +528,13 @@ Expected: FAIL — `assert 200.0 >= 400.0`
 CAMERA_FPS = 500.0
 ```
 
-- [ ] **Step 4: Run the full suite and fix the ripple**
+- [x] **Step 4: Run the full suite and fix the ripple**
 
 Run: `.venv/bin/python -m pytest -q`
 
 `CAMERA_FPS` feeds `frame_count = int(recipe.duration_s * CAMERA_FPS)`, so sidecar frame counts change. Update any test asserting a literal frame count to derive it from `CAMERA_FPS` instead — a literal that has to be edited when the rate changes is the same defect one layer down.
 
-- [ ] **Step 5: Add the sidecar's digital-line field as OPTIONAL**
+- [x] **Step 5: Add the sidecar's digital-line field as OPTIONAL**
 
 ```python
 # wl_preproc/contracts/sidecar.py
@@ -538,7 +551,7 @@ Run: `.venv/bin/python -m pytest -q`
     digital_line: list[int] | None = None
 ```
 
-- [ ] **Step 6: Write the failing test for backward compatibility**
+- [x] **Step 6: Write the failing test for backward compatibility**
 
 ```python
 # append to tests/contracts/test_sidecar.py
@@ -550,7 +563,7 @@ def test_a_sidecar_without_a_digital_line_still_validates():
     assert sidecar.digital_line is None
 ```
 
-- [ ] **Step 7: Emit the digital line from the generator, re-export schemas, commit**
+- [x] **Step 7: Emit the digital line from the generator, re-export schemas, commit**
 
 Have `write_camera_sidecar` render the barcode into `digital_line` at `CAMERA_FPS`, using `wl_sync.barcode.encode` for the frame shape and the recipe's `drift_ppm` for the camera's own clock.
 

@@ -12,7 +12,7 @@ from wl_preproc.contracts.done import DONE_SCHEMA_VERSION, DoneMarker, FileEntry
 from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.synth.faults import drop_camera_frames, truncate_file
 from wl_preproc.synth.peripherals import (
-    CAMERA_FPS,
+    camera_frame_count,
     write_camera_sidecar,
     write_manifest,
     write_task_file,
@@ -80,11 +80,17 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
             write_rhs(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
         elif system == "bcam":
             dropped = (
-                drop_camera_frames(int(recipe.duration_s * CAMERA_FPS), rng)
+                drop_camera_frames(camera_frame_count(recipe), rng)
                 if Fault.DROPPED_CAMERA_FRAMES in recipe.faults
                 else ()
             )
-            write_camera_sidecar(directory / "frames.yaml", recipe, dropped=dropped)
+            write_camera_sidecar(
+                directory / "frames.yaml",
+                recipe,
+                truth,
+                dropped=dropped,
+                drift_ppm=recipe.drift_ppm,
+            )
 
         _write_done_marker(layout, system, finished_at)
 
