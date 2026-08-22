@@ -1,0 +1,133 @@
+# wl_preproc/schema/ephys.py
+"""The ephys branch: probe, insertion, clustering, units, waveforms, QC.
+
+Custom rather than adopted. `element-array-ephys` was declined 2026-08-22 --
+its `Clustering` is keyed (subject, session_datetime, insertion_number,
+paramset_idx) with nowhere to put `activation_id`, which parent spec section
+5.2 requires, so two derivative activations over different block sets would
+collide on one primary key. Adopting it also imports four unpinned moving git
+refs and silently replaces this project's pinned spikeinterface. See
+`docs/superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md` section 2.
+
+**Every array attribute here declares `<blob>`.** Under DataJoint 2.x a bare
+`longblob` stores a numpy array as its string repr and nothing raises on insert
+or on fetch -- measured at 31,488 float32 values becoming 488 bytes.
+"""
+
+from __future__ import annotations
+
+import datajoint as dj
+
+from wl_preproc.ephys import geometry
+from wl_preproc.schema import DEFAULT_PREFIX, core, paramset, pipeline, request
+
+schema = dj.Schema()
+
+
+@schema
+class ProbeType(dj.Lookup):
+    definition = """
+    # One probe model, named by its IMEC part number. Key: (probe_type).
+    # Populated from probeinterface's OFFLINE table -- see wl_preproc/ephys/
+    # geometry.py for why that source and not element-array-ephys's map.
+    probe_type : varchar(32)  # e.g. NP1000, NP1030
+    """
+
+    class Electrode(dj.Part):
+        definition = """
+        # One electrode site on a probe model, in the model's own frame.
+        # Key: (probe_type, electrode).
+        -> master
+        electrode : int unsigned
+        ---
+        shank      : tinyint unsigned
+        shank_col  : tinyint unsigned
+        shank_row  : int unsigned
+        x_coord    : float  # (um)
+        y_coord    : float  # (um)
+        """
+
+
+@schema
+class Probe(dj.Manual):
+    definition = """
+    # One physical probe, by serial. Key: (probe_serial). Serials arrive with
+    # the activation request (parent spec section 11.2); this machine cannot
+    # fetch them from wl.works.
+    probe_serial : varchar(32)
+    ---
+    -> ProbeType
+    """
+
+
+@schema
+class ElectrodeConfig(dj.Manual):
+    definition = """
+    # A SET OF ELECTRODES, named by its contents -- not 'the configuration of a
+    # recording'. Key: (electrode_config_hash). That distinction is load-
+    # bearing: the intersection of two electrode sets is itself an electrode
+    # set, so a cross-montage derivative's effective config is a row in this
+    # table like any other, and the canonical and derivative cases need no
+    # branch. Design spec section 3.2.2.
+    electrode_config_hash : varchar(32)
+    ---
+    -> ProbeType
+    n_electrodes : int unsigned
+    """
+
+    class Electrode(dj.Part):
+        definition = """
+        # Key: (electrode_config_hash, probe_type, electrode).
+        -> master
+        -> ProbeType.Electrode
+        """
+
+
+def register_probe_type(part_number: str) -> None:
+    """Declare `part_number` and every electrode of it. Idempotent."""
+    ProbeType.insert1({"probe_type": part_number}, skip_duplicates=True)
+    rows = [
+        {"probe_type": part_number, **row} for row in geometry.electrode_rows(part_number)
+    ]
+    ProbeType.Electrode.insert(rows, skip_duplicates=True)
+
+
+def register_electrode_config(part_number: str, electrodes: list[int]) -> str:
+    """Register the electrode set and return its hash. Idempotent.
+
+    The hash is over the SORTED set, so an intersection computed in any order
+    resolves to one identity. `paramset.content_hash` is reused by name rather
+    than reimplemented -- that function's own docstring rules it, for the
+    one-definition reason.
+    """
+    unique = sorted(set(int(e) for e in electrodes))
+    config_hash = paramset.content_hash({"probe_type": part_number, "electrodes": unique})
+    ElectrodeConfig.insert1(
+        {
+            "electrode_config_hash": config_hash,
+            "probe_type": part_number,
+            "n_electrodes": len(unique),
+        },
+        skip_duplicates=True,
+    )
+    ElectrodeConfig.Electrode.insert(
+        [
+            {
+                "electrode_config_hash": config_hash,
+                "probe_type": part_number,
+                "electrode": e,
+            }
+            for e in unique
+        ],
+        skip_duplicates=True,
+    )
+    return config_hash
+
+
+def activate(prefix: str = DEFAULT_PREFIX) -> None:
+    """Bind these tables to `{prefix}ephys`. Idempotent."""
+    core.activate(prefix=prefix)
+    paramset.activate(prefix=prefix)
+    request.activate(prefix=prefix)
+    if not schema.is_activated():
+        schema.activate(f"{prefix}ephys", create_tables=True)
