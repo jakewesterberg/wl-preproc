@@ -1098,6 +1098,20 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 9: Block coverage
 
+> **Done 2026-08-22.** The test file is `tests/timebase/test_coverage_rules.py`, not
+> `test_coverage.py`: `tests/schema/` already has that basename, the test directories are not
+> packages, and pytest fails collection for the **whole suite** rather than for the one file.
+>
+> `BlockCoverage.key_source` is the cross product `Block * AcquisitionSystem`, not a join
+> through `Segment`. A system that recorded none of a block still needs a row saying `absent`,
+> and joining through segments would silently omit exactly the systems whose absence matters
+> most — a missing row is not the same statement as `absent`.
+>
+> `classify_coverage` refuses a zero-length block rather than answering. Both plausible answers
+> are wrong in opposite directions: `full` says nothing is missing, `absent` says nothing was
+> recorded. The row is malformed and wl.works authored it.
+
+
 **Files:**
 - Create: `wl_preproc/timebase/coverage.py`, `tests/timebase/test_coverage.py`
 - Modify: `wl_preproc/schema/coverage.py`
@@ -1105,7 +1119,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `classify_coverage(block: tuple[float, float], segments: Sequence[tuple[float, float]]) -> tuple[str, float]` returning `(coverage, covered_s)`; `BlockCoverage.make()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_coverage.py
@@ -1144,13 +1158,13 @@ def test_covered_s_never_exceeds_the_block_duration():
     assert covered_s <= 10.0
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Add the populate test, and state where block boundaries come from**
+- [x] **Step 5: Add the populate test, and state where block boundaries come from**
 
 `BlockCoverage.make()` reads `Block.start_s`/`end_s`, which are **wl.works' assertion, not our measurement** (spec §9). Say so in the table's docstring where a reader will meet it — otherwise a reader assumes the boundaries were decoded.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
