@@ -139,3 +139,81 @@ def test_continuous_tables_point_at_an_artifact_triple(ephys_activated):
     for table in (ephys.LFP, ephys.MUA):
         names = set(table.heading.names)
         assert {"artifact_host", "artifact_share", "artifact_path"} <= names
+
+
+def test_a_realistic_waveform_set_survives_insert_and_fetch(ephys_activated, dj_conn):
+    """The Phase 2 precondition, discharged.
+
+    384 x 82 float32 is the checkpoint's own MEASURED shape -- 31,488 values
+    that became 488 bytes under a bare longblob, unrecoverable, with nothing
+    raising on insert or on fetch. A toy array would not reproduce it: numpy
+    elides the middle of its repr only above ~1000 elements, so a small array
+    round-trips 'fine' through the very declaration that destroys a real one.
+    """
+    from tests.schema.test_guardrails import _build_parents, _synthetic_row
+    from wl_preproc.schema import ephys as e
+
+    arr = np.arange(384 * 82, dtype=np.float32).reshape(384, 82)
+
+    _build_parents(e.WaveformSet.Waveform)
+    row = {**_synthetic_row(e.WaveformSet.Waveform, exclude="waveform_mean"),
+           "waveform_mean": arr}
+    key = {k: row[k] for k in e.WaveformSet.Waveform.primary_key}
+    e.WaveformSet.Waveform.insert1(row, skip_duplicates=True)
+
+    got = (e.WaveformSet.Waveform & key).fetch1("waveform_mean")
+    assert isinstance(got, np.ndarray), f"got {type(got).__name__}, not ndarray"
+    assert got.shape == (384, 82)
+    assert got.dtype == np.float32
+    assert np.array_equal(got, arr)
+
+    # This test and test_guardrails.py's sweep share a session-scoped database and
+    # build the SAME synthetic key, and the sweep inserts with skip_duplicates=True.
+    # Leaving this row behind would silently turn the sweep's own insert into a
+    # no-op and make it compare its 64x64 probe array against this 384x82 one.
+    # Cleaning up keeps both tests honest.
+    (e.WaveformSet.Waveform & key).delete_quick()
+
+
+def test_reverting_a_blob_to_longblob_is_caught(dj_conn, prefix):
+    """Mutate, don't read -- this project's standing habit.
+
+    A declaration guard that has never seen a violation is a guard nobody has
+    tested. This mutates the declaration and asserts the sweep rejects it, so
+    the guard's own working is proven rather than assumed.
+    """
+    import datajoint as dj
+
+    mutant = dj.Schema()
+
+    @mutant
+    class Mutant(dj.Manual):
+        definition = """
+        # Deliberately wrong, to prove the sweep catches it. Key: (mutant_id).
+        mutant_id : int
+        ---
+        payload : longblob
+        """
+
+    mutant.activate(f"{prefix}mutant", create_tables=True)
+    try:
+        offenders = [
+            a for a in Mutant.heading.names
+            if "longblob" in (Mutant.heading[a].type or "").lower()
+        ]
+        assert offenders == ["payload"], (
+            "the mutation did not produce a bare longblob, so this test is not "
+            "exercising what it claims to -- check whether DataJoint's type "
+            "spelling changed before trusting the real guard"
+        )
+    finally:
+        mutant.drop()
+
+
+def test_an_unknown_probe_type_fails_registration_loudly(ephys_activated):
+    """Mutation of the geometry path: a part number absent from the offline
+    table must raise, not declare a ProbeType with zero electrodes."""
+    from wl_preproc.ephys.geometry import UnknownProbeType
+
+    with pytest.raises(UnknownProbeType):
+        ephys.register_probe_type("NP9999")
