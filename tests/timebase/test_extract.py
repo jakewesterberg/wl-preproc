@@ -6,8 +6,12 @@ from wl_sync.barcode import BIT_SLOT_US, decode_edges
 
 from wl_preproc.synth.recipe import RECIPES
 from wl_preproc.synth.session import generate_session
+from wl_preproc.contracts.paths import SYSTEMS
 from wl_preproc.timebase.extract import (
+    EXTRACTORS,
     BitStream,
+    extract_bcam,
+    extract_ohdpi,
     extract_rhs,
     extract_spikeglx,
     extract_syncbox,
@@ -238,3 +242,151 @@ def test_spikeglx_reshapes_by_the_declared_channel_count(tmp_path: Path):
     recovered = {b.value for b in decode_edges(list(stream.edges))}
     expected = {value for value, _ in truth.barcodes}
     assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
+
+
+def test_every_system_has_an_extractor():
+    """The registry is the phase's completeness claim. A system in SYSTEMS with
+    no extractor is a system that silently never aligns — it would produce no
+    Segment, no timebase and no coverage row, and nothing would report a gap.
+    """
+    assert set(EXTRACTORS) == set(SYSTEMS)
+
+
+def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
+    """At 500 Hz this is 2.5 samples per 5 ms bit — the thinnest margin in the
+    design (design spec section 3), so it is the case most likely to lose a
+    barcode to sample placement rather than to a bug."""
+    from wl_preproc.synth.ohdpi import FILENAME
+
+    truth = generate_session(tmp_path, RECIPES["eye"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    stream = extract_ohdpi(session_dir / "ohdpi" / FILENAME)
+
+    recovered = {b.value for b in decode_edges(list(stream.edges))}
+    expected = {value for value, _ in truth.barcodes}
+    assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
+
+
+def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
+    """The file carries a native timestamp per frame, so the rate is a
+    measurement rather than an assumption — and `OHDPI_FPS` is the fixture's
+    rate, not the instrument's.
+
+    The timestamps are rewritten to a different rate to prove it: a derivation
+    that ignored them and returned `OHDPI_FPS` passes any test written against
+    an unmodified fixture.
+    """
+    from wl_preproc.synth.ohdpi import FILENAME, OHDPI_FPS
+
+    generate_session(tmp_path, RECIPES["eye"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+    path = session_dir / "ohdpi" / FILENAME
+    slower_hz = 400.0
+    assert slower_hz != OHDPI_FPS
+
+    rows = path.read_text(encoding="utf-8").splitlines()
+    rewritten = [rows[0]]
+    for row in rows[1:]:
+        index, _timestamp, digital = row.split(",")
+        rewritten.append(f"{index},{round(int(index) * 1e6 / slower_hz)},{digital}")
+    path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+    assert extract_ohdpi(path).fs_hz == pytest.approx(slower_hz)
+
+
+def test_bcam_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
+    """The behaviour camera aligns the same way every other system does. Its
+    digital line and its frame rate are both PROPOSED sidecar fields (design
+    spec section 13), which is why this runs against the generator's sidecar
+    and not against a real one."""
+    truth = generate_session(tmp_path, RECIPES["ci"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    stream = extract_bcam(session_dir / "bcam" / "frames.yaml")
+
+    recovered = {b.value for b in decode_edges(list(stream.edges))}
+    expected = {value for value, _ in truth.barcodes}
+    assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
+
+
+def test_bcam_refuses_a_sidecar_with_no_frame_rate(tmp_path: Path):
+    """`frame_rate_hz` is optional to the CONTRACT, because that contract is
+    published and the FLIR project has not agreed to it. It is not optional to
+    the pipeline: falling back on `synth.CAMERA_FPS` would substitute the
+    fixture's rate for the camera's, which is wrong by exactly the ratio nobody
+    checks. Refusing is what keeps bcam alignment specified-and-unavailable
+    rather than silently wrong.
+    """
+    import yaml
+
+    generate_session(tmp_path, RECIPES["ci"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+    path = session_dir / "bcam" / "frames.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    del payload["frame_rate_hz"]
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="frame_rate_hz"):
+        extract_bcam(path)
+
+
+def test_bcam_refuses_a_sidecar_with_no_digital_line(tmp_path: Path):
+    """The other half of the same proposal. A sidecar from before the amendment
+    lands carries neither field, and must fail by name rather than produce an
+    empty stream that reads like "this camera saw no barcodes"."""
+    import yaml
+
+    generate_session(tmp_path, RECIPES["ci"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+    path = session_dir / "bcam" / "frames.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    del payload["digital_line"]
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="digital_line"):
+        extract_bcam(path)
+
+
+def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
+    """Design spec section 3: "Decode reliability per rate is measured, not
+    asserted." The margin at 2.5 samples per bit is a claim until a number is
+    printed beside it, so this reports recovered-versus-emitted per system and
+    asserts 100% on clean fixtures.
+
+    Emitting the counts is the point. A regression in margin then shows up as a
+    number that moved, in the suite's own output, rather than as a test that
+    started failing intermittently for no visible reason.
+    """
+    from wl_preproc.synth.ohdpi import FILENAME
+
+    measured: dict[str, tuple[int, int]] = {}
+    for profile, cases in (
+        ("ci", (("syncbox", "syncbox/syncbox.log"), ("bcam", "bcam/frames.yaml"))),
+        ("stim", (("rhs", "rhs"),)),
+        ("eye", (("ohdpi", f"ohdpi/{FILENAME}"), ("spikeglx", None))),
+    ):
+        root = tmp_path / profile
+        root.mkdir()
+        truth = generate_session(root, RECIPES[profile])
+        session_dir = next(p for p in root.iterdir() if p.is_dir())
+        for system, relative in cases:
+            path = (
+                next((session_dir / "spikeglx").glob("*.nidq.bin"))
+                if relative is None
+                else session_dir / relative
+            )
+            stream = EXTRACTORS[system](path)
+            recovered = {b.value for b in decode_edges(list(stream.edges))}
+            emitted = {value for value, _ in truth.barcodes}
+            measured[system] = (len(recovered & emitted), len(emitted))
+
+    assert set(measured) == set(SYSTEMS), f"unmeasured: {set(SYSTEMS) - set(measured)}"
+    with capsys.disabled():
+        print("\n  decode reliability, clean fixtures:")
+        for system in SYSTEMS:
+            found, emitted = measured[system]
+            print(f"    {system:9s} {found:3d}/{emitted:<3d} {100 * found / emitted:5.1f}%")
+
+    for system, (found, emitted) in measured.items():
+        assert found == emitted, f"{system}: recovered {found} of {emitted} barcodes"

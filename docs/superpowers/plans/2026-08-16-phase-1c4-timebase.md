@@ -660,6 +660,22 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 5: ohdpi and bcam extraction
 
+> **Done 2026-08-22.** `extract_ohdpi` takes the per-frame recording FILE, not the directory
+> the plan's signature sketched: the registry's unit is **one recording**, because §4.1 accepts
+> or rejects files individually and one recording is one `Segment` candidate. That is a file for
+> four systems and a directory for `rhs` only, because Intan's layout makes a recording a
+> directory. The registry's docstring carries the table.
+>
+> `extract_ohdpi` measures its rate from the file's own timestamps rather than taking
+> `OHDPI_FPS`, over the whole span rather than an adjacent difference — one interval is
+> quantised to the timestamp resolution, which at 500 Hz is a percent-level error the entire
+> fit would inherit. `extract_bcam` refuses a sidecar missing either proposed field instead of
+> falling back on `synth.CAMERA_FPS`.
+>
+> Step 5's measurement prints per-system counts in the suite output: **100% on clean fixtures
+> for all five**, including ohdpi at its 2.5 samples/bit margin.
+
+
 **Files:**
 - Modify: `wl_preproc/timebase/extract.py`
 - Test: `tests/timebase/test_extract.py`
@@ -667,7 +683,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `extract_ohdpi(dir_path: Path) -> BitStream`, `extract_bcam(sidecar_path: Path) -> BitStream`, and `EXTRACTORS: dict[str, Callable[[Path], BitStream]]` keyed by the `SYSTEMS` names.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -693,15 +709,15 @@ def test_bcam_extraction_recovers_ground_truth_barcodes(tmp_path):
     ...
 ```
 
-- [ ] **Step 2–4: Run, implement, run**
+- [x] **Step 2–4: Run, implement, run**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 
-- [ ] **Step 5: Measure and record decode reliability**
+- [x] **Step 5: Measure and record decode reliability**
 
 The spec requires decode reliability be **measured, not asserted**. Add a test that reports recovered-versus-emitted counts per system and asserts 100% on clean fixtures, so the margin at 2.5 samples/bit is a measured number in the suite output rather than a claim in a docstring.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q

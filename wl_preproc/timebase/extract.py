@@ -10,6 +10,7 @@ table and no fit.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -222,3 +223,104 @@ def extract_spikeglx(nidq_bin: Path) -> BitStream:
         fs_hz=meta.sample_rate_hz,
         n_samples=int(samples.shape[0]),
     )
+
+
+def extract_ohdpi(path: Path) -> BitStream:
+    """The barcode line out of an OpenIrisDPI per-frame recording.
+
+    At 500 Hz this is 2.5 samples per 5 ms bit -- the thinnest decoding margin
+    in the design (design spec section 3), and `BitStream`'s floor check is what
+    turns a recording below it into a refusal rather than an empty decode.
+
+    The rate is **measured from the file's own timestamps** rather than taken
+    from a constant. Design spec section 3.1 is why that matters here more than
+    elsewhere: an edge is known only to within one sample period, which is 2 ms
+    at this rate -- three orders of magnitude worse than the 33 us at 30 kHz,
+    and larger than a whole frame. A rate that is also wrong compounds it.
+
+    Every column this reads is a **proposal** (design spec section 12.1); they
+    live in `_ohdpi_file.py` so a real recording moves them and nothing else.
+    """
+    from wl_preproc.timebase._ohdpi_file import read_ohdpi
+
+    recording = read_ohdpi(path)
+    return BitStream(
+        edges=tuple(edges_from_samples(list(recording.digital), fs_hz=recording.fs_hz)),
+        fs_hz=recording.fs_hz,
+        n_samples=recording.n_frames,
+    )
+
+
+def extract_bcam(sidecar_path: Path) -> BitStream:
+    """The barcode line out of a behaviour-camera sidecar.
+
+    Both fields this needs -- `digital_line` and `frame_rate_hz` -- are
+    **proposed additions to a published contract** (design spec section 13), so
+    a sidecar written before the FLIR project adopts them carries neither. This
+    refuses such a file by name rather than falling back on
+    `wl_preproc.synth.CAMERA_FPS`: that constant is the rate the FIXTURE runs
+    at, and a consumer that reads one while meaning the other is wrong by
+    exactly the ratio nobody checks. Refusing is what makes bcam alignment
+    "specified and unavailable" true rather than "silently wrong", and it is
+    why no fallback path exists -- an unexercised fallback is the defect this
+    project's checkpoint records three times over.
+
+    Note that `dropped_frame_ids` is deliberately not consulted. Frame times
+    here are known by construction, because section 4.6 requires the sync box
+    to trigger the camera, so a dropped frame costs the samples it would have
+    carried and shifts nothing after it. What that can cost is a barcode
+    overlapping the gap, which surfaces downstream as a barcode this system did
+    not recover -- not as a silent offset.
+    """
+    from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
+
+    sidecar = BehaviorCameraSidecar.from_yaml(sidecar_path.read_text(encoding="utf-8"))
+    if sidecar.frame_rate_hz is None:
+        raise ValueError(
+            f"{sidecar_path}: no frame_rate_hz. A per-frame digital line cannot "
+            "be timed without the rate that sampled it, and assuming the "
+            "generator's rate would substitute the fixture's camera for this "
+            "one. The field is a pending amendment to a published contract -- "
+            "see the Phase 1c-4 design spec, section 13"
+        )
+    if sidecar.digital_line is None:
+        raise ValueError(
+            f"{sidecar_path}: no digital_line, so this camera recorded no sync "
+            "line and cannot be aligned. The field is a pending amendment to a "
+            "published contract -- see the Phase 1c-4 design spec, section 13"
+        )
+
+    return BitStream(
+        edges=tuple(
+            edges_from_samples(list(sidecar.digital_line), fs_hz=sidecar.frame_rate_hz)
+        ),
+        fs_hz=sidecar.frame_rate_hz,
+        n_samples=len(sidecar.digital_line),
+    )
+
+
+# One extractor per system, and the set equality against `SYSTEMS` is asserted
+# in the tests. That assertion is this phase's completeness claim: a system in
+# `SYSTEMS` with no extractor is one that silently never aligns -- no Segment,
+# no timebase, no coverage row, and nothing anywhere reporting the gap.
+#
+# The `Path` each takes is **one recording**, which is a file for four of the
+# five and a directory for `rhs`, because Intan's "One File Per Signal Type"
+# layout makes a recording a directory:
+#
+#     syncbox   the .log file
+#     spikeglx  the .nidq.bin file    (NOT the imec .ap.bin -- spec 4.5)
+#     rhs       the recording directory, or the system directory holding it
+#     ohdpi     the per-frame recording file
+#     bcam      the sidecar .yaml
+#
+# One recording is also one Segment candidate, which is why the unit is the
+# recording rather than the system directory: section 4.1 rejects or accepts
+# files individually.
+EXTRACTORS: dict[str, Callable[[Path], BitStream]] = {
+    "syncbox": extract_syncbox,
+    "spikeglx": extract_spikeglx,
+    "rhs": extract_rhs,
+    "ohdpi": extract_ohdpi,
+    "bcam": extract_bcam,
+}
