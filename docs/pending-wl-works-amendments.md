@@ -1,8 +1,54 @@
 # Amendments to wl-works
 
-**Nothing is outstanding.** Both batches are closed; their records are kept below, because
+**Two are outstanding, opened 2026-08-22.** The earlier two batches are closed; their records are
+kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — the montage definition widens, and §14 item 10 moves with it
+
+**Opened 2026-08-22** while designing Phase 2a
+([`specs/2026-08-22-phase-2a-ephys-schema-design.md`](superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md)
+§3.2.2). **This is the one with a real coupling; the payload item below is the easier half.**
+
+**The finding.** Electrode bank selection changes between blocks, and **Kilosort takes one channel
+map**, so across a bank change one map names two different sets of physical sites. Sorting across
+it fails exactly as sorting across a probe move does. §8.3's *"a maximal interval during which no
+probe moved"* did not cover it, and now reads *"no probe moved **and no electrode bank changed**."*
+
+**Why it reaches wl-works.** §14 item 10's still-open amendment to Plan 24 §10.4 keys the canonical
+uniqueness index on the montage — it currently keys on `(animal_session_id) WHERE role =
+'canonical'`, which makes the three-penetration case unrepresentable. **If montage now means "no
+movement and no bank change", that pending amendment's own definition moves with it.**
+
+**Applying either alone leaves the two repositories disagreeing about what a montage is**, which is
+worse than applying neither: the index would enforce a grain wl-preproc no longer uses.
+
+**Not applied here, deliberately.** §14 item 10 is wl.works' own open item, authored on their side.
+wl-preproc has ruled its half; whether wl.works accepts the widening is theirs to answer — the same
+narrowing-rather-than-closing that item 9 below settled on, and for the same reason.
+
+---
+
+# OPEN — the §11.2 activation-request payload gains `trajectory_id`
+
+**Opened 2026-08-22.** Phase 2a §5.5. The payload gains **`trajectory_id` per insertion**, alongside
+the probe serials and insertions it already carries, so that `ProbeInsertion` can record which
+trajectory a penetration ran — closing electrode → trajectory → CT/MR coregistration.
+
+**wl-preproc cannot fetch it instead.** §11.2: *"the app binds only to the WireGuard interface and
+we are on the lab LAN with no route in. So everything this machine needs from the ELN must arrive
+with the request."*
+
+**Two consumers, which is why this is an amendment and not an implementation detail.** §11.2 makes
+the protocol document a pre-January frozen interface, and wl.works' **18b contract tests run against
+a fake `wl-preproc`** — so the payload shape is load-bearing on their side before either machine
+exists.
+
+**Depends on** `wl-works` `docs/superpowers/specs/2026-08-22-trajectory-identity-design.md`
+(committed there as `38de8d6`), which defines what a `trajectory_id` is.
 
 ---
 

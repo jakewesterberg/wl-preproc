@@ -77,7 +77,7 @@ Consequences carried through this spec: a network responder (§11), outbound egr
 | Archive grain | **One compressed artifact per session** — not per segment, not per block |
 | Continuous data rate | **500 Hz, uniformly** — LFP, MUA, eye, pupil. Timing-critical signals stored as event times instead |
 | Canonical grain | Per **`(session, recording montage)`** — a montage is a maximal interval with no probe movement |
-| Montage source | **wl.works `item_insertion` alone.** No insertion record → no canonical, session quarantined |
+| Montage source | **Movement: wl.works `item_insertion` alone** — no insertion record → no canonical, session quarantined. **Bank change: the segment's own `~imroTbl`** (§8.3, added 2026-08-22) |
 | Characterization | A plugin registry keyed on task capability, not a frozen task contract |
 | Depth | Three independent methods computed and stored, plus their agreement. kCSD, not standard CSD |
 | Provisional data | Characterizations enter the canonical NWB immediately, flagged `provisional` until a human verdict |
@@ -426,7 +426,7 @@ DataJoint's `.alter()` handles non-key attributes; **changing a primary key mean
 | Lab, User, Protocol | `element-lab` |
 | Subject | `element-animal` |
 | Session | `element-session` (standard datetime-keyed) |
-| Probe, insertion, clustering, curation, units, waveforms, QC | `element-array-ephys` |
+| Probe, insertion, clustering, curation, units, waveforms, QC | **custom** — see §5.1.1; `element-array-ephys` was declined 2026-08-22 |
 | Events, trials, blocks | `element-event` |
 | Sync, segments, timebase, coverage, provenance | **custom** |
 | Eye (ohDPI, calibration, detection) | **custom** |
@@ -472,7 +472,7 @@ needs no table migration — but only if it is in place before any row is writte
 |---|---|---|
 | `element-lab`, `element-session`, `element-event` | upstream commit | Already activate cleanly on 2.3.2. `element-session` needs `Experimenter = User` supplied by the linking module. |
 | `element-animal` | **the open PR branch** (`akshay-jaggi/element-animal @ compat-fixes`, PR #51) | Zero divergence by construction — it is the code that will merge. Re-pin to `main` when it lands. |
-| `element-array-ephys` | **not activated yet** | Issue #230 is unfixed and has no PR. Deferred to Phase 2. |
+| `element-array-ephys` | **declined 2026-08-22** | Its `Clustering` key cannot carry `activation_id`, which §5.2 requires; adopting it also imports four unpinned moving git refs and silently replaces this project's pinned `spikeinterface`. Issue #230 was the stated blocker and turned out not to be the decisive one. `docs/superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md` §2. |
 
 > **Deferring array-ephys costs nothing on the blob deadline, because that deadline is
 > per-table rather than per-schema.** The fix must precede the first row written *to the
@@ -507,13 +507,19 @@ needs no table migration — but only if it is in place before any row is writte
 > They are allow-listed by name in `tests/schema/test_guardrails.py` rather than hidden, so a
 > *new* upstream bare `longblob` still trips the guard.
 
-> **PHASE 2 PRECONDITION — do not activate `element-array-ephys` until issue #230 is resolved,
-> upstream or here.** Its 14 `longblob` attributes declare perfectly and then silently destroy
-> every waveform, LFP trace and metrics array written to them. **An activation test cannot see
-> this**; only a round-trip can. Phase 2 must verify a numpy array survives insert-and-fetch
-> through an `element-array-ephys` table *before* anything real is written, and the 1 `attach`
-> attribute must be checked too — it hard-fails declaration rather than failing silently, so it
-> is the friendlier of the two.
+> **PHASE 2 PRECONDITION — DISCHARGED 2026-08-22, by declining the dependency.** It read: *"do
+> not activate `element-array-ephys` until issue #230 is resolved, upstream or here"*, because its
+> 14 `longblob` attributes declare perfectly and then silently destroy every waveform, LFP trace
+> and metrics array written to them — **an activation test cannot see this; only a round-trip
+> can.** That reasoning stands and is why the round-trip test in `docs/superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md` §7 exists.
+>
+> **What changed is that #230 was never the binding constraint.** Upstream's `Clustering` is keyed
+> `(subject, session_datetime, insertion_number, paramset_idx)` with nowhere to put
+> `activation_id`, so fixing every blob would still have left §5.2 unsatisfiable — two derivative
+> activations over different block sets colliding on one primary key. The branch is **custom** as
+> of that spec; the blob rule applies to it as it does to every other table this repository owns,
+> enforced by the same sweep. **The 1 `attach` attribute is moot** — it was `ephys_report`'s
+> drift-map plot, in a module never adopted.
 
 **The consequence for §5.2's hierarchy.** `ProbeInsertion`, `Clustering`, `CuratedClustering`,
 `WaveformSet` and the unit tables come from `element-array-ephys`, so that branch is **not**
@@ -558,6 +564,8 @@ A **block** is one run of one task (wl.works' `animal_session_block`). A **segme
 - **A block partially covered by a probe is the state that matters.** It is what `block_neural_assertion` is asserted against in wl.works, and what excludes a block from a sort.
 
 **Clustering is keyed on the activation, not the session**, because a sort's unit identity is a product of its block set (§8.3). Two activations over different block sets produce genuinely different units, and nothing may imply otherwise.
+
+> **The realised key is stricter than the tree above, and deliberately so.** `Activation` is keyed `(subject, session_datetime, montage_id, activation_id)` — on the *montage*, not the session — so `Clustering` inherits `montage_id` too. That is correct rather than incidental: §8.3 makes the montage the grain at which unit identity holds. Recorded 2026-08-22 with `docs/superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md` §3.3.
 
 **`session_datetime`** follows the `element-session` standard. Deviating from Elements on the most-referenced key in the schema is the worst place to deviate, and the cost of a post-hoc correction is bounded: everything downstream of raw is recomputable, so a drop-and-repopulate costs CPU time, not data.
 
@@ -937,7 +945,15 @@ Refines wl.works Plan 24 §1.2, which makes one NWB one activation but treats al
 
 #### The recording montage
 
-A **recording montage** is a maximal interval during which no probe moved. It is the grain at which unit identity is meaningful, and therefore the grain of the canonical NWB.
+A **recording montage** is a maximal interval during which **no probe moved and no electrode bank changed**. It is the grain at which unit identity is meaningful, and therefore the grain of the canonical NWB.
+
+> **The bank half was added 2026-08-22** (`docs/superpowers/specs/2026-08-22-phase-2a-ephys-schema-design.md` §3.2.2). Bank selection changes between blocks — the experimenter reselects the 384 live sites of a 4,416-site NP 1.0 NHP Long shank — and **Kilosort takes one channel map**, so across a bank change one map names two different sets of physical sites. That is the same failure as sorting across a probe move, for the same reason, and the original definition did not cover it.
+>
+> **It is detectable structurally, not heuristically.** A SpikeGLX `.meta` carries exactly one `~imroTbl` and `probeinterface` returns one probe per file, so a bank change *requires* a restart and surfaces as a new segment (§5.2.1). The experimenter's wl.works note is an independent cross-check, not the only witness.
+>
+> **The derivative row below is untouched.** A block set deliberately spanning montages — to sort the *overlapping* electrodes common to both — is a derivative, which is already *"requested via wl.works"* and already *"any hand-picked subset"*. The widened rule constrains only the automatic path.
+>
+> **wl.works must move with this.** §14 item 10's pending amendment to Plan 24 §10.4 keys the canonical uniqueness index on the montage; if montage now means *no movement and no bank change*, that amendment's own definition moves too, and the two must be applied together.
 
 **Sorting across a montage change produces garbage.** Kilosort's drift model treats a 500 µm advance as drift; it is not. An automatic process must never do it.
 
@@ -949,7 +965,9 @@ wl.works already models the other half: three penetrations in one rig day are **
 | 3 penetrations, both probes moving together | 3, each holding both probes |
 | Probes moved independently | 1 per distinct montage boundary |
 
-**Montage boundaries come from wl.works' `item_insertion` rows and nothing else.** Signal-based detection and a strobed movement code were both considered and declined as impractical.
+**Montage boundaries come from two sources and nothing else.** **Probe movement** comes from wl.works' `item_insertion` rows; signal-based detection and a strobed movement code were both considered and declined as impractical, and that ruling is unchanged. **Bank changes** come from the recording's own `~imroTbl`, one per segment.
+
+> **The second source was added 2026-08-22 with the definition above, and it is not a weakening of the first.** The declined alternatives were *inferential* — detecting a probe move from the signal. A bank change is not inferred: a SpikeGLX `.meta` holds exactly one `~imroTbl`, so a change *requires* a new file, and comparing two segments' tables is a read rather than a detection. **Neither source can substitute for the other**: wl.works does not record bank selection, and the recording does not record that a probe moved. The quarantine rule is unaffected — it is about the movement half, which still has exactly one authority.
 
 **That leaves one failure mode, and it is closed by refusing to guess.** Those rows are human-entered and may be late; with none present the pipeline would see one undifferentiated session and sort straight across a move, silently. So: **no insertion record → no canonical.** The session is quarantined and reported as "waiting on ELN entry" through the existing tier-D machinery. A silent bad sort becomes a visible blocked one.
 
@@ -1187,6 +1205,7 @@ The protocol carries, at minimum:
 
 ```
 activation request → { blocks, recording-montage boundaries, probe serials + insertions,
+                       trajectory_id per insertion,
                        experimenter, subject, task types, quality verdicts }
 ```
 

@@ -164,6 +164,25 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Traps that cost real time, recorded so they are paid for once
 
+- **An upstream Element can be right about types and wrong about keys, and the key is the one
+  that cannot be shimmed.** `element-array-ephys` was kept out for its 14 bare `longblob`s
+  (below), and that was the whole recorded reason for eight months. The decisive defect was
+  elsewhere: its `Clustering` is keyed `(subject, session_datetime, insertion_number,
+  paramset_idx)`, with `EphysRecording` one row per (session, insertion) and **nowhere to put
+  `activation_id`** — which §5.2 requires and states in bold. Two derivative activations over
+  different block sets would have collided on one primary key. **A blob defect is a definition
+  change; a key defect is a rewrite**, and the project spent eight months tracking the cheaper
+  one. **When evaluating an upstream schema, diff the primary keys before the column types.**
+  §5.1.1, and `specs/2026-08-22-phase-2a-ephys-schema-design.md` §2.3.
+- **A dependency's own `install_requires` can re-import a moving git ref you already closed.**
+  `pyproject.toml`'s five pins were converted from branches to commit SHAs on 2026-08-14 for
+  exactly this reason. Adding `element-array-ephys` would have brought **four unpinned git refs
+  back transitively** — `spikeinterface`, `element-interface`, `neo`, `probeinterface` — and,
+  worse, **silently satisfied this repo's own pinned `spikeinterface>=0.101` with SpikeInterface
+  `main`**, replacing the format oracle that `tests/synth/` validates both emitters against, with
+  no error. Measured with `uv pip compile`: +104 packages onto 66. **A pin you control says
+  nothing about what your dependencies pin**; resolve the lock, do not read the pin list.
+
 - **A bare `longblob` silently destroys array data under DataJoint 2.x.** 2.x declares it as a
   raw binary column rather than a DataJoint blob, so a numpy array is stored as its *string
   repr* — with the middle elided by numpy above ~1000 elements — and **nothing raises on insert
