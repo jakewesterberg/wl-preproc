@@ -185,6 +185,24 @@ defensible call, but it is a reversal rather than a gap.
   emitted fixtures cannot in fact be opened by `read_intan`. Every task passed its own review,
   because the claim lived in the Architecture paragraph and in no task's diff. **When a plan
   argues from a capability, check that some task actually exercises it.**
+- **"Well under 1 ppm" is a claim about a session, and a 15 s fixture cannot hold it.** §4.5 says
+  a full session fits rate to well under 1 ppm, and Phase 1c-4's plan turned that into a flat
+  `abs=1.0` assertion on a short fixture. It is not achievable there and never was: a sampled edge
+  is known only to within one sample period, so a slope across a span `T` cannot beat
+  **one sample period / T** — 2.4 ppm at 30 kHz over 14 s, and **143 ppm at 500 Hz**. Measured: at
+  a realistic 47 ppm the ohdpi fixture fitted **0.000 ppm with a zero residual**, because every
+  barcode landed in the frame it would have occupied with no drift at all; and RHS missed its
+  planted drift by exactly one 30 kHz sample per second, which is a staircase rather than noise
+  and so does not average down with barcode count. Tolerances are now derived from
+  `sample_period / span` per system, and the two camera fixtures carry deliberately unrealistic
+  drift magnitudes — the honest alternative to a camera test that cannot fail. **A tolerance
+  copied from a spec sentence is the same hypothesis as a timing number no code has executed.**
+- **Drift applied to the reference cancels exactly, and every fixture had it.** `session.py` passed
+  `recipe.drift_ppm` to *every* emitter including the sync box — but session time **is** the sync
+  box's timeline, so drifting it alongside the devices left zero relative drift for the rate fit to
+  find. It was invisible for three phases because all four shipped recipes left the value at `0.0`,
+  where the bug and the correct behaviour are identical. **A knob every fixture leaves at its
+  default is not a tested knob**; the `drift` profile now exercises it, per system.
 - **A fixture no reader has consumed is a hypothesis, exactly like a spec number no code has
   executed.** §4.5 says the barcode reaches SpikeGLX on **one NI digital line**, leaving the imec
   SMA free — and §12 orders the PXIe-6353 for the 32 Port 0 lines that requires. Phase 1a's

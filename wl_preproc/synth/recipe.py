@@ -90,7 +90,24 @@ class SessionRecipe(BaseModel):
     ap_sample_rate_hz: float
     seed: int
     faults: tuple[Fault, ...] = ()
+
+    # How fast each device's clock runs RELATIVE TO SESSION TIME. The sync box
+    # is exempt by definition and not by exception: session time IS its
+    # timeline, t=0 at its first barcode (spec section 4.5), so its drift
+    # against itself is zero and `session.py` passes it 0.0 explicitly.
+    #
+    # This was a per-session number applied to every emitter INCLUDING the sync
+    # box until Phase 1c-4, which made it cancel exactly: every fixture in the
+    # repo had zero relative drift, so the rate fit -- the thing this whole
+    # phase exists to do -- had nothing to fit. It was never noticed because
+    # every shipped recipe left it at 0.0, where the bug is invisible.
     drift_ppm: float = 0.0
+
+    # Per-system override, for the systems named. Real clocks differ from each
+    # other, not just from the reference, and a session where every device
+    # drifts identically cannot distinguish a per-system fit from one global
+    # constant applied five times.
+    system_drift_ppm: tuple[tuple[str, float], ...] = ()
 
     @property
     def duration_s(self) -> float:
@@ -109,6 +126,24 @@ class SessionRecipe(BaseModel):
         unknown = [s for s in self.systems if s not in SYSTEMS]
         if unknown:
             raise ValueError(f"unknown systems: {unknown}")
+        drifting = [system for system, _ppm in self.system_drift_ppm]
+        absent = [system for system in drifting if system not in self.systems]
+        if absent:
+            raise ValueError(
+                f"system_drift_ppm names {absent}, which this session does not "
+                "record; a drift for an absent device is a silent no-op"
+            )
+        if len(set(drifting)) != len(drifting):
+            raise ValueError(
+                f"system_drift_ppm names a system twice: {drifting}; the second "
+                "entry would silently win"
+            )
+        if "syncbox" in drifting:
+            raise ValueError(
+                "syncbox cannot drift: session time is defined as its own "
+                "timeline (spec section 4.5), so its drift against itself is "
+                "zero by construction rather than by choice"
+            )
         if "syncbox" not in self.systems:
             raise ValueError("syncbox is present at every session")
         covered = sum(m.end_s - m.start_s for m in self.montages)
@@ -214,6 +249,48 @@ EYE_RECIPE = SessionRecipe(
     seed=20270315,
 )
 
+DRIFT_RECIPE = SessionRecipe(
+    session_id="2027-03-14_05",
+    subject="pico",
+    rig="rig-a",
+    # Every system at once, which no other profile does — the alignment stage
+    # is the first thing in this pipeline whose job is to relate them, so it is
+    # the first thing that needs them all in one session.
+    systems=("syncbox", "spikeglx", "rhs", "ohdpi", "bcam"),
+    blocks=(
+        BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=5, trial_duration_s=3.0),
+    ),
+    montages=(MontageSpec(start_s=0.0, end_s=15.0),),
+    n_ap_channels=4,
+    ap_sample_rate_hz=30_000.0,
+    seed=20270316,
+    # Four different clocks, none of them the reference's, and all four
+    # distinct — a fit that mixed two systems up must produce a number that is
+    # wrong rather than one that still matches.
+    #
+    # THE TWO CAMERA MAGNITUDES ARE NOT REALISTIC CRYSTAL NUMBERS, and that is
+    # deliberate. A rate fit resolves drift only down to about one sample
+    # period divided by the barcode span: at 30 kHz over this session's 14 s
+    # that is 2.4 ppm, so tens of ppm are comfortably measurable — but at
+    # 500 Hz it is 143 ppm, and a realistic 50 ppm camera is quantised away
+    # entirely. Measured: at 47 ppm the ohdpi fixture fitted 0.000 ppm with a
+    # zero residual, because every barcode landed in the frame it would have
+    # occupied with no drift at all.
+    #
+    # So a realistic number here would buy a camera test that cannot fail. The
+    # honest alternatives were a session long enough to resolve one (hundreds
+    # of seconds, and tens of megabytes per generation, in a unit test) or a
+    # magnitude this rate can actually see. The second is cheaper and states
+    # its own artificiality; parent spec 4.5's "well under 1 ppm" remains a
+    # claim about a full session, which this is not.
+    system_drift_ppm=(
+        ("spikeglx", 18.0),
+        ("rhs", -31.0),
+        ("ohdpi", 900.0),
+        ("bcam", -750.0),
+    ),
+)
+
 # Recipes keyed by the CLI's own --profile name (wl_preproc/cli/main.py), so
 # a caller that wants "the ci recipe" or "the stim recipe" has one place to
 # look it up by name rather than importing three constants and building the
@@ -223,4 +300,5 @@ RECIPES: dict[str, SessionRecipe] = {
     "benchmark": BENCHMARK_RECIPE,
     "stim": STIM_RECIPE,
     "eye": EYE_RECIPE,
+    "drift": DRIFT_RECIPE,
 }

@@ -61,26 +61,31 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
 
     rng = np.random.default_rng(recipe.seed + 2)
     finished_at = SYNTH_EPOCH + datetime.timedelta(seconds=recipe.duration_s)
+    overrides = dict(recipe.system_drift_ppm)
 
     for system in recipe.systems:
         directory = layout.system_dir(system)
         directory.mkdir(exist_ok=True)
+        drift_ppm = overrides.get(system, recipe.drift_ppm)
 
         if system == "syncbox":
-            write_syncbox_log(
-                directory / "syncbox.log", recipe, truth, drift_ppm=recipe.drift_ppm
-            )
+            # Zero, unconditionally. Session time IS the sync box's timeline
+            # (spec section 4.5), so it cannot drift against itself — and
+            # drifting it alongside every device, which this did until Phase
+            # 1c-4, cancels the drift exactly and leaves every fixture with no
+            # relative drift for the rate fit to find.
+            write_syncbox_log(directory / "syncbox.log", recipe, truth, drift_ppm=0.0)
             write_task_file(directory / "task.json", truth)
         elif system == "spikeglx":
             bin_path = write_spikeglx(
-                directory, recipe, truth, drift_ppm=recipe.drift_ppm
+                directory, recipe, truth, drift_ppm=drift_ppm
             )
             if Fault.TRUNCATED_FILE in recipe.faults:
                 truncate_file(bin_path, keep_fraction=0.6)
         elif system == "rhs":
-            write_rhs(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
+            write_rhs(directory, recipe, truth, drift_ppm=drift_ppm)
         elif system == "ohdpi":
-            write_ohdpi(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
+            write_ohdpi(directory, recipe, truth, drift_ppm=drift_ppm)
         elif system == "bcam":
             dropped = (
                 drop_camera_frames(camera_frame_count(recipe), rng)
@@ -92,7 +97,7 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
                 recipe,
                 truth,
                 dropped=dropped,
-                drift_ppm=recipe.drift_ppm,
+                drift_ppm=drift_ppm,
             )
 
         _write_done_marker(layout, system, finished_at)

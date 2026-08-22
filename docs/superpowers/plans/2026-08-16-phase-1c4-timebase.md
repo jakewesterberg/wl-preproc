@@ -734,6 +734,29 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 6: Fitting — rate per session, offset per segment
 
+> **Done 2026-08-22. Step 4 could not be written as specified, and finding out why is the
+> task's main result.** Two fixture defects and one impossible tolerance:
+>
+> 1. **No fixture had any relative drift.** `session.py` gave `recipe.drift_ppm` to every
+>    emitter *including the sync box* — and session time is the sync box's timeline, so it
+>    cancelled exactly. Invisible for three phases because all four recipes left it at `0.0`.
+>    The sync box now gets `0.0` unconditionally, `system_drift_ppm` overrides per system, and
+>    a `drift` profile carries all five systems with four distinct clocks.
+> 2. **The plan's flat `abs=1.0` ppm is not achievable on a short fixture.** A sampled edge is
+>    known to one sample period, so a slope over span `T` cannot beat `period / T`: 2.4 ppm at
+>    30 kHz over 14 s, 143 ppm at 500 Hz. §4.5's "well under 1 ppm" is a claim about a
+>    *session*, where the quantity is 0.01 ppm. Tolerance is now derived per system.
+> 3. **A realistic camera drift is unmeasurable here.** At 47 ppm ohdpi fitted **0.000 ppm with
+>    a zero residual** — every barcode landed in the frame it would have occupied undrifted. The
+>    camera fixtures now carry deliberately unrealistic magnitudes, which the recipe says at
+>    length, because the alternative was a camera test that cannot fail.
+>
+> `fit_rate` raises below two matched barcodes rather than returning nominal-and-zero, and the
+> plan's own last test was rewritten: it passed a `fit_rate([], {}, ...)` inside the
+> `pytest.raises`, so the rate fit raising would have satisfied it and the offset guard under
+> test would never have run.
+
+
 **Files:**
 - Create: `wl_preproc/timebase/fit.py`, `tests/timebase/test_fit.py`
 
@@ -761,7 +784,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   ```
   `reference_s` maps barcode value → sync-box session time in seconds. Matching is **by value, never by ordinal position** — one dropped barcode must not shift every later one (parent spec §4.2 requirement 1 applies the same rule to trials).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_fit.py
@@ -819,20 +842,20 @@ def test_a_segment_with_no_barcodes_cannot_be_offset():
         fit_offset([], {}, fit_rate([], {}, nominal_rate_hz=1.0))
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_fit.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 3: Implement `fit.py`**
+- [x] **Step 3: Implement `fit.py`**
 
 Least-squares regression of device time against reference session time, matched by value. No DataJoint import, no file I/O — this module is pure numeric so it is testable without a database.
 
-- [ ] **Step 4: Run to verify they pass, then check against the real fixtures**
+- [x] **Step 4: Run to verify they pass, then check against the real fixtures**
 
 Add a test that runs the whole chain — extract, decode, fit — for every system in a generated session, and asserts each system's fitted drift matches the recipe's `drift_ppm` within 1 ppm. **This is the test that proves the phase works**; the unit tests above prove the arithmetic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
