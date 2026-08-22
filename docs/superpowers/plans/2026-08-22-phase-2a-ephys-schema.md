@@ -413,8 +413,12 @@ class Probe(dj.Manual):
 @schema
 class ElectrodeConfig(dj.Manual):
     definition = """
-    # A SET OF ELECTRODES, named by its contents -- not "the configuration of a
-    # recording". Key: (electrode_config_hash). That distinction is load-
+    # A SET OF ELECTRODES, named by its contents -- not 'the configuration of a
+    # recording'. Key: (electrode_config_hash).
+    #
+    # The single quotes are load-bearing: DataJoint emits only this FIRST
+    # comment line as the table's SQL COMMENT, wrapped in unescaped DOUBLE
+    # quotes, so a `"` here terminates the string and MySQL raises 42000. That distinction is load-
     # bearing: the intersection of two electrode sets is itself an electrode
     # set, so a cross-montage derivative's effective config is a row in this
     # table like any other, and the canonical and derivative cases need no
