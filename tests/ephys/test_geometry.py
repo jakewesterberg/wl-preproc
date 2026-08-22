@@ -29,6 +29,28 @@ def test_np1030_nhp_long_spans_about_44_mm_in_two_occupied_columns():
     assert len({r["shank_row"] for r in rows}) == 2208
 
 
+@pytest.mark.parametrize(
+    "part_number, electrode_count",
+    [
+        # Every NHP variant `wl_preproc/ephys/geometry.py`'s own module
+        # docstring names as a reason to vendor probeinterface's offline
+        # table rather than port element-array-ephys's map -- until this
+        # test, only NP1030 (above) was actually pinned, so the docstring's
+        # claim about the other three was asserted only in prose. Counts
+        # measured directly against the installed probeinterface==0.3.2
+        # before being asserted here, not copied from the docstring's own
+        # unverified claim.
+        ("NP1015", 960),
+        ("NP1022", 2496),
+        ("NP1030", 4416),
+        ("NP1032", 4416),
+    ],
+)
+def test_nhp_variant_electrode_counts_match_the_installed_library(part_number, electrode_count):
+    rows = geometry.electrode_rows(part_number)
+    assert len(rows) == electrode_count
+
+
 def test_multi_shank_columns_are_numbered_within_a_shank_not_across_the_probe():
     """NP2010 has 4 shanks with 2 columns each. A column index computed over
     the whole probe would run 0..7 and make shank 3's electrodes look like
@@ -62,11 +84,32 @@ def test_an_unknown_part_number_raises_rather_than_returning_nothing():
 def test_geometry_makes_no_network_call(monkeypatch):
     """Section 8: no network call in the geometry path. probeinterface's
     get_probe() fetches from its library repository over HTTP; this path must
-    not reach it."""
-    import urllib.request
+    not reach it.
+
+    Patches the names probeinterface's `library` module actually calls, not
+    `urllib.request.urlopen`: `probeinterface/library.py` does `from
+    urllib.request import urlopen` at import time, so that module holds its
+    own reference to the original function in its own namespace, and
+    patching `urllib.request.urlopen` afterward never reaches it -- monkey-
+    patching the origin does not affect a name already bound by a `from ...
+    import` elsewhere. Confirmed directly: before this fix, this test kept
+    passing even with a live `get_probe()` call planted inside
+    `electrode_rows`, which is a guard with no teeth at all. `requests.get`
+    is the library's other HTTP path (its tag/manifest-listing helpers), and
+    is patched too, guarded so this test still runs if `requests` is not
+    importable.
+    """
+    import probeinterface.library
 
     def explode(*args, **kwargs):
         raise AssertionError("geometry attempted a network call")
 
-    monkeypatch.setattr(urllib.request, "urlopen", explode)
+    monkeypatch.setattr(probeinterface.library, "urlopen", explode)
+    try:
+        import requests
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(requests, "get", explode)
+
     assert len(geometry.electrode_rows("NP1000")) == 960
