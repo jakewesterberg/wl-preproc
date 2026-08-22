@@ -164,6 +164,31 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Traps that cost real time, recorded so they are paid for once
 
+- **A double quote on a definition's FIRST comment line breaks table declaration.**
+  DataJoint emits only that first `#` line as the table's SQL `COMMENT`, wrapped in
+  **unescaped double quotes**, and drops every later comment line
+  (`declare.py`: `table_comment = definition.pop(0)[1:].strip()`). So a `"` there closes
+  the string early — `COMMENT "… -- not "the configuration of a"` → 42000, *syntax error
+  near 'the configuration of a"'*. Later comment lines are harmless, which is exactly why
+  `core.RejectedSegment` and `request.Activation` carry double quotes and declare fine.
+  **Found the hard way in Phase 2a**, where the reviewer's first instinct — "those two
+  tables prove the diagnosis is wrong" — was itself wrong, and only reverting the
+  character reproduced it. Two consequences beyond the trap: the `Key: (...)` line usually
+  **never reaches the database at all**, and `test_every_table_documents_its_key_in_schema`
+  only asserts `startswith("#")` — so that convention is enforced by neither the test nor
+  the DDL, only by review.
+- **The hand-listed-module shape bit a THIRD time, in a file no plan mentioned.**
+  `ingest` (1c-2) and `timebase` (1c-4) are recorded below. Phase 2a added `ephys` as a
+  **seventh** schema module and missed `wl_preproc/daemon.py`'s `_PROJECT_SCHEMA_MODULES`
+  tuple — a list the phase spec never named, while that same spec claimed vendoring
+  "retires that risk". **What saved it was the guard written after the second bite**:
+  `test_every_schema_module_is_swept_for_job_tables` compares the hand-list against
+  `pkgutil` discovery, and `daemon.py`'s own comment predicted the rescue verbatim — *"a
+  seventh module fails the suite rather than being silently skipped."* The lesson is not
+  "remember the list" — that has now failed three times. It is that **every hand-written
+  list of modules needs a discovering test beside it**, and that a claim of "this shape is
+  retired" must name the files it was checked against.
+
 - **An upstream Element can be right about types and wrong about keys, and the key is the one
   that cannot be shimmed.** `element-array-ephys` was kept out for its 14 bare `longblob`s
   (below), and that was the whole recorded reason for eight months. The decisive defect was
