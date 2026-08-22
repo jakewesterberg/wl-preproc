@@ -336,11 +336,20 @@ class MUA(dj.Manual):
 
 
 def register_probe_type(part_number: str) -> None:
-    """Declare `part_number` and every electrode of it. Idempotent."""
-    ProbeType.insert1({"probe_type": part_number}, skip_duplicates=True)
+    """Declare `part_number` and every electrode of it. Idempotent.
+
+    The geometry lookup runs FIRST and nothing is inserted until it
+    succeeds. `UnknownProbeType` exists to stop a `ProbeType` existing with
+    no electrodes -- "every downstream foreign key resolve[s] against an
+    empty set, and nothing would report a problem" -- and inserting the
+    master row before the lookup would raise that exception having already
+    created exactly the row it forbids.
+    """
     rows = [
-        {"probe_type": part_number, **row} for row in geometry.electrode_rows(part_number)
+        {"probe_type": part_number, **row}
+        for row in geometry.electrode_rows(part_number)
     ]
+    ProbeType.insert1({"probe_type": part_number}, skip_duplicates=True)
     ProbeType.Electrode.insert(rows, skip_duplicates=True)
 
 

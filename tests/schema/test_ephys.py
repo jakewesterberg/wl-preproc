@@ -212,8 +212,19 @@ def test_reverting_a_blob_to_longblob_is_caught(dj_conn, prefix):
 
 def test_an_unknown_probe_type_fails_registration_loudly(ephys_activated):
     """Mutation of the geometry path: a part number absent from the offline
-    table must raise, not declare a ProbeType with zero electrodes."""
+    table must raise, not declare a ProbeType with zero electrodes.
+
+    The absence assertion is the point. `pytest.raises` alone passed while
+    `register_probe_type` still inserted the master row before the lookup
+    that raises -- so the exception fired having already created exactly the
+    zero-electrode ProbeType its docstring says it exists to prevent.
+    """
     from wl_preproc.ephys.geometry import UnknownProbeType
 
     with pytest.raises(UnknownProbeType):
         ephys.register_probe_type("NP9999")
+
+    assert len(ephys.ProbeType & {"probe_type": "NP9999"}) == 0, (
+        "registration raised but still left a ProbeType row behind, which is "
+        "the zero-electrode state UnknownProbeType exists to prevent"
+    )
