@@ -588,6 +588,17 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 4: The ohdpi emitter and profile
 
+> **Done 2026-08-22, with one addition.** Adding `RECIPES["eye"]` was not enough to make the
+> profile reachable: `wl_preproc/cli/main.py` held a **second** copy of the name-to-recipe
+> mapping and a hardcoded `choices=["ci", "benchmark", "stim"]`, so the new profile existed,
+> `generate_session` handled it, and the CLI rejected it as invalid. Both copies are gone —
+> `--profile` now derives its choices from `RECIPES` — and a test asserts every key is offered,
+> run through the **shipped console script** rather than `-m`, per the `.pth` trap.
+>
+> The two existing subprocess tests in that file had no `timeout=`, which the checkpoint
+> records as "a test that reds by timeout is not a test". They have one now.
+
+
 **Files:**
 - Create: `wl_preproc/synth/ohdpi.py`, `tests/synth/test_ohdpi.py`
 - Modify: `wl_preproc/synth/recipe.py`, `wl_preproc/synth/session.py`
@@ -597,7 +608,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Context.** `ohdpi` is OpenIrisDPI, a dual-Purkinje eye tracker at 500 Hz. It appears in the `SYSTEMS` tuple and **nowhere else** — no emitter, no profile, no fixture. Its real per-frame file format is an open question (spec §12.1), so this emitter writes the *proposed* shape: one row per frame carrying a frame index, a native timestamp and a digital sample. **Isolate every format assumption in this one file** so a real file can settle them without touching the extractor's logic.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/synth/test_ohdpi.py
@@ -621,16 +632,16 @@ def test_ohdpi_emits_one_row_per_frame_with_a_digital_sample(tmp_path):
     ...
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/synth/test_ohdpi.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.synth.ohdpi'`
 
-- [ ] **Step 3: Write the emitter, the profile, and the dispatch branch**
+- [x] **Step 3: Write the emitter, the profile, and the dispatch branch**
 
 Add `ohdpi` to `session.py`'s per-system `elif` chain beside `bcam`, and a `RECIPES["eye"]` profile with `systems=("syncbox", "spikeglx", "ohdpi")`.
 
-- [ ] **Step 4: Run, then commit**
+- [x] **Step 4: Run, then commit**
 
 ```bash
 .venv/bin/python -m pytest -q

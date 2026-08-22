@@ -17,6 +17,7 @@ from wl_preproc.synth.peripherals import (
     write_manifest,
     write_task_file,
 )
+from wl_preproc.synth.ohdpi import write_ohdpi
 from wl_preproc.synth.recipe import Fault, SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.rhs import write_rhs
 from wl_preproc.synth.spikeglx import write_spikeglx
@@ -78,6 +79,8 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
                 truncate_file(bin_path, keep_fraction=0.6)
         elif system == "rhs":
             write_rhs(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
+        elif system == "ohdpi":
+            write_ohdpi(directory, recipe, truth, drift_ppm=recipe.drift_ppm)
         elif system == "bcam":
             dropped = (
                 drop_camera_frames(camera_frame_count(recipe), rng)

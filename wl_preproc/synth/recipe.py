@@ -195,6 +195,25 @@ STIM_RECIPE = SessionRecipe(
     seed=7,
 )
 
+EYE_RECIPE = SessionRecipe(
+    session_id="2027-03-14_04",
+    subject="pico",
+    rig="rig-a",
+    # The eye-tracker topology: `ohdpi` had no profile at all before Phase
+    # 1c-4, so nothing could generate a session containing it. SpikeGLX is
+    # present because the interesting case is a 500 Hz system aligned beside a
+    # 30 kHz one — design spec section 3.1's 2 ms edge quantisation is only
+    # visible against a system that does not have it.
+    systems=("syncbox", "spikeglx", "ohdpi"),
+    blocks=(
+        BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=4, trial_duration_s=3.0),
+    ),
+    montages=(MontageSpec(start_s=0.0, end_s=12.0),),
+    n_ap_channels=4,
+    ap_sample_rate_hz=30_000.0,
+    seed=20270315,
+)
+
 # Recipes keyed by the CLI's own --profile name (wl_preproc/cli/main.py), so
 # a caller that wants "the ci recipe" or "the stim recipe" has one place to
 # look it up by name rather than importing three constants and building the
@@ -203,4 +222,5 @@ RECIPES: dict[str, SessionRecipe] = {
     "ci": CI_RECIPE,
     "benchmark": BENCHMARK_RECIPE,
     "stim": STIM_RECIPE,
+    "eye": EYE_RECIPE,
 }
