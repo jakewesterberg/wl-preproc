@@ -14,7 +14,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **606 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is in progress on its own branch**: per-system barcode extraction is done for syncbox, SpikeGLX and RHS; fitting, the Computed tables and coverage are not. |
+| **wl-preproc** | private, CI green, **688 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is complete on `feat/phase-1c4-timebase`, all ten tasks, not yet merged.** With it, **Phase 1c is done.** |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -87,16 +87,31 @@ endpoints, status codes, the token, the verdict values, and the three timing con
 Plan 10 leaves unfilled. **It is proposed, not agreed** — the token and `408` are real work on
 their side.
 
+**wl-preproc Phase 1c-4** — `wl_preproc/timebase/` and `wl_preproc/schema/timebase.py`. Every
+system's recordings become session time: one extraction function per system (`EXTRACTORS`, whose
+set equality against `SYSTEMS` is the phase's completeness claim), then shared decode, rate fit
+per `(system, session)`, offset fit per `(system, segment)`, rejection, coverage and provenance.
+**Decode reliability is measured rather than asserted** — the suite prints recovered-versus-emitted
+per system on every run, currently 100% on clean fixtures for all five including ohdpi at its
+2.5-samples-per-bit margin. This project's **first Computed tables** are declared here, and
+`_computed_tables()` stops being empty.
+
+> The generator gained as much as the pipeline did. `--profile eye` and `--profile drift` are
+> new; the camera runs at 500 Hz because 200 Hz could not decode a barcode at all; SpikeGLX
+> emits an NI stream; `ohdpi` has an emitter for the first time; and **clock drift is per
+> system**, since applying it to the sync box too had made it cancel exactly.
+
 ---
 
 ## What is next
 
-1. **Phase 1c-4 — timebase fitting and coverage** (§4.5, §4.6). The last piece of 1c. It
-   declares this project's **first Computed table**, which turns on `count_stale_jobs` reading
-   DataJoint's internal `~jobs` tables — a path no write-detection snapshot currently covers.
-   Its tier-B work can assume reader-openable Intan fixtures: `--profile stim` sessions open
-   with `read_intan` today, so it plans against them directly rather than around them.
-2. **Phase 2 onward** — see spec §12.
+1. **Merge `feat/phase-1c4-timebase`**, which completes Phase 1c.
+2. **Phase 1c-5 — event decoding.** Named by 1c-4 rather than planned: `TimingProvenance.tier`
+   holds `'pending'` for every session, and `pending_inputs` names the three things it is waiting
+   for — `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
+   unreachable until they exist. The **measured** block boundary (as opposed to wl.works'
+   asserted one) is also 1c-5's, in its own Computed table.
+3. **Phase 2 onward** — see spec §12.
 
 **Not software, and on a clock: order the NI cards.** §12. **Models corrected 2026-08-16** to
 **PXIe-6353** (recording) and **PCIe-6343** (task PC) — both verified to carry the 32 hardware-timed
@@ -129,6 +144,15 @@ defensible call, but it is a reversal rather than a gap.
   docstring.
 - **The responder is stdlib-only.** No web framework, no new runtime dependency — the whole
   HTTP surface is `http.server` plus `hmac`. Argued in the 1c-3 design spec.
+- **The barcode reaches SpikeGLX on an NI digital line, not the imec SY channel**, leaving the
+  imec SMA free. §4.5, and it is why §12 orders a card with 32 hardware-timed Port 0 lines. The
+  1a fixture contradicted this until 1c-4; the fixture was corrected, not the spec.
+- **Every device's clock drifts against session time; the sync box's does not**, because session
+  time *is* its timeline. §4.5. `SessionRecipe.system_drift_ppm` is per system for that reason.
+- **Rate is read from each recording's own metadata, never from a constant** — `.nidq.meta`,
+  `info.rhs`, the ohdpi file's own timestamps, the sidecar's `frame_rate_hz`. Every fixture in
+  the repo samples at 30 kHz or 500 Hz, so a hardcoded rate is indistinguishable from a read one
+  unless a test supplies a rate that is neither. Each of the four has such a test.
 
 ---
 
@@ -246,6 +270,22 @@ defensible call, but it is a reversal rather than a gap.
 - **A broad outer guard can subsume the only failure a narrow-guard test detects**, leaving the
   suite green with the narrow guard deleted. Anywhere one is added, re-mutation-test the guards
   it now covers.
+- **A DataJoint `make()` that inserts nothing counts as a SUCCESS and leaves its key
+  outstanding.** So a stage that legitimately has nothing to write re-runs on **every daemon
+  pass, forever**, doing its full I/O each time and reporting keys "populated". Measured in 1c-4:
+  `success_count` stayed at 2 across four consecutive passes with no row ever appearing, and the
+  work being redone was extracting and decoding every recording of the affected systems. **Every
+  `make()` must insert at least one row on every key its `key_source` yields** — which usually
+  means a status column recording that the thing was attempted and could not be done, not an
+  absent row. An absent row also cannot distinguish "checked, failed" from "not reached yet".
+- **NULL, not zero, for a measurement that was never made.** A stored drift of `0.0` ppm with a
+  `0.0` µs residual is exactly what a *flawless* fit looks like, so a system that was never
+  fitted reads as the best-aligned one in the session. Same shape as the tier: an input treated
+  as passing because it is absent is a false claim, not a default.
+- **A knob every fixture leaves at its default is not a tested knob.** `drift_ppm` was applied to
+  every emitter *including the sync box* — which **defines** session time, so it cancelled
+  exactly and every fixture had zero relative drift. Three phases missed it because all four
+  recipes left the value at `0.0`, where the bug and the correct behaviour are identical.
 
 > The full defect lists — twelve tests that passed while proving nothing, seventeen instances of
 > prose asserting what the code does not support — are in
@@ -286,6 +326,22 @@ leaves something behind that does:
   neither the watcher nor the responder needs a montage source it cannot have. **The residual is
   exactly the automatic canonical trigger** — nothing yet re-fires an activation when the missing
   ELN rows land, and at a 12-hour canonical delay that cannot be a manual nudge.
+- **1c-4 leaves four things recorded rather than closed.**
+  - **The FLIR project has not been told.** `behavior_camera_sidecar.json` gained `digital_line`
+    and `frame_rate_hz`, both **optional**, so nothing they emit today breaks — but a proposal
+    nobody has received is not an agreement, and until they emit both fields `bcam` alignment is
+    *specified and unavailable*. `extract_bcam` refuses such a sidecar by name rather than
+    falling back on the generator's `CAMERA_FPS`, which is the fixture's camera and not theirs.
+  - **`time_source` is `'barcode'` on every row**, because nothing is trigger-timed yet. Whether
+    the sync box can also trigger `ohdpi`'s frames is the open hardware question (1c-4 design
+    §12.2); answering it *yes* removes the 2 ms edge quantisation that is the dominant error term
+    for both camera systems.
+  - **A system whose files are all rejected is re-scanned on every daemon pass.** Deliberate —
+    it is what lets a corrected or re-transferred file be picked up with no manual step — but it
+    is unbounded rework on a permanently broken device, and worth revisiting if the daemon loop
+    is ever run at a fast cadence.
+  - **`RejectedSegment` still has no correction path**, inheriting the gap 1c-2 recorded for a
+    landed `Ingestion` row. Nothing consumes a re-align command.
 - **1c-3 left three things recorded rather than closed**, all in
   `docs/handoffs/2026-08-16-phase-1c3-rulings.md`: `GET /health` holds the process-wide lock
   while walking each *incomplete* session's directory tree, and `POST /jobs` contends for it —
