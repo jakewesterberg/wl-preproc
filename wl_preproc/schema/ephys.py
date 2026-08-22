@@ -160,9 +160,9 @@ class ClusterQualityLabel(dj.Lookup):
     label_description : varchar(255)
     """
     contents = [
-        ("good", "single unit"),
-        ("mua", "multi-unit activity"),
-        ("noise", "artifact or noise cluster"),
+        {"cluster_quality_label": "good", "label_description": "single unit"},
+        {"cluster_quality_label": "mua", "label_description": "multi-unit activity"},
+        {"cluster_quality_label": "noise", "label_description": "artifact or noise cluster"},
     ]
 
 
