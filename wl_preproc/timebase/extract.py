@@ -324,3 +324,54 @@ EXTRACTORS: dict[str, Callable[[Path], BitStream]] = {
     "ohdpi": extract_ohdpi,
     "bcam": extract_bcam,
 }
+
+
+# How to find one system's recordings inside its session directory. Per-system
+# knowledge, so it lives here beside EXTRACTORS rather than in `segments.py`:
+# this module's contract is that it is the ONLY per-system code in the phase,
+# and file layout is exactly that kind of knowledge.
+#
+# `rhs` is absent because its recording is a DIRECTORY, not a file, and is
+# found by looking for an `info.rhs` rather than by a glob -- see below.
+_RECORDING_GLOBS: dict[str, str] = {
+    "syncbox": "*.log",
+    # NOT "*.bin": that would also match the imec `.ap.bin`, whose SY channel
+    # spec 4.5 deliberately leaves undriven. Extracting from it would yield a
+    # silent line and a file rejected for `no_barcode` -- a diagnosis pointing
+    # at a dead cable when the real fault is a glob.
+    "spikeglx": "*.nidq.bin",
+    "ohdpi": "*.csv",
+    "bcam": "*.yaml",
+}
+
+
+def find_recordings(system: str, system_dir: Path) -> list[Path]:
+    """Every recording of one system, sorted, or empty if the directory is absent.
+
+    An absent directory is not an error here. Device absence never blocks
+    ingest (1c-2's rule), so a session whose `ohdpi` never ran has no `ohdpi`
+    directory and that is an ordinary session, not a fault.
+
+    Sorted so that populate order is deterministic. It does not affect the
+    result -- segments are keyed by barcode value, which is monotonic by
+    construction -- but an undefined order makes two runs of the same session
+    write rows in different orders, and a diff between two runs then shows
+    movement that is not a change.
+    """
+    if system not in EXTRACTORS:
+        raise ValueError(f"unknown system: {system!r}, expected one of {sorted(EXTRACTORS)}")
+    if not system_dir.is_dir():
+        return []
+
+    if system == "rhs":
+        from wl_preproc.timebase._rhs_header import INFO_FILENAME
+
+        if (system_dir / INFO_FILENAME).is_file():
+            return [system_dir]
+        return sorted(
+            child
+            for child in system_dir.iterdir()
+            if child.is_dir() and (child / INFO_FILENAME).is_file()
+        )
+
+    return sorted(system_dir.glob(_RECORDING_GLOBS[system]))

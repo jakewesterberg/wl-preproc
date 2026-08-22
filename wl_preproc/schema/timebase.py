@@ -14,6 +14,8 @@ internal `~jobs` tables, which only exist once something populates.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import datajoint as dj
 
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
@@ -58,6 +60,104 @@ class SystemTimebase(dj.Computed):
     residual_us_rms    : double
     residual_us_max    : double
     """
+
+    @property
+    def key_source(self):
+        """Only systems belonging to a session that actually landed.
+
+        `ingest.Ingestion` carries `session_dir`, which is the only record of
+        where a session's files are -- so a system whose session has no
+        `Ingestion` row cannot be read at all, and attempting it would fail
+        inside `make()` for every such key on every daemon pass. Restricting
+        here means those keys are simply not yet due.
+
+        Imported locally: `ingest` and `timebase` are peers, and an import-time
+        dependency between them would order two schema modules that have no
+        ordering.
+        """
+        from wl_preproc.schema import ingest
+
+        return core.AcquisitionSystem & ingest.Ingestion
+
+    def make(self, key: dict) -> None:
+        """Fit this system's clock against session time, pooling the session.
+
+        The sync box is inserted with an identity fit rather than skipped.
+        Session time IS its timeline, so a fit of it against itself is exactly
+        zero drift with zero residual -- that is the truth, not a placeholder,
+        and an absent row would read as "this system was never aligned", which
+        is the one thing it certainly was.
+        """
+        from wl_preproc.schema import ingest
+        from wl_preproc.timebase import segments
+        from wl_preproc.timebase.fit import fit_rate
+
+        session_dir = Path(
+            (ingest.Ingestion & {k: key[k] for k in pipeline.Session.primary_key}).fetch1(
+                "session_dir"
+            )
+        )
+        scans = segments.scan_system(key["system"], session_dir / key["system"])
+        if not scans:
+            # Device absence never blocks ingest (1c-2's rule) -- but an
+            # AcquisitionSystem row says this system WAS present, so finding no
+            # recording under it is a real disagreement rather than an absent
+            # device, and it is left un-populated for the daily report to
+            # surface rather than recorded as a fit of nothing.
+            return
+
+        decoded = [barcode for scan in scans for barcode in scan.barcodes]
+        nominal_rate_hz = scans[0].stream.fs_hz
+
+        if key["system"] == "syncbox":
+            self.insert1(
+                {
+                    **key,
+                    "time_source": "barcode",
+                    "nominal_rate_hz": nominal_rate_hz,
+                    "fitted_rate_hz": nominal_rate_hz,
+                    "drift_ppm": 0.0,
+                    "n_barcodes_decoded": len(decoded),
+                    "n_barcodes_matched": len(decoded),
+                    "residual_us_rms": 0.0,
+                    "residual_us_max": 0.0,
+                }
+            )
+            return
+
+        reference = segments.session_reference(session_dir)
+        try:
+            fit = fit_rate(decoded, reference, nominal_rate_hz)
+        except ValueError:
+            # Design spec section 10 names this as a failure path to exercise:
+            # "a system with zero decodable barcodes". It gets NO ROW rather
+            # than a row full of nominal values -- a stored rate of "exactly
+            # nominal, zero drift, zero residual" is indistinguishable from a
+            # perfect fit, and this is the opposite of one.
+            #
+            # The diagnosis is not lost by returning here. `Segment` keys off
+            # `AcquisitionSystem`, not off this table, precisely so that a
+            # system with no fit still records why each of its files could not
+            # be used.
+            return
+        self.insert1(
+            {
+                **key,
+                # 'barcode' unconditionally, because nothing in this pipeline
+                # is trigger-timed yet. Whether the sync box can also trigger
+                # ohdpi's frames is design spec section 12's open hardware
+                # question; until it is answered, claiming 'trigger' would
+                # assert a precision that was never measured.
+                "time_source": "barcode",
+                "nominal_rate_hz": nominal_rate_hz,
+                "fitted_rate_hz": fit.fitted_rate_hz,
+                "drift_ppm": fit.drift_ppm,
+                "n_barcodes_decoded": len(decoded),
+                "n_barcodes_matched": fit.n_matched,
+                "residual_us_rms": fit.residual_us_rms,
+                "residual_us_max": fit.residual_us_max,
+            }
+        )
 
 
 @schema

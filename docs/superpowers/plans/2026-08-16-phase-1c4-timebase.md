@@ -993,6 +993,30 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 8: Populate segments and timebases
 
+> **Done 2026-08-22, with one structural change and a third rejection reason.**
+>
+> `Segment.key_source` is `AcquisitionSystem`, **not** `SystemTimebase`, even though an offset
+> is fitted with that rate held fixed. Keying off the fit means a system with no fit — design
+> spec §10's "a system with zero decodable barcodes" — produces no rows at all, including no
+> `RejectedSegment` rows, so the record of *why* would be the one thing missing. Ordering is
+> the caller's job instead: `_computed_tables()` returns them in dependency order and `make()`
+> handles the fit's absence explicitly rather than assuming the order held.
+>
+> `unfitted_system` is a third reason. A system with exactly ONE decodable barcode has files
+> that are individually alignable and no rate to hold them against — one point is a position,
+> not a slope. Calling that `no_barcode` would misname the one file that did carry one.
+>
+> Step 5's test is named for three tables, not two: `Segment.make()` writes the negative half
+> of its own scan into `RejectedSegment`, because that table's key is `file_path` and a
+> barcode-keyed computation cannot produce it. Splitting them would decode every recording
+> twice to reach the same verdict.
+>
+> Measured while building the one-barcode fixture: **the decoder needs a trailing interval as
+> well as the leading idle.** Silencing a camera line at 1.3 s leaves the frame complete at
+> 1.05 s and still decodes nothing. Same fact the parent spec records as adding one
+> inter-frame interval to every bound, seen from the other end.
+
+
 **Files:**
 - Create: `wl_preproc/timebase/segments.py`, `tests/timebase/test_segments.py`
 - Modify: `wl_preproc/schema/core.py`, `wl_preproc/schema/timebase.py`
@@ -1001,7 +1025,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `EXTRACTORS`, `fit_rate`, `fit_offset`.
 - Produces: `classify_segment(duration_s: float, n_barcodes: int) -> str` returning `"alignable"` or a rejection reason; `SystemTimebase.make()`, `Segment.make()`.
 
-- [ ] **Step 1: Write the failing tests for §4.1's rules**
+- [x] **Step 1: Write the failing tests for §4.1's rules**
 
 ```python
 # tests/timebase/test_segments.py
@@ -1032,9 +1056,9 @@ def test_segment_classification_follows_the_alignment_table(duration_s, n_barcod
     assert classify_segment(duration_s, n_barcodes) == expected
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Write the populate tests, proving what is written and what is not**
+- [x] **Step 5: Write the populate tests, proving what is written and what is not**
 
 ```python
 # append to tests/timebase/test_segments.py
@@ -1057,7 +1081,7 @@ def test_populate_writes_only_timebase_and_segment_rows(table_snapshot, deep_equ
     misled by that assumption five times."""
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q

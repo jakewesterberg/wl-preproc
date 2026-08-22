@@ -10,6 +10,7 @@ from wl_preproc.contracts.paths import SYSTEMS
 from wl_preproc.timebase.extract import (
     EXTRACTORS,
     BitStream,
+    find_recordings,
     extract_bcam,
     extract_ohdpi,
     extract_rhs,
@@ -390,3 +391,45 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
 
     for system, (found, emitted) in measured.items():
         assert found == emitted, f"{system}: recovered {found} of {emitted} barcodes"
+
+
+def test_every_system_can_find_its_own_recordings(tmp_path: Path):
+    """Discovery is per-system knowledge, and a system that finds nothing looks
+    exactly like a system that was not recording. So this asserts each one
+    finds precisely the recording the generator wrote — on the profile that
+    carries all five at once."""
+    generate_session(tmp_path, RECIPES["drift"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    for system in SYSTEMS:
+        found = find_recordings(system, session_dir / system)
+        assert len(found) == 1, f"{system}: found {[p.name for p in found]}"
+        # And what was found is what the extractor can actually open.
+        assert EXTRACTORS[system](found[0]).n_samples > 0
+
+
+def test_spikeglx_discovery_does_not_match_the_imec_binary(tmp_path: Path):
+    """A `*.bin` glob would also match the imec `.ap.bin`, whose SY channel
+    spec 4.5 deliberately leaves undriven. That file extracts to a silent line
+    and would be rejected for `no_barcode` — a diagnosis pointing at a dead
+    cable when the real fault is a glob."""
+    generate_session(tmp_path, RECIPES["ci"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    found = find_recordings("spikeglx", session_dir / "spikeglx")
+
+    assert [p.suffixes[-2:] for p in found] == [[".nidq", ".bin"]]
+
+
+def test_an_absent_system_directory_finds_nothing_rather_than_raising(tmp_path: Path):
+    """Device absence never blocks ingest (1c-2's rule), so a session whose
+    ohdpi never ran has no ohdpi directory — an ordinary session, not a fault.
+    """
+    assert find_recordings("ohdpi", tmp_path / "never-ran") == []
+
+
+def test_an_unknown_system_is_refused_rather_than_silently_finding_nothing():
+    """A typo'd system name returning `[]` is indistinguishable from a device
+    that did not record, and would quietly drop that system from every fit."""
+    with pytest.raises(ValueError, match="unknown system"):
+        find_recordings("spikeglix", Path("/nonexistent"))
