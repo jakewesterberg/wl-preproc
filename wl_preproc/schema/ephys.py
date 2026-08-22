@@ -64,14 +64,32 @@ class Probe(dj.Manual):
 class ElectrodeConfig(dj.Manual):
     definition = """
     # A SET OF ELECTRODES, named by its contents -- not 'the configuration of a
-    # recording'. Key: (electrode_config_hash). That distinction is load-
-    # bearing: the intersection of two electrode sets is itself an electrode
-    # set, so a cross-montage derivative's effective config is a row in this
-    # table like any other, and the canonical and derivative cases need no
-    # branch. Design spec section 3.2.2.
+    # recording'. Key: (electrode_config_hash, probe_type). That distinction is
+    # load-bearing: the intersection of two electrode sets is itself an
+    # electrode set, so a cross-montage derivative's effective config is a row
+    # in this table like any other, and the canonical and derivative cases
+    # need no branch. Design spec section 3.2.2.
+    #
+    # `-> ProbeType` moved above this divider in fix round 2 (was a secondary
+    # attribute): `ElectrodeConfig.Electrode` already put `probe_type` into
+    # ITS OWN key via `-> ProbeType.Electrode`, but with probe_type secondary
+    # here, no foreign key tied the two together -- a part row could name a
+    # different probe model than its own master declared, and nothing would
+    # catch it. Moving it into this table's key makes `ElectrodeConfig.
+    # Electrode`'s existing `-> master` reference a genuine composite foreign
+    # key on (electrode_config_hash, probe_type), which now enforces the
+    # match. This adds no new row-identity ambiguity: `probe_type` is already
+    # one of the values hashed into `electrode_config_hash` itself (see
+    # `register_electrode_config`), so one hash still names exactly one probe
+    # type -- this only makes DataJoint enforce what was already true by
+    # construction. Verified this changes the primary key of no table that
+    # references `ElectrodeConfig` (SegmentConfig, Clustering -- both
+    # reference it below their own divider) or `ElectrodeConfig.Electrode`
+    # (Unit -- also below its divider; WaveformSet.Waveform -- already carried
+    # probe_type via this same diamond, so its key's shape is unchanged).
     electrode_config_hash : varchar(32)
-    ---
     -> ProbeType
+    ---
     n_electrodes : int unsigned
     """
 
