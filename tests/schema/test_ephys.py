@@ -91,25 +91,28 @@ def test_clustering_is_keyed_on_the_activation_not_the_session(ephys_activated):
 def test_no_ephys_table_declares_a_bare_longblob(ephys_activated):
     """The whole point of declining upstream. Belt and braces beside the
     repository-wide sweep in test_guardrails.py, because this module is the
-    one with fourteen known offenders upstream."""
-    import datajoint as dj
+    one with fourteen known offenders upstream.
+
+    Reuses the repository-wide sweep's own Part-table walker
+    (`_iter_tables_recursive`) and its own bare-longblob predicate
+    (`_is_bare_longblob`) rather than a second, hand-rolled copy of either --
+    a from-scratch copy here previously matched only a literal `"longblob"`
+    substring, which is weaker than the real predicate (it misses a
+    core-type alias like `bytes` that resolves to `longblob` physically) and
+    duplicated the Part-table discovery `_iter_tables_recursive` already
+    solves correctly, including its own underscore-name fix.
+    """
+    from tests.schema.test_guardrails import _iter_tables_recursive, _is_bare_longblob
 
     offenders = []
     for name in dir(ephys):
         obj = getattr(ephys, name)
         if not (hasattr(obj, "heading") and hasattr(obj, "definition")):
             continue
-        tables = [obj] + [
-            getattr(obj, n)
-            for n in dir(obj)
-            if isinstance(getattr(obj, n, None), type)
-            and issubclass(getattr(obj, n), dj.Part)
-        ]
-        for t in tables:
-            for attr in t.heading.names:
-                declared = (t.heading[attr].type or "").lower()
-                if "longblob" in declared:
-                    offenders.append(f"{name}.{attr}")
+        for _, table_name, table in _iter_tables_recursive("wl_preproc.schema.ephys", obj):
+            for attr in table.heading.names:
+                if _is_bare_longblob(table.heading[attr]):
+                    offenders.append(f"{table_name}.{attr}")
     assert not offenders, f"bare longblob declared: {offenders}"
 
 
@@ -161,28 +164,49 @@ def test_a_realistic_waveform_set_survives_insert_and_fetch(ephys_activated, dj_
     key = {k: row[k] for k in e.WaveformSet.Waveform.primary_key}
     e.WaveformSet.Waveform.insert1(row, skip_duplicates=True)
 
-    got = (e.WaveformSet.Waveform & key).fetch1("waveform_mean")
-    assert isinstance(got, np.ndarray), f"got {type(got).__name__}, not ndarray"
-    assert got.shape == (384, 82)
-    assert got.dtype == np.float32
-    assert np.array_equal(got, arr)
-
-    # This test and test_guardrails.py's sweep share a session-scoped database and
-    # build the SAME synthetic key, and the sweep inserts with skip_duplicates=True.
-    # Leaving this row behind would silently turn the sweep's own insert into a
-    # no-op and make it compare its 64x64 probe array against this 384x82 one.
-    # Cleaning up keeps both tests honest.
-    (e.WaveformSet.Waveform & key).delete_quick()
+    try:
+        got = (e.WaveformSet.Waveform & key).fetch1("waveform_mean")
+        assert isinstance(got, np.ndarray), f"got {type(got).__name__}, not ndarray"
+        assert got.shape == (384, 82)
+        assert got.dtype == np.float32
+        assert np.array_equal(got, arr)
+    finally:
+        # In `finally`, not after the assertions: this test and
+        # test_guardrails.py's sweep share a session-scoped database and build
+        # the SAME synthetic key, and the sweep inserts with
+        # skip_duplicates=True. Leaving this row behind -- which an assertion
+        # failure above would do, if cleanup ran only after them -- would
+        # silently turn the sweep's own insert into a no-op and make it
+        # compare its 64x64 probe array against this 384x82 one: a second,
+        # confusing failure in test_guardrails.py caused by this test's own
+        # assertion failing first. Cleaning up unconditionally keeps both
+        # tests honest regardless of how this one ends.
+        (e.WaveformSet.Waveform & key).delete_quick()
 
 
 def test_reverting_a_blob_to_longblob_is_caught(dj_conn, prefix):
     """Mutate, don't read -- this project's standing habit.
 
     A declaration guard that has never seen a violation is a guard nobody has
-    tested. This mutates the declaration and asserts the sweep rejects it, so
-    the guard's own working is proven rather than assumed.
+    tested. This mutates the declaration and asserts the REAL guard predicate
+    -- `tests.schema.test_guardrails._is_bare_longblob`, the exact function
+    `test_no_table_declares_a_bare_longblob` runs across the whole schema --
+    flags the mutant attribute, so the guard's own working is proven rather
+    than assumed.
+
+    What this used to do, and why that proved nothing: it re-implemented the
+    check inline as `"longblob" in attr.type`, a materially different (and
+    weaker) predicate than the real one (`"blob" in declared and codec is
+    None`, which also catches a core-type alias like `payload : bytes` that
+    resolves to `longblob` physically). That inline copy would have kept
+    passing even if the REAL guard were inverted or deleted -- it never
+    called it. Importing `_is_bare_longblob` instead means this test fails
+    if the actual guard predicate stops catching a bare longblob, which is
+    the only thing worth proving here.
     """
     import datajoint as dj
+
+    from tests.schema.test_guardrails import _is_bare_longblob
 
     mutant = dj.Schema()
 
@@ -199,12 +223,13 @@ def test_reverting_a_blob_to_longblob_is_caught(dj_conn, prefix):
     try:
         offenders = [
             a for a in Mutant.heading.names
-            if "longblob" in (Mutant.heading[a].type or "").lower()
+            if _is_bare_longblob(Mutant.heading[a])
         ]
         assert offenders == ["payload"], (
-            "the mutation did not produce a bare longblob, so this test is not "
-            "exercising what it claims to -- check whether DataJoint's type "
-            "spelling changed before trusting the real guard"
+            "the REAL guard predicate did not flag the mutant's bare longblob "
+            "attribute, so this test is not exercising what it claims to -- "
+            "check whether DataJoint's type spelling or codec attachment "
+            "changed before trusting the real guard"
         )
     finally:
         mutant.drop()
