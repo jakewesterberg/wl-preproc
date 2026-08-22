@@ -83,6 +83,74 @@ class ElectrodeConfig(dj.Manual):
         """
 
 
+@schema
+class ProbeInsertion(dj.Manual):
+    definition = """
+    # One penetration in one session. Key: (subject, session_datetime,
+    # insertion_number) -- exactly parent spec section 5.2's.
+    -> pipeline.Session
+    insertion_number : tinyint unsigned
+    ---
+    -> Probe
+    # A SOFT reference into wl.works' `trajectory` table, not a foreign key:
+    # that database is unreachable from this machine (parent spec section
+    # 11.2 -- "no route in"), so the value arrives with the activation
+    # request. Below the divider deliberately, the same way request.py's
+    # Activation projects Request rather than inheriting its key: a
+    # trajectory is a resource that outlives every session and is not
+    # primary-key material here.
+    #
+    # It names WHICHEVER trajectory the penetration actually ran against, and
+    # the planned/achieved stance is read through the reference. A penetration
+    # made before any post-operative scan legitimately names a `planned` one;
+    # null means only "not recorded". See wl-works
+    # 2026-08-22-trajectory-identity-design.md section 4, and this phase's
+    # design spec section 5.2.
+    trajectory_id = null : varchar(64)
+    works_insertion_id = null : varchar(64)
+    """
+
+
+@schema
+class InsertionLocation(dj.Manual):
+    definition = """
+    # The AIM, carried in from wl.works' item_insertion.targetArea and its
+    # atlas qualification. Key: (subject, session_datetime, insertion_number).
+    #
+    # Recorded, never derived. Row 27 of wl.works pins targetArea to mean the
+    # aim; what was actually hit is an insertion_area_assignment there, and
+    # per-electrode anatomy is authored into the NWB electrode table here --
+    # see design spec section 5.4 for the three prohibitions that meet at this
+    # table.
+    -> ProbeInsertion
+    ---
+    area        : varchar(32)
+    atlas       : varchar(32)
+    atlas_level : tinyint unsigned
+    """
+
+
+@schema
+class SegmentConfig(dj.Manual):
+    definition = """
+    # Which electrode set one probe was recording through, for one segment.
+    # Key: (subject, session_datetime, insertion_number, system,
+    # segment_barcode).
+    #
+    # Keyed on the SEGMENT, not the insertion and not the block. Bank
+    # selection changes between blocks, but a SpikeGLX .meta carries exactly
+    # one ~imroTbl and probeinterface returns one probe per file -- so a bank
+    # change REQUIRES a restart and is already a segment boundary (parent spec
+    # section 5.2.1). Blocks and segments do not align and neither is derivable
+    # from the other, so the block grain would be the wrong home even though
+    # the behaviour is block-aligned. Design spec section 3.2.1.
+    -> ProbeInsertion
+    -> core.Segment
+    ---
+    -> ElectrodeConfig
+    """
+
+
 def register_probe_type(part_number: str) -> None:
     """Declare `part_number` and every electrode of it. Idempotent."""
     ProbeType.insert1({"probe_type": part_number}, skip_duplicates=True)
