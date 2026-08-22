@@ -69,3 +69,45 @@ def test_electrode_config_is_keyed_on_the_segment_not_the_insertion(ephys_activa
     pk = ephys.SegmentConfig.primary_key
     assert "segment_barcode" in pk
     assert "insertion_number" in pk
+
+
+def test_clustering_is_keyed_on_the_activation_not_the_session(ephys_activated):
+    """Parent spec section 5.2, stated in bold there: two activations over
+    different block sets produce genuinely different units, and nothing may
+    imply otherwise. This is the assertion that upstream element-array-ephys
+    could not satisfy -- its Clustering key has no activation_id and
+    EphysRecording is one row per (session, insertion), so two derivative
+    activations with the same paramset would collide."""
+    pk = ephys.Clustering.primary_key
+    assert "activation_id" in pk
+    assert "insertion_number" in pk
+    assert "paramset_idx" in pk
+    # montage_id arrives through Activation and is stricter than the section
+    # 5.2 tree as drawn -- correct, because section 8.3 makes the montage the
+    # grain at which unit identity holds.
+    assert "montage_id" in pk
+
+
+def test_no_ephys_table_declares_a_bare_longblob(ephys_activated):
+    """The whole point of declining upstream. Belt and braces beside the
+    repository-wide sweep in test_guardrails.py, because this module is the
+    one with fourteen known offenders upstream."""
+    import datajoint as dj
+
+    offenders = []
+    for name in dir(ephys):
+        obj = getattr(ephys, name)
+        if not (hasattr(obj, "heading") and hasattr(obj, "definition")):
+            continue
+        tables = [obj] + [
+            getattr(obj, n)
+            for n in dir(obj)
+            if isinstance(getattr(obj, n, None), type)
+            and issubclass(getattr(obj, n), dj.Part)
+        ]
+        for t in tables:
+            for attr in t.heading.names:
+                declared = (t.heading[attr].type or "").lower()
+                if "longblob" in declared:
+                    offenders.append(f"{name}.{attr}")
+    assert not offenders, f"bare longblob declared: {offenders}"
