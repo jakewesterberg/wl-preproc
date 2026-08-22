@@ -610,10 +610,37 @@ def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
     attribute — which only proves `<blob>` works in general, something
     `test_harness.py` already establishes, and says nothing about the attributes
     actually declared here. Corrected 2026-08-13 before dispatch.
+
+    Walks Part tables too, via `_iter_tables_recursive` -- reused from the
+    declaration-test fixture below rather than written a second time. `all_tables`
+    itself is a flat `dir(module)` sweep and cannot see a `dj.Part` class nested
+    inside a master, which is exactly what let `ephys.WaveformSet.PeakWaveform.
+    peak_electrode_waveform` and `ephys.WaveformSet.Waveform.{waveform_mean,
+    waveforms}` go declared-and-checked-not-bare-longblob (by
+    `test_no_table_declares_a_bare_longblob`, via `all_tables_including_elements`,
+    which already recurses) but never actually ROUND-TRIPPED here -- three of
+    the six array attributes Phase 2a added, silently unverified by the one test
+    whose entire job is verifying them for real. Closed 2026-08-22, fix round 1.
+
+    Deliberately still `all_tables`, not `all_tables_including_elements`: the
+    expansion below is scoped to THIS repository's own schema modules only, so
+    no adopted-Element Part table (`element_event.event.Event.Attribute` and
+    the three siblings `_KNOWN_UPSTREAM_BARE_LONGBLOBS` names) is pulled in.
+    Round-tripping one of those would mean building a live parent chain through
+    Session/Trial/Event, which stays out of scope here exactly as
+    `all_tables_including_elements`'s own docstring says -- and, unlike the
+    custom Part tables above, every one of them is a KNOWN, permanently
+    allow-listed bare-longblob case that a real round-trip would correctly
+    fail on, not a gap worth closing.
     """
+    expanded_tables = [
+        entry
+        for module_name, table_name, table in all_tables
+        for entry in _iter_tables_recursive(module_name, table)
+    ]
     blob_attrs = [
         (module_name, table_name, table, attr)
-        for module_name, table_name, table in all_tables
+        for module_name, table_name, table in expanded_tables
         for attr in table.heading.names
         if getattr(table.heading[attr], "is_blob", False)
     ]
