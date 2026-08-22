@@ -108,7 +108,7 @@ def count_stale_jobs(...)               # reads DataJoint's internal ~jobs table
   def extract_syncbox(path: Path) -> BitStream
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_extract.py
@@ -148,12 +148,12 @@ def test_bitstream_accepts_the_floor_exactly():
     assert stream.fs_hz == 400.0
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.timebase'`
 
-- [ ] **Step 3: Implement `BitStream` and the floor**
+- [x] **Step 3: Implement `BitStream` and the floor**
 
 ```python
 # wl_preproc/timebase/extract.py
@@ -212,12 +212,12 @@ class BitStream:
             )
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Write the failing syncbox test**
+- [x] **Step 5: Write the failing syncbox test**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -250,12 +250,12 @@ def test_syncbox_extraction_recovers_every_ground_truth_barcode(tmp_path):
     assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -k syncbox -v`
 Expected: FAIL — `ImportError: cannot import name 'extract_syncbox'`
 
-- [ ] **Step 7: Implement `extract_syncbox`**
+- [x] **Step 7: Implement `extract_syncbox`**
 
 Read the log with `wl_sync.log`, and turn its recorded barcode entries into the same `(timestamp_us, level)` edge form every other system produces, so the shared path downstream sees one shape. Use `wl_sync.barcode.encode(value)` to render each barcode's edges at its logged time — the codec owns that rendering, and reproducing it here would be the reimplementation the constraints forbid.
 
@@ -295,12 +295,12 @@ def extract_syncbox(path: Path) -> BitStream:
 
 Create `wl_preproc/timebase/_syncbox_log.py` with `read_barcode_entries(path: Path) -> list[tuple[int, int]]` returning `(value, timestamp_us)`, parsing the log format `wl_sync.log` defines. Keep it in its own module so the log format's shape has exactly one reader.
 
-- [ ] **Step 8: Run the full suite**
+- [x] **Step 8: Run the full suite**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: 593 + 4 passing, **0 warnings**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add wl_preproc/timebase tests/timebase
@@ -317,6 +317,25 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 2: SpikeGLX and RHS extraction
 
+> **Done 2026-08-22, with one correction to the plan.** Step 1's test globbed
+> `*.nidq.bin` and matched no file: the Phase 1a generator emitted only an imec
+> AP pair and drove the barcode onto the **imec SY channel**, contradicting
+> §4.5 ("one NI digital line... the imec SMA stays free") and §12's reason for
+> ordering a 32-line card. The fixture was corrected rather than the spec —
+> `write_spikeglx` now also emits a `.nidq.bin`/`.nidq.meta` pair carrying the
+> barcode, SY is emitted but undriven, and `read_spikeglx(stream_id="nidq")`
+> is the acceptance test for it, as `read_intan` was for `info.rhs` in 1b2.
+> Recorded as a trap in `docs/CHECKPOINT.md`.
+>
+> Also beyond the plan's text, because the plan's versions could not fail:
+> `extract_rhs` reads its rate from `info.rhs` and `extract_spikeglx` from
+> `.nidq.meta`, each proven by a fixture declaring a rate that is **not** 30 kHz
+> — every fixture in the repo is 30 kHz, so a hardcoded rate passes any test
+> written against the emitted one. Step 5's mutation was run for all three:
+> bit+1, a hardcoded rate, and a wrong reshape stride each fail exactly the
+> tests that should catch them.
+
+
 **Files:**
 - Modify: `wl_preproc/timebase/extract.py`
 - Test: `tests/timebase/test_extract.py`
@@ -329,7 +348,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   def extract_rhs(session_dir: Path) -> BitStream
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -372,12 +391,12 @@ def test_rhs_extraction_recovers_ground_truth_barcodes(tmp_path):
     assert expected - recovered == set()
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -k "spikeglx or rhs" -v`
 Expected: FAIL — `ImportError: cannot import name 'extract_spikeglx'`
 
-- [ ] **Step 3: Implement both extractors**
+- [x] **Step 3: Implement both extractors**
 
 Both read a digital word stream, select the barcode's bit, and hand the resulting 0/1 trace to `edges_from_samples`. Read the generator's own emitters (`wl_preproc/synth/spikeglx.py`, `wl_preproc/synth/rhs.py`) to learn which bit each writes and at what rate — **do not assume; the emitters are the specification of the fixture.**
 
@@ -415,18 +434,18 @@ def extract_rhs(session_dir: Path) -> BitStream:
     ...
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Prove the tests are not vacuous**
+- [x] **Step 5: Prove the tests are not vacuous**
 
 Change `_edges_from_bit`'s `bit` to `bit + 1` in one extractor. Both that system's tests must fail. Restore.
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 
-- [ ] **Step 6: Run the full suite and commit**
+- [x] **Step 6: Run the full suite and commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -443,6 +462,19 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 3: Raise the camera frame rate, and give the camera a digital line
 
+> **Done 2026-08-22, with one addition.** Step 5 adds `digital_line`; the design spec's §13,
+> which that step cites, names **two** missing fields — the line "and... nor a frame-rate
+> field". `frame_rate_hz` is added alongside it, on the same optional-because-published
+> terms, because a per-frame line is useless without the rate that sampled it and Task 5's
+> `extract_bcam` would otherwise have to assume `synth.CAMERA_FPS` — the fixture's rate, not
+> the camera's. §13 now records the status of both.
+>
+> The camera also gains `BCAM_PRE_ROLL_S = 0.85`, the fourth distinct tick origin design spec
+> §10 asks for, checked against `IDLE_MIN_US` rather than chosen. Frame counts include it, so
+> `camera_frame_count()` exists to keep `session.py` and the emitter from holding two copies of
+> that arithmetic. `write_camera_sidecar` gained `truth` and `drift_ppm` to render the line.
+
+
 **Files:**
 - Modify: `wl_preproc/synth/peripherals.py`, `wl_preproc/contracts/sidecar.py`
 - Test: `tests/synth/test_peripherals.py`, `tests/contracts/test_sidecar.py`
@@ -452,7 +484,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why this task exists.** `CAMERA_FPS` is `200.0` today. Against a 5 ms bit slot that is **exactly 1.0 samples per bit** — below the floor, so the shipped fixture cannot decode a barcode at all. The spec is written against ≥400 Hz. **This is a fixture that contradicts the design, found before implementation rather than during it.**
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/synth/test_peripherals.py
@@ -479,12 +511,12 @@ def test_camera_fps_has_margin_over_the_floor():
     assert CAMERA_FPS >= 1.25 * min_sample_rate_hz()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/synth/test_peripherals.py -v`
 Expected: FAIL — `assert 200.0 >= 400.0`
 
-- [ ] **Step 3: Raise the rate and record why**
+- [x] **Step 3: Raise the rate and record why**
 
 ```python
 # wl_preproc/synth/peripherals.py
@@ -496,13 +528,13 @@ Expected: FAIL — `assert 200.0 >= 400.0`
 CAMERA_FPS = 500.0
 ```
 
-- [ ] **Step 4: Run the full suite and fix the ripple**
+- [x] **Step 4: Run the full suite and fix the ripple**
 
 Run: `.venv/bin/python -m pytest -q`
 
 `CAMERA_FPS` feeds `frame_count = int(recipe.duration_s * CAMERA_FPS)`, so sidecar frame counts change. Update any test asserting a literal frame count to derive it from `CAMERA_FPS` instead — a literal that has to be edited when the rate changes is the same defect one layer down.
 
-- [ ] **Step 5: Add the sidecar's digital-line field as OPTIONAL**
+- [x] **Step 5: Add the sidecar's digital-line field as OPTIONAL**
 
 ```python
 # wl_preproc/contracts/sidecar.py
@@ -519,7 +551,7 @@ Run: `.venv/bin/python -m pytest -q`
     digital_line: list[int] | None = None
 ```
 
-- [ ] **Step 6: Write the failing test for backward compatibility**
+- [x] **Step 6: Write the failing test for backward compatibility**
 
 ```python
 # append to tests/contracts/test_sidecar.py
@@ -531,7 +563,7 @@ def test_a_sidecar_without_a_digital_line_still_validates():
     assert sidecar.digital_line is None
 ```
 
-- [ ] **Step 7: Emit the digital line from the generator, re-export schemas, commit**
+- [x] **Step 7: Emit the digital line from the generator, re-export schemas, commit**
 
 Have `write_camera_sidecar` render the barcode into `digital_line` at `CAMERA_FPS`, using `wl_sync.barcode.encode` for the frame shape and the recipe's `drift_ppm` for the camera's own clock.
 
@@ -556,6 +588,17 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 4: The ohdpi emitter and profile
 
+> **Done 2026-08-22, with one addition.** Adding `RECIPES["eye"]` was not enough to make the
+> profile reachable: `wl_preproc/cli/main.py` held a **second** copy of the name-to-recipe
+> mapping and a hardcoded `choices=["ci", "benchmark", "stim"]`, so the new profile existed,
+> `generate_session` handled it, and the CLI rejected it as invalid. Both copies are gone —
+> `--profile` now derives its choices from `RECIPES` — and a test asserts every key is offered,
+> run through the **shipped console script** rather than `-m`, per the `.pth` trap.
+>
+> The two existing subprocess tests in that file had no `timeout=`, which the checkpoint
+> records as "a test that reds by timeout is not a test". They have one now.
+
+
 **Files:**
 - Create: `wl_preproc/synth/ohdpi.py`, `tests/synth/test_ohdpi.py`
 - Modify: `wl_preproc/synth/recipe.py`, `wl_preproc/synth/session.py`
@@ -565,7 +608,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Context.** `ohdpi` is OpenIrisDPI, a dual-Purkinje eye tracker at 500 Hz. It appears in the `SYSTEMS` tuple and **nowhere else** — no emitter, no profile, no fixture. Its real per-frame file format is an open question (spec §12.1), so this emitter writes the *proposed* shape: one row per frame carrying a frame index, a native timestamp and a digital sample. **Isolate every format assumption in this one file** so a real file can settle them without touching the extractor's logic.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/synth/test_ohdpi.py
@@ -589,16 +632,16 @@ def test_ohdpi_emits_one_row_per_frame_with_a_digital_sample(tmp_path):
     ...
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/synth/test_ohdpi.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.synth.ohdpi'`
 
-- [ ] **Step 3: Write the emitter, the profile, and the dispatch branch**
+- [x] **Step 3: Write the emitter, the profile, and the dispatch branch**
 
 Add `ohdpi` to `session.py`'s per-system `elif` chain beside `bcam`, and a `RECIPES["eye"]` profile with `systems=("syncbox", "spikeglx", "ohdpi")`.
 
-- [ ] **Step 4: Run, then commit**
+- [x] **Step 4: Run, then commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -617,6 +660,22 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 5: ohdpi and bcam extraction
 
+> **Done 2026-08-22.** `extract_ohdpi` takes the per-frame recording FILE, not the directory
+> the plan's signature sketched: the registry's unit is **one recording**, because §4.1 accepts
+> or rejects files individually and one recording is one `Segment` candidate. That is a file for
+> four systems and a directory for `rhs` only, because Intan's layout makes a recording a
+> directory. The registry's docstring carries the table.
+>
+> `extract_ohdpi` measures its rate from the file's own timestamps rather than taking
+> `OHDPI_FPS`, over the whole span rather than an adjacent difference — one interval is
+> quantised to the timestamp resolution, which at 500 Hz is a percent-level error the entire
+> fit would inherit. `extract_bcam` refuses a sidecar missing either proposed field instead of
+> falling back on `synth.CAMERA_FPS`.
+>
+> Step 5's measurement prints per-system counts in the suite output: **100% on clean fixtures
+> for all five**, including ohdpi at its 2.5 samples/bit margin.
+
+
 **Files:**
 - Modify: `wl_preproc/timebase/extract.py`
 - Test: `tests/timebase/test_extract.py`
@@ -624,7 +683,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `extract_ohdpi(dir_path: Path) -> BitStream`, `extract_bcam(sidecar_path: Path) -> BitStream`, and `EXTRACTORS: dict[str, Callable[[Path], BitStream]]` keyed by the `SYSTEMS` names.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -650,15 +709,15 @@ def test_bcam_extraction_recovers_ground_truth_barcodes(tmp_path):
     ...
 ```
 
-- [ ] **Step 2–4: Run, implement, run**
+- [x] **Step 2–4: Run, implement, run**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 
-- [ ] **Step 5: Measure and record decode reliability**
+- [x] **Step 5: Measure and record decode reliability**
 
 The spec requires decode reliability be **measured, not asserted**. Add a test that reports recovered-versus-emitted counts per system and asserts 100% on clean fixtures, so the margin at 2.5 samples/bit is a measured number in the suite output rather than a claim in a docstring.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -674,6 +733,29 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ---
 
 ## Task 6: Fitting — rate per session, offset per segment
+
+> **Done 2026-08-22. Step 4 could not be written as specified, and finding out why is the
+> task's main result.** Two fixture defects and one impossible tolerance:
+>
+> 1. **No fixture had any relative drift.** `session.py` gave `recipe.drift_ppm` to every
+>    emitter *including the sync box* — and session time is the sync box's timeline, so it
+>    cancelled exactly. Invisible for three phases because all four recipes left it at `0.0`.
+>    The sync box now gets `0.0` unconditionally, `system_drift_ppm` overrides per system, and
+>    a `drift` profile carries all five systems with four distinct clocks.
+> 2. **The plan's flat `abs=1.0` ppm is not achievable on a short fixture.** A sampled edge is
+>    known to one sample period, so a slope over span `T` cannot beat `period / T`: 2.4 ppm at
+>    30 kHz over 14 s, 143 ppm at 500 Hz. §4.5's "well under 1 ppm" is a claim about a
+>    *session*, where the quantity is 0.01 ppm. Tolerance is now derived per system.
+> 3. **A realistic camera drift is unmeasurable here.** At 47 ppm ohdpi fitted **0.000 ppm with
+>    a zero residual** — every barcode landed in the frame it would have occupied undrifted. The
+>    camera fixtures now carry deliberately unrealistic magnitudes, which the recipe says at
+>    length, because the alternative was a camera test that cannot fail.
+>
+> `fit_rate` raises below two matched barcodes rather than returning nominal-and-zero, and the
+> plan's own last test was rewritten: it passed a `fit_rate([], {}, ...)` inside the
+> `pytest.raises`, so the rate fit raising would have satisfied it and the offset guard under
+> test would never have run.
+
 
 **Files:**
 - Create: `wl_preproc/timebase/fit.py`, `tests/timebase/test_fit.py`
@@ -702,7 +784,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   ```
   `reference_s` maps barcode value → sync-box session time in seconds. Matching is **by value, never by ordinal position** — one dropped barcode must not shift every later one (parent spec §4.2 requirement 1 applies the same rule to trials).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_fit.py
@@ -760,20 +842,20 @@ def test_a_segment_with_no_barcodes_cannot_be_offset():
         fit_offset([], {}, fit_rate([], {}, nominal_rate_hz=1.0))
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_fit.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 3: Implement `fit.py`**
+- [x] **Step 3: Implement `fit.py`**
 
 Least-squares regression of device time against reference session time, matched by value. No DataJoint import, no file I/O — this module is pure numeric so it is testable without a database.
 
-- [ ] **Step 4: Run to verify they pass, then check against the real fixtures**
+- [x] **Step 4: Run to verify they pass, then check against the real fixtures**
 
 Add a test that runs the whole chain — extract, decode, fit — for every system in a generated session, and asserts each system's fitted drift matches the recipe's `drift_ppm` within 1 ppm. **This is the test that proves the phase works**; the unit tests above prove the arithmetic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -791,6 +873,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 7: Schema — Computed tables, new fields, and the Block comment
 
+> **Done 2026-08-22.** Converting `Segment` to `dj.Computed` reds two 1c-1 tests that insert
+> into it directly — DataJoint refuses direct inserts into an auto-populated table. They assert
+> what the table STORES rather than what a `make()` decides to store, which is precisely what
+> `allow_direct_insert=True` exists for, and they say so. Tests proving `make()` writes only
+> what it should are Task 8's, and they populate.
+
+
 **Files:**
 - Create: `wl_preproc/schema/timebase.py`, `tests/schema/test_timebase.py`
 - Modify: `wl_preproc/schema/core.py`, `wl_preproc/schema/coverage.py`
@@ -800,7 +889,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **This task changes declarations on tables that have no rows.** That is why it is free today and needs a migration after January — the same argument that forced the `<blob>` fix in parent spec §5.1.1.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/schema/test_timebase.py
@@ -842,12 +931,12 @@ def test_no_bare_longblob_in_the_new_schema_module():
     assert "longblob" not in timebase.TimingProvenance.definition
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/schema/test_timebase.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.schema.timebase'`
 
-- [ ] **Step 3: Declare the new tables**
+- [x] **Step 3: Declare the new tables**
 
 ```python
 # wl_preproc/schema/timebase.py
@@ -871,18 +960,18 @@ class SystemTimebase(dj.Computed):
 
 `time_source` exists because a camera system aligned by barcode is precise to one frame period (~2 ms at 500 Hz), while one aligned by an external trigger is exact. A downstream analysis that cares about 2 ms must be able to tell which it got.
 
-- [ ] **Step 4: Convert the three tables and correct the Block comment**
+- [x] **Step 4: Convert the three tables and correct the Block comment**
 
 `Block`'s comment currently reads *"boundaries are decoded from event codes and cross-validated against those rows"*, which contradicts closed open item 9 (wl-preproc **never authors** block rows). Correct it to say the boundaries are wl.works' assertion, recorded through `accept()`, and that the measured boundary is a separate quantity owned by 1c-5.
 
-- [ ] **Step 5: Run the schema tests and the guardrail sweep**
+- [x] **Step 5: Run the schema tests and the guardrail sweep**
 
 ```bash
 .venv/bin/python -m pytest tests/schema -q
 .venv/bin/python -m pytest tests/schema/test_guardrails.py -q
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -904,6 +993,30 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 8: Populate segments and timebases
 
+> **Done 2026-08-22, with one structural change and a third rejection reason.**
+>
+> `Segment.key_source` is `AcquisitionSystem`, **not** `SystemTimebase`, even though an offset
+> is fitted with that rate held fixed. Keying off the fit means a system with no fit — design
+> spec §10's "a system with zero decodable barcodes" — produces no rows at all, including no
+> `RejectedSegment` rows, so the record of *why* would be the one thing missing. Ordering is
+> the caller's job instead: `_computed_tables()` returns them in dependency order and `make()`
+> handles the fit's absence explicitly rather than assuming the order held.
+>
+> `unfitted_system` is a third reason. A system with exactly ONE decodable barcode has files
+> that are individually alignable and no rate to hold them against — one point is a position,
+> not a slope. Calling that `no_barcode` would misname the one file that did carry one.
+>
+> Step 5's test is named for three tables, not two: `Segment.make()` writes the negative half
+> of its own scan into `RejectedSegment`, because that table's key is `file_path` and a
+> barcode-keyed computation cannot produce it. Splitting them would decode every recording
+> twice to reach the same verdict.
+>
+> Measured while building the one-barcode fixture: **the decoder needs a trailing interval as
+> well as the leading idle.** Silencing a camera line at 1.3 s leaves the frame complete at
+> 1.05 s and still decodes nothing. Same fact the parent spec records as adding one
+> inter-frame interval to every bound, seen from the other end.
+
+
 **Files:**
 - Create: `wl_preproc/timebase/segments.py`, `tests/timebase/test_segments.py`
 - Modify: `wl_preproc/schema/core.py`, `wl_preproc/schema/timebase.py`
@@ -912,7 +1025,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `EXTRACTORS`, `fit_rate`, `fit_offset`.
 - Produces: `classify_segment(duration_s: float, n_barcodes: int) -> str` returning `"alignable"` or a rejection reason; `SystemTimebase.make()`, `Segment.make()`.
 
-- [ ] **Step 1: Write the failing tests for §4.1's rules**
+- [x] **Step 1: Write the failing tests for §4.1's rules**
 
 ```python
 # tests/timebase/test_segments.py
@@ -943,9 +1056,9 @@ def test_segment_classification_follows_the_alignment_table(duration_s, n_barcod
     assert classify_segment(duration_s, n_barcodes) == expected
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Write the populate tests, proving what is written and what is not**
+- [x] **Step 5: Write the populate tests, proving what is written and what is not**
 
 ```python
 # append to tests/timebase/test_segments.py
@@ -968,7 +1081,7 @@ def test_populate_writes_only_timebase_and_segment_rows(table_snapshot, deep_equ
     misled by that assumption five times."""
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -985,6 +1098,20 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 9: Block coverage
 
+> **Done 2026-08-22.** The test file is `tests/timebase/test_coverage_rules.py`, not
+> `test_coverage.py`: `tests/schema/` already has that basename, the test directories are not
+> packages, and pytest fails collection for the **whole suite** rather than for the one file.
+>
+> `BlockCoverage.key_source` is the cross product `Block * AcquisitionSystem`, not a join
+> through `Segment`. A system that recorded none of a block still needs a row saying `absent`,
+> and joining through segments would silently omit exactly the systems whose absence matters
+> most — a missing row is not the same statement as `absent`.
+>
+> `classify_coverage` refuses a zero-length block rather than answering. Both plausible answers
+> are wrong in opposite directions: `full` says nothing is missing, `absent` says nothing was
+> recorded. The row is malformed and wl.works authored it.
+
+
 **Files:**
 - Create: `wl_preproc/timebase/coverage.py`, `tests/timebase/test_coverage.py`
 - Modify: `wl_preproc/schema/coverage.py`
@@ -992,7 +1119,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `classify_coverage(block: tuple[float, float], segments: Sequence[tuple[float, float]]) -> tuple[str, float]` returning `(coverage, covered_s)`; `BlockCoverage.make()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_coverage.py
@@ -1031,13 +1158,13 @@ def test_covered_s_never_exceeds_the_block_duration():
     assert covered_s <= 10.0
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Add the populate test, and state where block boundaries come from**
+- [x] **Step 5: Add the populate test, and state where block boundaries come from**
 
 `BlockCoverage.make()` reads `Block.start_s`/`end_s`, which are **wl.works' assertion, not our measurement** (spec §9). Say so in the table's docstring where a reader will meet it — otherwise a reader assumes the boundaries were decoded.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -1058,6 +1185,32 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 10: Provenance, tier, daemon wiring, and the `~jobs` gap
 
+> **Done 2026-08-22, and it surfaced a defect the plan could not have anticipated: the daemon
+> did not converge.** `SystemTimebase.make()` returned without inserting for a system it could
+> not fit. **DataJoint counts that as a SUCCESS and leaves the key outstanding**, so every such
+> system was re-scanned and re-decoded on every pass, forever, reporting keys "populated" each
+> time. Measured: `success_count` stayed at 2 across four consecutive passes with no row ever
+> appearing.
+>
+> The fix is a `fit_status` column — `fitted` / `no_recording` / `unfittable` — so every
+> attempted system gets exactly one row, with the fit columns NULL rather than zero where no
+> fit was reached (a stored 0.0 ppm drift with a 0.0 µs residual is precisely what a flawless
+> fit looks like). That also dissolves Task 8's reason for keying `Segment` off
+> `AcquisitionSystem`: `SystemTimebase` now records the unfittable systems too, so `Segment`
+> keys off it again and DataJoint orders the two natively.
+>
+> One steady-state rework remains and is deliberate: a system whose files are ALL rejected
+> produces no `Segment` row, so its key stays outstanding. That is what lets a corrected or
+> re-transferred file be picked up with no manual step. `test_run_once_reports_what_it_did`
+> therefore asserts *steady state is stable*, not *steady state is empty*.
+>
+> `_PROJECT_SCHEMAS` was a hand-listed tuple of four and 1c-4 adds a fifth and sixth — so the
+> one schema that can own `~jobs` tables would have been the one never swept, and
+> `count_stale_jobs` would have returned a confident zero. It is a written list still, because
+> the outbound guardrail bans `importlib` inside `wl_preproc/`; the completeness claim is
+> enforced by a test that DOES discover, so a seventh module reds the suite.
+
+
 **Files:**
 - Modify: `wl_preproc/schema/timebase.py`, `wl_preproc/daemon.py`, `wl_preproc/cli/report.py`
 - Test: `tests/schema/test_timebase.py`, `tests/schema/test_daemon.py`
@@ -1065,7 +1218,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces: `TimingProvenance.make()`; `daemon._computed_tables()` returning the four tables in dependency order.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/schema/test_timebase.py
@@ -1104,13 +1257,13 @@ def test_count_stale_jobs_sees_the_jobs_tables_it_reads(...):
     misses a table is worse than no snapshot, because it reads as coverage."""
 ```
 
-- [ ] **Step 2–4: Run, implement, run.**
+- [x] **Step 2–4: Run, implement, run.**
 
-- [ ] **Step 5: Close the `~jobs` snapshot gap**
+- [x] **Step 5: Close the `~jobs` snapshot gap**
 
 Extend the report's write-detection snapshot to include the `~jobs` tables of every activated project schema, and add a test that a `populate` failure leaving a stale job row is both counted and visible.
 
-- [ ] **Step 6: Run the full suite, export schemas, commit**
+- [x] **Step 6: Run the full suite, export schemas, commit**
 
 ```bash
 .venv/bin/python -m pytest -q

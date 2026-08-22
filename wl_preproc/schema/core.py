@@ -9,6 +9,8 @@ and a segment can span blocks, so neither is derivable from the other.
 
 from __future__ import annotations
 
+import pathlib
+
 import datajoint as dj
 
 from wl_preproc.contracts.paths import SYSTEMS
@@ -36,9 +38,13 @@ class Montage(dj.Manual):
 @schema
 class Block(dj.Manual):
     definition = """
-    # One run of one task. Mirrors wl.works animal_session_block; boundaries are
-    # decoded from event codes and cross-validated against those rows.
-    # Key: (subject, session_datetime, block_id).
+    # One run of one task, mirroring wl.works animal_session_block.
+    # start_s/end_s are WL.WORKS' ASSERTION, recorded here through accept() --
+    # recording an assertion is not authoring it. Closed open item 9: block rows
+    # are authored by wl.works' session planner and wl-preproc never writes
+    # them; it cross-validates and quarantines on absence. The MEASURED boundary
+    # is a different quantity and belongs to whatever decodes event codes (1c-5),
+    # in its own Computed table. Key: (subject, session_datetime, block_id).
     -> pipeline.Session
     block_id : smallint
     ---
@@ -61,18 +67,146 @@ class AcquisitionSystem(dj.Manual):
 
 
 @schema
-class Segment(dj.Manual):
+class Segment(dj.Computed):
     definition = """
-    # One recording file's extent. Keyed on the first barcode value in the
-    # segment, which is globally unique by construction (32-bit counter at 1 Hz).
-    # Key: (subject, session_datetime, system, segment_barcode).
+    # One recording file's extent, in session time. Keyed on the first barcode
+    # value in the segment, which is globally unique by construction (32-bit
+    # counter at 1 Hz) -- so discovering a previously-missed file shifts no
+    # existing key. Key: (subject, session_datetime, system, segment_barcode).
+    #
+    # Computed, not Manual: it was declared Manual in 1c-1 when nothing computed
+    # it. Every attribute below is derived from the file and the sync box's log.
     -> AcquisitionSystem
     segment_barcode : int unsigned  # spec 4.1: 32-bit counter, full 0..2**32-1 range
     ---
-    start_s   : double
-    end_s     : double
-    n_samples : bigint
+    file_path    : varchar(255)  # relative to the system directory
+    start_s      : double
+    end_s        : double
+    n_samples    : bigint
+    first_sample : bigint  # this segment's first sample index in NATIVE time
+    offset_s     : double  # session_s = native_s / timebase.scale + offset_s
+    residual_us  : double  # RMS about this segment's own offset
+    n_barcodes   : int unsigned
     """
+
+    # first_sample, offset_s and residual_us are here because spec 4.5 requires
+    # that "fit parameters, residuals, and native stream timestamps [are]
+    # retained so every transform is reversible and auditable". On the row, that
+    # is a property of the data; in a document, it is a promise. The rate half
+    # of the transform is on SystemTimebase, once per session rather than
+    # copied onto every segment -- a per-segment copy is a second definition
+    # free to drift from the one the fit produced.
+
+    @property
+    def key_source(self):
+        """Systems whose clock fit has been ATTEMPTED and which had recordings.
+
+        `SystemTimebase` rather than `AcquisitionSystem`, and it is safe to key
+        off it precisely because that table records an attempt for every system
+        -- `fit_status` of `unfittable` as readily as `fitted`. So a system with
+        no fit still reaches here and still records why each of its files could
+        not be used, which was the whole objection to keying off it.
+
+        `no_recording` is excluded because there is nothing to scan: including
+        it would leave a key that can never insert a row, and DataJoint
+        re-attempts such a key on every pass forever (measured -- see
+        `SystemTimebase`'s `_FIT_STATUS_ENUM` comment).
+
+        > A system whose files are ALL rejected is still re-scanned each pass,
+        > for the same reason: no `Segment` row appears, so the key stays
+        > outstanding. That one is deliberate. It is what lets a corrected or
+        > re-transferred file be picked up with no manual step, which is the
+        > property closed open item 9 requires of anything waiting on data that
+        > lands late.
+
+        Imported locally because `timebase` imports this module.
+        """
+        from wl_preproc.schema import timebase
+
+        return timebase.SystemTimebase & "fit_status != 'no_recording'"
+
+    def make(self, key: dict) -> None:
+        """One row per alignable recording, and a RejectedSegment for the rest.
+
+        Both halves are written here, from one scan. Splitting them into two
+        populates would extract and decode every recording twice -- the largest
+        files in the pipeline -- to reach the same verdict, and would let the
+        two disagree about which files exist.
+
+        A rejected file structurally CANNOT become a Segment: this table is
+        keyed on `segment_barcode`, "the first barcode value in the segment",
+        and a file yielding zero barcodes has no such value. An implementation
+        that wants to invent a placeholder has found the rule, not a limitation.
+        """
+        from wl_preproc.schema import ingest, timebase
+        from wl_preproc.timebase import segments
+        from wl_preproc.timebase.fit import fit_offset
+
+        session_key = {k: key[k] for k in pipeline.Session.primary_key}
+        key = {k: key[k] for k in AcquisitionSystem.primary_key}
+        session_dir = pathlib.Path(
+            (ingest.Ingestion & session_key).fetch1("session_dir")
+        )
+        system_dir = session_dir / key["system"]
+        scans = segments.scan_system(key["system"], system_dir)
+        if not scans:
+            return
+
+        fit = (timebase.SystemTimebase & key).fetch1()
+        # A row exists for every attempted system, fitted or not, so the check
+        # is on the status rather than on the row's presence. An unfitted
+        # system's files are each unusable for a reason worth recording.
+        rate = (
+            segments.rate_fit_from_row(fit) if fit["fit_status"] == "fitted" else None
+        )
+        reference = segments.session_reference(session_dir)
+
+        accepted, rejected = [], []
+        for scan in scans:
+            # Relative to the system directory, matching DoneMarker's own
+            # convention, so the two name the same file the same way.
+            file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
+            if scan.verdict != segments.ALIGNABLE:
+                rejected.append({**key, "file_path": file_path, "reason": scan.verdict})
+                continue
+            if rate is None:
+                rejected.append(
+                    {**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM}
+                )
+                continue
+            offset = fit_offset(scan.barcodes, reference, rate)
+            first_barcode_us = min(barcode.start_us for barcode in scan.barcodes)
+            accepted.append(
+                {
+                    **key,
+                    "segment_barcode": scan.barcodes[0].value,
+                    "file_path": file_path,
+                    # Native extent, converted with this segment's own offset.
+                    "start_s": offset.offset_s,
+                    "end_s": scan.duration_s / rate.scale + offset.offset_s,
+                    "n_samples": scan.stream.n_samples,
+                    # The NATIVE sample index of this segment's first
+                    # barcode -- the instant the offset was anchored to.
+                    # Spec 4.5 requires native stream timestamps be retained,
+                    # and this is the auditable one: it says which sample the
+                    # row's own offset was computed from, so the transform can
+                    # be checked against the sync box's log rather than only
+                    # against itself.
+                    "first_sample": round(first_barcode_us * 1e-6 * scan.stream.fs_hz),
+                    "offset_s": offset.offset_s,
+                    "residual_us": offset.residual_us,
+                    "n_barcodes": offset.n_barcodes,
+                }
+            )
+
+        self.insert(accepted)
+        # RejectedSegment is Manual and is written from here rather than by its
+        # own populate, because its key -- file_path -- is the one thing a
+        # computation over a barcode-keyed table cannot produce. It is the
+        # negative half of this same scan, and 1c-1's comment says why it
+        # exists at all: recorded rather than dropped, so "why is this session
+        # short" has an answer.
+        RejectedSegment.insert(rejected, skip_duplicates=True)
 
 
 @schema

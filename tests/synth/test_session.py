@@ -46,8 +46,13 @@ def test_truncated_file_fault_shortens_the_binary(tmp_path):
     broken.mkdir()
     generate_session(clean, CI_RECIPE)
     generate_session(broken, CI_RECIPE.model_copy(update={"faults": (Fault.TRUNCATED_FILE,)}))
-    good = next((clean / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
-    bad = next((broken / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
+    # `*.ap.bin`, not `*.bin`: a SpikeGLX run emits an imec binary and an NI
+    # one, and the fault truncates the imec binary that `write_spikeglx`
+    # returns. A bare `*.bin` glob picks whichever the filesystem lists first,
+    # which is how this test started comparing the untruncated NI stream
+    # against itself.
+    good = next((clean / CI_RECIPE.session_id / "spikeglx").glob("*.ap.bin"))
+    bad = next((broken / CI_RECIPE.session_id / "spikeglx").glob("*.ap.bin"))
     assert bad.stat().st_size < good.stat().st_size
 
 

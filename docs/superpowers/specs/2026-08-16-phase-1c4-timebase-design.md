@@ -354,3 +354,19 @@ without its consumer's agreement is a broken contract, not an updated one.
 
 Until it lands, `bcam` alignment is specified and untestable against a real sidecar — the synthetic
 generator emits the proposed shape, so the code is exercised, and a real file settles it.
+
+> **Status 2026-08-22 (Task 3).** Both fields are now **expressible and exported**, and both are
+> **optional**: `digital_line` (one 0/1 sample per frame) and `frame_rate_hz`. A sidecar written
+> before the amendment lands still validates unchanged and reads `None` for both, which is what
+> keeps this a proposal rather than a unilateral change — `docs/schemas/behavior_camera_sidecar.json`
+> adds them to `properties` and to neither `required` nor `additionalProperties`.
+>
+> **The frame-rate field is not optional to the pipeline, only to the contract.** `extract_bcam`
+> refuses a sidecar that omits it rather than falling back on `synth.CAMERA_FPS`: that constant is
+> what the *fixture* runs at, and a consumer reading one while meaning the other is wrong by exactly
+> the ratio nobody checks. Refusing is what makes "specified and unavailable" true instead of
+> "silently wrong", and it is why a fallback was not written — an unexercised fallback path is the
+> defect this phase's own checkpoint records three times.
+>
+> **What is still owed to the FLIR project:** agreement. Neither field has been proposed to them in
+> writing yet.

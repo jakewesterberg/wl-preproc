@@ -560,7 +560,21 @@ def test_gather_readings_does_not_write(scanned, table_snapshot, deep_equal):
     from wl_preproc.cli.report import gather_readings
     from wl_preproc.schema import core, ingest, pipeline
 
-    watched = [ingest.Ingestion, ingest.Quarantine, pipeline.Session, core.AcquisitionSystem]
+    from wl_preproc.daemon import job_tables
+
+    # The `~jobs` tables are in the watched set from Phase 1c-4. `gather_readings`
+    # calls `count_stale_jobs`, which reads them -- and the 1c-2 handoff records
+    # that this snapshot did not cover them. That was harmless only while no
+    # Computed table existed to create one; 1c-4 declares the first two. A
+    # snapshot that silently misses a table is worse than no snapshot, because
+    # it reads as coverage.
+    watched = [
+        ingest.Ingestion,
+        ingest.Quarantine,
+        pipeline.Session,
+        core.AcquisitionSystem,
+        *job_tables(),
+    ]
     before = [table_snapshot(t) for t in watched]
     gather_readings(root, prefix=prefix)
     after = [table_snapshot(t) for t in watched]
@@ -608,12 +622,18 @@ def test_the_report_opens_no_write_transaction(scanned, table_snapshot, deep_equ
     root, prefix = scanned("rpttxn1")
     core.activate(prefix=prefix)
 
+    from wl_preproc.daemon import job_tables
+
     tables = (
         ingest.Ingestion,
         ingest.Quarantine,
         pipeline.Session,
         pipeline.Subject,
         core.AcquisitionSystem,
+        # See `test_gather_readings_does_not_write` above: `build_report` reaches
+        # `count_stale_jobs`, which reads these, and 1c-4 is the phase that gives
+        # this project a Computed table for them to exist for at all.
+        *job_tables(),
     )
     before = [table_snapshot(table) for table in tables]
 
@@ -693,3 +713,69 @@ def test_a_deferred_session_is_named_as_such_rather_than_invisible(
     assert "deferred" in body.lower()
     assert "contention" in body.lower()
     assert "not lost" in body.lower()
+
+
+def test_a_stale_reservation_is_both_counted_and_visible_to_the_snapshot(
+    scanned, table_snapshot, dj_conn
+):
+    """The `~jobs` gap 1c-2 recorded, closed and then checked from both sides.
+
+    A failed populate leaves a reservation behind. It must be COUNTED by
+    `count_stale_jobs` — which the report prints — and it must be VISIBLE in
+    `daemon.job_tables()`, which is what the two write-detection tests above
+    snapshot. Counted but invisible is the exact shape of the gap: the number
+    on the report would be right while the snapshot proving the report wrote
+    nothing silently skipped the only tables it could have written to.
+    """
+    import datajoint as dj
+
+    from wl_preproc import daemon
+    from wl_preproc.cli.report import gather_readings
+    from wl_preproc.schema import timebase
+
+    root, prefix = scanned("rptjobs")
+    timebase.activate(prefix=prefix)
+
+    @timebase.schema
+    class ReportJobsProbeSource(dj.Manual):
+        definition = """
+        # throwaway source for the report's ~jobs visibility probe
+        n : int
+        """
+
+    @timebase.schema
+    class ReportJobsProbeDerived(dj.Computed):
+        definition = """
+        # throwaway computed table for the report's ~jobs visibility probe
+        -> ReportJobsProbeSource
+        ---
+        doubled : int
+        """
+
+        def make(self, key):
+            self.insert1({**key, "doubled": key["n"] * 2})
+
+    try:
+        ReportJobsProbeSource.insert1({"n": 1})
+        jobs = ReportJobsProbeDerived.jobs
+        jobs.refresh()
+        assert jobs.reserve({"n": 1})
+        # Backdate past the 24 h default, so the REAL threshold classifies it.
+        # A fresh reservation is correctly not stale — measured: without this
+        # the count is 0 and the test proves only that nothing crashed.
+        dj_conn.query(
+            f"UPDATE {jobs.full_table_name} "
+            "SET reserved_time = reserved_time - INTERVAL 48 HOUR"
+        )
+
+        readings = gather_readings(root, prefix=prefix)
+        assert readings.stale_jobs is not None
+        assert readings.stale_jobs >= 1
+
+        snapshots = [table_snapshot(table) for table in daemon.job_tables()]
+        assert any(snapshot for snapshot in snapshots), (
+            "the reservation was counted but is invisible to the snapshot"
+        )
+    finally:
+        ReportJobsProbeDerived.drop_quick()
+        ReportJobsProbeSource.drop_quick()

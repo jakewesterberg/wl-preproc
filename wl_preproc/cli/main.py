@@ -86,7 +86,15 @@ def main(argv: list[str] | None = None) -> int:
     synth_sub = synth.add_subparsers(dest="action", required=True)
     generate = synth_sub.add_parser("generate", help="write a synthetic session")
     generate.add_argument("--out", required=True, type=Path)
-    generate.add_argument("--profile", choices=["ci", "benchmark", "stim"], default="ci")
+    # Choices come from RECIPES, not a literal list. They were two copies until
+    # Phase 1c-4, and they drifted the moment a fourth recipe was added: "eye"
+    # existed, `generate_session` handled it, and the CLI rejected it as an
+    # invalid choice. Importing here costs an import of `recipe` at parser
+    # construction, which is pydantic but not NumPy — the lazy import below is
+    # what keeps the generator's real weight off `wlpp schemas export`.
+    from wl_preproc.synth.recipe import RECIPES
+
+    generate.add_argument("--profile", choices=sorted(RECIPES), default="ci")
 
     subparsers.add_parser("doctor", help="check this host's readiness")
 
@@ -152,11 +160,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "synth" and args.action == "generate":
         # Imported lazily: the generator pulls in NumPy, and `wlpp schemas
         # export` has no reason to pay for it.
-        from wl_preproc.synth.recipe import BENCHMARK_RECIPE, CI_RECIPE, STIM_RECIPE
+        from wl_preproc.synth.recipe import RECIPES
         from wl_preproc.synth.session import generate_session
 
-        recipes = {"ci": CI_RECIPE, "benchmark": BENCHMARK_RECIPE, "stim": STIM_RECIPE}
-        recipe = recipes[args.profile]
+        recipe = RECIPES[args.profile]
         args.out.mkdir(parents=True, exist_ok=True)
         truth = generate_session(args.out, recipe)
         print(f"{args.out / recipe.session_id}: {len(truth.trials)} trials")

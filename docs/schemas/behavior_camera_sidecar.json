@@ -37,6 +37,21 @@
   },
   "additionalProperties": false,
   "properties": {
+    "digital_line": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Digital Line"
+    },
     "dropped_frame_ids": {
       "items": {
         "type": "integer"
@@ -47,6 +62,18 @@
     "frame_count": {
       "title": "Frame Count",
       "type": "integer"
+    },
+    "frame_rate_hz": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Frame Rate Hz"
     },
     "schema_version": {
       "title": "Schema Version",
