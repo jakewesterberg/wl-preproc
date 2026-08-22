@@ -105,13 +105,19 @@ per system on every run, currently 100% on clean fixtures for all five including
 
 ## What is next
 
-1. **Merge `feat/phase-1c4-timebase`**, which completes Phase 1c.
+1. **Unblock Phase 2: resolve `element-array-ephys` #230 here, not upstream.** §5.1.1's
+   precondition forbids activating it until #230 is fixed *"upstream or here"*, and upstream is
+   not moving — **open, zero comments, no PR, last touched 2026-08-10**, before this file first
+   recorded it as unfixed. Free now (definition-only, no rows anywhere); a migration once Phase 2
+   writes one waveform. **The brief is
+   `docs/handoffs/2026-08-22-next-session-element-array-ephys.md`.**
 2. **Phase 1c-5 — event decoding.** Named by 1c-4 rather than planned: `TimingProvenance.tier`
    holds `'pending'` for every session, and `pending_inputs` names the three things it is waiting
    for — `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
    unreachable until they exist. The **measured** block boundary (as opposed to wl.works'
    asserted one) is also 1c-5's, in its own Computed table.
-3. **Phase 2 onward** — see spec §12.
+3. **Phase 2 onward** — see spec §12. Its window is Oct–Nov 2026; Phase 1's was Sep–Oct and
+   finished 2026-08-22, about six weeks early. That lead is what item 1 is for.
 
 **Not software, and on a clock: order the NI cards.** §12. **Models corrected 2026-08-16** to
 **PXIe-6353** (recording) and **PCIe-6343** (task PC) — both verified to carry the 32 hardware-timed
