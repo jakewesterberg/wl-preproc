@@ -108,7 +108,7 @@ def count_stale_jobs(...)               # reads DataJoint's internal ~jobs table
   def extract_syncbox(path: Path) -> BitStream
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/timebase/test_extract.py
@@ -148,12 +148,12 @@ def test_bitstream_accepts_the_floor_exactly():
     assert stream.fs_hz == 400.0
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.timebase'`
 
-- [ ] **Step 3: Implement `BitStream` and the floor**
+- [x] **Step 3: Implement `BitStream` and the floor**
 
 ```python
 # wl_preproc/timebase/extract.py
@@ -212,12 +212,12 @@ class BitStream:
             )
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 5: Write the failing syncbox test**
+- [x] **Step 5: Write the failing syncbox test**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -250,12 +250,12 @@ def test_syncbox_extraction_recovers_every_ground_truth_barcode(tmp_path):
     assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -k syncbox -v`
 Expected: FAIL — `ImportError: cannot import name 'extract_syncbox'`
 
-- [ ] **Step 7: Implement `extract_syncbox`**
+- [x] **Step 7: Implement `extract_syncbox`**
 
 Read the log with `wl_sync.log`, and turn its recorded barcode entries into the same `(timestamp_us, level)` edge form every other system produces, so the shared path downstream sees one shape. Use `wl_sync.barcode.encode(value)` to render each barcode's edges at its logged time — the codec owns that rendering, and reproducing it here would be the reimplementation the constraints forbid.
 
@@ -295,12 +295,12 @@ def extract_syncbox(path: Path) -> BitStream:
 
 Create `wl_preproc/timebase/_syncbox_log.py` with `read_barcode_entries(path: Path) -> list[tuple[int, int]]` returning `(value, timestamp_us)`, parsing the log format `wl_sync.log` defines. Keep it in its own module so the log format's shape has exactly one reader.
 
-- [ ] **Step 8: Run the full suite**
+- [x] **Step 8: Run the full suite**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: 593 + 4 passing, **0 warnings**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add wl_preproc/timebase tests/timebase
@@ -317,6 +317,25 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Task 2: SpikeGLX and RHS extraction
 
+> **Done 2026-08-22, with one correction to the plan.** Step 1's test globbed
+> `*.nidq.bin` and matched no file: the Phase 1a generator emitted only an imec
+> AP pair and drove the barcode onto the **imec SY channel**, contradicting
+> §4.5 ("one NI digital line... the imec SMA stays free") and §12's reason for
+> ordering a 32-line card. The fixture was corrected rather than the spec —
+> `write_spikeglx` now also emits a `.nidq.bin`/`.nidq.meta` pair carrying the
+> barcode, SY is emitted but undriven, and `read_spikeglx(stream_id="nidq")`
+> is the acceptance test for it, as `read_intan` was for `info.rhs` in 1b2.
+> Recorded as a trap in `docs/CHECKPOINT.md`.
+>
+> Also beyond the plan's text, because the plan's versions could not fail:
+> `extract_rhs` reads its rate from `info.rhs` and `extract_spikeglx` from
+> `.nidq.meta`, each proven by a fixture declaring a rate that is **not** 30 kHz
+> — every fixture in the repo is 30 kHz, so a hardcoded rate passes any test
+> written against the emitted one. Step 5's mutation was run for all three:
+> bit+1, a hardcoded rate, and a wrong reshape stride each fail exactly the
+> tests that should catch them.
+
+
 **Files:**
 - Modify: `wl_preproc/timebase/extract.py`
 - Test: `tests/timebase/test_extract.py`
@@ -329,7 +348,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   def extract_rhs(session_dir: Path) -> BitStream
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/timebase/test_extract.py
@@ -372,12 +391,12 @@ def test_rhs_extraction_recovers_ground_truth_barcodes(tmp_path):
     assert expected - recovered == set()
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -k "spikeglx or rhs" -v`
 Expected: FAIL — `ImportError: cannot import name 'extract_spikeglx'`
 
-- [ ] **Step 3: Implement both extractors**
+- [x] **Step 3: Implement both extractors**
 
 Both read a digital word stream, select the barcode's bit, and hand the resulting 0/1 trace to `edges_from_samples`. Read the generator's own emitters (`wl_preproc/synth/spikeglx.py`, `wl_preproc/synth/rhs.py`) to learn which bit each writes and at what rate — **do not assume; the emitters are the specification of the fixture.**
 
@@ -415,18 +434,18 @@ def extract_rhs(session_dir: Path) -> BitStream:
     ...
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Prove the tests are not vacuous**
+- [x] **Step 5: Prove the tests are not vacuous**
 
 Change `_edges_from_bit`'s `bit` to `bit + 1` in one extractor. Both that system's tests must fail. Restore.
 
 Run: `.venv/bin/python -m pytest tests/timebase/test_extract.py -v`
 
-- [ ] **Step 6: Run the full suite and commit**
+- [x] **Step 6: Run the full suite and commit**
 
 ```bash
 .venv/bin/python -m pytest -q

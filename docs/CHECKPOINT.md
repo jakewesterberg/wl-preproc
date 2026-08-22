@@ -1,7 +1,8 @@
 # Where this build actually is
 
-**Last updated 2026-08-16**, at `wl-preproc` commit `0ac4753`. Check `git log --oneline -1`
-against that; if it has moved, this file is stale and the spec wins.
+**Last updated 2026-08-22**, mid **Phase 1c-4** on branch `feat/phase-1c4-timebase` (last
+merge to `main` was `0ac4753`). Check `git log --oneline -1` against that; if it has moved,
+this file is stale and the spec wins.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
 so that January validates rather than discovers.
@@ -13,7 +14,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **593 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is the only piece of 1c left.** |
+| **wl-preproc** | private, CI green, **606 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is in progress on its own branch**: per-system barcode extraction is done for syncbox, SpikeGLX and RHS; fitting, the Computed tables and coverage are not. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -37,8 +38,10 @@ FLIR project, and `job_request.json` / `health_response.json` for wl.works, whos
 run against a *fake* wl-preproc.
 
 **wl-preproc Phase 1a** — `wl_preproc/synth/`. `wlpp synth generate --profile ci` writes a
-complete 4.5 MB session directory that SpikeInterface opens; `--profile benchmark` writes a
-realistic 384-channel hour for the P6000 benchmark.
+complete session directory that SpikeInterface opens; `--profile benchmark` writes a
+realistic 384-channel hour for the P6000 benchmark. **A SpikeGLX run emits two streams** — the
+imec AP pair and an NI (`nidq`) pair — and **the barcode is on the NI digital line**, per §4.5,
+with the imec SY channel emitted but undriven. That was corrected in 1c-4; see the trap below.
 
 **wl-preproc Phase 1b** — `wl_preproc/synth/{stim,rhs}.py`. `wlpp synth generate --profile
 stim` writes a **standalone-Intan** session: no NI, no SpikeGLX, stim planted as ground truth
@@ -182,6 +185,16 @@ defensible call, but it is a reversal rather than a gap.
   emitted fixtures cannot in fact be opened by `read_intan`. Every task passed its own review,
   because the claim lived in the Architecture paragraph and in no task's diff. **When a plan
   argues from a capability, check that some task actually exercises it.**
+- **A fixture no reader has consumed is a hypothesis, exactly like a spec number no code has
+  executed.** §4.5 says the barcode reaches SpikeGLX on **one NI digital line**, leaving the imec
+  SMA free — and §12 orders the PXIe-6353 for the 32 Port 0 lines that requires. Phase 1a's
+  generator put the barcode on the **imec SY channel** instead, with a passing test whose
+  docstring asserted that layout was how the pipeline aligns. It survived from 1a to 1c-4
+  because **nothing extracted a SpikeGLX barcode in between**: the fixture was written, read by
+  `read_spikeglx` for *format* validity, and never once consumed for the thing it existed to
+  carry. 1c-4's own plan then wrote a test globbing `*.nidq.bin` — correct against the spec,
+  matching no file on disk. **A fixture is only pinned by a consumer that needs its content,
+  and "the reader opens it" is not that consumer.**
 - **neo cannot parse a header out of `io.BytesIO`.** `read_variable_header` reads every
   non-QString field with `np.fromfile`, which needs a real OS file descriptor, so a BytesIO
   raises `UnsupportedOperation: fileno` on the very first field — before a byte of header

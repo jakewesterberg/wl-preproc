@@ -170,7 +170,21 @@ files:
   - path: 2027-03-14_01_imec0.ap.meta
     bytes: 4211
     blake3: 04bb7e…
+  - path: 2027-03-14_01.nidq.bin
+    bytes: 216042000
+    blake3: c17d90…
+  - path: 2027-03-14_01.nidq.meta
+    bytes: 312
+    blake3: 5ae338…
 ```
+
+> **Amended 2026-08-22 (Phase 1c-4).** The NI pair was added to this example
+> when the generator gained it. One SpikeGLX run stops `imec0` and `nidq`
+> together, so both streams are one system's transfer and one `DONE` covers
+> them — and §4.5's barcode arrives on the NI digital line, so a marker listing
+> only the imec pair declares a complete transfer of the stream nothing aligns
+> on. The listing is illustrative either way: the marker is written by
+> `rglob`, not from a fixed list.
 
 Paths are relative to the system directory. **Existence keeps meaning exactly what it meant**,
 so wl.works' `nas_artifact_observation.complete` is unaffected — it reads presence, and
