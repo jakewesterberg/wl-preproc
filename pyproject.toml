@@ -105,6 +105,14 @@ include = ["wl_preproc*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The test suite imports shared helpers across test files
+# (tests.schema.test_guardrails), which requires the repository root on sys.path.
+# python -m pytest adds the working directory to sys.path; the bare pytest
+# console script does not. CI uses both (line 50: bare pytest, line 65: python -m
+# pytest), so this setting ensures both work correctly. This is pytest's
+# supported configuration for this case, and preferable to adding __init__.py
+# files to tests/ (which this repository deliberately does not have).
+pythonpath = ["."]
 # tests/conftest.py is the root conftest, so it imports datajoint at
 # collection time for every test in the suite, not only the schema tests.
 # datajoint itself raises two warnings on import/first-config-read that this
