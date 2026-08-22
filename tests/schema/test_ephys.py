@@ -264,3 +264,23 @@ def test_an_empty_intersection_is_refused(ephys_activated):
 
     with pytest.raises(ephys.EmptyElectrodeIntersection):
         ephys.intersect_electrode_configs([a, b])
+
+
+def test_configs_spanning_two_probe_types_are_refused(ephys_activated):
+    """Electrode numbers name different physical sites on different probe
+    models, so an intersection across models is meaningless rather than
+    merely unusual -- electrode 7 of an NP1000 and electrode 7 of an NP2000
+    are not the same site, and a set intersection would silently pretend
+    they were.
+
+    Untested until fix round 1: the check existed in the implementation from
+    the start, but the task's own test block omitted the case, so the branch
+    was asserted only by inspection.
+    """
+    ephys.register_probe_type("NP1000")
+    ephys.register_probe_type("NP2000")
+    a = ephys.register_electrode_config("NP1000", [1, 2, 3])
+    b = ephys.register_electrode_config("NP2000", [2, 3, 4])
+
+    with pytest.raises(ephys.EmptyElectrodeIntersection, match="probe type"):
+        ephys.intersect_electrode_configs([a, b])

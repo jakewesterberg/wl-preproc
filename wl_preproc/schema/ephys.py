@@ -415,9 +415,11 @@ def intersect_electrode_configs(hashes: list[str]) -> str:
     )
     if len(probe_types) != 1:
         raise EmptyElectrodeIntersection(
-            f"configurations span more than one probe type: {sorted(probe_types)} -- "
-            "an intersection across probe models is not meaningful, because "
-            "electrode numbers name different physical sites on each"
+            f"expected exactly one probe type across the configurations named, "
+            f"got {sorted(probe_types)} -- an intersection across probe models is "
+            f"not meaningful, because electrode numbers name different physical "
+            f"sites on each. An empty list here means a named hash is not in "
+            f"ElectrodeConfig at all."
         )
     part_number = str(probe_types.pop())
 
