@@ -289,6 +289,52 @@ class QualityMetrics(dj.Manual):
         """
 
 
+@schema
+class LFP(dj.Manual):
+    definition = """
+    # Provenance for one LFP product. Key: (subject, session_datetime,
+    # montage_id, activation_id, insertion_number, paramset_type,
+    # paramset_idx).
+    #
+    # NO SAMPLE ARRAY, deliberately. Parent spec section 8.4 stores every
+    # continuous channel at 500 Hz -- 384 KB/s per probe, so ~5.5 GB per 2 h
+    # dual-probe session -- and parent spec section 3.3's storage tiers put the
+    # NWB on the NAS with no database tier at all. Declaring `lfp : <blob>`
+    # here would satisfy the blob rule and still be wrong. Design spec sections
+    # 3.4 and 6.
+    -> request.Activation
+    -> ProbeInsertion
+    -> paramset.ParamSet
+    ---
+    output_rate_hz : float  # 500 is the lab default (parent spec section 8.4)
+    artifact_host  : varchar(64)
+    artifact_share : varchar(64)
+    artifact_path  : varchar(255)
+    """
+
+
+@schema
+class MUA(dj.Manual):
+    definition = """
+    # Provenance for one MUA-envelope product. Same shape and same reasoning as
+    # LFP above -- no sample array. Key: (subject, session_datetime,
+    # montage_id, activation_id, insertion_number, paramset_type,
+    # paramset_idx).
+    #
+    # The envelope is computed from the 500-5000 Hz band BEFORE any decimation
+    # (parent spec section 8.4), and its low-pass must sit at <=200 Hz or the
+    # envelope itself aliases at a 500 Hz output rate.
+    -> request.Activation
+    -> ProbeInsertion
+    -> paramset.ParamSet
+    ---
+    output_rate_hz : float
+    artifact_host  : varchar(64)
+    artifact_share : varchar(64)
+    artifact_path  : varchar(255)
+    """
+
+
 def register_probe_type(part_number: str) -> None:
     """Declare `part_number` and every electrode of it. Idempotent."""
     ProbeType.insert1({"probe_type": part_number}, skip_duplicates=True)

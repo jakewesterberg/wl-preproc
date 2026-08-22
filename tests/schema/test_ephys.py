@@ -111,3 +111,31 @@ def test_no_ephys_table_declares_a_bare_longblob(ephys_activated):
                 if "longblob" in declared:
                     offenders.append(f"{name}.{attr}")
     assert not offenders, f"bare longblob declared: {offenders}"
+
+
+def test_continuous_tables_hold_no_sample_array(ephys_activated):
+    """Design spec section 3.4 and section 6. Parent spec section 8.4 stores
+    every continuous channel at 500 Hz: 384 ch x 500 Hz x int16 is 384 KB/s
+    per probe, so a 2 h dual-probe session is ~5.5 GB of LFP and ~5.5 GB of
+    MUA. Parent spec section 3.3 puts the NWB on the NAS and lists no database
+    tier at all -- so these rows carry provenance and an artifact pointer,
+    never samples.
+
+    Asserted rather than trusted to review: a later contributor adding an
+    `lfp : <blob>` here would be declaring it correctly by the blob rule and
+    still be wrong."""
+    for table in (ephys.LFP, ephys.MUA):
+        blobs = [
+            a for a in table.heading.names
+            if getattr(table.heading[a], "is_blob", False)
+        ]
+        assert not blobs, f"{table.__name__} declares sample data: {blobs}"
+
+
+def test_continuous_tables_point_at_an_artifact_triple(ephys_activated):
+    """Parent spec section 11.2: artifact locations are a triple, never a
+    string -- host + share + relative path -- so an agent can open the file
+    rather than a human reading a path out of a field."""
+    for table in (ephys.LFP, ephys.MUA):
+        names = set(table.heading.names)
+        assert {"artifact_host", "artifact_share", "artifact_path"} <= names
