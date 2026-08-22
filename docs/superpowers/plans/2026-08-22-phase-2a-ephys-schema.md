@@ -973,14 +973,16 @@ git commit -m "feat(ephys): LFP and MUA as provenance rows, not sample stores"
 
 **Interfaces:**
 - Consumes: every table from Tasks 2–5.
-- Produces: `_synthetic_value(name: str, declared: str)` (one definition, used by both key and secondary builders); `_build_parents(table) -> None`; `_BLOB_ATTRS_WITH_UNBUILT_PARENTS` becomes an empty frozenset.
+- Produces: `_synthetic_value(name: str, declared: str)` (one definition, used by both key and secondary builders); `_fk_overrides(table) -> dict`; `_synthetic_row(table, exclude=None) -> dict`; `_build_parents(table) -> None`; `_BLOB_ATTRS_WITH_UNBUILT_PARENTS` becomes an empty frozenset.
 
 **Why this task exists:** `test_every_blob_attribute_round_trips_an_array` currently skips any blob-bearing table with a foreign key, via an allow-list. Every table in Tasks 2–5 has foreign keys, so without this the new blob attributes are declared but never round-tripped — precisely the half the Phase 2 precondition demanded. `tests/schema/test_guardrails.py:429` already anticipates this work and records that it retires the `Ingestion` entry as a side effect.
 
-**Two facts, checked against the live API rather than assumed:**
+**Three facts, checked against the live API and DataJoint's source rather than assumed. Each one breaks the build if ignored:**
 
-1. `Table.parents(primary=None, as_objects=False, foreign_key_info=False)` returns **a list of table NAMES** by default. Use `as_objects=True` to get table objects; do not try to unpack tuples from it.
-2. `_synthetic_key` today handles only `char` and `int`. The chain runs through `pipeline.Session`, keyed on a **datetime**, and `core.AcquisitionSystem`, keyed on an **enum** — both raise `AssertionError: unhandled key type`. `_synthetic_required_secondary` already handles enum, datetime, date and float. **The two must agree**: a `subject` value built as a key and the same attribute built as a secondary have to match, or the foreign key will not resolve.
+1. `Table.parents(primary=None, as_objects=False, foreign_key_info=False)` returns **a list of table NAMES** by default. Use `as_objects=True` for objects; do not unpack tuples from the default form.
+2. `_synthetic_key` today handles only `char` and `int`. The chain runs through `pipeline.Session`, keyed on a **datetime**, and `core.AcquisitionSystem`, keyed on an **enum** — both raise `AssertionError: unhandled key type`. `_synthetic_required_secondary` already handles enum, datetime, date and float. **The two must agree**, because `_build_parents` writes an ancestor row with one and a descendant row with the other.
+3. **Use ALL parents, not `primary=True`, and honour `attr_map`.** `primary=True` returns only foreign keys composed of primary-key attributes — which makes every below-divider foreign key in this schema invisible to it (`ProbeInsertion -> Probe`, `SegmentConfig -> ElectrodeConfig`, `Clustering -> ElectrodeConfig`, `Unit -> ElectrodeConfig.Electrode`, `Unit -> ClusterQualityLabel`) while the database still enforces them.
+   And determinism-by-attribute-name breaks on a **renamed** foreign key: `request.Activation` declares `-> Request.proj(request_key='idempotency_key')`, so the child column is `request_key` while the row it must match is keyed `idempotency_key`. From DataJoint's source, `attr_map[column_name] = referenced_column_name` — child to parent — and its own rename idiom is `any(k != v for k, v in attr_map.items())`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1090,6 +1092,47 @@ Replace `_BLOB_ATTRS_WITH_UNBUILT_PARENTS`'s contents, keeping the explanatory c
 _BLOB_ATTRS_WITH_UNBUILT_PARENTS = frozenset()
 
 
+def _fk_overrides(table) -> dict:
+    """Values for foreign-key columns whose name differs from the parent's.
+
+    `_synthetic_value` is deterministic in the attribute NAME, which is what
+    lets an inherited `subject` match the ancestor row with nothing threaded
+    through. A RENAMED foreign key breaks that: `request.Activation` declares
+    `-> Request.proj(request_key='idempotency_key')`, so the child column is
+    `request_key` while the row it must match is keyed `idempotency_key`.
+    Naming alone would build "blobprobe-request_key" against a row holding
+    "blobprobe-idempotency_key", and the insert would fail on a foreign key
+    that looks, from the error, like a missing parent.
+
+    `attr_map` is child -> parent, per DataJoint's own
+    `attr_map[column_name] = referenced_column_name`.
+    """
+    overrides = {}
+    for parent, props in table.parents(as_objects=True, foreign_key_info=True):
+        for child_attr, parent_attr in props["attr_map"].items():
+            if child_attr == parent_attr:
+                continue
+            overrides[child_attr] = _synthetic_value(
+                parent_attr, parent.heading[parent_attr].type
+            )
+    return overrides
+
+
+def _synthetic_row(table, exclude: str | None = None) -> dict:
+    """A complete insertable row: key, required secondaries, and FK renames.
+
+    One function so that `_build_parents` and the round-trip test cannot build
+    the same table two different ways -- which is the drift that made a separate
+    `_synthetic_key` ladder wrong in the first place.
+    """
+    row = {
+        **_synthetic_key(table),
+        **_synthetic_required_secondary(table, exclude=exclude),
+    }
+    row.update(_fk_overrides(table))
+    return row
+
+
 def _build_parents(table) -> None:
     """Insert every ancestor row `table` needs, depth-first and idempotently.
 
@@ -1099,27 +1142,28 @@ def _build_parents(table) -> None:
     added later -- the same hand-listed shape that let `ingest` (1c-2) and
     `timebase` (1c-4) go unswept.
 
-    `parents(primary=True, as_objects=True)` returns table OBJECTS. The default
-    returns names, which is a shape this helper does not want -- checked against
-    the live signature rather than assumed.
+    ALL parents, not `primary=True`. `primary=True` returns only foreign keys
+    composed of primary-key attributes, which would skip every below-divider
+    foreign key this schema declares -- Probe, ElectrodeConfig,
+    ClusterQualityLabel -- while the database still enforces them.
     """
-    for parent in table.parents(primary=True, as_objects=True):
+    for parent in table.parents(as_objects=True):
         _build_parents(parent)
-        row = {
-            **_synthetic_key(parent),
-            **_synthetic_required_secondary(parent, exclude=None),
-        }
-        parent.insert1(row, skip_duplicates=True)
+        parent.insert1(_synthetic_row(parent), skip_duplicates=True)
 ```
 
 - [ ] **Step 5: Use the builder in the round-trip test**
 
-In `test_every_blob_attribute_round_trips_an_array`, replace the whole `if table.parents():` block (the `assert qualified in _BLOB_ATTRS_WITH_UNBUILT_PARENTS` branch and its `continue`) with:
+In `test_every_blob_attribute_round_trips_an_array`, replace the whole `if table.parents():` block (the `assert qualified in _BLOB_ATTRS_WITH_UNBUILT_PARENTS` branch and its `continue`) and the two lines that follow it with:
 
 ```python
-        if table.parents():
-            _build_parents(table)
+        _build_parents(table)
+        row = {**_synthetic_row(table, exclude=attr), attr: arr}
+        key = {k: row[k] for k in table.primary_key}
+        table.insert1(row, skip_duplicates=True)
 ```
+
+The key is taken FROM the row rather than rebuilt, so a renamed foreign key cannot make the fetch restriction disagree with what was inserted.
 
 Delete the `allow_listed_seen = set()` line and the trailing `stale = ...` assertion, which the empty allow-list makes vacuous. **Keep** `assert exercised, "no blob attribute was actually round-tripped"` — it is the guard against this test passing over nothing.
 
@@ -1162,16 +1206,16 @@ def test_a_realistic_waveform_set_survives_insert_and_fetch(ephys_activated, dj_
     elides the middle of its repr only above ~1000 elements, so a small array
     round-trips 'fine' through the very declaration that destroys a real one.
     """
-    from tests.schema.test_guardrails import _build_parents, _synthetic_key
+    from tests.schema.test_guardrails import _build_parents, _synthetic_row
     from wl_preproc.schema import ephys as e
 
     arr = np.arange(384 * 82, dtype=np.float32).reshape(384, 82)
 
     _build_parents(e.WaveformSet.Waveform)
-    key = _synthetic_key(e.WaveformSet.Waveform)
-    e.WaveformSet.Waveform.insert1(
-        {**key, "waveform_mean": arr}, skip_duplicates=True
-    )
+    row = {**_synthetic_row(e.WaveformSet.Waveform, exclude="waveform_mean"),
+           "waveform_mean": arr}
+    key = {k: row[k] for k in e.WaveformSet.Waveform.primary_key}
+    e.WaveformSet.Waveform.insert1(row, skip_duplicates=True)
 
     got = (e.WaveformSet.Waveform & key).fetch1("waveform_mean")
     assert isinstance(got, np.ndarray), f"got {type(got).__name__}, not ndarray"
