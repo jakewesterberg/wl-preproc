@@ -19,6 +19,7 @@ from wl_preproc.schema import (
     DEFAULT_PREFIX,
     core,
     coverage,
+    ephys,
     ingest,
     paramset,
     request,
@@ -68,16 +69,28 @@ def _computed_tables() -> list:
 # returned a confident zero. `tests/schema/test_guardrails.py` records the same
 # shape biting once before, when `ingest` landed as a fifth module.
 #
+# It became SEVEN with Phase 2a's `ephys` module, and this time the omission
+# was caught by the test below rather than by a person noticing —
+# `test_every_schema_module_is_swept_for_job_tables` failed the moment `ephys`
+# existed and this tuple did not yet name it, exactly the guarantee the
+# paragraph below already claimed for it. `ephys` declares every one of its
+# tables `dj.Manual` or `dj.Lookup` (probe, insertion, clustering, unit,
+# waveform, quality-metric, and continuous-product provenance — nothing
+# Computed or Imported), so it owns no `~jobs` table of its own; it is listed
+# here only so the completeness claim below stays true, not because
+# `_computed_tables()` or `reap_stale_jobs` need a new stage for it.
+#
 # It stays a written list rather than a `pkgutil` sweep because the outbound
 # guardrail bans `importlib` inside `wl_preproc/` (its ruling is recorded in
 # `tests/test_cli_guardrails.py`: banning the import closes the whole
 # dynamic-import class at a node type already visited). Static imports are also
 # what make this auditable by reading. **The completeness claim is enforced by
 # a test that DOES discover** — `test_every_schema_module_is_swept_for_job_tables`
-# — so a seventh module fails the suite rather than being silently skipped.
+# — so an eighth module fails the suite rather than being silently skipped.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("core", core),
     ("coverage", coverage),
+    ("ephys", ephys),
     ("ingest", ingest),
     ("paramset", paramset),
     ("request", request),

@@ -14,6 +14,7 @@ import datetime
 import importlib
 import pathlib
 import pkgutil
+import re
 
 import datajoint as dj
 import numpy as np
@@ -298,23 +299,46 @@ _KNOWN_UPSTREAM_BARE_LONGBLOBS = frozenset(
 )
 
 
+def _is_bare_longblob(attr) -> bool:
+    """True when `attr` (a `dj.Heading` attribute) is a bare `longblob` --
+    DataJoint 2.x's silent array-corrupting declaration -- rather than a
+    `<blob>`-codec column.
+
+    `attr.is_blob` is NOT the safe/unsafe signal it looks like: DataJoint
+    sets it for any physical MySQL blob-family column, so it is True for both
+    `<blob>` and a bare `longblob` alike -- confirmed against the live heading
+    before dispatch. `attr.codec` is what actually differs: non-None (a
+    BlobCodec) only when the `<blob>` codec is attached, and None for a raw
+    `longblob`, which is what silently returns bytes instead of an array. A
+    condition keyed on `is_blob` here would never fire, for anything.
+    (Pinned: tests/schema/test_harness.py.)
+
+    This also flags a core-type alias that resolves to `longblob` physically
+    -- `payload : bytes`, for instance -- because it keys on `attr.type` (the
+    PHYSICAL db type), not the as-written spelling. That is deliberate, not
+    incidental: the corruption this guards against happens at the physical
+    column level regardless of which source spelling produced it.
+
+    This is THE predicate `test_no_table_declares_a_bare_longblob` enforces
+    across the whole schema sweep, and the only one: `tests/schema/
+    test_ephys.py::test_reverting_a_blob_to_longblob_is_caught` imports this
+    function rather than keeping its own copy, specifically so a mutation
+    test proves this exact check catches a reverted declaration, not a
+    stand-in that might be weaker.
+    """
+    declared = (attr.type or "").lower()
+    return "blob" in declared and getattr(attr, "codec", None) is None
+
+
 def test_no_table_declares_a_bare_longblob(all_tables_including_elements):
     offenders = []
     seen_known = set()
     for module_name, table_name, table in all_tables_including_elements:
         for attr_name in table.heading.names:
             attr = table.heading[attr_name]
-            declared = (attr.type or "").lower()
-            # `attr.is_blob` is NOT the safe/unsafe signal it looks like: DataJoint
-            # sets it for any physical MySQL blob-family column, so it is True for
-            # both `<blob>` and a bare `longblob` alike -- confirmed against the
-            # live heading before dispatch. `attr.codec` is what actually differs:
-            # non-None (a BlobCodec) only when the `<blob>` codec is attached, and
-            # None for a raw `longblob`, which is what silently returns bytes
-            # instead of an array. A condition keyed on `is_blob` here would never
-            # fire, for anything. (Pinned: tests/schema/test_harness.py.)
-            if "blob" not in declared or getattr(attr, "codec", None) is not None:
+            if not _is_bare_longblob(attr):
                 continue
+            declared = (attr.type or "").lower()
             qualified = f"{module_name}.{table_name}.{attr_name}"
             if qualified in _KNOWN_UPSTREAM_BARE_LONGBLOBS:
                 seen_known.add(qualified)
@@ -347,19 +371,112 @@ def test_no_table_declares_a_bare_longblob(all_tables_including_elements):
     )
 
 
+def _synthetic_value(name: str, declared: str):
+    """One value per (attribute name, declared type), for both builders.
+
+    `_synthetic_key` and `_synthetic_required_secondary` each carried their own
+    type ladder until Task 6, and they had drifted: the key builder handled
+    only `char` and `int`, so a chain through `pipeline.Session` (datetime key)
+    or `core.AcquisitionSystem` (enum key) raised. They must agree, because
+    `_build_parents` writes an ancestor row using one and then a descendant key
+    using the other -- disagreement is an unresolvable foreign key, reported as
+    something else entirely.
+
+    Deterministic in `name`, which is what lets the chain work without threading
+    values through: `subject` gets the same value whichever table asks for it.
+    """
+    declared = (declared or "").lower()
+    if declared.startswith("enum("):
+        return declared.split("(", 1)[1].split(",", 1)[0].strip().strip("'")
+    if "char" in declared:
+        # DEVIATION from the brief's literal `[:32]`: `element_animal.Subject`
+        # declares `subject : varchar(8)`, reached once `_build_parents` walks
+        # a real chain (`pipeline.Session -> Subject`), and a value truncated
+        # to 32 chars still overflows an 8-char column -- measured as
+        # `pymysql.err.DataError: (1406, "Data too long for column 'subject'
+        # at row 1")`. Truncating to the DECLARED length instead of a fixed 32
+        # fixes the fixture rather than papering over it: every column still
+        # gets a value that fits, and two calls with the same (name, declared)
+        # pair -- which is what `_fk_overrides` and both builders always pass
+        # -- still agree, since the length comes from `declared` itself.
+        length_match = re.search(r"\((\d+)\)", declared)
+        length = int(length_match.group(1)) if length_match else 32
+        return f"blobprobe-{name}"[:length]
+    if "datetime" in declared or "timestamp" in declared:
+        return datetime.datetime(2026, 1, 1)
+    if "date" in declared:
+        return datetime.date(2026, 1, 1)
+    if "int" in declared:
+        return 99
+    if "float" in declared or "double" in declared or "decimal" in declared:
+        return 0.0
+    raise AssertionError(f"unhandled type for synthetic value: {name}: {declared}")
+
+
 def _synthetic_key(table) -> dict:
-    """A primary key of the right shape, for a table with no foreign keys."""
-    key = {}
-    for name in table.primary_key:
-        declared = (table.heading[name].type or "").lower()
-        if "char" in declared:
-            key[name] = f"blobprobe-{name}"[:32]
-        elif "int" in declared:
-            key[name] = 99
-        else:
-            # A new key type should fail loudly, not silently.
-            raise AssertionError(f"unhandled key type for {name}: {declared}")
-    return key
+    """A primary key of the right shape.
+
+    No longer restricted to tables without foreign keys: `_build_parents` makes
+    the inherited columns resolvable, and `_synthetic_value` is deterministic in
+    the attribute name, so an inherited `subject` matches the one written into
+    the ancestor.
+    """
+    return {
+        name: _synthetic_value(name, table.heading[name].type)
+        for name in table.primary_key
+    }
+
+
+# DEVIATION from the brief, and load-bearing for correctness, not cosmetic:
+# the SAME array `test_every_blob_attribute_round_trips_an_array` inserts and
+# compares against, defined once here so both sides can share it by reference
+# rather than by two separately-written literals that could drift.
+#
+# Every blob column that is not the attribute currently under test gets THIS
+# exact array -- never a distinct placeholder -- which is what makes a STALE
+# row harmless. Two collisions are real, both measured directly:
+#
+# (1) A multi-blob table tested attribute-by-attribute shares ONE primary key
+#     across iterations, because `_synthetic_key` is deterministic in name by
+#     design (see its own docstring). `ephys.Unit` declares three blob
+#     columns; probing `spike_sites` after `spike_times` has already inserted
+#     the row means `insert1(..., skip_duplicates=True)` SKIPS the second
+#     write, and the round-trip test then fetches whatever the FIRST write
+#     left behind for `spike_sites`, not what the second write intended.
+# (2) `_build_parents` can insert a table's row as an ANCESTOR before that
+#     same table is ever reached as the table directly under test.
+#     `request.Request` is reachable both ways -- directly (its own
+#     `payload`) and as `request.Activation`'s ancestor via a renamed FK --
+#     and "ephys" sorts before "request" in the module sweep, so `Request`'s
+#     row already exists, built for `Unit`, by the time `Request.payload`'s
+#     own turn comes.
+#
+# In both cases `skip_duplicates=True` leaves the EXISTING row untouched, so
+# whatever that row's non-excluded blob columns hold is what gets fetched.
+# Making that value identically `_PROBE_ARRAY` -- the same array `exclude`
+# itself is tested against -- means the fetch is correct regardless of which
+# insert call actually reached the database. A required, non-blob column
+# still needs a `skip_duplicates=True`-collision to be harmless too, but no
+# assertion ever reads THOSE back, so an arbitrary deterministic value
+# (`_synthetic_value`) remains correct for them.
+#
+# The nullable check therefore no longer applies to blob columns: a nullable
+# blob left to the database (as the literal brief ladder did) is NULL on any
+# row a later, non-excluded turn only skip-duplicates past -- measured as
+# `spike_depths` fetching back `None`, failing `isinstance(got, np.ndarray)`,
+# on the very first multi-blob table this suite ever reached. Every OTHER
+# nullable attribute is still left for the database, unchanged.
+_PROBE_ARRAY = np.arange(4096, dtype=np.float32).reshape(64, 64)
+# Immutable, so the correctness argument the docstring above makes -- every
+# non-excluded blob column gets THIS SAME object, and a stale row left behind
+# by a skip-duplicates collision is harmless because it always holds this
+# exact value -- is self-enforcing rather than merely a convention every
+# caller happens to honour. This is the SAME object shared by both sides of
+# the round-trip assertion (the value inserted, and the value the test
+# compares a fetch against); a future edit that mutated it in place after
+# insert would silently invalidate that comparison for every OTHER table's
+# blob columns already relying on it, and this raises immediately instead.
+_PROBE_ARRAY.flags.writeable = False
 
 
 def _synthetic_required_secondary(table, exclude: str) -> dict:
@@ -373,35 +490,28 @@ def _synthetic_required_secondary(table, exclude: str) -> dict:
     probe array. Attributes that are nullable or carry a default (like
     Request's `requested_by`) are correctly left for the database to fill in.
 
-    Every OTHER blob attribute (`is_blob`, not just `exclude`) is skipped too,
-    not synthesized: neither table currently has a second one, but if one
-    existed, no branch below knows how to fabricate array-shaped content for
-    it, and it should fail on the resulting missing-field insert error rather
-    than the more confusing "unhandled type for synthetic value: ... blob".
+    DEVIATION from the brief's literal ladder, which skipped every `is_blob`
+    attribute unconditionally (nullable or not) and left it to the database:
+    correct only while ParamSet and Request -- the sole blob-bearing tables
+    it had ever reached -- had exactly one blob attribute apiece, zero
+    foreign keys, and were never anyone else's ancestor, so neither collision
+    `_PROBE_ARRAY`'s docstring (above) describes could occur. Task 6 breaks
+    all three assumptions at once. A blob attribute that is not `exclude` now
+    gets `_PROBE_ARRAY` -- see that constant's docstring for why this exact
+    value, not merely "a" throwaway one, is what makes both collisions
+    harmless.
     """
     row = {}
     for name in table.heading.names:
         if name in table.primary_key or name == exclude:
             continue
         attr = table.heading[name]
-        if attr.is_blob or attr.nullable or attr.default is not None:
+        if attr.is_blob:
+            row[name] = _PROBE_ARRAY
             continue
-        declared = (attr.type or "").lower()
-        if declared.startswith("enum("):
-            row[name] = declared.split("(", 1)[1].split(",", 1)[0].strip().strip("'")
-        elif "char" in declared:
-            row[name] = f"blobprobe-{name}"[:32]
-        elif "datetime" in declared or "timestamp" in declared:
-            row[name] = datetime.datetime(2026, 1, 1)
-        elif "date" in declared:
-            row[name] = datetime.date(2026, 1, 1)
-        elif "int" in declared:
-            row[name] = 99
-        elif "float" in declared or "double" in declared or "decimal" in declared:
-            row[name] = 0.0
-        else:
-            # A new secondary type should fail loudly, not silently.
-            raise AssertionError(f"unhandled type for synthetic value: {name}: {declared}")
+        if attr.nullable or attr.default is not None:
+            continue
+        row[name] = _synthetic_value(name, attr.type)
     return row
 
 
@@ -430,9 +540,149 @@ def _synthetic_required_secondary(table, exclude: str) -> dict:
 # build a real parent chain — a `Lab -> Subject -> Session` builder is the
 # shape essentially every custom table in this project's schema needs, not
 # only `Ingestion` — reusable, one-time work deliberately out of scope here.
-_BLOB_ATTRS_WITH_UNBUILT_PARENTS = frozenset(
+# RETIRED 2026-08-22 by Task 6, which taught this test to build real parent
+# chains via `_build_parents` below. Kept as an empty frozenset, and asserted
+# empty by `test_the_parent_blocked_allow_list_is_empty`, so that re-adding an
+# entry is deliberate rather than a quiet skip.
+_BLOB_ATTRS_WITH_UNBUILT_PARENTS = frozenset()
+
+
+def _fk_overrides(table) -> dict:
+    """Values for foreign-key columns whose name differs from the parent's.
+
+    `_synthetic_value` is deterministic in the attribute NAME, which is what
+    lets an inherited `subject` match the ancestor row with nothing threaded
+    through. A RENAMED foreign key breaks that: `request.Activation` declares
+    `-> Request.proj(request_key='idempotency_key')`, so the child column is
+    `request_key` while the row it must match is keyed `idempotency_key`.
+    Naming alone would build "blobprobe-request_key" against a row holding
+    "blobprobe-idempotency_key", and the insert would fail on a foreign key
+    that looks, from the error, like a missing parent.
+
+    `attr_map` is child -> parent, per DataJoint's own
+    `attr_map[column_name] = referenced_column_name`.
+    """
+    overrides = {}
+    for parent, props in table.parents(as_objects=True, foreign_key_info=True):
+        for child_attr, parent_attr in props["attr_map"].items():
+            if child_attr == parent_attr:
+                continue
+            overrides[child_attr] = _synthetic_value(
+                parent_attr, parent.heading[parent_attr].type
+            )
+    return overrides
+
+
+def _synthetic_row(table, exclude: str | None = None) -> dict:
+    """A complete insertable row: key, required secondaries, and FK renames.
+
+    One function so that `_build_parents` and the round-trip test cannot build
+    the same table two different ways -- which is the drift that made a separate
+    `_synthetic_key` ladder wrong in the first place.
+    """
+    row = {
+        **_synthetic_key(table),
+        **_synthetic_required_secondary(table, exclude=exclude),
+    }
+    row.update(_fk_overrides(table))
+    return row
+
+
+def _build_parents(table) -> None:
+    """Insert every ancestor row `table` needs, depth-first and idempotently.
+
+    Recursive rather than a hand-written `Lab -> Subject -> Session` ladder: the
+    chain a Phase 2a table needs is ten deep and runs through Montage and
+    Activation, and a hand-written ladder would need extending for every table
+    added later -- the same hand-listed shape that let `ingest` (1c-2) and
+    `timebase` (1c-4) go unswept.
+
+    ALL parents, not `primary=True`. `primary=True` returns only foreign keys
+    composed of primary-key attributes, which would skip every below-divider
+    foreign key this schema declares -- Probe, ElectrodeConfig,
+    ClusterQualityLabel -- while the database still enforces them.
+    """
+    # `as_objects=True` returns `datajoint.table.FreeTable` instances
+    # (`datajoint/table.py::Table.parents`), not the real declared classes --
+    # confirmed by reading that method's source, then confirmed live: a
+    # FreeTable is a generic wrapper around a connection and a table name,
+    # never an instance of the original `Manual`/`Computed`/`Part` subclass,
+    # so it carries none of that class's tier-specific behaviour. This is
+    # WHY an ancestor chain that passes through an auto-populated table
+    # inserts cleanly here: `core.Segment` is `dj.Computed`, and calling
+    # `core.Segment.insert1(...)` directly raises "Inserts into an
+    # auto-populated table can only be done inside its make method" (its
+    # `_allow_insert` class attribute defaults to False outside
+    # `populate()`) -- verified directly against this exact table. The
+    # `FreeTable` this function actually inserts through has no
+    # `_allow_insert` attribute at all, so `Table.insert`'s guard
+    # (`not allow_direct_insert and not getattr(self, "_allow_insert",
+    # True)`) reads the default `True` and never raises. The same genericity
+    # is why a `dj.Part` ancestor's own master-integrity enforcement (its
+    # `delete`/`drop` overrides, which refuse to run directly on a Part) has
+    # no chance to engage either: a FreeTable is never `isinstance(_, dj.Part)`,
+    # regardless of what the real class declares. Anyone "simplifying" this to
+    # call the real parent classes instead would silently break every chain
+    # that passes through an auto-populated table -- which this schema's own
+    # chain already does, via `core.Segment` -- and lose Part-table ancestor
+    # coverage along with it.
+    for parent in table.parents(as_objects=True):
+        _build_parents(parent)
+        parent.insert1(_synthetic_row(parent), skip_duplicates=True)
+
+
+def test_the_parent_blocked_allow_list_is_empty():
+    """Task 6 retired this allow-list by teaching the round-trip test to build
+    real parent chains. Kept as an empty frozenset, and asserted empty, so that
+    re-adding an entry is a deliberate act with a test to answer to rather than
+    a quiet skip.
+
+    `Ingestion.topology` was its only member and is now round-tripped for real.
+    """
+    assert _BLOB_ATTRS_WITH_UNBUILT_PARENTS == frozenset()
+
+
+def test_the_key_and_secondary_builders_agree_on_every_shared_type():
+    """A `subject` built as a primary key and the same attribute built as a
+    required secondary must produce the SAME value, or a foreign key built by
+    `_build_parents` will not resolve against the ancestor row it just wrote.
+
+    Pinned by test rather than by comment: the two builders were separate
+    functions with separately-maintained type ladders until Task 6, which is
+    exactly the shape that drifts.
+    """
+    for declared in ("varchar(32)", "int unsigned", "datetime", "date",
+                     "enum('a','b')", "double"):
+        assert _synthetic_value("probe", declared) == _synthetic_value("probe", declared)
+    # And the spellings that used to exist in only one of the two ladders
+    assert _synthetic_value("t", "datetime") is not None
+    assert _synthetic_value("s", "enum('syncbox','spikeglx')") == "syncbox"
+
+
+# The exact set `test_every_blob_attribute_round_trips_an_array` must exercise
+# -- pinned by fully-qualified name, not merely "the list is non-empty". A
+# non-emptiness check cannot tell 10 real round-trips apart from 7: a
+# regression in `_iter_tables_recursive` that silently stopped recursing into
+# Part tables would drop the three `WaveformSet` blob attributes below and
+# stay green, which is the exact hole this project's own history already
+# proved once (see the test's docstring below, "fix round 1"). Spellings
+# verified directly against what the test's own `qualified = f"{module_name}.
+# {table_name}.{attr}"` construction actually produces before this was
+# asserted -- `table_name` is `table.__qualname__` from `_iter_tables_
+# recursive`, so a nested Part table reads as `Master.Part`
+# (e.g. `WaveformSet.Waveform`), not merely `Part`.
+_EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
     {
         "wl_preproc.schema.ingest.Ingestion.topology",
+        "wl_preproc.schema.ingest.Quarantine.detail",
+        "wl_preproc.schema.paramset.ParamSet.params",
+        "wl_preproc.schema.request.Request.payload",
+        "wl_preproc.schema.ephys.Unit.spike_times",
+        "wl_preproc.schema.ephys.Unit.spike_sites",
+        "wl_preproc.schema.ephys.Unit.spike_depths",
+        "wl_preproc.schema.ephys.WaveformSet.PeakWaveform.peak_electrode_waveform",
+        "wl_preproc.schema.ephys.WaveformSet.Waveform.waveform_mean",
+        "wl_preproc.schema.ephys.WaveformSet.Waveform.waveforms",
     }
 )
 
@@ -445,33 +695,63 @@ def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
     attribute — which only proves `<blob>` works in general, something
     `test_harness.py` already establishes, and says nothing about the attributes
     actually declared here. Corrected 2026-08-13 before dispatch.
+
+    Walks Part tables too, via `_iter_tables_recursive` -- reused from the
+    declaration-test fixture below rather than written a second time. `all_tables`
+    itself is a flat `dir(module)` sweep and cannot see a `dj.Part` class nested
+    inside a master, which is exactly what let `ephys.WaveformSet.PeakWaveform.
+    peak_electrode_waveform` and `ephys.WaveformSet.Waveform.{waveform_mean,
+    waveforms}` go declared-and-checked-not-bare-longblob (by
+    `test_no_table_declares_a_bare_longblob`, via `all_tables_including_elements`,
+    which already recurses) but never actually ROUND-TRIPPED here -- three of
+    the six array attributes Phase 2a added, silently unverified by the one test
+    whose entire job is verifying them for real. Closed 2026-08-22, fix round 1.
+
+    Deliberately still `all_tables`, not `all_tables_including_elements`: the
+    expansion below is scoped to THIS repository's own schema modules only, so
+    no adopted-Element Part table (`element_event.event.Event.Attribute` and
+    the three siblings `_KNOWN_UPSTREAM_BARE_LONGBLOBS` names) is pulled in.
+    Round-tripping one of those would mean building a live parent chain through
+    Session/Trial/Event, which stays out of scope here exactly as
+    `all_tables_including_elements`'s own docstring says -- and, unlike the
+    custom Part tables above, every one of them is a KNOWN, permanently
+    allow-listed bare-longblob case that a real round-trip would correctly
+    fail on, not a gap worth closing.
+
+    `exercised` is asserted against `_EXPECTED_EXERCISED_BLOB_ATTRIBUTES`
+    exactly -- ten fully-qualified names, not merely "the list is non-empty".
+    The non-emptiness check this test carried until fix round 2 could not
+    distinguish 10 real round-trips from 7: a regression in
+    `_iter_tables_recursive` that silently stopped recursing into Part tables
+    would drop exactly the three `WaveformSet` blob attributes this same
+    docstring already once had to have restored, and this test would stay
+    green throughout.
     """
+    expanded_tables = [
+        entry
+        for module_name, table_name, table in all_tables
+        for entry in _iter_tables_recursive(module_name, table)
+    ]
     blob_attrs = [
         (module_name, table_name, table, attr)
-        for module_name, table_name, table in all_tables
+        for module_name, table_name, table in expanded_tables
         for attr in table.heading.names
         if getattr(table.heading[attr], "is_blob", False)
     ]
     assert blob_attrs, "no blob attributes found — this test would pass vacuously"
 
-    arr = np.arange(4096, dtype=np.float32).reshape(64, 64)
+    # The SAME object `_synthetic_required_secondary` fills every non-excluded
+    # blob column with (see `_PROBE_ARRAY`'s docstring) -- not a second literal
+    # that happens to match today. Two definitions of "the probe array" is
+    # exactly the drift that would silently break the collision argument that
+    # docstring makes.
+    arr = _PROBE_ARRAY
     exercised = []
-    allow_listed_seen = set()
     for module_name, table_name, table, attr in blob_attrs:
         qualified = f"{module_name}.{table_name}.{attr}"
-        if table.parents():
-            assert qualified in _BLOB_ATTRS_WITH_UNBUILT_PARENTS, (
-                f"{module_name}.{table_name} has a foreign key, so a synthetic row "
-                "cannot be inserted without building its parents first. Extend "
-                f"this test to construct them, or add {qualified!r} to "
-                "_BLOB_ATTRS_WITH_UNBUILT_PARENTS with a comment explaining why — "
-                "do not skip the table silently, or the attribute goes unverified "
-                "and this guard stops guarding."
-            )
-            allow_listed_seen.add(qualified)
-            continue
-        key = _synthetic_key(table)
-        row = {**key, **_synthetic_required_secondary(table, exclude=attr), attr: arr}
+        _build_parents(table)
+        row = {**_synthetic_row(table, exclude=attr), attr: arr}
+        key = {k: row[k] for k in table.primary_key}
         table.insert1(row, skip_duplicates=True)
         got = (table & key).fetch1(attr)
         assert isinstance(got, np.ndarray), f"{table_name}.{attr} returned {type(got).__name__}"
@@ -479,13 +759,17 @@ def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
         assert np.array_equal(got, arr)
         exercised.append(qualified)
 
-    assert exercised, "no blob attribute was actually round-tripped"
-    stale = _BLOB_ATTRS_WITH_UNBUILT_PARENTS - allow_listed_seen
-    assert not stale, (
-        "allow-listed in _BLOB_ATTRS_WITH_UNBUILT_PARENTS but never encountered "
-        f"by the sweep as a parent-blocked table: {sorted(stale)} -- the sweep no "
-        "longer reaches them, or they no longer have a foreign key and should be "
-        "verified for real instead of skipped"
+    exercised_set = set(exercised)
+    assert exercised_set == _EXPECTED_EXERCISED_BLOB_ATTRIBUTES, (
+        "the set of blob attributes actually round-tripped has changed -- "
+        f"missing (expected but not seen): "
+        f"{sorted(_EXPECTED_EXERCISED_BLOB_ATTRIBUTES - exercised_set)}; "
+        f"unexpected (seen but not expected): "
+        f"{sorted(exercised_set - _EXPECTED_EXERCISED_BLOB_ATTRIBUTES)}. "
+        "A regression in _iter_tables_recursive or the schema sweep could "
+        "silently drop or add attributes here while a bare non-emptiness "
+        "check stayed green -- update _EXPECTED_EXERCISED_BLOB_ATTRIBUTES "
+        "only after confirming why the set actually changed."
     )
 
 
@@ -608,10 +892,45 @@ def test_no_code_path_writes_activation_supersedes():
 def test_every_table_documents_its_key_in_schema(all_tables):
     """Section 10: primary key changes require drop-and-repopulate, so the keys
     are documented where they are declared rather than in a separate file that
-    drifts."""
+    drifts.
+
+    Two things this test used to miss, both closed the same day:
+
+    1. It asserted only that the comment block started with `#` -- never that
+       it actually named the key via a `Key: (...)` line, which is the
+       specific convention section 10 requires and which every table in this
+       schema already follows by hand (see e.g. `wl_preproc/schema/ephys.py`).
+       A docstring comment that never mentioned the key at all passed this
+       test exactly as well as a fully compliant one.
+    2. It swept only the flat `all_tables` fixture (`dir(module)`), which
+       cannot reach a `dj.Part` class nested inside a master -- the same
+       blind spot `_iter_tables_recursive` exists to close for the bare-
+       longblob sweep. All six `dj.Part` tables this phase added
+       (`ProbeType.Electrode`, `ElectrodeConfig.Electrode`,
+       `WaveformSet.PeakWaveform`, `WaveformSet.Waveform`,
+       `QualityMetrics.Cluster`, `QualityMetrics.Waveform`) went unchecked by
+       this test, silently, for as long as it was scoped to `all_tables` alone.
+
+    Deliberately still expanded from `all_tables`, not `all_tables_including_
+    elements`: key-documentation compliance for an adopted Element's own table
+    is a different question than the one this test asks about this project's
+    own schema modules -- the same scoping choice
+    `test_every_blob_attribute_round_trips_an_array` makes, for the same
+    reason (see that test's own docstring).
+
+    Checked directly before relying on this stronger assertion: every one of
+    the 35 tables and Part tables this expanded sweep reaches already carries
+    a `Key:` line today, so tightening this assertion required no comment
+    fix -- see this dispatch's report for how that was verified.
+    """
+    expanded_tables = [
+        entry
+        for module_name, table_name, table in all_tables
+        for entry in _iter_tables_recursive(module_name, table)
+    ]
     undocumented = [
         f"{m}.{t}"
-        for m, t, table in all_tables
-        if not table.definition.strip().startswith("#")
+        for m, t, table in expanded_tables
+        if not (table.definition.strip().startswith("#") and "Key:" in table.definition)
     ]
-    assert not undocumented, f"tables with no in-schema comment: {undocumented}"
+    assert not undocumented, f"tables with no in-schema `Key:` comment: {undocumented}"
