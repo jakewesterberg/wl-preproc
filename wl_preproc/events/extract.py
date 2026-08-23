@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from wl_sync.log import CodeWord, read_log
 
 
@@ -70,3 +71,47 @@ def extract_syncbox_words(path: Path) -> WordStream:
         (record.tick_us, record.word) for record in records if isinstance(record, CodeWord)
     )
     return WordStream(words=words, fs_hz=_SYNCBOX_NOMINAL_FS_HZ)
+
+
+# Mirrors the emitter's allocation in `wl_preproc/synth/spikeglx.py`, which is
+# spec section 4.2's routing table made concrete. TWO digital words: 18 lines do
+# not fit in 16 bits, and NI saves a 32-line port as two words -- which is what
+# section 12's PXIe-6353 was chosen for.
+_NIDQ_STROBE_BIT = 1  # in digital word 0, beside the barcode at bit 0
+
+
+def extract_nidq_words(nidq_bin: Path) -> WordStream:
+    """Words from the NI digital line.
+
+    **Latched at the strobe's FAR edge, not its rising one.** Spec section
+    4.2.1: data and strobe assert together at the start of T1, and the latching
+    edge is T1's far end -- so T1 IS the setup time rather than adding to it.
+    Sampling the rising edge would read data that has been valid for zero
+    microseconds; sampling the falling edge reads data valid for a full T1.
+    """
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+
+    meta = read_nidq_meta(nidq_bin.with_suffix(".meta"))
+    if meta.n_digital_words < 2:
+        raise ValueError(
+            f"{nidq_bin}: the sidecar declares {meta.n_digital_words} digital "
+            "word(s), so this recording carries the barcode but no code lines. "
+            "Spec section 4.2 routes 16 data lines plus strobe to the NI, which "
+            "needs two words"
+        )
+
+    raw = np.fromfile(nidq_bin, dtype=np.int16)
+    samples = raw.reshape(-1, meta.n_channels)
+    # NI writes every analog channel before every digital word, so word 0 sits
+    # at n_analog_channels and word 1 immediately after it. `extract_spikeglx`
+    # takes word 0 for the barcode and already anticipates this second word.
+    control = samples[:, meta.n_analog_channels].astype(np.uint16)
+    data = samples[:, meta.n_analog_channels + 1].astype(np.uint16)
+
+    strobe = (control >> _NIDQ_STROBE_BIT) & 1
+    # Falling edges: high at i, low at i+1. The word is read at i, the last
+    # sample the strobe was still asserted.
+    falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
+
+    words = tuple((int(index), int(data[index])) for index in falling)
+    return WordStream(words=words, fs_hz=meta.sample_rate_hz)
