@@ -97,7 +97,8 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
     """
     from wl_preproc.timebase._nidq_meta import read_nidq_meta
 
-    meta = read_nidq_meta(nidq_bin.with_suffix(".meta"))
+    meta_path = nidq_bin.with_suffix(".meta")
+    meta = read_nidq_meta(meta_path)
     if meta.n_digital_words < 2:
         raise ValueError(
             f"{nidq_bin}: the sidecar declares {meta.n_digital_words} digital "
@@ -107,6 +108,20 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
         )
 
     raw = np.fromfile(nidq_bin, dtype=np.int16)
+    # The same guard, and the same message, `timebase/extract.py`'s
+    # `extract_spikeglx` puts in front of the identical reshape. Both call
+    # sites today reach this only after that sibling has already read the same
+    # file with the same divisor, so this is not covering a live gap -- it is
+    # for a direct caller, and so that one module family does not describe the
+    # same corruption two different ways (a bare numpy reshape error here, a
+    # sentence naming the file and the sidecar there).
+    if raw.size % meta.n_channels:
+        raise ValueError(
+            f"{nidq_bin}: {raw.size} int16 samples do not divide into "
+            f"the {meta.n_channels} channels {meta_path.name} declares; the "
+            "file is truncated mid-sample or the sidecar describes a different "
+            "recording"
+        )
     samples = raw.reshape(-1, meta.n_channels)
     # NI writes every analog channel before every digital word, so word 0 sits
     # at n_analog_channels and word 1 immediately after it. `extract_spikeglx`
@@ -139,10 +154,11 @@ def extract_rhs_witness(session_dir: Path) -> StrobeWitness:
         find_recording_dir,
         read_sample_rate_hz,
     )
+    from wl_preproc.timebase.extract import RHS_DIGITAL_IN_FILENAME
 
     recording_dir = find_recording_dir(session_dir)
     fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
-    words = np.fromfile(recording_dir / "digitalin.dat", dtype=np.uint16)
+    words = np.fromfile(recording_dir / RHS_DIGITAL_IN_FILENAME, dtype=np.uint16)
 
     strobe = (words >> RHS_STROBE_DIGITAL_BIT) & 1
     rising = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1

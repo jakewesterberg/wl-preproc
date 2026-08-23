@@ -129,7 +129,18 @@ def _edges_from_bit(
 # to change when that is measured rather than assumed.
 RHS_BARCODE_DIGITAL_BIT = 0
 
-_RHS_DIGITAL_IN_FILENAME = "digitalin.dat"
+# Public, not `_`-prefixed: `events/extract.py`'s `extract_rhs_witness` reads
+# the same vendor file and had the literal a second time. The two modules are
+# production peers -- `timebase` and `events` -- and Intan's own filename can
+# never legitimately differ between them, so there is nothing for a second copy
+# to express. (This is NOT the case `events/agreement.py`'s
+# `MIN_CODE_WORD_SLOT_S` restates rather than imports: that one crosses from
+# production into `synth` fixture generation, and its value is EXPECTED to
+# diverge once a real behavioural stack is chosen.) The layering objection to
+# importing across the two packages was already spent: `extract_rhs_witness`
+# imports three names from `timebase._rhs_header`, a private module, to find
+# the very directory it then reads this file from.
+RHS_DIGITAL_IN_FILENAME = "digitalin.dat"
 
 
 def extract_rhs(session_dir: Path) -> BitStream:
@@ -152,11 +163,11 @@ def extract_rhs(session_dir: Path) -> BitStream:
 
     recording_dir = find_recording_dir(session_dir)
     fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
-    digital_path = recording_dir / _RHS_DIGITAL_IN_FILENAME
+    digital_path = recording_dir / RHS_DIGITAL_IN_FILENAME
     if not digital_path.is_file():
         raise FileNotFoundError(
             f"{digital_path}: the recording has an {INFO_FILENAME} but no "
-            f"{_RHS_DIGITAL_IN_FILENAME}, so it carries no barcode line"
+            f"{RHS_DIGITAL_IN_FILENAME}, so it carries no barcode line"
         )
     words = np.fromfile(digital_path, dtype=np.uint16)
     return BitStream(
