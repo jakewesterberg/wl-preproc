@@ -309,3 +309,94 @@ def test_configs_spanning_two_probe_types_are_refused(ephys_activated):
 
     with pytest.raises(ephys.EmptyElectrodeIntersection, match="probe type"):
         ephys.intersect_electrode_configs([a, b])
+
+
+def test_a_unit_cannot_name_an_electrode_its_own_sort_did_not_run_on(
+    ephys_activated, dj_conn
+):
+    """`Clustering.Electrode` makes design spec section 3.2.2 a CONSTRAINT
+    rather than a convention.
+
+    Before it, `Unit` carried its own `electrode_config_hash` with no foreign
+    key back to the sort, so a unit could name an electrode from a
+    configuration its own `Clustering` never ran on -- and nothing would report
+    it. That is the same shape as the defects this phase exists to prevent: a
+    plausible-looking row that is quietly wrong.
+
+    Asserted by attempting the bad insert, not by reading the declaration. A
+    foreign key that is declared but not exercised is a claim, not a guarantee.
+    """
+    import datajoint as dj
+
+    from tests.schema.test_guardrails import _build_parents, _synthetic_row
+
+    _build_parents(ephys.Unit)
+    row = _synthetic_row(ephys.Unit)
+
+    # The electrode must exist in the CONFIG but not in this sort's own
+    # electrode set. Naming an electrode that exists nowhere would fail against
+    # either foreign key, old or new, and so would prove nothing about scoping.
+    stray = {
+        "electrode_config_hash": row["electrode_config_hash"],
+        "probe_type": row["probe_type"],
+        "electrode": row["electrode"] + 1,
+    }
+    # The electrode has to exist on the probe MODEL before it can exist in a
+    # configuration -- ElectrodeConfig.Electrode foreign-keys ProbeType.Electrode.
+    ephys.ProbeType.Electrode.insert1(
+        {
+            "probe_type": stray["probe_type"],
+            "electrode": stray["electrode"],
+            "shank": 0,
+            "shank_col": 0,
+            "shank_row": 0,
+            "x_coord": 0.0,
+            "y_coord": 0.0,
+        },
+        skip_duplicates=True,
+    )
+    ephys.ElectrodeConfig.Electrode.insert1(stray, skip_duplicates=True)
+    assert len(ephys.ElectrodeConfig.Electrode & stray) == 1, (
+        "the stray electrode must really exist in the configuration, or this "
+        "test degenerates into 'a nonexistent electrode is rejected'"
+    )
+    assert len(ephys.Clustering.Electrode & stray) == 0, (
+        "and it must NOT be in this sort's own electrode set"
+    )
+
+    row["unit"] = 4242
+    row["electrode"] = stray["electrode"]
+
+    with pytest.raises(dj.errors.IntegrityError):
+        ephys.Unit.insert1(row)
+
+
+def test_quality_metrics_records_per_channel_facts_not_only_per_unit_ones(
+    ephys_activated,
+):
+    """Parent spec section 6.6's per-channel quantities, which design spec
+    section 3.3 claimed landed here and which did not exist until now.
+
+    Per-channel rather than per-unit is the whole point: a dead or saturating
+    electrode is a fact about the probe, not about whichever unit happened to
+    sit near it, and the per-unit parts cannot express it.
+    """
+    pk = ephys.QualityMetrics.Channel.primary_key
+    assert "electrode" in pk, "per-channel metrics must be keyed on the electrode"
+    assert "unit" not in pk, (
+        "keying per-channel metrics on the unit would make a dead electrode a "
+        "property of a unit, which is the confusion this part exists to remove"
+    )
+
+    names = set(ephys.QualityMetrics.Channel.heading.names)
+    expected = {
+        "rms_ap",
+        "rms_lfp",
+        "bad_channel_label",
+        "line_noise_50hz",
+        "saturation_fraction",
+        "artifact_fraction",
+        "impedance",
+        "spectral_profile",
+    }
+    assert expected <= names, f"missing: {sorted(expected - names)}"

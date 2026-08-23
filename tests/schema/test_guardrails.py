@@ -683,6 +683,11 @@ _EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
         "wl_preproc.schema.ephys.WaveformSet.PeakWaveform.peak_electrode_waveform",
         "wl_preproc.schema.ephys.WaveformSet.Waveform.waveform_mean",
         "wl_preproc.schema.ephys.WaveformSet.Waveform.waveforms",
+        # Added with QualityMetrics.Channel, which closes parent spec section
+        # 6.6's per-channel gap. Pinned here in the same commit that declares
+        # it: a new array attribute that does not join this set is exactly the
+        # silent hole this set exists to close.
+        "wl_preproc.schema.ephys.QualityMetrics.Channel.spectral_profile",
     }
 )
 
