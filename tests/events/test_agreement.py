@@ -274,3 +274,66 @@ def test_block_agreement_tolerance_is_derived_from_float32_precision_not_chosen(
     assert abs(stored_measured_end_s - genuinely_disagreeing) > agreement.block_agreement_tolerance_s(
         stored_measured_end_s, genuinely_disagreeing
     )
+
+
+def test_min_code_word_slot_s_tracks_synth_timelines_spacing_or_flags_the_drift():
+    """Fix round 4 (coordinator review): a drift detector, not a coupling.
+
+    `events.agreement.MIN_CODE_WORD_SLOT_S` and `synth.timeline.
+    CODE_WORD_SPACING_S` are two independent constants that happen to share
+    a value (`0.001`) today, and nothing before this test noticed if they
+    stopped agreeing. This project has already paid for exactly this shape
+    once: Task 1 found the same 1-sample buffer bug shipped independently in
+    two emitters, and the fix was a shared `code_word_span_s` helper built
+    specifically so the two could not drift apart. A shared helper is not
+    available here -- `wl_preproc.events` is production code and
+    `wl_preproc.synth` is fixture generation only, so one may not import the
+    other in either direction (`MIN_CODE_WORD_SLOT_S`'s own comment) -- so
+    this test is the substitute: `tests/` is the one layer allowed to import
+    both without running that architecture backwards.
+
+    **What this guards, concretely.** `events.agreement.
+    BLOCK_AGREEMENT_TOLERANCE_FLOOR_S` is derived from `MIN_CODE_WORD_SLOT_S`
+    as "one code-word slot's worth of transport quantization, doubled for
+    float32-rounding headroom" -- a derivation that is only true because
+    `MIN_CODE_WORD_SLOT_S` matches the ACTUAL slot spacing the synthetic
+    generator (this project's only behavioural-stack implementation) uses to
+    place code words. If `synth.timeline.CODE_WORD_SPACING_S` is ever
+    revised and `MIN_CODE_WORD_SLOT_S` is not updated to match, the floor
+    silently stops covering the ratchet `tests/schema/test_timebase.py::
+    provenance_session` measures (`block_start_time == 0.001`), and an
+    honestly agreeing session starts reading `block_agreement=False` and
+    getting quarantined at tier D -- silently, and in the single most
+    consequential surface this phase produces.
+
+    **This is a "decide, don't drift" gate, not a permanent lock.**
+    Divergence is allowed: the production constant is meant to track a real
+    system's own slot spacing once the behavioural stack is chosen, at which
+    point it will legitimately stop matching the synthetic generator's own
+    choice. What must not happen is divergence nobody decided -- so this
+    test fails loudly, with a message that says a real change is fine, and
+    names exactly what to go re-derive.
+    """
+    from wl_preproc.synth import timeline
+
+    if agreement.MIN_CODE_WORD_SLOT_S != timeline.CODE_WORD_SPACING_S:
+        pytest.fail(
+            "events.agreement.MIN_CODE_WORD_SLOT_S "
+            f"({agreement.MIN_CODE_WORD_SLOT_S}) no longer matches "
+            "synth.timeline.CODE_WORD_SPACING_S "
+            f"({timeline.CODE_WORD_SPACING_S}). This divergence may be "
+            "correct and deliberate -- MIN_CODE_WORD_SLOT_S is documented "
+            "to track a real system's own code-word slot spacing once one "
+            "is chosen, not to stay locked to the synthetic generator "
+            "forever. But it must be a DECISION, not an accident: "
+            "block_agreement_tolerance_s's floor "
+            "(BLOCK_AGREEMENT_TOLERANCE_FLOOR_S) is derived from "
+            "MIN_CODE_WORD_SLOT_S as one code-word transport slot, and if "
+            "that no longer reflects the slot spacing a real boundary is "
+            "actually quantized to, the floor silently stops covering the "
+            "ratchet and an honestly agreeing session starts getting "
+            "quarantined at tier D. Whoever changed either constant must "
+            "re-derive BLOCK_AGREEMENT_TOLERANCE_FLOOR_S against the new "
+            "value (or explicitly confirm the old derivation still holds) "
+            "before this assertion is updated to match."
+        )
