@@ -182,28 +182,38 @@ def _trial_stop_time(
     """`trial.end_s`, or the best available inference when the stream never
     explicitly closed it.
 
-    **This project's own session-level synthetic generator does not emit
-    `Marker.TRIAL_END`** -- checked in `synth/timeline.py`: every trial gets
-    `TRIAL_START`, a `TRIAL_NUMBER` payload and an outcome marker, never
-    `TRIAL_END`. So `assemble()` closes every one of THESE fixtures' trials
-    the same way it closes a trial superseded by the next `TRIAL_START`:
-    with `end_s=None` (`events/assemble.py`'s own `close_trial(end_s=None)`).
-    That this is a property of the session-level fixture rather than of
-    `assemble()` or the codec is checked directly: `tests/events/
-    test_assemble.py`'s own `_trial()` helper DOES emit an explicit
-    `Marker.TRIAL_END`, and a trial built through it comes back with a real
-    `end_s`.
+    **`synth/timeline.py` now emits `Marker.TRIAL_END` for every trial**
+    (fix round 1, Task 8 -- it did not before, which was a fixture gap rather
+    than a code gap: `Marker.TRIAL_END` is in the frozen contract and
+    `assemble()` already handled it correctly, proven by `tests/events/
+    test_assemble.py`'s own `_trial()` helper, which always has). So
+    `end_s=None` no longer happens for any trial this project's own fixtures
+    produce (`tests/synth/test_timeline.py::
+    test_decoded_trial_ends_match_the_planted_truth_not_none` pins this), and
+    every branch below except the first is dead code against every fixture in
+    this repository today.
 
-    `trial.Trial.trial_stop_time` is not nullable, so something concrete has
-    to be written regardless. The best available inference, in order:
+    It is not dead code against reality, which is why it is kept rather than
+    deleted: a real recording can stop mid-trial -- power loss, a killed
+    process, a full disk -- and `assemble()` closes whatever trial was open
+    at end-of-stream with `end_s=None` regardless of why the stream ended
+    (`events/assemble.py`'s own `close_trial(end_s=None)`, run once,
+    unconditionally, after the main loop). `trial.Trial.trial_stop_time` is
+    not nullable, so something concrete has to be written even then.
+    `tests/schema/test_events.py::
+    test_a_genuinely_truncated_trial_falls_back_to_the_last_stream_event`
+    builds exactly that case -- a hand-built stream ending after
+    `TRIAL_START` with no closing marker at all -- and exercises this
+    function's last branch directly, which no fixture-driven test can reach
+    anymore.
 
-    1. The next trial's own start. Exact, by `synth/timeline.py`'s own
-       construction -- it sets `cursor = trial_end` and the next trial starts
-       at that same `cursor`, so the two are the same instant before
-       rounding, whether or not the next trial is in the same block.
-    2. This trial's containing block's own end -- every block in this
-       project's fixtures gets an explicit `BLOCK_END`.
-    3. The last event time in the whole decoded stream.
+    The best available inference, in order:
+
+    1. The next trial's own start, when there is one closed by a real
+       `TRIAL_START` after it.
+    2. This trial's containing block's own end, when the block itself closed.
+    3. The last event time in the whole decoded stream -- the only branch a
+       trial truncated with nothing recorded after it can ever reach.
     """
     if trial.end_s is not None:
         return trial.end_s

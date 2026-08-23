@@ -2,7 +2,7 @@ import pytest
 
 from wl_preproc.contracts.events import DecodeError, Escape, Marker, TaskTypeCode, decode_stream
 from wl_preproc.synth.recipe import CI_RECIPE
-from wl_preproc.synth.timeline import apply_drift, build_timeline
+from wl_preproc.synth.timeline import CODE_WORD_SPACING_S, apply_drift, build_timeline
 
 
 def test_barcodes_are_emitted_once_per_second():
@@ -75,6 +75,46 @@ def test_drift_is_proportional_and_signed():
 
 def test_timeline_is_deterministic():
     assert build_timeline(CI_RECIPE) == build_timeline(CI_RECIPE)
+
+
+def test_every_trial_emits_an_explicit_trial_end():
+    """Fix round 1, Task 8: the generator emitted TRIAL_START, a TRIAL_NUMBER
+    payload and an outcome marker per trial, but never Marker.TRIAL_END --
+    even though it is in the frozen contract and assemble() already handles
+    it correctly (tests/events/test_assemble.py's own _trial() fixture proves
+    that). That left every trial's own recorded end inferred rather than
+    decoded. This is a fixture gap, not a code gap, and it blocks Task 9: trial
+    coverage is a fraction of a trial's own duration, and a fraction of a
+    guess is not a measurement.
+    """
+    truth = build_timeline(CI_RECIPE)
+    codes = [w for _, w in truth.code_words]
+    assert codes.count(Marker.TRIAL_END.value) == len(truth.trials)
+
+
+def test_decoded_trial_ends_match_the_planted_truth_not_none():
+    """The property the fix exists for. AssembledTrial.end_s is no longer
+    None for a single trial in this fixture, and it recovers TrialTruth.end_s
+    -- not bit-exactly, because a strobed bus carries one word at a time and
+    TRIAL_END necessarily takes its own slot CODE_WORD_SPACING_S before the
+    boundary it marks (the same slot the outcome marker held before this fix;
+    see build_timeline's own comment), but to within that one word's worth of
+    timing, which is the granularity the protocol itself imposes, not slack
+    added to this assertion.
+    """
+    from wl_preproc.events.assemble import assemble
+
+    truth = build_timeline(CI_RECIPE)
+    assembly = assemble(decode_stream(list(truth.code_words)))
+
+    assert len(assembly.trials) == len(truth.trials)
+    planted_by_id = {t.trial_id: t for t in truth.trials}
+    for decoded_trial in assembly.trials:
+        assert decoded_trial.end_s is not None, (
+            f"trial {decoded_trial.trial_id} was not closed by an explicit TRIAL_END"
+        )
+        planted = planted_by_id[decoded_trial.trial_id]
+        assert decoded_trial.end_s == pytest.approx(planted.end_s - CODE_WORD_SPACING_S)
 
 
 def test_code_words_never_overlap_on_the_bus():

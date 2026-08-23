@@ -125,7 +125,18 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
             _emit(words, trial_start, Marker.TRIAL_START.value)
             for word in encode_payload(Escape.TRIAL_NUMBER, _uint32_words(trial_id)):
                 _emit(words, trial_start, word)
-            _emit(words, trial_end - CODE_WORD_SPACING_S, Marker.TRIAL_CORRECT.value)
+            # Outcome, then TRIAL_END -- both still inside the trial, and kept
+            # CODE_WORD_SPACING_S apart from each other and from trial_end
+            # itself (fix round 1, Task 8): TRIAL_END was missing entirely, so
+            # a trial's own recorded end was always inferred rather than
+            # decoded. TRIAL_END is placed at exactly the offset the outcome
+            # marker held before this fix (trial_end - CODE_WORD_SPACING_S),
+            # which is why the outcome moves one spacing earlier rather than
+            # TRIAL_END moving later: this way neither the next trial's own
+            # TRIAL_START nor this block's BLOCK_END (both ratcheted off the
+            # last word placed before them, in `_emit`) shift by this change.
+            _emit(words, trial_end - 2 * CODE_WORD_SPACING_S, Marker.TRIAL_CORRECT.value)
+            _emit(words, trial_end - CODE_WORD_SPACING_S, Marker.TRIAL_END.value)
             cursor = trial_end
             trial_id += 1
 

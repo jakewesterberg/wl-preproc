@@ -178,3 +178,48 @@ def test_no_array_is_ever_written_to_event_attribute_blob(ci_session):
 
     blobs = (pipeline.event.Event.Attribute & session_key).to_arrays("attribute_blob")
     assert all(value is None for value in blobs)
+
+
+def test_a_genuinely_truncated_trial_falls_back_to_the_last_stream_event():
+    """Fix round 1, Task 8: `synth/timeline.py` now emits `Marker.TRIAL_END`
+    for every trial, so `_trial_stop_time`'s inference is unreachable against
+    every fixture this repository generates -- but not against reality. A
+    real recording can still stop mid-trial (a killed process, a full disk),
+    and `assemble()` closes whatever trial was open at end-of-stream with
+    `end_s=None` regardless of why the stream ended. This builds exactly that
+    shape through the real codec and `assemble()`, not by hand-constructing an
+    `AssembledTrial` -- a stream that ends right after `TRIAL_START`, with no
+    `TRIAL_NUMBER` payload, no outcome, and no `TRIAL_END` at all.
+    """
+    from wl_preproc.contracts.events import Escape, Marker, decode_stream, encode_payload
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _trial_stop_time
+
+    words = [(0.0, Marker.SESSION_START.value), (1.0, Marker.TRIAL_START.value)]
+    # The TRIAL_NUMBER payload must actually land -- assemble() matches
+    # trials by ID, never by position, so a trial whose id never arrived is
+    # not merely unclosed, it is unrepresentable and never appended at all
+    # (Task 6's own design). Confirmed the hard way: an earlier draft of this
+    # test cut the stream right after TRIAL_START, before the payload, and
+    # assembly.trials came back EMPTY rather than holding one open trial.
+    words += [
+        (1.0 + 0.001 * (i + 1), word)
+        for i, word in enumerate(encode_payload(Escape.TRIAL_NUMBER, [0, 1]))
+    ]
+    # Nothing after this -- the recording stops here, mid-trial: no outcome,
+    # no TRIAL_END.
+    decoded = decode_stream(words)
+    assembly = assemble(decoded)
+
+    assert len(assembly.trials) == 1
+    (trial,) = assembly.trials
+    # The condition this test exists to reach, confirmed rather than assumed:
+    # a fixture that did not actually produce end_s=None would make the
+    # fallback below pass vacuously.
+    assert trial.end_s is None, "this fixture must actually leave the trial unclosed"
+
+    stream_end_s = max(item.time_s for item in decoded)
+    stop = _trial_stop_time(
+        trial, 0, assembly.trials, containing_block=None, stream_end_s=stream_end_s
+    )
+    assert stop == stream_end_s
