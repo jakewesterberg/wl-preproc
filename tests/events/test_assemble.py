@@ -73,7 +73,7 @@ def test_decode_errors_are_kept_rather_than_dropped():
     DecodeError decode_stream produced, regardless of why decoding failed.
     WHICH codec-level failure occurred (a corrupted checksum vs. a truncated
     payload) is pinned down at the codec's own boundary, in
-    tests/contracts/test_events.py, and is not this layer's business to
+    tests/contracts/test_events_codec.py, and is not this layer's business to
     re-verify.
 
     History: fix round 1 briefly added two tests here --
@@ -82,7 +82,7 @@ def test_decode_errors_are_kept_rather_than_dropped():
     checksum/truncation coverage "from the events package's own side."
     Neither actually called assemble.assemble(); both exercised decode_stream
     directly through the _stream() helper, so they duplicated
-    tests/contracts/test_events.py's existing coverage of those branches
+    tests/contracts/test_events_codec.py's existing coverage of those branches
     while reading, in this file, as assembly coverage. Removed in fix round 2
     rather than reworded, because the fix for a false claim is deletion, not
     a better label.

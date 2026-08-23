@@ -20,6 +20,7 @@ from wl_preproc.schema import (
     core,
     coverage,
     ephys,
+    events,
     ingest,
     paramset,
     request,
@@ -87,10 +88,23 @@ def _computed_tables() -> list:
 # what make this auditable by reading. **The completeness claim is enforced by
 # a test that DOES discover** — `test_every_schema_module_is_swept_for_job_tables`
 # — so an eighth module fails the suite rather than being silently skipped.
+#
+# It became EIGHT with Phase 1c-5's `events` module, predicted by name in that
+# phase's own design spec (section 4.2: "Assume it will be missed a fourth
+# time.") and caught here exactly as predicted, by the test rather than by a
+# person. `events` is a second case unlike `ephys`'s, though: it declares no
+# `@schema` of its own at all — every table it fills is element-event's,
+# already swept via `pipeline` (see that module's own exclusion, above) — so
+# unlike every other entry here it has no `.schema` attribute for
+# `_project_schemas()` to read. `_project_schemas()` returns `None` for it
+# rather than raising, and its two callers below skip a `None` schema, so this
+# tuple can still name `events` — satisfying the completeness claim — without
+# inventing a `dj.Schema` this module would never activate.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("core", core),
     ("coverage", coverage),
     ("ephys", ephys),
+    ("events", events),
     ("ingest", ingest),
     ("paramset", paramset),
     ("request", request),
@@ -103,9 +117,21 @@ def _project_schema_modules() -> list[tuple[str, object]]:
     return list(_PROJECT_SCHEMA_MODULES)
 
 
-def _project_schemas() -> list[tuple[str, dj.Schema]]:
-    """The `dj.Schema` of each. See above."""
-    return [(name, module.schema) for name, module in _PROJECT_SCHEMA_MODULES]
+def _project_schemas() -> list[tuple[str, dj.Schema | None]]:
+    """The `dj.Schema` of each, or `None` for a module that declares no table
+    of its own.
+
+    `events` is the one entry this applies to today: its own module docstring
+    explains why it has no `@schema` (every table it fills is already an
+    adopted Element's, activated via `pipeline`). `None` is returned rather
+    than the module being left out of this list entirely, because
+    `test_every_schema_module_is_swept_for_job_tables` compares NAMES here
+    against every module `pkgutil` discovers under `wl_preproc/schema/` —
+    and a module missing from this list, for any reason, is exactly the shape
+    this project has been bitten by three times already (see this tuple's own
+    comment above).
+    """
+    return [(name, getattr(module, "schema", None)) for name, module in _PROJECT_SCHEMA_MODULES]
 
 
 def activate_all(prefix: str = DEFAULT_PREFIX) -> None:
@@ -148,8 +174,16 @@ def _any_schema_activated() -> bool:
     "genuinely checked, found nothing to reap" apart from "there was nothing
     activated to check in the first place". ``count_stale_jobs`` needs that
     distinction to avoid reporting the second case as if it were the first.
+
+    `schema_obj` is `None` for a module that declares no schema of its own
+    (`events` today — see `_project_schemas()`); such an entry contributes
+    nothing to activation state either way, so it is skipped rather than
+    read.
     """
-    return any(schema_obj.is_activated() for _name, schema_obj in _project_schemas())
+    return any(
+        schema_obj is not None and schema_obj.is_activated()
+        for _name, schema_obj in _project_schemas()
+    )
 
 
 def _activated_job_tables():
@@ -165,9 +199,13 @@ def _activated_job_tables():
     some of them (exactly what ``tests/schema/test_daemon.py``'s
     ``daemon_env`` fixture does — it activates ``core`` and ``request`` but
     not ``coverage``/``paramset``).
+
+    `schema_obj` is `None` for a module that declares no schema of its own
+    (`events` today — see `_project_schemas()`); it owns no `~jobs` table
+    either way, so it is skipped exactly like an unactivated one.
     """
     for _name, schema_obj in _project_schemas():
-        if not schema_obj.is_activated():
+        if schema_obj is None or not schema_obj.is_activated():
             continue
         yield from schema_obj.jobs
 
