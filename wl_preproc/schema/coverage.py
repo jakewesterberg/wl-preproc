@@ -86,6 +86,42 @@ class TrialCoverage(dj.Computed):
     covered_s : double
     """
 
+    @property
+    def key_source(self):
+        """Every (trial, system) pair of a session, whatever each system did.
+
+        The cross product, mirroring `BlockCoverage.key_source` exactly and
+        for the identical reason: a system that recorded NONE of a trial still
+        needs a row saying `absent`, and joining through `Segment` would
+        silently omit exactly the systems whose absence matters most.
+        """
+        return pipeline.trial.Trial * core.AcquisitionSystem
+
+    def make(self, key: dict) -> None:
+        """Intersect this trial's interval with this system's segment extents.
+
+        The same rule `BlockCoverage.make()` calls -- `timebase/coverage.py`'s
+        own docstring already names this table by name as the second caller,
+        "so the rule has one definition rather than one per table." Nothing
+        here reimplements it.
+
+        `trial.Trial.trial_stop_time` is not nullable (1c-5 Task 8: the
+        synthetic generator now emits `Marker.TRIAL_END` for every trial, so no
+        trial comes back with `end_s=None`), so a zero-or-negative-duration
+        trial is not papered over here either -- `classify_coverage` raises,
+        and that is surfaced rather than caught, exactly as `BlockCoverage.
+        make()` leaves it.
+        """
+        from wl_preproc.timebase.coverage import classify_coverage
+
+        trial = (pipeline.trial.Trial & key).fetch1("trial_start_time", "trial_stop_time")
+        extents = [
+            (row["start_s"], row["end_s"])
+            for row in (core.Segment & key).to_dicts()
+        ]
+        state, covered_s = classify_coverage(trial, extents)
+        self.insert1({**key, "coverage": state, "covered_s": covered_s})
+
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}coverage`. Idempotent."""

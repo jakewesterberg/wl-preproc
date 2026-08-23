@@ -72,17 +72,24 @@ def test_the_timebase_records_which_clock_it_believed(schemas):
     assert "trigger" in time_source.type
 
 
-def test_the_tier_can_say_it_does_not_know_yet(schemas):
-    """Design spec section 8: tiers A/B/C each include a code-agreement or
-    trial-count term, and event decoding is 1c-5. A tier derived from absent
-    inputs treated as passing is a false claim of validation, so 'pending' is a
-    value the column can hold rather than a default that reads like a verdict.
-    """
+def test_the_tier_enum_no_longer_holds_pending(schemas, enum_values):
+    """Before 1c-5, tiers A/B/C each needed a code-agreement or trial-count
+    term that event decoding alone could supply, so 'pending' was a value the
+    column could hold rather than a default that reads like a verdict --
+    which this test asserted directly, by checking 'pending' was IN the
+    declared type.
+
+    1c-5 Task 9 is what supplies those inputs: `TimingProvenance.make()` now
+    calls `events.agreement.resolve_tier` unconditionally, so no code path
+    writes 'pending' any more. It is dropped from the enum outright rather
+    than kept as a value nothing can reach -- a stored value with no writer
+    left is worse than no value at all, per `_TIER_ENUM`'s own comment in
+    `schema/timebase.py`. So this test now asserts the opposite of what it
+    used to: the enum is EXACTLY {A, B, C, D}, and 'pending' is gone."""
     _core, _coverage, timebase = schemas
 
     tier = timebase.TimingProvenance.heading.attributes["tier"]
-    assert "pending" in tier.type
-    assert "D" in tier.type
+    assert enum_values(tier.type) == {"A", "B", "C", "D"}
 
 
 def test_no_bare_longblob_in_the_new_schema_module(schemas):
@@ -116,14 +123,35 @@ import datetime  # noqa: E402
 
 @pytest.fixture(scope="module")
 def provenance_session(dj_conn, prefix, tmp_path_factory):
-    """A landed `drift` session with every populate run, provenance last."""
-    from wl_preproc.schema import core, coverage, ingest, pipeline, timebase
+    """A landed `drift` session with every populate run, provenance last --
+    including `events.populate_session`, which 1c-5 Task 9's tier resolution
+    now depends on for `trial_count_agreement` (codes vs task file) and
+    `block_agreement` (measured `trial.Block` vs asserted `core.Block`).
+
+    Before Task 9 this fixture never called `events.populate_session` at all,
+    because nothing here needed `pipeline.trial.Trial`/`trial.Block` to exist.
+    That premise is gone: leaving it out would make every session decode as
+    though the codes were never assembled, forcing a spurious
+    `trial_count_agreement=False` and quarantining a clean fixture at D for a
+    reason that has nothing to do with what each test actually exercises. Per
+    "fix the fixture, not the spec" -- the fixture predates the dependency,
+    not the design.
+
+    `core.Block` gets one row matching the DRIFT recipe's own single measured
+    block exactly (`block_id=1`, `start_s=0.0`, `end_s=15.0` -- `recipe.blocks`
+    is one `BlockSpec(n_trials=5, trial_duration_s=3.0)`, so `duration_s ==
+    15.0`), so this session's own `block_agreement` is genuinely `True` rather
+    than the `None` every other fixture in this file leaves it at -- proving
+    the positive path end-to-end, not merely that it does not crash.
+    """
+    from wl_preproc.schema import core, coverage, events, ingest, pipeline, timebase
     from wl_preproc.synth.recipe import RECIPES
     from wl_preproc.synth.session import generate_session
 
     timebase.activate(prefix=prefix)
     coverage.activate(prefix=prefix)
     ingest.activate(prefix=prefix)
+    events.activate(prefix=prefix)
 
     root = tmp_path_factory.mktemp("provenance")
     recipe = RECIPES["drift"]
@@ -162,28 +190,55 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
         [{**session_key, "system": system} for system in recipe.systems],
         skip_duplicates=True,
     )
+    core.Block.insert1(
+        {
+            **session_key,
+            "block_id": 1,
+            "task_type": "rf_map",
+            "start_s": 0.0,
+            "end_s": recipe.duration_s,
+        },
+        skip_duplicates=True,
+    )
 
     timebase.SystemTimebase.populate()
     core.Segment.populate()
+    events.populate_session(session_key, root / recipe.session_id)
     timebase.TimingProvenance.populate()
     return session_key, recipe
 
 
-def test_tier_is_pending_not_a_passing_grade_when_inputs_are_missing(
+def test_the_tier_resolves_to_a_once_two_full_code_records_genuinely_agree(
     schemas, provenance_session
 ):
-    """Spec section 8. Tiers A/B/C each need event-code agreement or trial
-    counts, both of which are 1c-5. A tier derived from absent inputs treated
-    as passing is a FALSE CLAIM OF VALIDATION, so this phase emits 'pending'
-    and names what it could not compute — mirroring 1c-2's report, which names
-    the categories it cannot yet count rather than omitting them."""
+    """1c-5 Task 9 supplies what 1c-4 could only wait for. Before this task,
+    this exact fixture's tier read 'pending' (this test's own former name);
+    now `TimingProvenance.make()` always calls `resolve_tier`, and this
+    session has everything tier A needs: the DRIFT recipe carries both
+    `syncbox` (the Pi) and `spikeglx` (the NI, since 1c-5's Task 1 gave the
+    synthetic NI its own code lines), so there are two independent full-code
+    records: 1.0 -- the NI latches whatever value is on the shared strobe bus
+    at that instant, which does not depend on either system's own clock rate,
+    so the two decode identically regardless of the NI's planted 18 ppm
+    drift. `trial_count_agreement` is `True`: the task file and the decoded
+    code stream both derive from the identical planted `GroundTruth.trials`.
+    `block_agreement` is `True` too: the fixture asserts one `core.Block` row
+    matching the DRIFT recipe's own single measured block exactly. Produces:
+    tier A, by the `n_full_code_records >= 2` branch, with none of the D
+    guards tripped.
+    """
     _core, _coverage, timebase = schemas
     session_key, _recipe = provenance_session
 
     row = (timebase.TimingProvenance & session_key).fetch1()
 
-    assert row["tier"] == "pending"
-    assert row["pending_inputs"], "a pending tier that names nothing explains nothing"
+    assert row["tier"] == "A", row
+    assert row["pending_inputs"] == ""
+    assert row["n_full_code_records"] == 2
+    assert row["event_code_agreement"] == pytest.approx(1.0)
+    assert row["decode_errors"] == 0
+    assert row["trial_count_agreement"]
+    assert row["block_agreement"]
 
 
 def test_tier_d_is_fully_derivable_now(schemas, dj_conn, prefix, tmp_path):
@@ -274,4 +329,131 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
     # The largest planted magnitude, recovered through the database.
     assert abs(row["worst_drift_ppm"]) == pytest.approx(
         max(abs(ppm) for _s, ppm in recipe.system_drift_ppm), abs=300.0
+    )
+
+
+def test_the_tier_leaves_pending_once_the_three_inputs_exist(dj_conn, prefix):
+    """1c-4 recorded `tier='pending'` and named exactly what it waited for:
+    event_code_agreement, trial_count_agreement, camera_trigger_count. This
+    phase supplies them, so no session may still read 'pending' afterwards --
+    and `pending_inputs` must be emptied rather than left describing a wait
+    that is over.
+
+    Every row already in the shared database by the time this test runs is in
+    scope, not only this file's own fixtures: `tests/conftest.py`'s `dj_conn`/
+    `prefix` are session-scoped, one database for the whole suite, so any
+    other test file that has populated `TimingProvenance` by now contributes
+    rows here too. That is deliberate -- the invariant this test states is
+    "no code path writes 'pending' any more", and a check restricted to this
+    file's own rows could not tell that from "this file's fixtures happen not
+    to trigger the old path".
+
+    (Mid-flight correction: the first draft of this test wrapped the
+    `pending_inputs == ""` assertion in `if row["tier"] != "pending"`. Dead
+    code -- the assertion just above it already requires `tier` to be one of
+    A/B/C/D, so the guard's condition is unconditionally true and reads, to
+    anyone skimming it, as though pending rows were deliberately exempted from
+    the very check this test exists to enforce. Removed; both assertions now
+    run unconditionally for every row.)
+    """
+    from wl_preproc.schema import timebase
+
+    rows = timebase.TimingProvenance.to_dicts()
+    assert rows, "no provenance rows to check"
+    for row in rows:
+        assert row["tier"] in {"A", "B", "C", "D"}, f"still pending: {row}"
+        assert row["pending_inputs"] == "", (
+            "pending_inputs must be empty once the tier is decided; it "
+            f"still reads {row['pending_inputs']!r}"
+        )
+
+
+def test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records(
+    dj_conn, prefix, tmp_path
+):
+    """Design spec section 5: "A disagreement between `trial.Block` (measured)
+    and `core.Block` (asserted) is a tier-D condition, not a silent
+    reconciliation" -- proven end-to-end here, not only at
+    `resolve_tier`'s own unit level (`tests/events/test_agreement.py`).
+
+    The `ci` recipe's own single block genuinely spans `[0.0, 9.0)` (RF_MAP:
+    3 trials * 3.0s) -- `core.Block` instead asserts `end_s=999.0`, a wl.works
+    row that does not describe this session at all. Every other input is
+    clean: `syncbox` + `spikeglx` give two agreeing full-code records (tier A
+    territory otherwise), and the task file's trial count matches the decoded
+    one exactly. Produces: `block_agreement=False`, and a tier of D despite
+    satisfying every other tier-A condition -- proving `block_agreement`
+    actually gates `TimingProvenance.make()`'s own resolved tier, not merely
+    `resolve_tier` in isolation.
+    """
+    import datetime
+
+    from wl_preproc.schema import core, events, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+
+    ingest.activate(prefix=prefix)
+    events.activate(prefix=prefix)
+    recipe = RECIPES["ci"]
+    generate_session(tmp_path, recipe)
+    session_dir = tmp_path / recipe.session_id
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 23, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 23, 19, 0),
+            "session_dir": str(session_dir),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+    core.Block.insert1(
+        {
+            **session_key,
+            "block_id": 1,
+            "task_type": "rf_map",
+            "start_s": 0.0,
+            "end_s": 999.0,  # disagrees with the measured trial.Block outright
+        },
+        skip_duplicates=True,
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    events.populate_session(session_key, session_dir)
+    timebase.TimingProvenance.populate()
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+    # `== 0`, not `is False`: a `tinyint(1)` column round-trips through
+    # DataJoint/pymysql as a plain Python int, not the `False` singleton, so
+    # an `is` comparison here would fail on genuinely correct data.
+    assert row["block_agreement"] == 0, row
+    assert row["tier"] == "D", row
+    assert row["n_full_code_records"] == 2, (
+        "this must be a genuine A-territory session apart from the block "
+        f"disagreement, or D proves nothing about block_agreement: {row}"
     )

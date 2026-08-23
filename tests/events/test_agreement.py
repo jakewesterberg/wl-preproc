@@ -77,6 +77,53 @@ def test_c_requires_the_task_file_check_to_have_actually_happened():
     ) == "D"
 
 
+def test_block_disagreement_is_D_even_with_two_agreeing_full_code_records():
+    """Design spec section 5: "A disagreement between `trial.Block` (measured)
+    and `core.Block` (asserted) is a tier-D condition, not a silent
+    reconciliation." Overrides `block_agreement=False` only, everything else
+    at base (`n_full_code_records=2`, `event_code_agreement=1.0`,
+    `trial_count_agreement=True`) -- so this fixture would otherwise satisfy
+    tier A outright. Produces: two full-code records that genuinely agree, a
+    genuine task-file cross-check, and a genuine block-boundary disagreement.
+    `resolve_tier` must reach the `block_agreement is False` line specifically,
+    not merely land on D through some other guard -- confirmed by sabotage:
+    deleting that one `if` from `resolve_tier` turns this fixture's verdict
+    into "A", nothing else in this file moves, and the mutant survives every
+    other test in this suite.
+    """
+    assert agreement.resolve_tier(_inputs(block_agreement=False)) == "D"
+
+
+def test_c_requires_the_block_check_to_have_actually_happened():
+    """`block_agreement=None` means wl.works asserted no blocks at all for this
+    session -- nothing to cross-validate the measured boundary against, same
+    shape as `trial_count_agreement=None`. Only a genuine disagreement
+    (`block_agreement is False`) may force D; `None` must fall through this
+    guard exactly as it falls through the `trial_count_agreement` one, so a
+    session with one full-code record, a real task-file cross-check, but no
+    wl.works block assertion at all still reaches C rather than being
+    penalised for a check that never ran."""
+    assert (
+        agreement.resolve_tier(
+            _inputs(
+                n_full_code_records=1,
+                n_strobe_witnesses=0,
+                event_code_agreement=None,
+                block_agreement=None,
+            )
+        )
+        == "C"
+    )
+
+
+def test_block_agreement_true_does_not_block_tier_a():
+    """The positive case: `block_agreement=True` alongside every other tier-A
+    condition must still resolve to A -- a passing check must never be
+    mistaken for a gating one. Produces: two agreeing full-code records, a
+    genuine task-file cross-check, and a genuine, matching block boundary."""
+    assert agreement.resolve_tier(_inputs(block_agreement=True)) == "A"
+
+
 def test_no_full_code_record_at_all_is_D():
     """Zero full-code recorders present at all -- nothing decoded any event
     codes, so A, B and C's shared precondition (>=1 full-code record) is

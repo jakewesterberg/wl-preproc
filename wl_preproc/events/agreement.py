@@ -9,6 +9,15 @@ camera_trigger_count`. This module supplies them.
 is retained on the row so the verdict can be re-derived under different
 thresholds later. `resolve_tier` therefore takes only the measured inputs and
 holds no state of its own.
+
+**`block_agreement` is a fourth, later addition -- not one of "the three".**
+Section 5 makes a disagreement between the measured block boundary
+(`trial.Block`) and wl.works' own assertion (`core.Block`) its own tier-D
+condition, distinct from section 7's three. 1c-5 Task 9 found `TierInputs` had
+no field for it -- a gap between the design spec and the plan that built this
+module -- and closed it here, following the exact precedent
+`trial_count_agreement` already set for "nothing to compare against" rather
+than inventing a second convention.
 """
 
 from __future__ import annotations
@@ -30,6 +39,16 @@ class TierInputs:
     n_full_code_records: int
     n_strobe_witnesses: int
     decode_errors: int
+    # Design spec section 5: "A disagreement between `trial.Block` (measured)
+    # and `core.Block` (asserted) is a tier-D condition, not a silent
+    # reconciliation." Added in 1c-5 Task 9 -- the original TierInputs had no
+    # field for this, so the condition the spec names could not be expressed
+    # at all. `None` when there is nothing to compare against (wl.works
+    # asserted no blocks for this session), exactly the same convention
+    # `trial_count_agreement` uses for "no task file at all": a tier is a
+    # published quality claim, and `None` must never be silently treated as
+    # agreement any more than an unmeasured trial count is.
+    block_agreement: bool | None = None
 
 
 def resolve_tier(inputs: TierInputs) -> str:
@@ -52,10 +71,20 @@ def resolve_tier(inputs: TierInputs) -> str:
     fifth state for "never checked", and D is the quarantined tier that is not
     auto-published, which is the correct home for both "checked and failed"
     and "never checked at all".
+
+    **`block_agreement is False` is a D condition too -- 1c-5 Task 9, spec
+    section 5.** "A disagreement between `trial.Block` (measured) and
+    `core.Block` (asserted) is a tier-D condition, not a silent
+    reconciliation." `None` is treated exactly as `trial_count_agreement`'s
+    `None` is: wl.works asserted no blocks to compare against, which is
+    nothing measured, not an agreement -- so it must not gate anything here,
+    for the identical reason an absent task file must not earn C.
     """
     if inputs.decode_errors:
         return "D"
     if inputs.trial_count_agreement is False:
+        return "D"
+    if inputs.block_agreement is False:
         return "D"
     if inputs.event_code_agreement is not None and (
         inputs.event_code_agreement < AGREEMENT_THRESHOLD
