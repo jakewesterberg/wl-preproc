@@ -444,6 +444,28 @@ times at native precision"* — in the database, queryable, and **never decimate
 
 ## 9. Open questions
 
+0. **Nothing populates `trajectory_id`, and nothing can yet.** The column is declared
+   (`ephys.py`, below `ProbeInsertion`'s divider) and is the whole of this binding's
+   implementation. Three things stand between it and a real value, in order:
+   **(a)** wl.works has no `trajectory` table — it holds 31 tables, all platform infrastructure,
+   and the design there is blocked on Plans 11, 16 and 19 and rows 27 and 28, all designed and
+   unbuilt (`wl-works` `specs/2026-08-22-trajectory-identity-design.md` §0.2.1 and §8.3);
+   **(b)** parent spec §11.2's payload does not name it — `MetadataBundle.probes` is
+   `list[dict[str, Any]]` and `docs/schemas/job_request.json` types its items as
+   `additionalProperties: true`, so an id *could* ride inside a probe dict today and **nothing
+   would validate it**, which means wl.works has no signal to send one and this machine has no
+   signal if it is missing or misspelled;
+   **(c)** the responder does not read it. Reading it from the payload and writing it onto
+   `ProbeInsertion` is Phase 2b.
+   **The column is a reservation, and a correct one** — declaring it now costs nothing and adding
+   a non-key attribute later costs nothing either, but declaring it now means the shape is settled
+   before anything writes a row. Recorded because a reader finding an always-null column is
+   entitled to know whether that is a bug or a plan.
+   > `wl-trajectortree` carries its own half at
+   > `specs/2026-08-23-trajectory-identity-binding-design.md`. It is **not** on the critical path:
+   > wl.works records geometry rather than computing it, so a human can author a trajectory by
+   > hand the day those tables exist.
+
 1. **Does an overlap derivative need its own request verb?** §3.2.2 makes a cross-montage
    derivative representable and refuses an empty intersection, but says nothing about how wl.works
    *asks* for one. Parent spec §11.2's payload carries a block selection; a request that
