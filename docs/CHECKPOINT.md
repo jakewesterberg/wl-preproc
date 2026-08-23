@@ -413,6 +413,22 @@ leaves something behind that does:
   the activation must re-fire automatically once the missing rows land.** At 48 h that could
   have been a manual nudge; at 12 h it cannot. Whatever implements the canonical trigger must
   treat "waiting on ELN" as retryable with no human step.
+- **NEW, found 2026-08-23 while wiring Phase 1c-5's daemon stage: an errored key is never
+  retried, and that collides with the requirement two items above.** Measured against
+  DataJoint 2.3.2 on a live probe — three consecutive `run_once` passes gave **2 errors, then
+  0, then 0**, with `make()` called only on the first. `_populate_distributed` draws solely
+  from `jobs.pending`, and `Job.refresh()` re-pends *completed* jobs but not errored ones (its
+  step 3 only deletes rows whose key has left `key_source`). Because `run_once` passes
+  `suppress_errors=True`, **one transient failure parks that session permanently** and the
+  daily report names it once, never again.
+  This is not merely an operational nuisance. Items 9 and 10 above require that a session
+  quarantined *"waiting on ELN"* **re-fire automatically with no human step** — and at the
+  canonical 12-hour delay that quarantine is ordinary, not exceptional. If waiting on ELN ever
+  surfaces as a populate error rather than as an empty `key_source`, the retry that requirement
+  depends on will not happen. Deciding the retry policy — what is transient, how many attempts,
+  what backoff — is a design question, so it is recorded here rather than patched into 1c-5.
+  Outside `reap_stale_jobs`' contract: that function was audited in the same pass and **is**
+  correct, since a `make()` that raises ends at `status='error'` and is never left reserved.
 - **Item 12 narrowed.** No machine creates a block, so the actor question is now only about
   the canonical activation row itself.
 - **One question is out with the wl.works owner**, and nothing blocks on the answer: can the
