@@ -48,6 +48,26 @@ def test_montages_must_cover_the_session():
     assert "cover" in str(exc.value)
 
 
+def test_a_zero_trial_block_is_refused():
+    """A zero-trial block has zero nominal duration, but `timeline.py` still
+    emits its `BLOCK_START` payload and its `BLOCK_END` -- so its MEASURED
+    boundary lands several code-word slots away from `(0.0, 0.0)`, and the
+    block after it starts displaced too. Traced: nominal `(0.0, 0.0)` measures
+    `(0.001, 0.005)`, with the next block's start pushed to `0.006` -- six
+    slots, three times `BLOCK_AGREEMENT_TOLERANCE_FLOOR_S`, i.e. a tier-D
+    quarantine for a session where nothing is actually wrong.
+
+    `events/agreement.py`'s `_BLOCK_START_MAX_SLOTS` derives its one-slot
+    bound assuming every block has at least one trial. Its comment used to
+    claim the refusal already happened downstream in `classify_coverage`,
+    which was never called on the measured block at all; the refusal lives
+    here instead, at the only point a zero-trial block can be described.
+    """
+    with pytest.raises(ValidationError) as exc:
+        BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=0, trial_duration_s=3.0)
+    assert "greater than or equal to 1" in str(exc.value)
+
+
 def test_ci_recipe_is_small_enough_for_ci():
     """A CI fixture that takes minutes or gigabytes will be deleted by whoever
     inherits it. Keep it tiny by construction."""
