@@ -8,10 +8,9 @@ from wl_preproc.synth.rhs import (
     RHS_PRE_ROLL_S,
     RHS_SAMPLE_RATE_HZ,
     STROBE_DIGITAL_BIT,
-    STROBE_WIDTH_S,
     write_rhs,
 )
-from wl_preproc.synth.recipe import STIM_RECIPE
+from wl_preproc.synth.recipe import CI_RECIPE, STIM_RECIPE
 from wl_preproc.synth.rhs_header import MAGIC
 from wl_preproc.synth.stim import SETTLE_DURATION_S, unpack_stim_word
 from wl_preproc.synth.timeline import build_timeline
@@ -208,24 +207,22 @@ def test_every_code_word_gets_its_own_strobe_edge(tmp_path):
     rendered as 5 rising edges, and nothing tested it. STROBE_WIDTH_S is half
     the spacing, so a low always separates them.
 
-    Two of the 31 words do not appear, and that is a different thing from
-    merging: build_timeline places BLOCK_END and SESSION_END at and just after
-    duration_s, while the RHS buffer ends at duration_s + pre-roll, so those
-    two fall past the last sample. Every word the buffer can hold gets an edge.
+    Until the digital buffer was sized from the actual last code word rather
+    than from `recipe.duration_s`, two of the 31 words -- BLOCK_END and
+    SESSION_END, which build_timeline places at and just after duration_s --
+    fell past the buffer's last sample and got no edge at all: a second,
+    different way to lose a word, alongside the merge above. This test used
+    to assert that loss as the expected count (`len(truth.code_words) - 2`);
+    that assertion's premise was the defect, not something to preserve. See
+    `test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line` for the
+    regression test written against that bug.
     """
     truth, out, _ = emit(tmp_path)
     digital = np.fromfile(out / "digitalin.dat", dtype=np.uint16)
     strobe = ((digital >> STROBE_DIGITAL_BIT) & 1).astype(np.int8)
     rising = int(np.count_nonzero(np.diff(np.concatenate(([0], strobe))) == 1))
 
-    width = max(1, int(STROBE_WIDTH_S * RHS_SAMPLE_RATE_HZ))
-    starts = [
-        int((time_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-        for time_s, _word in truth.code_words
-    ]
-    inside = [s for s in starts if s + width <= digital.size]
-    assert len(inside) == len(truth.code_words) - 2, "only the session-closing pair"
-    assert rising == len(inside)
+    assert rising == len(truth.code_words)
 
 
 def test_digital_input_uses_only_the_barcode_and_strobe_bits(tmp_path):
@@ -339,3 +336,32 @@ def test_emission_is_deterministic(tmp_path):
     b = write_rhs(second, STIM_RECIPE, truth)
     assert (a / "amplifier.dat").read_bytes() == (b / "amplifier.dat").read_bytes()
     assert (a / "stim.dat").read_bytes() == (b / "stim.dat").read_bytes()
+
+
+@pytest.mark.parametrize("recipe", [CI_RECIPE, STIM_RECIPE], ids=["ci", "stim"])
+def test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line(tmp_path, recipe):
+    """The RHS carries the strobe ONLY -- spec section 4.2, because 16 digital
+    inputs cannot fit 16 data lines plus strobe plus barcode -- so its entire
+    contribution is a COUNT. A dropped word is therefore invisible unless
+    something counts.
+
+    This shipped broken: the digital buffer was sized on recipe.duration_s
+    while build_timeline places SESSION_END about a millisecond after it, so
+    the last code word fell off the end of every session. Nothing caught it
+    because this file only checked barcode values.
+
+    Same class as the Phase 1b strobe defect in CHECKPOINT: a witness that
+    silently stopped witnessing.
+    """
+    truth = build_timeline(recipe)
+    directory = tmp_path / "rhs"
+    directory.mkdir()
+    out = write_rhs(directory, recipe, truth)
+
+    digital = np.fromfile(out / "digitalin.dat", dtype=np.uint16)
+    strobe = ((digital >> STROBE_DIGITAL_BIT) & 1).astype(np.int8)
+    rising = int(np.count_nonzero(np.diff(np.concatenate(([0], strobe))) == 1))
+
+    assert rising == len(truth.code_words), (
+        f"{rising} strobe edges for {len(truth.code_words)} emitted words"
+    )

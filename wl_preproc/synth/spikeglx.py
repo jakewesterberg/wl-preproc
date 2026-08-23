@@ -29,7 +29,7 @@ import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.synth.recipe import SessionRecipe
-from wl_preproc.synth.timeline import apply_drift
+from wl_preproc.synth.timeline import apply_drift, code_word_span_s
 from wl_preproc.synth.truth import GroundTruth
 
 SPIKE_TEMPLATE_UV = np.array(
@@ -223,18 +223,11 @@ def write_nidq(
 
     strobe_width = max(1, int(round(STROBE_WIDTH_S * NIDQ_SAMPLE_RATE_HZ)))
 
-    # timeline.py's own spacing rule (`_emit`) places SESSION_END -- and, in a
-    # multi-block session, every BLOCK_END -- at or after recipe.duration_s,
-    # never before it: the last trial's own closing marks land AT
-    # duration_s, and each later word is pushed CODE_WORD_SPACING_S past
-    # whatever came before it. A buffer sized to duration_s alone has no room
-    # left for that last word's strobe pulse. Barcodes never hit this --
-    # BARCODE_INTERVAL_S keeps the last one strictly before duration_s -- so
-    # this only had to be discovered once code words existed to overrun it.
-    last_code_word_s = max(
-        (apply_drift(time_s, drift_ppm) for time_s, _ in truth.code_words), default=0.0
-    )
-    session_span_s = max(recipe.duration_s, last_code_word_s + STROBE_WIDTH_S)
+    # `code_word_span_s` -- shared with `synth/rhs.py` -- extends the buffer
+    # past recipe.duration_s when SESSION_END lands after it, which
+    # timeline.py's own spacing rule always does. Barcodes never need this;
+    # code words do.
+    session_span_s = code_word_span_s(recipe, truth, drift_ppm, STROBE_WIDTH_S)
     n_samples = int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ) + 1
     control = np.zeros(n_samples, dtype=np.uint16)  # word 0: barcode + strobe
     data = np.zeros(n_samples, dtype=np.uint16)  # word 1: the 16 data lines

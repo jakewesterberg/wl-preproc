@@ -24,6 +24,33 @@ def apply_drift(time_s: float, drift_ppm: float) -> float:
     return time_s * (1.0 + drift_ppm * 1e-6)
 
 
+def code_word_span_s(
+    recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float, strobe_width_s: float
+) -> float:
+    """How long, in seconds, a per-system digital buffer must span to hold
+    every code word's own strobe pulse -- not just `recipe.duration_s`.
+
+    `_emit` places `Marker.SESSION_END` -- and, in a multi-block session,
+    every `Marker.BLOCK_END` -- at or after `recipe.duration_s`, never before
+    it: the last trial's own closing marks land AT `duration_s`, and each
+    later word is pushed `CODE_WORD_SPACING_S` past whatever came before it.
+    A buffer sized to `duration_s` alone has no room left for that last
+    word's own strobe pulse. Barcodes never hit this -- `BARCODE_INTERVAL_S`
+    keeps the last one strictly before `duration_s` -- so only code words
+    need this correction.
+
+    Shared by `synth/spikeglx.py` and `synth/rhs.py` so the correction exists
+    in exactly one place: Phase 1c5 first fixed this only on the NI side, and
+    `rhs.py` carried the identical defect, unnoticed, because nothing counted
+    the strobe edges it wrote -- see `tests/synth/test_rhs.py`'s
+    `test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line`.
+    """
+    last_code_word_s = max(
+        (apply_drift(time_s, drift_ppm) for time_s, _ in truth.code_words), default=0.0
+    )
+    return max(recipe.duration_s, last_code_word_s + strobe_width_s)
+
+
 def _uint32_words(value: int) -> list[int]:
     return [(value >> 16) & 0xFFFF, value & 0xFFFF]
 

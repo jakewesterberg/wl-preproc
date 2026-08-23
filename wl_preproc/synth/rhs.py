@@ -26,7 +26,7 @@ from wl_preproc.synth.rhs_header import write_rhs_header
 # emitters are meant to be planting the same ground truth.
 from wl_preproc.synth.spikeglx import SPIKE_TEMPLATE_UV
 from wl_preproc.synth.stim import SETTLE_DURATION_S, pack_stim_word
-from wl_preproc.synth.timeline import apply_drift
+from wl_preproc.synth.timeline import apply_drift, code_word_span_s
 from wl_preproc.synth.truth import GroundTruth
 
 # The RHS controller has its own clock, so recipe.ap_sample_rate_hz — which
@@ -78,7 +78,18 @@ def write_rhs(
     rng = np.random.default_rng(recipe.seed + 3)
     fs = RHS_SAMPLE_RATE_HZ
     n_channels = recipe.n_ap_channels
-    n_samples = int((recipe.duration_s + RHS_PRE_ROLL_S) * fs)
+    # `code_word_span_s` -- shared with `synth/spikeglx.py` -- extends the
+    # buffer past recipe.duration_s when SESSION_END lands after it, which
+    # timeline.py's own spacing rule always does; barcodes never need this.
+    # Every "One File Per Signal Type" output shares this n_samples, so
+    # amplifier.dat, stim.dat and time.dat all grow the same handful of
+    # samples alongside digitalin.dat -- they must, since a reader indexes
+    # all four by the same sample count. Before this fix the digital buffer
+    # ended at duration_s + pre-roll and the last code word's own strobe fell
+    # past it on every session -- see
+    # test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line.
+    session_span_s = code_word_span_s(recipe, truth, drift_ppm, STROBE_WIDTH_S)
+    n_samples = int((session_span_s + RHS_PRE_ROLL_S) * fs) + 1
 
     out = dir_path / f"{recipe.session_id}_rhs"
     out.mkdir(exist_ok=True)
