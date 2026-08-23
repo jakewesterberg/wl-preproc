@@ -53,6 +53,12 @@ class StrobeWitness:
         return len(self.edge_samples)
 
 
+# `timebase/extract.py` names the barcode's line as RHS_BARCODE_DIGITAL_BIT = 0.
+# The strobe is the next one, and it has no constant on the READING side yet --
+# only `synth/rhs.py` names it, on the emitting side.
+RHS_STROBE_DIGITAL_BIT = 1
+
+
 # The sync box logs at microsecond resolution and is not a sampled line at all;
 # 1 MHz is nominal, matching `timebase/extract.py`'s own treatment of it.
 _SYNCBOX_NOMINAL_FS_HZ = 1_000_000.0
@@ -115,3 +121,29 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
 
     words = tuple((int(index), int(data[index])) for index in falling)
     return WordStream(words=words, fs_hz=meta.sample_rate_hz)
+
+
+def extract_rhs_witness(session_dir: Path) -> StrobeWitness:
+    """Strobe edges from the Intan RHS. A witness, never words.
+
+    Spec section 4.2: RHS receives the strobe only. Its 16 digital inputs
+    cannot fit 16 data lines plus the strobe plus the barcode, and the design
+    permits that because the Pi is always present as a full-code recorder --
+    a rule that "does not generalize back to the Pi", which is the sole
+    recorder on training days.
+    """
+    import numpy as np
+
+    from wl_preproc.timebase._rhs_header import (
+        INFO_FILENAME,
+        find_recording_dir,
+        read_sample_rate_hz,
+    )
+
+    recording_dir = find_recording_dir(session_dir)
+    fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
+    words = np.fromfile(recording_dir / "digitalin.dat", dtype=np.uint16)
+
+    strobe = (words >> RHS_STROBE_DIGITAL_BIT) & 1
+    rising = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1
+    return StrobeWitness(edge_samples=tuple(int(i) for i in rising), fs_hz=fs_hz)
