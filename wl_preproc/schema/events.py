@@ -98,18 +98,28 @@ def _u32(words: tuple[int, ...]) -> int:
     return (words[0] << 16) | words[1]
 
 
-def _decode_syncbox_in_session_time(session_dir: Path) -> list[tuple[float, int]]:
+def decode_syncbox_in_session_time(session_dir: Path) -> list[tuple[float, int]]:
     """Every code word the sync box recorded, native time converted to session
     time via `timebase/fit.py` -- the same fit primitives `core.Segment` and
     `timebase.SystemTimebase` use, so this does not invent a second
     conversion.
 
-    Sync box only, deliberately. The NI's own code words (once Phase 1c-5's
-    synthetic NI fixture carries them -- design spec section 2.1) are a
-    SECOND, independent record used only for `event_code_agreement` (tier A),
-    which is `events/agreement.py` and `TimingProvenance`'s job (1c-5 Task 9),
-    not this module's: the canonical trial list is built from exactly one
-    full-code record.
+    **Public, not module-private** (1c-5 Task 9): this docstring said all
+    along that the NI's own code words are "used only for `event_code_agreement`
+    ... which is `events/agreement.py` and `TimingProvenance`'s job ... not
+    this module's" -- and `TimingProvenance.make()` needs the Pi's SAME
+    canonical decode to compare the NI's record against. Restating this
+    function there, the way `events.py`'s own `_u32` restates `assemble.py`'s,
+    would duplicate the non-trivial half (barcode reference, identity rate,
+    offset fit) that restating a two-word integer pack does not risk --
+    `timebase/coverage.py`'s own rule against a second implementation applies
+    here for the same reason.
+
+    Sync box only, deliberately. The NI's own code words are a SECOND,
+    independent record used only for `event_code_agreement` (tier A) and the
+    tier B/C witness counts, which is `TimingProvenance`'s job, not this
+    module's: the canonical trial list is built from exactly one full-code
+    record.
 
     Identity rate, not `fit_rate`: session time IS the sync box's own
     timeline (spec section 4.5), the same special case `SystemTimebase.make()`
@@ -179,49 +189,77 @@ def _trial_stop_time(
     containing_block: AssembledBlock | None,
     stream_end_s: float,
 ) -> float:
-    """`trial.end_s`, or the best available inference when the stream never
-    explicitly closed it.
+    """`trial.end_s`, or the tightest verified bound available when the
+    stream never explicitly closed it.
 
-    **`synth/timeline.py` now emits `Marker.TRIAL_END` for every trial**
-    (fix round 1, Task 8 -- it did not before, which was a fixture gap rather
-    than a code gap: `Marker.TRIAL_END` is in the frozen contract and
-    `assemble()` already handled it correctly, proven by `tests/events/
-    test_assemble.py`'s own `_trial()` helper, which always has). So
-    `end_s=None` no longer happens for any trial this project's own fixtures
-    produce (`tests/synth/test_timeline.py::
-    test_decoded_trial_ends_match_the_planted_truth_not_none` pins this), and
-    every branch below except the first is dead code against every fixture in
-    this repository today.
+    **`end_s=None` arises from two distinct routes, not one -- fix round 2
+    corrects a docstring that named only the first.** The first is a stream
+    that ends mid-trial: a genuinely truncated recording (a killed process, a
+    full disk), closed by the final, unconditional `close_trial(end_s=None)`
+    in `events/assemble.py`, run once after its main loop. The second is a
+    **dropped `TRIAL_END` mid-stream**: that same `close_trial(end_s=None)`
+    also fires the moment the NEXT `TRIAL_START` arrives, whether or not that
+    next trial belongs to the same block -- a dropped marker is exactly the
+    lossy case this protocol is designed around (spec section 4.2
+    requirement 1), not merely an end-of-recording artifact. `synth/
+    timeline.py` now always emits `TRIAL_END` (fix round 1), so NEITHER route
+    is reachable against any fixture in this repository today -- but both are
+    real operational scenarios for this pipeline, which is why the fallback
+    stays rather than being deleted.
 
-    It is not dead code against reality, which is why it is kept rather than
-    deleted: a real recording can stop mid-trial -- power loss, a killed
-    process, a full disk -- and `assemble()` closes whatever trial was open
-    at end-of-stream with `end_s=None` regardless of why the stream ended
-    (`events/assemble.py`'s own `close_trial(end_s=None)`, run once,
-    unconditionally, after the main loop). `trial.Trial.trial_stop_time` is
-    not nullable, so something concrete has to be written even then.
-    `tests/schema/test_events.py::
-    test_a_genuinely_truncated_trial_falls_back_to_the_last_stream_event`
-    builds exactly that case -- a hand-built stream ending after
-    `TRIAL_START` with no closing marker at all -- and exercises this
-    function's last branch directly, which no fixture-driven test can reach
-    anymore.
+    **Fix round 2: the containing block's own end is checked BEFORE the next
+    trial's start, not after.** A previous version preferred "next trial's
+    start" first, reasoning it was "exact, by synth/timeline.py's own
+    construction" -- true only while every trial closed for real, which was
+    the very premise fix round 1 removed. For a trial abandoned by a dropped
+    `TRIAL_END`, checking "next trial's start" first is wrong exactly when
+    the abandoned trial's OWN block closes (`BLOCK_END` received) before any
+    later trial starts: `assemble()`'s `BLOCK_END` handling does not close an
+    open trial (see that function's own docstring and its handling of
+    `Marker.BLOCK_END`), so the abandoned trial stays open until the NEXT
+    `TRIAL_START` -- which can belong to a LATER block. The old order would
+    then return that later trial's start, overshooting the abandoned trial's
+    own, already-known block boundary. Task 9 computes per-trial coverage as
+    a fraction of a trial's own duration, so an overshot end silently
+    UNDERSTATES every such trial's coverage, and nothing raises: the interval
+    is still positive. A verified block boundary is a harder guarantee than a
+    same-list index lookup, and checked first, it cannot place a trial's end
+    outside its own block. `tests/schema/test_events.py::
+    test_an_abandoned_trial_whose_block_closed_prefers_the_block_boundary`
+    and `test_an_abandoned_trial_whose_block_never_closed_falls_to_the_next_trial`
+    build both shapes through the real codec and `assemble()`, name which
+    condition each produces, and are each confirmed to fail against the
+    branch order this replaces.
 
-    The best available inference, in order:
+    The order, tightest verified bound first:
 
-    1. The next trial's own start, when there is one closed by a real
-       `TRIAL_START` after it.
-    2. This trial's containing block's own end, when the block itself closed.
-    3. The last event time in the whole decoded stream -- the only branch a
+    1. The trial's own `end_s`, when `TRIAL_END` (or the final flush) closed
+       it for real.
+    2. Its containing block's own end, when that block itself closed.
+    3. The next trial's own start, when there is one.
+    4. The last event time in the whole decoded stream -- the only branch a
        trial truncated with nothing recorded after it can ever reach.
+
+    **Invariant, asserted below:** whenever the containing block has closed,
+    the value returned here can never exceed it -- the cheap check that turns
+    a repeat of this class of error from silent into loud.
     """
     if trial.end_s is not None:
-        return trial.end_s
-    if trial_index + 1 < len(ordered_trials):
-        return ordered_trials[trial_index + 1].start_s
+        stop = trial.end_s
+    elif containing_block is not None and containing_block.end_s is not None:
+        stop = containing_block.end_s
+    elif trial_index + 1 < len(ordered_trials):
+        stop = ordered_trials[trial_index + 1].start_s
+    else:
+        stop = stream_end_s
+
     if containing_block is not None and containing_block.end_s is not None:
-        return containing_block.end_s
-    return stream_end_s
+        assert stop <= containing_block.end_s, (
+            f"trial {trial.trial_id} stop time {stop} exceeds its own containing "
+            f"block {containing_block.block_id}'s stop time {containing_block.end_s} "
+            "-- a trial can never end after the block that contains it"
+        )
+    return stop
 
 
 def _block_stop_time(block: AssembledBlock, stream_end_s: float) -> float:
@@ -260,7 +298,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
     """
     session_key = {k: key[k] for k in pipeline.Session.primary_key}
 
-    converted = _decode_syncbox_in_session_time(session_dir)
+    converted = decode_syncbox_in_session_time(session_dir)
     decoded = decode_stream(converted)
     assembly = assemble(decoded)
 

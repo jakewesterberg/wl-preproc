@@ -223,3 +223,133 @@ def test_a_genuinely_truncated_trial_falls_back_to_the_last_stream_event():
         trial, 0, assembly.trials, containing_block=None, stream_end_s=stream_end_s
     )
     assert stop == stream_end_s
+
+
+def _stream_at_1ms(words):
+    """`words` placed one per millisecond, starting at t=0 -- a minimal stand-
+    in for the real `_emit` ratchet in `synth/timeline.py` (private to that
+    module), sufficient here because these tests only need strictly
+    increasing, uniquely-ordered times, not any particular spacing."""
+    return [(index * 0.001, word) for index, word in enumerate(words)]
+
+
+def test_an_abandoned_trial_whose_block_closed_prefers_the_block_boundary():
+    """Fix round 2. The condition this fixture actually produces, checked
+    rather than assumed: trial 1's own outcome and TRIAL_END are both
+    dropped, so it is closed only when trial 2's TRIAL_START arrives
+    (assemble()'s close_trial(end_s=None)) -- but block 1 (trial 1's own
+    containing block) already closed for real, via a genuine BLOCK_END,
+    BEFORE that happened. assemble()'s BLOCK_END handling does not close an
+    open trial, so trial 1 stays open across the block boundary, and the
+    trial that finally closes it (trial 2) starts AFTER block 1's own end.
+    The fix must prefer block 1's own, tighter end over that later start.
+
+    Reverting _trial_stop_time's branch order to check "next trial's start"
+    before the containing block's end makes this test fail: confirmed by
+    hand before writing this comment (see fix round 2's report for the
+    observed failure) -- stop would come back as trial 2's start_s, which is
+    strictly greater than block_one.end_s, tripping the very invariant this
+    round adds.
+    """
+    from wl_preproc.contracts.events import (
+        Escape,
+        Marker,
+        TaskTypeCode,
+        decode_stream,
+        encode_payload,
+    )
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _containing_block, _trial_stop_time
+
+    words = []
+    words.extend(encode_payload(Escape.BLOCK_START, [1, int(TaskTypeCode.RF_MAP)]))
+    words.append(Marker.TRIAL_START.value)  # trial 1 starts
+    words.extend(encode_payload(Escape.TRIAL_NUMBER, [0, 1]))  # trial 1, id=1
+    # Trial 1's outcome and TRIAL_END are BOTH dropped here -- the lossy case.
+    words.append(Marker.BLOCK_END.value)  # block 1 closes for real
+    words.append(Marker.TRIAL_START.value)  # trial 2 starts; closes trial 1
+    words.extend(encode_payload(Escape.TRIAL_NUMBER, [0, 2]))  # trial 2, id=2
+
+    decoded = decode_stream(_stream_at_1ms(words))
+    assembly = assemble(decoded)
+
+    assert [t.trial_id for t in assembly.trials] == [1, 2], (
+        "both trials must actually be represented, or this is not exercising "
+        "the shape it claims to"
+    )
+    trial_one, trial_two = assembly.trials
+    assert trial_one.end_s is None, "trial 1 must actually be left open"
+    assert len(assembly.blocks) == 1
+    (block_one,) = assembly.blocks
+    assert block_one.end_s is not None, "block 1 must actually have closed for real"
+    assert trial_two.start_s > block_one.end_s, (
+        "trial 2 must actually start AFTER block 1's own end, or this fixture "
+        "does not produce the overshoot condition the fix targets"
+    )
+
+    stream_end_s = max(item.time_s for item in decoded)
+    containing = _containing_block(trial_one, assembly.blocks, stream_end_s)
+    assert containing is block_one
+
+    stop = _trial_stop_time(
+        trial_one, 0, assembly.trials, containing_block=containing, stream_end_s=stream_end_s
+    )
+    assert stop == block_one.end_s
+    assert stop <= block_one.end_s, "the invariant fix round 2 adds"
+
+
+def test_an_abandoned_trial_whose_block_never_closed_falls_to_the_next_trial():
+    """Fix round 2's second shape. The condition this fixture actually
+    produces: trial 1's own outcome and TRIAL_END are dropped, exactly as
+    above, but this time block 1 never gets a BLOCK_END at all -- so
+    `_containing_block` still finds it (a block with no recorded end
+    contains everything up to the end of the stream), but its `end_s` is
+    `None`, and the fix's own guard (`containing_block.end_s is not None`)
+    must correctly skip it and fall through to the next available bound --
+    the next trial's own start.
+
+    Confirmed to fail if that fallback branch is removed rather than merely
+    reordered: with it deleted, this would fall straight to `stream_end_s`
+    (checked by hand before writing this comment; see fix round 2's report),
+    which is a different, later value than trial 2's start here.
+    """
+    from wl_preproc.contracts.events import (
+        Escape,
+        Marker,
+        TaskTypeCode,
+        decode_stream,
+        encode_payload,
+    )
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _containing_block, _trial_stop_time
+
+    words = []
+    words.extend(encode_payload(Escape.BLOCK_START, [1, int(TaskTypeCode.RF_MAP)]))
+    words.append(Marker.TRIAL_START.value)  # trial 1 starts
+    words.extend(encode_payload(Escape.TRIAL_NUMBER, [0, 1]))  # trial 1, id=1
+    # Trial 1's outcome and TRIAL_END are dropped, and block 1 never closes.
+    words.append(Marker.TRIAL_START.value)  # trial 2 starts; closes trial 1
+    words.extend(encode_payload(Escape.TRIAL_NUMBER, [0, 2]))  # trial 2, id=2
+
+    decoded = decode_stream(_stream_at_1ms(words))
+    assembly = assemble(decoded)
+
+    assert [t.trial_id for t in assembly.trials] == [1, 2]
+    trial_one, trial_two = assembly.trials
+    assert trial_one.end_s is None, "trial 1 must actually be left open"
+    assert len(assembly.blocks) == 1
+    (block_one,) = assembly.blocks
+    assert block_one.end_s is None, "block 1 must actually never have closed"
+
+    stream_end_s = max(item.time_s for item in decoded)
+    containing = _containing_block(trial_one, assembly.blocks, stream_end_s)
+    assert containing is block_one, "an unclosed block must still be found by containment"
+    assert trial_two.start_s != stream_end_s, (
+        "trial 2's start and the stream's last event time must actually "
+        "differ, or this cannot distinguish the two candidate fallbacks"
+    )
+
+    stop = _trial_stop_time(
+        trial_one, 0, assembly.trials, containing_block=containing, stream_end_s=stream_end_s
+    )
+    assert stop == trial_two.start_s
