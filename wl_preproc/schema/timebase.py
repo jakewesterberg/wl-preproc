@@ -45,9 +45,11 @@ _TIME_SOURCE_ENUM = "enum('barcode','trigger')"
 # as a value nothing can reach. A stored value with no writer left is worse
 # than no value at all: the next reader who finds it has to work out whether
 # it means "unreachable" or "reachable and I haven't found how yet".
-# `PENDING_TIER_INPUTS` below no longer names a wait: Task 10 rewrote it to
-# name the three inputs the tier derives from, and to keep the record of what
-# `pending_inputs` used to hold.
+# The `pending_inputs` column that named the wait goes empty for the same
+# reason, and Task 10 deleted the `PENDING_TIER_INPUTS` constant that used to
+# fill it: an unread constant whose name asserts "pending" is the same false
+# claim in a second place. What it held, and which phase ended the wait, is
+# recorded on the column itself.
 _TIER_ENUM = "enum('A','B','C','D')"
 
 # Whether this system's clock was actually fitted, and if not, why not. Every
@@ -220,7 +222,21 @@ class TimingProvenance(dj.Computed):
     n_rejected_segments   : int unsigned
     worst_residual_us     : double  # the largest residual over every system
     worst_drift_ppm       : double  # the largest magnitude, signed as measured
-    pending_inputs        : varchar(255)  # '' always, now -- see PENDING_TIER_INPUTS
+    pending_inputs        : varchar(255)  # always '' -- see the note below
+    # Empty on every row, and that is a finished state rather than a
+    # placeholder. 1c-4 wrote "event_code_agreement,trial_count_agreement,
+    # camera_trigger_count" here on every session: the three inputs tiers A, B
+    # and C turn on (spec section 4.7), none of which could be computed without
+    # an event decoder. 1c-5 ended that wait -- all three are measured in
+    # `make()` and stored in their own columns below -- so nothing is pending
+    # and the string is empty.
+    #
+    # Emptied rather than dropped, for the same reason 1c-2's daily report
+    # names the categories it cannot yet count rather than omitting them: a
+    # reader must be able to see WHAT is missing, not only that something is.
+    # `''` states "nothing is pending", which an absent column could not
+    # distinguish from "nobody ever checked". If a later phase has to defer one
+    # of the three again, this is where it says so.
     # Every field `events.agreement.TierInputs` took to reach `tier`, kept on
     # the row: spec section 4.7 requires the tier be "derived, not asserted"
     # and re-derivable under different thresholds later, which a stored
@@ -233,29 +249,6 @@ class TimingProvenance(dj.Computed):
     decode_errors               : int unsigned  # DecodeErrors across every full-code record
     block_agreement=null        : tinyint(1)  # measured trial.Block vs wl.works' core.Block; null unasserted
     """
-
-    # The three event-derived inputs the tier is resolved from, named rather
-    # than left implicit -- and the record of what `pending_inputs` used to
-    # hold. Until 1c-5 this constant WAS the wait: `make()` wrote it into
-    # `pending_inputs` verbatim, because none of the three could be computed
-    # without event decoding, and section 4.7 makes each a term in tiers A, B
-    # and C. That wait is over. `make()` measures all three now --
-    # `event_code_agreement` from the Pi's word stream against the NI's,
-    # `trial_count_agreement` from the trial count decoded out of the codes
-    # against the task file, `camera_trigger_count` from the behaviour-camera
-    # sidecar -- and stores each in its own column beside the tier, which is
-    # what makes section 4.7's "derived, not asserted" true of the row rather
-    # than only of the code that wrote it.
-    #
-    # Kept as a string constant, and `pending_inputs` kept as a column, for
-    # the same reason 1c-2's daily report names the categories it cannot yet
-    # count rather than omitting them: a reader must be able to see WHAT is
-    # missing, not only that something is. That principle is why the column is
-    # emptied rather than dropped -- `''` states "nothing is pending", where an
-    # absent column would leave a reader unable to tell that from "nobody
-    # checked". This constant is what would be named again if a later phase
-    # ever has to defer one of the three.
-    PENDING_TIER_INPUTS = "event_code_agreement,trial_count_agreement,camera_trigger_count"
 
     @property
     def key_source(self):
@@ -563,8 +556,8 @@ class TimingProvenance(dj.Computed):
                     key=abs,
                     default=0.0,
                 ),
-                # Always empty now: the wait it used to name is over. See
-                # `PENDING_TIER_INPUTS`.
+                # Always empty now: the wait it used to name is over. What
+                # it held before 1c-5 is recorded on the column itself.
                 "pending_inputs": "",
                 "event_code_agreement": event_code_agreement,
                 "trial_count_agreement": trial_count_agreement,
