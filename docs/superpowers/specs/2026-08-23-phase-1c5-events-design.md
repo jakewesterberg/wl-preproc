@@ -235,4 +235,20 @@ under different thresholds.
 2. **`TimingProvenance.PENDING_TIER_INPUTS`** — the constant and its comment describe a state this
    phase ends. Both need rewriting to say what the tier now derives from, rather than what it waits
    for.
+
+   > **SUPERSEDED 2026-08-23, in Task 10: the constant was deleted, not rewritten.** Item 2 above
+   > is kept as written rather than edited to agree with the outcome — it was the prescription at
+   > design time, and the ruling that replaced it is worth reading beside it rather than instead
+   > of it.
+   >
+   > **Rewriting the comment would have left the name standing**, and `PENDING_TIER_INPUTS`
+   > asserts *pending* — the one claim this phase falsified. Two facts settled it. **Nothing read
+   > the constant**: a grep over the whole tree found no reader in `wl_preproc/` or `tests/`,
+   > in code or as a string literal — only comments in its own module and prose in the plan and
+   > in this section. And a dead constant kept alive so it can carry a comment about its own
+   > obsolescence is the weakest available way to preserve a record.
+   >
+   > **The record moved to the `pending_inputs` column instead** — what it once held, which phase
+   > ended the wait, and why the column is emptied rather than dropped. A reader meeting an empty
+   > value looks at the column, not at an unused module-level constant.
 3. **Parent spec §4.7** — record that the tier is computed here and what each input's source is.
