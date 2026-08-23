@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wl_preproc.contracts.events import DecodeError, Escape, Marker, encode_payload
+from wl_preproc.contracts.events import Escape, Marker, encode_payload
 from wl_preproc.events import assemble
 
 
@@ -43,7 +43,6 @@ def test_trials_are_matched_by_id_not_by_position():
     result = assemble.assemble(_stream(words))
     ids = [t.trial_id for t in result.trials]
     assert 1 in ids and 3 in ids, f"trials 1 and 3 must survive; got {ids}"
-    assert 3 in ids, "trial 3 must keep its OWN id, not inherit trial 2's slot"
 
 
 def test_a_block_start_payload_carries_its_task_type():
@@ -64,61 +63,29 @@ def test_a_block_start_payload_carries_its_task_type():
     assert result.blocks[0].task_type == TaskTypeCode.RF_MAP.value
 
 
-def test_a_corrupted_checksum_word_is_caught_rather_than_decoded():
-    """Spec section 4.2 requirement 3: multi-word payloads carry a checksum
-    word.
-
-    Added in fix round 1 because THIS file's test claimed to exercise the
-    checksum and did not: its fixture was one word short of a complete payload,
-    so it tripped the TRUNCATION path while its comment and assertion message
-    both said "checksum". It passed for the wrong reason.
-
-    **Correcting the claim that justified adding it:** the coordinator asserted
-    that nothing in the repository covered the checksum branch. That was wrong,
-    from a grep truncated by `head`. `tests/contracts/test_events.py::
-    test_corrupt_checksum_yields_error_not_exception` has covered it at the
-    codec boundary all along. What was genuinely missing is what this test adds
-    -- coverage from the events package's own side, and a fixture whose
-    behaviour matches what its name says.
-
-    Built through encode_payload so the fixture is a VALID payload with exactly
-    one word corrupted, rather than a hand-written sequence that might be
-    malformed in some other way and pass for the wrong reason again.
-    """
-    words = encode_payload(Escape.TRIAL_NUMBER, [0, 7])
-    words[-1] ^= 0xFFFF  # corrupt only the checksum
-    stream = _stream([(0.001 * i, w) for i, w in enumerate(words)])
-
-    errors = [e for e in stream if isinstance(e, DecodeError)]
-    assert errors, "a corrupted checksum must produce a DecodeError"
-    assert "checksum" in errors[0].reason, (
-        f"expected a checksum error, got {errors[0].reason!r} -- if this says "
-        "'truncated' the fixture is short and the checksum branch is still "
-        "untested"
-    )
-
-
-def test_a_truncated_payload_is_caught_rather_than_decoded():
-    """The other half, kept deliberately: decode_stream 'never raises on
-    malformed input... so one bad trial cannot lose a session', and truncation
-    is the failure mode a cut-short recording produces."""
-    words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1)]
-    errors = [e for e in _stream(words) if isinstance(e, DecodeError)]
-    assert errors and "truncated" in errors[0].reason
-
-
 def test_decode_errors_are_kept_rather_than_dropped():
-    """decode_stream never raises: "a corrupt or truncated payload yields a
-    DecodeError and decoding continues, so one bad trial cannot lose a
-    session." The assembly must surface those, because a session with decode
-    errors is a tier-D candidate and silence would hide it.
+    """assemble() forwards a DecodeError into Assembly.errors rather than
+    discarding it: decode_stream "never raises on malformed input... so one
+    bad trial cannot lose a session," and a session with decode errors is a
+    tier-D candidate that silence would hide.
 
-    Deliberately agnostic about WHICH decode failure produced the error: that
-    distinction (checksum vs. truncation) is pinned down at the codec's own
-    boundary by the two tests above. This test's claim is different and
-    narrower -- that assemble() forwards a DecodeError into Assembly.errors at
-    all, rather than silently discarding it -- so it reuses the truncated
-    fixture rather than a checksum one.
+    assemble() is deliberately reason-blind here -- it appends whatever
+    DecodeError decode_stream produced, regardless of why decoding failed.
+    WHICH codec-level failure occurred (a corrupted checksum vs. a truncated
+    payload) is pinned down at the codec's own boundary, in
+    tests/contracts/test_events.py, and is not this layer's business to
+    re-verify.
+
+    History: fix round 1 briefly added two tests here --
+    test_a_corrupted_checksum_word_is_caught_rather_than_decoded and
+    test_a_truncated_payload_is_caught_rather_than_decoded -- meant to add
+    checksum/truncation coverage "from the events package's own side."
+    Neither actually called assemble.assemble(); both exercised decode_stream
+    directly through the _stream() helper, so they duplicated
+    tests/contracts/test_events.py's existing coverage of those branches
+    while reading, in this file, as assembly coverage. Removed in fix round 2
+    rather than reworded, because the fix for a false claim is deletion, not
+    a better label.
     """
     words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1), (0.002, 0xDEAD)]  # truncated: only 2 of the 3 required words follow the escape
     result = assemble.assemble(_stream(words))
