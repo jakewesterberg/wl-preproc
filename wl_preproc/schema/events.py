@@ -22,9 +22,21 @@ clock IS session time (spec section 4.5, and section 3's whole argument for
 `BehaviorRecording` being one-per-session), so it is also the only system this
 module needs in order to decode a complete, correctly-timed trial/block list on
 its own, with no dependency on `core.Segment` / `timebase.SystemTimebase`
-already having populated for this session -- this module owns no populate
-stage of its own (see above) and so has no fixed place in the daemon's
-ordering, unlike those two `Computed` tables.
+already having populated for this session.
+
+**That independence fixes WHERE the daemon runs this module, not whether it
+runs at all.** `populate_session` is a plain function over
+`(key, session_dir)` rather than a `dj.Computed`, so it is not in
+`daemon._computed_tables()` -- but it is a daemon stage all the same:
+`daemon.run_once` calls it, via `daemon._populate_event_stage()`, FIRST,
+ahead of that whole list. First precisely because of the paragraph above --
+it needs none of those tables -- while two of them need it:
+`coverage.TrialCoverage.key_source` reads `pipeline.trial.Trial`, and
+`TimingProvenance.make()` counts that same table for
+`trial_count_agreement`. Until 1c-5's fix round this function had no
+production caller at all, so `trial.Trial` stayed empty, that count came out
+0 against a non-zero task file, and every session in production resolved to
+tier D.
 """
 
 from __future__ import annotations

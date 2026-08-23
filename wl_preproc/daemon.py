@@ -13,6 +13,8 @@ transaction; see section 10's hazard table.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import datajoint as dj
 
 from wl_preproc.schema import (
@@ -23,6 +25,15 @@ from wl_preproc.schema import (
     events,
     ingest,
     paramset,
+    # Imported, but deliberately NOT one of `_PROJECT_SCHEMA_MODULES` below --
+    # that tuple's own comment says why `pipeline` is excepted from it.
+    # `_event_stage_keys()` needs `pipeline.Session` (that stage's key source,
+    # via `ingest.Ingestion`) and `pipeline.event.BehaviorRecording` (its
+    # done-marker). Bound as the MODULE rather than by name, because
+    # `pipeline.activate()` rebinds `pipeline.Session` (see its own
+    # `global Session`) and a `from ... import Session` here would freeze the
+    # pre-activation object.
+    pipeline,
     request,
     timebase,
 )
@@ -48,15 +59,55 @@ def _computed_tables() -> list:
 
     Empty in 1c-1, because nothing computed yet. 1c-4 fills it; Phase 2's
     sorting extends the same list rather than inventing its own traversal.
+
+    **Not every daemon stage is in here, and one is not a table at all.**
+    `run_once` runs `_populate_event_stage()` before this loop -- a plain
+    function over sessions, not a `dj.Computed` -- and `TrialCoverage`'s
+    `key_source` is what that stage fills. See `_populate_event_stage`.
+
+    **Completeness is enforced by a test that discovers, not by review.**
+    `tests/schema/test_daemon.py::test_every_computed_table_is_a_daemon_stage`
+    fails if any `dj.Computed` declared in one of `_PROJECT_SCHEMA_MODULES`'
+    modules is absent from this list and is not named in
+    `_COMPUTED_TABLES_EXEMPT` below. `TrialCoverage` was missing here for the
+    whole of 1c-5 -- the same shape `_PROJECT_SCHEMA_MODULES`' own comment
+    below records going stale four times over, and `activate_all`'s docstring
+    once more -- and the cost was not a dormant feature: with `trial.Trial`
+    never filled in production, `TimingProvenance.make()` counted zero trials
+    from the codes against a non-zero task file, so `trial_count_agreement`
+    was False and `events.agreement.resolve_tier` returned D at its
+    `trial_count_agreement is False` guard for every session.
     """
     return [
         timebase.SystemTimebase,
         core.Segment,
         coverage.BlockCoverage,
+        # After `Segment` for exactly `BlockCoverage`'s reason -- it intersects
+        # a trial's interval with this system's segment extents -- and after
+        # `_populate_event_stage()`, which is what puts rows in the
+        # `pipeline.trial.Trial` half of its `key_source`. `run_once` runs that
+        # stage before this whole list, so the second half is satisfied by
+        # position rather than needing an entry here.
+        coverage.TrialCoverage,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
     ]
+
+
+# `dj.Computed` tables deliberately kept OUT of `_computed_tables()`, as
+# `{module}.{ClassName}` against `_PROJECT_SCHEMA_MODULES`' own module names.
+#
+# Empty, and that is the finished state rather than a placeholder: every
+# `dj.Computed` this project declares today is a daemon stage. The constant
+# exists so that a future one which genuinely should not be traversed has to
+# SAY so here -- `test_every_computed_table_is_a_daemon_stage` reads absence
+# from `_computed_tables()` as a defect, never as an intention, which is
+# precisely the inference that let `TrialCoverage` sit unregistered for a
+# whole phase. A name listed here that is not actually a discovered
+# `dj.Computed` fails that test too, so an exemption cannot outlive the table
+# it was written for.
+_COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 
 
 # Every schema module this package defines, `pipeline` excepted — its tables
@@ -351,6 +402,76 @@ def count_stale_jobs(
     return sum(len(_stale_reserved_keys(job, older_than_s)) for job in _activated_job_tables())
 
 
+def _event_stage_keys() -> list[dict]:
+    """Landed sessions whose canonical trial list has not been built yet.
+
+    `pipeline.Session & ingest.Ingestion` is `TimingProvenance.key_source`
+    verbatim, for its stated reason: `Ingestion` carries `session_dir`, the
+    only record of where a session's files are, so a session with no row there
+    cannot be read at all and is simply not yet due.
+
+    `- pipeline.event.BehaviorRecording` is the done-marker, and it is needed
+    because `populate_session` is a plain function rather than a
+    `dj.Computed` -- DataJoint's own `key_source - target` bookkeeping does not
+    apply to it, and nothing else would stop the daemon re-decoding every
+    session it has ever landed on every pass (a cron every 30 minutes is the
+    obvious deployment; see `reap_stale_jobs`). `BehaviorRecording` is the
+    right target because `populate_session` writes exactly one row of it per
+    session it processes, keyed on the session's own primary key
+    (`schema/events.py`'s own "one per session (its primary key IS the
+    session's)").
+
+    That marker is only sound because `_populate_event_stage` runs the call
+    inside a transaction -- `BehaviorRecording` is the FIRST thing
+    `populate_session` inserts, so a half-finished session would otherwise be
+    marked done with no trials in it. See that function.
+    """
+    return ((pipeline.Session & ingest.Ingestion) - pipeline.event.BehaviorRecording).keys()
+
+
+def _populate_event_stage() -> tuple[int, list[str]]:
+    """Build the canonical trial list for each session still missing one.
+
+    Returns `(sessions built, per-session failures)` -- the same two quantities
+    one iteration of `run_once`'s `_computed_tables()` loop contributes, so the
+    caller accounts for both identically.
+
+    **A failing session is caught here rather than allowed to escape, because
+    `suppress_errors=True` cannot reach a plain function call.** That flag is
+    what keeps one bad key from stopping a `.populate()`; `populate_session` is
+    not a `.populate()`, so the equivalent has to be written out. The `except`
+    below is therefore the analogue of `populate()`'s own `error_list` -- one
+    entry per failing SESSION, formatted like the per-key entries the loop
+    already produces -- and not of `run_once`'s outer `try`, which exists for
+    the different failure `suppress_errors` genuinely cannot cover.
+
+    **The call runs inside one transaction**, so the session's rows land
+    entirely or not at all. Two reasons, both load-bearing: it is what makes
+    `BehaviorRecording` a sound done-marker for `_event_stage_keys()` (that
+    row is written first, before any `Trial`), and it matches what DataJoint
+    already does around every `make()` in `_computed_tables()`. The decode
+    happens inside the transaction as a result, which the module docstring's
+    three-part-make rule would otherwise argue against -- but
+    `TimingProvenance.make()` is a plain `make()` that re-decodes the same
+    session's syncbox AND nidq streams inside DataJoint's own transaction
+    already (`tests/schema/test_daemon.py::
+    test_a_plain_make_runs_entirely_inside_the_transaction` pins that this is
+    what a plain `make` does), so this is the cost this pipeline already pays
+    at this stage's scale, not a new one.
+    """
+    built, errors = 0, []
+    for key in _event_stage_keys():
+        session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
+        try:
+            with dj.conn().transaction:
+                events.populate_session(key, session_dir)
+        except Exception as exc:  # one bad session must not take down the run
+            errors.append(f"populate_session {key}: {exc}")
+        else:
+            built += 1
+    return built, errors
+
+
 def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
     """One pass of the runner. Returns what it did, for the daily report.
 
@@ -369,11 +490,30 @@ def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
     `try` now catches only what `suppress_errors` genuinely cannot -- a
     failure in `populate()` itself rather than in one of its keys (a dropped
     connection, a key_source that will not resolve).
+
+    **`_populate_event_stage()` runs FIRST, before the `_computed_tables()`
+    loop.** It is not in that list because it is not a `dj.Computed` at all --
+    `wl_preproc.schema.events.populate_session` is a function over
+    `(key, session_dir)` -- and it goes first because it depends on no computed
+    table (only on `ingest.Ingestion` for the directory; see
+    `schema/events.py`'s own argument that the sync box alone suffices), while
+    two later stages depend on it: `coverage.TrialCoverage.key_source` reads
+    `pipeline.trial.Trial`, and `TimingProvenance.make()` counts that same
+    table for `trial_count_agreement`. Until 1c-5's review this stage did not
+    exist, so `trial.Trial` was empty in production, that count was 0 against
+    a non-zero task file, and `resolve_tier` returned D for every session.
+    The sessions it builds are counted into `populated` for the same reason
+    every other key computed is.
     """
     activate_all(prefix=prefix)
 
     reaped = reap_stale_jobs(prefix=prefix)
     populated, errors = 0, []
+
+    built, event_errors = _populate_event_stage()
+    populated += built
+    errors.extend(event_errors)
+
     for table in _computed_tables():
         try:
             result = table.populate(reserve_jobs=True, suppress_errors=True)

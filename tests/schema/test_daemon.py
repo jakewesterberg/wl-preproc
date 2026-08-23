@@ -520,7 +520,18 @@ def test_computed_tables_are_in_dependency_order():
     system's rate to already exist, and `BlockCoverage.make()` needs the
     segments — and neither dependency is expressed as a `key_source`, precisely
     so that a system with no fit still records why (see `Segment.key_source`).
-    So this list IS the ordering, and nothing else enforces it."""
+    So this list IS the ordering, and nothing else enforces it.
+
+    `TrialCoverage` was added to the list in 1c-5's fix round and is asserted
+    after `Segment` for exactly `BlockCoverage`'s reason: its `make()`
+    intersects a trial's interval with `core.Segment`'s extents, so running it
+    first would record a session as less covered than it is. That is the ONE
+    ordering this test adds; its other dependency, `pipeline.trial.Trial`, is
+    not in this list at all and cannot be checked here — `run_once` fills it
+    from `_populate_event_stage()` before this whole loop, which
+    `test_the_daemon_path_alone_lifts_a_good_session_off_tier_d` is what
+    actually proves.
+    """
     from wl_preproc import daemon
     from wl_preproc.schema import core, coverage, timebase
 
@@ -528,8 +539,79 @@ def test_computed_tables_are_in_dependency_order():
 
     assert names.index(timebase.SystemTimebase.__name__) < names.index(core.Segment.__name__)
     assert names.index(core.Segment.__name__) < names.index(coverage.BlockCoverage.__name__)
+    assert names.index(core.Segment.__name__) < names.index(coverage.TrialCoverage.__name__)
     assert names.index(core.Segment.__name__) < names.index(
         timebase.TimingProvenance.__name__
+    )
+
+
+def test_every_computed_table_is_a_daemon_stage():
+    """A `dj.Computed` this project declares and `_computed_tables()` does not
+    name never runs in production, and nothing else says so.
+
+    `coverage.TrialCoverage` was absent for the whole of 1c-5, so
+    `pipeline.trial.Trial` was never filled outside tests,
+    `TimingProvenance.make()` counted zero trials from the codes against a
+    non-zero task file, and `resolve_tier` returned D for every session in
+    production. It is the same hand-maintained-list shape `daemon.py`'s
+    `_PROJECT_SCHEMA_MODULES` comment records going stale four times over, and
+    `activate_all`'s docstring once more. That tuple already has a discovering
+    guard -- `test_every_schema_module_is_swept_for_job_tables`, right above --
+    and the list of computed tables had none; every fixture in this suite that
+    needed a trial list called `events.populate_session` by hand, so no test
+    exercised the daemon's own path.
+
+    **It discovers rather than lists.** It walks `daemon._project_schema_
+    modules()` and keeps every class that is both a `dj.Computed` subclass and
+    DEFINED in that module (`obj.__module__` check) rather than imported into
+    it — a hand-written list of the hand-written list would fix nothing.
+
+    **Absence is read as a defect, never as an intention.** A table that
+    genuinely belongs outside the daemon's traversal has to be named in
+    `daemon._COMPUTED_TABLES_EXEMPT`, and an exemption naming something no
+    module declares fails the first assertion, so an exemption cannot outlive
+    its table either.
+
+    **What this test actually produces today:** five discovered tables —
+    `core.Segment`, `coverage.BlockCoverage`, `coverage.TrialCoverage`,
+    `timebase.SystemTimebase`, `timebase.TimingProvenance` — an empty
+    exemption set, and set equality with `_computed_tables()`. Confirmed to
+    fail with `TrialCoverage` removed from `_computed_tables()` (the state
+    this branch shipped) and to fail on a stale exemption.
+
+    **Scope, stated exactly:** `dj.Computed` only, across the eight modules
+    `_PROJECT_SCHEMA_MODULES` names. `dj.Imported` is not swept and neither is
+    `pipeline` — element-event's Imported tables live there, this project fills
+    them by direct insert rather than by `populate()`, and `schema/events.py`'s
+    module docstring records why. Neither is a claim this test makes.
+    """
+    from wl_preproc import daemon
+
+    short_name = {module.__name__: name for name, module in daemon._project_schema_modules()}
+
+    discovered = {
+        f"{name}.{attribute}"
+        for name, module in daemon._project_schema_modules()
+        for attribute, obj in vars(module).items()
+        if isinstance(obj, type)
+        and issubclass(obj, dj.Computed)
+        and obj.__module__ == module.__name__
+    }
+    registered = {
+        f"{short_name.get(table.__module__, table.__module__)}.{table.__name__}"
+        for table in daemon._computed_tables()
+    }
+    exempt = set(daemon._COMPUTED_TABLES_EXEMPT)
+
+    assert exempt <= discovered, (
+        "_COMPUTED_TABLES_EXEMPT names something no schema module declares as a "
+        f"dj.Computed: {sorted(exempt - discovered)}"
+    )
+    assert registered == discovered - exempt, (
+        "every dj.Computed in this project's schema modules must be a daemon "
+        "stage, or be exempted by name in daemon._COMPUTED_TABLES_EXEMPT. "
+        f"Declared but never populated: {sorted(discovered - exempt - registered)}. "
+        f"Populated but not declared here: {sorted(registered - discovered)}."
     )
 
 
@@ -613,3 +695,104 @@ def test_count_stale_jobs_sees_the_jobs_tables_it_reads(dj_conn, prefix, tmp_pat
     finally:
         JobsProbeDerived.drop_quick()
         JobsProbeSource.drop_quick()
+
+
+def test_the_daemon_path_alone_lifts_a_good_session_off_tier_d(
+    daemon_env, dj_conn, prefix, tmp_path
+):
+    """The Critical itself: a clean session must not be quarantined at D by the
+    daemon's own path.
+
+    Every other test of the trial list and the tier calls
+    `events.populate_session` BY HAND first -- `tests/schema/test_coverage.py`,
+    `tests/schema/test_events.py`, and `tests/schema/test_timebase.py`'s
+    `provenance_session` fixture all do -- which is exactly why nothing caught
+    that production called it nowhere: `wl_preproc.schema.events.
+    populate_session` had zero non-test callers, and `coverage.TrialCoverage`
+    was absent from `daemon._computed_tables()`.
+
+    So this test lands only what the ingest watcher writes -- `Session`,
+    `Ingestion`, `AcquisitionSystem`, plus the `Lab`/`Subject` those need --
+    and then calls **`daemon.run_once` and nothing else**. No populate and no
+    `populate_session` call appears below.
+
+    **What it actually produces, read off a live run rather than assumed.**
+    One `run_once` pass over the `ci` recipe (4 trials; systems `syncbox`,
+    `spikeglx`, `bcam`) yields 4 `pipeline.trial.Trial` rows, 12
+    `coverage.TrialCoverage` rows, `trial_count_agreement` true, and tier
+    **A** -- the `n_full_code_records >= 2` branch, since `ci` carries both the
+    Pi and an NI with its own code lines, and no D guard trips. Tier A rather
+    than merely "not D" is asserted because a bare `!= "D"` would also pass on
+    a session that reached B or C for the wrong reason.
+
+    **Confirmed to fail in both halves of the defect, separately:** with
+    `_populate_event_stage()` removed from `run_once`, this session produces 0
+    trials, 0 `TrialCoverage` rows, `trial_count_agreement` false and tier
+    `D` -- the exact production verdict this fix exists to end. With only
+    `coverage.TrialCoverage` removed from `_computed_tables()`, the trial list
+    is built but its coverage rows stay at 0.
+
+    `activate_all` runs first because this test reads `coverage`/`timebase`/
+    `ingest` tables that `daemon_env` alone does not bind, and it must insert
+    into `ingest.Ingestion` before `run_once` would bind them itself.
+    """
+    import datetime
+
+    from wl_preproc.schema import core, coverage, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+
+    daemon_env.activate_all(prefix=prefix)
+
+    recipe = RECIPES["ci"]
+    generate_session(tmp_path, recipe)
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 27, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 27, 19, 0),
+            "session_dir": str(tmp_path / recipe.session_id),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    report = daemon_env.run_once(prefix=prefix)
+
+    n_trials = sum(block.n_trials for block in recipe.blocks)
+    assert len(pipeline.trial.Trial & session_key) == n_trials, report["errors"]
+    assert len(coverage.TrialCoverage & session_key) == n_trials * len(recipe.systems)
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+    assert row["trial_count_agreement"], row
+    assert row["tier"] != "D", (
+        "a clean session is still quarantined by the daemon's own path, which "
+        f"is the Critical this fix exists to close: {row}"
+    )
+    # Stricter than `!= "D"` deliberately: B or C here would mean the session
+    # reached a passing tier for the wrong reason.
+    assert row["tier"] == "A", row
