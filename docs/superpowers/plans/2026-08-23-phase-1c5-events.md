@@ -46,7 +46,11 @@ Parent spec: `docs/superpowers/specs/2026-08-12-wl-preproc-design.md` §4.2, §4
 
 **Interfaces:**
 - Consumes: `GroundTruth.code_words: tuple[tuple[float, int], ...]` — (session-time seconds, 16-bit word).
-- Produces: a nidq stream whose digital word carries **bit 0 = barcode, bit 1 = strobe, bits 2–17 = the 16 data lines**, and a `.meta` whose `niXDChans1` and `~snsChanMap` describe all 18.
+- Produces: a nidq stream with **TWO digital words** — word 0 carrying barcode (bit 0) and strobe (bit 1), word 1 carrying the 16 data lines (bits 0–15) — and a `.meta` declaring `snsMnMaXaDw=0,0,0,2`.
+
+> **Two words, not one.** Eighteen lines do not fit in a 16-bit word. `_nidq_meta.py`'s own docstring says how NI saves this: *"`n_digital_words` is almost always 1 … but it is read rather than assumed, because **a second word is how a 32-line port is saved and that is exactly the card spec §12 orders**."* An earlier draft of this task packed bits 0–17 into one word, which overflows.
+>
+> **The existing barcode reader already handles it.** `extract_spikeglx` takes `samples[:, meta.n_analog_channels]` — word 0 — and its comment already anticipates *"a second word … would follow this one."* So adding word 1 breaks nothing, and `extract_spikeglx` needs no change. Confirm that by running `tests/timebase/` in step 6.
 
 **Why:** spec §2.1. §4.2 routes *"16 data + strobe"* to the NI and §12 picks the PXIe-6353 for the *"32 hardware-timed Port 0 lines"* that needs. The generator carries only the barcode today, so **tier A — "≥2 independent full-code records (Pi + NI)" — cannot be produced or tested at all.**
 
@@ -77,24 +81,27 @@ def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
     out = tmp_path / "spikeglx"
     write_spikeglx(out, recipe, truth)
 
-    meta = (out / "synth-ni-codes_t0.nidq.meta").read_text()
-    assert "niXDChans1=0:17" in meta, (
-        "the nidq meta must declare all 18 digital lines -- barcode, strobe and "
-        f"16 data. Got: {[l for l in meta.splitlines() if l.startswith('niXDChans1')]}"
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+
+    meta = read_nidq_meta(out / "synth-ni-codes_t0.nidq.meta")
+    assert meta.n_digital_words == 2, (
+        "18 lines -- barcode, strobe and 16 data -- do not fit in one 16-bit "
+        "word. NI saves a 32-line port as TWO digital words, which is what "
+        f"section 12's PXIe-6353 is for. Got {meta.n_digital_words}"
     )
 
     raw = np.fromfile(out / "synth-ni-codes_t0.nidq.bin", dtype=np.int16)
-    digital = raw.reshape(-1, 1)[:, 0].astype(np.uint16)
+    samples = raw.reshape(-1, meta.n_channels)
+    control = samples[:, meta.n_analog_channels].astype(np.uint16)      # word 0
+    data = samples[:, meta.n_analog_channels + 1].astype(np.uint16)     # word 1
 
-    # Strobe is bit 1. Every rising strobe edge must expose the word on bits 2..17.
-    strobe = (digital >> 1) & 1
-    rising = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1
-    assert len(rising) == len(truth.code_words), (
-        f"{len(rising)} strobe edges for {len(truth.code_words)} emitted words"
+    # The word is latched at the strobe's FAR edge -- section 4.2.1.
+    strobe = (control >> 1) & 1
+    falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
+    assert len(falling) == len(truth.code_words), (
+        f"{len(falling)} strobe edges for {len(truth.code_words)} emitted words"
     )
-
-    latched = [(int(digital[i]) >> 2) & 0xFFFF for i in rising]
-    assert latched == [word for _, word in truth.code_words]
+    assert [int(data[i]) for i in falling] == [word for _, word in truth.code_words]
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -119,9 +126,10 @@ In `wl_preproc/synth/spikeglx.py`, beside `NIDQ_BARCODE_XD_LINE`, add:
 # falls -- not where it rises. Section 4.2.1: "T1 is the strobe pulse width,
 # and the latching edge is its far end."
 NIDQ_CODE_STROBE_XD_LINE = 1
-NIDQ_CODE_DATA_BASE_XD_LINE = 2
-NIDQ_N_XD_LINES = 18
+NIDQ_N_DIGITAL_WORDS = 2
 ```
+
+Word 0 holds barcode and strobe; **word 1 holds all 16 data lines at bits 0-15**, so nothing overflows and `extract_spikeglx` keeps finding the barcode exactly where it already looks.
 
 - [ ] **Step 4: Emit the strobe and data**
 
@@ -137,11 +145,11 @@ In the function that builds the nidq digital array (the one that currently write
         sample = int(round((apply_drift(time_s, drift_ppm) + NIDQ_PRE_ROLL_S) * fs))
         if sample + strobe_width > n_samples:
             continue
-        digital[sample : sample + strobe_width] |= 1 << NIDQ_CODE_STROBE_XD_LINE
-        digital[sample : sample + strobe_width] |= (
-            (word & 0xFFFF) << NIDQ_CODE_DATA_BASE_XD_LINE
-        )
+        control[sample : sample + strobe_width] |= 1 << NIDQ_CODE_STROBE_XD_LINE
+        data[sample : sample + strobe_width] = word & 0xFFFF
 ```
+
+`control` is the existing digital array (word 0, already carrying the barcode); `data` is a new array of the same length for word 1. Interleave them into the `.bin` in word order — NI writes every analog channel first, then digital word 0, then word 1.
 
 Import `STROBE_WIDTH_S` from wherever `synth/rhs.py` takes it, so both emitters use one definition rather than two.
 
@@ -150,14 +158,22 @@ Import `STROBE_WIDTH_S` from wherever `synth/rhs.py` takes it, so both emitters 
 Replace the two `.meta` lines that describe digital channels:
 
 ```python
-            f"niXDChans1=0:{NIDQ_N_XD_LINES - 1}",
-            f"~snsChanMap=(0,0,0,{_NIDQ_N_CHANNELS},0)(XD0;0:{NIDQ_N_XD_LINES - 1})",
+            f"nSavedChans={NIDQ_N_DIGITAL_WORDS}",
+            f"acqMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
+            f"snsMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
+            "niXDChans1=0:1",
+            f"~snsChanMap=(0,0,0,{NIDQ_N_DIGITAL_WORDS},0)(XD0;0:1)(XD1;0:15)",
 ```
+
+`snsMnMaXaDw`'s fourth field is the digital-word count `read_nidq_meta` parses, so it is the line that actually matters.
 
 - [ ] **Step 6: Run the tests**
 
-Run: `.venv/bin/python -m pytest tests/synth/ -q`
-Expected: PASS. If an existing test asserted `niXDChans1=0`, update it — the old value was the defect, not the assertion's premise. Say which in your report.
+Run: `.venv/bin/python -m pytest tests/synth/ tests/timebase/ -q`
+
+**Both, and `tests/timebase/` is the one that matters** — it exercises `extract_spikeglx`, which must still find the barcode in word 0 now that a word 1 exists beside it.
+
+Expected: PASS. If an existing test asserted a one-word census, update it — the old value was the defect, not the assertion's premise. Say which in your report.
 
 - [ ] **Step 7: Commit**
 
@@ -365,7 +381,7 @@ git commit -m "feat(events): the events package, and syncbox word extraction"
 - Test: `tests/events/test_extract.py`
 
 **Interfaces:**
-- Consumes: `WordStream` from Task 2; the nidq digital word written by Task 1 (bit 0 barcode, bit 1 strobe, bits 2–17 data).
+- Consumes: `WordStream` from Task 2; the **two** nidq digital words written by Task 1 — word 0 (bit 0 barcode, bit 1 strobe), word 1 (16 data lines at bits 0–15). `read_nidq_meta` returns `NidqMeta(sample_rate_hz, n_analog_channels, n_digital_words)` with an `n_channels` property; there is no `n_saved_chans`.
 - Produces: `extract_nidq_words(nidq_bin: Path) -> WordStream`.
 
 - [ ] **Step 1: Write the failing test**
@@ -389,19 +405,23 @@ def test_nidq_latches_the_word_at_the_strobes_FAR_edge(tmp_path):
 
     fs = 25_000.0
     n = 1_000
-    digital = np.zeros(n, dtype=np.uint16)
+    control = np.zeros(n, dtype=np.uint16)   # word 0: barcode, strobe
+    data = np.zeros(n, dtype=np.uint16)      # word 1: the 16 data lines
 
     # One strobe from sample 100 to 120. Data is 0x00AA for the first half and
     # 0x00BB for the second; only the latter is latched.
-    digital[100:120] |= 1 << 1
-    digital[100:110] |= 0x00AA << 2
-    digital[110:120] |= 0x00BB << 2
+    control[100:120] |= 1 << 1
+    data[100:110] = 0x00AA
+    data[110:120] = 0x00BB
 
+    interleaved = np.empty(n * 2, dtype=np.int16)
+    interleaved[0::2] = control.astype(np.int16)
+    interleaved[1::2] = data.astype(np.int16)
     path = tmp_path / "s_t0.nidq.bin"
-    digital.astype(np.int16).tofile(path)
+    interleaved.tofile(path)
     (tmp_path / "s_t0.nidq.meta").write_text(
-        f"niSampRate={fs}\nnSavedChans=1\nniXDChans1=0:17\n"
-        "~snsChanMap=(0,0,0,1,0)(XD0;0:17)\nfileSizeBytes=" + str(n * 2) + "\n"
+        f"niSampRate={fs}\nnSavedChans=2\nsnsMnMaXaDw=0,0,0,2\n"
+        "niXDChans1=0:1\n~snsChanMap=(0,0,0,2,0)(XD0;0:1)(XD1;0:15)\n"
     )
 
     stream = extract.extract_nidq_words(path)
@@ -426,10 +446,10 @@ Add to `wl_preproc/events/extract.py`:
 import numpy as np
 
 # Mirrors the emitter's allocation in `wl_preproc/synth/spikeglx.py`, which is
-# spec section 4.2's routing table made concrete.
-_NIDQ_STROBE_BIT = 1
-_NIDQ_DATA_SHIFT = 2
-_WORD_MASK = 0xFFFF
+# spec section 4.2's routing table made concrete. TWO digital words: 18 lines do
+# not fit in 16 bits, and NI saves a 32-line port as two words -- which is what
+# section 12's PXIe-6353 was chosen for.
+_NIDQ_STROBE_BIT = 1  # in digital word 0, beside the barcode at bit 0
 
 
 def extract_nidq_words(nidq_bin: Path) -> WordStream:
@@ -444,18 +464,28 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
     from wl_preproc.timebase._nidq_meta import read_nidq_meta
 
     meta = read_nidq_meta(nidq_bin.with_suffix(".meta"))
-    raw = np.fromfile(nidq_bin, dtype=np.int16)
-    digital = raw.reshape(-1, meta.n_saved_chans)[:, -1].astype(np.uint16)
+    if meta.n_digital_words < 2:
+        raise ValueError(
+            f"{nidq_bin}: the sidecar declares {meta.n_digital_words} digital "
+            "word(s), so this recording carries the barcode but no code lines. "
+            "Spec section 4.2 routes 16 data lines plus strobe to the NI, which "
+            "needs two words"
+        )
 
-    strobe = (digital >> _NIDQ_STROBE_BIT) & 1
+    raw = np.fromfile(nidq_bin, dtype=np.int16)
+    samples = raw.reshape(-1, meta.n_channels)
+    # NI writes every analog channel before every digital word, so word 0 sits
+    # at n_analog_channels and word 1 immediately after it. `extract_spikeglx`
+    # takes word 0 for the barcode and already anticipates this second word.
+    control = samples[:, meta.n_analog_channels].astype(np.uint16)
+    data = samples[:, meta.n_analog_channels + 1].astype(np.uint16)
+
+    strobe = (control >> _NIDQ_STROBE_BIT) & 1
     # Falling edges: high at i, low at i+1. The word is read at i, the last
     # sample the strobe was still asserted.
     falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
 
-    words = tuple(
-        (int(index), (int(digital[index]) >> _NIDQ_DATA_SHIFT) & _WORD_MASK)
-        for index in falling
-    )
+    words = tuple((int(index), int(data[index])) for index in falling)
     return WordStream(words=words, fs_hz=meta.sample_rate_hz)
 ```
 
@@ -541,15 +571,35 @@ def extract_rhs_witness(session_dir: Path) -> StrobeWitness:
     a rule that "does not generalize back to the Pi", which is the sole
     recorder on training days.
     """
-    from wl_preproc.timebase.extract import _STROBE_DIGITAL_BIT, _read_rhs_digital
+    import numpy as np
 
-    digital, fs_hz = _read_rhs_digital(session_dir)
-    strobe = (digital >> _STROBE_DIGITAL_BIT) & 1
+    from wl_preproc.timebase._rhs_header import (
+        INFO_FILENAME,
+        find_recording_dir,
+        read_sample_rate_hz,
+    )
+
+    recording_dir = find_recording_dir(session_dir)
+    fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
+    words = np.fromfile(recording_dir / "digitalin.dat", dtype=np.uint16)
+
+    strobe = (words >> RHS_STROBE_DIGITAL_BIT) & 1
     rising = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1
     return StrobeWitness(edge_samples=tuple(int(i) for i in rising), fs_hz=fs_hz)
 ```
 
-`timebase/extract.py` already reads the RHS digital array for the barcode. **Reuse its reader rather than writing a second one** — if the helper is private or shaped differently, extract it to a shared name in that module and import it here, and say so in your report. Two readers of the same file is the duplication this repo has removed twice.
+Also add, beside the `WordStream` / `StrobeWitness` definitions:
+
+```python
+# `timebase/extract.py` names the barcode's line as RHS_BARCODE_DIGITAL_BIT = 0.
+# The strobe is the next one, and it has no constant on the READING side yet --
+# only `synth/rhs.py` names it, on the emitting side.
+RHS_STROBE_DIGITAL_BIT = 1
+```
+
+> **Checked before writing this: `_STROBE_DIGITAL_BIT` and `_read_rhs_digital` do NOT exist.** An earlier draft imported both from `timebase/extract.py`. What exists there is `RHS_BARCODE_DIGITAL_BIT`, `_edges_from_bit(words, bit, fs_hz)` and `extract_rhs`, which reads `digitalin.dat` via `_rhs_header`'s `find_recording_dir` / `read_sample_rate_hz`. The code above follows that path rather than inventing a helper.
+>
+> If you find yourself wanting `_edges_from_bit` instead of the inline `np.flatnonzero`, use it — it returns `BitStream`-shaped edges rather than a bare index tuple, so it does not fit `StrobeWitness` directly, but duplicating edge-finding twice in one repo is worse than a small adapter. Say which you chose.
 
 - [ ] **Step 4: Add an end-to-end test over a real synthetic session**
 
