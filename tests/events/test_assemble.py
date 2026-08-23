@@ -66,9 +66,20 @@ def test_a_block_start_payload_carries_its_task_type():
 
 def test_a_corrupted_checksum_word_is_caught_rather_than_decoded():
     """Spec section 4.2 requirement 3: multi-word payloads carry a checksum
-    word. Until fix round 1 nothing exercised it -- the test that claimed to
-    was three words short and tripped the TRUNCATION path instead, so the
-    checksum branch had no coverage while appearing to have some.
+    word.
+
+    Added in fix round 1 because THIS file's test claimed to exercise the
+    checksum and did not: its fixture was one word short of a complete payload,
+    so it tripped the TRUNCATION path while its comment and assertion message
+    both said "checksum". It passed for the wrong reason.
+
+    **Correcting the claim that justified adding it:** the coordinator asserted
+    that nothing in the repository covered the checksum branch. That was wrong,
+    from a grep truncated by `head`. `tests/contracts/test_events.py::
+    test_corrupt_checksum_yields_error_not_exception` has covered it at the
+    codec boundary all along. What was genuinely missing is what this test adds
+    -- coverage from the events package's own side, and a fixture whose
+    behaviour matches what its name says.
 
     Built through encode_payload so the fixture is a VALID payload with exactly
     one word corrupted, rather than a hand-written sequence that might be
