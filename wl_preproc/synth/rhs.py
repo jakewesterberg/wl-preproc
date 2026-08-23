@@ -26,7 +26,11 @@ from wl_preproc.synth.rhs_header import write_rhs_header
 # emitters are meant to be planting the same ground truth.
 from wl_preproc.synth.spikeglx import SPIKE_TEMPLATE_UV
 from wl_preproc.synth.stim import SETTLE_DURATION_S, pack_stim_word
-from wl_preproc.synth.timeline import apply_drift, code_word_span_s
+from wl_preproc.synth.timeline import (
+    SAMPLE_COUNT_ROUNDING_SLACK,
+    apply_drift,
+    code_word_span_s,
+)
 from wl_preproc.synth.truth import GroundTruth
 
 # The RHS controller has its own clock, so recipe.ap_sample_rate_hz — which
@@ -89,7 +93,7 @@ def write_rhs(
     # past it on every session -- see
     # test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line.
     session_span_s = code_word_span_s(recipe, truth, drift_ppm, STROBE_WIDTH_S)
-    n_samples = int((session_span_s + RHS_PRE_ROLL_S) * fs) + 1
+    n_samples = int((session_span_s + RHS_PRE_ROLL_S) * fs) + SAMPLE_COUNT_ROUNDING_SLACK
 
     out = dir_path / f"{recipe.session_id}_rhs"
     out.mkdir(exist_ok=True)

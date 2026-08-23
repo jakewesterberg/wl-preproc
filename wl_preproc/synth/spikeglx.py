@@ -29,7 +29,11 @@ import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.synth.recipe import SessionRecipe
-from wl_preproc.synth.timeline import apply_drift, code_word_span_s
+from wl_preproc.synth.timeline import (
+    SAMPLE_COUNT_ROUNDING_SLACK,
+    apply_drift,
+    code_word_span_s,
+)
 from wl_preproc.synth.truth import GroundTruth
 
 SPIKE_TEMPLATE_UV = np.array(
@@ -228,7 +232,10 @@ def write_nidq(
     # timeline.py's own spacing rule always does. Barcodes never need this;
     # code words do.
     session_span_s = code_word_span_s(recipe, truth, drift_ppm, STROBE_WIDTH_S)
-    n_samples = int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ) + 1
+    n_samples = (
+        int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)
+        + SAMPLE_COUNT_ROUNDING_SLACK
+    )
     control = np.zeros(n_samples, dtype=np.uint16)  # word 0: barcode + strobe
     data = np.zeros(n_samples, dtype=np.uint16)  # word 1: the 16 data lines
 
@@ -261,9 +268,16 @@ def write_nidq(
     # NI writes every analog channel first, then digital word 0, then word 1;
     # this stream has no analog channels, so each sample is (word 0, word 1).
     # `.view`, not `.astype`: values like Escape.BLOCK_START (0x8002) exceed
-    # int16's signed range, and a value-cast would raise or silently wrap,
-    # where a bit-reinterpretation round-trips exactly through the reader's
-    # own `.astype(np.uint16)` on the other end.
+    # int16's signed range, and what this file needs written to disk is the
+    # 16-bit pattern, which `.view` reinterprets by definition and round-trips
+    # exactly through the reader's own `.astype(np.uint16)` on the other end.
+    # `.astype` is a VALUE cast, and it neither raises nor warns on those
+    # out-of-range values -- checked under `-W error` against numpy 2.4.6, an
+    # earlier version of this comment claimed it would. It happens to produce
+    # the identical bytes, by numpy's own unsigned-to-signed wraparound, so
+    # the difference here is intent rather than output: `.view` says "these
+    # bits", which is what the format specifies, while `.astype` says "these
+    # values" and would go silently wrong the day the two stop coinciding.
     interleaved = np.column_stack((control, data))
     interleaved.view(np.int16).tofile(bin_path)
     bin_path.with_suffix(".meta").write_text(

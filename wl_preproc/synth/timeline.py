@@ -51,6 +51,28 @@ def code_word_span_s(
     return max(recipe.duration_s, last_code_word_s + strobe_width_s)
 
 
+# One sample of slack on top of what a span's own arithmetic yields, added to
+# every emitted buffer's `n_samples`. `int()` truncates toward zero, so
+# `int(span * fs)` counts only the WHOLE samples the span covers: whenever
+# `span * fs` is not integral -- which `code_word_span_s`'s strobe-width
+# correction makes the normal case -- a buffer of exactly that many samples
+# ends one sample BEFORE the span's own end. Every writer downstream is
+# bounded by a `<= n_samples` guard that SKIPS rather than raises, so the
+# sample truncation dropped would take the last code word's strobe with it and
+# nothing would notice. The NI side makes it strictly reachable: it indexes
+# each strobe with `int(round(...))` while sizing the buffer with `int(...)`,
+# so a rounded-up index can land one past a truncated buffer.
+#
+# Stated once and imported by `synth/spikeglx.py` and `synth/rhs.py`, for the
+# same reason `code_word_span_s` above is shared rather than written twice:
+# those two emitters have already shipped one identical off-by-one buffer bug
+# independently of each other (see that function's docstring), and this
+# project has since paid again for a pair of code-word-slot constants kept in
+# two places. A number written twice across these two files is a number free
+# to drift.
+SAMPLE_COUNT_ROUNDING_SLACK = 1
+
+
 def _uint32_words(value: int) -> list[int]:
     return [(value >> 16) & 0xFFFF, value & 0xFFFF]
 
