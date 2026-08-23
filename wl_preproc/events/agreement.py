@@ -157,12 +157,16 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
     `Fault.MID_SESSION_RESTART`), not a hazard unique to this comparison.
 
     **`autojunk=False` is required, not incidental.** `SequenceMatcher`'s
-    default autojunk heuristic treats any element occupying more than 1% of
-    a sequence of length >= 200 as "popular" and excludes it from matching --
-    and code words repeat heavily over a real session (the same handful of
-    marker and escape values, over and over, for as long as the session
-    runs). Left at its default, autojunk would silently discard most genuine
-    matches on exactly the long sessions this metric exists for.
+    default autojunk heuristic applies to the SECOND sequence only (`b` --
+    `other` here, never `reference`), and only once `len(b) >= 200`: an
+    element of `b` appearing at more than `len(b) // 100 + 1` positions is
+    marked "popular" and dropped from the match index. Read off
+    `difflib.SequenceMatcher.__chain_b` directly, not paraphrased -- and the
+    threshold is slightly ABOVE a flat 1% because of that `+ 1`. Code words
+    repeat heavily over a real session (the same handful of marker and escape
+    values, over and over, for as long as the session runs), so left at its
+    default, autojunk would silently discard most genuine matches on exactly
+    the long sessions this metric exists for.
     """
     if not reference and not other:
         return 1.0
@@ -177,10 +181,20 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
 # `core.Block`'s `start_s`/`end_s` are `double` (confirmed directly against
 # `element_event/trial.py`). k=2 covers the comparison itself, not the
 # block's two endpoints (start_s and end_s each get their own call to
-# `block_agreement_tolerance_s`, below): the measured value can be off by up
-# to one half-ULP in either direction from rounding, and so, in the general
-# case, can whatever it is compared against, so the pair's worst-case
-# difference is two half-ULPs, not one.
+# `block_agreement_tolerance_s`, below).
+#
+# **k=2 is conservative margin here, not a derived bound -- fix round 4
+# correction.** Only ONE side of this comparison is stored as float32, so
+# only one half-ULP is ever in play: `core.Block`'s `double` side carries no
+# float32 rounding at all, by this comment's own premise two sentences up.
+# The previous justification -- that "in the general case" the compared value
+# can be off by a half-ULP too, so the pair's worst case is two of them --
+# named a term it had already excluded. What k=2 actually buys is a full ULP
+# of headroom over a term provably at most half of one: free against a
+# genuine disagreement, which is orders of magnitude larger, and still
+# correct if the asserted side is ever narrowed to float32 as well. Kept for
+# that reason, and stated as margin rather than re-derived into a bound it
+# is not.
 BLOCK_AGREEMENT_TOLERANCE_K = 2
 
 # Fix round 3 correction: this floor used to be `1e-6`, matched to
@@ -219,16 +233,48 @@ MIN_CODE_WORD_SLOT_S = 0.001
 # PREVIOUS block's own `BLOCK_END` for every block after it -- and both
 # resolve to the identical one-slot displacement, by construction of
 # `_emit`'s ratchet (`earliest = words[-1][0] + CODE_WORD_SPACING_S`), for
-# any block with at least one trial (a zero-trial block has zero duration
-# and is refused elsewhere, by `classify_coverage`, before this comparison
-# is ever reached). `BLOCK_END`, by contrast, lands EXACTLY at its nominal
-# instant -- zero displacement: its own target
-# (`cursor - CODE_WORD_SPACING_S/2`) is always dominated by the ratchet from
-# the preceding `TRIAL_END` (`cursor - CODE_WORD_SPACING_S`, one slot
-# earlier), which resolves to exactly `cursor`. Verified against a live
-# session, not only traced by hand: `tests/schema/test_timebase.py`'s
-# `provenance_session` fixture measures `block_start_time == 0.001` and
-# `block_stop_time == recipe.duration_s` exactly.
+# any block with at least one trial.
+#
+# **A zero-trial block is outside this bound, and the refusal this comment
+# claimed did not exist -- fix round 4.** The claim was that such a block
+# "has zero duration and is refused elsewhere, by `classify_coverage`, before
+# this comparison is ever reached". Both halves were false:
+# `classify_coverage` is called only on `core.Block` and `trial.Trial`
+# (`schema/coverage.py`), never on the measured `pipeline.trial.Block` this
+# constant governs; and `daemon.run_once` populates with
+# `suppress_errors=True`, so a raise there could not have stopped
+# `TimingProvenance` even if it had been reached. Measured rather than
+# argued: a nominal `(0.0, 0.0)` block lands at `(0.001, 0.005)`, with the
+# FOLLOWING block starting at `0.006` -- six slots, three times the floor
+# below, i.e. a spurious tier-D quarantine. The guard now genuinely exists,
+# one level up, at the only place such a block can be described at all:
+# `synth/recipe.py`'s `BlockSpec.n_trials` carries `ge=1`, so no
+# `SessionRecipe` can express a zero-duration block and none reaches here.
+#
+# `BLOCK_END`, by contrast, lands EXACTLY at its nominal instant -- zero
+# displacement: its own target (`cursor - CODE_WORD_SPACING_S/2`) is
+# dominated by the ratchet from the preceding `TRIAL_END`
+# (`cursor - CODE_WORD_SPACING_S`, one slot earlier), which resolves to
+# exactly `cursor`.
+#
+# **That zero has a domain of its own, which the word "always" used to hide.**
+# The `TRIAL_END` ratchet dominates only while each trial is long enough to
+# carry its own seven code words (`TRIAL_START`, the four-word `TRIAL_NUMBER`
+# payload, the outcome marker, `TRIAL_END`) AND repay the five the session
+# head spends before the first trial (`SESSION_START` plus the four-word
+# `BLOCK_START` payload). Swept over `trial_duration_s` and trial count: the
+# displacement is zero at 0.012 s and above for every trial count tried (1,
+# 2, 3, 5, 10, 40), and degrades below it -- a single-trial block is 2 slots
+# off at 0.010 s, and every block is 5 slots off at 0.007 s, where a trial
+# can no longer hold its own words at all. So the bound reads "for any trial
+# longer than about a dozen code-word slots", not "always". No plausible
+# behavioural trial is 12 ms long and all five shipped recipes use 3 s or
+# 6 s, but the bound has an edge and a reader should be told where it is.
+#
+# Verified against a live session, not only traced by hand:
+# `tests/schema/test_timebase.py`'s `provenance_session` fixture measures
+# `block_start_time == 0.001` and `block_stop_time == recipe.duration_s`
+# exactly.
 #
 # **This bias is real, systematic and ONE-SIDED, not symmetric noise.**
 # `_emit`'s own `max(at_s, earliest)` can never return a time earlier than
