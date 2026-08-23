@@ -144,11 +144,14 @@ def test_reaper_frees_a_stale_reservation_not_a_fresh_one(daemon_env, dj_conn, p
     `test_reaper_clears_a_stale_reservation` above, which only exercises the
     zero-computed-tables path because nothing computes in 1c-1).
 
-    `daemon.reap_stale_jobs` is hardcoded to sweep exactly `core`, `coverage`,
-    `paramset`, `request` (see its docstring) — it does not take a schema
-    list — so a throwaway `dj.Computed` table has to live inside one of
-    those four schemas, not a standalone probe schema, to be seen by it at
-    all. `core` is already activated by `daemon_env`.
+    `daemon.reap_stale_jobs` sweeps exactly the modules
+    `daemon._PROJECT_SCHEMA_MODULES` names and takes no schema list, so a
+    throwaway `dj.Computed` table has to live inside one of those schemas,
+    not a standalone probe schema, to be seen by it at all. `core` is already
+    activated by `daemon_env`. That membership is DERIVED in the body below
+    rather than restated here: this paragraph used to name four modules by
+    hand and the tuple has held eight since 1c-5, which is the same
+    hand-copied-list failure that produced this branch's Critical.
 
     Also proves the negative direction: `older_than_s` large enough that the
     reservation is not actually stale must free nothing and must not touch
@@ -160,6 +163,11 @@ def test_reaper_frees_a_stale_reservation_not_a_fresh_one(daemon_env, dj_conn, p
     that is not actually stale.
     """
     from wl_preproc.schema import core
+
+    # Read from the real tuple, not copied into the sentence above: the probe
+    # is only reachable by the reaper because `core` is one of the modules it
+    # actually sweeps.
+    assert "core" in dict(daemon_env._project_schema_modules())
 
     @core.schema
     class ReaperProbeSource(dj.Manual):
@@ -317,13 +325,22 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
 
 
 # Every probe below is declared inside `core.schema`, not a standalone one:
-# `run_once` and `reap_stale_jobs` sweep `core`/`coverage`/`paramset`/`request`
-# by name and take no schema list, so a probe anywhere else is invisible to
-# them -- the same constraint
-# `test_reaper_frees_a_stale_reservation_not_a_fresh_one` documents. `core` is
-# the one `daemon_env` activates. Each is dropped in a `finally`, child before
-# parent, with the job queue table DataJoint creates on first `.jobs` access
-# dropped first.
+# `run_once` and `reap_stale_jobs` sweep exactly the modules
+# `daemon._PROJECT_SCHEMA_MODULES` names and take no schema list, so a probe
+# anywhere else is invisible to them -- the same constraint
+# `test_reaper_frees_a_stale_reservation_not_a_fresh_one` documents and, in its
+# body, asserts from the real tuple. That tuple is deliberately not restated
+# here: it named four modules when this comment was written and names eight
+# now. `core` is the one `daemon_env` activates.
+#
+# Each probe is dropped in a `finally`, child before parent, with the job queue
+# table DataJoint creates on first `.jobs` access dropped FIRST. That last step
+# is not tidiness. `dj.Schema.jobs` yields a `Job` only when the target table
+# AND its `~~` table both exist (datajoint/schemas.py), so a `~~` table whose
+# target was dropped is invisible to `job_tables()`, `count_stale_jobs` and the
+# reaper alike -- measured -- and simply sits in this suite's shared database
+# holding whatever reservation it held, waiting for the next probe that happens
+# to reuse its name.
 
 
 def test_run_once_counts_keys_computed_not_tables_attempted(
@@ -693,6 +710,12 @@ def test_count_stale_jobs_sees_the_jobs_tables_it_reads(dj_conn, prefix, tmp_pat
         assert visible, "count_stale_jobs read job tables the snapshot cannot see"
         assert any(len(table) >= 1 for table in visible)
     finally:
+        # `.jobs` FIRST, child before parent, exactly as every other probe in
+        # this file does. Omitting it left `~~jobs_probe_derived` orphaned in
+        # the shared database with its reservation still in it -- invisible to
+        # every accessor here once its target table was gone (see the comment
+        # block above), so nothing could report or clean it.
+        JobsProbeDerived.jobs.drop()
         JobsProbeDerived.drop_quick()
         JobsProbeSource.drop_quick()
 

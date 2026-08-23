@@ -219,12 +219,23 @@ def _any_schema_activated() -> bool:
     ``.activate()``d in this process.
 
     Distinct from "``_activated_job_tables()`` yielded something": that
-    generator also yields nothing when a schema IS activated but happens to
-    have no Computed/Imported table yet, which is true of *every* schema in
-    this project today (see ``_computed_tables()``) — so it cannot tell
-    "genuinely checked, found nothing to reap" apart from "there was nothing
-    activated to check in the first place". ``count_stale_jobs`` needs that
-    distinction to avoid reporting the second case as if it were the first.
+    generator can still yield nothing from a schema that IS activated, and the
+    reason has changed since this was written. It used to be that no schema
+    here had a Computed table at all; five of them do now (see
+    ``_computed_tables()``). What survives is narrower and still sufficient:
+    ``dj.Schema.jobs`` yields a ``Job`` only for a Computed/Imported table
+    whose ``~~`` job table *already exists in the database* (read directly
+    from datajoint/schemas.py), and that table is created lazily — on the
+    first ``populate(reserve_jobs=True)`` or the first ``table.jobs`` access.
+    So a freshly-activated process that has not populated yet yields nothing,
+    as does any schema declaring no Computed/Imported table at all -- still
+    most of them, and deliberately not name-listed here: which schemas those
+    are is what ``test_every_computed_table_is_a_daemon_stage`` discovers.
+    Either way this generator cannot
+    tell "genuinely checked, found nothing to reap" apart from "there was
+    nothing activated to check in the first place". ``count_stale_jobs`` needs
+    that distinction to avoid reporting the second case as if it were the
+    first.
 
     `schema_obj` is `None` for a module that declares no schema of its own
     (`events` today — see `_project_schemas()`); such an entry contributes
@@ -280,13 +291,14 @@ def _stale_reserved_keys(job, older_than_s: int) -> list[dict]:
     * `schema_obj.jobs` is not a single restrictable query. It is a
       `list[Job]`, one entry per Computed/Imported table that already has a
       *declared* `~~table_name` job table (created lazily on first
-      `populate(reserve_jobs=True)` or first `table.jobs` access). Every
-      table in this project's own schemas is `dj.Manual` — see
-      `_computed_tables()` above — so today this list is always empty and
-      there is genuinely nothing to reap yet; restricting a bare `list` with
-      `&` raises `TypeError` the first time a Computed table exists anywhere
+      `populate(reserve_jobs=True)` or first `table.jobs` access). When this
+      was written no table in this project's own schemas was Computed, so
+      that list was always empty and the hazard was theoretical; since 1c-4
+      there are five (see `_computed_tables()` above) and `run_once` reserves
+      jobs for every one, so it is non-empty in any process that has
+      populated. Restricting a bare `list` with `&` raises `TypeError`
       (reproduced directly: `TypeError: unsupported operand type(s) for &:
-      'list' and 'str'`).
+      'list' and 'str'`), which is now reachable rather than hypothetical.
     * `Job.refresh()`'s orphan-reaping gate is `if orphan_timeout is not None
       and orphan_timeout > 0:` — so `orphan_timeout=0` silently no-ops
       instead of meaning "no grace period, reap anything reserved". This
@@ -343,11 +355,37 @@ def reap_stale_jobs(
     think-the-machine-is-free failure section 11.3 refuses. The default is
     24h: not a measured bound, just a rounder, more conservative one than the
     1h this shipped with first, for a pipeline whose only named long stage
-    (section 10's worked example) is a 4h sort. `_computed_tables()` is empty
-    today, so this cannot fire yet; it arms the moment a future task adds a
-    stage there, and whoever adds one that can legitimately run longer than
-    this default should raise it again, deliberately, rather than inherit a
-    number sized for a codebase with nothing to compute yet.
+    (section 10's worked example) is a 4h sort. This used to say the reaper
+    could not fire at all because `_computed_tables()` was empty; that has
+    been false since 1c-4, and 1c-5 is what makes it exercised -- five
+    computed stages, every one populated with `reserve_jobs=True`. Whoever
+    adds a stage that can legitimately run longer than this default should
+    raise it, deliberately, rather than inherit a number sized for a codebase
+    with nothing to compute yet.
+
+    **Scope, checked against DataJoint 2.3.2's real job lifecycle rather than
+    assumed.** This frees `status='reserved'` rows and nothing else, and that
+    is the correct scope: `_populate1` catches a failing `make()` and calls
+    `jobs.error(...)`, so a key whose `make()` raised under
+    `suppress_errors=True` ends at `status='error'`, never left reserved.
+    Only an interrupted process -- one that reserved and then died before
+    `complete()` or `error()` -- leaves a reservation behind, which is
+    exactly what this function's first paragraph describes. An errored key is
+    a different state with a different remedy and is deliberately not touched
+    here. Measured consequence, since `run_once` passes
+    `suppress_errors=True`: an errored key is NOT retried on the next pass --
+    `_populate_distributed` draws only from `jobs.pending`, and
+    `Job.refresh()` re-pends completed jobs but not errored ones -- so a
+    transient failure parks that key until someone clears it by hand. Three
+    consecutive passes over a probe stage that raises produced 2 errors then
+    0 then 0, with `make()` called only on the first. That is a real gap and
+    it is not this function's to close; naming it here is the point.
+
+    `_populate_event_stage` leaves nothing for this function to find, and
+    needs nothing: it never calls `.populate()`, so it reserves no job at
+    all, and its whole call runs inside one transaction whose rollback takes
+    the `BehaviorRecording` done-marker with it. A crash there re-attempts the
+    session on the next pass rather than stranding it.
 
     `prefix` is accepted for interface symmetry with `run_once` and
     `count_stale_jobs` but not read: every schema this function inspects
