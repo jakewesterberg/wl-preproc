@@ -169,6 +169,13 @@ unusable. The ephys tables are custom. See
 4. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
    finished 2026-08-22, about six weeks early.
 
+**Phase 1c-5 is merged to `main`** (2026-08-23, `5d81ef8..03db020`, 38 commits, 765 tests). With it
+done, **every remaining piece of Phase 2b is blocked on the compute machine** — 2b-0 needs the
+P6000 and 2b-1 needs x86_64 with SELinux and GPU passthrough, and §5 forces 2b-1 before everything
+else. 1c-5 was the piece chosen to be productive while the box was in transit, so that gap is open
+again. What is still unblocked, and why, is in
+`handoffs/2026-08-23-next-session-phase-2b-is-hardware-blocked.md`.
+
 **The NI cards are ordered** (2026-08-23), closing the item that stood here as the longest-lead
 purchase on §12's list. **The compute machine is bought or on order** as of the same date, which is
 what makes the P6000 spike runnable — it gates nothing else in Phase 2b.
