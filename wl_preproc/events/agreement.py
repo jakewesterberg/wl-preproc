@@ -183,14 +183,74 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
 # difference is two half-ULPs, not one.
 BLOCK_AGREEMENT_TOLERANCE_K = 2
 
-# Beneath this, float32's own ULP is far finer than anything this pipeline
-# measures. Matches `timebase/coverage.py`'s own `_FULL_TOLERANCE_S`, chosen
-# there for float64 accumulation error at a comparable order of magnitude --
-# not the same justification (that one is about summed subtraction error;
-# this one is a floor under a magnitude-scaled term), but the same
-# reasoning about what "far finer than anything measured" means numerically
-# in this codebase.
-BLOCK_AGREEMENT_TOLERANCE_FLOOR_S = 1e-6
+# Fix round 3 correction: this floor used to be `1e-6`, matched to
+# `timebase/coverage.py`'s `_FULL_TOLERANCE_S` -- wrong, because that
+# constant is a floor under float64 ACCUMULATION error, which is not a
+# physical quantity, and this tolerance sits under a MEASUREMENT, which has
+# a resolution. The resolution is the transport's: the shared strobe bus
+# carries one code word at a time (`synth/timeline.py`'s own `_emit`:
+# "words can never overlap ... if two logical events want the same instant,
+# the second waits"), and a block boundary is transported as one specific
+# code word in one specific slot -- so it cannot be measured any finer than
+# the spacing between slots. That is the actual explanation for the 1 ms
+# this project's very first fixed tolerance happened to cover: not
+# "generous slack", but exactly one slot's worth of transport quantization,
+# covered by accident rather than by argument.
+#
+# `MIN_CODE_WORD_SLOT_S` matches `synth/timeline.py`'s own
+# `CODE_WORD_SPACING_S` (0.001) -- restated, not imported: `wl_preproc.
+# events` is production code (this value feeds `TimingProvenance.make()` on
+# every session, real or synthetic), and `wl_preproc.synth` is fixture
+# generation only, so importing one from the other would run the
+# architecture backwards in whichever direction it went. The synthetic
+# generator is this project's only behavioural-stack implementation today
+# (`events/taskfile.py`'s own "one implementation" framing for the same
+# reason), so its transport timing is the only measured value there currently
+# is to derive this from; update it to match a real system's own slot
+# spacing once one is chosen, the same way `SyntheticTaskFileReader` gets a
+# sibling implementation rather than a replacement then.
+MIN_CODE_WORD_SLOT_S = 0.001
+
+# How many slots the MEASURED block boundary can sit from the NOMINAL one --
+# traced exhaustively through every transition `build_timeline` produces,
+# not merely observed once. A block's own `BLOCK_START` escape word (whose
+# time IS `AssembledBlock.start_s`) is ratcheted exactly one slot past its
+# nominal instant: by `SESSION_START` for the very first block, or by the
+# PREVIOUS block's own `BLOCK_END` for every block after it -- and both
+# resolve to the identical one-slot displacement, by construction of
+# `_emit`'s ratchet (`earliest = words[-1][0] + CODE_WORD_SPACING_S`), for
+# any block with at least one trial (a zero-trial block has zero duration
+# and is refused elsewhere, by `classify_coverage`, before this comparison
+# is ever reached). `BLOCK_END`, by contrast, lands EXACTLY at its nominal
+# instant -- zero displacement: its own target
+# (`cursor - CODE_WORD_SPACING_S/2`) is always dominated by the ratchet from
+# the preceding `TRIAL_END` (`cursor - CODE_WORD_SPACING_S`, one slot
+# earlier), which resolves to exactly `cursor`. Verified against a live
+# session, not only traced by hand: `tests/schema/test_timebase.py`'s
+# `provenance_session` fixture measures `block_start_time == 0.001` and
+# `block_stop_time == recipe.duration_s` exactly.
+#
+# **This bias is real, systematic and ONE-SIDED, not symmetric noise.**
+# `_emit`'s own `max(at_s, earliest)` can never return a time earlier than
+# the nominal `at_s` it was asked for -- so the measured boundary is always
+# >= the nominal one, never earlier, for any code word this generator
+# places. A tolerance built from it is absorbing a known, signed
+# quantization in one direction, not guarding against noise that could go
+# either way; a reader relying on this constant should not mistake it for
+# the latter.
+_BLOCK_START_MAX_SLOTS = 1
+
+# The floor doubles the proven 1-slot bound above rather than using it bare,
+# for a separate and much smaller reason than the bound itself being
+# uncertain: the transported VALUE is also subject to the same float32
+# storage rounding `BLOCK_AGREEMENT_TOLERANCE_K` exists for, stacked on top
+# of the slot quantization, and comparing two floats at an exact
+# theoretical boundary (`diff == floor` to the last representable bit) is
+# fragile regardless of how solid the derivation behind the boundary is.
+# Doubling costs nothing against a genuine disagreement, which is orders of
+# magnitude larger than either the slot quantization or the storage
+# rounding on top of it.
+BLOCK_AGREEMENT_TOLERANCE_FLOOR_S = 2 * _BLOCK_START_MAX_SLOTS * MIN_CODE_WORD_SLOT_S
 
 
 def _float32_half_ulp(value: float) -> float:
@@ -209,26 +269,36 @@ def _float32_half_ulp(value: float) -> float:
 
 def block_agreement_tolerance_s(*magnitudes: float) -> float:
     """How close a measured block boundary must land to wl.works' own
-    assertion, at these magnitudes, to count as agreeing -- derived from
-    float32 storage precision, not chosen. Fix round 2: a prior fixed
-    `1e-3` cited `timebase/segments.py`'s alignment durations as precedent
-    for "chosen rather than derived" -- wrong, since that module derives its
-    own numbers explicitly ("consequences of the decoder"), so a derived
-    number was cited to license an underived one.
+    assertion, at these magnitudes, to count as agreeing -- two DERIVED
+    terms, neither chosen. Fix round 2: a prior fixed `1e-3` cited
+    `timebase/segments.py`'s alignment durations as "chosen rather than
+    derived" precedent -- wrong, since that module derives its own numbers
+    explicitly. Fix round 3: the float32 term that replaced it was right,
+    but its floor (`1e-6`) was matched to `timebase/coverage.py`'s
+    `_FULL_TOLERANCE_S` -- also wrong, because that constant floors float64
+    ACCUMULATION error, not a physical quantity, while this tolerance sits
+    under a MEASUREMENT with an actual resolution. See
+    `BLOCK_AGREEMENT_TOLERANCE_FLOOR_S`'s own comment for that resolution
+    (the strobe bus's one-code-word-per-slot transport) and the exhaustive
+    trace behind it.
 
     Design spec section 5 makes a disagreement here its own tier-D
-    condition. A FIXED tolerance cannot be right at every magnitude a
-    session might reach: `pipeline.trial.Block`'s own columns are float32
-    (see `BLOCK_AGREEMENT_TOLERANCE_K`'s comment), so the MEASURED side of
-    this comparison always carries up to one float32 half-ULP of pure
-    storage rounding, and that half-ULP DOUBLES every time the magnitude
-    doubles -- 0.977 ms at 16384 s (4.5h into a session), 1.953 ms at
-    32768 s (9.1h). A fixed 1 ms tolerance already consumes nearly its
-    entire budget on storage rounding alone at 4.5h and is provably too
-    tight past 9.1h: a false tier-D quarantine on an honestly agreeing long
-    session, for a reason that has nothing to do with whether the blocks
-    actually agree -- exactly the false-verdict shape section 4.7's whole
-    apparatus exists to avoid, reintroduced by an underived constant.
+    condition. Two things make a FIXED tolerance wrong at some magnitude:
+    `pipeline.trial.Block`'s own columns are float32 (see
+    `BLOCK_AGREEMENT_TOLERANCE_K`'s comment), so the MEASURED side of this
+    comparison always carries up to one float32 half-ULP of pure storage
+    rounding, and that half-ULP DOUBLES every time the magnitude doubles --
+    0.977 ms at 16384 s (4.5h into a session), 1.953 ms at 32768 s (9.1h).
+    A fixed 1 ms tolerance already consumes nearly its entire budget on
+    storage rounding alone at 4.5h and is provably too tight past 9.1h: a
+    false tier-D quarantine on an honestly agreeing long session, for a
+    reason that has nothing to do with whether the blocks actually agree --
+    exactly the false-verdict shape parent spec section 4.7's whole
+    apparatus exists to avoid, reintroduced by an underived term. And a
+    fixed tolerance UNDER one slot's transport quantization is wrong at
+    short magnitudes for the opposite reason: it would reject an honestly
+    agreeing SHORT session too, quarantining it for exactly the same kind
+    of reason -- a measurement resolution mistaken for a disagreement.
 
     Callers pass every value entering ONE boundary comparison (typically the
     measured time and the asserted time for a single endpoint), so the
