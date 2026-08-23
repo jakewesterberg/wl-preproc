@@ -20,6 +20,7 @@ Parent spec: `docs/superpowers/specs/2026-08-12-wl-preproc-design.md` §4.2, §4
 - **Session time throughout.** `BehaviorRecording` is `-> Session` with no extra key attribute, so one row per session is structural and element-event's "relative to recording start" IS session time.
 - **`extract.py` is the only per-system code**, as 1c-4 established.
 - Run tests with `.venv/bin/python -m pytest`. There is no `pip` in that venv — install nothing.
+- **Use the suite's module-level recipes** — `CI_RECIPE`, `STIM_RECIPE`, and their siblings in `wl_preproc/synth/recipe.py` — never a hand-built one. `SessionRecipe` is a pydantic model with many cross-validated required fields. The timeline builder is **`build_timeline`**, not `build_truth`. Both names were wrong in this plan's first draft, in two separate tasks.
 - **Test file basenames must be globally unique across `tests/`.** There is no `__init__.py` anywhere under `tests/`, so pytest imports test modules by basename alone and two files sharing one collide at collection. `tests/timebase/test_extract.py` already exists, which is why this phase's per-system extractor tests are `test_syncbox_extract.py`, `test_nidq_extract.py` and `test_rhs_extract.py` rather than one shared `test_extract.py`. Found by Task 2, whose original brief would have collided.
 - Zero warnings. Green on 3.11 and 3.13.
 
@@ -71,12 +72,15 @@ def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
     """
     import numpy as np
 
-    from wl_preproc.synth.recipe import Recipe
+    from wl_preproc.synth.recipe import CI_RECIPE
     from wl_preproc.synth.spikeglx import write_spikeglx
-    from wl_preproc.synth.timeline import build_truth
+    from wl_preproc.synth.timeline import build_timeline
 
-    recipe = Recipe(session_id="synth-ni-codes", rig="rigA", seed=7)
-    truth = build_truth(recipe)
+    # `SessionRecipe` is a pydantic model with many cross-validated required
+    # fields, so the suite's own module-level recipes are the fixtures to use
+    # rather than hand-building one. `build_timeline`, not `build_truth`.
+    recipe = CI_RECIPE
+    truth = build_timeline(recipe)
     assert truth.code_words, "the fixture must emit code words at all"
 
     out = tmp_path / "spikeglx"
@@ -613,13 +617,16 @@ def test_rhs_witness_matches_the_emitted_word_count(tmp_path):
     a hand-built array, because the emitter is what a real recording resembles.
     """
     from wl_preproc.events import extract
-    from wl_preproc.synth.recipe import Recipe
+    from wl_preproc.synth.recipe import STIM_RECIPE
     from wl_preproc.synth.rhs import write_rhs
-    from wl_preproc.synth.timeline import build_truth
+    from wl_preproc.synth.timeline import build_timeline
 
-    recipe = Recipe(session_id="synth-witness", rig="rigA", seed=11)
-    truth = build_truth(recipe)
+    # STIM_RECIPE is the repo's standalone-Intan fixture -- the tier-B topology
+    # this witness exists for. `build_timeline`, not `build_truth`.
+    recipe = STIM_RECIPE
+    truth = build_timeline(recipe)
     out = tmp_path / "rhs"
+    out.mkdir(parents=True, exist_ok=True)
     write_rhs(out, recipe, truth)
 
     witness = extract.extract_rhs_witness(out)
