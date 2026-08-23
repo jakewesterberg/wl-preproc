@@ -220,18 +220,23 @@ def test_spikeglx_reshapes_by_the_declared_channel_count(tmp_path: Path):
     Two analog channels are prepended to a real session's NI stream and the
     census is corrected to match. The barcodes must still come out.
     """
-    from wl_preproc.synth.spikeglx import NIDQ_BARCODE_XD_LINE
+    from wl_preproc.synth.spikeglx import NIDQ_BARCODE_XD_LINE, NIDQ_N_DIGITAL_WORDS
 
     truth = generate_session(tmp_path, RECIPES["ci"])
     bin_path = _spikeglx_nidq(tmp_path)
     meta_path = bin_path.with_suffix(".meta")
 
-    word = np.fromfile(bin_path, dtype=np.int16)
-    analog = np.full((word.size, 2), 1 << NIDQ_BARCODE_XD_LINE, dtype=np.int16)
-    np.column_stack([analog, word]).ravel().tofile(bin_path)
+    # Two digital words (barcode+strobe, then the 16 data lines) since Phase
+    # 1c5, not the single barcode-only word this test was written against --
+    # reshape by that real width before prepending the fake analog channels.
+    digital = np.fromfile(bin_path, dtype=np.int16).reshape(-1, NIDQ_N_DIGITAL_WORDS)
+    analog = np.full((digital.shape[0], 2), 1 << NIDQ_BARCODE_XD_LINE, dtype=np.int16)
+    np.column_stack([analog, digital]).tofile(bin_path)
     meta_path.write_text(
         "\n".join(
-            line if not line.startswith("snsMnMaXaDw=") else "snsMnMaXaDw=0,0,2,1"
+            line
+            if not line.startswith("snsMnMaXaDw=")
+            else f"snsMnMaXaDw=0,0,2,{NIDQ_N_DIGITAL_WORDS}"
             for line in meta_path.read_text(encoding="utf-8").splitlines()
         )
         + "\n",

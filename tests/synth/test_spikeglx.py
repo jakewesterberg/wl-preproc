@@ -49,10 +49,18 @@ def test_the_nidq_word_carries_decodable_barcodes(tmp_path):
     """
     from wl_sync.barcode import decode_edges, edges_from_samples
 
-    from wl_preproc.synth.spikeglx import NIDQ_BARCODE_XD_LINE, NIDQ_SAMPLE_RATE_HZ
+    from wl_preproc.synth.spikeglx import (
+        NIDQ_BARCODE_XD_LINE,
+        NIDQ_N_DIGITAL_WORDS,
+        NIDQ_SAMPLE_RATE_HZ,
+    )
 
     truth, bin_path, _ = emit(tmp_path)
-    word = np.fromfile(bin_path.parent / f"{CI_RECIPE.session_id}.nidq.bin", dtype=np.int16)
+    raw = np.fromfile(bin_path.parent / f"{CI_RECIPE.session_id}.nidq.bin", dtype=np.int16)
+    # Two digital words per sample since Phase 1c5 -- word 0 (barcode, bit 0,
+    # and strobe, bit 1), then word 1 (the 16 data lines) -- not the single
+    # barcode-only word this test was originally written against.
+    word = raw.reshape(-1, NIDQ_N_DIGITAL_WORDS)[:, 0]
     trace = ((word >> NIDQ_BARCODE_XD_LINE) & 1).astype(np.int8)
     decoded = decode_edges(edges_from_samples(trace, NIDQ_SAMPLE_RATE_HZ))
     assert [b.value for b in decoded] == [v for v, _ in truth.barcodes]
@@ -79,12 +87,16 @@ def test_spikeinterface_can_open_the_nidq_stream(tmp_path):
     stream the pipeline actually aligns on. Guessing at .meta fields does not
     survive contact with the reader — `snsMnMaXaDw` and `niXDChans1` in
     particular are indexed unconditionally.
+
+    Two channels, not one: since Phase 1c5 the NI stream carries two digital
+    words (word 0 -- barcode and strobe -- and word 1 -- the 16 data lines),
+    and spikeinterface's reader counts one channel per declared digital word.
     """
     _, _, directory = emit(tmp_path)
-    from wl_preproc.synth.spikeglx import NIDQ_SAMPLE_RATE_HZ
+    from wl_preproc.synth.spikeglx import NIDQ_N_DIGITAL_WORDS, NIDQ_SAMPLE_RATE_HZ
 
     recording = spikeinterface.read_spikeglx(directory, stream_id="nidq")
-    assert recording.get_num_channels() == 1
+    assert recording.get_num_channels() == NIDQ_N_DIGITAL_WORDS
     assert recording.get_sampling_frequency() == pytest.approx(NIDQ_SAMPLE_RATE_HZ)
     assert recording.get_total_duration() == pytest.approx(
         CI_RECIPE.duration_s + SPIKEGLX_PRE_ROLL_S, rel=1e-3
@@ -125,3 +137,59 @@ def test_emission_is_deterministic(tmp_path):
     # every fit while the imec bytes stayed identical.
     nidq = f"{CI_RECIPE.session_id}.nidq.bin"
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
+
+
+def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
+    """Spec section 4.2 routes 16 data lines plus strobe to the NI, and section
+    12 picks the PXIe-6353 for exactly the 32 Port 0 lines that needs.
+
+    Until 2026-08-23 the generator emitted only the barcode here, which made
+    tier A -- two independent full-code records, Pi and NI -- impossible to
+    produce or test. That left NP+NI, the lab's main recording configuration,
+    at the one tier nothing exercised.
+    """
+    from wl_preproc.contracts.events import TaskTypeCode
+    from wl_preproc.synth.recipe import BlockSpec, MontageSpec, SessionRecipe
+    from wl_preproc.synth.spikeglx import write_spikeglx
+
+    recipe = SessionRecipe(
+        session_id="synth-ni-codes",
+        subject="pico",
+        rig="rigA",
+        systems=("syncbox", "spikeglx"),
+        blocks=(
+            BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=3, trial_duration_s=3.0),
+        ),
+        montages=(MontageSpec(start_s=0.0, end_s=9.0),),
+        n_ap_channels=4,
+        ap_sample_rate_hz=30_000.0,
+        seed=7,
+    )
+    truth = build_timeline(recipe)
+    assert truth.code_words, "the fixture must emit code words at all"
+
+    out = tmp_path / "spikeglx"
+    out.mkdir()
+    write_spikeglx(out, recipe, truth)
+
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+
+    meta = read_nidq_meta(out / f"{recipe.session_id}.nidq.meta")
+    assert meta.n_digital_words == 2, (
+        "18 lines -- barcode, strobe and 16 data -- do not fit in one 16-bit "
+        "word. NI saves a 32-line port as TWO digital words, which is what "
+        f"section 12's PXIe-6353 is for. Got {meta.n_digital_words}"
+    )
+
+    raw = np.fromfile(out / f"{recipe.session_id}.nidq.bin", dtype=np.int16)
+    samples = raw.reshape(-1, meta.n_channels)
+    control = samples[:, meta.n_analog_channels].astype(np.uint16)  # word 0
+    data = samples[:, meta.n_analog_channels + 1].astype(np.uint16)  # word 1
+
+    # The word is latched at the strobe's FAR edge -- section 4.2.1.
+    strobe = (control >> 1) & 1
+    falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
+    assert len(falling) == len(truth.code_words), (
+        f"{len(falling)} strobe edges for {len(truth.code_words)} emitted words"
+    )
+    assert [int(data[i]) for i in falling] == [word for _, word in truth.code_words]

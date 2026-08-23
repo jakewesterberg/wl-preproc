@@ -60,10 +60,21 @@ NIDQ_SAMPLE_RATE_HZ = 30_000.0
 # the consuming half of the same convention.
 NIDQ_BARCODE_XD_LINE = 0
 
-# One digital word channel and nothing else. Named rather than inlined because
-# the .meta's census, its channel map and the file's own shape must all agree,
-# and three literal 1s are three places to disagree.
-_NIDQ_N_CHANNELS = 1
+# Spec section 4.2's routing table gives the NI 16 data lines plus strobe, and
+# section 12 picks the PXIe-6353 for the 32 hardware-timed Port 0 lines that
+# requires. One digital word cannot carry all of it:
+#
+#   word 0, bit 0        barcode          (section 4.5 -- the timebase's own line)
+#   word 0, bit 1        code strobe      (T1 = 500 us, section 4.2.1)
+#   word 1, bits 0..15   the 16 data lines, latched at the strobe's FAR edge
+#
+# Eighteen lines -- barcode, strobe, 16 data -- do not fit in one 16-bit word,
+# which is why NI (and `_nidq_meta.py`'s own docstring) saves a 32-line port as
+# TWO digital words rather than one. The latch is the far edge of T1, so the
+# data is sampled where the strobe falls, not where it rises: section 4.2.1,
+# "T1 is the strobe pulse width, and the latching edge is its far end."
+NIDQ_CODE_STROBE_XD_LINE = 1
+NIDQ_N_DIGITAL_WORDS = 2
 
 
 def _meta_text(
@@ -154,22 +165,25 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
 
     `snsMnMaXaDw` is the NI channel-type census — multiplexed neural,
     multiplexed aux, non-muxed analog, digital words — and the reader slices
-    gains by it, so `0,0,0,1` says this file is one digital word channel and
-    nothing else. `niXDChans1` names which lines within that word exist;
-    without it the reader reports zero digital channels and the barcode line is
-    invisible to anything that asks the reader rather than the bytes.
+    gains by it, so `0,0,0,2` says this file is two digital word channels and
+    nothing else: word 0 (barcode, bit 0, and strobe, bit 1) and word 1 (the 16
+    data lines, bits 0-15). `snsMnMaXaDw`'s fourth field is the one
+    `read_nidq_meta` actually parses; `niXDChans1` and `~snsChanMap` are
+    descriptive, but without them the reader reports zero digital channels and
+    the barcode line is invisible to anything that asks the reader rather than
+    the bytes.
     """
-    file_bytes = n_samples * _NIDQ_N_CHANNELS * 2
+    file_bytes = n_samples * NIDQ_N_DIGITAL_WORDS * 2
     return "\n".join(
         [
             "typeThis=nidq",
             f"fileName={bin_name}",
             f"niSampRate={NIDQ_SAMPLE_RATE_HZ:g}",
-            f"nSavedChans={_NIDQ_N_CHANNELS}",
+            f"nSavedChans={NIDQ_N_DIGITAL_WORDS}",
             f"fileSizeBytes={file_bytes}",
             f"fileTimeSecs={n_samples / NIDQ_SAMPLE_RATE_HZ:.6f}",
-            f"acqMnMaXaDw=0,0,0,{_NIDQ_N_CHANNELS}",
-            f"snsMnMaXaDw=0,0,0,{_NIDQ_N_CHANNELS}",
+            f"acqMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
+            f"snsMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
             # Gains for channel types this file has none of. The reader indexes
             # them unconditionally, so absent fields are a KeyError rather than
             # an unused default.
@@ -178,8 +192,8 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
             "niAiRangeMax=5",
             "niAiRangeMin=-5",
             "firstSample=0",
-            f"niXDChans1={NIDQ_BARCODE_XD_LINE}",
-            f"~snsChanMap=(0,0,0,{_NIDQ_N_CHANNELS},0)(XD{NIDQ_BARCODE_XD_LINE};0:0)",
+            "niXDChans1=0:1",
+            f"~snsChanMap=(0,0,0,{NIDQ_N_DIGITAL_WORDS},0)(XD0;0:1)(XD1;0:15)",
         ]
     ) + "\n"
 
@@ -187,20 +201,43 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
 def write_nidq(
     dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
 ) -> Path:
-    """The NI stream: one digital word channel carrying the barcode.
+    """The NI stream: two digital words carrying the barcode, the code strobe
+    and the 16 data lines (spec section 4.2's routing table; section 12's
+    PXIe-6353).
 
-    One int16 per sample, the whole 16-line Port 0 word — which is how NI
-    hardware-timed digital input arrives and why isolating the barcode
-    downstream is a mask rather than a stride. Only the barcode line is driven
-    here; the 16-bit event codes and the strobe are the same port's other lines
-    and belong to a later phase.
+    One int16 per word per sample, interleaved word 0 then word 1 — which is
+    how NI hardware-timed digital input arrives, and why isolating any one
+    line downstream is a mask rather than a stride. Word 0 carries the barcode
+    (bit 0) and the strobe (bit 1); word 1 carries the 16 data lines at bits
+    0-15, because 18 lines do not fit in one 16-bit word.
 
     The same `SPIKEGLX_PRE_ROLL_S` origin as the imec stream, because SpikeGLX
     starts them together — and a different origin from the sync box's, so a
     pipeline that never computes an offset fails.
     """
-    n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)
-    word = np.zeros(n_samples, dtype=np.int16)
+    # Deferred rather than a top-level import: `rhs.py` imports SPIKE_TEMPLATE_UV
+    # from this module, so a top-level import in the other direction would be a
+    # circular import whose success depends on which of the two a caller
+    # imports first.
+    from wl_preproc.synth.rhs import STROBE_WIDTH_S
+
+    strobe_width = max(1, int(round(STROBE_WIDTH_S * NIDQ_SAMPLE_RATE_HZ)))
+
+    # timeline.py's own spacing rule (`_emit`) places SESSION_END -- and, in a
+    # multi-block session, every BLOCK_END -- at or after recipe.duration_s,
+    # never before it: the last trial's own closing marks land AT
+    # duration_s, and each later word is pushed CODE_WORD_SPACING_S past
+    # whatever came before it. A buffer sized to duration_s alone has no room
+    # left for that last word's strobe pulse. Barcodes never hit this --
+    # BARCODE_INTERVAL_S keeps the last one strictly before duration_s -- so
+    # this only had to be discovered once code words existed to overrun it.
+    last_code_word_s = max(
+        (apply_drift(time_s, drift_ppm) for time_s, _ in truth.code_words), default=0.0
+    )
+    session_span_s = max(recipe.duration_s, last_code_word_s + STROBE_WIDTH_S)
+    n_samples = int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ) + 1
+    control = np.zeros(n_samples, dtype=np.uint16)  # word 0: barcode + strobe
+    data = np.zeros(n_samples, dtype=np.uint16)  # word 1: the 16 data lines
 
     for value, start_s in truth.barcodes:
         cursor = int(
@@ -208,15 +245,34 @@ def write_nidq(
         )
         for level, duration_us in encode(value):
             width = int(round(duration_us * 1e-6 * NIDQ_SAMPLE_RATE_HZ))
-            # OR the line in rather than assigning the word: the other Port 0
-            # lines are this same array, so an assignment here would clear
-            # whatever a later phase writes beside it.
+            # OR the line in rather than assigning the word: the strobe is the
+            # same array, so an assignment here would clear it.
             if level and cursor + width <= n_samples:
-                word[cursor : cursor + width] |= 1 << NIDQ_BARCODE_XD_LINE
+                control[cursor : cursor + width] |= 1 << NIDQ_BARCODE_XD_LINE
             cursor += width
 
+    # Strobe must be strictly narrower than the word spacing, or consecutive
+    # strobes merge into one long high with no falling edge between them and
+    # the words become uncountable. Phase 1b shipped exactly that defect: a
+    # 1 ms pulse at 1 ms spacing rendered 31 words as 5 countable edges.
+    for time_s, word in truth.code_words:
+        sample = int(
+            round((apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)
+        )
+        if sample + strobe_width > n_samples:
+            continue
+        control[sample : sample + strobe_width] |= 1 << NIDQ_CODE_STROBE_XD_LINE
+        data[sample : sample + strobe_width] = word & 0xFFFF
+
     bin_path = dir_path / f"{recipe.session_id}.nidq.bin"
-    word.tofile(bin_path)
+    # NI writes every analog channel first, then digital word 0, then word 1;
+    # this stream has no analog channels, so each sample is (word 0, word 1).
+    # `.view`, not `.astype`: values like Escape.BLOCK_START (0x8002) exceed
+    # int16's signed range, and a value-cast would raise or silently wrap,
+    # where a bit-reinterpretation round-trips exactly through the reader's
+    # own `.astype(np.uint16)` on the other end.
+    interleaved = np.column_stack((control, data))
+    interleaved.view(np.int16).tofile(bin_path)
     bin_path.with_suffix(".meta").write_text(
         _nidq_meta_text(recipe, n_samples, bin_path.name), encoding="utf-8"
     )
