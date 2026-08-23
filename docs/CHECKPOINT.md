@@ -153,15 +153,19 @@ unusable. The ephys tables are custom. See
    > keys on block type (`rf_map`, `resting_dark`, `passive_flash`, *"any task with in-RF stimulus
    > events"*), and §6.9's chain runs `RF estimation → in-RF trial selection → task-evoked CSD →
    > laminar depth`. Both need the canonical trial list and decoded event codes. **1c-5 is a
-   > prerequisite for 2b-7 and 2b-8** — see the decomposition's §4. It still blocks 2b-0 through
-   > 2b-6, so it may be built in parallel with them.
+   > prerequisite for 2b-7 and 2b-8** — see the decomposition's §4. It still does **not** block
+   > 2b-0 through 2b-6, so it may be built in parallel with them.
+
+   *Transcription fix, 2026-08-23, not a change of position: the last sentence of the blockquote
+   above had lost its "not" and so read "It still blocks 2b-0 through 2b-6, so it may be built in
+   parallel with them", which contradicts itself — a phase that blocks those pieces cannot be built
+   alongside them. Restored against the decomposition's §4, which reads "1c-5 does not block 2b-0
+   through 2b-6." Corrected in place rather than recorded-and-left, because nothing was ever
+   believed here that the correction reverses.*
 
    > **Satisfied 2026-08-23**, by the phase above being built. The blockquote is kept rather than
    > deleted because the dependency it records is *why* 1c-5 ran first; nothing downstream waits on
-   > it now — 2b-7 and 2b-8 have their canonical trial list and decoded event codes. **One clause
-   > of it is a dropped negation, corrected here rather than in place**: *"It still blocks 2b-0
-   > through 2b-6, so it may be built in parallel with them"* contradicts itself, and the
-   > decomposition's §4 reads *"1c-5 does **not** block 2b-0 through 2b-6."* Moot either way now.
+   > it now — 2b-7 and 2b-8 have their canonical trial list and decoded event codes.
 4. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
    finished 2026-08-22, about six weeks early.
 
