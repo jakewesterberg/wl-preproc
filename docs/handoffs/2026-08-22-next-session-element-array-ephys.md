@@ -1,5 +1,30 @@
 # Next session: unblock Phase 2 by fixing `element-array-ephys` #230 here
 
+> **OUTCOME, appended 2026-08-23. Not rewritten — this file is a record of what was believed on
+> the morning of 2026-08-22, and editing it to agree with its own result would destroy the evidence
+> that the measurements mattered.**
+>
+> **The brief was right that this was the next thing and wrong about what the thing was.** #230 was
+> not fixed. The dependency was **declined**: its `Clustering` is keyed
+> `(subject, session_datetime, insertion_number, paramset_idx)` with nowhere to put
+> `activation_id`, which §5.2 requires — so fixing all fourteen blobs would still have left the
+> branch unusable. Adopting it would also have imported four unpinned moving git refs and silently
+> replaced this project's pinned `spikeinterface`. The ephys tables are custom, merged as
+> `056ee57`. Full argument: `specs/2026-08-22-phase-2a-ephys-schema-design.md` §2.
+>
+> **The brief ranked vendoring the largest of its three shapes. Two measurements inverted that.**
+>
+> **One claim below is now false.** *"Nothing downstream is blocked by [1c-5]"* held while Phase 2
+> meant readers-through-QC. Phase 2b's decomposition (2026-08-23) admits §6.7–6.10, whose
+> characterization registry keys on block type and whose depth chain needs in-RF trial selection —
+> so **1c-5 is a prerequisite for 2b-7 and 2b-8.** See `specs/2026-08-23-phase-2b-decomposition-design.md` §4.
+>
+> **And one warning below was right in a way it did not anticipate.** The brief said the
+> hand-listed-module shape *"has now bitten this project twice… assume it is about to bite a third
+> time and check every list that names modules by hand."* It did — in `wl_preproc/daemon.py`'s
+> `_PROJECT_SCHEMA_MODULES`, a file the Phase 2a plan never named, while the Phase 2a spec claimed
+> vendoring had retired that risk. Caught by the guard written after the second bite.
+
 **Written 2026-08-22, at `wl-preproc` commit `36c68d7`** (Phase 1c-4 merged, Phase 1c complete,
 688 tests green on 3.11 and 3.13). If `git log --oneline -1` has moved, re-read
 `docs/CHECKPOINT.md` before trusting anything below.

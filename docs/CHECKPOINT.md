@@ -105,26 +105,38 @@ per system on every run, currently 100% on clean fixtures for all five including
 
 ## What is next
 
-1. **Unblock Phase 2: resolve `element-array-ephys` #230 here, not upstream.** §5.1.1's
-   precondition forbids activating it until #230 is fixed *"upstream or here"*, and upstream is
-   not moving — **open, zero comments, no PR, last touched 2026-08-10**, before this file first
-   recorded it as unfixed. Free now (definition-only, no rows anywhere); a migration once Phase 2
-   writes one waveform. **The brief is
-   `docs/handoffs/2026-08-22-next-session-element-array-ephys.md`.**
-2. **Phase 1c-5 — event decoding.** Named by 1c-4 rather than planned: `TimingProvenance.tier`
-   holds `'pending'` for every session, and `pending_inputs` names the three things it is waiting
-   for — `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
-   unreachable until they exist. The **measured** block boundary (as opposed to wl.works'
-   asserted one) is also 1c-5's, in its own Computed table.
-3. **Phase 2 onward** — see spec §12. Its window is Oct–Nov 2026; Phase 1's was Sep–Oct and
-   finished 2026-08-22, about six weeks early. That lead is what item 1 is for.
+**Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
+2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
+expected.** The dependency was **declined** rather than patched: its `Clustering` key cannot carry
+`activation_id`, which §5.2 requires, so fixing all fourteen blobs would still have left the branch
+unusable. The ephys tables are custom. See
+`specs/2026-08-22-phase-2a-ephys-schema-design.md` §2.
 
-**Not software, and on a clock: order the NI cards.** §12. **Models corrected 2026-08-16** to
-**PXIe-6353** (recording) and **PCIe-6343** (task PC) — both verified to carry the 32 hardware-timed
-Port 0 lines the design needs, differing from the 6363 only in analog input rate, which nothing here
-depends on. This is the longest lead item on that list and nothing in the software queue moves the
-date. **The 12–13 week figure was measured for the 6363 and has not been re-derived for these
-models** — re-confirm at ordering rather than carrying it across.
+1. **Phase 2b — the ephys branch proper.** Decomposed 2026-08-23 into a spike and eight pieces:
+   `specs/2026-08-23-phase-2b-decomposition-design.md`. Two of its rulings are worth knowing before
+   reading it: **containers come first**, before any processing stage (§6.6.1's setup cost is
+   explicitly one to pay in October); and the **P6000 benchmark is a spike that runs first**, not a
+   Phase 2 deliverable that runs last, because its whole purpose is producing a number that
+   justifies a card in a budget request.
+2. **Phase 1c-5 — event decoding, and it is no longer optional.** `TimingProvenance.tier` holds
+   `'pending'` for every session, and `pending_inputs` names the three things it waits for —
+   `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
+   unreachable until they exist. The **measured** block boundary (as opposed to wl.works' asserted
+   one) is also 1c-5's, in its own Computed table.
+
+   > **This entry used to say nothing downstream was blocked by it. That is now false**, and the
+   > reversal is recorded rather than quietly edited. Phase 2b's §6.8 characterization registry
+   > keys on block type (`rf_map`, `resting_dark`, `passive_flash`, *"any task with in-RF stimulus
+   > events"*), and §6.9's chain runs `RF estimation → in-RF trial selection → task-evoked CSD →
+   > laminar depth`. Both need the canonical trial list and decoded event codes. **1c-5 is a
+   > prerequisite for 2b-7 and 2b-8** — see the decomposition's §4. It still blocks 2b-0 through
+   > 2b-6, so it may be built in parallel with them.
+3. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
+   finished 2026-08-22, about six weeks early.
+
+**The NI cards are ordered** (2026-08-23), closing the item that stood here as the longest-lead
+purchase on §12's list. **The compute machine is bought or on order** as of the same date, which is
+what makes the P6000 spike runnable — it gates nothing else in Phase 2b.
 
 ---
 
