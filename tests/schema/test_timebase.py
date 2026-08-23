@@ -315,7 +315,30 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
     """Spec section 4.7 requires the tier be derived, not asserted, and
     re-derivable under different thresholds later. That is only true if every
     input is on the row — a stored verdict with the evidence discarded can be
-    re-read but never re-judged."""
+    re-read but never re-judged.
+
+    **Fix round 1** (coordinator review): this test's own opening claim is
+    "every input", but until this round it checked only the six columns that
+    predate 1c-5 Task 9 and none of the four `TierInputs` fields Task 9 added
+    -- `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`,
+    `block_agreement` -- which are exactly the evidence the re-derivability
+    clause is about. Extended to check all seven new columns (those four plus
+    `n_full_code_records`, `n_strobe_witnesses`, `decode_errors`), and against
+    values this test derives independently rather than merely checking the
+    keys exist: `camera_trigger_count` against `synth.peripherals.
+    camera_frame_count(recipe)` (no `Fault.DROPPED_CAMERA_FRAMES` in this
+    recipe, so nothing should be subtracted from it), and the rest against
+    what the `drift` recipe's own topology implies -- two full-code records
+    (`syncbox` + `spikeglx`) that must agree exactly regardless of the NI's
+    planted drift, one valid `rhs` strobe witness, zero decode errors, and a
+    genuine (not merely non-`None`) trial-count and block-boundary match, both
+    of which this fixture's own `core.Block` insert and populated `Trial` rows
+    make true rather than assumed. Verified directly against a live run
+    before writing the literals below, per `provenance_session`'s current
+    state (`tests/schema/test_timebase.py`'s own module).
+    """
+    from wl_preproc.synth.peripherals import camera_frame_count
+
     _core, _coverage, timebase = schemas
     session_key, recipe = provenance_session
 
@@ -329,6 +352,29 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
     # The largest planted magnitude, recovered through the database.
     assert abs(row["worst_drift_ppm"]) == pytest.approx(
         max(abs(ppm) for _s, ppm in recipe.system_drift_ppm), abs=300.0
+    )
+
+    # -- The four TierInputs fields Task 9 added, and the tier's own
+    # derived-count fields: present AND holding what this session's real
+    # topology implies, not merely non-null.
+    assert row["n_full_code_records"] == 2, "syncbox + spikeglx, both present"
+    assert row["n_strobe_witnesses"] == 1, "rhs is present and a valid witness"
+    assert row["decode_errors"] == 0, "a clean fixture with no injected fault"
+    assert row["event_code_agreement"] == pytest.approx(1.0), (
+        "the NI latches whatever the shared bus carries, independent of "
+        "either clock's own rate, so drift must not affect this"
+    )
+    assert row["trial_count_agreement"], (
+        "the task file and the decoded trial list both derive from the same "
+        "planted GroundTruth.trials"
+    )
+    assert row["camera_trigger_count"] == camera_frame_count(recipe), (
+        "no DROPPED_CAMERA_FRAMES fault on this recipe, so nothing should be "
+        "subtracted from the full frame count"
+    )
+    assert row["block_agreement"], (
+        "this fixture's own core.Block row matches the recipe's single "
+        "measured block exactly"
     )
 
 
@@ -456,4 +502,138 @@ def test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records(
     assert row["n_full_code_records"] == 2, (
         "this must be a genuine A-territory session apart from the block "
         f"disagreement, or D proves nothing about block_agreement: {row}"
+    )
+
+
+def test_a_session_with_no_corroboration_at_all_resolves_to_d(
+    schemas, dj_conn, prefix, tmp_path
+):
+    """Fix round 1 (coordinator review). `test_tier_is_pending_not_a_passing_
+    grade_when_inputs_are_missing` used to guard a principle that outlived
+    the word 'pending': missing inputs must never be treated as passing, a
+    false claim of validation. Retiring that test (it asserted a state that
+    no longer exists) was correct, but nothing at TABLE level replaced its
+    principle -- `test_tier_d_is_fully_derivable_now` covers a FAILED timing
+    check, and `test_block_disagreement_forces_d_...` covers a genuine block
+    disagreement; neither covers a session that passes every timing check
+    outright and simply has nothing corroborating it. `tests/events/
+    test_agreement.py` guards `resolve_tier` itself at the unit level, but
+    that cannot catch `TimingProvenance.make()` handing it a FABRICATED
+    input -- exactly the shape of defect Task 7's fix round 1 corrected
+    inside `resolve_tier` (a verdict asserting a check that never happened),
+    one layer up, in the code that supplies it.
+
+    **What this fixture genuinely produces, built rather than simulated:**
+    no named recipe in `synth/recipe.py` reaches "one full-code record, no
+    witness, no successful task-file check" honestly -- every recipe with
+    `spikeglx` gives a second full-code record (tier A territory), `rhs`
+    gives a witness (tier B territory), and every recipe's task file is
+    written unconditionally by `session.py` with a trial count that always
+    matches the decoded one exactly, since both derive from the same planted
+    `GroundTruth.trials` (so leaving it in place would genuinely earn C, not
+    demonstrate the gap this test exists to close). So this builds a
+    minimal `SessionRecipe` directly -- `systems=("syncbox",)` alone, the
+    "behaviour-only training day" topology `test_one_full_code_record_alone_
+    is_c` already names in `tests/events/test_agreement.py` -- and then
+    deletes the task file `generate_session` wrote, a real, honest
+    filesystem state (a task file that never transferred, or was never
+    written), not a patch to any function under test.
+
+    Verified directly (this docstring is not a guess): with this recipe and
+    the task file removed, `n_systems_aligned == len(systems) == 1` and
+    `n_rejected_segments == 0` -- every timing check genuinely passes, so
+    this reaches D through `resolve_tier`'s own bare fallthrough, never
+    through the pre-existing timing-check fast path `test_tier_d_is_fully_
+    derivable_now` covers. `n_full_code_records == 1` (only syncbox: no
+    `spikeglx`, so no second record; no `rhs`, so `n_strobe_witnesses == 0`),
+    and `trial_count_agreement`/`event_code_agreement`/`camera_trigger_count`/
+    `block_agreement` are all `None` -- nothing corroborated this session,
+    which is the row's own evidence for why D is correct here, not merely
+    that it is D.
+    """
+    from wl_preproc.contracts.events import TaskTypeCode
+    from wl_preproc.schema import core, events, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import BlockSpec, MontageSpec, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    ingest.activate(prefix=prefix)
+    events.activate(prefix=prefix)
+
+    recipe = SessionRecipe(
+        session_id="2027-03-25_01",
+        subject="pico",
+        rig="rig-a",
+        systems=("syncbox",),  # no spikeglx (no 2nd record), no rhs (no witness)
+        blocks=(
+            BlockSpec(task_type=TaskTypeCode.RESTING_DARK, n_trials=2, trial_duration_s=3.0),
+        ),
+        montages=(MontageSpec(start_s=0.0, end_s=6.0),),
+        n_ap_channels=4,
+        ap_sample_rate_hz=30_000.0,
+        seed=42,
+    )
+    generate_session(tmp_path, recipe)
+    session_dir = tmp_path / recipe.session_id
+
+    # The one deliberate absence: a real file, written by the generator, then
+    # removed -- not a patch to `SyntheticTaskFileReader` or `resolve_tier`.
+    (session_dir / "syncbox" / "task.json").unlink()
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        "session_datetime": datetime.datetime(2027, 3, 25, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 25, 19, 0),
+            "session_dir": str(session_dir),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    events.populate_session(session_key, session_dir)
+    timebase.TimingProvenance.populate()
+
+    row = (timebase.TimingProvenance & session_key).fetch1()
+
+    # Every timing check genuinely passed -- this is NOT the pre-existing
+    # failed-timing route.
+    assert row["n_systems_aligned"] == len(recipe.systems) == 1, row
+    assert row["n_rejected_segments"] == 0, row
+
+    # Nothing corroborated this session -- the row's own evidence for D.
+    assert row["n_full_code_records"] == 1, row
+    assert row["n_strobe_witnesses"] == 0, row
+    assert row["decode_errors"] == 0, row
+    assert row["event_code_agreement"] is None, row
+    assert row["trial_count_agreement"] is None, row
+    assert row["block_agreement"] is None, row
+
+    assert row["tier"] == "D", (
+        "one full-code record, no witness, no successful task-file check: "
+        f"none of A, B or C is satisfied, so this must be D, not {row['tier']!r}"
     )
