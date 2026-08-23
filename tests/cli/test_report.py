@@ -777,5 +777,12 @@ def test_a_stale_reservation_is_both_counted_and_visible_to_the_snapshot(
             "the reservation was counted but is invisible to the snapshot"
         )
     finally:
+        # `.jobs` FIRST, child before parent -- the same leak fixed in
+        # `tests/schema/test_daemon.py`. `dj.Schema.jobs` resolves only while
+        # the target table still exists, so dropping the probe first orphans
+        # `~~report_jobs_probe_derived` in the shared database with its
+        # reservation still in it, invisible to `job_tables()`,
+        # `count_stale_jobs` and the reaper alike.
+        ReportJobsProbeDerived.jobs.drop()
         ReportJobsProbeDerived.drop_quick()
         ReportJobsProbeSource.drop_quick()
