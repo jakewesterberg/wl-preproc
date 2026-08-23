@@ -231,6 +231,15 @@ share, and a cross-montage derivative's is their intersection.
   Resulting key: `(subject, session_datetime, insertion_number, montage_id, activation_id,
   paramset_idx)`. That is parent spec §5.2's requirement **plus `montage_id`**, inherited from `Activation`,
   which is stricter and correct — parent spec §8.3 makes the montage the grain at which unit identity holds.
+- **`Clustering.Electrode`** — `-> master`, `-> ElectrodeConfig.Electrode`. The electrodes
+  the sort actually ran on. **Added 2026-08-23**, because §3.2.2's claim that every
+  `-> ElectrodeConfig.Electrode` resolves against the sort's own config was a *convention*
+  and not a constraint: `Unit` and `WaveformSet.Waveform` each carried an independent
+  `electrode_config_hash` with no foreign key back to the sort, so a unit could name an
+  electrode from a configuration its own `Clustering` never ran on and nothing would
+  report it. Measured: this costs **no primary-key change anywhere** — `Unit` already
+  carries `Clustering`'s key, so the part contributes exactly the three columns
+  `ElectrodeConfig.Electrode` did.
 - **`ClusterQualityLabel`** — lookup: `good` / `mua` / `noise`.
 - **`Curation`** — `-> Clustering`, `curation_id`.
 - **`Unit`** — `-> Curation`, `unit`. Below: `-> ElectrodeConfig.Electrode` (peak electrode),
@@ -240,8 +249,14 @@ share, and a cross-montage derivative's is their intersection.
   - **`.PeakWaveform`** — `-> Unit`; `peak_electrode_waveform : <blob>`.
   - **`.Waveform`** — `-> Unit`, `-> ElectrodeConfig.Electrode`; `waveform_mean : <blob>`,
     `waveforms = null : <blob>`.
-- **`QualityMetrics`** — `-> Curation`, with `.Cluster` and `.Waveform` parts. Parent spec §6.6's per-channel
-  RMS, bad-channel labels, 50 Hz line-noise magnitude and saturation fraction land here.
+- **`QualityMetrics`** — `-> Curation`, with `.Cluster`, `.Waveform` and `.Channel` parts.
+  Parent spec §6.6's per-channel RMS, bad-channel labels, 50 Hz line-noise magnitude and
+  saturation fraction land in **`.Channel`**, keyed on the electrode rather than the unit —
+  a dead or saturating electrode is a fact about the probe, not about whichever unit sat
+  near it. **`.Channel` was added 2026-08-23**: this section claimed those quantities
+  landed here from the start, and until then only the two per-*unit* parts existed. It
+  carries an eleventh `<blob>`, `spectral_profile`, pinned into the round-trip guard's
+  expected set in the same commit that declares it.
 
 **`ClusteringParamSet` and `ClusteringMethod` are not vendored.** `paramset.ParamSet` already
 supersedes them: keyed `(paramset_type, paramset_idx)`, registered by content hash, with

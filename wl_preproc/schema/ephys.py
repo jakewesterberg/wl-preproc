@@ -207,11 +207,36 @@ class Clustering(dj.Manual):
     # it is the one config its segments share; for a derivative deliberately
     # spanning montages it is their INTERSECTION -- which is an ElectrodeConfig
     # row like any other, so there is no branch here. Every
-    # `-> ElectrodeConfig.Electrode` below resolves against this one, which is
-    # what makes Unit's peak electrode well-defined for a derivative too.
+    # `-> Clustering.Electrode` below resolves against this one, which is what
+    # makes Unit's peak electrode well-defined for a derivative too.
     # Design spec section 3.2.2.
     -> ElectrodeConfig
     """
+
+    class Electrode(dj.Part):
+        definition = """
+        # The electrodes this sort actually ran on. Key: (..., paramset_idx,
+        # electrode_config_hash, probe_type, electrode).
+        #
+        # This part exists to make section 3.2.2's claim a CONSTRAINT rather
+        # than a convention. Before it, Unit and WaveformSet.Waveform each
+        # carried their own electrode_config_hash with no foreign key back to
+        # the sort, so a Unit could name an electrode from a configuration its
+        # own Clustering never ran on -- and nothing would report it. They now
+        # reference this part instead, so an electrode a unit names must be one
+        # of the electrodes its own sort declared.
+        #
+        # NOT ENFORCED HERE, in the same sense ActivationBlock records: the
+        # master's `-> ElectrodeConfig` is BELOW its divider, so a part row
+        # cannot inherit it into this key, and nothing at the database level
+        # ties these rows to that configuration. Whatever populates this table
+        # must fill it from the master's own config. The alternative -- lifting
+        # the hash into Clustering's primary key -- was refused: the config is
+        # a function of the activation, not identity-forming, and two sorts
+        # differing only by configuration would be two rows that should be one.
+        -> master
+        -> ElectrodeConfig.Electrode
+        """
 
 
 @schema
@@ -236,7 +261,9 @@ class Unit(dj.Manual):
     -> Curation
     unit : int unsigned
     ---
-    -> ElectrodeConfig.Electrode
+    # The peak electrode, scoped to this sort's OWN electrode set rather than
+    # to any ElectrodeConfig -- see Clustering.Electrode for why.
+    -> Clustering.Electrode
     -> ClusterQualityLabel
     spike_count : int unsigned
     spike_times : <blob>    # (s) session time
@@ -267,7 +294,7 @@ class WaveformSet(dj.Manual):
         # electrode).
         -> master
         -> Unit
-        -> ElectrodeConfig.Electrode
+        -> Clustering.Electrode
         ---
         waveform_mean : <blob>        # (uV) mean across spikes
         waveforms = null : <blob>     # (uV) (spike x sample), populated on request
@@ -304,6 +331,43 @@ class QualityMetrics(dj.Manual):
         duration        : float
         halfwidth       : float
         repolarisation_slope : float
+        """
+
+    class Channel(dj.Part):
+        definition = """
+        # Per-CHANNEL quality, parent spec section 6.6. Key: (..., curation_id,
+        # electrode_config_hash, probe_type, electrode).
+        #
+        # Per-channel rather than per-unit, which is the whole point: a dead or
+        # saturating electrode is a fact about the probe, not about any unit
+        # that happened to be near it, and the per-unit parts above cannot say
+        # it. Section 3.3 of the Phase 2a design named these quantities as
+        # landing here; they did not, and this closes that gap.
+        #
+        # 50 Hz rather than 60: KU Leuven is on EU mains.
+        #
+        # `out` in bad_channel_label is a free brain-surface estimate -- an
+        # electrode above the surface is not broken, and conflating the two
+        # would discard a usable channel on the next insertion.
+        #
+        # impedance is nullable because it is CARRIED from wl.works'
+        # electrode_reading rather than measured here, and arrives with the
+        # activation request or not at all.
+        -> master
+        -> Clustering.Electrode
+        ---
+        rms_ap              : float  # (uV) RMS noise, AP band
+        rms_lfp             : float  # (uV) RMS noise, LFP band
+        bad_channel_label   : enum('good','dead','noise','out')
+        line_noise_50hz     : float  # (uV) magnitude at EU mains
+        saturation_fraction : float  # fraction of samples at rail
+        artifact_fraction   : float
+        impedance = null    : float  # (ohm) carried from wl.works
+        # Power versus frequency for this channel. A `<blob>` like every other
+        # array here -- and small enough to belong in the database by section
+        # 6's rule: hundreds of floats per channel, not the ~5.5 GB per stream
+        # that keeps LFP and MUA out.
+        spectral_profile = null : <blob>
         """
 
 
