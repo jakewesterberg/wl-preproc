@@ -16,6 +16,8 @@ hardware. It is also a **prerequisite for 2b-7 and 2b-8** — see
 
 Three things, in dependency order:
 
+0. **Give the synthetic NI the code lines it should always have had** (§2.1), without which tier A
+   is untestable.
 1. **Turn recorded digital lines into decoded events** — the measured record of what the
    behavioural system said happened.
 2. **Build the canonical trial list**, and the measured block boundary, cross-validated against
@@ -35,8 +37,30 @@ Three things, in dependency order:
 | `BehaviorRecording`, `EventType`, `Event`, `Trial`, `TrialType`, `Block`, `BlockTrial` | element-event, already activated by `pipeline.activate()` | No new event/trial tables |
 | `TrialCoverage`, declared and keyed on `pipeline.trial.Trial` | `schema/coverage.py` | Only `make()` is owed. 1c-4 converted it to `Computed` *"despite belonging to 1c-5, because converting it later costs a migration and converting it now, with no row anywhere, costs nothing"* |
 | The coverage rule shared by block and trial grains | `timebase/coverage.py`, whose docstring already names *"1c-5's `TrialCoverage.make()`"* | One definition, not two |
-| Synthetic camera sidecar **and task file** | `synth/peripherals.py` | Both tier inputs have fixtures already |
+| Synthetic camera sidecar **and task file** | `synth/peripherals.py` | **Two of three** tier inputs have fixtures — see §2.1 for the one that does not |
 | `tier` / `pending_inputs`, with the three names spelled out | `schema/timebase.py` | The contract this phase discharges |
+
+### 2.1 One fixture is missing, and tier A is unreachable without it
+
+> **CORRECTION, 2026-08-23.** An earlier draft of §2 claimed *"both tier inputs have fixtures
+> already."* That is true of `trial_count_agreement` and `camera_trigger_count` and **false of
+> `event_code_agreement`**, which is the Pi-versus-NI comparison. Checked after writing it:
+> `wl_preproc/synth/spikeglx.py` never references `truth.code_words` — its nidq stream carries
+> **one** digital line, `NIDQ_BARCODE_XD_LINE = 0`, and that line is the barcode.
+
+**§4.2 routes 16 data lines plus strobe to the NI**, and §12 specifies the PXIe-6353 for exactly
+that reason — *"32 hardware-timed Port 0 lines fit the 16-bit codes, the strobe and the barcode."*
+The generator is behind the design, not the design behind the generator.
+
+**The consequence is not cosmetic.** Tier A is *"≥2 independent full-code records (Pi + NI)"*. With
+no code words on the synthetic NI there is no second full-code record, so **tier A cannot be
+produced or tested at all** — leaving the NP+NI topology, the lab's main recording configuration,
+at the one tier nothing exercises.
+
+**So this phase extends the generator**: 17 digital lines on nidq — barcode, strobe, and 16 data —
+with `niXDChans1` and `~snsChanMap` widened to match, before any extraction work depends on them.
+Declaring tier A untestable instead would bake a fixture's omission into the design, which is the
+inversion this project refuses.
 
 ---
 
