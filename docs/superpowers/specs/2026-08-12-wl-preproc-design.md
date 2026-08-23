@@ -413,6 +413,18 @@ Recorded per session:
 
 The tier is **derived, not asserted** — underlying counts, rates, and residuals are retained so it can be re-derived under different thresholds later.
 
+> **Added 2026-08-23, on building Phase 1c-5. This is an addition, not a correction — nothing above was wrong.** The section lists the tier's inputs and states its conditions, but names **no computation site and no source for any of the three event-derived inputs**, leaving both to be rediscovered from the code by whoever asks next.
+>
+> **The tier is computed in Phase 1c-5**, in `TimingProvenance.make()` (`wl_preproc/schema/timebase.py`), which resolves it through `resolve_tier` in `wl_preproc/events/agreement.py`. Before 1c-5 the column read `'pending'` on every session, because all three inputs need an event decoder that did not exist yet; `'pending'` is retired from the enum with the phase, since no code path can produce it any more.
+>
+> | Input | Source |
+> |---|---|
+> | `event_code_agreement` | The Pi's decoded word stream against the NI's, compared by **sequence position, not by time** — the strobe latches the same bus value on both systems, so the codes agree regardless of either clock's drift |
+> | `trial_count_agreement` | The trial count decoded from the event codes against the task file. `NULL` when there was no readable task file, which is *not* a pass — see tier C, which requires the cross-check to have succeeded |
+> | `camera_trigger_count` | The behaviour-camera sidecar: frames it declares, less those it declares dropped. `NULL` when the session had no camera at all |
+>
+> **Naming the site strengthens the sentence above rather than replacing it.** Each of these is stored in its own column on `TimingProvenance` beside the verdict, alongside the full-code-record and strobe-witness counts and the decode-error total, which is what makes re-derivation under different thresholds an operation someone can actually perform rather than an intention.
+
 ---
 
 ## 5. Schema and primary keys

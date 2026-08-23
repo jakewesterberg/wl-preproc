@@ -112,21 +112,41 @@ expected.** The dependency was **declined** rather than patched: its `Clustering
 unusable. The ephys tables are custom. See
 `specs/2026-08-22-phase-2a-ephys-schema-design.md` §2.
 
-1. **Phase 1c-5 — event decoding. It runs NEXT** (decided 2026-08-23), for a hardware reason as
-   much as a dependency one: Phase 2b's first two pieces both need the compute machine, which has
-   not arrived, and 1c-5 needs none. See item 2 below for what it is, and
-   `specs/2026-08-23-phase-2b-decomposition-design.md` §8 item 2.
+1. **Phase 1c-5 — event decoding. It RAN** (built 2026-08-23 on `phase-1c5-events`). This entry
+   read *"It runs NEXT"*, decided the same day for a hardware reason as much as a dependency one:
+   Phase 2b's first two pieces both need the compute machine, which had not arrived, and 1c-5
+   needed none. That ordering held. See item 3 below for what it did — **item 3, not the item 2
+   this entry used to point at**, which is Phase 2b — and
+   `specs/2026-08-23-phase-2b-decomposition-design.md` §8 item 2 for the argument that put it
+   first.
 2. **Phase 2b — the ephys branch proper.** Decomposed 2026-08-23 into a spike and eight pieces:
    `specs/2026-08-23-phase-2b-decomposition-design.md`. Two of its rulings are worth knowing before
    reading it: **containers come first**, before any processing stage (§6.6.1's setup cost is
    explicitly one to pay in October); and the **P6000 benchmark is a spike that runs first**, not a
    Phase 2 deliverable that runs last, because its whole purpose is producing a number that
    justifies a card in a budget request.
-3. **What 1c-5 is.** `TimingProvenance.tier` holds
+3. **What 1c-5 is — and it is built.** It decodes the 16-bit event stream, builds the canonical
+   trial list, fills per-trial coverage, and **resolves the data-quality tier**.
+
+   **This entry used to describe a wait. Every clause of that wait is now false**, and the
+   reversal is recorded rather than quietly edited. It read: *"`TimingProvenance.tier` holds
    `'pending'` for every session, and `pending_inputs` names the three things it waits for —
    `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
-   unreachable until they exist. The **measured** block boundary (as opposed to wl.works' asserted
-   one) is also 1c-5's, in its own Computed table.
+   unreachable until they exist."* The tier now resolves to **A, B, C or D on every session**;
+   `'pending'` is **retired from the enum** rather than merely left unwritten, because a stored
+   value no code path can produce is worse than no value at all. `pending_inputs` is `''` on every
+   row. All three inputs are measured in `TimingProvenance.make()` — the Pi's word stream against
+   the NI's, trial counts decoded from the codes against the task file, and the behaviour-camera
+   sidecar — so A/B/C are reachable, and each input is stored in its own column so §4.7's
+   *"derived, not asserted"* holds on the row itself.
+
+   **The same entry also put the measured block boundary in the wrong table, and that clause was
+   wrong before this phase rather than made wrong by it.** It read *"in its own Computed table"*.
+   There is no such table: `schema/events.py` declares none at all — it is a module of functions —
+   and `populate_session` inserts the measured boundary into element-event's
+   `pipeline.trial.Block`, cross-validated against wl.works' asserted `core.Block`, where a
+   disagreement is its own tier-D condition. Spec §5's adoption table assigns *"Events, trials,
+   blocks"* to `element-event`; the entry contradicted it.
 
    > **This entry used to say nothing downstream was blocked by it. That is now false**, and the
    > reversal is recorded rather than quietly edited. Phase 2b's §6.8 characterization registry
@@ -135,6 +155,13 @@ unusable. The ephys tables are custom. See
    > laminar depth`. Both need the canonical trial list and decoded event codes. **1c-5 is a
    > prerequisite for 2b-7 and 2b-8** — see the decomposition's §4. It still blocks 2b-0 through
    > 2b-6, so it may be built in parallel with them.
+
+   > **Satisfied 2026-08-23**, by the phase above being built. The blockquote is kept rather than
+   > deleted because the dependency it records is *why* 1c-5 ran first; nothing downstream waits on
+   > it now — 2b-7 and 2b-8 have their canonical trial list and decoded event codes. **One clause
+   > of it is a dropped negation, corrected here rather than in place**: *"It still blocks 2b-0
+   > through 2b-6, so it may be built in parallel with them"* contradicts itself, and the
+   > decomposition's §4 reads *"1c-5 does **not** block 2b-0 through 2b-6."* Moot either way now.
 4. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
    finished 2026-08-22, about six weeks early.
 

@@ -45,8 +45,9 @@ _TIME_SOURCE_ENUM = "enum('barcode','trigger')"
 # as a value nothing can reach. A stored value with no writer left is worse
 # than no value at all: the next reader who finds it has to work out whether
 # it means "unreachable" or "reachable and I haven't found how yet".
-# `PENDING_TIER_INPUTS` below still describes the wait this phase ends --
-# rewriting that comment is 1c-5 Task 10's job, not this one's.
+# `PENDING_TIER_INPUTS` below no longer names a wait: Task 10 rewrote it to
+# name the three inputs the tier derives from, and to keep the record of what
+# `pending_inputs` used to hold.
 _TIER_ENUM = "enum('A','B','C','D')"
 
 # Whether this system's clock was actually fitted, and if not, why not. Every
@@ -236,16 +237,27 @@ class TimingProvenance(dj.Computed):
     block_agreement=null        : tinyint(1)  # measured trial.Block vs wl.works' core.Block; null unasserted
     """
 
-    # What this phase cannot compute, named rather than defaulted. Every one
-    # needs event decoding, which is 1c-5: agreement between the Pi's and NI's
-    # event-code records, trial counts from codes versus the task file, and the
-    # camera's trigger count against frames received. Section 4.7 makes each a
-    # term in tiers A, B and C, so none of those verdicts is reachable here.
+    # The three event-derived inputs the tier is resolved from, named rather
+    # than left implicit -- and the record of what `pending_inputs` used to
+    # hold. Until 1c-5 this constant WAS the wait: `make()` wrote it into
+    # `pending_inputs` verbatim, because none of the three could be computed
+    # without event decoding, and section 4.7 makes each a term in tiers A, B
+    # and C. That wait is over. `make()` measures all three now --
+    # `event_code_agreement` from the Pi's word stream against the NI's,
+    # `trial_count_agreement` from the trial count decoded out of the codes
+    # against the task file, `camera_trigger_count` from the behaviour-camera
+    # sidecar -- and stores each in its own column beside the tier, which is
+    # what makes section 4.7's "derived, not asserted" true of the row rather
+    # than only of the code that wrote it.
     #
-    # Stored as a string on the row rather than implied by the tier, for the
-    # same reason 1c-2's daily report names the categories it cannot yet count
-    # rather than omitting them: a reader must be able to see WHAT is missing,
-    # not only that something is.
+    # Kept as a string constant, and `pending_inputs` kept as a column, for
+    # the same reason 1c-2's daily report names the categories it cannot yet
+    # count rather than omitting them: a reader must be able to see WHAT is
+    # missing, not only that something is. That principle is why the column is
+    # emptied rather than dropped -- `''` states "nothing is pending", where an
+    # absent column would leave a reader unable to tell that from "nobody
+    # checked". This constant is what would be named again if a later phase
+    # ever has to defer one of the three.
     PENDING_TIER_INPUTS = "event_code_agreement,trial_count_agreement,camera_trigger_count"
 
     @property
