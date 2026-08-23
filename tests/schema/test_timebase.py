@@ -138,11 +138,20 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
     not the design.
 
     `core.Block` gets one row matching the DRIFT recipe's own single measured
-    block exactly (`block_id=1`, `start_s=0.0`, `end_s=15.0` -- `recipe.blocks`
-    is one `BlockSpec(n_trials=5, trial_duration_s=3.0)`, so `duration_s ==
-    15.0`), so this session's own `block_agreement` is genuinely `True` rather
-    than the `None` every other fixture in this file leaves it at -- proving
-    the positive path end-to-end, not merely that it does not crash.
+    block, read back from `pipeline.trial.Block` itself rather than assumed
+    to be `(0.0, recipe.duration_s)` -- fix round 2 correction. The first
+    draft asserted `start_s=0.0`, which is NOT what this session actually
+    measures: `SESSION_START` occupies session time 0.0 on the shared strobe
+    bus first, so `BLOCK_START`'s own escape sequence is ratcheted to the
+    next code-word slot, 0.001s later (`timeline.py`'s own `_emit`). That
+    1ms gap sat unnoticed under the previous fixed `1e-3` block-agreement
+    tolerance; the derived tolerance (`events.agreement.
+    block_agreement_tolerance_s`, scaled to float32 storage precision at
+    this small a magnitude) is properly tight here and caught it. So this
+    session's own `block_agreement` is genuinely `True` because the
+    assertion below matches what `trial.Block` actually measures, not
+    because a generous fixed tolerance let a real mismatch through --
+    proving the positive path end-to-end, not merely that it does not crash.
     """
     from wl_preproc.schema import core, coverage, events, ingest, pipeline, timebase
     from wl_preproc.synth.recipe import RECIPES
@@ -190,20 +199,26 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
         [{**session_key, "system": system} for system in recipe.systems],
         skip_duplicates=True,
     )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    # Before core.Block: this session's own block_agreement must be True
+    # because the assertion below genuinely matches what gets measured, not
+    # because it was written first and happened to be close enough.
+    events.populate_session(session_key, root / recipe.session_id)
+
+    measured_block = (pipeline.trial.Block & {**session_key, "block_id": 1}).fetch1()
     core.Block.insert1(
         {
             **session_key,
             "block_id": 1,
             "task_type": "rf_map",
-            "start_s": 0.0,
-            "end_s": recipe.duration_s,
+            "start_s": measured_block["block_start_time"],
+            "end_s": measured_block["block_stop_time"],
         },
         skip_duplicates=True,
     )
 
-    timebase.SystemTimebase.populate()
-    core.Segment.populate()
-    events.populate_session(session_key, root / recipe.session_id)
     timebase.TimingProvenance.populate()
     return session_key, recipe
 
@@ -248,6 +263,16 @@ def test_tier_d_is_fully_derivable_now(schemas, dj_conn, prefix, tmp_path):
 
     The session here has a system that decoded nothing, which is exactly a
     failed timing check.
+
+    **Also verifies fix round 2's I1 correction.** The first draft of
+    `make()` gated ALL evidence-gathering behind `not failed`, so a
+    timing-failed session's row stored zeros and NULLs for every
+    `TierInputs`-derived column -- byte-identical to a genuinely
+    uncorroborated session, and parent spec section 4.7's re-derivability
+    was lost exactly where a human is most likely to go looking (a
+    quarantined session). Only `bcam` is corrupted here; `syncbox` and
+    `spikeglx` are both untouched and fully decodable, so this row should
+    show real evidence (`n_full_code_records == 2`) despite `tier == "D"`.
     """
     import yaml
 
@@ -307,6 +332,11 @@ def test_tier_d_is_fully_derivable_now(schemas, dj_conn, prefix, tmp_path):
     row = (timebase.TimingProvenance & session_key).fetch1()
     assert row["tier"] == "D"
     assert row["n_rejected_segments"] >= 1
+    # I1: real evidence, not a zeroed-out row, despite the timing failure.
+    assert row["n_full_code_records"] == 2, (
+        "syncbox and spikeglx are both clean here -- only bcam is corrupted "
+        f"-- so this must not read as though nothing was ever decoded: {row}"
+    )
 
 
 def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
@@ -422,9 +452,12 @@ def test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records(
     reconciliation" -- proven end-to-end here, not only at
     `resolve_tier`'s own unit level (`tests/events/test_agreement.py`).
 
-    The `ci` recipe's own single block genuinely spans `[0.0, 9.0)` (RF_MAP:
-    3 trials * 3.0s) -- `core.Block` instead asserts `end_s=999.0`, a wl.works
-    row that does not describe this session at all. Every other input is
+    One of the `ci` recipe's two blocks (RF_MAP: 3 trials * 3.0s, then
+    RESTING_DARK: 1 trial * 6.0s) genuinely spans `[0.0, 9.0)` -- fix round 2
+    correction: this docstring previously called it the recipe's "own single
+    block", which is wrong; `core.Block` instead asserts `end_s=999.0`, a
+    wl.works row that does not describe this session at all. Every other
+    input is
     clean: `syncbox` + `spikeglx` give two agreeing full-code records (tier A
     territory otherwise), and the task file's trial count matches the decoded
     one exactly. Produces: `block_agreement=False`, and a tier of D despite

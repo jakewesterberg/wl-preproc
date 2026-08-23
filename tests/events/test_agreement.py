@@ -34,7 +34,28 @@ def test_one_full_code_record_plus_a_witness_is_b():
 
 def test_one_full_code_record_alone_is_c():
     """"1 full-code record, cross-checked only against task file" -- behaviour-
-    only training, where the Pi is the sole recorder."""
+    only training, where the Pi is the sole recorder.
+
+    **`block_agreement=None` does not block C, unlike `trial_count_agreement
+    =None` -- fix round 2, folded in after deleting a duplicate test.** A
+    prior `test_c_requires_the_block_check_to_have_actually_happened`
+    asserted this exact property with `block_agreement=None` passed
+    explicitly, which is a no-op: `block_agreement` already defaults to
+    `None`, so that test's inputs were this one's verbatim and it killed no
+    mutant this one does not. Its own NAME also asserted the opposite of
+    what it checked -- it claimed C "requires" the block check, while its
+    body proved C does NOT require it -- copied from the genuinely-D
+    `..._task_file_check_...` test below without updating for the fact that
+    `block_agreement` and `trial_count_agreement` are NOT gated the same
+    way: `trial_count_agreement` is a precondition for C's OWN branch
+    (`n_full_code_records == 1 and trial_count_agreement is True`), so its
+    `None` fails that branch and falls through toward D; `block_agreement`
+    has no branch anywhere that requires it to be `True`, so its `None`
+    simply never fires the one D-check it participates in and this fixture
+    (which never sets it, leaving it `None`) reaches C exactly as it would
+    without `block_agreement` existing at all. See `resolve_tier`'s own
+    docstring for the fuller version of this distinction.
+    """
     assert agreement.resolve_tier(
         _inputs(n_full_code_records=1, n_strobe_witnesses=0, event_code_agreement=None)
     ) == "C"
@@ -88,32 +109,18 @@ def test_block_disagreement_is_D_even_with_two_agreeing_full_code_records():
     `resolve_tier` must reach the `block_agreement is False` line specifically,
     not merely land on D through some other guard -- confirmed by sabotage:
     deleting that one `if` from `resolve_tier` turns this fixture's verdict
-    into "A", nothing else in this file moves, and the mutant survives every
-    other test in this suite.
+    into "A", and nothing else in THIS file moves.
+
+    (Fix round 2 correction: this docstring previously also claimed "the
+    mutant survives every other test in this suite". Checked and false --
+    `tests/schema/test_timebase.py::
+    test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records`
+    exercises the identical `block_agreement is False` path end-to-end
+    through `TimingProvenance.make()` and would fail under the same
+    sabotage too. The claim was never verified against the whole suite, only
+    against this one file; narrowed to what was actually checked.)
     """
     assert agreement.resolve_tier(_inputs(block_agreement=False)) == "D"
-
-
-def test_c_requires_the_block_check_to_have_actually_happened():
-    """`block_agreement=None` means wl.works asserted no blocks at all for this
-    session -- nothing to cross-validate the measured boundary against, same
-    shape as `trial_count_agreement=None`. Only a genuine disagreement
-    (`block_agreement is False`) may force D; `None` must fall through this
-    guard exactly as it falls through the `trial_count_agreement` one, so a
-    session with one full-code record, a real task-file cross-check, but no
-    wl.works block assertion at all still reaches C rather than being
-    penalised for a check that never ran."""
-    assert (
-        agreement.resolve_tier(
-            _inputs(
-                n_full_code_records=1,
-                n_strobe_witnesses=0,
-                event_code_agreement=None,
-                block_agreement=None,
-            )
-        )
-        == "C"
-    )
 
 
 def test_block_agreement_true_does_not_block_tier_a():
@@ -151,3 +158,119 @@ def test_no_full_code_record_at_all_is_D():
             trial_count_agreement=None,
         )
     ) == "D"
+
+
+def test_code_agreement_tolerates_a_dropped_word_at_the_head():
+    """Fix round 2: `TimingProvenance.make()` used to compare the Pi's and
+    NI's decoded code lists by ordinal position (`zip`), which reintroduces
+    -- one layer up -- the exact hazard design spec section 4.2 requirement 1
+    exists to prevent: "one dropped code must not shift every subsequent
+    trial", quoted directly in this repo's own `tests/events/
+    test_assemble.py`. A word dropped at the head of either independent
+    record is not hypothetical -- unequal extents are already first-class
+    elsewhere in this pipeline (`partial` coverage, `Fault.STOP_MID_TRIAL`,
+    `Fault.MID_SESSION_RESTART`) -- and no named recipe in `synth/recipe.py`
+    sets `faults=`, so nothing ever exercised two genuinely unequal streams
+    before this test.
+
+    Produces: 2000 distinct code words as the Pi's record, and the identical
+    2000 with the first removed as the NI's -- a dropped word at the head,
+    the worst case for a position-matched comparison, since it misaligns
+    every subsequent position. Content-matched agreement stays at 0.9995,
+    comfortably above `AGREEMENT_THRESHOLD` (0.999) -- a session this would
+    genuinely reach tier A on.
+
+    Confirmed against the position-matched (`zip`) implementation this
+    replaces: computed inline below rather than reintroduced as a second
+    real implementation anywhere. That computation gives exactly `0.0` on
+    this fixture -- every position mismatched, because `reference[i]` is
+    always `1000 + i` and `dropped_at_head[i]` is always `1001 + i`, which
+    can never be equal -- confirming the old implementation would have
+    quarantined this genuinely-agreeing pair at tier D.
+    """
+    reference = list(range(1000, 3000))  # 2000 distinct code words
+    dropped_at_head = reference[1:]  # the NI missed the very first one
+
+    result = agreement.code_agreement(reference, dropped_at_head)
+    assert result == pytest.approx(0.9995)
+    assert result >= agreement.AGREEMENT_THRESHOLD, (
+        "a single dropped word must not collapse agreement for a 2000-word "
+        f"record: got {result}"
+    )
+
+    # The position-matched implementation this replaces, computed here only
+    # to prove what it WOULD have said -- never reintroduced as production
+    # code.
+    total = max(len(reference), len(dropped_at_head))
+    matched = sum(1 for a, b in zip(reference, dropped_at_head) if a == b)
+    position_matched_result = (matched / total) if total else 1.0
+    assert position_matched_result == pytest.approx(0.0), (
+        "this fixture must exercise the old implementation's actual failure "
+        f"mode, not merely a lower score: got {position_matched_result}"
+    )
+
+
+def test_block_agreement_tolerance_is_derived_from_float32_precision_not_chosen():
+    """Fix round 2: a fixed `1e-3` tolerance in `TimingProvenance.make()`
+    cited `timebase/segments.py`'s alignment durations as precedent for
+    "chosen rather than derived" -- wrong, since that module derives its own
+    numbers explicitly ("consequences of the decoder"), and a real budget
+    exists to derive this one too. `pipeline.trial.Block` declares
+    `block_start_time`/`block_stop_time` as `float` (single precision,
+    confirmed directly against `element_event/trial.py`), so the MEASURED
+    side of a block-boundary comparison always carries up to one float32
+    half-ULP of pure storage rounding -- and that half-ULP grows with
+    magnitude, consuming a fixed 1 ms tolerance's entire budget by 4.5h into
+    a session and exceeding it past 9.1h.
+
+    A schema-level test at that duration would need to generate hours of
+    synthetic session data (`synth/recipe.py::BENCHMARK_RECIPE`'s own
+    comment: "tens of megabytes per generation" for a session far shorter
+    than this), so this tests the derivation function directly instead --
+    honest about testing the unit rather than quietly avoiding the regime
+    the schema-level fixtures never reach.
+
+    Produces: `true_end_s = 42345.678`, a magnitude in the same binade
+    `worst_drift_ppm`'s own review measured (past 32768s / 9.1h) and NOT
+    exactly float32-representable, so storing it in a `float` column
+    genuinely rounds it -- confirmed inline (`numpy.float32(true_end_s) !=
+    true_end_s`) rather than assumed. The resulting rounding error, 1.6875
+    ms, exceeds a fixed 1 ms tolerance outright (proving the fixed tolerance
+    would have wrongly quarantined this honestly-agreeing pair at tier D),
+    while the derived tolerance at this magnitude (3.90625 ms) comfortably
+    covers it. A genuine several-second disagreement at the same magnitude
+    is still correctly rejected, proving the derivation does not just grow
+    permissive without bound.
+    """
+    import numpy as np
+
+    true_end_s = 42345.678
+    stored_measured_end_s = float(np.float32(true_end_s))
+    rounding_error_s = abs(stored_measured_end_s - true_end_s)
+
+    assert rounding_error_s > 0.0, (
+        "this fixture must exercise genuine float32 rounding, not a value "
+        "that happens to already be exactly representable"
+    )
+
+    fixed_tolerance_s = 1e-3
+    assert rounding_error_s > fixed_tolerance_s, (
+        "this test's whole point is a magnitude where a fixed 1 ms tolerance "
+        f"is already insufficient for storage rounding alone: got "
+        f"{rounding_error_s}s"
+    )
+
+    derived = agreement.block_agreement_tolerance_s(stored_measured_end_s, true_end_s)
+    assert derived > fixed_tolerance_s
+    assert rounding_error_s <= derived, (
+        "the derived tolerance must cover pure storage rounding at this "
+        f"magnitude: error {rounding_error_s}s, tolerance {derived}s"
+    )
+
+    # And a genuine disagreement -- not storage rounding -- at the same
+    # magnitude must still be rejected: the derivation must not grow so
+    # permissive that it stops meaning anything.
+    genuinely_disagreeing = stored_measured_end_s + 1.0
+    assert abs(stored_measured_end_s - genuinely_disagreeing) > agreement.block_agreement_tolerance_s(
+        stored_measured_end_s, genuinely_disagreeing
+    )

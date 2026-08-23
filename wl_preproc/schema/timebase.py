@@ -68,18 +68,15 @@ _TIER_ENUM = "enum('A','B','C','D')"
 # distinguish "checked, could not fit" from "not reached yet".
 _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
 
-# How close the measured block boundary (`trial.Block`) must land to wl.works'
-# own assertion (`core.Block`) to count as agreeing, in seconds. Both are
-# session-time doubles built from independent paths -- one decoded, one
-# authored -- so exact equality is not the bar; a real disagreement (a
-# misassigned block, a boundary off by a trial or more) is orders of magnitude
-# larger than this. 1 ms is generous next to `timebase/coverage.py`'s own
-# `_FULL_TOLERANCE_S` (1 us, chosen for float accumulation error alone) because
-# these two numbers were never fit against the same clock the way a segment's
-# offset is -- there is no rate/residual budget to derive this from, so it is
-# chosen rather than derived, exactly as `timebase/segments.py`'s own alignment
-# durations are guarantees rather than measurements.
-_BLOCK_AGREEMENT_TOLERANCE_S = 1e-3
+# How close the measured block boundary must land to wl.works' own assertion
+# to count as agreeing used to be a fixed constant here (`1e-3`). Fix round 2:
+# that comment cited `timebase/segments.py`'s alignment durations as a
+# "chosen rather than derived" precedent -- wrong, since that module derives
+# its own numbers explicitly, and a real budget exists to derive this one
+# from too (`pipeline.trial.Block`'s float32 columns). Moved to
+# `events.agreement.block_agreement_tolerance_s`, which derives it from
+# float32 storage precision at the magnitude being compared -- see that
+# function's own docstring.
 
 
 @schema
@@ -268,7 +265,8 @@ class TimingProvenance(dj.Computed):
         return pipeline.Session & ingest.Ingestion
 
     def make(self, key: dict) -> None:
-        """Record section 4.7's timing metrics, and resolve the tier.
+        """Record parent spec section 4.7's timing metrics, and resolve the
+        tier.
 
         **1c-5 Task 9: every input `events.agreement.resolve_tier` needs is now
         measured here**, by re-decoding the session's own files rather than by
@@ -344,7 +342,10 @@ class TimingProvenance(dj.Computed):
         # would crash this table's very first `.populate()` call in the
         # shared suite, on a session belonging to a wholly unrelated test.
         # `fit_status == "fitted"` is the exact same test `Segment.key_source`
-        # already relies on to prove a file was genuinely read.
+        # already relies on to prove a file was genuinely read -- and it does
+        # not depend on `failed` (see below): a `"blobprobe"`-style session
+        # has no `AcquisitionSystem` row for `syncbox` at all, so
+        # `syncbox_fitted` is False there regardless of `failed`'s own value.
         #
         # A second layer catches the reverse: `SystemTimebase.make()` marks
         # syncbox "fitted" even with zero decoded barcodes (a real log file
@@ -352,6 +353,23 @@ class TimingProvenance(dj.Computed):
         # `session_reference` can still raise `ValueError`. Caught here rather
         # than left to propagate, for the same reason a single trial's decode
         # error does not lose the whole session in `assemble()`.
+        #
+        # **`failed` is deliberately NOT part of this gate -- fix round 2
+        # correction.** The first draft of this method gated on
+        # `not failed and syncbox_fitted`, and this docstring claimed "every
+        # measured input is still computed and stored even when [`failed`]
+        # fires" -- which was false: that gate skipped the decode entirely
+        # whenever `failed`, so a timing-failed session's row stored zeros
+        # and NULLs for every one of these seven columns, indistinguishable
+        # from a genuinely uncorroborated one. Parent spec section 4.7's
+        # re-derivability was lost exactly for the quarantined sessions a
+        # human is most likely to actually go look at. `syncbox_fitted`
+        # alone is the real precondition -- it is what proves a file exists
+        # to read, which `failed` says nothing about -- and the existing
+        # `try/except (FileNotFoundError, ValueError)` already covers the
+        # remaining failure modes. `failed` still forces the FINAL tier to D
+        # on its own, unconditionally, below; only the evidence-gathering
+        # gate changed.
         syncbox_fitted = any(
             fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits
         )
@@ -366,7 +384,7 @@ class TimingProvenance(dj.Computed):
         # be conflated with `syncbox_pairs` itself being falsy.
         syncbox_available = False
 
-        if not failed and syncbox_fitted:
+        if syncbox_fitted:
             try:
                 syncbox_pairs = decode_syncbox_in_session_time(session_dir)
                 syncbox_available = True
@@ -420,19 +438,23 @@ class TimingProvenance(dj.Computed):
                 decode_errors += sum(
                     1 for event in nidq_events if isinstance(event, DecodeError)
                 )
-                # Compared by SEQUENCE POSITION, not by time: the strobe
-                # latches whatever value the shared bus carries at that
-                # instant, independent of either system's own clock rate --
-                # so the codes agree exactly regardless of drift; only their
-                # apparent timing is drift-affected.
+                # Content-matched (`agreement.code_agreement`), not compared
+                # by sequence POSITION -- fix round 2 correction. A `zip`-
+                # based position comparison reintroduces design spec section
+                # 4.2 requirement 1's own hazard one level up: one code
+                # dropped at the head of either stream misaligns everything
+                # after it, driving agreement toward zero and a genuinely
+                # tier-A session to D. Time never enters this comparison
+                # either way: the strobe latches whatever value the shared
+                # bus carries at that instant, independent of either system's
+                # own clock rate, so the codes agree exactly regardless of
+                # drift.
                 codes_pi = [code for _, code in syncbox_pairs]
                 codes_ni = [code for _, code in nidq_pairs]
-                total = max(len(codes_pi), len(codes_ni))
-                matched = sum(1 for a, b in zip(codes_pi, codes_ni) if a == b)
-                event_code_agreement = (matched / total) if total else 1.0
+                event_code_agreement = agreement.code_agreement(codes_pi, codes_ni)
 
-            # -- The RHS strobe witness, where present. Section 7's own
-            # warning: "The strobe witness must assert a count, not merely
+            # -- The RHS strobe witness, where present. Design spec section 7's
+            # own warning: "The strobe witness must assert a count, not merely
             # that edges exist" -- so an edge count that does not match the
             # Pi's own word count does not count as a witness, rather than
             # being trusted on the strength of existing at all.
@@ -473,13 +495,17 @@ class TimingProvenance(dj.Computed):
                 camera_trigger_count = sidecar.frame_count - len(sidecar.dropped_frame_ids)
 
         # -- block_agreement: the measured boundary (`trial.Block`) against
-        # wl.works' own assertion (`core.Block`). Spec section 5: a
+        # wl.works' own assertion (`core.Block`). Design spec section 5: a
         # disagreement here is its own tier-D condition, "not a silent
         # reconciliation" -- `None` when wl.works asserted no blocks at all
-        # for this session, the identical convention `trial_count_agreement`
-        # already uses for "nothing to compare against". Matched by
+        # for this session (nothing to compare against; see `TierInputs.
+        # block_agreement`'s own comment for exactly how this parallels, and
+        # does not parallel, `trial_count_agreement`'s `None`). Matched by
         # `block_id`, mirroring how `timebase/fit.py`'s own barcode matching
-        # is "by value, never by ordinal position".
+        # is "by value, never by ordinal position". The tolerance itself is
+        # `agreement.block_agreement_tolerance_s` -- derived from float32
+        # storage precision at the magnitude actually being compared, not a
+        # fixed constant; see that function's own docstring (fix round 2).
         asserted_blocks = {
             row["block_id"]: (row["start_s"], row["end_s"])
             for row in (core.Block & session_key).to_dicts()
@@ -493,9 +519,13 @@ class TimingProvenance(dj.Computed):
             block_agreement = all(
                 block_id in measured_blocks
                 and abs(measured_blocks[block_id][0] - asserted_start)
-                <= _BLOCK_AGREEMENT_TOLERANCE_S
+                <= agreement.block_agreement_tolerance_s(
+                    measured_blocks[block_id][0], asserted_start
+                )
                 and abs(measured_blocks[block_id][1] - asserted_end)
-                <= _BLOCK_AGREEMENT_TOLERANCE_S
+                <= agreement.block_agreement_tolerance_s(
+                    measured_blocks[block_id][1], asserted_end
+                )
                 for block_id, (asserted_start, asserted_end) in asserted_blocks.items()
             )
 
