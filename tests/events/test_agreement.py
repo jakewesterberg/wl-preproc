@@ -56,3 +56,38 @@ def test_two_records_that_disagree_are_D_rather_than_B():
     with one usable record. Demoting to B would silently prefer whichever
     record the implementation happened to read first."""
     assert agreement.resolve_tier(_inputs(event_code_agreement=0.5)) == "D"
+
+
+def test_c_requires_the_task_file_check_to_have_actually_happened():
+    """`trial_count_agreement=None` means there was no task file at all --
+    the cross-check spec section 4.7 requires for C never happened. Before
+    fix round 1, `resolve_tier` only treated `is False` as a failure, so
+    `None` slipped past into "C" here, as if an absent task file were an
+    agreeing one. Only a genuinely successful cross-check
+    (`trial_count_agreement is True`) may earn C; "never measured" falls to D
+    same as "measured and failed", because a tier is a published quality
+    claim and nothing corroborated this session."""
+    assert agreement.resolve_tier(
+        _inputs(
+            n_full_code_records=1,
+            n_strobe_witnesses=0,
+            trial_count_agreement=None,
+            event_code_agreement=None,
+        )
+    ) == "D"
+
+
+def test_no_full_code_record_at_all_is_D():
+    """Zero full-code recorders present at all -- nothing decoded any event
+    codes, so A, B and C's shared precondition (>=1 full-code record) is
+    never met by any of them. Exercises resolve_tier's final bare
+    `return "D"`, which none of the other seven tests reach: every other
+    fixture in this file uses n_full_code_records of 1 or 2."""
+    assert agreement.resolve_tier(
+        _inputs(
+            n_full_code_records=0,
+            n_strobe_witnesses=0,
+            event_code_agreement=None,
+            trial_count_agreement=None,
+        )
+    ) == "D"

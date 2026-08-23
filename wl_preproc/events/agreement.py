@@ -40,6 +40,18 @@ def resolve_tier(inputs: TierInputs) -> str:
     records that disagree is a failed check, not a session with one good
     record, and treating it as B would silently prefer whichever record was
     read first.
+
+    **C requires the task-file cross-check to have actually succeeded --
+    fix round 1.** `trial_count_agreement` is `None` when there was no task
+    file to compare against at all: not a pass, not a failure, simply nothing
+    measured. Section 4.7 defines C as "cross-checked ... against task file",
+    so `None` must not earn C -- nothing corroborated the session, and a tier
+    is a published quality claim, not a default one falls into. A session with
+    one full-code record, no strobe witness, and no successful task-file check
+    satisfies none of A, B or C. That is exactly D's job: the tiers have no
+    fifth state for "never checked", and D is the quarantined tier that is not
+    auto-published, which is the correct home for both "checked and failed"
+    and "never checked at all".
     """
     if inputs.decode_errors:
         return "D"
@@ -54,6 +66,6 @@ def resolve_tier(inputs: TierInputs) -> str:
         return "A"
     if inputs.n_full_code_records == 1 and inputs.n_strobe_witnesses >= 1:
         return "B"
-    if inputs.n_full_code_records == 1:
+    if inputs.n_full_code_records == 1 and inputs.trial_count_agreement is True:
         return "C"
     return "D"
