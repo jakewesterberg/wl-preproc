@@ -20,6 +20,7 @@ Parent spec: `docs/superpowers/specs/2026-08-12-wl-preproc-design.md` §4.2, §4
 - **Session time throughout.** `BehaviorRecording` is `-> Session` with no extra key attribute, so one row per session is structural and element-event's "relative to recording start" IS session time.
 - **`extract.py` is the only per-system code**, as 1c-4 established.
 - Run tests with `.venv/bin/python -m pytest`. There is no `pip` in that venv — install nothing.
+- **Test file basenames must be globally unique across `tests/`.** There is no `__init__.py` anywhere under `tests/`, so pytest imports test modules by basename alone and two files sharing one collide at collection. `tests/timebase/test_extract.py` already exists, which is why this phase's per-system extractor tests are `test_syncbox_extract.py`, `test_nidq_extract.py` and `test_rhs_extract.py` rather than one shared `test_extract.py`. Found by Task 2, whose original brief would have collided.
 - Zero warnings. Green on 3.11 and 3.13.
 
 ## File Structure
@@ -188,7 +189,7 @@ git commit -m "feat(synth): give the NI its 16 code lines and strobe, so tier A 
 
 **Files:**
 - Create: `wl_preproc/events/__init__.py`, `wl_preproc/events/extract.py`
-- Test: `tests/events/test_extract.py`
+- Test: `tests/events/test_syncbox_extract.py`
 
 **Interfaces:**
 - Consumes: `wl_sync.log.CodeWord(tick_us: int, word: int)` and the log reader used by `timebase/extract.py::extract_syncbox`.
@@ -196,7 +197,7 @@ git commit -m "feat(synth): give the NI its 16 code lines and strobe, so tier A 
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/events/test_extract.py`:
+Create `tests/events/test_syncbox_extract.py`:
 
 ```python
 """Per-system code extraction. Pure logic against synthetic fixtures."""
@@ -257,7 +258,7 @@ def test_syncbox_ignores_edge_records(tmp_path):
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/events/test_extract.py -v`
+Run: `.venv/bin/python -m pytest tests/events/test_syncbox_extract.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'wl_preproc.events'`
 
 - [ ] **Step 3: Create the package**
@@ -378,7 +379,7 @@ git commit -m "feat(events): the events package, and syncbox word extraction"
 
 **Files:**
 - Modify: `wl_preproc/events/extract.py`
-- Test: `tests/events/test_extract.py`
+- Test: `tests/events/test_nidq_extract.py`
 
 **Interfaces:**
 - Consumes: `WordStream` from Task 2; the **two** nidq digital words written by Task 1 — word 0 (bit 0 barcode, bit 1 strobe), word 1 (16 data lines at bits 0–15). `read_nidq_meta` returns `NidqMeta(sample_rate_hz, n_analog_channels, n_digital_words)` with an `n_channels` property; there is no `n_saved_chans`.
@@ -386,7 +387,7 @@ git commit -m "feat(events): the events package, and syncbox word extraction"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/events/test_extract.py`:
+Create `tests/events/test_nidq_extract.py`:
 
 ```python
 def test_nidq_latches_the_word_at_the_strobes_FAR_edge(tmp_path):
@@ -435,7 +436,7 @@ def test_nidq_latches_the_word_at_the_strobes_FAR_edge(tmp_path):
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/events/test_extract.py::test_nidq_latches_the_word_at_the_strobes_FAR_edge -v`
+Run: `.venv/bin/python -m pytest tests/events/test_nidq_extract.py::test_nidq_latches_the_word_at_the_strobes_FAR_edge -v`
 Expected: FAIL — `AttributeError: module 'wl_preproc.events.extract' has no attribute 'extract_nidq_words'`
 
 - [ ] **Step 3: Implement**
@@ -499,7 +500,7 @@ Expected: PASS, 3 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add wl_preproc/events/extract.py tests/events/test_extract.py
+git add wl_preproc/events/extract.py tests/events/test_nidq_extract.py
 git commit -m "feat(events): NI word extraction, latched at the strobe's far edge"
 ```
 
@@ -509,7 +510,7 @@ git commit -m "feat(events): NI word extraction, latched at the strobe's far edg
 
 **Files:**
 - Modify: `wl_preproc/events/extract.py`
-- Test: `tests/events/test_extract.py`
+- Test: `tests/events/test_rhs_extract.py`
 
 **Interfaces:**
 - Consumes: `StrobeWitness` from Task 2; `wl_preproc/timebase/_rhs_header.py` for the sample rate.
@@ -517,7 +518,7 @@ git commit -m "feat(events): NI word extraction, latched at the strobe's far edg
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/events/test_extract.py`:
+Create `tests/events/test_rhs_extract.py`:
 
 ```python
 def test_the_rhs_witness_counts_edges_rather_than_merely_finding_them():
@@ -554,7 +555,7 @@ def test_the_rhs_witness_counts_edges_rather_than_merely_finding_them():
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/events/test_extract.py::test_the_rhs_witness_counts_edges_rather_than_merely_finding_them -v`
+Run: `.venv/bin/python -m pytest tests/events/test_rhs_extract.py::test_the_rhs_witness_counts_edges_rather_than_merely_finding_them -v`
 Expected: PASS if `StrobeWitness` from Task 2 exists — this test pins the TYPE's contract. If it passes immediately, that is correct; the extraction function is Step 3 and gets its own test below.
 
 - [ ] **Step 3: Implement the extractor**
@@ -603,7 +604,7 @@ RHS_STROBE_DIGITAL_BIT = 1
 
 - [ ] **Step 4: Add an end-to-end test over a real synthetic session**
 
-Append to `tests/events/test_extract.py`:
+Create `tests/events/test_rhs_extract.py`:
 
 ```python
 def test_rhs_witness_matches_the_emitted_word_count(tmp_path):
@@ -633,7 +634,7 @@ Expected: PASS, 5 tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add wl_preproc/events/extract.py tests/events/test_extract.py
+git add wl_preproc/events/extract.py tests/events/test_rhs_extract.py
 git commit -m "feat(events): the RHS strobe witness, which counts rather than merely finds"
 ```
 
