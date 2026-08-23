@@ -275,11 +275,25 @@ class TimingProvenance(dj.Computed):
         checked BEFORE `resolve_tier` is consulted at all.** None of
         `TierInputs`' seven fields represents an alignment failure -- folding
         one into (say) `decode_errors` would corrupt a column whose whole
-        point is to mean one specific, re-derivable thing. Every measured
-        input is still computed and stored even when this fires, for the same
-        reason `worst_residual_us`/`worst_drift_ppm` already were: a session
-        already known to have failed is not any less worth recording the rest
-        of.
+        point is to mean one specific, re-derivable thing.
+
+        **`failed` firing does not by itself skip the evidence**, for the same
+        reason `worst_residual_us`/`worst_drift_ppm` already were computed
+        regardless: a session already known to have failed is not any less
+        worth recording the rest of. The gate on the evidence below is
+        `syncbox_fitted`, never `failed` -- see the long comment on it.
+
+        **But the two are not independent, and the docstring used to claim they
+        were.** `failed` is `len(aligned) < len(systems) or bool(rejected)`, so
+        it fires whenever ANY present system went unfitted -- the syncbox
+        included. When the syncbox is the system that failed (`fit_status` of
+        `no_recording` or `unfittable`, both reachable from
+        `SystemTimebase.make()`), `syncbox_fitted` is False and all seven
+        evidence columns keep their zero/`None` defaults, indistinguishable
+        from a genuinely uncorroborated session. So the guarantee holds
+        precisely when the failure is somewhere OTHER than the syncbox -- a
+        rejected segment, or another system that could not be fitted -- which
+        is the case the gate was separated from `failed` to rescue.
         """
         from wl_preproc.contracts.events import DecodeError, decode_stream
         from wl_preproc.contracts.sidecar import BehaviorCameraSidecar

@@ -43,8 +43,12 @@ class Block(dj.Manual):
     # recording an assertion is not authoring it. Closed open item 9: block rows
     # are authored by wl.works' session planner and wl-preproc never writes
     # them; it cross-validates and quarantines on absence. The MEASURED boundary
-    # is a different quantity and belongs to whatever decodes event codes (1c-5),
-    # in its own Computed table. Key: (subject, session_datetime, block_id).
+    # is a different quantity and lives in element-event's `trial.Block`, written
+    # by `schema/events.py::populate_session` (1c-5). This repo declares no table
+    # of its own for it: design spec section 5's adoption table assigns "Events,
+    # trials, blocks" to `element-event`. A disagreement between the two is its
+    # own tier-D condition on `timebase.TimingProvenance.block_agreement`, not a
+    # silent reconciliation. Key: (subject, session_datetime, block_id).
     -> pipeline.Session
     block_id : smallint
     ---

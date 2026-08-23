@@ -237,10 +237,15 @@ def test_the_tier_resolves_to_a_once_two_full_code_records_genuinely_agree(
     so the two decode identically regardless of the NI's planted 18 ppm
     drift. `trial_count_agreement` is `True`: the task file and the decoded
     code stream both derive from the identical planted `GroundTruth.trials`.
-    `block_agreement` is `True` too: the fixture asserts one `core.Block` row
-    matching the DRIFT recipe's own single measured block exactly. Produces:
-    tier A, by the `n_full_code_records >= 2` branch, with none of the D
-    guards tripped.
+    `block_agreement` is `True` too -- but NOT because the two values match
+    exactly, which they provably do not. The fixture asserts one `core.Block`
+    row at the DRIFT recipe's NOMINAL boundary (`start_s=0.0`), while the
+    measured `trial.Block` starts one code-word slot later, at `0.001`: the
+    ratchet `provenance_session`'s own docstring describes. It agrees because
+    `block_agreement_tolerance_s`'s floor is derived from exactly that one-slot
+    transport quantization and absorbs it -- so this positive path exercises
+    the tolerance rather than bypassing it. Produces: tier A, by the
+    `n_full_code_records >= 2` branch, with none of the D guards tripped.
     """
     _core, _coverage, timebase = schemas
     session_key, _recipe = provenance_session
@@ -403,8 +408,9 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
         "subtracted from the full frame count"
     )
     assert row["block_agreement"], (
-        "this fixture's own core.Block row matches the recipe's single "
-        "measured block exactly"
+        "this fixture's own core.Block row asserts the NOMINAL boundary "
+        "(start_s=0.0); the measured trial.Block starts one code-word slot "
+        "later at 0.001, inside the derived tolerance -- not an exact match"
     )
 
 
