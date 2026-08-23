@@ -240,13 +240,40 @@ def _trial_stop_time(
     4. The last event time in the whole decoded stream -- the only branch a
        trial truncated with nothing recorded after it can ever reach.
 
-    **Invariant, asserted below:** whenever the containing block has closed,
-    the value returned here can never exceed it -- the cheap check that turns
-    a repeat of this class of error from silent into loud.
+    **Fix round 3: branch 1 is exempt from the invariant below, and returns
+    before reaching it.** `_containing_block` decides containment by START
+    time alone (`block.start_s <= trial.start_s < block_end`), and -- as fix
+    round 2 already established -- `assemble()`'s `BLOCK_END` handling does
+    not close an open trial. So a trial can legitimately start inside block
+    N, have block N close around it, and only afterwards receive its own
+    real `TRIAL_END` -- an ordinary behavioural-rig pattern (a block ending
+    on a time or trial limit while a trial is still running), not a corrupt
+    stream. Branch 1's `stop` is that transmitted value: ground truth from
+    the recording, not this function's own inference, so it is accepted as
+    authoritative and is not compared against the block boundary at all.
+    Round 2's assertion did not distinguish this from the three inferred
+    branches, so it would have crashed a real session's entire ingest on
+    exactly this ordinary pattern the moment production data contained it
+    (`tests/schema/test_events.py::
+    test_a_trial_whose_real_end_arrives_after_its_block_closed` builds it and
+    confirms both that no exception is raised and that reverting this
+    exemption makes the test fail).
+
+    **Invariant, asserted below on the INFERRED branches only (2-4):**
+    whenever the containing block has closed, an inferred stop time can
+    never exceed it -- the cheap check that turns a repeat of fix round 2's
+    class of error from silent into loud, without also refusing branch 1's
+    legitimate, transmitted values.
     """
     if trial.end_s is not None:
-        stop = trial.end_s
-    elif containing_block is not None and containing_block.end_s is not None:
+        # Ground truth from the recording, never this function's own
+        # inference -- exempt from the invariant below by construction,
+        # returned before that check is even reached. See the docstring's
+        # "Fix round 3" paragraph for why this can legitimately fall after
+        # the containing block's own end.
+        return trial.end_s
+
+    if containing_block is not None and containing_block.end_s is not None:
         stop = containing_block.end_s
     elif trial_index + 1 < len(ordered_trials):
         stop = ordered_trials[trial_index + 1].start_s
@@ -255,9 +282,10 @@ def _trial_stop_time(
 
     if containing_block is not None and containing_block.end_s is not None:
         assert stop <= containing_block.end_s, (
-            f"trial {trial.trial_id} stop time {stop} exceeds its own containing "
-            f"block {containing_block.block_id}'s stop time {containing_block.end_s} "
-            "-- a trial can never end after the block that contains it"
+            f"trial {trial.trial_id} INFERRED stop time {stop} exceeds its own "
+            f"containing block {containing_block.block_id}'s stop time "
+            f"{containing_block.end_s} -- an inferred trial stop time can never "
+            "exceed its containing block's stop time"
         )
     return stop
 

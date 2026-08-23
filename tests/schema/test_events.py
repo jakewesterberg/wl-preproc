@@ -353,3 +353,62 @@ def test_an_abandoned_trial_whose_block_never_closed_falls_to_the_next_trial():
         trial_one, 0, assembly.trials, containing_block=containing, stream_end_s=stream_end_s
     )
     assert stop == trial_two.start_s
+
+
+def test_a_trial_whose_real_end_arrives_after_its_block_closed():
+    """Fix round 3. The condition this fixture actually produces: trial 1
+    starts inside block 1, block 1 closes for real (a genuine BLOCK_END)
+    while trial 1 is STILL OPEN -- assemble()'s BLOCK_END handling does not
+    close an open trial (fix round 2's own finding) -- and only afterwards
+    does trial 1 receive its own real outcome and TRIAL_END. This is an
+    ordinary behavioural-rig pattern (a block ending on a time or trial
+    limit while a trial is still running), not a corrupt stream, and
+    `_containing_block`'s start-time-only containment still assigns trial 1
+    to block 1.
+
+    Must return the transmitted end WITHOUT raising, even though it lands
+    strictly after block 1's own end -- exactly the shape round 2's
+    un-narrowed assertion would have crashed a real session's ingest on.
+    """
+    from wl_preproc.contracts.events import (
+        Escape,
+        Marker,
+        TaskTypeCode,
+        decode_stream,
+        encode_payload,
+    )
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _containing_block, _trial_stop_time
+
+    words = []
+    words.extend(encode_payload(Escape.BLOCK_START, [1, int(TaskTypeCode.RF_MAP)]))
+    words.append(Marker.TRIAL_START.value)  # trial 1 starts
+    words.extend(encode_payload(Escape.TRIAL_NUMBER, [0, 1]))  # trial 1, id=1
+    words.append(Marker.BLOCK_END.value)  # block 1 closes -- trial 1 stays open
+    words.append(Marker.TRIAL_CORRECT.value)  # trial 1's own outcome, AFTER the block closed
+    words.append(Marker.TRIAL_END.value)  # trial 1's own real end, AFTER the block closed
+
+    decoded = decode_stream(_stream_at_1ms(words))
+    assembly = assemble(decoded)
+
+    assert len(assembly.trials) == 1
+    (trial,) = assembly.trials
+    assert trial.end_s is not None, "trial 1 must actually be closed for real by its own TRIAL_END"
+    assert len(assembly.blocks) == 1
+    (block,) = assembly.blocks
+    assert block.end_s is not None, "block 1 must actually have closed for real"
+    assert trial.end_s > block.end_s, (
+        "trial 1's own real end must actually land AFTER block 1's own end, or "
+        "this fixture does not produce the condition the fix targets"
+    )
+
+    stream_end_s = max(item.time_s for item in decoded)
+    containing = _containing_block(trial, assembly.blocks, stream_end_s)
+    assert containing is block, "start-time containment must still assign trial 1 to block 1"
+
+    # The point of the fix: this must not raise, and must return the
+    # transmitted value unchanged -- not the (earlier) block boundary.
+    stop = _trial_stop_time(
+        trial, 0, assembly.trials, containing_block=containing, stream_end_s=stream_end_s
+    )
+    assert stop == trial.end_s
