@@ -112,13 +112,17 @@ expected.** The dependency was **declined** rather than patched: its `Clustering
 unusable. The ephys tables are custom. See
 `specs/2026-08-22-phase-2a-ephys-schema-design.md` §2.
 
-1. **Phase 2b — the ephys branch proper.** Decomposed 2026-08-23 into a spike and eight pieces:
+1. **Phase 1c-5 — event decoding. It runs NEXT** (decided 2026-08-23), for a hardware reason as
+   much as a dependency one: Phase 2b's first two pieces both need the compute machine, which has
+   not arrived, and 1c-5 needs none. See item 2 below for what it is, and
+   `specs/2026-08-23-phase-2b-decomposition-design.md` §8 item 2.
+2. **Phase 2b — the ephys branch proper.** Decomposed 2026-08-23 into a spike and eight pieces:
    `specs/2026-08-23-phase-2b-decomposition-design.md`. Two of its rulings are worth knowing before
    reading it: **containers come first**, before any processing stage (§6.6.1's setup cost is
    explicitly one to pay in October); and the **P6000 benchmark is a spike that runs first**, not a
    Phase 2 deliverable that runs last, because its whole purpose is producing a number that
    justifies a card in a budget request.
-2. **Phase 1c-5 — event decoding, and it is no longer optional.** `TimingProvenance.tier` holds
+3. **What 1c-5 is.** `TimingProvenance.tier` holds
    `'pending'` for every session, and `pending_inputs` names the three things it waits for —
    `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`. Tiers A/B/C are
    unreachable until they exist. The **measured** block boundary (as opposed to wl.works' asserted
@@ -131,7 +135,7 @@ unusable. The ephys tables are custom. See
    > laminar depth`. Both need the canonical trial list and decoded event codes. **1c-5 is a
    > prerequisite for 2b-7 and 2b-8** — see the decomposition's §4. It still blocks 2b-0 through
    > 2b-6, so it may be built in parallel with them.
-3. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
+4. **Phase 3 onward** — see spec §12. Phase 2's window is Oct–Nov 2026; Phase 1's was Sep–Oct and
    finished 2026-08-22, about six weeks early.
 
 **The NI cards are ordered** (2026-08-23), closing the item that stood here as the longest-lead

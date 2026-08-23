@@ -188,9 +188,14 @@ discovered."* The capability report is therefore a **required output** of 2b-7, 
 1. **Does 2b-0's answer change 2b-5's design?** If the P6000 benchmark comes back poor, the
    sorting stage may need chunking or a different sorter path. Deliberately unanswered — the point
    of running the spike first is that the answer arrives before the design.
-2. **Where does 1c-5 sit in the order?** It is a prerequisite for 2b-7 and independent of
-   everything earlier, so it may be built before 2b-1, in parallel, or immediately before 2b-7.
-   That is a scheduling call, not a design one.
+2. ~~**Where does 1c-5 sit in the order?**~~ **DECIDED 2026-08-23: 1c-5 runs first, before any
+   piece of 2b.** Two reasons, and the second is the practical one. It is a prerequisite for 2b-7
+   either way. And **2b-0 and 2b-1 both require the compute machine, which has not arrived** —
+   2b-0 needs the P6000, and 2b-1's hard part is §6.6.1's *"Fedora with SELinux enforcing plus GPU
+   passthrough… NVIDIA Container Toolkit, correct device exposure, and `:z`/`:Z` labels"*, none of
+   which exists or can be tested on the macOS arm64 machine this is developed on. Images built
+   there would be arm64 against an x86_64 target. **1c-5 needs no hardware at all**, so it is the
+   piece that is productive while the box is in transit.
 3. **MUAe's citation.** §6.4 carries an OPEN: *"verify and cite the MUAe reference (Supèr &
    Roelfsema) at implementation."* It lands in 2b-3.
 
