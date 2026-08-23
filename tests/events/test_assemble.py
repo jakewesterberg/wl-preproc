@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wl_preproc.contracts.events import Escape, Marker, encode_payload
+from wl_preproc.contracts.events import DecodeError, Escape, Marker, encode_payload
 from wl_preproc.events import assemble
 
 
@@ -64,11 +64,51 @@ def test_a_block_start_payload_carries_its_task_type():
     assert result.blocks[0].task_type == TaskTypeCode.RF_MAP.value
 
 
+def test_a_corrupted_checksum_word_is_caught_rather_than_decoded():
+    """Spec section 4.2 requirement 3: multi-word payloads carry a checksum
+    word. Until fix round 1 nothing exercised it -- the test that claimed to
+    was three words short and tripped the TRUNCATION path instead, so the
+    checksum branch had no coverage while appearing to have some.
+
+    Built through encode_payload so the fixture is a VALID payload with exactly
+    one word corrupted, rather than a hand-written sequence that might be
+    malformed in some other way and pass for the wrong reason again.
+    """
+    words = encode_payload(Escape.TRIAL_NUMBER, [0, 7])
+    words[-1] ^= 0xFFFF  # corrupt only the checksum
+    stream = _stream([(0.001 * i, w) for i, w in enumerate(words)])
+
+    errors = [e for e in stream if isinstance(e, DecodeError)]
+    assert errors, "a corrupted checksum must produce a DecodeError"
+    assert "checksum" in errors[0].reason, (
+        f"expected a checksum error, got {errors[0].reason!r} -- if this says "
+        "'truncated' the fixture is short and the checksum branch is still "
+        "untested"
+    )
+
+
+def test_a_truncated_payload_is_caught_rather_than_decoded():
+    """The other half, kept deliberately: decode_stream 'never raises on
+    malformed input... so one bad trial cannot lose a session', and truncation
+    is the failure mode a cut-short recording produces."""
+    words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1)]
+    errors = [e for e in _stream(words) if isinstance(e, DecodeError)]
+    assert errors and "truncated" in errors[0].reason
+
+
 def test_decode_errors_are_kept_rather_than_dropped():
     """decode_stream never raises: "a corrupt or truncated payload yields a
     DecodeError and decoding continues, so one bad trial cannot lose a
     session." The assembly must surface those, because a session with decode
-    errors is a tier-D candidate and silence would hide it."""
-    words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1), (0.002, 0xDEAD)]  # bad checksum
+    errors is a tier-D candidate and silence would hide it.
+
+    Deliberately agnostic about WHICH decode failure produced the error: that
+    distinction (checksum vs. truncation) is pinned down at the codec's own
+    boundary by the two tests above. This test's claim is different and
+    narrower -- that assemble() forwards a DecodeError into Assembly.errors at
+    all, rather than silently discarding it -- so it reuses the truncated
+    fixture rather than a checksum one.
+    """
+    words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1), (0.002, 0xDEAD)]  # truncated: only 2 of the 3 required words follow the escape
     result = assemble.assemble(_stream(words))
-    assert result.errors, "a checksum failure must reach the assembly's error list"
+    assert result.errors, "a decode error must reach the assembly's error list"
