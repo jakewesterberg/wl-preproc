@@ -81,8 +81,21 @@ def test_no_full_code_record_at_all_is_D():
     """Zero full-code recorders present at all -- nothing decoded any event
     codes, so A, B and C's shared precondition (>=1 full-code record) is
     never met by any of them. Exercises resolve_tier's final bare
-    `return "D"`, which none of the other seven tests reach: every other
-    fixture in this file uses n_full_code_records of 1 or 2."""
+    `return "D"` -- but not alone, and not uniquely: fix round 2 corrected
+    this docstring after a review found it falsely claimed "none of the
+    other seven tests reach" that line. The task-file-check test above
+    (n_full_code_records=1, trial_count_agreement=None) reaches the exact
+    same final line too, by a different route: THIS test's fixture fails
+    every guard's record-count term outright (n_full_code_records=0 satisfies
+    neither A's `>= 2` nor B's and C's `== 1`), while THAT test's fixture
+    satisfies the `== 1` half of both B's and C's guards and fails only the
+    other half of each (no strobe witness for B; trial_count_agreement is
+    not True for C). The two tests guard different conditions that happen to
+    share a return statement, not the same one twice: this test covers "no
+    full-code recorder exists at all", the other covers "a full-code
+    recorder exists but its task-file cross-check was never performed".
+    Both conditions are real and both are worth a named test; only the
+    exclusivity claim about this line was wrong, not the coverage."""
     assert agreement.resolve_tier(
         _inputs(
             n_full_code_records=0,
