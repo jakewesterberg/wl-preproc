@@ -21,6 +21,13 @@ status:
 
 runs_on: [serv]
 
+# The pipeline is deployed to the preprocessing server, but it is written and
+# tested on workstations — its own handoff records that Phase 2b "cannot be
+# tested on the macOS arm64 machine this project is developed on." Without
+# this, wl-orchestrator's own manifest reasons about a workstation footprint
+# that nothing declares.
+builds_on: [dws, mws]
+
 third_party:
   - name: python
     constraint: ">=3.11"
