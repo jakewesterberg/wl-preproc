@@ -132,3 +132,19 @@ publishes:
       LFP, multiunit, Kilosort output, eye tracking and task codes aligned onto
       one clock. The target layout is Phase 3 and not settled; nothing should
       be built against its structure yet.
+
+# The artifacts this package builds on. These are the three the `requires` entry
+# above names in prose — written here as the artifact names wl-sync owns, so the
+# registry can join them rather than read them out of a sentence.
+consumes:
+  - name: syncbox-log-header
+    why: >-
+      Re-exported into docs/schemas and diffed by CI, so the sync box's log
+      format and this repository's published contract cannot drift apart.
+  - name: session-id
+    why: >-
+      Every session this pipeline ingests is keyed by the identity the sync box
+      minted for it.
+  - name: barcode-codec
+    why: >-
+      Alignment onto one clock is decoded from the barcodes the sync box emits.
