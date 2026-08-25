@@ -68,3 +68,67 @@ requires:
       repository's exported contract with nobody here touching it. The
       dependency runs one way only — wl-sync must never import from wl-preproc,
       and CI asserts it.
+
+publishes:
+  - name: session-manifest
+    kind: json-schema
+    at: docs/schemas/session_manifest.json
+    stability: stable
+    what: >-
+      One record per recording session: session_id, rig, the systems expected
+      to contribute, when it started and from which source, and the
+      acquisition build it ran under.
+
+  - name: job-request
+    kind: json-schema
+    at: docs/schemas/job_request.json
+    stability: stable
+    what: >-
+      A unit of work handed to the pipeline: domain, selection, parameters and
+      an idempotency key. A published contract wl.works builds against, and
+      its Phase 18b tests run against a fake wl-preproc that honours it.
+
+  - name: health-response
+    kind: json-schema
+    at: docs/schemas/health_response.json
+    stability: stable
+    what: >-
+      Served at the health check URL wl.works polls: a verdict, readings, and
+      the host's own action list — so, in its own words, "adding a sixth job
+      type needs no change on the wl.works side".
+
+  - name: behavior-camera-sidecar
+    kind: json-schema
+    at: docs/schemas/behavior_camera_sidecar.json
+    stability: stable
+    what: >-
+      Per-video metadata written beside behaviour recordings: frame count and
+      rate, dropped frame ids, trigger source and digital line. A published
+      contract the separate FLIR camera project builds against.
+
+  - name: done-marker
+    kind: json-schema
+    at: docs/schemas/done_marker.json
+    stability: stable
+    what: >-
+      Written when a system finishes transferring: the files it produced, the
+      system that wrote them, and when the transfer finished.
+
+  - name: syncbox-log-header
+    kind: json-schema
+    at: docs/schemas/syncbox_log_header.json
+    stability: stable
+    mirrors: wl-sync
+    what: >-
+      Re-exported from wl-sync, not redefined — wl-sync owns session identity
+      and the log format. Kept identical by the CI step that re-runs
+      `wlpp schemas export` and diffs docs/schemas.
+
+  - name: nwb-session
+    kind: nwb
+    stability: planned
+    available_after: ingest
+    what: >-
+      LFP, multiunit, Kilosort output, eye tracking and task codes aligned onto
+      one clock. The target layout is Phase 3 and not settled; nothing should
+      be built against its structure yet.
