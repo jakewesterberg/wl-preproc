@@ -1,0 +1,33 @@
+name: Manifest
+
+# Its own workflow, not a step bolted onto an existing one. The check is
+# unrelated to whatever else this repository builds, it needs no matrix, and
+# keeping it separate means a manifest fault is legible on sight and cannot
+# fail — or be masked by — a test job it has nothing to do with.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  wl-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Gates on THIS repository's wl.yaml and nothing else. wl-orchestrator's
+      # `wlo validate` cannot be used here: its exit code covers the whole
+      # registry, so a neighbouring package's bad manifest would fail this
+      # build. wl-check reads one file and reports only this package's faults.
+      #
+      # The commit is pinned. An unpinned reference means a change in
+      # wl-manifest can turn this red without anything here changing.
+      - name: This package's manifest is true
+        run: |
+          pip install "wl-manifest @ git+https://github.com/jakewesterberg/wl-manifest.git@6552b4a92ed19af97cb8c717dfcb8124cbc0b18b"
+          wl-check .
