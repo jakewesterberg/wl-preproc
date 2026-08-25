@@ -49,3 +49,22 @@ third_party:
     why: >-
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
+
+# The only place this edge is written down where another repository can see it.
+# The dependency itself lives in pyproject.toml, which nothing outside this
+# repo reads; wl-sync had no way to learn that changing its log format breaks
+# something here.
+requires:
+  - name: wl-sync
+    pinned_at: 90b931e8d4714a0b199510d5ccb8813114bb076e
+    for: session identity, the barcode codec, and the log format
+    why: >-
+      The sync box owns everything it produces, and vendoring copies here would
+      create a second definition free to drift from the one the hardware
+      actually implements. A commit pin, not a branch, because the exposure is
+      wired into a CI gate rather than a test: `wlpp schemas export` re-exports
+      SyncBoxLogHeader from wl-sync into docs/schemas, and CI diffs that
+      directory. On a moving ref, a commit to wl-sync main would change this
+      repository's exported contract with nobody here touching it. The
+      dependency runs one way only — wl-sync must never import from wl-preproc,
+      and CI asserts it.
