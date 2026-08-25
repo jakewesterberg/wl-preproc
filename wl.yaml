@@ -1,0 +1,53 @@
+schema: 1
+slug: wl-preproc
+class: pipeline
+lifecycle: active
+visibility: private
+remote: https://github.com/jakewesterberg/wl-preproc.git
+
+summary: >-
+  Aligns LFP, multiunit, Kilosort output, eye tracking and task codes into one
+  NWB file with DataJoint alongside; organises and compresses raw data for
+  archival.
+
+status:
+  phase: Phase 1c-5 merged; Phase 2b hardware-blocked
+  branch: main
+  last_merge: 60bbb70
+  next: >-
+    close the two holes in the wl.works protocol payload, which are blocking
+    that repository's tests, then write the 2b-2 design spec
+  updated: 2026-08-23
+
+runs_on: [serv]
+# The pipeline is deployed to the preprocessing server, but it is written and
+# tested on workstations. Its 2026-08-23 handoff records that Phase 2b's
+# container seam needs Fedora with SELinux enforcing and GPU passthrough, and
+# that "None of that exists or can be tested on the macOS arm64 machine this
+# project is developed on." Without this field, wl-orchestrator's own manifest
+# reasons about a workstation footprint that nothing declares.
+builds_on: [dws, mws]
+
+third_party:
+  - name: python
+    constraint: ">=3.11"
+    why: >-
+      3.11 is the floor wl-sync also supports; 3.13 is what Fedora ships on the
+      preprocessing server. CI tests both ends.
+  - name: datajoint
+    constraint: ">=2.3,<3"
+    why: >-
+      The Elements are mid-migration to DataJoint 2.x and no fork is taken.
+      element-array-ephys is deliberately absent: its issue #230 is unfixed and
+      its tables silently destroy array data under 2.x.
+  - name: kilosort
+    where: serv
+    why: >-
+      Spike sorting runs on the preprocessing server. wl-softrepo's rig scope
+      ruling of 2026-08-23 is explicit that rigs run lean, with no
+      spike-sorting infrastructure at all.
+  - name: spikeinterface
+    constraint: ">=0.101"
+    why: >-
+      The format oracle for the synthetic generator: the test that matters is
+      whether the reader the pipeline will actually use can open what we wrote.
