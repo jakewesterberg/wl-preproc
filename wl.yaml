@@ -12,12 +12,10 @@ summary: >-
 
 status:
   phase: Phase 1c-5 merged; Phase 2b hardware-blocked
-  branch: main
-  last_merge: 60bbb70
   next: >-
     close the two holes in the wl.works protocol payload, which are blocking
     that repository's tests, then write the 2b-2 design spec
-  updated: 2026-08-23
+  describes: 30fcdc6
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
