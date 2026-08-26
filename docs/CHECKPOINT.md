@@ -130,7 +130,7 @@ unusable. The ephys tables are custom. See
    `specs/2026-08-26-phase-2b2-reader-and-chain-design.md` designs the reader seam and the
    reordered preprocessing chain; its own §1 records why the design grew a front half: the
    synthetic generator had no spatial structure at all, so none of Phase 2b's questions were
-   measurable against it. Correcting that fixture is now built, on `spec/phase-2b2-reader-and-chain`
+   measurable against it. Correcting that fixture is now built
    — the generator plants unit identity, multi-channel spike footprints with a real amplitude-decay
    bias, spatially correlated noise, and an LF band. **`wl_preproc/ephys/` is no longer only
    `geometry.py`** — `sorter_geometry.py` now sits beside it, deriving Kilosort's

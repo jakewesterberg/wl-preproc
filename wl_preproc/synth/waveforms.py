@@ -127,6 +127,15 @@ TEMPLATE_MS_BEFORE = 1.0
 # so this holds for every seed, not only the ones tested. Verified anyway at
 # `n_units=12` across 200 seeds and `n_units=1/2/3/5/10/20` across 100 seeds
 # each: 0 failures throughout (task-4-report.md, fix round 1).
+#
+# The guarantee is not specific to 30 kHz either, though that is the only rate
+# the margin above is stated at. Every term in the assertion is
+# `int(ms * fs / 1000)`, so it reduces to whether `0.8 + 1.5 < 2.5` holds in
+# the millisecond domain once truncation is accounted for -- a fixed 0.2 ms
+# margin, and truncation can only erase a margin that size once it is worth
+# less than one whole sample, i.e. below `fs = 5 kHz`. `unit_templates` is
+# only ever called at 30 kHz today (`write_spikeglx`, `write_rhs`), comfortably
+# clear -- but the bound itself does not depend on that.
 TEMPLATE_MS_AFTER = 2.5
 
 # **A recorded bias, not an oversight.** `generate_templates` is documented as
@@ -159,11 +168,11 @@ TEMPLATE_MS_AFTER = 2.5
 # Re-swept the same way at the values below: worst case 91 uV, 5th percentile
 # 203 uV, median 300-400 uV -- comfortably clear of the noise floor and in the
 # range real best-channel EAP amplitudes occupy (the single-channel fixture
-# this task replaces, `spikeglx.SPIKE_TEMPLATE_UV`, peaked at 200 uV). 60 um
-# for the decay constant is deliberately `_MAX_DISTANCE_UM` again rather than
-# an independent guess: a unit planted at the edge of where `place_units` is
-# allowed to put it still registers a real, attenuated footprint instead of
-# falling below noise entirely.
+# this task replaced -- its per-spike template constant, since removed --
+# peaked at 200 uV). 60 um for the decay constant is deliberately
+# `_MAX_DISTANCE_UM` again rather than an independent guess: a unit planted at
+# the edge of where `place_units` is allowed to put it still registers a real,
+# attenuated footprint instead of falling below noise entirely.
 TEMPLATE_ALPHA_RANGE_UV = (500.0, 1200.0)
 TEMPLATE_SPATIAL_DECAY_UM = 60.0
 
@@ -247,7 +256,7 @@ def unit_templates(
 
 def render_traces(
     sites: list[dict],
-    units: tuple,
+    units: tuple[UnitTruth, ...],
     spikes: tuple[tuple[float, int], ...],
     n_samples: int,
     sampling_rate_hz: float,

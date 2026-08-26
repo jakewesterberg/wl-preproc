@@ -158,9 +158,9 @@ def test_emission_is_deterministic(tmp_path):
     nidq = f"{CI_RECIPE.session_id}.nidq.bin"
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
     # And the LF stream Task 5 added: CI_RECIPE plants zero units, so this is
-    # the timing-only branch of `_write_lf` -- all zeros, trivially
-    # deterministic, but only if nothing upstream starts drawing from an
-    # unseeded RNG on this path.
+    # the timing-only branch of `_write_lf` -- a seeded noise floor rather
+    # than the band's laminar-gradient signal, deterministic only if nothing
+    # upstream starts drawing from an unseeded RNG on this path.
     lf = f"{CI_RECIPE.session_id}_imec0.lf.bin"
     assert (first / lf).read_bytes() == (second / lf).read_bytes()
 
@@ -185,9 +185,9 @@ def test_emission_is_deterministic_with_planted_units(tmp_path):
     nidq = f"{recipe.session_id}.nidq.bin"
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
     # `recipe.n_units=3` also takes `_write_lf`'s laminar-gradient branch --
-    # `correlated_noise` again, seeded `recipe.seed + 2` -- so this is this
-    # branch's own determinism check, the same reason the units branch above
-    # needed one separate from the timing-only test.
+    # `correlated_noise` again, seeded `recipe.seed + LF_SEED_OFFSET` -- so
+    # this is this branch's own determinism check, the same reason the units
+    # branch above needed one separate from the timing-only test.
     lf = f"{recipe.session_id}_imec0.lf.bin"
     assert (first / lf).read_bytes() == (second / lf).read_bytes()
 

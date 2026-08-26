@@ -10,7 +10,9 @@ synthetic generator turned out to be unable to answer any question this phase
 asks (§1), so the fixture work is now this piece's front half. And a survey of
 what Allen, IBL, SpikeGLX and SpikeInterface actually do (§2) falsified the step
 order in §6.1, replaced the reference choice with a four-way enum, and turned up
-a Kilosort default that would silently split units on this lab's probe (§7).
+a Kilosort default that splits units on this lab's probe by mechanism — the
+fixture's demonstration of that consequence turned out narrower than first
+stated (§7).
 
 ---
 
@@ -232,8 +234,20 @@ Contained change: four call sites — `synth/spikeglx.py:143`, `synth/rhs.py:110
 - `generate_noise(probe, ..., spatial_decay=...)` — noise from a spatial
   covariance matrix, which is what gives a common reference something common to
   remove.
-- `inject_templates` places them at times **the existing timeline still owns**,
-  so barcodes, blocks and trials stay coherent with the signal.
+- **Placement is hand-rolled, not `inject_templates`.** `waveforms.render_traces`
+  loops `truth.spikes` directly and adds each spike's unit template onto the
+  noise array at a sample computed from **the existing timeline**, so barcodes,
+  blocks and trials stay coherent with the signal — the intent originally
+  recorded here, kept, but not through the call this bullet named.
+  `inject_templates` takes a `BaseSorting` and returns a lazy
+  `InjectTemplatesRecording` (checked against the installed
+  `spikeinterface.generation.inject_templates`); building that sorting from
+  `truth.spikes` would still need the identical per-spike drift/offset-to-sample
+  conversion the hand-rolled loop already does, in exchange for a lazy recording
+  this module would immediately materialise anyway. One cost of hand-rolling
+  was not previously recorded: `inject_templates`'s `amplitude_factor` has no
+  analogue here, so every spike from one unit is added at fixed amplitude
+  (§3.4).
 - An **LF stream at 2.5 kHz** is emitted alongside the AP stream, closing §1's
   fourth gap.
 
@@ -267,6 +281,16 @@ upper bound**, and this spec requires that caveat to travel with any such number
 bias, but needs network access, which CI and offline reproducibility both argue
 against. It sits behind a flag, fetched once and cached, for the one experiment
 where the bias matters.
+
+**A second idealisation, not previously recorded here.** `render_traces` (§3.2)
+adds one unit's template unmodified at every one of its spikes — no
+`amplitude_factor`, no jitter, ever. A real unit's spikes vary in peak
+amplitude — burst adaptation, slow drift, electrode-tissue movement — and this
+fixture's do not. That flattens a second source of real per-spike variability,
+in the same direction as the amplitude-decay-only bias above: it makes sorting
+easier than the recording it stands in for, not harder. Not fixed here — it
+changes every fixture's bytes, which is a decision for whoever next needs
+per-spike amplitude variance, not a documentation pass.
 
 ---
 
@@ -439,12 +463,21 @@ where the probe is known.
 > above — a spike straddling both columns becomes two units, and nothing
 > reports it — is a mechanism claim and a consequence claim, and only the
 > first is confirmed. The mechanism is real, verified directly in KS4's own
-> `kilosort/spikedetect.py`: `template_centers()`'s candidate grid at
-> `dminx=32` never places a template at NP1032's 51.5 µm midpoint, so no
-> template can draw channels from both columns; at the derived spacing
-> (`dminx=103`) it does. What this amendment narrows is *"nothing reports
-> it"* — the promise that the fixture would show the consequence, not just
-> confirm the cause.
+> `kilosort/spikedetect.py` — but not at the step first named here.
+> `template_centers()`'s candidate grid DOES place a template at NP1032's
+> 51.5 µm midpoint even at `dminx=32`: `nx = round((xmax-xmin)/(dminx/2))+1`
+> gives 7, and `linspace(0, 103, 7)` includes 51.5 exactly. What removes it is
+> the separate distance filter `run()` applies right after,
+> `igood = ds[0,:] <= max_channel_distance**2`: the nearest real channel to
+> the 51.5 µm midpoint is 51.5 µm away in either column, and `51.5² ≈ 2652`
+> exceeds `max_channel_distance`'s own 32 µm default (`32² = 1024`), so the
+> midpoint template is discarded before it can draw channels from both
+> columns. At the derived spacing (`max_channel_distance=103`),
+> `2652 < 103² = 10609`, and the midpoint template survives. (This matches
+> `tests/ephys/test_kilosort_defaults_split_units.py`'s own module docstring,
+> which already had the two-step mechanism right.) What this amendment
+> narrows is *"nothing reports it"* — the promise that the fixture would show
+> the consequence, not just confirm the cause.
 >
 > **The first metric tried, raw sorted-cluster count, does not show it, and
 > was abandoned as unfit rather than as evidence against the claim.** At seed
@@ -644,6 +677,26 @@ belongs to whoever reads repeatedly — 2b-3, 2b-5 — not here.
    them; only real data settles it, and that is January.
 5. **Allen's OpenScope databook**, not walked chapter by chapter (§2.7).
 6. **MUAe's citation** remains §6.4's OPEN and lands in 2b-3, not here.
+7. **RHS-rendered units sit in SpikeGLX's coordinate frame, not RHS's own.**
+   `synth/timeline.py:183` places `truth.units` against
+   `ephys.geometry.electrode_rows(recipe.probe_part_number)` for every recipe,
+   RHS-only ones included — but `synth/rhs.py:118` then renders them against
+   `linear_sites(n_channels)`, a geometry `rhs.py`'s own words declare *"rather
+   than borrowed from Neuropixels"*, with a different pitch and axis. Measured
+   directly on `STIM_RECIPE` (probe NP1000, RHS-only, seed 7): all three
+   planted units sit within 16 µm of `linear_sites`' top site along the
+   array's own axis, and over 84 µm from sites 2 and 3. `place_units`'s own
+   docstring promises units *"bounded by the sites rather than by the
+   probe"*; that promise holds for the sites `place_units` was actually given
+   (NP1000's), not for the ones RHS renders against, which is a different
+   probe entirely. Latent today — no shipped recipe plants units on both
+   systems in the same session — but STIM_RECIPE alone shows what it would do:
+   three units the mechanism treats as clustered near one end of the array,
+   when nothing planted them there. The clean fix is one of: each emitter
+   passes its own sites into `place_units`, or `GroundTruth.units` carries the
+   frame its coordinates are expressed in so a consuming emitter can tell
+   whether it matches its own. Not fixed here — this is design work, and
+   changing it changes what every RHS fixture's amplitude field looks like.
 
 ---
 

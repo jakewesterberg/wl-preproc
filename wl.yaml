@@ -11,7 +11,7 @@ summary: >-
   archival.
 
 status:
-  phase: Phase 1c-5 merged; Phase 2b hardware-blocked
+  phase: Phase 1c-5 merged; Phase 2b underway -- 2b-2's front half built, the rest hardware-blocked
   next: >-
     2b-2's back half: the reader seam, the reordered preprocessing chain, the
     Kilosort seam and the paramset work
@@ -19,8 +19,7 @@ status:
     §4, §5, §6, §8). Gated on 2b-1, the container seam, which is still
     hardware-blocked. 2b-2's front half — the synthetic generator's spatial
     reality: unit identity, multi-channel footprints, correlated noise, an LF
-    band — needed neither container nor GPU and is already built, on
-    `spec/phase-2b2-reader-and-chain`.
+    band — needed neither container nor GPU and is already built.
   describes: 583d4ed
 
 runs_on: [serv]

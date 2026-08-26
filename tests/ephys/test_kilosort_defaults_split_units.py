@@ -145,10 +145,19 @@ def _long_recipe(seed):
     -- checked directly for all three seeds via
     `wl_preproc.synth.waveforms.unit_templates`, not assumed: worst-case
     weakest-column peak amplitude was 107.1 uV (seed 20270317), 97.1 uV
-    (20270318) and 128.1 uV (20270319). The fault this test demonstrates
-    needs units whose spikes genuinely register on both columns; at all three
-    seeds, every planted unit qualifies structurally, not by luck of the
-    draw.
+    (20270318) and 128.1 uV (20270319).
+
+    That is ONE criterion -- clears the noise floor on both columns -- and
+    12/12 planted units meet it at every seed. It is not the criterion the
+    mechanism needs. Fragmenting a unit needs comparable amplitude on both
+    columns, not merely detectable amplitude: the design spec's section 7
+    amendment measures a best-channel-peak-per-column ratio and finds only
+    3, 4 and 4 of the 12 units per seed within its 1.5x parity bound -- the
+    rest are detectable on the far column without being anywhere near equal
+    on it, which the mechanism cannot fragment regardless of what the
+    template grid allows. That narrower count, not the 12/12 noise-floor
+    figure above, is what actually bounds this test's power; see section 7
+    for the full accounting.
     """
     recipe = SPATIAL_RECIPE.model_copy(
         update={
@@ -221,7 +230,10 @@ def _sort(recording_dir, label, **settings):
 def _truth_samples_by_unit(truth, fs, pre_roll_s):
     """Ground-truth spike sample indices per unit, in the same integer sample
     frame the emitted `.bin` file -- and therefore KS4's own output -- uses:
-    `write_spikeglx` places a spike at `round((time_s + pre_roll_s) * fs)`.
+    `waveforms.render_traces` (which `write_spikeglx` calls) places a spike at
+    `int((time_s + pre_roll_s) * fs)`, truncating rather than rounding. This
+    function's own `round()` below can therefore differ from the written
+    sample by at most one, well inside `MATCH_TOLERANCE_SAMPLES`.
     """
     by_unit = {u.unit_id: [] for u in truth.units}
     for time_s, unit_id in truth.spikes:

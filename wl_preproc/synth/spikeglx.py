@@ -57,6 +57,15 @@ LF_SAMPLE_RATE_HZ = 2500.0
 LFP_UV = 120.0
 LFP_FREQ_HZ = 8.0
 
+# The LF band's own seed offset. +1 is this file's AP band (write_spikeglx
+# below); +3 is RHS's (rhs.py). +2 looks free from inside this file but is
+# not: session.py's camera-drop RNG is also `recipe.seed + 2`, even though it
+# lives outside synth/spikeglx.py entirely -- a survey for a free slot has to
+# cover every emitter keyed off recipe.seed, not just this module's own.
+# Distinct offsets exist so two streams never draw the same noise; this one
+# had, silently, until now.
+LF_SEED_OFFSET = 4
+
 # A different tick origin from the sync box, deliberately — see syncbox.py. It
 # is shared by both of this system's streams: SpikeGLX starts and stops imec
 # and NI together, which is what makes "spikeglx" one segment unit rather than
@@ -222,16 +231,34 @@ def _write_lf(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_p
     sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
 
     data = np.zeros((n_samples, n_channels), dtype=np.float64)
-    if recipe.n_units:
+    if truth.units:
         data[:, :-1] = correlated_noise(
-            sites, n_samples, fs, NOISE_UV, seed=recipe.seed + 2
+            sites, n_samples, fs, NOISE_UV, seed=recipe.seed + LF_SEED_OFFSET
         )
         ys = np.array([s["y_coord"] for s in sites], dtype=float)
         # np.ptp(), not ys.ptp(): NumPy 2.0 removed the method, and this repo runs 2.4.
         depth = (ys - ys.min()) / max(float(np.ptp(ys)), 1.0)
         t = np.arange(n_samples, dtype=float) / fs
-        phase = np.sin(2 * np.pi * LFP_FREQ_HZ * apply_drift(t, drift_ppm))
+        # `t` is already a DEVICE-sample time axis (sample index / nominal
+        # fs) -- unlike every other apply_drift call in this file (the spike
+        # times above, and the barcode/code-word times in write_nidq), which
+        # all start from a SESSION time and convert forward. Running a device
+        # axis back through apply_drift applied its session->device contract
+        # backwards: a session-time f Hz signal appears at
+        # f/(1+drift_ppm*1e-6) once read off the device's own sample clock,
+        # not f*(1+drift_ppm*1e-6). Unreachable today -- no recipe combines
+        # drift_ppm with n_units -- but wrong regardless.
+        phase = np.sin(2 * np.pi * LFP_FREQ_HZ * t / (1.0 + drift_ppm * 1e-6))
         data[:, :-1] += np.outer(phase, LFP_UV * np.cos(np.pi * depth))
+    else:
+        # Timing-only fixtures plant no units -- the same case write_spikeglx's
+        # AP-band branch above handles, and for the same reason: give the band
+        # a real noise floor rather than leaving it bit-for-bit zero. A
+        # uniformly-zero band would be labelled `dead` on every channel by any
+        # detector and has zero PSD -- a fixture describing hardware nobody
+        # owns, the same category §1 corrected for the rest of the generator.
+        rng = np.random.default_rng(recipe.seed + LF_SEED_OFFSET)
+        data[:, :-1] = rng.normal(0.0, NOISE_UV, (n_samples, n_channels - 1))
 
     data /= UV_PER_BIT
     data[:, -1] = 0
