@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from wl_preproc.ephys.geometry import electrode_rows
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.spikeglx import SPIKEGLX_PRE_ROLL_S, write_spikeglx
 from wl_preproc.synth.timeline import build_timeline
@@ -193,3 +194,35 @@ def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
         f"{len(falling)} strobe edges for {len(truth.code_words)} emitted words"
     )
     assert [int(data[i]) for i in falling] == [word for _, word in truth.code_words]
+
+
+def test_geom_map_comes_from_the_probe_table_not_a_format_string(tmp_path):
+    """The fabricated map alternated x between 16 and 48. Real NP1000
+    electrodes 0-3 sit at (16,0), (48,0), (0,20), (32,20) -- four x values on a
+    four-channel period. A geometry the probe does not have is a fixture that
+    describes a probe nobody owns."""
+    recipe = CI_RECIPE.model_copy(update={"n_ap_channels": 4})
+    truth = build_timeline(recipe)
+    bin_path = write_spikeglx(tmp_path, recipe, truth)
+
+    meta = bin_path.with_suffix(".meta").read_text()
+    geom_line = next(l for l in meta.splitlines() if l.startswith("~snsGeomMap="))
+    entries = geom_line.split("=", 1)[1]
+
+    expected = electrode_rows(recipe.probe_part_number)[:4]
+    for row in expected:
+        assert f"(0:{row['x_coord']:g}:{row['y_coord']:g}:1)" in entries
+
+
+def test_a_recipe_can_declare_the_nhp_probe(tmp_path):
+    """NP1032 is the 4,416-site NHP Long probe with columns 103 um apart. The
+    fixture could not express it at all before this."""
+    recipe = CI_RECIPE.model_copy(
+        update={"probe_part_number": "NP1032", "n_ap_channels": 4}
+    )
+    truth = build_timeline(recipe)
+    bin_path = write_spikeglx(tmp_path, recipe, truth)
+
+    meta = bin_path.with_suffix(".meta").read_text()
+    assert "imDatPrb_pn=NP1032" in meta
+    assert "(0:0:0:1)" in meta and "(0:103:0:1)" in meta

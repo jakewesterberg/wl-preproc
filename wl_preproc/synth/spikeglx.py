@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 from wl_sync.barcode import encode
 
+from wl_preproc.ephys.geometry import electrode_rows
 from wl_preproc.synth.recipe import SessionRecipe
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
@@ -86,6 +87,8 @@ def _meta_text(
 ) -> str:
     n_ap = recipe.n_ap_channels
     file_bytes = n_samples * n_channels * 2
+    sites = electrode_rows(recipe.probe_part_number)[:n_ap]
+
     imro = f"({n_ap},{n_ap})" + "".join(
         f"({c} 0 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
     )
@@ -94,8 +97,12 @@ def _meta_text(
         + "".join(f"(AP{c};{c}:{c})" for c in range(n_ap))
         + f"(SY0;{n_ap}:{n_ap})"
     )
-    geom = "(NP1000,1,0,70)" + "".join(
-        f"(0:{16 if c % 2 else 48}:{20 * (c // 2)}:1)" for c in range(n_ap)
+    # Read from probeinterface's offline table rather than fabricated. The
+    # fabricated version alternated x between 16 and 48, which is not the
+    # layout of any probe -- NP1000's first four sites are (16,0), (48,0),
+    # (0,20), (32,20). Nothing caught it because nothing read the map back.
+    geom = f"({recipe.probe_part_number},1,0,70)" + "".join(
+        f"({s['shank']}:{s['x_coord']:g}:{s['y_coord']:g}:1)" for s in sites
     )
     lines = [
         "typeThis=imec",
@@ -113,8 +120,10 @@ def _meta_text(
         "imMaxInt=512",
         "imDatPrb_type=0",
         # The reader looks up probe geometry by part number in ProbeInterface's
-        # table and raises if it is absent. NP1000 is Neuropixels 1.0.
-        "imDatPrb_pn=NP1000",
+        # table and raises if it is absent. Read from the recipe rather than
+        # hardcoded NP1000 (Neuropixels 1.0) -- SessionRecipe.probe_part_number
+        # is what lets a fixture name NP1032 instead.
+        f"imDatPrb_pn={recipe.probe_part_number}",
         # Which channels were saved. ProbeInterface requires it to map the
         # imroTbl onto physical sites; "all" is the whole-probe case.
         "snsSaveChanSubset=all",

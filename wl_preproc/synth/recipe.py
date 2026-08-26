@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.contracts.paths import SYSTEMS
+from wl_preproc.ephys.geometry import UnknownProbeType, electrode_rows
 from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S
 
 # The synthetic package's one fixed "session started" instant. peripherals.py
@@ -96,6 +97,14 @@ class SessionRecipe(BaseModel):
     blocks: tuple[BlockSpec, ...]
     montages: tuple[MontageSpec, ...]
     n_ap_channels: int
+
+    # Which probe this session was recorded through, as a probeinterface part
+    # number. Defaulted to NP1000 (Neuropixels 1.0) because every recipe
+    # predating Phase 2b-2 described one implicitly -- `_meta_text` hardcoded
+    # `imDatPrb_pn=NP1000`. It is a field rather than a constant because this
+    # lab's probe is NP1032, whose columns sit 103 um apart, and spec section 7
+    # turns on a fixture being able to say so.
+    probe_part_number: str = "NP1000"
     channels: tuple[ChannelSpec, ...] = ()
     ap_sample_rate_hz: float
     seed: int
@@ -188,6 +197,16 @@ class SessionRecipe(BaseModel):
                 f"channels declares {len(self.channels)} channels but "
                 f"n_ap_channels is {self.n_ap_channels}; a header describing a "
                 f"different array than amplifier.dat contains is unreadable"
+            )
+        try:
+            available = len(electrode_rows(self.probe_part_number))
+        except UnknownProbeType as exc:
+            raise ValueError(str(exc)) from exc
+        if self.n_ap_channels > available:
+            raise ValueError(
+                f"n_ap_channels is {self.n_ap_channels} but "
+                f"{self.probe_part_number} has {available} sites; a recording "
+                "cannot have more channels than the probe has electrodes"
             )
         return self
 
