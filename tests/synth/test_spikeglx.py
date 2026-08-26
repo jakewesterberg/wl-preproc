@@ -226,3 +226,49 @@ def test_a_recipe_can_declare_the_nhp_probe(tmp_path):
     meta = bin_path.with_suffix(".meta").read_text()
     assert "imDatPrb_pn=NP1032" in meta
     assert "(0:0:0:1)" in meta and "(0:103:0:1)" in meta
+
+
+def test_geometry_round_trips_through_the_independent_reader_for_the_nhp_probe(tmp_path):
+    """The two tests above assert on the .meta text we wrote -- a plumbing
+    check that the string got built, not that the file we produced decodes to
+    the probe we intended. The binding constraint for this whole module is
+    that our writer emits the bytes and spikeinterface's `read_spikeglx` is
+    the independent oracle, so the oracle needs to be asked, not just the
+    text re-read.
+
+    NP1032, not NP1000: this task's whole point is that the NHP probe is now
+    nameable, and its 103 um column spacing is a value that would be obvious
+    if the reader decoded something else.
+
+    Verified by reading probeinterface 0.3.2's own source
+    (`probeinterface/neuropixels_tools.py`): `read_spikeglx` does not consult
+    `~snsGeomMap` at all. It rebuilds the full probe from `imDatPrb_pn` via
+    `build_neuropixels_probe` -- the same offline table `electrode_rows`
+    reads -- then resolves each recorded channel's electrode as
+    `bank * 384 + channel` from `~imroTbl` and slices to those. So this test
+    exercises a different decode path than the two above (`~imroTbl` plus the
+    offline table, not the `~snsGeomMap` text), even though both ultimately
+    bottom out at the same table.
+
+    Design spec section 11's open item 2 asks whether `read_spikeglx` derives
+    NHP bank geometry correctly, to be verified against `ElectrodeConfig`
+    (§4) -- a DataJoint table this phase has not built yet. This test is
+    narrower than that: one bank (n_ap_channels=4, bank 0 throughout), no
+    `ElectrodeConfig` to check against. It found agreement here. It does not
+    retire the open item -- a second bank is still unverified.
+    """
+    recipe = CI_RECIPE.model_copy(
+        update={"probe_part_number": "NP1032", "n_ap_channels": 4}
+    )
+    truth = build_timeline(recipe)
+    directory = tmp_path / "spikeglx"
+    directory.mkdir()
+    write_spikeglx(directory, recipe, truth)
+
+    recording = spikeinterface.read_spikeglx(directory, stream_id="imec0.ap")
+    decoded = recording.get_channel_locations()
+
+    expected = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    expected_xy = np.array([[row["x_coord"], row["y_coord"]] for row in expected])
+
+    np.testing.assert_allclose(decoded, expected_xy, atol=1e-6)
