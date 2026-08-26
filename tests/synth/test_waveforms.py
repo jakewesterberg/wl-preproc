@@ -52,6 +52,13 @@ def test_a_unit_appears_on_several_channels_with_amplitude_falling_off():
     distance = np.array(
         [np.hypot(s["x_coord"] - unit.x_um, s["y_coord"] - unit.y_um) for s in sites]
     )
+    # A wiring-regression guard, not the falsifiable claim above: under
+    # waveforms.TEMPLATE_MODE = "sphere", the loudest channel is provably the
+    # nearest one FOR THE ALPHA/SPATIAL_DECAY THIS FIXTURE SHIPS (see
+    # TEMPLATE_MODE's own comment for the swept range that guarantee does and
+    # does not cover), so a pass here cannot distinguish a correct footprint
+    # from an incorrect one -- only catch something like transposed axes or a
+    # channel/site mismatch.
     assert distance[int(np.argmax(peak_per_channel))] == distance.min()
 
 

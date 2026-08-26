@@ -98,7 +98,36 @@ def correlated_noise(
 
 
 TEMPLATE_MS_BEFORE = 1.0
-TEMPLATE_MS_AFTER = 2.0
+
+# 2.0 ms (this task's original value) is too short for
+# `generate_templates`'s own default `unit_params`, and this is fixed here
+# rather than merely documented -- fix round 1 found it load-bearing, not
+# cosmetic (see below).
+#
+# `generate_single_fake_waveform` asserts `nrefac + nrepol < nafter`: the
+# repolarization and recovery phases must fit inside `ms_after`.
+# `repolarization_ms` is drawn from `[0.5, 0.8)` ms and `recovery_ms` from
+# `[1.0, 1.5)` ms (spikeinterface's `default_unit_params_range` -- unchanged
+# for these two keys across every git tag checked from 0.101.0 through
+# 0.104.0, so this is not version-fragile). At `sampling_rate_hz=30_000`,
+# the supremum of `nrepol + nrefac` is `23 + 44 = 67` samples, which needs
+# `nafter >= 68`; 2.0 ms gives only `nafter = 60`.
+#
+# Not a rare edge case: measured directly with `TEMPLATE_ALPHA_RANGE_UV`,
+# `TEMPLATE_SPATIAL_DECAY_UM` and `TEMPLATE_MODE` already fixed below, a
+# 100-seed sweep's crash rate rose from 28% at `n_units=1` to 100% at
+# `n_units=20` -- `generate_templates` draws every unit's shape params in one
+# seeded call, so one unit's ~28% own failure rate compounds across a
+# session's worth of units. Phase 2b-2's own `SPATIAL_RECIPE` (Task 5) plants
+# 12, where an unpatched 100-seed sweep crashed 61-75% of the time.
+#
+# 2.5 ms (`nafter = 75`) clears the analytic bound with an 8-sample margin --
+# a mathematical guarantee, not a swept-and-hoped-for one: no draw of
+# `repolarization_ms`/`recovery_ms` from their declared ranges can reach it,
+# so this holds for every seed, not only the ones tested. Verified anyway at
+# `n_units=12` across 200 seeds and `n_units=1/2/3/5/10/20` across 100 seeds
+# each: 0 failures throughout (task-4-report.md, fix round 1).
+TEMPLATE_MS_AFTER = 2.5
 
 # **A recorded bias, not an oversight.** `generate_templates` is documented as
 # "very naive: it generates a mono channel waveform ... and duplicates this same
@@ -145,11 +174,31 @@ TEMPLATE_SPATIAL_DECAY_UM = 60.0
 # mode's loudest channel was not the nearest one. `mode="sphere"` makes the
 # per-channel distance isotropic (`get_ellipse` with a unit sphere, no random
 # shape), and every recorded site shares the same z=0 while one unit's z is
-# fixed across all of them, so distance is a strictly monotonic function of
-# xy distance alone: the geometrically nearest channel is provably the
-# loudest, not just usually. That guarantee is
+# fixed across all of them, so `channel_factors = alpha * exp(-distance /
+# spatial_decay)` alone ranks channels the same way plain xy distance does.
+#
+# That guarantee holds WITHIN this fixture's own constants, not in general --
+# correcting an overclaim from this task's first pass ("provably the
+# loudest", full stop). `generate_templates` also applies a distance-
+# dependent `propagation_speed` delay by default, an FFT shift per channel
+# that `channel_factors` does not account for; fix round 1 re-swept 300
+# draws with alpha/decay moved outside `TEMPLATE_ALPHA_RANGE_UV`/
+# `TEMPLATE_SPATIAL_DECAY_UM` and found 30 mismatches where the loudest
+# channel was not the nearest one. At the constants actually shipped here it
+# held over 500 independent draws, 0 mismatches (task-4-report.md, fix round
+# 1). That is what
 # `test_a_unit_appears_on_several_channels_with_amplitude_falling_off`'s
-# second assertion.
+# second assertion checks: a wiring-regression guard (transposed axes, a
+# channel/site mismatch) true at these constants -- not, on its own, evidence
+# that the spatial footprint is physically correct. See that test's own
+# comment.
+#
+# Sphere mode is not neutral to spec section 3.4's interpolation-bias caveat
+# either -- it compounds it. Flattening the amplitude field to pure radial
+# symmetry is the easiest possible pattern for a linear interpolator to
+# reconstruct, more so than ellipsoid's already-naive per-channel decay law.
+# Section 3.4's "every interpolation result measured on this fixture is an
+# UPPER BOUND" applies doubly here, not just once.
 TEMPLATE_MODE = "sphere"
 
 

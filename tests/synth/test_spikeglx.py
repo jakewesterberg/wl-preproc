@@ -154,6 +154,27 @@ def test_emission_is_deterministic(tmp_path):
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
 
 
+def test_emission_is_deterministic_with_planted_units(tmp_path):
+    """`test_emission_is_deterministic` above only exercises CI_RECIPE, which
+    plants zero units and takes `write_spikeglx`'s else (timing-only) branch.
+    The `if truth.units:` branch -- `render_traces`, and so
+    `generate_templates`/`generate_noise` underneath it -- has its own RNG
+    usage and needs its own determinism check: the global constraint ("every
+    random draw derives from a passed-in seed") is two-sided, not satisfied
+    by covering only one branch. Fix round 1, Finding 3.
+    """
+    recipe = CI_RECIPE.model_copy(update={"n_units": 3})
+    truth = build_timeline(recipe)
+    first, second = tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    a = write_spikeglx(first, recipe, truth)
+    b = write_spikeglx(second, recipe, truth)
+    assert a.read_bytes() == b.read_bytes()
+    nidq = f"{recipe.session_id}.nidq.bin"
+    assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
+
+
 def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
     """Spec section 4.2 routes 16 data lines plus strobe to the NI, and section
     12 picks the PXIe-6353 for exactly the 32 Port 0 lines that needs.
