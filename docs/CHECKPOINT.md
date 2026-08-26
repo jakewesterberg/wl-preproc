@@ -125,6 +125,21 @@ unusable. The ephys tables are custom. See
    explicitly one to pay in October); and the **P6000 benchmark is a spike that runs first**, not a
    Phase 2 deliverable that runs last, because its whole purpose is producing a number that
    justifies a card in a budget request.
+
+   **2026-08-26: 2b-2 is designed, and its front half is built.**
+   `specs/2026-08-26-phase-2b2-reader-and-chain-design.md` designs the reader seam and the
+   reordered preprocessing chain; its own §1 records why the design grew a front half: the
+   synthetic generator had no spatial structure at all, so none of Phase 2b's questions were
+   measurable against it. Correcting that fixture is now built, on `spec/phase-2b2-reader-and-chain`
+   — the generator plants unit identity, multi-channel spike footprints with a real amplitude-decay
+   bias, spatially correlated noise, and an LF band. **`wl_preproc/ephys/` is no longer only
+   `geometry.py`** — `sorter_geometry.py` now sits beside it, deriving Kilosort's
+   `dminx`/`max_channel_distance` from the probe rather than accepting its 32 µm default. The
+   decomposition's §0.1 claim that *"no signal reading exists yet"* **still holds**: neither module
+   reads a sample of signal, and a reader should not infer otherwise from a second file appearing in
+   that directory. **The back half — the reader seam itself, the chain, the Kilosort seam and the
+   paramset work (design spec §4, §5, §6, §8) — is unbuilt and waits on 2b-1**, same as the rest of
+   Phase 2b.
 3. **What 1c-5 is — and it is built.** It decodes the 16-bit event stream, builds the canonical
    trial list, fills per-trial coverage, and **resolves the data-quality tier**.
 

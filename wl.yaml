@@ -13,13 +13,15 @@ summary: >-
 status:
   phase: Phase 1c-5 merged; Phase 2b hardware-blocked
   next: >-
-    write the 2b-2 design spec — the reader seam and the preprocessing chain,
-    the largest unwritten design in Phase 2 and the one piece of it that needs
-    no hardware. The two protocol payload holes that stood here are closed;
-    what remains of that item is wl.works' own half, which this repository
-    cannot do — their caller must send `trajectory_id` and their 18b fake must
-    carry it (docs/pending-wl-works-amendments.md).
-  describes: abe4a91
+    2b-2's back half: the reader seam, the reordered preprocessing chain, the
+    Kilosort seam and the paramset work
+    (docs/superpowers/specs/2026-08-26-phase-2b2-reader-and-chain-design.md
+    §4, §5, §6, §8). Gated on 2b-1, the container seam, which is still
+    hardware-blocked. 2b-2's front half — the synthetic generator's spatial
+    reality: unit identity, multi-channel footprints, correlated noise, an LF
+    band — needed neither container nor GPU and is already built, on
+    `spec/phase-2b2-reader-and-chain`.
+  describes: 583d4ed
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

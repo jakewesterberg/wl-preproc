@@ -64,6 +64,15 @@ roadmap line.
 | **2b-7** | **The characterization registry** | §6.8 | 2b-5, **Phase 1c-5** |
 | **2b-8** | **Depth, RF, and the provisional loop** | §6.9, §6.10 | 2b-7, 2b-3, 2b-6 |
 
+> **2b-2 roughly doubled on 2026-08-26**, and the reason is recorded rather
+> than absorbed. Designing it found that the synthetic generator has no spatial
+> structure at all — one channel per spike, one template, no unit identity,
+> uncorrelated noise, no LF band — so none of §6.1's questions were measurable
+> against it. Correcting the fixture is now this piece's front half; see
+> `2026-08-26-phase-2b2-reader-and-chain-design.md` §1 and §3. The dependency
+> column is unchanged: the front half needs neither container nor GPU and was
+> built while 2b-1 was still hardware-blocked.
+
 ---
 
 ## 2. 2b-0 is a spike, and it runs first
