@@ -81,14 +81,25 @@ def test_dcamplifier_is_deliberately_absent(tmp_path):
 def test_amplifier_is_int16_with_no_offset(tmp_path):
     """One File Per Signal Type stores int16 scaled by 0.195 uV with no offset.
     The traditional .rhs format uses uint16 with a 32768 offset; mixing them
-    shifts every trace by 6.4 mV. The bound is 5 counts, not 500: at 500 a
+    shifts every trace by 6.4 mV. The bound is 20 counts, not 500: at 500 a
     400-count offset — a real mis-scaling, just not the 32768 one — would sail
-    through. Measured mean is about -1 count against a per-sample noise of 31,
-    so 5 is still tens of sigma clear of a false failure."""
+    through.
+
+    20, not the 5 this bound was before Task 6: `correlated_noise` alone
+    measures near-perfectly zero-mean (<0.1 counts), but a real
+    `generate_templates` waveform is not -- spikeinterface's own "naive"
+    per-unit shape averages tens of uV negative over its capture window, a
+    documented property of that model rather than a defect introduced here.
+    Task 6 now spends that bias on every channel a unit's footprint reaches
+    instead of confining it to one placeholder channel, so the whole-file
+    mean moved from about -1 count to about -6. 20 stays comfortably clear
+    of that measured value while remaining three orders of magnitude inside
+    the 32768 this test actually guards against.
+    """
     _, out, _ = emit(tmp_path)
     data = np.fromfile(out / "amplifier.dat", dtype=np.int16)
     assert data.size % STIM_RECIPE.n_ap_channels == 0
-    assert abs(float(np.mean(data))) < 5  # centred near zero, not near 32768
+    assert abs(float(np.mean(data))) < 20  # centred near zero, not near 32768
 
 
 def test_stim_words_carry_amp_settle_after_each_pulse(tmp_path):
@@ -372,3 +383,31 @@ def test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line(tmp_path, re
     assert rising == len(truth.code_words), (
         f"{rising} strobe edges for {len(truth.code_words)} emitted words"
     )
+
+
+def test_an_intan_spike_has_a_footprint_too(tmp_path):
+    """`truth.spikes` must mean one thing regardless of which emitter reads it.
+    A footprint in SpikeGLX and a modulo here is exactly the kind of drift
+    `synth/rhs.py` importing SPIKE_TEMPLATE_UV was written to prevent.
+
+    n_units=1, not STIM_RECIPE's default 3: with 3 units and no modulo
+    collision (3 < n_ap_channels=16), the OLD placeholder already put each
+    unit on its own distinct channel, so "more than one loud channel" held
+    trivially -- three single-channel spikes, not evidence that any one of
+    them has a footprint. One unit isolates the actual claim under test, the
+    same way
+    test_waveforms.test_a_unit_appears_on_several_channels_with_amplitude_falling_off
+    does. Stim windows are excluded via `planted_mask`: STIM_RECIPE's own
+    ARTIFACT_UV artifacts reach the low tens of thousands of counts against a
+    spike's low thousands, so measured unmasked, the artifact channels alone
+    clear "more than one loud channel" regardless of how spikes render.
+    """
+    recipe = STIM_RECIPE.model_copy(update={"n_units": 1, "n_ap_channels": 16})
+    truth = build_timeline(recipe)
+    out = write_rhs(tmp_path, recipe, truth)
+
+    amp = np.fromfile(out / "amplifier.dat", dtype=np.int16)
+    data = amp.reshape(-1, recipe.n_ap_channels).astype(float)
+    clean = np.where(planted_mask(truth, data.shape), np.nan, data)
+    peak_per_channel = np.nanmax(np.abs(clean - np.nanmean(clean, axis=0)), axis=0)
+    assert np.count_nonzero(peak_per_channel > 0.3 * peak_per_channel.max()) > 1

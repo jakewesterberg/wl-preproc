@@ -31,6 +31,7 @@ from wl_sync.barcode import encode
 
 from wl_preproc.ephys.geometry import electrode_rows
 from wl_preproc.synth.recipe import SessionRecipe
+from wl_preproc.synth.rhs import STROBE_WIDTH_S
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
     apply_drift,
@@ -39,9 +40,6 @@ from wl_preproc.synth.timeline import (
 from wl_preproc.synth.truth import GroundTruth
 from wl_preproc.synth.waveforms import correlated_noise, render_traces
 
-SPIKE_TEMPLATE_UV = np.array(
-    [0, -10, -40, -120, -200, -140, -40, 30, 60, 45, 25, 10, 0], dtype=np.float64
-)
 AP_GAIN = 500.0
 NOISE_UV = 8.0
 UV_PER_BIT = 2.34375  # Neuropixels 1.0 at gain 500
@@ -301,12 +299,6 @@ def write_nidq(
     starts them together — and a different origin from the sync box's, so a
     pipeline that never computes an offset fails.
     """
-    # Deferred rather than a top-level import: `rhs.py` imports SPIKE_TEMPLATE_UV
-    # from this module, so a top-level import in the other direction would be a
-    # circular import whose success depends on which of the two a caller
-    # imports first.
-    from wl_preproc.synth.rhs import STROBE_WIDTH_S
-
     strobe_width = max(1, int(round(STROBE_WIDTH_S * NIDQ_SAMPLE_RATE_HZ)))
 
     # `code_word_span_s` -- shared with `synth/rhs.py` -- extends the buffer

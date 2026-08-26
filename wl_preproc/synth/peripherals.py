@@ -57,8 +57,8 @@ def camera_frame_count(recipe: SessionRecipe) -> int:
 
     One definition, because `session.py` needs the same number to decide which
     frames a fault drops and a second copy would be free to disagree — the
-    reason `SYNTH_EPOCH` and `SPIKE_TEMPLATE_UV` are each imported rather than
-    restated.
+    reason `SYNTH_EPOCH` and `waveforms.render_traces` are each imported
+    rather than restated.
     """
     return int((recipe.duration_s + BCAM_PRE_ROLL_S) * CAMERA_FPS)
 

@@ -20,11 +20,6 @@ from wl_sync.barcode import encode
 
 from wl_preproc.synth.recipe import SessionRecipe
 from wl_preproc.synth.rhs_header import write_rhs_header
-# The spike waveform is imported rather than restated: one definition of the
-# shape, scaled per system by that system's own uV-per-bit. A second copy here
-# would be free to drift from the one write_spikeglx plants, and the two
-# emitters are meant to be planting the same ground truth.
-from wl_preproc.synth.spikeglx import SPIKE_TEMPLATE_UV
 from wl_preproc.synth.stim import SETTLE_DURATION_S, pack_stim_word
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
@@ -32,6 +27,7 @@ from wl_preproc.synth.timeline import (
     code_word_span_s,
 )
 from wl_preproc.synth.truth import GroundTruth
+from wl_preproc.synth.waveforms import render_traces
 
 # The RHS controller has its own clock, so recipe.ap_sample_rate_hz — which
 # describes the Neuropixels stream — is deliberately not consulted here. The
@@ -63,6 +59,27 @@ STROBE_DIGITAL_BIT = 1
 # derives from the actual emitter — MonkeyLogic strobes for 500 us within a
 # 750 us code — so this is spec-faithful, not merely convenient.
 STROBE_WIDTH_S = 0.0005
+
+# Intan headstages carry no probe part number, so there is no offline table to
+# read. A linear array is declared here instead -- and declared rather than
+# borrowed from Neuropixels, because an RHS session on NP geometry would be a
+# fixture describing hardware this lab does not have.
+RHS_SITE_PITCH_UM = 50.0
+
+
+def linear_sites(n_channels: int) -> list[dict]:
+    """Rows in `electrode_rows`' shape, so `waveforms.py` needs no RHS branch."""
+    return [
+        {
+            "electrode": index,
+            "shank": 0,
+            "shank_col": 0,
+            "shank_row": index,
+            "x_coord": 0.0,
+            "y_coord": index * RHS_SITE_PITCH_UM,
+        }
+        for index in range(n_channels)
+    ]
 
 
 def write_rhs(
@@ -98,7 +115,7 @@ def write_rhs(
     out = dir_path / f"{recipe.session_id}_rhs"
     out.mkdir(exist_ok=True)
 
-    amplifier = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels))
+    sites = linear_sites(n_channels)
     stim = np.zeros((n_samples, n_channels), dtype=np.uint16)
 
     # The same planted spikes write_spikeglx renders, at this system's scale.
@@ -106,16 +123,23 @@ def write_rhs(
     # in the emitted session, and artifact removal — which fails by
     # over-blanking — would have no planted signal whose survival can be
     # asserted underneath the artifacts.
-    # INTERIM, replaced in Task 6. A modulo rather than a nearest-site lookup
-    # because an Intan headstage has no probe part number and so no geometry to
-    # be nearest to -- Task 6 declares one. The modulo is deliberately obvious
-    # about being a placeholder.
-    template = SPIKE_TEMPLATE_UV / UV_PER_BIT
-    for time_s, unit_id in truth.spikes:
-        start = int((apply_drift(time_s, drift_ppm) + RHS_PRE_ROLL_S) * fs)
-        stop = start + template.size
-        if stop < n_samples:
-            amplifier[start:stop, unit_id % n_channels] += template
+    if truth.units:
+        amplifier = (
+            render_traces(
+                sites,
+                truth.units,
+                truth.spikes,
+                n_samples=n_samples,
+                sampling_rate_hz=fs,
+                noise_uv=NOISE_UV,
+                seed=recipe.seed + 3,
+                time_offset_s=RHS_PRE_ROLL_S,
+                drift_ppm=drift_ppm,
+            )
+            / UV_PER_BIT
+        )
+    else:
+        amplifier = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels))
 
     settle_samples = int(SETTLE_DURATION_S * fs)
     artifact_bits = ARTIFACT_UV / UV_PER_BIT
