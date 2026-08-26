@@ -95,3 +95,135 @@ def correlated_noise(
     # on any of them.
     traces = recording.get_traces(start_frame=0, end_frame=n_samples)
     return np.asarray(traces, dtype=np.float64)
+
+
+TEMPLATE_MS_BEFORE = 1.0
+TEMPLATE_MS_AFTER = 2.0
+
+# **A recorded bias, not an oversight.** `generate_templates` is documented as
+# "very naive: it generates a mono channel waveform ... and duplicates this same
+# waveform on all channel given a simple decay law per unit" -- amplitude decays
+# with distance, waveform SHAPE does not. Interpolating a dead channel is
+# spatial averaging of its neighbours, so against these templates interpolation
+# reconstructs a dead site almost perfectly. Every interpolation result measured
+# on this fixture is therefore an UPPER BOUND, and spec section 3.4 requires
+# that caveat to travel with any such number. Real templates
+# (`fetch_template_object_from_database`) would remove the bias and need the
+# network, which CI and offline reproducibility both rule out here.
+
+# `generate_templates`'s own defaults for these two -- measured, not assumed,
+# the same way NOISE_SPATIAL_DECAY_UM above was. `unit_params=None` draws
+# "alpha" (peak amplitude at zero distance, in the a.u. this module treats as
+# uV) uniform on 100-500, and "spatial_decay" uniform on 20-40 um pre-0.104,
+# 10-45 from 0.104 on -- a range that already moved once inside the declared
+# `spikeinterface>=0.101` floor, so trusting it ties this fixture's amplitude
+# to whichever release happens to be installed.
+#
+# Swept 200+ draws of `place_units`' own placement (xy anywhere across the
+# recorded span, z up to `units.py`'s `_MAX_DISTANCE_UM` = 60 um) through the
+# raw defaults: worst-case peak amplitude at a unit's best channel came out at
+# 0.3-6 uV -- *below* `NOISE_UV` = 8.0, the opposite of a footprint a sorter
+# could use, and not one unlucky seed: the median across the same sweep was
+# only 60-69 uV, barely above noise. That is what
+# `test_rendered_traces_carry_the_planted_spikes_above_the_noise` caught.
+#
+# Re-swept the same way at the values below: worst case 91 uV, 5th percentile
+# 203 uV, median 300-400 uV -- comfortably clear of the noise floor and in the
+# range real best-channel EAP amplitudes occupy (the single-channel fixture
+# this task replaces, `spikeglx.SPIKE_TEMPLATE_UV`, peaked at 200 uV). 60 um
+# for the decay constant is deliberately `_MAX_DISTANCE_UM` again rather than
+# an independent guess: a unit planted at the edge of where `place_units` is
+# allowed to put it still registers a real, attenuated footprint instead of
+# falling below noise entirely.
+TEMPLATE_ALPHA_RANGE_UV = (500.0, 1200.0)
+TEMPLATE_SPATIAL_DECAY_UM = 60.0
+
+# The default `mode="ellipsoid"` draws a random per-unit orientation and
+# squash, which can put some OTHER channel's warped distance ahead of the
+# geometrically nearest one -- measured directly: with the two constants
+# above and `place_units(sites, 1, default_rng(0))`'s own unit, ellipsoid
+# mode's loudest channel was not the nearest one. `mode="sphere"` makes the
+# per-channel distance isotropic (`get_ellipse` with a unit sphere, no random
+# shape), and every recorded site shares the same z=0 while one unit's z is
+# fixed across all of them, so distance is a strictly monotonic function of
+# xy distance alone: the geometrically nearest channel is provably the
+# loudest, not just usually. That guarantee is
+# `test_a_unit_appears_on_several_channels_with_amplitude_falling_off`'s
+# second assertion.
+TEMPLATE_MODE = "sphere"
+
+
+def unit_templates(
+    sites: list[dict],
+    units: tuple[UnitTruth, ...],
+    sampling_rate_hz: float,
+    seed: int,
+) -> np.ndarray:
+    """One multi-channel template per unit, µV, `(n_units, n_samples, n_channels)`.
+
+    **Indexed by `unit_id`, which `place_units` assigns as 0..n-1.** If unit ids
+    ever stop being contiguous and zero-based, `render_traces` indexes the wrong
+    template rather than failing, so the assumption is asserted here.
+    """
+    if [u.unit_id for u in units] != list(range(len(units))):
+        raise ValueError(
+            "unit ids must be contiguous from zero; render_traces indexes "
+            f"templates by unit_id, and got {[u.unit_id for u in units]}"
+        )
+    from spikeinterface.generation import generate_templates
+
+    channel_locations = np.array(
+        [[s["x_coord"], s["y_coord"]] for s in sites], dtype=float
+    )
+    unit_locations = np.array(
+        [[u.x_um, u.y_um, u.z_um] for u in units], dtype=float
+    )
+    return np.asarray(
+        generate_templates(
+            channel_locations=channel_locations,
+            units_locations=unit_locations,
+            sampling_frequency=sampling_rate_hz,
+            ms_before=TEMPLATE_MS_BEFORE,
+            ms_after=TEMPLATE_MS_AFTER,
+            seed=seed,
+            mode=TEMPLATE_MODE,
+            unit_params={
+                "alpha": TEMPLATE_ALPHA_RANGE_UV,
+                "spatial_decay": TEMPLATE_SPATIAL_DECAY_UM,
+            },
+        ),
+        dtype=np.float64,
+    )
+
+
+def render_traces(
+    sites: list[dict],
+    units: tuple,
+    spikes: tuple[tuple[float, int], ...],
+    n_samples: int,
+    sampling_rate_hz: float,
+    noise_uv: float,
+    seed: int,
+    time_offset_s: float,
+    drift_ppm: float,
+) -> np.ndarray:
+    """Correlated noise with every planted spike summed onto it, in µV.
+
+    `drift_ppm` and `time_offset_s` are applied here rather than by the caller
+    so that a spike lands at the same session time in every emitter that renders
+    the same ground truth.
+    """
+    from wl_preproc.synth.timeline import apply_drift
+
+    traces = correlated_noise(sites, n_samples, sampling_rate_hz, noise_uv, seed)
+    templates = unit_templates(sites, units, sampling_rate_hz, seed)
+    before = int(TEMPLATE_MS_BEFORE * sampling_rate_hz / 1000.0)
+
+    for time_s, unit_id in spikes:
+        peak = int((apply_drift(time_s, drift_ppm) + time_offset_s) * sampling_rate_hz)
+        start = peak - before
+        stop = start + templates.shape[1]
+        if start < 0 or stop >= n_samples:
+            continue
+        traces[start:stop, :] += templates[unit_id]
+    return traces

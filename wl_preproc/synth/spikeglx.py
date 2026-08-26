@@ -36,6 +36,7 @@ from wl_preproc.synth.timeline import (
     code_word_span_s,
 )
 from wl_preproc.synth.truth import GroundTruth
+from wl_preproc.synth.waveforms import render_traces
 
 SPIKE_TEMPLATE_UV = np.array(
     [0, -10, -40, -120, -200, -140, -40, 30, 60, 45, 25, 10, 0], dtype=np.float64
@@ -146,30 +147,27 @@ def write_spikeglx(
     n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * fs)
     n_channels = recipe.n_ap_channels + 1
 
-    data = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels))
-
-    # INTERIM, replaced in Task 4: each unit renders on the single site nearest
-    # to it. That is a real position-derived channel rather than the random one
-    # this replaced, but it is still not a footprint -- a spike lands on exactly
-    # one channel, so nothing spatial can be measured yet.
     sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
-    nearest = {
-        unit.unit_id: int(
-            np.argmin(
-                [
-                    (s["x_coord"] - unit.x_um) ** 2 + (s["y_coord"] - unit.y_um) ** 2
-                    for s in sites
-                ]
+    data = np.zeros((n_samples, n_channels), dtype=np.float64)
+    if truth.units:
+        data[:, :-1] = (
+            render_traces(
+                sites,
+                truth.units,
+                truth.spikes,
+                n_samples=n_samples,
+                sampling_rate_hz=fs,
+                noise_uv=NOISE_UV,
+                seed=recipe.seed + 1,
+                time_offset_s=SPIKEGLX_PRE_ROLL_S,
+                drift_ppm=drift_ppm,
             )
+            / UV_PER_BIT
         )
-        for unit in truth.units
-    }
-    template = SPIKE_TEMPLATE_UV / UV_PER_BIT
-    for time_s, unit_id in truth.spikes:
-        start = int((apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S) * fs)
-        stop = start + template.size
-        if stop < n_samples:
-            data[start:stop, nearest[unit_id]] += template
+    else:
+        # Timing-only fixtures plant no units. Paying for template rendering to
+        # validate a barcode is waste, and every Phase 1c recipe is this case.
+        data[:, :-1] = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels - 1))
 
     # The SY channel is emitted and left at zero. `snsApLfSy` declares it, so a
     # reader expects the column and reshaping breaks without it — but nothing
