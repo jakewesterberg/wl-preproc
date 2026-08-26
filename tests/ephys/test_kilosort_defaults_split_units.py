@@ -66,17 +66,18 @@ exactly as measured, per the instruction that produced this file's second
 version: "I would rather learn the claim is wrong than ship a demonstration
 that only works on one draw." It did not replicate past one draw.
 
-The test below is therefore marked `xfail(strict=True)` rather than left to
-fail bare. That marker changes nothing about the assertion or the numbers
-above -- summing across seeds and comparing is still exactly what runs, and
-the direction it currently finds is still exactly what gets asserted. What
-the marker changes is how a known, fully-documented, non-surprising outcome
-is reported, so `pytest -m slow` shows one clearly-labelled `XFAIL` instead of
-a bare `FAILED` that looks like something broke. `strict=True` means an
-unexpected PASS -- a different KS4 version, a different fixture, more seeds
-tipping the balance -- fails loudly rather than silently going green; nobody
-should mistake a stronger future result for confirmation of a marker nobody
-revisited.
+**Task 8 (2026-08-26) turned this from a directional assertion into a
+measurement-recording one, and dropped `xfail(strict=True)`.** `xfail`
+idiomatically promises a known bug with a fix pending; this is not that --
+there is no pending fix, the tie above is the actual result, and asserting
+either direction here would claim more than three seeds settle. The test
+below therefore still sorts all six recordings (three seeds x two settings)
+for real, and asserts only that the machinery worked: every sort completes
+and produces well-formed, ground-truth-matchable output. The per-seed
+fragmentation numbers above -- not a pass or fail on them -- are the record
+of what actually happened; see the design spec's 2026-08-26 section 7
+amendment (`docs/superpowers/specs/2026-08-26-phase-2b2-reader-and-chain-
+design.md`) for what they do and do not settle about the underlying claim.
 
 Whether spec section 7's claim needs revising, whether more seeds would
 settle it, or whether this fixture's noise regime is the wrong instrument for
@@ -272,29 +273,28 @@ def _count_fragmented_units(sorting, truth_by_unit):
     return n_fragmented
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "3-seed aggregate ties (4 fragmented at default vs 4 derived) rather than "
-        "confirming the claim -- see the module docstring's 'How many seeds back this' "
-        "section for the per-seed numbers and why this is reported rather than forced. "
-        "strict=True: an unexpected PASS is news, not confirmation of a stale marker."
-    ),
-)
-def test_the_default_dminx_fragments_more_planted_units_than_derived_spacing(tmp_path):
-    """Sums, across `SEEDS`, how many of the 12 planted units come out
-    fragmented (`_count_fragmented_units`) at the 32 um default versus the
-    derived NP1032 spacing, and asserts the default fragments strictly more
-    in aggregate. See the module docstring for the raw-count result this
-    replaced, the mechanism verified in KS4's own source, and the actual
-    3-seed result (a tie, hence the `xfail` above).
+def test_planted_unit_fragmentation_under_default_and_derived_dminx(tmp_path):
+    """Sorts each of `SEEDS` twice -- once at KS4's 32 um default, once at the
+    NP1032-derived spacing -- and counts, via `_count_fragmented_units`, how
+    many of the 12 planted units land fragmented across output clusters under
+    each setting.
+
+    This is a measurement, not a directional assertion (Task 8, 2026-08-26):
+    the measured 3-seed aggregate is an exact tie (4 fragmented at default, 4
+    derived -- see the module docstring's "How many seeds back this"), and
+    asserting either direction would claim more than that tie supports. What
+    is checked is that the machinery itself worked: all six sorts (3 seeds x
+    2 settings) complete and produce well-formed, ground-truth-matchable
+    output, with each seed's fragmentation count a sane integer in [0, 12].
+    See the module docstring for the raw-count metric this replaced, the
+    mechanism verified in KS4's own source, and the design spec's section 7
+    amendment for what the tie does and does not settle.
     """
     from wl_preproc.synth.spikeglx import SPIKEGLX_PRE_ROLL_S, write_spikeglx
     from wl_preproc.synth.timeline import build_timeline
 
-    total_default = 0
-    total_derived = 0
     per_seed = []
+    n_sorts_completed = 0
 
     for seed in SEEDS:
         recipe = _long_recipe(seed)
@@ -306,17 +306,42 @@ def test_the_default_dminx_fragments_more_planted_units_than_derived_spacing(tmp
 
         derived_spacing = kilosort_spacing(recipe.probe_part_number)
         default_sorting = _sort(seed_dir, "default", dminx=32.0, max_channel_distance=32.0)
+        n_sorts_completed += 1
         derived_sorting = _sort(seed_dir, "derived", **derived_spacing)
+        n_sorts_completed += 1
+
+        # Well-formed output: a content-free sanity check, not a directional
+        # claim. Each sort must produce at least one cluster spikeinterface
+        # can enumerate and fetch a spike train from -- the minimum
+        # `_count_fragmented_units` needs to mean anything, independent of
+        # which way the fragmentation count itself comes out.
+        assert len(default_sorting.get_unit_ids()) > 0, f"seed {seed}: default sort produced no clusters"
+        assert len(derived_sorting.get_unit_ids()) > 0, f"seed {seed}: derived sort produced no clusters"
 
         n_default = _count_fragmented_units(default_sorting, truth_by_unit)
         n_derived = _count_fragmented_units(derived_sorting, truth_by_unit)
-        total_default += n_default
-        total_derived += n_derived
+        assert 0 <= n_default <= len(truth.units), (
+            f"seed {seed}: default fragmentation count {n_default} outside [0, {len(truth.units)}]"
+        )
+        assert 0 <= n_derived <= len(truth.units), (
+            f"seed {seed}: derived fragmentation count {n_derived} outside [0, {len(truth.units)}]"
+        )
         per_seed.append((seed, n_default, n_derived))
 
-    assert total_default > total_derived, (
-        f"expected the 32 um default to fragment more of the 12 planted units than the "
-        f"derived spacing, summed across {len(SEEDS)} seeds; got {total_default} "
-        f"fragmented at the default vs {total_derived} derived "
-        f"(per seed, (seed, default, derived): {per_seed})"
+    # Printed rather than only asserted on: this is the actual result, not a
+    # pass/fail condition. `pytest -m slow -s` shows it; the module docstring
+    # is where it is permanently recorded.
+    print(
+        f"fragmentation per seed (seed, default, derived): {per_seed}; summed: "
+        f"{sum(n for _, n, _ in per_seed)} default, {sum(n for _, _, n in per_seed)} derived"
     )
+
+    # Content-free: confirms the demonstration ran end-to-end (six real KS4
+    # sorts, all well-formed), not a direction. The actual measurement -- a
+    # tie -- lives in the printed line above, the module docstring, and the
+    # design spec's section 7 amendment, not in this assertion.
+    assert n_sorts_completed == 2 * len(SEEDS), (
+        f"expected {2 * len(SEEDS)} sorts to complete (default + derived per seed); "
+        f"got {n_sorts_completed}. per_seed so far: {per_seed}"
+    )
+    assert len(per_seed) == len(SEEDS)

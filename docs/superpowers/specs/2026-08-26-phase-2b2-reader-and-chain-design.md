@@ -435,6 +435,68 @@ where the probe is known.
 
 **The fixture proves it rather than warning about it** (§10).
 
+> **Amended 2026-08-26, after Task 7 built and ran the fixture.** The claim
+> above — a spike straddling both columns becomes two units, and nothing
+> reports it — is a mechanism claim and a consequence claim, and only the
+> first is confirmed. The mechanism is real, verified directly in KS4's own
+> `kilosort/spikedetect.py`: `template_centers()`'s candidate grid at
+> `dminx=32` never places a template at NP1032's 51.5 µm midpoint, so no
+> template can draw channels from both columns; at the derived spacing
+> (`dminx=103`) it does. What this amendment narrows is *"nothing reports
+> it"* — the promise that the fixture would show the consequence, not just
+> confirm the cause.
+>
+> **The first metric tried, raw sorted-cluster count, does not show it, and
+> was abandoned as unfit rather than as evidence against the claim.** At seed
+> 20270317 (60 s, NP1032, 12 planted units), the 32 µm default produced **56**
+> total output clusters against **57** at the derived spacing — the wrong
+> direction — because roughly **44 clusters exist under both settings alike**
+> and trace to no planted unit at all (43 at default, 45 derived; almost
+> certainly the fixture's own spatially correlated background noise, which
+> gets far more real time to cross threshold at 60 s than in the 6.7 s smoke
+> fixture that motivated this section). A population that size and that close
+> between settings swamps a raw-count difference of one, whichever way it
+> points.
+>
+> **The second metric — how many of the 12 planted units land fragmented
+> across ≥2 output clusters, matched to ground truth — is closer to the
+> claim, and it does not replicate across seeds either.** Three seeds,
+> pre-committed before either of the two new ones ran:
+> `20270317 → (3 fragmented at default, 1 derived)`, supporting the claim;
+> `20270318 → (0, 0)`, no signal either way; `20270319 → (1, 3)`, the opposite
+> direction. **Summed: 4 versus 4 — an exact tie**, neither a confirmation nor
+> a refutation.
+>
+> **Why a tie reads as underpowered rather than as a clean null, checked
+> directly rather than assumed.** For the mechanism to fragment a unit at all,
+> that unit's spikes need comparable amplitude on both columns — a unit ten
+> times louder on column 0 is never going to draw a column-103 channel into
+> its cluster, regardless of what the template grid allows. Measured directly
+> against each seed's actual planted positions and rendered templates
+> (best-channel peak amplitude per column, ratio ≤ 1.5×): **3, 4 and 4 of the
+> 12 planted units per seed** sit close enough to cross-column parity for the
+> mechanism to have anything to act on at all — consistent with the **~2.8
+> per seed** that a uniform draw of unit x over [0, 103] against
+> `TEMPLATE_SPATIAL_DECAY_UM = 60` predicts analytically. So roughly three
+> candidate units per seed, out of twelve planted, are even in a position to
+> show the effect — against the same ~44-cluster noise population common to
+> both settings. Three seeds puts at most about ten such units in play total;
+> a tie at that sample size is what low power looks like, not evidence the
+> mechanism is absent.
+>
+> **The honest reading: this fixture, at three seeds, does not reliably
+> demonstrate the mechanism. That is narrower than saying the mechanism is not
+> real** — the mechanism is independently confirmed in KS4's own source, and
+> nothing measured above touches it, only the fixture's power to show its
+> consequence. What would settle it: more planted units per session (raising
+> the ~2.8-per-seed count directly rather than averaging around it), units
+> placed deliberately at the 51.5 µm midpoint instead of drawn uniformly over
+> the full span, or enough additional seeds to move the sum past what a tie
+> this close can produce by chance. None of the three is done here. See §10's
+> matching amendment and `tests/ephys/test_kilosort_defaults_split_units.py`,
+> which now records the measurement rather than asserting a direction it did
+> not find.
+
 ---
 
 ## 8. Paramsets, provenance, and the table that does not exist
@@ -550,6 +612,17 @@ belongs to whoever reads repeatedly — 2b-3, 2b-5 — not here.
   fault is demonstrated, not warned about.
 - **The order is load-bearing.** Reordering the chain must change the result. A
   step order nothing tests is a step order that drifts.
+
+> **Amended 2026-08-26.** The column-splitting bullet's *"the fault is
+> demonstrated, not warned about"* overstated what got measured. The test
+> exists and ran three real seeds
+> (`tests/ephys/test_kilosort_defaults_split_units.py`), sorting each at both
+> settings and counting fragmentation of the twelve planted units against
+> ground truth — and the three-seed sum is an exact tie, 4 fragmented units at
+> the default versus 4 at the derived spacing. That is measured, not
+> demonstrated. See §7's 2026-08-26 amendment for the full numbers, the
+> raw-count metric they replaced, and why a tie at this sample size reads as
+> underpowered rather than as a refutation of §7's claim.
 
 ---
 
