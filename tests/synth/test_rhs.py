@@ -356,6 +356,36 @@ def test_emission_is_deterministic(tmp_path):
     assert (a / "stim.dat").read_bytes() == (b / "stim.dat").read_bytes()
 
 
+def test_emission_is_deterministic_with_no_units(tmp_path):
+    """`test_emission_is_deterministic` above uses STIM_RECIPE, which plants
+    units and so takes `write_rhs`'s `if truth.units:` (spatial) branch --
+    `render_traces`, and so `generate_templates`/`generate_noise` underneath
+    it. That `if`/`else` fork is new as of Task 6; before it there was one
+    unconditional path. The `else` (timing-only) branch has its own RNG draw
+    and needs its own determinism check: the global constraint ("every
+    random draw derives from a passed-in seed") is two-sided, not satisfied
+    by covering only one branch.
+
+    Same reasoning
+    `test_spikeglx.test_emission_is_deterministic_with_planted_units`
+    already states for the mirror-image gap in that module. There the base
+    test covers the timing-only branch and the added one covers spatial,
+    because CI_RECIPE is that file's default fixture; here it is reversed,
+    because STIM_RECIPE -- not CI_RECIPE -- is the fixture the existing test
+    above already uses. Task 6 fix round 1's finding.
+    """
+    recipe = CI_RECIPE
+    assert recipe.n_units == 0  # else branch requires this -- CI_RECIPE's own default
+    truth = build_timeline(recipe)
+    first, second = tmp_path / "one", tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    a = write_rhs(first, recipe, truth)
+    b = write_rhs(second, recipe, truth)
+    assert (a / "amplifier.dat").read_bytes() == (b / "amplifier.dat").read_bytes()
+    assert (a / "stim.dat").read_bytes() == (b / "stim.dat").read_bytes()
+
+
 @pytest.mark.parametrize("recipe", [CI_RECIPE, STIM_RECIPE], ids=["ci", "stim"])
 def test_every_code_word_gets_a_strobe_edge_in_the_rhs_digital_line(tmp_path, recipe):
     """The RHS carries the strobe ONLY -- spec section 4.2, because 16 digital
