@@ -10,12 +10,13 @@ from __future__ import annotations
 import numpy as np
 
 from wl_preproc.contracts.events import Escape, Marker, encode_payload
+from wl_preproc.ephys.geometry import electrode_rows
 from wl_preproc.synth.recipe import SessionRecipe
 from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 from wl_preproc.synth.truth import BlockTruth, GroundTruth, TrialTruth
+from wl_preproc.synth.units import place_units, spike_train
 
 BARCODE_INTERVAL_S = 1.0
-SPIKE_RATE_HZ = 5.0
 CODE_WORD_SPACING_S = 0.001
 
 
@@ -174,16 +175,26 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
 
     _emit(words, recipe.duration_s, Marker.SESSION_END.value)
 
-    n_spikes = int(SPIKE_RATE_HZ * recipe.duration_s * recipe.n_ap_channels)
-    spike_times = np.sort(rng.uniform(0.0, recipe.duration_s, n_spikes))
-    spike_channels = rng.integers(0, recipe.n_ap_channels, n_spikes)
-    spikes = tuple((float(t), int(c)) for t, c in zip(spike_times, spike_channels))
+    # A unit has a position; which channels it appears on is a CONSEQUENCE of
+    # that position, derived downstream by each emitter -- not, as before, an
+    # independent random draw. `sites` is bounded by what this session actually
+    # records (recipe.n_ap_channels), same as `place_units` requires: a unit
+    # placed against the full probe could sit outside the recorded span.
+    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    units = place_units(sites, recipe.n_units, rng)
+    spikes = tuple(
+        (time_s, unit.unit_id)
+        for unit in units
+        for time_s in spike_train(unit, recipe.duration_s, rng)
+    )
+    spikes = tuple(sorted(spikes))
 
     return GroundTruth(
         barcodes=tuple(barcodes),
         code_words=tuple(words),
         trials=tuple(trials),
         blocks=tuple(blocks),
+        units=units,
         spikes=spikes,
         stim_events=tuple(stim_events),
     )

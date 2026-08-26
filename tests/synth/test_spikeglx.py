@@ -113,16 +113,30 @@ def test_spikeglx_pre_roll_differs_from_the_sync_box(tmp_path):
 
 
 def test_planted_spikes_are_present_where_promised(tmp_path):
-    """A large deflection must exist near each planted spike, or the fixture is
-    not testing what it claims to."""
-    truth, bin_path, _ = emit(tmp_path)
-    n_channels = CI_RECIPE.n_ap_channels + 1
+    """A large deflection must exist near each planted spike -- on SOME
+    channel, not necessarily the one named by truth.spikes[0]. Channel-agnostic
+    on purpose: `truth.spikes` now names a unit, not a channel, and Task 4
+    replaces this emitter's single-nearest-site render with a real multi-channel
+    footprint -- a fixed-channel assertion would break again the day a spike
+    stops living on exactly one column.
+
+    CI_RECIPE itself plants no units (n_units defaults to 0, which is what
+    every timing-only fixture wants -- recipe.py's own comment), so this test
+    asks for 3 of them explicitly rather than relying on the shared `emit()`
+    helper.
+    """
+    recipe = CI_RECIPE.model_copy(update={"n_units": 3})
+    truth = build_timeline(recipe)
+    bin_path = write_spikeglx(tmp_path, recipe, truth)
+
+    n_channels = recipe.n_ap_channels + 1
     data = np.fromfile(bin_path, dtype=np.int16).reshape(-1, n_channels)
-    time_s, channel = truth.spikes[0]
-    sample = int((time_s + SPIKEGLX_PRE_ROLL_S) * CI_RECIPE.ap_sample_rate_hz)
-    window = data[sample : sample + 30, channel]
-    baseline = np.std(data[:, channel])
-    assert np.abs(window).max() > 3 * baseline
+    time_s, unit_id = truth.spikes[0]
+    assert unit_id in {u.unit_id for u in truth.units}
+    sample = int((time_s + SPIKEGLX_PRE_ROLL_S) * recipe.ap_sample_rate_hz)
+    window = data[sample : sample + 30, :]
+    baseline = np.std(data, axis=0)
+    assert (np.abs(window).max(axis=0) > 3 * baseline).any()
 
 
 def test_emission_is_deterministic(tmp_path):

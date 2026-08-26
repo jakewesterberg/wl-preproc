@@ -165,18 +165,25 @@ def test_amplifier_shows_an_artifact_where_stim_occurred(tmp_path):
 
 
 def test_planted_spikes_are_present_where_promised(tmp_path):
-    """GroundTruth.spikes describes 240 events; before this they existed in the
-    SpikeGLX stream and nowhere in the RHS one, so generate_session handed
-    callers a truth its own files contradicted. Mirrors the SpikeGLX check."""
+    """Before this, planted spikes existed in the SpikeGLX stream and nowhere
+    in the RHS one, so generate_session handed callers a truth its own files
+    contradicted. Mirrors the SpikeGLX check.
+
+    Channel-agnostic on purpose: `truth.spikes` names a unit, not a channel,
+    and Task 6 replaces this emitter's `unit_id % n_channels` placeholder with
+    a real multi-channel footprint -- an assertion pinned to one particular
+    channel would break again the day a spike stops living on exactly one.
+    """
     truth, out, _ = emit(tmp_path)
     amp = read_amplifier(out)
     mask = planted_mask(truth, amp.shape)
     assert truth.spikes
-    time_s, channel = truth.spikes[0]
+    time_s, unit_id = truth.spikes[0]
+    assert unit_id in {u.unit_id for u in truth.units}
     sample = int((time_s + RHS_PRE_ROLL_S) * RHS_SAMPLE_RATE_HZ)
-    window = amp[sample : sample + 30, channel]
-    baseline = np.std(amp[~mask[:, channel], channel])
-    assert np.abs(window).max() > 3 * baseline
+    window = amp[sample : sample + 30, :]
+    baseline = np.array([np.std(amp[~mask[:, c], c]) for c in range(amp.shape[1])])
+    assert (np.abs(window).max(axis=0) > 3 * baseline).any()
 
 
 def test_a_pulse_straddling_the_end_of_the_buffer_is_truncated_not_fatal(tmp_path):

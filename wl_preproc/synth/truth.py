@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.synth.stim import StimEvent
+from wl_preproc.synth.units import UnitTruth
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,5 +35,6 @@ class GroundTruth:
     code_words: tuple[tuple[float, int], ...]    # (session-time seconds, 16-bit word)
     trials: tuple[TrialTruth, ...]
     blocks: tuple[BlockTruth, ...]
-    spikes: tuple[tuple[float, int], ...]        # (session-time seconds, channel)
+    units: tuple[UnitTruth, ...]
+    spikes: tuple[tuple[float, int], ...]        # (session-time seconds, UNIT id)
     stim_events: tuple[StimEvent, ...] = ()

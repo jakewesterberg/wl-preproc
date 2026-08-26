@@ -148,12 +148,28 @@ def write_spikeglx(
 
     data = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels))
 
+    # INTERIM, replaced in Task 4: each unit renders on the single site nearest
+    # to it. That is a real position-derived channel rather than the random one
+    # this replaced, but it is still not a footprint -- a spike lands on exactly
+    # one channel, so nothing spatial can be measured yet.
+    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    nearest = {
+        unit.unit_id: int(
+            np.argmin(
+                [
+                    (s["x_coord"] - unit.x_um) ** 2 + (s["y_coord"] - unit.y_um) ** 2
+                    for s in sites
+                ]
+            )
+        )
+        for unit in truth.units
+    }
     template = SPIKE_TEMPLATE_UV / UV_PER_BIT
-    for time_s, channel in truth.spikes:
+    for time_s, unit_id in truth.spikes:
         start = int((apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S) * fs)
         stop = start + template.size
         if stop < n_samples:
-            data[start:stop, channel] += template
+            data[start:stop, nearest[unit_id]] += template
 
     # The SY channel is emitted and left at zero. `snsApLfSy` declares it, so a
     # reader expects the column and reshaping breaks without it — but nothing

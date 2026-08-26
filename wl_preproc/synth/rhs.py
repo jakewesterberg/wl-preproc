@@ -106,12 +106,16 @@ def write_rhs(
     # in the emitted session, and artifact removal — which fails by
     # over-blanking — would have no planted signal whose survival can be
     # asserted underneath the artifacts.
+    # INTERIM, replaced in Task 6. A modulo rather than a nearest-site lookup
+    # because an Intan headstage has no probe part number and so no geometry to
+    # be nearest to -- Task 6 declares one. The modulo is deliberately obvious
+    # about being a placeholder.
     template = SPIKE_TEMPLATE_UV / UV_PER_BIT
-    for time_s, channel in truth.spikes:
+    for time_s, unit_id in truth.spikes:
         start = int((apply_drift(time_s, drift_ppm) + RHS_PRE_ROLL_S) * fs)
         stop = start + template.size
         if stop < n_samples:
-            amplifier[start:stop, channel] += template
+            amplifier[start:stop, unit_id % n_channels] += template
 
     settle_samples = int(SETTLE_DURATION_S * fs)
     artifact_bits = ARTIFACT_UV / UV_PER_BIT

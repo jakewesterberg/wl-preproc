@@ -105,6 +105,12 @@ class SessionRecipe(BaseModel):
     # lab's probe is NP1032, whose columns sit 103 um apart, and spec section 7
     # turns on a fixture being able to say so.
     probe_part_number: str = "NP1000"
+
+    # How many neurons this session contains. Zero is legal and is what every
+    # timing-only fixture wants: Phase 1c's recipes care about barcodes and
+    # event codes, and paying for template rendering to validate a barcode is
+    # waste. The spatial recipes below set it deliberately.
+    n_units: int = Field(default=0, ge=0)
     channels: tuple[ChannelSpec, ...] = ()
     ap_sample_rate_hz: float
     seed: int
@@ -255,6 +261,11 @@ STIM_RECIPE = SessionRecipe(
     ),
     montages=(MontageSpec(start_s=0.0, end_s=12.0),),
     n_ap_channels=4,
+    # Non-zero, unlike CI_RECIPE: rhs.py's own comment on the spike-planting
+    # loop says artifact removal needs "planted signal whose survival can be
+    # asserted underneath the artifacts" -- true only if a unit exists to fire
+    # it. n_units's own default of 0 would silently stop planting any.
+    n_units=3,
     ap_sample_rate_hz=30_000.0,
     seed=7,
 )
