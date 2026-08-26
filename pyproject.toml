@@ -124,3 +124,16 @@ filterwarnings = [
     "ignore:datajoint.migrate is deprecated and is scheduled for removal in DataJoint 2.4 or 2.5. Complete your schema migrations while on DataJoint 2.3 or earlier.:DeprecationWarning:datajoint$",
     "ignore:No datajoint.json found. Using defaults and environment variables. Run :UserWarning:datajoint\\.settings$",
 ]
+# Registered so pytest does not warn "unknown marker" and so `--markers` states
+# in one place what it means. `slow` is for a test that runs a real sorter --
+# spec section 7's tests/ephys/test_kilosort_defaults_split_units.py, minutes
+# not seconds on CPU -- rather than anything about the rest of this fast suite.
+markers = ["slow: runs a real sorter; excluded from CI, run by hand"]
+# Deselects `slow` by default. CI runs bare `pytest -v` and, separately,
+# `python -m pytest tests/schema/test_guardrails.py -v` (.github/workflows/ci.yml
+# and the Guardrails step) -- neither passes `-m`, so both rely on this default
+# to keep a real KS4 sort out of CI. Run the slow test by hand with
+# `pytest -m slow`: pytest appends `addopts` ahead of the real command line, and
+# an explicit `-m` there replaces the ini's rather than ANDing with it, so
+# `-m slow` on the command line overrides this `not slow`, not narrows it further.
+addopts = "-m 'not slow'"
