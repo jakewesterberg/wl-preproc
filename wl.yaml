@@ -13,9 +13,13 @@ summary: >-
 status:
   phase: Phase 1c-5 merged; Phase 2b hardware-blocked
   next: >-
-    close the two holes in the wl.works protocol payload, which are blocking
-    that repository's tests, then write the 2b-2 design spec
-  describes: 30fcdc6
+    write the 2b-2 design spec — the reader seam and the preprocessing chain,
+    the largest unwritten design in Phase 2 and the one piece of it that needs
+    no hardware. The two protocol payload holes that stood here are closed;
+    what remains of that item is wl.works' own half, which this repository
+    cannot do — their caller must send `trajectory_id` and their 18b fake must
+    carry it (docs/pending-wl-works-amendments.md).
+  describes: abe4a91
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
