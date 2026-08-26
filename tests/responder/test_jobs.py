@@ -732,22 +732,32 @@ def test_accept_normalises_an_aware_datetime_anywhere_in_the_stored_payload(
     assert len(schema_request.Request & {"idempotency_key": "jbpar01-k1"}) == 1
 
 
-def test_accept_rejects_an_out_of_range_montage_id(landed_session, prefix):
-    """I2: `core.Montage.montage_id` is a signed `tinyint` (-128..127)."""
+def test_an_out_of_range_montage_id_is_refused_with_the_field_named(landed_session, prefix):
+    """I2: `core.Montage.montage_id` is a signed `tinyint` (-128..127).
+
+    **The refusal moved on 2026-08-26 and this test moved with it.** It used to
+    happen inside `accept()`; `contracts.protocol.MontageBoundary` now carries
+    the bound, so the request cannot be CONSTRUCTED with a montage id this
+    column cannot hold. Both are the same answer on the wire -- `handler.py`
+    maps `pydantic.ValidationError` (a `ValueError` subclass) and this module's
+    own `ValueError` to the same `422` -- so the `raises` block now spans the
+    build as well as the call, and asserts what a caller can actually observe:
+    a `ValueError` naming the offending field, from one of the two.
+    """
     from wl_preproc.responder.jobs import accept
 
     subject = "jbrng01"
     naive_dt = datetime.datetime(2027, 5, 17, 9, 0)
     landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=99999,
-        idempotency_key="jbrng01-k1",
-        montage_boundaries=[{"montage_id": 99999, "start_s": 0.0, "end_s": 12.0}],
-    )
 
     with pytest.raises(ValueError, match="montage_id"):
+        job = _request(
+            subject=subject,
+            session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+            montage_id=99999,
+            idempotency_key="jbrng01-k1",
+            montage_boundaries=[{"montage_id": 99999, "start_s": 0.0, "end_s": 12.0}],
+        )
         accept(job, prefix=prefix)
 
 
@@ -819,25 +829,29 @@ def test_accept_rejects_an_oversized_works_block_id(landed_session, prefix):
         accept(job, prefix=prefix)
 
 
-def test_accept_rejects_a_non_finite_start_s_or_end_s(landed_session, prefix):
+def test_a_non_finite_start_s_or_end_s_is_refused_with_the_field_named(landed_session, prefix):
     """I2: `start_s`/`end_s` are `double` -- unbounded in magnitude for any
     realistic session-time-seconds value, but a non-finite float (here,
-    infinity) or a wrong type is exactly the "syntactically fine Python
-    value, wrong for the column" case this whole guard class exists for."""
+    infinity) or a wrong type is exactly the "syntactically fine Python value,
+    wrong for the column" case this whole guard class exists for.
+
+    Refusal moved to `MontageBoundary` on 2026-08-26; see the montage-id test
+    above for why the `raises` block now spans the build as well as the call.
+    """
     from wl_preproc.responder.jobs import accept
 
     subject = "jbrng05"
     naive_dt = datetime.datetime(2027, 5, 21, 9, 0)
     landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbrng05-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": float("inf")}],
-    )
 
     with pytest.raises(ValueError, match="end_s"):
+        job = _request(
+            subject=subject,
+            session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+            montage_id=0,
+            idempotency_key="jbrng05-k1",
+            montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": float("inf")}],
+        )
         accept(job, prefix=prefix)
 
 

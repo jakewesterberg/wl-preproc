@@ -113,7 +113,7 @@ from __future__ import annotations
 import datetime
 import math
 
-from wl_preproc.contracts.protocol import JobRequest
+from wl_preproc.contracts.protocol import JobRequest, MontageBoundary
 from wl_preproc.ingest import landing
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.schema import request as schema_request
@@ -294,26 +294,32 @@ def _require_landed_session(session_key: dict) -> None:
         )
 
 
-def _build_montage_rows(session_key: dict, montage_boundaries: list[dict]) -> list[dict]:
-    """`Montage` rows this request WOULD write -- validated, not yet
-    inserted. See `accept()`'s two-phase structure (review C1)."""
-    rows = []
-    for boundary in montage_boundaries:
-        b_montage_id = boundary["montage_id"]
-        _reject_out_of_range_int(
-            b_montage_id, name="montage_boundaries[].montage_id", bounds=_MONTAGE_ID_RANGE
-        )
-        _reject_non_finite(boundary["start_s"], name="montage_boundaries[].start_s")
-        _reject_non_finite(boundary["end_s"], name="montage_boundaries[].end_s")
-        rows.append(
-            {
-                **session_key,
-                "montage_id": b_montage_id,
-                "start_s": boundary["start_s"],
-                "end_s": boundary["end_s"],
-            }
-        )
-    return rows
+def _build_montage_rows(
+    session_key: dict, montage_boundaries: list[MontageBoundary]
+) -> list[dict]:
+    """`Montage` rows this request WOULD write -- not yet inserted. See
+    `accept()`'s two-phase structure (review C1).
+
+    **The three field validations this function used to perform are gone, and
+    they were not dropped.** `contracts.protocol.MontageBoundary` now carries
+    the tinyint bound and both finite-number checks, so a boundary violating
+    any of them cannot be constructed and can never reach here. Keeping the
+    calls would have been a check that cannot fire, reading as protection while
+    protecting nothing. The status on the wire is unchanged: `handler.py` maps
+    `pydantic.ValidationError` and this module's `ValueError` to the same `422`
+    -- and `ValidationError` IS a `ValueError` subclass, so even a caller
+    catching the old type still catches the new one. What the move buys is that
+    `docs/schemas/job_request.json` now carries the constraints, where the
+    other implementer of this protocol can read them."""
+    return [
+        {
+            **session_key,
+            "montage_id": boundary.montage_id,
+            "start_s": boundary.start_s,
+            "end_s": boundary.end_s,
+        }
+        for boundary in montage_boundaries
+    ]
 
 
 def _build_block_rows(session_key: dict, blocks: list[dict]) -> list[dict]:

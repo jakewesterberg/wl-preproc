@@ -18,16 +18,14 @@
         },
         "montage_boundaries": {
           "items": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/$defs/MontageBoundary"
           },
           "title": "Montage Boundaries",
           "type": "array"
         },
         "probes": {
           "items": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/$defs/ProbeEntry"
           },
           "title": "Probes",
           "type": "array"
@@ -53,6 +51,69 @@
         "task_types"
       ],
       "title": "MetadataBundle",
+      "type": "object"
+    },
+    "MontageBoundary": {
+      "additionalProperties": false,
+      "description": "One maximal interval with no probe movement and no bank change, as\nwl.works asserts it -- design spec section 8.3's \"recording montage\".\n\nTyped rather than `dict[str, Any]` because this payload is a frozen\ninterface with a second implementer: section 11.2 records that wl.works'\n18b tests are contract tests against a *fake* wl-preproc, and a fake can\nonly be built from what the contract writes down. An untyped list exports\nto `{\"type\": \"object\", \"additionalProperties\": true}`, which tells that\nimplementer nothing at all -- while `responder/jobs.py` validated these\nfields anyway, in a module no other repository reads.",
+      "properties": {
+        "end_s": {
+          "title": "End S",
+          "type": "number"
+        },
+        "montage_id": {
+          "maximum": 127,
+          "minimum": -128,
+          "title": "Montage Id",
+          "type": "integer"
+        },
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "montage_id",
+        "start_s",
+        "end_s"
+      ],
+      "title": "MontageBoundary",
+      "type": "object"
+    },
+    "ProbeEntry": {
+      "additionalProperties": false,
+      "description": "One penetration: which probe, which insertion, and which trajectory it\nran against. Section 11.2's payload block, verbatim: *\"probe serials +\ninsertions, trajectory_id per insertion\"*.",
+      "properties": {
+        "insertion_number": {
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Insertion Number",
+          "type": "integer"
+        },
+        "serial": {
+          "maxLength": 32,
+          "title": "Serial",
+          "type": "string"
+        },
+        "trajectory_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trajectory Id"
+        }
+      },
+      "required": [
+        "serial",
+        "insertion_number"
+      ],
+      "title": "ProbeEntry",
       "type": "object"
     }
   },

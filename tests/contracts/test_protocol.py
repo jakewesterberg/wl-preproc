@@ -122,7 +122,7 @@ def test_job_request_carries_the_metadata_bundle():
         ),
     )
     assert request.metadata.subject == "pico"
-    assert request.metadata.montage_boundaries[0]["montage_id"] == 1
+    assert request.metadata.montage_boundaries[0].montage_id == 1
 
 
 def test_job_request_rejects_unknown_key():
@@ -143,4 +143,134 @@ def test_job_request_rejects_unknown_key():
                 },
                 "priorty": 3,
             }
+        )
+
+
+# --- The two payload holes, closed 2026-08-26. -------------------------------
+#
+# Both were named in `handoffs/2026-08-23-next-session-phase-2b-is-hardware-
+# blocked.md` and both are the same fault in two places: a `list[dict[str,
+# Any]]` records nothing a second implementer can build against. Design spec
+# section 11.2 makes this payload a frozen interface precisely because wl.works'
+# 18b tests are contract tests against a FAKE wl-preproc, and a fake can only be
+# built from what the contract writes down. An untyped list exports to
+# `{"type": "object", "additionalProperties": true}` -- which is to say, it
+# exports nothing.
+
+
+def _bundle(**overrides):
+    """A minimal valid bundle, so each test below varies exactly one thing."""
+    return {
+        "blocks": [],
+        "montage_boundaries": [{"montage_id": 1, "start_s": 0.0, "end_s": 3600.0}],
+        "probes": [{"serial": "NP-1234", "insertion_number": 1}],
+        "experimenter": "jw",
+        "subject": "pico",
+        "task_types": [],
+        **overrides,
+    }
+
+
+def test_a_montage_boundary_is_a_model_not_a_bare_dict():
+    bundle = MetadataBundle.model_validate(_bundle())
+    assert bundle.montage_boundaries[0].montage_id == 1
+    assert bundle.montage_boundaries[0].start_s == 0.0
+    assert bundle.montage_boundaries[0].end_s == 3600.0
+
+
+def test_a_montage_id_beyond_tinyint_is_refused_at_the_contract():
+    """`core.Montage.montage_id` is a tinyint. 128 does not fit, and the
+    refusal belongs in the exported schema where wl.works can see it -- not
+    only in `responder/jobs.py`, which nobody outside this repository reads."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(montage_boundaries=[{"montage_id": 128, "start_s": 0.0, "end_s": 1.0}])
+        )
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_montage_boundary_is_refused(bad):
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(montage_boundaries=[{"montage_id": 0, "start_s": bad, "end_s": 1.0}])
+        )
+
+
+def test_a_montage_boundary_missing_a_field_is_refused():
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(montage_boundaries=[{"montage_id": 0, "start_s": 0.0}])
+        )
+
+
+def test_an_unknown_key_on_a_montage_boundary_is_refused():
+    """`extra="forbid"` everywhere else in this module. A frozen interface that
+    silently swallows a key it does not know is how two implementations drift
+    apart while both look correct."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(
+                montage_boundaries=[
+                    {"montage_id": 0, "start_s": 0.0, "end_s": 1.0, "bank": "A"}
+                ]
+            )
+        )
+
+
+def test_a_probe_entry_carries_the_trajectory_it_ran_against():
+    """Design spec section 11.2's payload block lists `trajectory_id per
+    insertion`; wl-works' trajectory-identity design section 8.1 says the same
+    from the other side. `ephys.ProbeInsertion.trajectory_id` has been waiting
+    for it since Phase 2a."""
+    bundle = MetadataBundle.model_validate(
+        _bundle(probes=[{"serial": "NP-1234", "insertion_number": 1, "trajectory_id": "T-0042"}])
+    )
+    assert bundle.probes[0].trajectory_id == "T-0042"
+
+
+def test_a_penetration_with_no_trajectory_omits_it_rather_than_inventing_one():
+    """Ruled 2026-08-26: probes are sometimes inserted along a trajectory that
+    was never planned, so there is nothing to name. Absence is a legitimate
+    permanent state, not only a not-yet."""
+    bundle = MetadataBundle.model_validate(_bundle())
+    assert bundle.probes[0].trajectory_id is None
+
+
+def test_a_trajectory_id_longer_than_the_column_is_refused():
+    """`ephys.ProbeInsertion.trajectory_id` is varchar(64). A 65th character is
+    silently truncated by MySQL in non-strict mode, which would store a
+    reference to a DIFFERENT trajectory than the one the ELN named."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(probes=[{"serial": "NP-1", "insertion_number": 1, "trajectory_id": "T" * 65}])
+        )
+
+
+def test_an_unknown_key_on_a_probe_entry_is_refused():
+    """The case this exists for: `trajectroy_id`. Under a bare dict it rides
+    along unread, and every insertion silently records no trajectory."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(probes=[{"serial": "NP-1", "insertion_number": 1, "trajectroy_id": "T-1"}])
+        )
+
+
+def test_a_probe_entry_requires_its_serial_and_insertion_number():
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(_bundle(probes=[{"serial": "NP-1"}]))
+
+
+def test_a_probe_serial_longer_than_the_column_is_refused():
+    """`ephys.Probe.probe_serial` is varchar(32)."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(probes=[{"serial": "N" * 33, "insertion_number": 1}])
+        )
+
+
+def test_an_insertion_number_beyond_tinyint_unsigned_is_refused():
+    """`ephys.ProbeInsertion.insertion_number` is tinyint unsigned."""
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(probes=[{"serial": "NP-1", "insertion_number": 256}])
         )

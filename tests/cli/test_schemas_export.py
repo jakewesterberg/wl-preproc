@@ -67,3 +67,27 @@ def test_module_is_runnable_with_dash_m(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "session_manifest.json").exists()
+
+
+def test_job_request_schema_carries_trajectory_id_for_wl_works(tmp_path):
+    """The whole point of typing the payload: `docs/schemas/job_request.json`
+    is what wl.works' 18b contract tests build their fake against, so a field
+    that exists only on the Python model is a field the other implementer
+    cannot see."""
+    export_schemas(tmp_path)
+    schema = json.loads((tmp_path / "job_request.json").read_text())
+    trajectory = schema["$defs"]["ProbeEntry"]["properties"]["trajectory_id"]
+    assert {"maxLength": 64, "type": "string"} in trajectory["anyOf"]  # varchar(64)
+    assert {"type": "null"} in trajectory["anyOf"]  # a penetration may have none
+    assert trajectory["default"] is None
+    assert "trajectory_id" not in schema["$defs"]["ProbeEntry"]["required"]
+
+
+def test_job_request_schema_carries_the_montage_bounds(tmp_path):
+    """A constraint enforced only in `responder/jobs.py` is invisible outside
+    this repository. These belong in the published artifact."""
+    export_schemas(tmp_path)
+    schema = json.loads((tmp_path / "job_request.json").read_text())
+    boundary = schema["$defs"]["MontageBoundary"]
+    assert boundary["properties"]["montage_id"]["maximum"] == 127  # tinyint
+    assert boundary["additionalProperties"] is False

@@ -50,6 +50,38 @@ exists.
 **Depends on** `wl-works` `docs/superpowers/specs/2026-08-22-trajectory-identity-design.md`
 (committed there as `38de8d6`), which defines what a `trajectory_id` is.
 
+**2026-08-26 — this repository's half is built, and the shape is now frozen.**
+`contracts/protocol.py`'s `MetadataBundle.probes` was `list[dict[str, Any]]`, which recorded
+nothing a second implementer could build against; it is now `list[ProbeEntry]`, and
+`docs/schemas/job_request.json` carries the field. What wl.works must send, per insertion:
+
+```json
+{ "serial": "NP-1234", "insertion_number": 1, "trajectory_id": "T-0042" }
+```
+
+`serial` is `varchar(32)` and required; `insertion_number` is `tinyint unsigned` and required;
+`trajectory_id` is `varchar(64)`, **optional, and null is legitimate rather than provisional** —
+see below. Unknown keys are refused (`extra="forbid"`), so a misspelled `trajectroy_id` is a `422`
+rather than an insertion that silently records no trajectory.
+
+**One ruling was needed to write the field, and it corrects something we had already written.**
+Asked and answered 2026-08-26: *"there will be instances where a probe is inserted along a
+non-planned trajectory."* `schema/ephys.py` had asserted that *"a penetration made before any
+post-operative scan legitimately names a `planned` one; null means only 'not recorded'"* — which
+assumes a planned trajectory always exists to fall back on. It does not. That comment is corrected
+in place, with the reversal recorded.
+
+**This narrows their §9 item 1 rather than closing it.** Their open question is which stance
+`item_insertion.trajectoryId` points at, and it warns against *"a null that means three things"*.
+That discrimination is still theirs to make; what is settled is only that **wl-preproc will never
+attempt it** — this host records what arrived and infers nothing from an absence. A missing
+`trajectory_id` is explicitly **not** a quarantine condition: §8.3's *"no insertion record → no
+canonical"* is about a missing insertion, which hides a probe move; an insertion naming no
+trajectory hides nothing.
+
+**Still open on their side**, and unchanged by the above: their caller must actually send the
+field, and row 18b's fake wl-preproc must carry it.
+
 ---
 
 # CLOSED — item 9, the block and montage precondition

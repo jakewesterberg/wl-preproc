@@ -119,11 +119,32 @@ class ProbeInsertion(dj.Manual):
     # primary-key material here.
     #
     # It names WHICHEVER trajectory the penetration actually ran against, and
-    # the planned/achieved stance is read through the reference. A penetration
-    # made before any post-operative scan legitimately names a `planned` one;
-    # null means only "not recorded". See wl-works
+    # the planned/achieved stance is read through the reference. See wl-works
     # 2026-08-22-trajectory-identity-design.md section 4, and this phase's
     # design spec section 5.2.
+    #
+    # **Two clauses here were false and are corrected rather than quietly
+    # edited.** They read: "A penetration made before any post-operative scan
+    # legitimately names a `planned` one; null means only 'not recorded'."
+    # Ruled 2026-08-26: probes are sometimes inserted along a trajectory that
+    # was never planned. Such a penetration has no planned trajectory to name --
+    # none was ever designed -- and no achieved one either until a
+    # post-operative scan mints it, so there are cases with nothing to put here
+    # at all. Null therefore does NOT mean only "not recorded"; it also covers a
+    # penetration for which no trajectory resource exists.
+    #
+    # This host does not distinguish them and must not try. Null means "no
+    # trajectory arrived with the request" and nothing further -- the same
+    # discipline as `core.Block`'s "recording an assertion is not authoring it".
+    # wl-works' section 9 item 1 leaves the discrimination open on their side
+    # and warns against "a null that means three things"; their item 2 is why
+    # the no-planned-parent case is legitimate rather than an error.
+    #
+    # **Not a quarantine condition.** Design spec section 8.3's "no insertion
+    # record -> no canonical" is about a missing INSERTION, which hides a probe
+    # move and would have the sort run straight across it. An insertion naming
+    # no trajectory hides nothing: only the electrode -> CT/MR chain is
+    # unavailable for that penetration.
     trajectory_id = null : varchar(64)
     works_insertion_id = null : varchar(64)
     """
