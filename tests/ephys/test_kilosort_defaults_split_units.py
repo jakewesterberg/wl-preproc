@@ -4,8 +4,90 @@ Marked `slow` and excluded from CI. It exists because spec section 7 rules that
 the fixture should demonstrate the fault rather than warn about it, and a
 demonstration that never runs is a warning with extra steps -- so run it by hand
 whenever the probe, the geometry module or the KS4 version changes.
+
+**Fix round 1: the metric changed, not the finding.** The first version of this
+test compared raw `len(sorting.get_unit_ids())` between the two settings. That
+FAILED, and stayed failed on re-run: at seed 20270317 (60 s, 12 planted units)
+the 32 um default produced 56 total units, the derived spacing 57 -- the wrong
+direction. Matching sorter output back to ground truth explained why rather
+than excusing it: ~44 output clusters trace to no planted unit at all, under
+EITHER setting (43 at default, 45 derived) -- almost certainly noise-driven,
+since this fixture's spatially correlated background noise (`waveforms.py`'s
+`NOISE_SPATIAL_DECAY_UM`) gets about 9x more real time to cross threshold at
+60 s than in the un-widened 6.7 s smoke test. A population this large and this
+close between the two settings swamps a raw-count difference of one,
+regardless of which way that one difference points. Raw cluster count is a
+proxy for "planted units get split"; a metric a confound this size dominates
+cannot demonstrate the claim either way.
+
+This version measures the claim directly instead of inferring it from a
+population count: for each of the 12 planted units, does its own spike train
+land substantially in more than one output cluster? See
+`_count_fragmented_units` and `FRAGMENT_SHARE_THRESHOLD`. At seed 20270317,
+3/12 planted units are fragmented at the default vs 1/12 derived (mean
+dominant-cluster purity 0.871 -> 0.903 -- see the fix-round report for the
+full per-unit table). That direction is not a threshold artefact: swept
+`FRAGMENT_SHARE_THRESHOLD` from 0.10 to 0.30 against this seed's already-
+computed output and default fragmented strictly more units than derived at
+every value through 0.25 (3-vs-2 at 0.10/0.15, 3-vs-1 at 0.20/0.25),
+collapsing to a tie only at 0.30, where the threshold is loose enough to call
+almost nothing a fragment.
+
+**Why the derived spacing helps at all** -- verified directly in KS4's own
+`kilosort/spikedetect.py`, not assumed. `template_centers()` lays out
+candidate template-centre x-positions as
+`linspace(xmin, xmax, round((xmax-xmin)/(dminx/2))+1)`. For NP1032 (columns at
+0 and 103 um): the default's dminx=32 grid is the 7 columns
+`[0, 17.2, 34.3, 51.5, 68.7, 85.8, 103]`, of which
+`igood = ds[0,:] <= max_channel_distance**2` (also in `spikedetect.py`) keeps
+only the 4 nearest a real column -- `{0, 17.2, 85.8, 103}` -- never the 51.5 um
+midpoint. The derived dminx=103 grid collapses to exactly `[0, 51.5, 103]`,
+and now the midpoint survives the (103 um) distance filter too.
+`nearest_chans` (10, untouched by this task) then picks each surviving grid
+column's 10 nearest REAL channels by raw distance: at every x except the exact
+midpoint, NP1032's 20 um row pitch means same-column neighbours always win, so
+only the midpoint column ever draws channels from BOTH NP1032 columns -- and
+post-filter, it exists only under the derived setting. This is a narrow
+bridge, not "every channel pair gets compared" -- which is also why the
+per-unit effect is not perfectly monotonic (the fix-round report has a unit
+that improves under derived and one, at the same seed, that gets worse).
+
+**How many seeds back this, and what they actually showed.** Three:
+20270317 (`SPATIAL_RECIPE`'s own seed), 20270318 and 20270319 -- the next two
+in this repository's own date-seed convention (`CI_RECIPE`=20270314 through
+`SPATIAL_RECIPE`=20270317 in `synth/recipe.py`), chosen before any of the two
+new ones was run, not picked afterwards for agreeing with seed 20270317.
+
+The aggregate does NOT hold. Per seed, (fragmented at default, fragmented
+derived): 20270317 -> (3, 1), supporting the claim; 20270318 -> (0, 0), no
+signal either way; 20270319 -> (1, 3), the OTHER direction. Summed: 4
+fragmented at the default, 4 derived -- a tie, not a win. This is reported
+exactly as measured, per the instruction that produced this file's second
+version: "I would rather learn the claim is wrong than ship a demonstration
+that only works on one draw." It did not replicate past one draw.
+
+The test below is therefore marked `xfail(strict=True)` rather than left to
+fail bare. That marker changes nothing about the assertion or the numbers
+above -- summing across seeds and comparing is still exactly what runs, and
+the direction it currently finds is still exactly what gets asserted. What
+the marker changes is how a known, fully-documented, non-surprising outcome
+is reported, so `pytest -m slow` shows one clearly-labelled `XFAIL` instead of
+a bare `FAILED` that looks like something broke. `strict=True` means an
+unexpected PASS -- a different KS4 version, a different fixture, more seeds
+tipping the balance -- fails loudly rather than silently going green; nobody
+should mistake a stronger future result for confirmation of a marker nobody
+revisited.
+
+Whether spec section 7's claim needs revising, whether more seeds would
+settle it, or whether this fixture's noise regime is the wrong instrument for
+this specific comparison, is not this file's call. It measures; it does not
+rule.
 """
 
+import os
+from collections import Counter
+
+import numpy as np
 import pytest
 
 from wl_preproc.contracts.events import TaskTypeCode
@@ -16,53 +98,81 @@ pytest.importorskip("kilosort")
 pytestmark = pytest.mark.slow
 
 
-# SPATIAL_RECIPE itself is 6 s -- enough to exercise the emitters, not enough
-# to sort. KS4 builds its templates from the data it is given, so at 6 s it
-# plausibly returns no units at all under EITHER setting, which would make
-# `len(at_default) > len(at_derived)` fail for a reason that has nothing to do
-# with the 32 um default: too little data, not the wrong spacing. Measured
-# directly before this file was written: at 6 s both the default and the
-# derived spacing produced the SAME 11 units from the 12 planted, so the
-# comparison this test exists to make had nothing to say at that duration.
-#
-# `.model_copy(update=...)` bypasses `SessionRecipe._coherent` entirely --
-# pydantic does not re-validate on a copy -- so its rule that montages must
-# cover the session duration does NOT run against what this produces. Both
-# fields are therefore widened together, by hand, and the module-level assert
-# below checks the one thing `_coherent` would have: 20 trials of 3.0 s is
-# exactly 60.0 s, and the montage covers exactly that.
-_LONG_RECIPE = SPATIAL_RECIPE.model_copy(
-    update={
-        "blocks": (
-            BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=20, trial_duration_s=3.0),
-        ),
-        "montages": (MontageSpec(start_s=0.0, end_s=60.0),),
-    }
-)
-assert _LONG_RECIPE.duration_s == sum(m.end_s - m.start_s for m in _LONG_RECIPE.montages), (
-    "model_copy bypassed SessionRecipe._coherent's montage-coverage rule, so it is "
-    "re-checked here by hand -- nothing else will catch a mismatch"
-)
+SEEDS = (20270317, 20270318, 20270319)
 
-# `probe_part_number`, `n_ap_channels`, `n_units` and `seed` are untouched by
-# the widening above, and `build_timeline` draws unit positions from a fresh
-# `default_rng(seed)` consumed by nothing before `place_units` (no stim events
-# are configured here, so the block loop draws nothing from it) -- so which
-# units this recipe plants, and where, does not depend on trial count at all.
-# That was checked directly, not assumed: rendering this seed's own 12 units
-# through `wl_preproc.synth.waveforms.unit_templates` shows every one of them
-# peaks above 100 uV on BOTH NP1032 columns' nearest channel (the closest
-# call, unit 9 at x=55.7 um -- nearly the 51.5 um midpoint -- peaks at 135.6
-# uV on column 0's side and 148.9 uV on column 103's), against this fixture's
-# 8 uV noise floor. The fault this test demonstrates needs at least one unit
-# whose spikes genuinely register on both columns; at this seed, every planted
-# unit qualifies, so nothing had to be forced.
+# A planted unit counts as "fragmented" once at least two output clusters each
+# capture this share of its true spike train. Below that, a cluster is most
+# likely a handful of coincidental-timing matches against a NEIGHBOURING
+# unit's spikes -- every unit shows a few of these regardless of setting (see
+# the fix-round report's per-unit table) -- rather than a second, real piece
+# of the same unit. 0.20 sits in the middle of the range (0.10-0.25) where the
+# default-fragments-more-than-derived direction holds; see the module
+# docstring.
+FRAGMENT_SHARE_THRESHOLD = 0.20
+
+# How close, in samples at 30 kHz, a sorted spike must land to a planted one
+# to count as the same event. 15 samples is 0.5 ms -- a quarter of
+# `units.REFRACTORY_S` (2 ms), so it cannot itself span two of one unit's own
+# spikes, while comfortably covering KS4's own detection/alignment jitter.
+MATCH_TOLERANCE_SAMPLES = 15
+
+
+def _long_recipe(seed):
+    """SPATIAL_RECIPE's own probe/channel/unit-count geometry, widened to 60 s
+    and re-seeded.
+
+    SPATIAL_RECIPE itself is 6 s -- enough to exercise the emitters, not
+    enough to sort. KS4 builds its templates from the data it is given, so at
+    6 s it plausibly returns no units at all under EITHER setting. Measured
+    directly: at 6 s, seed 20270317 produced the SAME 11 units under both
+    settings, so the comparison this test makes had nothing to say at that
+    duration.
+
+    `.model_copy(update=...)` bypasses `SessionRecipe._coherent` entirely --
+    pydantic does not re-validate a copy -- so its montage-coverage rule does
+    NOT run against what this produces. Both fields are therefore widened
+    together, by hand, and the assert below re-checks the one thing
+    `_coherent` would have: 20 trials of 3.0 s is exactly 60.0 s, and the one
+    montage must cover exactly that, for every seed this builds.
+
+    Re-seeding changes which 12 unit positions get planted (see the module
+    docstring for how many seeds this file checks and why), but not whether
+    they straddle the columns: `place_units` draws x uniformly over the full
+    [0, 103] span, and `TEMPLATE_SPATIAL_DECAY_UM` (60 um) is generous enough
+    relative to the 103 um gap that amplitude on the FAR column never drops
+    below ~100 uV for any placement, against this fixture's 8 uV noise floor
+    -- checked directly for all three seeds via
+    `wl_preproc.synth.waveforms.unit_templates`, not assumed: worst-case
+    weakest-column peak amplitude was 107.1 uV (seed 20270317), 97.1 uV
+    (20270318) and 128.1 uV (20270319). The fault this test demonstrates
+    needs units whose spikes genuinely register on both columns; at all three
+    seeds, every planted unit qualifies structurally, not by luck of the
+    draw.
+    """
+    recipe = SPATIAL_RECIPE.model_copy(
+        update={
+            "seed": seed,
+            "blocks": (
+                BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=20, trial_duration_s=3.0),
+            ),
+            "montages": (MontageSpec(start_s=0.0, end_s=60.0),),
+        }
+    )
+    assert recipe.duration_s == sum(m.end_s - m.start_s for m in recipe.montages), (
+        f"seed {seed}: model_copy bypassed SessionRecipe._coherent's montage-coverage "
+        "rule, so it is re-checked here by hand -- nothing else will catch a mismatch"
+    )
+    return recipe
 
 
 def _sort(recording_dir, label, **settings):
     """`label` names the output folder explicitly. Deriving it from `settings`
     would collide here: both calls pass exactly two keyword arguments, so the
     second run would silently reuse -- or clobber -- the first one's folder.
+
+    Returns the live `BaseSorting`, not just its unit ids: the fragmentation
+    count needs each unit's own spike train (`get_unit_spike_train`), not
+    only how many units KS4 produced.
 
     `torch_device="cpu"` is pinned rather than left at KS4's "auto" default.
     On this machine `torch.cuda.is_available()` is False, and
@@ -95,35 +205,118 @@ def _sort(recording_dir, label, **settings):
     -v` that merely COLLECTS this file (to read its marker) does not force
     every other, unrelated test in the same process onto one thread.
     """
-    import os
-
     os.environ.setdefault("OMP_NUM_THREADS", "1")
 
     from spikeinterface.extractors import read_spikeglx
     from spikeinterface.sorters import run_sorter
 
     recording = read_spikeglx(recording_dir, stream_id="imec0.ap")
-    sorting = run_sorter(
+    return run_sorter(
         "kilosort4", recording, folder=recording_dir / f"ks_{label}",
         remove_existing_folder=True, do_CAR=False, torch_device="cpu", **settings,
     )
-    return sorting.get_unit_ids()
 
 
-def test_the_default_dminx_splits_a_unit_that_straddles_the_columns(tmp_path):
-    from wl_preproc.synth.spikeglx import write_spikeglx
+def _truth_samples_by_unit(truth, fs, pre_roll_s):
+    """Ground-truth spike sample indices per unit, in the same integer sample
+    frame the emitted `.bin` file -- and therefore KS4's own output -- uses:
+    `write_spikeglx` places a spike at `round((time_s + pre_roll_s) * fs)`.
+    """
+    by_unit = {u.unit_id: [] for u in truth.units}
+    for time_s, unit_id in truth.spikes:
+        by_unit[unit_id].append(int(round((time_s + pre_roll_s) * fs)))
+    return {uid: np.array(sorted(samples)) for uid, samples in by_unit.items()}
+
+
+def _count_fragmented_units(sorting, truth_by_unit):
+    """How many planted units (keys of `truth_by_unit`) have their spikes
+    split across 2+ output clusters, each holding at least
+    `FRAGMENT_SHARE_THRESHOLD` of that unit's true spike count.
+
+    This is spec section 7's claim -- planted units get split -- measured
+    directly against ground truth, rather than inferred from how many output
+    clusters exist in total (see the module docstring for why that proxy
+    does not work on this fixture: a large, roughly setting-independent
+    population of clusters traces to no planted unit at all).
+    """
+    cluster_ids = sorting.get_unit_ids()
+    if len(cluster_ids) == 0:
+        return 0
+
+    samples, clusters = [], []
+    for cluster_id in cluster_ids:
+        spike_samples = sorting.get_unit_spike_train(cluster_id)
+        samples.append(spike_samples)
+        clusters.append(np.full(len(spike_samples), cluster_id))
+    samples = np.concatenate(samples)
+    clusters = np.concatenate(clusters)
+    order = np.argsort(samples)
+    samples, clusters = samples[order], clusters[order]
+
+    n_fragmented = 0
+    for true_samples in truth_by_unit.values():
+        idx = np.searchsorted(samples, true_samples)
+        matched = []
+        for true_sample, i in zip(true_samples, idx):
+            for j in (i - 1, i, i + 1):
+                if 0 <= j < len(samples) and abs(samples[j] - true_sample) <= MATCH_TOLERANCE_SAMPLES:
+                    matched.append(clusters[j])
+                    break
+        if not matched:
+            continue
+        counts = Counter(matched)
+        total = sum(counts.values())
+        big_fragments = sum(1 for n in counts.values() if n / total >= FRAGMENT_SHARE_THRESHOLD)
+        if big_fragments >= 2:
+            n_fragmented += 1
+    return n_fragmented
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "3-seed aggregate ties (4 fragmented at default vs 4 derived) rather than "
+        "confirming the claim -- see the module docstring's 'How many seeds back this' "
+        "section for the per-seed numbers and why this is reported rather than forced. "
+        "strict=True: an unexpected PASS is news, not confirmation of a stale marker."
+    ),
+)
+def test_the_default_dminx_fragments_more_planted_units_than_derived_spacing(tmp_path):
+    """Sums, across `SEEDS`, how many of the 12 planted units come out
+    fragmented (`_count_fragmented_units`) at the 32 um default versus the
+    derived NP1032 spacing, and asserts the default fragments strictly more
+    in aggregate. See the module docstring for the raw-count result this
+    replaced, the mechanism verified in KS4's own source, and the actual
+    3-seed result (a tie, hence the `xfail` above).
+    """
+    from wl_preproc.synth.spikeglx import SPIKEGLX_PRE_ROLL_S, write_spikeglx
     from wl_preproc.synth.timeline import build_timeline
 
-    recipe = _LONG_RECIPE
-    truth = build_timeline(recipe)
-    write_spikeglx(tmp_path, recipe, truth)
+    total_default = 0
+    total_derived = 0
+    per_seed = []
 
-    derived = kilosort_spacing(recipe.probe_part_number)
-    at_default = _sort(tmp_path, "default", dminx=32.0, max_channel_distance=32.0)
-    at_derived = _sort(tmp_path, "derived", **derived)
+    for seed in SEEDS:
+        recipe = _long_recipe(seed)
+        truth = build_timeline(recipe)
+        seed_dir = tmp_path / f"seed_{seed}"
+        seed_dir.mkdir()
+        write_spikeglx(seed_dir, recipe, truth)
+        truth_by_unit = _truth_samples_by_unit(truth, recipe.ap_sample_rate_hz, SPIKEGLX_PRE_ROLL_S)
 
-    planted = len(truth.units)
-    assert len(at_default) > len(at_derived), (
-        f"expected the 32 um default to over-split {planted} planted units; "
-        f"got {len(at_default)} at the default and {len(at_derived)} derived"
+        derived_spacing = kilosort_spacing(recipe.probe_part_number)
+        default_sorting = _sort(seed_dir, "default", dminx=32.0, max_channel_distance=32.0)
+        derived_sorting = _sort(seed_dir, "derived", **derived_spacing)
+
+        n_default = _count_fragmented_units(default_sorting, truth_by_unit)
+        n_derived = _count_fragmented_units(derived_sorting, truth_by_unit)
+        total_default += n_default
+        total_derived += n_derived
+        per_seed.append((seed, n_default, n_derived))
+
+    assert total_default > total_derived, (
+        f"expected the 32 um default to fragment more of the 12 planted units than the "
+        f"derived spacing, summed across {len(SEEDS)} seeds; got {total_default} "
+        f"fragmented at the default vs {total_derived} derived "
+        f"(per seed, (seed, default, derived): {per_seed})"
     )
