@@ -1,5 +1,6 @@
-"""Emit a SpikeGLX run: an imec AP stream and an NI (`nidq`) stream, each an
-interleaved int16 .bin plus a .meta sidecar.
+"""Emit a SpikeGLX run: two imec streams (AP and LF -- NP 1.0 digitises the
+action-potential and local-field-potential bands separately) and an NI
+(`nidq`) stream, each an interleaved int16 .bin plus a .meta sidecar.
 
 **The barcode is carried on an NI digital line, not on the imec SY channel.**
 Spec section 4.5: "SpikeGLX handles imec-NI sync internally... The barcode
@@ -36,7 +37,7 @@ from wl_preproc.synth.timeline import (
     code_word_span_s,
 )
 from wl_preproc.synth.truth import GroundTruth
-from wl_preproc.synth.waveforms import render_traces
+from wl_preproc.synth.waveforms import correlated_noise, render_traces
 
 SPIKE_TEMPLATE_UV = np.array(
     [0, -10, -40, -120, -200, -140, -40, 30, 60, 45, 25, 10, 0], dtype=np.float64
@@ -44,6 +45,19 @@ SPIKE_TEMPLATE_UV = np.array(
 AP_GAIN = 500.0
 NOISE_UV = 8.0
 UV_PER_BIT = 2.34375  # Neuropixels 1.0 at gain 500
+
+# NP 1.0 digitises the two bands separately -- the NHP probe paper: "the action
+# potential band (10 bits, 30 kHz, 5.7 uV mean input-referred noise) and local
+# field potential (LFP) band (10 bits, 2.5 kHz)". Emitting only AP left 2b-3
+# and 2b-8 with nothing to read.
+LF_SAMPLE_RATE_HZ = 2500.0
+
+# Amplitude of the planted laminar gradient, and the depth over which it turns
+# over. A CSD is a second spatial derivative, so an LF band identical at every
+# depth has a CSD of zero everywhere and "the reference preserved the laminar
+# gradient" becomes unfalsifiable.
+LFP_UV = 120.0
+LFP_FREQ_HZ = 8.0
 
 # A different tick origin from the sync box, deliberately — see syncbox.py. It
 # is shared by both of this system's streams: SpikeGLX starts and stops imec
@@ -84,11 +98,20 @@ NIDQ_N_DIGITAL_WORDS = 2
 
 
 def _meta_text(
-    recipe: SessionRecipe, n_samples: int, n_channels: int, bin_name: str
+    recipe: SessionRecipe,
+    n_samples: int,
+    n_channels: int,
+    bin_name: str,
+    band: str = "ap",
 ) -> str:
     n_ap = recipe.n_ap_channels
     file_bytes = n_samples * n_channels * 2
     sites = electrode_rows(recipe.probe_part_number)[:n_ap]
+    rate = recipe.ap_sample_rate_hz if band == "ap" else LF_SAMPLE_RATE_HZ
+    # SpikeInterface picks the stream apart on this pair: (n_ap, 0, 1) is an AP
+    # file and (0, n_ap, 1) is an LF one. Getting it wrong yields a file the
+    # reader opens as the wrong band rather than one it refuses.
+    ap_lf_sy = f"{n_ap},0,1" if band == "ap" else f"0,{n_ap},1"
 
     imro = f"({n_ap},{n_ap})" + "".join(
         f"({c} 0 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
@@ -110,12 +133,12 @@ def _meta_text(
         # SpikeInterface's reader requires fileName — it reconstructs the original
         # path from it. Omitting it raises KeyError rather than degrading.
         f"fileName={bin_name}",
-        f"imSampRate={recipe.ap_sample_rate_hz:g}",
+        f"imSampRate={rate:g}",
         f"nSavedChans={n_channels}",
         f"fileSizeBytes={file_bytes}",
-        f"fileTimeSecs={n_samples / recipe.ap_sample_rate_hz:.6f}",
-        f"acqApLfSy={n_ap},0,1",
-        f"snsApLfSy={n_ap},0,1",
+        f"fileTimeSecs={n_samples / rate:.6f}",
+        f"acqApLfSy={ap_lf_sy}",
+        f"snsApLfSy={ap_lf_sy}",
         "imAiRangeMax=0.6",
         "imAiRangeMin=-0.6",
         "imMaxInt=512",
@@ -182,8 +205,44 @@ def write_spikeglx(
         _meta_text(recipe, n_samples, n_channels, bin_path.name), encoding="utf-8"
     )
     write_nidq(dir_path, recipe, truth, drift_ppm=drift_ppm)
+    _write_lf(dir_path, recipe, truth, drift_ppm=drift_ppm)
     # The imec binary, not the NI one: it is the stream the TRUNCATED_FILE fault
     # truncates and the one every existing caller means by "the SpikeGLX file".
+    return bin_path
+
+
+def _write_lf(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float) -> Path:
+    """The LFP band: a depth-varying low-frequency field, no spikes.
+
+    Spikes are deliberately absent rather than low-passed away. The AP band is
+    where they are ground truth; a filtered copy of them here would be a second
+    representation of one fact, free to disagree with the first.
+    """
+    fs = LF_SAMPLE_RATE_HZ
+    n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * fs)
+    n_channels = recipe.n_ap_channels + 1
+    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+
+    data = np.zeros((n_samples, n_channels), dtype=np.float64)
+    if recipe.n_units:
+        data[:, :-1] = correlated_noise(
+            sites, n_samples, fs, NOISE_UV, seed=recipe.seed + 2
+        )
+        ys = np.array([s["y_coord"] for s in sites], dtype=float)
+        # np.ptp(), not ys.ptp(): NumPy 2.0 removed the method, and this repo runs 2.4.
+        depth = (ys - ys.min()) / max(float(np.ptp(ys)), 1.0)
+        t = np.arange(n_samples, dtype=float) / fs
+        phase = np.sin(2 * np.pi * LFP_FREQ_HZ * apply_drift(t, drift_ppm))
+        data[:, :-1] += np.outer(phase, LFP_UV * np.cos(np.pi * depth))
+
+    data /= UV_PER_BIT
+    data[:, -1] = 0
+    bin_path = dir_path / f"{recipe.session_id}_imec0.lf.bin"
+    data.astype(np.int16).tofile(bin_path)
+    bin_path.with_suffix(".meta").write_text(
+        _meta_text(recipe, n_samples, n_channels, bin_path.name, band="lf"),
+        encoding="utf-8",
+    )
     return bin_path
 
 

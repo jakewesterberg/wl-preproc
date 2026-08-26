@@ -64,8 +64,14 @@ def test_generation_is_byte_identical_for_one_seed(tmp_path):
     second.mkdir()
     generate_session(first, CI_RECIPE)
     generate_session(second, CI_RECIPE)
-    a = next((first / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
-    b = next((second / CI_RECIPE.session_id / "spikeglx").glob("*.bin"))
+    # `*.ap.bin`, not `*.bin`: a SpikeGLX run now emits an imec AP binary, an
+    # imec LF binary and an NI one, and a bare `*.bin` glob matches all three.
+    # `next()` would then take whichever the filesystem happens to list first
+    # rather than the same file from both generations -- the same ambiguity
+    # `test_truncated_file_fault_shortens_the_binary` above already fixed for
+    # its own two-file case.
+    a = next((first / CI_RECIPE.session_id / "spikeglx").glob("*.ap.bin"))
+    b = next((second / CI_RECIPE.session_id / "spikeglx").glob("*.ap.bin"))
     assert a.read_bytes() == b.read_bytes()
 
 

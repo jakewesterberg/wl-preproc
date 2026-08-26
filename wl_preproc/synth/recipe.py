@@ -331,6 +331,24 @@ DRIFT_RECIPE = SessionRecipe(
     ),
 )
 
+SPATIAL_RECIPE = SessionRecipe(
+    session_id="2027-03-14_06",
+    subject="pico",
+    rig="rig-a",
+    systems=("syncbox", "spikeglx"),
+    blocks=(BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=2, trial_duration_s=3.0),),
+    montages=(MontageSpec(start_s=0.0, end_s=6.0),),
+    # NP1032 because its columns sit 103 um apart, which is what makes spec
+    # section 7's Kilosort default reproducible. 64 sites span 640 um of shank
+    # -- enough for a footprint to decay inside the recorded window, and small
+    # enough that a rendered trace matrix stays a few tens of megabytes.
+    probe_part_number="NP1032",
+    n_ap_channels=64,
+    n_units=12,
+    ap_sample_rate_hz=30_000.0,
+    seed=20270317,
+)
+
 # Recipes keyed by the CLI's own --profile name (wl_preproc/cli/main.py), so
 # a caller that wants "the ci recipe" or "the stim recipe" has one place to
 # look it up by name rather than importing three constants and building the
@@ -341,4 +359,5 @@ RECIPES: dict[str, SessionRecipe] = {
     "stim": STIM_RECIPE,
     "eye": EYE_RECIPE,
     "drift": DRIFT_RECIPE,
+    "spatial": SPATIAL_RECIPE,
 }

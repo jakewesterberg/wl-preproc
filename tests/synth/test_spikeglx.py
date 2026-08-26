@@ -2,8 +2,13 @@ import numpy as np
 import pytest
 
 from wl_preproc.ephys.geometry import electrode_rows
-from wl_preproc.synth.recipe import CI_RECIPE
-from wl_preproc.synth.spikeglx import SPIKEGLX_PRE_ROLL_S, write_spikeglx
+from wl_preproc.synth.recipe import CI_RECIPE, SPATIAL_RECIPE
+from wl_preproc.synth.spikeglx import (
+    LF_SAMPLE_RATE_HZ,
+    LFP_FREQ_HZ,
+    SPIKEGLX_PRE_ROLL_S,
+    write_spikeglx,
+)
 from wl_preproc.synth.timeline import build_timeline
 
 spikeinterface = pytest.importorskip("spikeinterface.extractors")
@@ -152,6 +157,12 @@ def test_emission_is_deterministic(tmp_path):
     # every fit while the imec bytes stayed identical.
     nidq = f"{CI_RECIPE.session_id}.nidq.bin"
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
+    # And the LF stream Task 5 added: CI_RECIPE plants zero units, so this is
+    # the timing-only branch of `_write_lf` -- all zeros, trivially
+    # deterministic, but only if nothing upstream starts drawing from an
+    # unseeded RNG on this path.
+    lf = f"{CI_RECIPE.session_id}_imec0.lf.bin"
+    assert (first / lf).read_bytes() == (second / lf).read_bytes()
 
 
 def test_emission_is_deterministic_with_planted_units(tmp_path):
@@ -173,6 +184,12 @@ def test_emission_is_deterministic_with_planted_units(tmp_path):
     assert a.read_bytes() == b.read_bytes()
     nidq = f"{recipe.session_id}.nidq.bin"
     assert (first / nidq).read_bytes() == (second / nidq).read_bytes()
+    # `recipe.n_units=3` also takes `_write_lf`'s laminar-gradient branch --
+    # `correlated_noise` again, seeded `recipe.seed + 2` -- so this is this
+    # branch's own determinism check, the same reason the units branch above
+    # needed one separate from the timing-only test.
+    lf = f"{recipe.session_id}_imec0.lf.bin"
+    assert (first / lf).read_bytes() == (second / lf).read_bytes()
 
 
 def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
@@ -307,3 +324,45 @@ def test_geometry_round_trips_through_the_independent_reader_for_the_nhp_probe(t
     expected_xy = np.array([[row["x_coord"], row["y_coord"]] for row in expected])
 
     np.testing.assert_allclose(decoded, expected_xy, atol=1e-6)
+
+
+def test_an_lf_stream_is_emitted_beside_the_ap_stream(tmp_path):
+    recipe = SPATIAL_RECIPE
+    truth = build_timeline(recipe)
+    write_spikeglx(tmp_path, recipe, truth)
+
+    lf = tmp_path / f"{recipe.session_id}_imec0.lf.bin"
+    assert lf.exists()
+    meta = lf.with_suffix(".meta").read_text()
+    assert "imSampRate=2500" in meta
+    assert f"snsApLfSy=0,{recipe.n_ap_channels},1" in meta
+
+
+def test_the_lf_band_carries_a_depth_varying_signal(tmp_path):
+    """2b-8's CSD is a second spatial derivative. An LF band that is the same
+    at every depth has a CSD of zero everywhere, so 'the reference preserved
+    the laminar gradient' would be unfalsifiable.
+
+    The bin is located from LFP_FREQ_HZ, LF_SAMPLE_RATE_HZ and the actual
+    sample count rather than a hardcoded range. At 2500 Hz over ~16,750
+    samples a `[1:20]` slice spans roughly 0.15-2.8 Hz -- nowhere near the
+    planted 8 Hz signal, which sits around bin 54 -- so it would measure
+    background noise instead of the signal this test claims to check
+    (confirmed empirically: on SPATIAL_RECIPE's own fixture, `[1:20]` reads a
+    12.6x max/min ratio off noise alone, well past this test's own threshold,
+    versus 22.5x at the located bin). A test that computes its own bin cannot
+    drift from the constant it is testing.
+    """
+    recipe = SPATIAL_RECIPE
+    truth = build_timeline(recipe)
+    write_spikeglx(tmp_path, recipe, truth)
+
+    lf = tmp_path / f"{recipe.session_id}_imec0.lf.bin"
+    n_chan = recipe.n_ap_channels + 1
+    data = np.fromfile(lf, dtype=np.int16).reshape(-1, n_chan)[:, :-1].astype(float)
+
+    low_freq = data - data.mean(axis=0)
+    spectrum = np.abs(np.fft.rfft(low_freq, axis=0))
+    freq_bin = round(LFP_FREQ_HZ * data.shape[0] / LF_SAMPLE_RATE_HZ)
+    profile = spectrum[freq_bin]
+    assert profile.max() > 3 * profile.min()
