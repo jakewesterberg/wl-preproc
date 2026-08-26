@@ -78,11 +78,20 @@ def correlated_noise(
         spatial_decay=NOISE_SPATIAL_DECAY_UM,
         seed=seed,
     )
-    # `return_scaled` (the brief's original spelling) is deprecated as of
-    # 0.104 and slated for removal in 0.105 -- `pyproject.toml` pins
-    # spikeinterface with no upper bound, so leaving it in place would break
-    # on the next routine upgrade. `return_in_uV` is the same parameter under
-    # its current name; both mean "do not apply gain_to_uV/offset_to_uV",
-    # which this synthetic recording never sets in the first place.
-    traces = recording.get_traces(start_frame=0, end_frame=n_samples, return_in_uV=False)
+    # Neither scaling keyword is passed. `pyproject.toml` declares
+    # `spikeinterface>=0.101` with no upper bound and no lockfile, so every
+    # released version from there through the installed 0.104.8 is
+    # legitimately in play, and the two spellings do not overlap:
+    # `return_in_uV` does not exist before 0.103.0 (an unconditional
+    # TypeError on 0.101.0-0.102.3), and `return_scaled` (the brief's
+    # original spelling) is deprecated from 0.103.0 onward, not just 0.104.
+    # Both default to "no scaling" on every version in range --
+    # `return_scaled=False` through 0.102.x, `return_in_uV=False` from
+    # 0.103.0 on -- and this synthetic recording never sets
+    # gain_to_uV/offset_to_uV in the first place (`has_scaleable_traces()`
+    # is False), so the keyword is a no-op here regardless. Omitting it
+    # entirely is therefore correct across the whole declared range, not
+    # just the version installed today, and it carries no DeprecationWarning
+    # on any of them.
+    traces = recording.get_traces(start_frame=0, end_frame=n_samples)
     return np.asarray(traces, dtype=np.float64)
