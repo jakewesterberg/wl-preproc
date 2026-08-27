@@ -1,3 +1,5 @@
+import shutil
+
 import numpy as np
 import zarr
 
@@ -41,16 +43,22 @@ def test_the_store_is_smaller_than_the_session(tmp_path):
     assert result.codec == "zstd"
 
 
-def test_the_manifest_digest_is_stable_and_order_independent(tmp_path):
-    """A Zarr store is a directory tree with no single hash. The digest is over
-    sorted (path, blake3) pairs, so two identical copies agree regardless of
-    the order a walk happens to return."""
+def test_the_manifest_digest_is_stable_across_a_copy(tmp_path):
+    """This is design spec section 3's confirm step: manifest_digest is
+    recomputed against the *same bytes* after a plain copy, never against a
+    second independent compression -- numcodecs.Blosc's compressed output is
+    not reproducible across separate write_store() calls (see
+    manifest_digest's own docstring, and design spec section 10 item 4), so
+    that stronger property is deliberately not asserted here."""
     generate_session(tmp_path / "in", CI_RECIPE)
     session = tmp_path / "in" / CI_RECIPE.session_id
-    a = write_store(session, tmp_path / "a")
-    b = write_store(session, tmp_path / "b")
-    assert a.manifest_digest == b.manifest_digest
-    assert manifest_digest(a.path) == a.manifest_digest
+    result = write_store(session, tmp_path / "out")
+
+    copy_path = tmp_path / "copy" / result.path.name
+    shutil.copytree(result.path, copy_path)
+
+    assert manifest_digest(copy_path) == result.manifest_digest
+    assert manifest_digest(copy_path) == manifest_digest(result.path)
 
 
 def test_a_changed_byte_changes_the_manifest_digest(tmp_path):

@@ -49,6 +49,25 @@ def manifest_digest(store_dir: Path) -> str:
     A directory tree has no single hash, and a digest over concatenated bytes
     would depend on walk order -- two identical copies would disagree. Sorting
     the pairs makes it a property of the contents alone.
+
+    **This identifies a stored artifact, not a session** -- design spec
+    section 10 item 4's own words for it: "the digest is of an artifact
+    rather than of a session." Confirmed empirically 2026-08-27 building this
+    module: `numcodecs.Blosc`'s default multi-threaded compression emits a
+    DIFFERENT compressed byte string for identical input across separate
+    calls -- same length, and every version decodes back to the identical
+    bytes, but the compressed representation itself is not reproducible run
+    to run. Two independent `write_store()` calls over the same session
+    therefore produce two different manifest digests, and both are valid.
+
+    That is fine for what this digest is actually used for: section 3's
+    confirm step calls it against *the same bytes* twice -- `write_store()`
+    once, then a plain copy to the NAS, then compare -- never against a
+    second independent compression. Do not pin `numcodecs.blosc`'s thread
+    count to make two archives of one session agree; that pays real
+    throughput on a ~360 GB session for a property nothing in this design
+    consumes (tried in an earlier version of this function; reverted per
+    design spec section 10 item 4).
     """
     import blake3 as _blake3
 
@@ -62,36 +81,7 @@ def manifest_digest(store_dir: Path) -> str:
 def write_store(
     session_dir: Path, out_dir: Path, codec_name: str = "zstd", clevel: int = 5
 ) -> StoreResult:
-    """Compress `session_dir` into a Zarr store under `out_dir`.
-
-    **Compression is pinned to one thread for the duration of this call.**
-    Confirmed empirically 2026-08-27, isolated down to a single `.encode()`
-    call: `numcodecs.Blosc`'s default multi-threaded path (`nthreads` follows
-    the host's core count) returns a DIFFERENT compressed byte string on
-    repeated calls over the identical input array -- same length, and every
-    version decodes back to the identical bytes, but the compressed
-    representation itself is not stable run to run. At `nthreads=1` it is
-    stable across every repeat tried.
-
-    Design spec section 8 defines `manifest_digest` on the premise that "two
-    identical copies" of a store agree: "A digest over concatenated bytes
-    would depend on walk order and differ between two identical copies" names
-    walk order as the one risk sorting the pairs removes -- which only makes
-    sense if the underlying file bytes of "two identical copies" are already
-    identical. Two independent `write_store` calls over the same session are
-    "two identical copies" in exactly that sense, and with threaded
-    compression they were not byte-identical: the digest genuinely differed,
-    not on a walk-order technicality but for real, and this file's own
-    `test_the_manifest_digest_is_stable_and_order_independent` caught it.
-    Whatever section 3's confirm step turns out to compare once it is
-    written, a manifest digest that is not a pure function of the session's
-    contents cannot be the stable reference it is meant to be.
-
-    `numcodecs.Blosc` takes no per-call thread count -- only the process-wide
-    `numcodecs.blosc.set_nthreads()` -- so the previous value is restored in
-    `finally` rather than left changed for whatever else runs in this
-    process afterward.
-    """
+    """Compress `session_dir` into a Zarr store under `out_dir`."""
     store_path = out_dir / f"{session_dir.name}.zarr"
     out_dir.mkdir(parents=True, exist_ok=True)
     root = zarr.open(str(store_path), mode="w")
@@ -101,36 +91,31 @@ def write_store(
 
     streams = bulk_streams(session_dir)
     stream_paths = {s.path for s in streams}
+    arrays = root.create_group(ARRAY_GROUP)
+    for stream in streams:
+        data = np.fromfile(stream.path, dtype=SAMPLE_DTYPE).reshape(
+            stream.n_samples, stream.n_channels
+        )
+        arrays.create_dataset(
+            stream.path.name,
+            data=data,
+            chunks=(min(_CHUNK_SAMPLES, stream.n_samples), stream.n_channels),
+            compressor=compressor,
+        )
+        # The relative path is stored so verification can find the original
+        # again without re-deriving where a stream sat in the tree.
+        arrays[stream.path.name].attrs["source"] = str(
+            stream.path.relative_to(session_dir)
+        )
 
-    previous_nthreads = numcodecs.blosc.set_nthreads(1)
-    try:
-        arrays = root.create_group(ARRAY_GROUP)
-        for stream in streams:
-            data = np.fromfile(stream.path, dtype=SAMPLE_DTYPE).reshape(
-                stream.n_samples, stream.n_channels
-            )
-            arrays.create_dataset(
-                stream.path.name,
-                data=data,
-                chunks=(min(_CHUNK_SAMPLES, stream.n_samples), stream.n_channels),
-                compressor=compressor,
-            )
-            # The relative path is stored so verification can find the original
-            # again without re-deriving where a stream sat in the tree.
-            arrays[stream.path.name].attrs["source"] = str(
-                stream.path.relative_to(session_dir)
-            )
-
-        verbatim = root.create_group(VERBATIM_GROUP)
-        for path in sorted(p for p in session_dir.rglob("*") if p.is_file()):
-            if path in stream_paths:
-                continue
-            raw = np.frombuffer(path.read_bytes(), dtype=np.uint8)
-            verbatim.create_dataset(
-                str(path.relative_to(session_dir)), data=raw, compressor=compressor
-            )
-    finally:
-        numcodecs.blosc.set_nthreads(previous_nthreads)
+    verbatim = root.create_group(VERBATIM_GROUP)
+    for path in sorted(p for p in session_dir.rglob("*") if p.is_file()):
+        if path in stream_paths:
+            continue
+        raw = np.frombuffer(path.read_bytes(), dtype=np.uint8)
+        verbatim.create_dataset(
+            str(path.relative_to(session_dir)), data=raw, compressor=compressor
+        )
 
     compressed = sum(p.stat().st_size for p in store_path.rglob("*") if p.is_file())
     return StoreResult(
