@@ -12,6 +12,32 @@ time.dat, stim.dat, the ohDPI rows, camera sidecars, the sync box log, the task
 file, manifests and DONE markers -- is stored verbatim by `store.py`. They are a
 rounding error against ~100 GB, and a byte kept untransformed is a byte that
 cannot be reconstructed wrongly.
+
+**Byte reconstruction cannot catch a shape this module gets wrong.** On a
+C-contiguous array, `.reshape()` moves no bytes -- `.tobytes()` is identical for
+any valid factorization of the same element count -- so an artifact labelled
+with a plausible-but-wrong (n_channels, n_samples) round-trips Task 3's own
+verification clean. Design spec section 4's "byte reconstruction catches a
+channel-order error, an interleaving mistake, or a dtype slip" is true of a
+genuine transformation of the data and false of a mislabelling of its shape.
+This module's own checks are therefore the only guard that exists.
+
+**Known gap: Intan's channel count is derived, not declared.** SpikeGLX's shape
+is checked against `nSavedChans`, a value the recording software itself wrote;
+an inconsistent `.bin` is caught because it disagrees with something external
+to it. `amplifier.dat` carries no such header -- its channel count is derived
+by dividing its size by a sample count read out of `time.dat`, and `time.dat`
+is checked only for being a whole multiple of 4 bytes (one int32 index). A
+`time.dat` truncated exactly ON a 4-byte boundary -- the shape an interrupted
+copy takes -- still divides evenly and reports a self-consistent but wrong
+shape: confirmed against a real STIM_RECIPE session (true shape n_channels=4,
+n_samples=373546) truncated to exactly half, which reports n_channels=8,
+n_samples=186773 with no exception raised. The real fix is reading Intan's own
+channel count out of `info.rhs`'s signal-group headers and cross-checking it
+against the derived value; this module does not, because `info.rhs` has no
+reader in this repository and gaining one means parsing those headers -- more
+than a byte-layout oracle should carry. Named here rather than silently relied
+on.
 """
 
 from __future__ import annotations
@@ -25,6 +51,13 @@ import numpy as np
 # reconstruction in verify.py assumes. Stated as an explicit byte order rather
 # than `np.int16` so the artifact does not depend on the host's endianness.
 SAMPLE_DTYPE = np.dtype("<i2")
+
+# int32 little-endian: what Intan's time.dat stores, one sample index per
+# entry (synth/rhs.py's write_rhs: `np.arange(n_samples,
+# dtype=np.int32).tofile(...)`). Declared for the same reason as SAMPLE_DTYPE
+# above -- an explicit byte order the artifact does not depend on the host's
+# endianness for.
+TIME_INDEX_DTYPE = np.dtype("<i4")
 
 
 class LayoutUndetermined(ValueError):
@@ -52,6 +85,23 @@ def _meta_value(meta: Path, key: str) -> str:
     raise LayoutUndetermined(f"{meta} has no {key}")
 
 
+def _channel_count(meta: Path, key: str) -> int:
+    """`int(_meta_value(...))`, refusing rather than crashing on a bad value.
+
+    This module's whole public promise is a determined shape or a raised
+    `LayoutUndetermined`; a non-numeric `nSavedChans` -- a hand-edited or
+    corrupted `.meta` -- must not surface as a bare `ValueError` from `int()`
+    that nothing downstream was written to expect.
+    """
+    value = _meta_value(meta, key)
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise LayoutUndetermined(
+            f"{meta} has {key}={value!r}, which is not an integer"
+        ) from exc
+
+
 def _checked(path: Path, n_channels: int) -> StreamLayout:
     size = path.stat().st_size
     stride = SAMPLE_DTYPE.itemsize * n_channels
@@ -73,17 +123,30 @@ def bulk_streams(session_dir: Path) -> list[StreamLayout]:
         meta = binary.with_suffix(".meta")
         if not meta.exists():
             raise LayoutUndetermined(f"{binary} has no .meta beside it")
-        found.append(_checked(binary, int(_meta_value(meta, "nSavedChans"))))
+        found.append(_checked(binary, _channel_count(meta, "nSavedChans")))
 
     # Intan: info.rhs has no reader in this repository and needs none. time.dat
     # is int32 sample indices, one per sample, so the channel count falls out of
     # two file sizes -- derived from the data rather than parsed from a header
-    # this repo would otherwise have to learn to read.
+    # this repo would otherwise have to learn to read. See the module
+    # docstring's "known gap" paragraph for what this derivation still cannot
+    # catch.
     for amplifier in sorted(session_dir.rglob("amplifier.dat")):
         time_dat = amplifier.with_name("time.dat")
         if not time_dat.exists():
             raise LayoutUndetermined(f"{amplifier} has no time.dat beside it")
-        n_samples = time_dat.stat().st_size // np.dtype("<i4").itemsize
+        time_size = time_dat.stat().st_size
+        # Defended the same way _checked defends the .bin branch: a size that
+        # is not a whole number of int32 indices is refused before it is ever
+        # divided into a sample count. Without this, a time.dat torn off a
+        # 4-byte boundary produced a self-consistent but wrong shape that
+        # nothing caught -- see the module docstring.
+        if time_size % TIME_INDEX_DTYPE.itemsize:
+            raise LayoutUndetermined(
+                f"{time_dat} is {time_size} bytes, not a whole number of "
+                f"{TIME_INDEX_DTYPE.itemsize}-byte sample indices"
+            )
+        n_samples = time_size // TIME_INDEX_DTYPE.itemsize
         if n_samples == 0:
             raise LayoutUndetermined(f"{time_dat} is empty")
         size = amplifier.stat().st_size
