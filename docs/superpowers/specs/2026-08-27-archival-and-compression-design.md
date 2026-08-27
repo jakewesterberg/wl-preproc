@@ -193,8 +193,9 @@ becomes real; deciding it now would be deciding it without the thing to measure.
 > `wlpp ingest --no-verify` (`cli/main.py:115-120`) makes `ingest/verify.py`
 > return `Integrity.SKIPPED` with an **empty** mismatch list, and
 > `watcher.py`'s `if mismatches:` cannot tell that from a genuine pass — so the
-> session lands as `INGESTED` with no size or blake3 check ever run, and
-> `SKIPPED` is recorded and then read by nothing.
+> session lands as `INGESTED` with no size or blake3 check ever run.
+> `SKIPPED` is recorded, and `cli/report.py` displays it in the daily report —
+> but **nothing branches on it**, which is the part that matters here.
 >
 > On its own that does not defeat archival, which re-does the same digest
 > comparison. What it defeats is §4's *shape* guarantee: reconstruction
