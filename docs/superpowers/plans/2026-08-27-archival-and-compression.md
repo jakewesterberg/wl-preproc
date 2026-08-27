@@ -1537,6 +1537,7 @@ visible — this repository corrects rather than rewrites:
 - **§3.3** — the storage arithmetic is conservative by ~1.8×: ~100 GB/session and ~10.4 TB/year at CR 3.59, not 180 GB and 15–20 TB. Keep the old figures; a purchasing decision may rest on them.
 - **§8.4** — *"cold copy confirmed"* leaves the reclamation preconditions. This pipeline cannot observe it and tape is a human's step.
 - **§8.5** — the human "checked good" verdict becomes a derived predicate plus a hold. A reversal, argued from §8.4's own rehydration path.
+- **Corrected 2026-08-27 (Task 10 whole-branch review):** the rehydration path above is §3.3's, not §8.4's — §8.4 lists reclamation's own preconditions and never itself mentions rehydration; §3.3 is where the T1 cache and "decompress to scratch" are actually described. This bullet's own text is left as originally written above; the amendment it produced (`docs/superpowers/specs/2026-08-12-wl-preproc-design.md`'s own §8.5 amendment) carried the same error and was corrected there directly, and the same error recurred independently in the design spec's own §5.1, its opening summary, and its §11 table, and in `archive/reclaim.py` — all corrected the same review round.
 - **§8.5** — its Buccino OPEN is **discharged**; cite the paper and the CR figures.
 - **§10** — the daily report gains the blocking reclamation condition and the rig-may-clear list.
 
@@ -1558,3 +1559,4 @@ git commit -m "archive: trigger at ingest, and record what this changed in the p
 - **IO throttling** (spec §10 item 4). Archival runs immediately after ingest, and the contention it would trade against does not exist until sorting does.
 - **A chosen high-water mark** (spec §10 item 3). The default is 1 TB; the real device does not exist yet.
 - **Rehydration** — decompress-to-scratch. §8.4 names it as the path that makes reclamation safe, and it is the natural next plan.
+- **Corrected 2026-08-27 (Task 10 whole-branch review):** §3.3 names this, not §8.4 — the identical correction as the bullet above, for the identical reason. `cli/main.py`'s own quotation of this exact sentence (its `reclaim` dispatch, review-round comment) is left untouched: it quotes this bullet accurately, and the fix belongs at the root rather than in a citation of it.

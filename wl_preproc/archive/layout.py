@@ -44,12 +44,22 @@ then returns `Integrity.SKIPPED` with an empty mismatch list, which
 `watcher.py`'s own `if mismatches:` cannot tell apart from a session that was
 actually checked and passed, so the session lands either way.
 `Integrity.SKIPPED` is recorded on that landed row (`schema/ingest.py`'s
-`Ingestion.integrity`), but nothing in this repository currently branches on
-it -- not here, and not yet in the archival trigger, which is where that
-decision belongs rather than in this module. So: a `time.dat` whose size
-disagrees with what the acquisition system declared for it -- 4-byte-aligned
-or not -- cannot reach `bulk_streams` through a session that was actually
-verified. It can through one that opted out of verification.
+`Ingestion.integrity`). Corrected 2026-08-27 (Task 10 whole-branch review):
+this used to say nothing branches on it, naming the archival trigger as
+where that decision belonged and did not yet exist -- it exists now.
+`daemon._archive_stage_keys()` restricts on `integrity = "verified"` exactly
+(Controller ruling B), so a `SKIPPED` (or `declared_only`) session is never
+handed to `archive_session` by the daemon's own automatic pass. That closes
+this asymmetry for the AUTOMATIC path specifically, and only that path:
+`wlpp archive` run by hand against a session directory still does not
+consult `integrity` at all (`cli/main.py`'s `archive` dispatch resolves its
+key from the session's manifest, not from the `Ingestion` row), so a shape
+truncation this module cannot see can still reach `bulk_streams` that way.
+So: a `time.dat` whose size disagrees with what the acquisition system
+declared for it -- 4-byte-aligned or not -- cannot reach `bulk_streams`
+through a session that was actually verified and archived automatically. It
+still can through one that opted out of verification and is archived by a
+human running `wlpp archive` directly.
 
 **The asymmetry with SpikeGLX is real, though, and worth naming rather than
 hiding behind the ingest backstop.** SpikeGLX's shape is checked against

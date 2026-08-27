@@ -50,9 +50,12 @@ def reclaim_conditions(
     walks a directory would be two things.
 
     Activates `archive` and `timebase` itself -- the same
-    `<module>.activate(prefix=prefix)` pattern `cli/report.py:256` already
+    `<module>.activate(prefix=prefix)` pattern `cli/report.py:459` already
     uses for `ingest` -- so a caller only has to know the prefix, not which
-    schema modules this predicate happens to query.
+    schema modules this predicate happens to query. (Line number corrected
+    2026-08-27, Task 10 whole-branch review: `report.py` grew earlier
+    sections since this comment was written, and this citation had gone
+    stale by 203 lines without the passage it names having moved at all.)
     """
     from wl_preproc.schema import archive, timebase
 
@@ -63,8 +66,10 @@ def reclaim_conditions(
     verifications = archive.ArchiveVerification & session_key
     matched = verifications & "matched = 1"
     # `.to_arrays(attr)`, not `.fetch(attr)`: this venv's DataJoint (2.3.2,
-    # matching `cli/report.py:269`'s own comment) warns on EVERY `.fetch()`
-    # call, not only the bare, no-attrs form that comment describes --
+    # matching `cli/report.py:472`'s own comment -- corrected 2026-08-27 for
+    # the identical drift as this file's other citation above) warns on
+    # EVERY `.fetch()` call, not only the bare, no-attrs form that comment
+    # describes --
     # confirmed directly, since the brief this function was drafted from
     # still wrote `.fetch("tier")` and produced a live DeprecationWarning
     # until this module's own test suite surfaced it. `to_arrays` with a

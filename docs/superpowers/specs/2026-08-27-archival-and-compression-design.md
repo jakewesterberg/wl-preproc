@@ -193,12 +193,22 @@ becomes real; deciding it now would be deciding it without the thing to measure.
 
 > **"Verification passes" means `integrity == 'verified'`, not "the session
 > landed".** Found 2026-08-27 while reviewing `archive/layout.py`:
-> `wlpp ingest --no-verify` (`cli/main.py:115-120`) makes `ingest/verify.py`
+> `wlpp ingest --no-verify` (`cli/main.py:183-189`) makes `ingest/verify.py`
 > return `Integrity.SKIPPED` with an **empty** mismatch list, and
 > `watcher.py`'s `if mismatches:` cannot tell that from a genuine pass — so the
 > session lands as `INGESTED` with no size or blake3 check ever run.
 > `SKIPPED` is recorded, and `cli/report.py` displays it in the daily report —
-> but **nothing branches on it**, which is the part that matters here.
+> but **nothing branches on it**, which is the part that matters here (Task 10
+> closed exactly this, 2026-08-27 whole-branch review: `daemon._archive_
+> stage_keys()` now restricts on `integrity = "verified"` exactly, so a
+> `SKIPPED` session is never handed to the archival trigger this box is
+> arguing for — true when this box was written, which is the reason this
+> §3.1's own rule below exists at all, and corrected here rather than left
+> silently stale now that the rule has an implementation).
+>
+> (Citation also corrected 2026-08-27, Task 10 whole-branch review: `cli/
+> main.py`'s `--no-verify` argument moved to lines 183–189 as earlier
+> subcommands were added above it; the passage it names has not moved.)
 >
 > On its own that does not defeat archival, which re-does the same digest
 > comparison. What it defeats is §4's *shape* guarantee: reconstruction
@@ -387,6 +397,18 @@ machine has the drive.
 §4.3 is explicit that the plan contains no check-then-write. Two records of one
 cartridge would be two records free to disagree.
 
+> **Corrected 2026-08-27 (Task 10 whole-branch review): the sentence above
+> contradicts the paragraph it sits three lines above.** "Verified sessions
+> not yet on tape" claims a filter this repository cannot compute — it
+> "records no tape state" at all, so nothing here can distinguish a session
+> a human already wrote to a cartridge last week from one nobody has ever
+> staged. `wlpp tape-manifest` (`_staged_entries`/`_verified_archives`)
+> lists every verified session, full stop, every time it runs; the code is
+> right, and matches the "two records free to disagree" reasoning below it
+> exactly — tracking "not yet on tape" here would be a second record of the
+> same fact Plan 25's own tables own. A human still has to remember which
+> entries on a given manifest they already carried to a drive.
+
 **The seam the institutional online archive would attach to** is the same
 listing: a destination that takes a verified artifact and returns a location
 triple. Deferred by the 2026-08-27 ruling, named here so it is not rediscovered.
@@ -487,4 +509,4 @@ of it is testable today with no hardware and no real recording.
 | Parent §8.5 | the human "checked good" verdict is replaced by a derived predicate plus a hold; a reversal, argued from §3.3's own rehydration path (§5.1) |
 | Parent §8.5 | its OPEN on the Buccino citation is **discharged** (§2) |
 | Parent §10 | the daily report gains the blocking reclamation condition per unreclaimed session (§5.2), and the list of sessions whose rig may clear its copy (§3.2) |
-| `wl.yaml` | `zarr` and a codec become runtime dependencies; `spikeinterface` moves from format oracle to runtime here rather than at 2b-2's reader seam, whichever lands first |
+| `wl.yaml` | `zarr` and a codec become runtime dependencies; `spikeinterface` moves from format oracle to runtime here rather than at 2b-2's reader seam, whichever lands first — **corrected 2026-08-27, Task 10 whole-branch review: this did not happen.** `archive/store.py` and `archive/verify.py` import `zarr` directly, never `spikeinterface`, and `wl.yaml`'s own entry for it still correctly says "the format oracle for the synthetic generator" — the code is right and this row was not; `spikeinterface` remains format-oracle-only pending 2b-2's reader seam |

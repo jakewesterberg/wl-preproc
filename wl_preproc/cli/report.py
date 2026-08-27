@@ -180,9 +180,12 @@ def _quarantine_lines(row: dict, new_since: datetime.datetime) -> list[str]:
     return [head, f"  - {detail}"] if detail else [head]
 
 
-def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
+def _verified_archives(
+    prefix: str = DEFAULT_PREFIX, nas_root: Path | None = None
+) -> list[dict] | None:
     """Every archived session whose every RECORDED `ArchiveVerification` row
-    matched -- an approximation of design spec section 5.2 condition 2, not
+    matched AND whose completion sentinel is confirmed present on the NAS
+    itself -- an approximation of design spec section 5.2 condition 2, not
     that condition itself, and the difference is worth stating precisely
     (review round: an earlier version of this docstring overclaimed the two
     were the same thing). Condition 2, as `archive/reclaim.py`'s own
@@ -190,18 +193,39 @@ def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
     `expected_file_count` -- a count read fresh from the session's DONE
     markers on every call. This function compares `len(matched)` against
     `len(verifications)`, the row count ALREADY on record, and reads no
-    marker and no filesystem at all. The two agree whenever verification ran
-    to completion and the session's file set has not changed since -- true
-    of every session this codebase can currently produce -- and diverge only
-    if a session's DONE markers gained files after its `ArchiveVerification`
-    rows were written, a case nothing in this design currently creates. That
-    gap is accepted deliberately here: this function is called from
-    `build_report` (see below) and from `cli/main.py`'s `_staged_entries`
-    (`wlpp tape-manifest`), and re-reading every archived session's markers
+    marker at all. The two agree whenever verification ran to completion and
+    the session's file set has not changed since -- true of every session
+    this codebase can currently produce -- and diverge only if a session's
+    DONE markers gained files after its `ArchiveVerification` rows were
+    written, a case nothing in this design currently creates. That gap is
+    accepted deliberately here: this function is called from `build_report`
+    (see below) and from `cli/main.py`'s `_staged_entries` (`wlpp
+    tape-manifest`), and re-reading every archived session's DONE markers
     from disk for a rows-only "is this staged for a cartridge" question would
     reintroduce the exact per-session filesystem cost review moved OUT of
     the responder's hot path for `_unreclaimed_sessions` below -- see that
     function's own docstring.
+
+    **The sentinel check is not the same accepted gap.** Found in review
+    (Task 10 whole-branch pass, part of the BLOCKING finding): this function
+    used to read only DATABASE rows, never the filesystem, so a partial NAS
+    publish -- `copytree`/`manifest_digest` raising mid-`archive_session`,
+    the exact failure this design most expects -- that left a STALE prior
+    row in place (fixed separately, in `archive/stage.py::archive_session`)
+    would still have been reported here as verified even after that fix,
+    for a session `archive_session` had never actually gotten to insert a
+    fresh row for at all: a row-only read cannot distinguish "confirmed
+    whole" from "a write that never finished", which is `SENTINEL_NAME`'s
+    entire declared purpose (`archive/stage.py`'s own module docstring:
+    "a half-copied artifact and a finished one are the same observation"
+    without it) -- and before this fix NOTHING outside tests ever read it.
+    `nas_root` is `None`-able and FAILS CLOSED: absent, no row can ever
+    verify (see the `is None` branch below), because "not checked" must
+    never render as "checked, and it passed" -- the identical reasoning
+    `daemon.run_once`'s `archived: None` already applies to the archival
+    stage itself. Returns `None` outright (not `[]`) in that case, so a
+    caller can render "not checked" instead of a fabricated "0 verified" --
+    the same `count_stale_jobs`-style distinction, applied here.
 
     An `ArchiveArtifact` row with ZERO `ArchiveVerification` children is not
     verified -- the same `len(matched) > 0` trap `archive/reclaim.py`'s own
@@ -215,7 +239,8 @@ def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
     section 5.2 already computes, read for a different purpose") and
     `build_report` below. Living here rather than in a third module: this
     file's whole job is already "read state, never write" (see this module's
-    own docstring), and this predicate reads, nothing else. Underscored and
+    own docstring), and this predicate reads, nothing else -- reading the
+    sentinel's mere presence is still reading, not writing. Underscored and
     imported across a module boundary anyway, the same as `_candidate_dirs`
     below in `gather_readings` -- package-internal, not public API, and this
     docstring is what names both callers.
@@ -227,6 +252,10 @@ def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
     hot, lock-held polling path for no reason, since `build_health` never
     reads either result).
     """
+    if nas_root is None:
+        return None
+
+    from wl_preproc.archive.stage import SENTINEL_NAME
     from wl_preproc.schema import archive as archive_schema
 
     archive_schema.activate(prefix=prefix)
@@ -236,6 +265,18 @@ def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
         verifications = archive_schema.ArchiveVerification & key
         matched = verifications & "matched = 1"
         if len(verifications) == 0 or len(matched) != len(verifications):
+            continue
+        # `.is_file()`, guarded: a permission fault on a NAS mount (EACCES,
+        # not swallowed by pathlib's own ignored-errno set -- see `ingest/
+        # watcher.py::_candidate_dirs`'s own extensively-verified reasoning
+        # for the identical guard) must read as "not confirmed", the same
+        # fail-closed direction as `nas_root is None` above, not crash the
+        # whole daily report over one unreadable mount.
+        try:
+            confirmed = (nas_root / row["archive_path"] / SENTINEL_NAME).is_file()
+        except OSError:
+            confirmed = False
+        if not confirmed:
             continue
         verified.append(
             {
@@ -249,6 +290,39 @@ def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
             }
         )
     return verified
+
+
+def _orphaned_archiving_dirs(root: Path) -> list[Path]:
+    """`.{session_id}.archiving` scratch directories `archive_session`
+    created and never reclaimed. `archive/stage.py`'s own `scratch =
+    session_dir.parent / f".{session_dir.name}.archiving"` is removed only
+    when `all_matched` (that module's own docstring: "Scratch is reclaimed
+    only once the artifact is known-good"). A session whose most recent
+    archive attempt failed verification leaves one behind -- a full-size
+    compressed copy parked on the very scratch disk `refuses_new_sessions`
+    (parent spec section 8.4's "Backpressure at ingest") exists to protect
+    -- and before this, nothing named it anywhere (Task 10 whole-branch
+    review).
+
+    Best-effort, matching every other filesystem read in this module: a
+    glob that cannot run at all (an unreadable or missing `root`) reports
+    zero rather than crashing the whole report over it, and a fault
+    checking one candidate is skipped rather than fatal to the rest --
+    the same asymmetry `ingest/watcher.py::_candidate_dirs` documents at
+    length for the identical class of call.
+    """
+    try:
+        candidates = list(root.glob(".*.archiving"))
+    except OSError:
+        return []
+    orphaned = []
+    for path in candidates:
+        try:
+            if path.is_dir():
+                orphaned.append(path)
+        except OSError:
+            continue
+    return sorted(orphaned)
 
 
 def _unreclaimed_sessions(
@@ -569,6 +643,7 @@ def build_report(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
     now: datetime.datetime | None = None,
+    nas_root: Path | None = None,
 ) -> str:
     from wl_preproc.ingest import landing
     from wl_preproc.schema import ingest
@@ -582,7 +657,12 @@ def build_report(
     # `gather_readings`' path, since `build_health` (the responder) also
     # calls that function on every poll and reads neither result.
     unreclaimed, unarchived_count = _unreclaimed_sessions(root, prefix=prefix)
-    verified_archives = _verified_archives(prefix=prefix)
+    # `None` when `nas_root` is not given -- `_verified_archives`' own
+    # fail-closed contract (Task 10 whole-branch review, BLOCKING fix 2).
+    # Rendered as its own, explicitly-named state below, not silently
+    # treated as zero.
+    verified_archives = _verified_archives(prefix=prefix, nas_root=nas_root)
+    orphaned_archiving = _orphaned_archiving_dirs(root)
 
     # Two things `gather_readings` deliberately does not compute, because
     # neither is a status number the responder needs -- both are markdown-
@@ -700,14 +780,28 @@ def build_report(
     # missing section and an empty one must never render identically.
     lines += [
         "",
-        f"## Sessions whose rig may clear its copy — {len(verified_archives)}",
+        "## Sessions whose rig may clear its copy"
+        + ("" if verified_archives is None else f" — {len(verified_archives)}"),
         "",
     ]
-    lines += [
-        f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
-        f"verified at `{row['archive_host']}:{row['archive_share']}/{row['archive_path']}`"
-        for row in verified_archives
-    ] or ["- none"]
+    if verified_archives is None:
+        # `nas_root` was not given, so `_verified_archives` could not confirm
+        # the completion sentinel on the NAS for anything and failed closed
+        # (its own docstring). Named explicitly rather than rendered as "0":
+        # "not checked" and "checked, zero sessions verified" must never
+        # read identically, the same principle this module's own docstring
+        # states one level up for the unreclaimed-sessions section.
+        lines += [
+            "- not checked: no `--nas-root` given to `wlpp report`, so the "
+            "completion sentinel could not be confirmed on the NAS for any "
+            "session -- nothing is reported safe to clear until it can be."
+        ]
+    else:
+        lines += [
+            f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+            f"verified at `{row['archive_host']}:{row['archive_share']}/{row['archive_path']}`"
+            for row in verified_archives
+        ] or ["- none"]
 
     lines += ["", "## Deferred (transient contention)", ""]
     lines += [_DEFERRED_NOTE]
@@ -721,6 +815,20 @@ def build_report(
 
     lines += ["", "## Disk", ""]
     lines += [disk]
+    if orphaned_archiving:
+        # Named, not silently absent -- the same "a missing section and an
+        # empty one must never render identically" principle this module's
+        # own docstring states, applied to a single line rather than a
+        # whole section: a report that says nothing here when one of these
+        # is sitting on scratch is indistinguishable from a report that
+        # checked and found none (Task 10 whole-branch review).
+        noun = "directory" if len(orphaned_archiving) == 1 else "directories"
+        lines += [
+            f"- {len(orphaned_archiving)} orphaned `.archiving` scratch {noun} "
+            "(a failed archive attempt's compressed copy, reclaimed only by "
+            "a future successful archive of the same session): "
+            + ", ".join(f"`{path}`" for path in orphaned_archiving)
+        ]
 
     lines += ["", "## Not yet reported", ""]
     lines += [f"- **{name}** — {why}" for name, why in _NOT_YET_REPORTED]
@@ -733,11 +841,12 @@ def write_report(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
     now: datetime.datetime | None = None,
+    nas_root: Path | None = None,
 ) -> Path:
     """Write `out_dir/YYYY-MM-DD.md` and return its path."""
     at = now or datetime.datetime.now(datetime.UTC)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{at:%Y-%m-%d}.md"
-    path.write_text(build_report(root, prefix=prefix, now=at), encoding="utf-8")
+    path.write_text(build_report(root, prefix=prefix, now=at, nas_root=nas_root), encoding="utf-8")
     return path

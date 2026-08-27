@@ -103,7 +103,9 @@ def _session_key_from_dir(session_dir: Path) -> dict:
     return manifest_session_key(manifest)
 
 
-def _staged_entries(prefix: str = DEFAULT_PREFIX) -> list[TapeEntry]:
+def _staged_entries(
+    prefix: str = DEFAULT_PREFIX, nas_root: Path | None = None
+) -> list[TapeEntry] | None:
     """Verified artifacts, shaped for `staging_manifest`.
 
     The "every file verified" predicate this wraps is NOT re-derived here --
@@ -113,10 +115,21 @@ def _staged_entries(prefix: str = DEFAULT_PREFIX) -> list[TapeEntry]:
     may clear its copy are the same fact, read for two different audiences).
     `main.py` already imports from `report.py` for the `report` subcommand
     below, so this adds no new edge, just a second name crossing it.
+
+    Returns `None`, not `[]`, when `nas_root` is not given -- propagated
+    straight from `_verified_archives`' own fail-closed contract (Task 10
+    whole-branch review, BLOCKING fix 2: the completion sentinel could not
+    be confirmed on the NAS for anything, so nothing is "verified" here
+    either). The `tape-manifest` dispatch below prints this distinctly from
+    `staging_manifest([])`'s own "No sessions are staged for tape." --
+    "not checked" and "checked, genuinely zero" must never read the same.
     """
     from wl_preproc.archive.tape import TapeEntry
     from wl_preproc.cli.report import _verified_archives
 
+    verified = _verified_archives(prefix=prefix, nas_root=nas_root)
+    if verified is None:
+        return None
     return [
         TapeEntry(
             session_id=f"{row['subject']} @ {row['session_datetime']:%Y-%m-%d %H:%M:%S}",
@@ -124,7 +137,7 @@ def _staged_entries(prefix: str = DEFAULT_PREFIX) -> list[TapeEntry]:
             bytes=row["compressed_bytes"],
             manifest_digest=row["manifest_digest"],
         )
-        for row in _verified_archives(prefix=prefix)
+        for row in verified
     ]
 
 
@@ -192,9 +205,16 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("--root", required=True, help="directory holding session dirs")
     report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
     report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # Optional, matching `wlpp daemon`'s own `--nas-root` (Controller ruling
+    # F) for the identical reason: the NAS does not exist yet, so a report
+    # that REQUIRED it would be unrunnable today. Absent, `_verified_archives`
+    # cannot confirm the completion sentinel for anything and fails closed
+    # (Task 10 whole-branch review, BLOCKING fix 2) -- "Sessions whose rig
+    # may clear its copy" prints "not checked" rather than a fabricated zero.
+    report_parser.add_argument("--nas-root", type=Path, default=None)
 
     responder_parser = subparsers.add_parser(
-        "responder", help="run the HTTP responder wl.works polls (design spec section 8/9)"
+        "responder", help="run the HTTP responder wl.works polls (parent spec section 8/9)"
     )
     # No default -- controller ruling for Task 9: the port must be stated
     # identically in the systemd unit, the protocol document (Task 10) and
@@ -243,6 +263,12 @@ def main(argv: list[str] | None = None) -> int:
     # Controller ruling C names for `archive`'s `--nas-root`/`--host`/
     # `--share`, just not one of the five rulings that already lists it.
     tape_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # Optional, matching `wlpp report`'s own `--nas-root` and for the
+    # identical reason (Controller ruling F's pattern): absent,
+    # `_staged_entries` cannot confirm the completion sentinel on the NAS
+    # for anything and fails closed (Task 10 whole-branch review, BLOCKING
+    # fix 2).
+    tape_p.add_argument("--nas-root", type=Path, default=None)
 
     try:
         args = parser.parse_args(argv)
@@ -310,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         # publishing happens, not only after.
         key = _session_key_from_dir(session_dir)
         outcome = archive_session(
-            session_dir, nas_root_for_subject(args.nas_root, key), args.host, args.share
+            session_dir, nas_root_for_subject(args.nas_root, key), key, prefix=args.prefix
         )
         for verdict in outcome.verdicts:
             if not verdict.matched:
@@ -436,7 +462,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "tape-manifest":
         from wl_preproc.archive.tape import staging_manifest
 
-        print(staging_manifest(_staged_entries(prefix=args.prefix)))
+        entries = _staged_entries(prefix=args.prefix, nas_root=args.nas_root)
+        if entries is None:
+            print(
+                "not checked: no --nas-root given; the completion sentinel "
+                "could not be confirmed on the NAS for any session, so "
+                "nothing is listed as staged until it can be."
+            )
+            return 0
+        print(staging_manifest(entries))
         return 0
 
     if args.group == "daemon":
@@ -503,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         # even when scratch is tight: `outcomes` is then empty regardless of
         # `refuses_new_sessions`, so there is nothing to report turning
         # away, and `responder/health.py` already surfaces low headroom as
-        # `degraded` on every wl.works poll (design spec section 8.4's "and
+        # `degraded` on every wl.works poll (parent spec section 8.4's "and
         # alerts" half) -- a second alerting path here would be a second
         # definition of "is this host degraded", which `_featured_key`'s own
         # docstring says this project has already found in four separate
@@ -539,7 +573,9 @@ def main(argv: list[str] | None = None) -> int:
         # found and fixed for `ingest`; the brief for this task repeated it.
         from wl_preproc.cli.report import write_report
 
-        path = write_report(Path(args.out), Path(args.root), prefix=args.prefix)
+        path = write_report(
+            Path(args.out), Path(args.root), prefix=args.prefix, nas_root=args.nas_root
+        )
         print(path.read_text(), end="")
         return 0
 

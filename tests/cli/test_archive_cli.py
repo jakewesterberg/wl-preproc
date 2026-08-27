@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime
 import re
+from unittest.mock import patch
 
 import pytest
 
@@ -372,6 +373,84 @@ def test_a_failed_rearchive_invalidates_the_prior_good_row(landed, prefix):
     assert len(archive.ArchiveVerification & key) == 0
 
 
+def test_a_raising_publish_leaves_no_stale_row_and_drops_off_rig_may_clear(landed, prefix):
+    """The BLOCKING finding (Task 10 whole-branch review). Its sibling above,
+    `test_a_failed_rearchive_invalidates_the_prior_good_row`, covers the
+    CLEAN failure -- `archive_session` returns normally with `all_matched=
+    False`. That is not the failure this design most expects. Between
+    `rmtree(published)` and `archive_session`'s return sit `copytree` of a
+    whole session to a NAS and `manifest_digest(published)` -- exactly the
+    calls that raise on a full share, a dropped mount, a permission fault,
+    an IO error. Before this fix, a raise there meant `record_archive_
+    outcome` -- which used to own the delete -- was never called at all, so
+    a PRIOR good row survived describing bytes that might no longer exist.
+    `_verified_archives` (`cli/report.py`) reads only that row, never the
+    filesystem, so the stale row kept telling "Sessions whose rig may clear
+    its copy" and `wlpp tape-manifest` this session's archive was still
+    verified -- design spec section 3.2's own channel for telling a rig it
+    is safe to delete its only other copy of an irreplaceable recording,
+    asserting something the pipeline never actually confirmed.
+
+    Fixed two ways, both exercised here: `archive_session` now invalidates
+    the prior row itself, immediately before it starts mutating the NAS
+    (`archive/stage.py`'s own comment) -- so no row survives at all, checked
+    below. And `_verified_archives` now requires the completion sentinel be
+    confirmed present on the NAS (BLOCKING fix 2) -- so even if a row DID
+    survive some other way this file's own imagination has not covered, an
+    un-sentineled artifact still could not read as verified. Together: the
+    DB and the disk have to agree before anything tells a human to delete
+    data.
+    """
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed("rawpub1")
+    nas_root = session_dir.parent.parent / "nas"
+    archive_args = [
+        "archive",
+        "--session",
+        str(session_dir),
+        "--nas-root",
+        str(nas_root),
+        "--host",
+        "vault",
+        "--share",
+        "cold",
+        "--prefix",
+        prefix,
+    ]
+
+    # A real, good archive first -- the row this bug left stale.
+    assert main(archive_args) == 0
+    assert len(archive.ArchiveArtifact & key) == 1
+
+    # Re-archive, but the NAS-side confirm raises mid-publish -- patched
+    # where `archive_session` actually looks it up (`wl_preproc.archive.
+    # stage.manifest_digest`, imported there from `archive.store`), NOT
+    # `archive.store.manifest_digest` itself: `write_store`'s OWN internal
+    # call to it (computing `StoreResult.manifest_digest` from the LOCAL
+    # scratch copy, before anything below even reaches the NAS) resolves
+    # through `store.py`'s own module globals and must keep succeeding, or
+    # this test would never reach the publish step it exists to probe.
+    # `cli/main.py`'s `archive` dispatch has no `try` around `archive_
+    # session` (named explicitly in the finding), so this propagates.
+    with patch(
+        "wl_preproc.archive.stage.manifest_digest",
+        side_effect=OSError("simulated NAS fault"),
+    ):
+        with pytest.raises(OSError):
+            main(archive_args)
+
+    assert len(archive.ArchiveArtifact & key) == 0, (
+        "a raise mid-publish must not leave the prior row in place -- "
+        "'no row' must always honestly mean 'not archived'"
+    )
+    assert len(archive.ArchiveVerification & key) == 0
+
+    body = build_report(session_dir.parent, prefix=prefix, nas_root=nas_root)
+    section = _section(body, "Sessions whose rig may clear its copy")
+    assert key["subject"] not in section
+
+
 def test_two_subjects_sharing_a_session_id_do_not_collide_on_the_nas(landed, prefix):
     """Review round, Important. `archive_session`'s own publish path
     (`archive/stage.py`) is a bare `SessionId` -- date plus index
@@ -615,6 +694,38 @@ def _archive_and_verify_directly(key, *, n_files: int):
         )
 
 
+def test_a_db_row_with_no_sentinel_on_disk_is_not_verified(landed, prefix):
+    """BLOCKING fix 2, isolated from fix 1. `test_a_raising_publish_leaves_
+    no_stale_row_and_drops_off_rig_may_clear` above proves the invalidation
+    fix (fix 1) already keeps a STALE row from surviving a raising publish
+    -- but that alone does not prove fix 2 (the sentinel requirement) is
+    doing any work of its own, since a session with no row at all is
+    trivially excluded either way. This session's row is complete by every
+    DB-only measure `_archive_and_verify_directly(n_files=1)` can produce --
+    an `ArchiveArtifact` row, one matching `ArchiveVerification` child, the
+    same shape the OLD `_verified_archives` (rows only) would have called
+    verified -- and `archive_session` never ran for it at all, so fix 1's
+    invalidation has no reason to have touched it. What excludes it now is
+    specifically that nothing ever wrote `SENTINEL_NAME` under its
+    `archive_path` on the (real, if empty) NAS root."""
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed("nosent1")
+    nas_root = session_dir.parent.parent / "nas"
+    # Explicit, not relied on from an earlier `main(["archive", ...])` call
+    # in this same test the way other callers of `_archive_and_verify_
+    # directly` get it for free: this test never runs a real archive, so
+    # nothing else in its own body activates the schema first.
+    archive.activate(prefix=prefix)
+    _archive_and_verify_directly(key, n_files=1)
+    assert len(archive.ArchiveVerification & key) == 1  # the DB half is genuinely complete
+
+    body = build_report(session_dir.parent, prefix=prefix, nas_root=nas_root)
+
+    section = _section(body, "Sessions whose rig may clear its copy")
+    assert key["subject"] not in section
+
+
 def test_tape_manifest_lists_a_verified_session_and_excludes_an_unverified_one(landed, prefix, capsys):
     session_dir, verified_key = landed("tpm1")
     _, unverified_key = landed("tpm2")
@@ -638,12 +749,26 @@ def test_tape_manifest_lists_a_verified_session_and_excludes_an_unverified_one(l
     # An artifact row with NO verification children -- "artifact exists,
     # nothing verified yet" -- which must never read as staged.
     _archive_and_verify_directly(unverified_key, n_files=0)
+    # Cleared here, not left to accumulate: `wlpp archive` above ALSO prints
+    # "archived: tpm1 @ ..." to stdout, which itself contains `verified_key
+    # ["subject"]` -- found in review (Task 10 whole-branch pass) while
+    # threading `--nas-root` through this test: `capsys.readouterr()` was
+    # previously called only once, after BOTH commands, so the assertions
+    # below passed on the `archive` command's own leftover output even when
+    # `tape-manifest` itself printed nothing relevant -- proven directly by
+    # reading `out`'s repr before this fix, not merely suspected.
+    capsys.readouterr()
 
-    code = main(["tape-manifest", "--prefix", prefix])
+    # `--nas-root` is what makes `_verified_archives`' sentinel check
+    # (Task 10 whole-branch review, BLOCKING fix 2) actually confirm this
+    # session rather than fail closed with "not checked" -- the real
+    # sentinel `wlpp archive` wrote above lives under this exact root.
+    code = main(["tape-manifest", "--nas-root", str(nas_root), "--prefix", prefix])
     out = capsys.readouterr().out
 
     assert code == 0
     assert "no sessions" not in out.lower()
+    assert "not checked" not in out
     assert verified_key["subject"] in out
     assert unverified_key["subject"] not in out
 
@@ -701,6 +826,22 @@ def test_report_counts_a_landed_but_never_archived_session_separately(landed, pr
 
 
 def test_report_names_a_verified_archive_as_clear_to_the_rig(landed, prefix):
+    """`nas_root` passed to `build_report` -- required now (Task 10
+    whole-branch review, BLOCKING fix 2): `_verified_archives` confirms the
+    completion sentinel on the NAS itself, not just DB rows, and fails
+    closed to "not checked" without it.
+
+    Filtered to the subject's own line before checking "vault"/"cold",
+    matching the sibling test below (`test_report_names_the_blocking_
+    condition_for_an_unreclaimed_session`) rather than searching the whole
+    section body (cheap correction, Task 10 whole-branch review): this
+    shared-database suite has FOUR other tests in this file that also
+    archive with these identical `--host vault --share cold` values under
+    this same session-scoped `prefix`, so a bare `"vault" in section` proves
+    nothing about THIS row specifically -- it would pass even if this
+    test's own session never appeared in the section at all, so long as any
+    other verified session did.
+    """
     session_dir, key = landed("rptcl1")
     nas_root = session_dir.parent.parent / "nas"
     main(
@@ -719,12 +860,13 @@ def test_report_names_a_verified_archive_as_clear_to_the_rig(landed, prefix):
         ]
     )
 
-    body = build_report(session_dir.parent, prefix=prefix)
+    body = build_report(session_dir.parent, prefix=prefix, nas_root=nas_root)
 
     section = _section(body, "Sessions whose rig may clear its copy")
-    assert key["subject"] in section
-    assert "vault" in section
-    assert "cold" in section
+    line = [ln for ln in section.splitlines() if key["subject"] in ln]
+    assert len(line) == 1, section
+    assert "vault" in line[0]
+    assert "cold" in line[0]
 
 
 def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, prefix):

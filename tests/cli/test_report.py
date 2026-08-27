@@ -786,3 +786,57 @@ def test_a_stale_reservation_is_both_counted_and_visible_to_the_snapshot(
         ReportJobsProbeDerived.jobs.drop()
         ReportJobsProbeDerived.drop_quick()
         ReportJobsProbeSource.drop_quick()
+
+
+def test_an_orphaned_archiving_directory_is_named_in_the_disk_section(scanned):
+    """Task 10 whole-branch review, cheap correction: `archive/stage.py`'s
+    `scratch = session_dir.parent / f".{session_dir.name}.archiving"` is
+    reaped only when `all_matched` -- a session whose most recent archive
+    attempt failed verification leaves this directory sitting on scratch,
+    a full-size compressed copy nothing named anywhere before this. No real
+    `archive_session` call is run here (this suite already covers that path
+    end to end, expensively, in `tests/archive/test_stage.py`); this test's
+    only claim is about `build_report`'s own rendering, so the directory is
+    created directly, matching the exact name `archive_session` would have
+    used for this session.
+    """
+    root, prefix = scanned("orph1")
+    session_id = CI_RECIPE.session_id
+    scratch = root / f".{session_id}.archiving"
+    scratch.mkdir()
+    (scratch / "some-chunk.bin").write_bytes(b"not a real zarr chunk")
+
+    body = build_report(root, prefix=prefix)
+
+    section = _section(body, "Disk")
+    # The specific phrase, not the bare word "orphaned": pytest's own
+    # `tmp_path` is named after the TEST FUNCTION, and this test's own name
+    # contains "orphaned" -- a bare substring check against `section` would
+    # pass on the temp path alone, proving nothing about the report line
+    # (found directly: the negative test below failed on exactly this before
+    # its own assertion was narrowed the identical way).
+    assert "orphaned `.archiving`" in section
+    assert str(scratch) in section
+
+
+def test_no_orphaned_archiving_directory_is_silent_in_the_disk_section(scanned):
+    """The negative direction, pinned separately rather than assumed: a
+    session with no leftover `.archiving` directory must not print the
+    orphaned-directory line at all -- proving it is genuinely conditional
+    on what `_orphaned_archiving_dirs` finds, not a hardcoded string every
+    report carries regardless.
+
+    Checks the specific phrase, not the bare word "orphaned": this test's
+    OWN name contains "orphaned", and pytest names `tmp_path` after the
+    test function, so a bare substring check against `section` (which
+    includes the scratch path) passed on the temp path alone before this
+    fix -- proving nothing about whether the report line itself appeared,
+    caught by reading the actual failure rather than assuming the first
+    version was right.
+    """
+    root, prefix = scanned("orph2")
+
+    body = build_report(root, prefix=prefix)
+
+    section = _section(body, "Disk")
+    assert "orphaned `.archiving`" not in section

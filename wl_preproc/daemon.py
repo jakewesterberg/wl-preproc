@@ -546,11 +546,15 @@ def _archive_stage_keys() -> list[dict]:
     was") -- alongside a genuine pass. Equality names exactly the one state
     the 2026-08-27 archival-and-compression design's own §3.1 means by
     "verification passes", and excludes the other two states by construction
-    rather than by remembering to enumerate them. `archive/layout.py`'s own docstring
-    already named this as unfinished business: "`Integrity.SKIPPED` is
-    recorded... but nothing in this repository currently branches on it --
-    not here, and not yet in the archival trigger, which is where that
-    decision belongs."
+    rather than by remembering to enumerate them. `archive/layout.py`'s own
+    docstring used to name this restriction as unfinished business -- "not
+    here, and not yet in the archival trigger, which is where that decision
+    belongs" -- and this function is that resolution, not a second instance
+    of the gap; that passage was corrected 2026-08-27 (Task 10 whole-branch
+    review) to cite this restriction rather than describe its absence, with
+    the one real asymmetry that survives named there precisely: this covers
+    only the daemon's own automatic pass, and `wlpp archive` run by hand
+    still does not consult `integrity` at all.
 
     **`- archive.ArchiveArtifact` is the done-marker**, mirroring
     `_event_stage_keys()`'s own `- pipeline.event.BehaviorRecording`: a
@@ -613,7 +617,7 @@ def _archive_stage(
         session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
         try:
             outcome = archive_session(
-                session_dir, nas_root_for_subject(nas_root, key), host, share
+                session_dir, nas_root_for_subject(nas_root, key), key, prefix=prefix
             )
             record_archive_outcome(key, outcome, nas_root, host, share, prefix=prefix)
         except Exception as exc:  # one bad session must not take down the run
@@ -678,9 +682,14 @@ def run_once(
     new to archive", collapsing it with the genuinely-ran-and-found-nothing
     case. `cli/main.py`'s `daemon` dispatch prints this distinction rather
     than flattening it to a bare number. Every one of the three must be
-    present, not just one -- `archive_session(session_dir, nas_root, host,
-    share)` has no partial-configuration mode, so a lone `--host` with no
-    `--nas-root` is exactly as unusable as none of the three at all.
+    present, not just one -- `record_archive_outcome`'s own `host`/`share`
+    parameters (its `ArchiveArtifact` row needs both) have no
+    partial-configuration mode either, so a lone `--host` with no
+    `--nas-root` is exactly as unusable as none of the three at all. (This
+    used to cite `archive_session`'s own signature for the identical point;
+    `archive_session` no longer takes `host`/`share` at all -- Task 10
+    whole-branch review, cheap correction -- so the citation moved to the
+    function that still does.)
     """
     activate_all(prefix=prefix)
 
