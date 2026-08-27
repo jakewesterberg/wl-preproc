@@ -14,7 +14,50 @@ import numpy as np
 import pytest
 from testcontainers.community.mysql import MySqlContainer
 
+from wl_preproc.ingest import watcher
 from wl_preproc.schema._compat import apply_datajoint_compat
+
+
+@pytest.fixture(autouse=True)
+def _healthy_scratch_by_default(monkeypatch):
+    """Insulate every test from this machine's REAL free disk space.
+
+    `responder/health.py`'s own comment already documents the fact this
+    exists to neutralise: "on this project's own dev sandbox the real disk
+    sits under the 800 GiB floor" (confirmed again here: `df` on this
+    machine). That was always true and always harmless before
+    `ingest/watcher.py::refuses_new_sessions` (Task 6, design spec section
+    8.4) started ACTING on `scratch_headroom`'s reading rather than merely
+    reporting it: `cli/report.py`'s own `scratch_headroom` call only ever
+    renders a number into a "Disk" section, so a low real reading there
+    just prints "(LOW)" and nothing else depended on it. `scan_once` now
+    refuses admission on that same reading, so without this fixture, every
+    test anywhere in the suite that lands a session through `scan_once` --
+    directly, or through `tests/cli/test_report.py`'s and `tests/responder/
+    conftest.py`'s own `scanned` fixtures -- would silently get
+    `Outcome.REFUSED` back on any machine whose scratch happens to run
+    tighter than the lab's real rigs usually do. A test's outcome must not
+    depend on how much free space the machine running it happens to have.
+
+    Patches `wl_preproc.ingest.watcher.scratch_headroom` specifically -- the
+    name `refuses_new_sessions` actually reads, bound into `watcher`'s own
+    namespace by its own `from wl_preproc.cli.doctor import scratch_headroom`
+    -- not `wl_preproc.cli.doctor.scratch_headroom` itself, which a patch
+    there would leave `watcher`'s already-bound copy completely unaware of.
+    `cli/report.py`'s separately-bound copy is left alone entirely: it still
+    reports this machine's real reading, exactly as it always has, for any
+    test that cares what the Disk section renders.
+
+    A test that wants the real refusal behaviour re-patches this exact
+    target itself, inside its own body -- see `tests/ingest/
+    test_backpressure.py`, most of whose tests do precisely this (one
+    reads watcher.py's own source text instead and never touches this
+    target at all). A `with patch(...)` there layers on top of this
+    fixture's patch for its own scope and is restored to THIS fixture's
+    value on exit, not to the real function -- ordinary mock/monkeypatch
+    stacking, not a special case.
+    """
+    monkeypatch.setattr(watcher, "scratch_headroom", lambda path: (4000, True))
 
 
 @pytest.fixture(scope="session")

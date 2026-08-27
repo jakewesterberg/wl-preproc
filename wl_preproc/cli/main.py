@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         # branch is ever reached, for every subcommand, not just `ingest`.
         # Found by running the full suite after adding this branch: every CLI
         # guardrail test failed with exactly that traceback.
-        from wl_preproc.ingest.watcher import scan_once
+        from wl_preproc.ingest.watcher import Outcome, scan_once
 
         result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
         # Outcomes are printed FIRST, unconditionally, before root_error is
@@ -233,6 +233,20 @@ def main(argv: list[str] | None = None) -> int:
         # dropped from the one place an operator would see it.
         for session_dir, outcome in sorted(result.outcomes.items()):
             print(f"  [{outcome}] {session_dir}")
+        # A refused scan admitted nothing at all -- every waiting candidate
+        # was turned away by scratch headroom (watcher.refuses_new_sessions),
+        # never evaluated -- and exiting 0 here would read exactly like a
+        # scan that ingested cleanly to anything watching this command's
+        # exit code (a cron wrapper, a systemd unit). Checked independently
+        # of root_error below: the two name different faults (tight scratch
+        # vs. an unreadable root), and either one, or both at once, must be
+        # non-zero.
+        refused = Outcome.REFUSED in result.outcomes.values()
+        if refused:
+            print(
+                f"error: {args.root} was not scanned: scratch headroom is below the "
+                "floor or could not be measured; refusing new sessions"
+            )
         if result.root_error is not None:
             # An unreadable, missing, or mistyped --root produces the same
             # empty outcomes dict a genuinely empty root does -- exit 0, no
@@ -241,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             # reporting success is exactly "a session simply never appears"
             # arriving through the front door instead of a stalled transfer.
             print(f"error: {args.root} was not fully scanned: {result.root_error}")
+        if refused or result.root_error is not None:
             return 1
         return 0
 
