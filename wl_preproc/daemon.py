@@ -19,6 +19,7 @@ import datajoint as dj
 
 from wl_preproc.schema import (
     DEFAULT_PREFIX,
+    archive,
     core,
     coverage,
     ephys,
@@ -151,7 +152,16 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # rather than raising, and its two callers below skip a `None` schema, so this
 # tuple can still name `events` — satisfying the completeness claim — without
 # inventing a `dj.Schema` this module would never activate.
+#
+# It became NINE with the 2026-08-27 archival-and-compression design's
+# `archive` module, caught by the same test again rather than by a person.
+# `archive` is a third case, like `ephys`: all four of its tables —
+# `ArchiveArtifact`, `ArchiveVerification`, `ReclamationHold`,
+# `ScratchReclamation` — are `dj.Manual`, nothing Computed or Imported, so it
+# owns no `~jobs` table of its own either; it is listed here only so the
+# completeness claim above stays true.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
+    ("archive", archive),
     ("core", core),
     ("coverage", coverage),
     ("ephys", ephys),
