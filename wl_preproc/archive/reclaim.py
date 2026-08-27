@@ -98,7 +98,11 @@ def reclaim_conditions(
         # round: an earlier draft cited "the rehydration plan" as if that
         # were a document -- checked docs/superpowers/specs/ and .../plans/
         # directly, and no such document exists; the design spec treats
-        # rehydration as a supported PATH, section 8.4, not a named artifact)
+        # rehydration as a supported PATH, section 3.3, not a named artifact
+        # -- corrected 2026-08-27, Task 10 review: this line said "section
+        # 8.4" before, the easy mix-up since 8.4 IS the correct citation two
+        # lines up for the paramset/warm-copy clause this comment opens
+        # with, but 8.4 never itself mentions rehydration at all)
         # -- so this passes today and gains its query once each half does.
         Condition(
             "no_pending_paramset_or_warm_copy",

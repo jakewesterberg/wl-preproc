@@ -12,9 +12,12 @@ compute machine. This is the same reasoning that put Phase 1c-5 ahead of 2b
 while the box was in transit.
 
 **Two of the parent spec's positions do not survive this design**, and both are
-recorded rather than quietly rewritten: §8.4's storage arithmetic is
+recorded rather than quietly rewritten: §3.3's storage arithmetic is
 conservative by a factor of about 1.8 (§2), and §8.5's human gate is replaced by
-a derived predicate on an argument §8.4 itself supplies (§5).
+a derived predicate on an argument §3.3 itself supplies (§5). (Both corrected
+2026-08-27, Task 10 review — this paragraph originally credited §8.4 for both;
+§8.4 covers compression and archival as a topic, but the storage sizing and the
+rehydration path are §3.3's, not its own.)
 
 ---
 
@@ -298,7 +301,9 @@ reclamation rather than on archival, reasoning that compression and archival are
 while reclamation is the irreversible one. That reasoning is sound and this
 design keeps its placement.
 
-**What it did not weigh is its own §8.4.** That section establishes rehydration
+**What it did not weigh is its own §3.3** — not §8.4, which lists
+reclamation's own preconditions but never itself mentions rehydration
+(corrected 2026-08-27, Task 10 review). That section establishes rehydration
 as a supported path: *"rehydration for reprocessing is 'decompress to scratch' —
 the same code path as a cold fetch, minus the slow retrieval."* Once the
 artifact is on the NAS and verified against the rig's own hash, **the scratch
@@ -479,7 +484,7 @@ of it is testable today with no hardware and no real recording.
 |---|---|
 | Parent §3.3 | the storage arithmetic is conservative by ~1.8×: ~100 GB/session and ~10.4 TB/year, not 180 GB and 15–20 TB (§2) |
 | Parent §8.4 | *"cold copy confirmed"* leaves the reclamation preconditions — this pipeline cannot observe it, and tape is a human's step (§0, §5.2) |
-| Parent §8.5 | the human "checked good" verdict is replaced by a derived predicate plus a hold; a reversal, argued from §8.4's own rehydration path (§5.1) |
+| Parent §8.5 | the human "checked good" verdict is replaced by a derived predicate plus a hold; a reversal, argued from §3.3's own rehydration path (§5.1) |
 | Parent §8.5 | its OPEN on the Buccino citation is **discharged** (§2) |
 | Parent §10 | the daily report gains the blocking reclamation condition per unreclaimed session (§5.2), and the list of sessions whose rig may clear its copy (§3.2) |
 | `wl.yaml` | `zarr` and a codec become runtime dependencies; `spikeinterface` moves from format oracle to runtime here rather than at 2b-2's reader seam, whichever lands first |
