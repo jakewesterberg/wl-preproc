@@ -140,6 +140,37 @@ states the rule it lives under: *"Positive observations only; absence renders
 `unknown`, never 'no data'."* Without a sentinel, a half-copied artifact and a
 finished one are the same observation.
 
+### 3.1 When it runs, and why that is not a scheduling preference
+
+**Archival is triggered as soon as ingest verification passes**, before anything
+else touches the session. Ruled 2026-08-27.
+
+**Two facts settled it, and they point the same way for different reasons.**
+First, the rigs retain their own copy until this pipeline reports a verified
+archive, so a session is never single-copy — that removes the urgency argument,
+and archiving early was chosen anyway. Second, and this is the reason it costs
+nothing to choose: **the contention it trades against does not exist yet.**
+Sorting is Phase 2b and blocked behind the compute machine, so archival will be
+the only heavy IO on this box for as long as that lasts.
+
+That makes throttling an honest deferral rather than an omission (§10). When
+sorting does land, the two are the box's two IO-heavy stages and the interaction
+becomes real; deciding it now would be deciding it without the thing to measure.
+
+### 3.2 Somebody has to tell the rig it is safe
+
+The retention arrangement above has a loose end: the rig holds its copy **until
+this pipeline reports a verified archive**, and this pipeline cannot reach the
+rig. Transport is pull-only and a rig is not a wl.works client.
+
+So the report is the channel. §10's daily report gains **sessions whose archive
+is verified and whose rig may therefore clear** — the same list §5.2 already
+computes, read for a different purpose. A person acts on it.
+
+**Named rather than assumed**, because the failure is quiet: if nobody ever
+reads that line, acquisition disks fill and the rig stops recording — a failure
+that surfaces at the rig, hours away from the pipeline that caused it.
+
 **Nothing here needs the container seam.** §6.6.1's *"every pipeline stage runs
 as a container"* still applies eventually, and this stage containerises like any
 other. But 2b-1's ruling — containers before every processing stage — was
@@ -344,7 +375,12 @@ of it is testable today with no hardware and no real recording.
 3. **The high-water mark has no chosen value** (§6). It depends on the real
    scratch device and on what Phase 2's sorting actually consumes, neither of
    which exists yet.
-4. **Whether the artifact should be one file rather than a tree.** A Zarr store
+4. **Whether archival needs IO throttling** (§3.1). It runs immediately after
+   ingest, and once sorting exists the two are this box's heavy IO stages
+   competing on the same device. Deferred deliberately: the thing to measure
+   does not exist, and a throttle wrong in either direction is worse than
+   none.
+5. **Whether the artifact should be one file rather than a tree.** A Zarr store
    is a directory; `fileCount` accommodates it, and tar-on-write was rejected as
    it would defeat partial reads during rehydration. Worth revisiting if the
    tape workflow turns out to prefer single objects.
@@ -359,5 +395,5 @@ of it is testable today with no hardware and no real recording.
 | Parent §8.4 | *"cold copy confirmed"* leaves the reclamation preconditions — this pipeline cannot observe it, and tape is a human's step (§0, §5.2) |
 | Parent §8.5 | the human "checked good" verdict is replaced by a derived predicate plus a hold; a reversal, argued from §8.4's own rehydration path (§5.1) |
 | Parent §8.5 | its OPEN on the Buccino citation is **discharged** (§2) |
-| Parent §10 | the daily report gains the blocking reclamation condition per unreclaimed session (§5.2) |
+| Parent §10 | the daily report gains the blocking reclamation condition per unreclaimed session (§5.2), and the list of sessions whose rig may clear its copy (§3.2) |
 | `wl.yaml` | `zarr` and a codec become runtime dependencies; `spikeinterface` moves from format oracle to runtime here rather than at 2b-2's reader seam, whichever lands first |
