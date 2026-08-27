@@ -115,6 +115,37 @@ nothing to keep. Which one actually ran is recorded on the artifact (§8), not
 inferred from a constant in the code — an archive read in 2031 must be able to
 say how it was written without consulting that year's source tree.
 
+### 2.1 Measured 2026-08-27, and it settles the codec
+
+**`wavpack-numcodecs` does not install from pip alone.** Attempting it here:
+
+```
+AssertionError: WavPack needs to be installed externally for MacOS
+```
+
+It wraps a system library and expects `./configure && sudo make install`, or a
+distribution package — `wavpack-devel` on Fedora. That is a deployment
+dependency on the preprocessing server rather than a Python one, and this
+repository's manifest discipline would owe it a `why` naming a system package.
+
+**So the fallback becomes the default: `numcodecs.Blosc(cname="zstd")`.** It is
+already installed as a `numcodecs` codec, needs no system library, and the paper
+puts it **6% behind** the audio codecs on NP1 — about 6 GB a session. WavPack
+remains selectable wherever its library is present, and because the codec is
+recorded on each artifact (§8), a later switch produces differently-compressed
+new artifacts rather than a migration.
+
+> **The synthetic fixture cannot rank codecs, and this is worth stating before
+> somebody tries.** Measured on a generated NP1032 session: zstd-5 with no
+> shuffle reached **CR 3.32×** (lossless verified by comparison), while
+> bit-shuffling — which the literature reports as *helping* real ephys —
+> **hurt**, at 2.50×. That inversion is the tell: the fixture's noise is
+> `generate_noise`'s spatial covariance plus scaled templates, not the
+> statistics of real extracellular recording. The fixture is a valid instrument
+> for **losslessness** and for exercising the chain, and an invalid one for
+> choosing between codecs. The first real session settles that, alongside §10's
+> CR question.
+
 **Lossy mode is out of scope and stays out.** CR 7.08 with no measured harm to
 sorting is a real result, and this is an *archive*: the copy of record cannot be
 the one that threw information away, whatever the benchmarks say about the
@@ -369,9 +400,10 @@ of it is testable today with no hardware and no real recording.
 
 1. **CR 3.59 is measured on NP1, not NP1 NHP** (§2). The first real session
    should measure it rather than inherit it.
-2. **`wavpack-numcodecs` is a niche dependency** and this repository's manifest
-   discipline requires a `why` for a pin. If it proves awkward to install on
-   Fedora, §2's blosc-zstd fallback costs 6%.
+2. **WavPack needs a system library, and whether the server gets it is a
+   deployment decision** (§2.1). `blosc-zstd` is the default and needs nothing;
+   adopting WavPack later costs a `wavpack-devel` package on the preprocessing
+   server and buys ~6%. Not resolvable from this machine.
 3. **The high-water mark has no chosen value** (§6). It depends on the real
    scratch device and on what Phase 2's sorting actually consumes, neither of
    which exists yet.
