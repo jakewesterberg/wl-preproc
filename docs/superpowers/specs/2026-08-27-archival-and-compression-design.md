@@ -244,6 +244,32 @@ original hash"* — and gives the reason to keep in view:
 **Verification is per file, and so is its record** (§8). When it fails, the
 question is immediately *which file*, and a per-session boolean cannot answer it.
 
+> **Amended 2026-08-27, and this narrows the section's headline claim.** The
+> sentence above says byte reconstruction catches *"a channel-order error, an
+> interleaving mistake, or a dtype slip"*. That is true of a **transformation**
+> of the data and false of a **mislabelling** of its shape, and the difference
+> matters because only the first was ever in view when this was written.
+>
+> `reshape()` does not move bytes. On a C-contiguous array `.tobytes()` is
+> identical for **any** valid factorization of the same element count, so an
+> artifact whose arrays carry the wrong `(n_samples, n_channels)` reconstructs
+> byte-for-byte and verifies clean. A genuine reordering — channels actually
+> swapped — does change the bytes and is caught, which is what the transposed
+> test in §9 pins.
+>
+> **So the shape guarantee lives in `archive/layout.py` and nowhere else.**
+> Found on 2026-08-27 by reviewing that module: a `time.dat` truncated on a
+> 4-byte boundary yielded `n_channels=8, n_samples=186773` where the truth was
+> `4, 373546` — dimensionally consistent, silently wrong, and invisible to
+> everything downstream. The fix hardens `layout.py`; what this amendment
+> corrects is the belief that verification would have caught it.
+>
+> **The residual is structural and named rather than closed.** SpikeGLX reads a
+> *declared* `nSavedChans`; Intan *derives* its channel count from two file
+> sizes, so it is underdetermined by construction. Reading the count out of
+> `info.rhs` and using the derived value as a cross-check is the real fix, and
+> needs a header reader this repository does not have.
+
 ---
 
 ## 5. Reclamation, and the reversal of §8.5
