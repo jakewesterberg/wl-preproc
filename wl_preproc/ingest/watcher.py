@@ -17,6 +17,19 @@ from typing import NamedTuple
 
 import blake3 as _blake3
 
+# A layering inversion: `wl_preproc.ingest` (this package) now depends on
+# `wl_preproc.cli` (nominally the outer layer wrapping this one), not the
+# usual direction. Brief-mandated for Task 6 (design spec section 8.4) --
+# moving `scratch_headroom` out of the CLI package to fix the layering
+# properly is a refactor beyond this task's scope, not something to do
+# unilaterally here. Safe today only because `wl_preproc/cli/__init__.py`
+# is empty and `doctor.py` itself imports nothing from `wl_preproc` at
+# module level (only `shutil` -- its `datajoint`/`wl_preproc.daemon`
+# imports are local, inside `run_checks`, confirmed by reading the file
+# directly). This becomes a real import cycle the day `doctor.py`, or
+# anything `wl_preproc/cli/__init__.py` comes to import, gains a
+# module-level import from `wl_preproc.ingest` -- worth knowing before
+# adding one, not a reason to avoid this one.
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.contracts.manifest import SCHEMA_VERSION, SessionManifest
 from wl_preproc.contracts.paths import MANIFEST_FILENAME, SessionLayout
@@ -69,10 +82,13 @@ class Outcome(StrEnum):
     # session's own on-disk state at all. And unlike DEFERRED -- also
     # produced inside `scan_once`, also not a session-caused defect -- this
     # is not decided per session: it is a single scan-wide admission
-    # decision, made once before any candidate directory is opened, and
-    # applied identically to every one of them regardless of what any
-    # individual candidate actually contains. A session refused this way
-    # may be perfectly complete and valid; it was simply never looked at.
+    # decision, made once before any candidate's manifest is actually read,
+    # and applied identically to every one of them regardless of what any
+    # individual candidate contains. (`_candidate_dirs` has already
+    # confirmed each candidate's manifest FILE exists, by stat, before this
+    # decision runs -- this precedes reading what is IN it, not every
+    # filesystem call that has touched the directory.) A session refused
+    # this way may be perfectly complete and valid; it was never evaluated.
     #
     # REFUSED has no durable row anywhere -- no Ingestion, no Quarantine --
     # so, exactly like DEFERRED, it is invisible to every report section

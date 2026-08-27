@@ -233,14 +233,24 @@ def main(argv: list[str] | None = None) -> int:
         # dropped from the one place an operator would see it.
         for session_dir, outcome in sorted(result.outcomes.items()):
             print(f"  [{outcome}] {session_dir}")
-        # A refused scan admitted nothing at all -- every waiting candidate
-        # was turned away by scratch headroom (watcher.refuses_new_sessions),
-        # never evaluated -- and exiting 0 here would read exactly like a
-        # scan that ingested cleanly to anything watching this command's
-        # exit code (a cron wrapper, a systemd unit). Checked independently
-        # of root_error below: the two name different faults (tight scratch
-        # vs. an unreadable root), and either one, or both at once, must be
-        # non-zero.
+        # A refused scan WITH WAITING SESSIONS admitted nothing at all --
+        # every one of them was turned away by scratch headroom
+        # (watcher.refuses_new_sessions), never evaluated -- and exiting 0
+        # here would read exactly like a scan that ingested cleanly to
+        # anything watching this command's exit code (a cron wrapper, a
+        # systemd unit). Checked independently of root_error below: the two
+        # name different faults (tight scratch vs. an unreadable root), and
+        # either one, or both at once, must be non-zero.
+        #
+        # A root with NO waiting candidates stays quiet here on purpose,
+        # even when scratch is tight: `outcomes` is then empty regardless of
+        # `refuses_new_sessions`, so there is nothing to report turning
+        # away, and `responder/health.py` already surfaces low headroom as
+        # `degraded` on every wl.works poll (design spec section 8.4's "and
+        # alerts" half) -- a second alerting path here would be a second
+        # definition of "is this host degraded", which `_featured_key`'s own
+        # docstring says this project has already found in four separate
+        # shapes.
         refused = Outcome.REFUSED in result.outcomes.values()
         if refused:
             print(

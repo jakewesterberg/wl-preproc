@@ -19,7 +19,7 @@ from wl_preproc.schema._compat import apply_datajoint_compat
 
 
 @pytest.fixture(autouse=True)
-def _healthy_scratch_by_default(monkeypatch):
+def _healthy_scratch_by_default(request, monkeypatch):
     """Insulate every test from this machine's REAL free disk space.
 
     `responder/health.py`'s own comment already documents the fact this
@@ -50,13 +50,30 @@ def _healthy_scratch_by_default(monkeypatch):
 
     A test that wants the real refusal behaviour re-patches this exact
     target itself, inside its own body -- see `tests/ingest/
-    test_backpressure.py`, most of whose tests do precisely this (one
-    reads watcher.py's own source text instead and never touches this
-    target at all). A `with patch(...)` there layers on top of this
-    fixture's patch for its own scope and is restored to THIS fixture's
-    value on exit, not to the real function -- ordinary mock/monkeypatch
-    stacking, not a special case.
+    test_backpressure.py`, most of whose tests do precisely this. Two do
+    not: the source-scan test never touches this target at all (it reads
+    watcher.py's own source text), and the CLI exit-code test patches
+    `watcher.scan_once` itself, bypassing `scratch_headroom` entirely. A
+    `with patch(...)` inside a test layers on top of this fixture's patch
+    for its own scope and is restored to THIS fixture's value on exit, not
+    to the real function -- ordinary mock/monkeypatch stacking, not a
+    special case.
+
+    One test opts OUT of this fixture entirely, via the `real_scratch`
+    marker (registered in `pyproject.toml`) checked below:
+    `test_the_real_scratch_headroom_is_never_shadowed` needs to see the
+    REAL, un-mocked `watcher.scratch_headroom` to check it is genuinely
+    `doctor.scratch_headroom` and not a same-named local reimplementation --
+    a hole review found in this fixture's first version: every OTHER test
+    here mocks the name itself, by string target, which cannot tell a
+    genuine import apart from a shadowing local `def` of the identical
+    name. `request.keywords` is pytest's own supported way to ask "is this
+    test marked X" from inside a fixture; checked before patching, not
+    after, so an opted-out test never sees the mock at all, not even
+    briefly.
     """
+    if "real_scratch" in request.keywords:
+        return
     monkeypatch.setattr(watcher, "scratch_headroom", lambda path: (4000, True))
 
 

@@ -128,7 +128,16 @@ filterwarnings = [
 # in one place what it means. `slow` is for a test that runs a real sorter --
 # spec section 7's tests/ephys/test_kilosort_defaults_split_units.py, minutes
 # not seconds on CPU -- rather than anything about the rest of this fast suite.
-markers = ["slow: runs a real sorter; excluded from CI, run by hand"]
+# `real_scratch` is unrelated to `slow` and not excluded by the `addopts`
+# below: it opts one test out of tests/conftest.py's autouse scratch-headroom
+# mock (see that fixture's own docstring) so it can check `watcher.
+# scratch_headroom` is genuinely `doctor.scratch_headroom`, not a same-named
+# local reimplementation -- an identity check, not a real-disk one, so it
+# costs nothing to run everywhere the rest of the suite does.
+markers = [
+    "slow: runs a real sorter; excluded from CI, run by hand",
+    "real_scratch: opts one test out of the autouse scratch-headroom mock",
+]
 # Deselects `slow` by default. CI runs bare `pytest -v` and, separately,
 # `python -m pytest tests/schema/test_guardrails.py -v` (.github/workflows/ci.yml
 # and the Guardrails step) -- neither passes `-m`, so both rely on this default

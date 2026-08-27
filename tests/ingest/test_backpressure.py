@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from wl_preproc.cli import doctor
 from wl_preproc.contracts.paths import MANIFEST_FILENAME
 from wl_preproc.ingest import watcher
 
@@ -50,12 +53,18 @@ def test_the_threshold_is_not_redefined_here():
 def test_a_second_threshold_would_be_caught_even_if_differently_named(tmp_path):
     """The source scan above only catches a duplicate threshold that reuses
     one of two specific names; a third name would slip past it unnoticed.
-    This instead pins the BEHAVIOUR: `free_gib=1` paired with
+    This instead pins part of the BEHAVIOUR: `free_gib=1` paired with
     `headroom_ok=True` can never come from the real `scratch_headroom`
     (whose own floor is 800 GiB) -- it is deliberately contradictory, chosen
-    so that any second, independent free_gib comparison, however named,
-    would flip this result to True instead of the correct False. Only
-    `headroom_ok` may decide this."""
+    so that a second comparison against THIS call's own returned `free_gib`,
+    with any floor above 1 GiB and however named, would flip this result to
+    True instead of the correct False.
+
+    Scoped to exactly that: a threshold that reads the disk independently of
+    `scratch_headroom`'s return value (a raw `shutil.disk_usage` call inside
+    `watcher.py`, say) is invisible to this test and to the source scan
+    alike -- neither one inspects, or can inspect, what a function body
+    reads outside its own mocked return value."""
     with patch("wl_preproc.ingest.watcher.scratch_headroom", return_value=(1, True)):
         assert watcher.refuses_new_sessions(tmp_path) is False
 
@@ -76,13 +85,15 @@ def test_an_unmeasurable_disk_refuses_rather_than_raising(tmp_path):
 
 def test_scan_once_refuses_every_candidate_without_evaluating_it(tmp_path, monkeypatch):
     """Wiring test: `refuses_new_sessions` must actually gate `scan_once`'s
-    admission of a session, not merely exist unused beside it. Two
-    independent signals would catch a wrong implementation that still
-    evaluates the candidate: `_scan_one` is patched to raise `AssertionError`
-    if it runs at all, and the candidate's manifest is deliberately garbage,
-    so if `_scan_one` ran anyway it would quarantine as `manifest_invalid`
-    rather than land as `REFUSED` -- either signal alone would fail this
-    test."""
+    admission of a session, not merely exist unused beside it. `_scan_one`
+    is patched to raise `AssertionError` if it runs at all, so a wrong
+    implementation that still evaluates the candidate fails loudly here
+    rather than silently producing some other outcome. The candidate
+    directory needs SOME file named `MANIFEST_FILENAME` regardless of what
+    this test checks -- `_candidate_dirs` only counts a directory as a
+    candidate at all once that file exists -- so its garbage content is
+    ordinary setup, not a second probe: with `_scan_one` patched to raise
+    immediately, nothing here ever reads it."""
     candidate = tmp_path / "would-be-session"
     candidate.mkdir()
     (candidate / MANIFEST_FILENAME).write_bytes(b"not a real manifest")
@@ -155,4 +166,31 @@ def test_cli_ingest_exits_non_zero_when_refused(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert exit_code != 0
-    assert "refused" in captured.out
+    # Not "refused": the pre-existing per-outcome print loop
+    # (`f"  [{outcome}] {session_dir}"`) already renders `[refused]` for
+    # this fixture's outcomes regardless of whether the exit-code branch
+    # below exists at all -- `Outcome` is a `StrEnum`. "scratch headroom"
+    # appears only in the new error line that branch prints, so only that
+    # assertion actually exercises it.
+    assert "scratch headroom" in captured.out
+
+
+@pytest.mark.real_scratch
+def test_the_real_scratch_headroom_is_never_shadowed():
+    """Review found the hole this closes: every other test in this file
+    mocks `wl_preproc.ingest.watcher.scratch_headroom` by string target, and
+    the source scan above checks source text for only two literal names --
+    neither can tell a genuine `from wl_preproc.cli.doctor import
+    scratch_headroom` apart from a same-named local `def
+    scratch_headroom(path): return (0, True)` sitting in its place instead.
+    A mock patches whatever object currently holds that name either way; a
+    source scan checking for two specific strings says nothing about a
+    third, differently-shaped replacement that never mentions either one.
+
+    Opts out of `tests/conftest.py`'s autouse mock via the `real_scratch`
+    marker (registered in `pyproject.toml`), so this sees the actual,
+    un-mocked module attribute. An identity check, not a value check --
+    `scratch_headroom` is never called here -- so it needs no real disk
+    state and is safe to run anywhere, including a CI runner far below the
+    800 GiB floor."""
+    assert watcher.scratch_headroom is doctor.scratch_headroom
