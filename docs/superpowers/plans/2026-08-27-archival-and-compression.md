@@ -833,7 +833,15 @@ git commit -m "schema: the four archival tables, and no status column"
 
 **Interfaces:**
 - Consumes: `store.write_store`, `verify.verify_store`, `schema.archive`.
-- Produces: `SENTINEL_NAME = ".wlpp-archive-complete"`; `archive_session(session_dir, nas_root, host, share) -> ArchiveOutcome`; `ArchiveOutcome` (frozen: `artifact_path: Path`, `verdicts: list[FileVerdict]`, `all_matched: bool`).
+- Produces: `SENTINEL_NAME = ".wlpp-archive-complete"`; `archive_session(session_dir, nas_root, host, share) -> ArchiveOutcome`; `ArchiveOutcome` (frozen: `artifact_path: Path`, `verdicts: list[FileVerdict]`, `all_matched: bool`, **`store: StoreResult`**).
+
+> **`store` was added 2026-08-27, during Task 5's review.** `ArchiveArtifact`
+> needs `codec`, `clevel`, `compressed_bytes` and `manifest_digest`, and Task 9
+> **cannot re-derive them by calling `write_store` again**: Blosc's
+> multi-threaded compression is not reproducible (Task 2's finding, recorded in
+> `store.py`'s docstring and spec §10 item 4), so a second call yields a
+> different, equally valid digest that does not match what is on the NAS. The
+> only run that can supply those values is the one that wrote the artifact.
 
 - [ ] **Step 1: Write the failing test**
 
