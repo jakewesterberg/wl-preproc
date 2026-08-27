@@ -163,6 +163,20 @@ def main(argv: list[str] | None = None) -> int:
     # DEFAULT_PREFIX, not a second literal: the prefix carries its own
     # separator and a copy here is exactly how `wlpplab` would come back.
     daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # All three OPTIONAL, unlike `archive_p`'s own `--nas-root`/`--host`/
+    # `--share` below -- Controller ruling F. `archive_session` needs all
+    # three to publish anywhere, but the NAS this would publish to does not
+    # exist yet: a daemon stage that REQUIRED them would make `wlpp daemon`
+    # unrunnable today, which is worse than the stage not existing. Absent,
+    # `run_once` skips the archival stage entirely and says so in its
+    # returned dict -- see the `daemon` dispatch below. `type=Path`, not a
+    # bare string, for the identical reason `archive_p.add_argument
+    # ("--nas-root", ..., type=Path)` already uses it: every caller
+    # downstream (`nas_root_for_subject`, `record_archive_outcome`) does path
+    # arithmetic on it.
+    daemon_p.add_argument("--nas-root", type=Path, default=None)
+    daemon_p.add_argument("--host", default=None)
+    daemon_p.add_argument("--share", default=None)
 
     ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
     ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
@@ -284,134 +298,41 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.group == "archive":
-        from wl_preproc.archive.stage import archive_session
-        from wl_preproc.ingest import landing
-        from wl_preproc.schema import archive as archive_schema
+        from wl_preproc.archive.stage import (
+            archive_session,
+            nas_root_for_subject,
+            record_archive_outcome,
+        )
 
         session_dir = Path(args.session)
         # Key first, before `archive_session` runs: the NAS publish path
         # below is namespaced by subject, which the CLI knows before
         # publishing happens, not only after.
         key = _session_key_from_dir(session_dir)
-        # Namespaced by subject -- review found that `archive_session`'s own
-        # publish path (`archive/stage.py`: `nas_root / f"{session_dir.name}
-        # .zarr"`) is a bare `SessionId` (date + index, `wl_sync.session`),
-        # which carries no subject at all. Reproduced directly against a
-        # real MySQL container: two different subjects sharing one session
-        # id -- a real, reachable state; nothing anywhere enforces that
-        # session ids are subject-scoped -- published to the IDENTICAL NAS
-        # path, the second silently `rmtree`-ing and replacing the first,
-        # with both `ArchiveArtifact` rows left recording that same path.
-        # That defeats the settled triple's whole stated purpose (Controller
-        # ruling C: "so another agent can open the file from elsewhere").
-        # Fixed entirely at this call site rather than in `archive/stage.py`
-        # (outside this task's assigned files, and inherited from Task 5):
-        # passing a per-subject subdirectory as `nas_root` makes stage.py's
-        # own unchanged logic publish to a unique path with no change there
-        # at all. `archive_path` below is still computed relative to the
-        # SHARE root (`args.nas_root`), not this nested one, so it stays
-        # "relative to the share" exactly as ruling C requires -- it just
-        # now includes the subject as its first path component.
-        nas_root_for_session = args.nas_root / key["subject"]
-        outcome = archive_session(session_dir, nas_root_for_session, args.host, args.share)
+        outcome = archive_session(
+            session_dir, nas_root_for_subject(args.nas_root, key), args.host, args.share
+        )
         for verdict in outcome.verdicts:
             if not verdict.matched:
                 print(f"MISMATCH {verdict.relative_path}")
         print("verified" if outcome.all_matched else "NOT verified")
 
-        archive_schema.activate(prefix=args.prefix)
-        # `archive_session` has ALREADY overwritten the NAS artifact
-        # unconditionally by this point, regardless of `all_matched`
-        # (`archive/stage.py`: publish -- rmtree the old `published`, copy
-        # the new one -- runs before the confirm/all_matched check, not
-        # after it). So any PRIOR `ArchiveArtifact` row for this session now
-        # describes bytes that no longer exist on the NAS, whether or not
-        # THIS run verified. Deleted here, before the `all_matched` branch
-        # below, so "no row" always honestly means "not archived" -- never
-        # "was archived once, may or may not still be" (review, Important:
-        # "the failure path leaves the database describing bytes that no
-        # longer exist").
-        #
-        # `.delete(prompt=False)`, not `replace=True` on the insert below.
-        # DataJoint declares every foreign key `ON DELETE RESTRICT`
-        # (`datajoint/declare.py`), so a plain `REPLACE INTO` on
-        # `ArchiveArtifact` -- MySQL's REPLACE is DELETE-then-INSERT -- while
-        # its own `ArchiveVerification` children still exist from a PRIOR
-        # run raises `IntegrityError`. Reproduced directly against a real
-        # MySQL container with this schema (review, CRITICAL): a second
-        # `wlpp archive` over an already-archived session got as far as
-        # re-publishing a genuinely new artifact to the NAS, then crashed on
-        # exactly this insert -- leaving the database recording the FIRST
-        # run's digest for bytes the second run had already deleted, so
-        # `manifest_digest(published) != ArchiveArtifact.manifest_digest`
-        # afterward. `.delete()` cascades through the real dependency graph
-        # instead (confirmed directly: deleting `ArchiveArtifact & key` also
-        # removes its `ArchiveVerification` rows), which a bare `REPLACE
-        # INTO` cannot do under `ON DELETE RESTRICT`. `prompt=False` is
-        # required explicitly, not left to `dj.config["safemode"]`'s
-        # default: that default is `True` outside this project's own test
-        # fixtures (which set it `False` for the whole suite), and an
-        # interactive y/n confirmation would hang a non-interactive cron/
-        # systemd invocation of this command forever.
-        (archive_schema.ArchiveArtifact & key).delete(prompt=False)
+        # The database bookkeeping -- delete any stale row unconditionally,
+        # write a fresh `ArchiveArtifact` (+ `ArchiveVerification` children)
+        # only when verified -- is `archive/stage.py::record_archive_outcome`
+        # now, not inline here: `wl_preproc.daemon`'s archival stage (Task 10)
+        # needs the identical sequence, and this is the shared body rather
+        # than a second, divergent implementation of it. See that function's
+        # own docstring for the reasoning this dispatch used to carry inline
+        # (the `IntegrityError` history, why `.delete(prompt=False)` and not
+        # `replace=True`, why the delete is unconditional).
+        archive_path = record_archive_outcome(
+            key, outcome, args.nas_root, args.host, args.share, prefix=args.prefix
+        )
 
         if not outcome.all_matched:
             return 1
 
-        # `ArchiveVerification` rows are written here too, alongside
-        # `ArchiveArtifact`, though Controller ruling C's own text names
-        # only the latter explicitly ("write the row only when outcome.
-        # all_matched" -- singular). Before this task, nothing in this
-        # codebase wrote either table: confirmed by grepping
-        # `ArchiveVerification.insert` across wl_preproc/ and tests/ before
-        # writing this -- the only hits were Task 7's own `tests/archive/
-        # test_reclaim.py::_archive_and_verify` helper (pre-existing, not
-        # this task's) and this task's own `tests/cli/test_archive_cli.py`.
-        # `ArchiveVerification -> ArchiveArtifact` (`schema/archive.py`)
-        # means there is no row shape that could record one without the
-        # other anyway. Leaving it unwritten would make `reclaim_conditions`
-        # 's `every_file_verified` condition (`archive/reclaim.py`) and
-        # `_staged_entries` below fail closed forever, on every session --
-        # the exact "tape-manifest prints an empty manifest when artifacts
-        # exist" failure this task's own brief warns to catch with a real
-        # test rather than trust.
-        archive_path = str(outcome.artifact_path.relative_to(args.nas_root))
-        # One instant reused for every row this call writes, not a fresh
-        # `datetime.now()` per row: `StoreResult` (`archive/store.py`) carries
-        # no timestamp of its own -- compression already finished by the time
-        # this line runs -- so "now" is this pipeline's best honest record of
-        # when the artifact was CONFIRMED good, the same moment `stage.py`'s
-        # own sentinel is stamped.
-        now = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
-        # No `replace=True` needed here (or below): the prior row for this
-        # key, if any, was just deleted above, so this is always a fresh
-        # insert now.
-        archive_schema.ArchiveArtifact.insert1(
-            {
-                **key,
-                "archive_host": args.host,
-                "archive_share": args.share,
-                "archive_path": archive_path,
-                "codec": outcome.store.codec,
-                "clevel": outcome.store.clevel,
-                "compressed_bytes": outcome.store.compressed_bytes,
-                "manifest_digest": outcome.store.manifest_digest,
-                "compressed_at": now,
-            }
-        )
-        archive_schema.ArchiveVerification.insert(
-            [
-                {
-                    **key,
-                    "relative_path": verdict.relative_path,
-                    "expected_blake3": verdict.expected,
-                    "actual_blake3": verdict.actual,
-                    "matched": 1 if verdict.matched else 0,
-                    "verified_at": now,
-                }
-                for verdict in outcome.verdicts
-            ]
-        )
         print(
             f"archived: {key['subject']} @ {key['session_datetime']} -> "
             f"{args.host}:{args.share}/{archive_path}"
@@ -521,9 +442,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "daemon":
         from wl_preproc.daemon import run_once
 
-        report = run_once(prefix=args.prefix)
+        report = run_once(
+            prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share
+        )
         print(f"populated: {report['populated']}")
         print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
+        # `None`, not `0`: `run_once` returns `None` specifically when
+        # archival was never configured, so this is never collapsed into the
+        # same line a genuinely-ran-and-found-nothing pass would print --
+        # Controller ruling F's own words, "a stage that silently does
+        # nothing is the shape this project has already been bitten by."
+        if report["archived"] is None:
+            print("archived: skipped (no --nas-root/--host/--share)")
+        else:
+            print(f"archived: {report['archived']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:

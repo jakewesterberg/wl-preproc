@@ -270,13 +270,20 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
     first = daemon_env.run_once(prefix=prefix)
     baseline = daemon_env.run_once(prefix=prefix)
 
-    assert set(baseline) == {"populated", "errors", "stale_jobs_reaped"}
+    assert set(baseline) == {"populated", "errors", "stale_jobs_reaped", "archived"}
     assert baseline["populated"] == first["populated"], (
         "the daemon does not reach a steady state: two consecutive idle passes "
         f"computed {first['populated']} then {baseline['populated']} keys"
     )
     assert baseline["errors"] == []
     assert isinstance(baseline["stale_jobs_reaped"], int)
+    # `None`, not `0`: every call above omits `nas_root`/`host`/`share`, so
+    # Controller ruling F's archival stage must not have run at all -- `0`
+    # would read as "ran, and archived nothing", collapsing the unconfigured
+    # case with the configured-but-idle one. See `daemon.run_once`'s own
+    # docstring, and `test_daemon_cli_still_works_with_no_archival_flags`
+    # below for the identical claim at the CLI's own argparse layer.
+    assert baseline["archived"] is None
 
     recipe = RECIPES["ci"]
     generate_session(tmp_path, recipe)
@@ -322,6 +329,31 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
 
     # And back to the same steady state, not to some new one.
     assert daemon_env.run_once(prefix=prefix)["populated"] == baseline["populated"]
+
+
+def test_daemon_cli_still_works_with_no_archival_flags(prefix, dj_conn, capsys):
+    """Controller ruling F: `--nas-root`/`--host`/`--share` are OPTIONAL on
+    `wlpp daemon` -- the NAS this pipeline would publish to does not exist
+    yet, so a daemon that REQUIRED them would be unrunnable today. Calls the
+    real CLI entry point, not `run_once` directly: the two are independent
+    claims. `run_once`'s own Python defaults could be perfectly correct while
+    `daemon_p`'s argparse definition marked one of the three `required=True`
+    by copy-paste from `archive_p`'s own `--nas-root`/`--host`/`--share`
+    (which legitimately ARE required there) -- a mistake only a call through
+    argparse itself, like this one, would catch; a direct `run_once(prefix=
+    prefix)` call never touches argparse at all. Mirrors `tests/ingest/
+    test_watcher.py`'s own `test_cli_no_verify_flag_flows_through_to_
+    skipped_integrity`, which imports `cli.main.main` inside a lower-layer
+    test file for the identical reason -- proving a CLI flag actually flows
+    through, not just that the function under it accepts a keyword.
+    """
+    from wl_preproc.cli.main import main
+
+    exit_code = main(["daemon", "--prefix", prefix])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "archived: skipped" in out
 
 
 # Every probe below is declared inside `core.schema`, not a standalone one:

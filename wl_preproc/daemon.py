@@ -17,6 +17,17 @@ from pathlib import Path
 
 import datajoint as dj
 
+# Imported directly, by name, rather than reached through a composed helper:
+# this is what makes `wl_preproc.daemon.archive_session` a real, patchable
+# module attribute. `tests/ingest/test_archive_trigger.py` patches exactly
+# that name (Controller ruling A's own "consequence for the tests") so its
+# mocked archival stage never actually spends the hour `archive_session`
+# costs -- `unittest.mock.patch` resolves a bare name inside a function body
+# against the ENCLOSING MODULE's globals at call time, which only works if
+# this module itself holds the name, not if `_archive_stage` reached it via
+# `wl_preproc.archive.stage.archive_session` on every call. See
+# `_archive_stage` below for how the two archival helpers are then combined.
+from wl_preproc.archive.stage import archive_session, nas_root_for_subject, record_archive_outcome
 from wl_preproc.schema import (
     DEFAULT_PREFIX,
     archive,
@@ -520,7 +531,111 @@ def _populate_event_stage() -> tuple[int, list[str]]:
     return built, errors
 
 
-def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
+def _archive_stage_keys() -> list[dict]:
+    """Verified sessions with no archive on record yet -- `_event_stage_
+    keys()`'s own key_source-minus-done-marker shape, applied to a different
+    done marker. See `_archive_stage` below for what actually runs against
+    each key this returns.
+
+    **Restricted to `integrity = "verified"` exactly, never `!= "skipped"`.**
+    Controller ruling B: `Ingestion.integrity` is a THREE-valued enum
+    (`schema/ingest.py`: `enum('verified','declared_only','skipped')`), and a
+    negative check would silently admit `declared_only` -- some system's DONE
+    marker was empty, so nothing about that system was ever actually checked
+    (`ingest/verify.py`'s own "a session is verified only if everything in it
+    was") -- alongside a genuine pass. Equality names exactly the one state
+    the 2026-08-27 archival-and-compression design's own §3.1 means by
+    "verification passes", and excludes the other two states by construction
+    rather than by remembering to enumerate them. `archive/layout.py`'s own docstring
+    already named this as unfinished business: "`Integrity.SKIPPED` is
+    recorded... but nothing in this repository currently branches on it --
+    not here, and not yet in the archival trigger, which is where that
+    decision belongs."
+
+    **`- archive.ArchiveArtifact` is the done-marker**, mirroring
+    `_event_stage_keys()`'s own `- pipeline.event.BehaviorRecording`: a
+    session archived successfully is not archived again on the next pass.
+    `record_archive_outcome` writes this row only when `outcome.all_matched`
+    (see its own docstring), so a session whose most recent attempt FAILED
+    verification has no such row and stays in this key source -- retried on
+    the next pass, exactly like a raising `populate_session` call is retried
+    by `_populate_event_stage`.
+
+    Parenthesized exactly like `_event_stage_keys()`'s `(pipeline.Session &
+    ingest.Ingestion) - pipeline.event.BehaviorRecording`: Python's `-`
+    (`__sub__`) binds TIGHTER than `&` (`__and__`), so an unparenthesized
+    `ingest.Ingestion & 'integrity = "verified"' - archive.ArchiveArtifact`
+    would try to subtract a table from a STRING, not restrict-then-subtract.
+    """
+    return (
+        (ingest.Ingestion & 'integrity = "verified"') - archive.ArchiveArtifact
+    ).keys()
+
+
+def _archive_stage(
+    nas_root: Path, host: str, share: str, prefix: str = DEFAULT_PREFIX
+) -> tuple[int, list[str]]:
+    """Archive every verified, not-yet-archived session. Returns `(sessions
+    archived, per-session failures)` -- the same two quantities
+    `_populate_event_stage` returns, and for the identical reason: `run_once`
+    accounts for every stage's failures the same way.
+
+    **Controller ruling A: a bespoke stage here, like `_populate_event_
+    stage`, not a `.populate()` call.** `archive`'s four tables are all
+    `dj.Manual` (`schema/archive.py`'s own module docstring), so there is no
+    `~jobs` table for this to reserve against, and
+    `test_every_computed_table_is_a_daemon_stage` does not apply to it.
+
+    **Every exception from one session's archival is caught here and turned
+    into an error string, not left to propagate.** This is precisely what
+    ruling A's own reasoning rules out doing inside `ingest/watcher.py`'s
+    `scan_once` instead: hooking archival into the scan would put it under
+    `_scan_one`'s exception boundary, which turns any unhandled exception
+    into `Outcome.QUARANTINED` with reason `unexpected_failure` -- correct
+    for a session-caused defect, wrong for a full NAS or a transient IO fault
+    during compression, which would then quarantine an already-ingested,
+    perfectly good session and blame its own files for it. Running here
+    instead means this stage has NO such boundary of its own, so nothing
+    else would stop one session's archival fault from crashing the rest of
+    this `run_once` pass -- including every stage still to run after this
+    one -- if it were not caught explicitly.
+
+    A verification failure (`outcome.all_matched` is False) is reported the
+    same way, as an error string, but is NOT the exception case above: it is
+    `archive_session`'s own ordinary, non-raising outcome for genuinely bad
+    bytes, and `record_archive_outcome` already leaves no `ArchiveArtifact`
+    row for it -- which is what keeps the session in `_archive_stage_keys()`
+    for the next pass, rather than this function needing its own retry
+    bookkeeping.
+    """
+    archived, errors = 0, []
+    for key in _archive_stage_keys():
+        session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
+        try:
+            outcome = archive_session(
+                session_dir, nas_root_for_subject(nas_root, key), host, share
+            )
+            record_archive_outcome(key, outcome, nas_root, host, share, prefix=prefix)
+        except Exception as exc:  # one bad session must not take down the run
+            errors.append(f"archive_session {key}: {exc}")
+            continue
+        if outcome.all_matched:
+            archived += 1
+        else:
+            n_mismatched = sum(1 for v in outcome.verdicts if not v.matched)
+            errors.append(
+                f"archive_session {key}: verification failed "
+                f"({n_mismatched} of {len(outcome.verdicts)} files mismatched)"
+            )
+    return archived, errors
+
+
+def run_once(
+    prefix: str = DEFAULT_PREFIX,
+    nas_root: Path | None = None,
+    host: str | None = None,
+    share: str | None = None,
+) -> dict:
     """One pass of the runner. Returns what it did, for the daily report.
 
     `populated` counts KEYS computed, not tables attempted, and `errors`
@@ -552,6 +667,20 @@ def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
     a non-zero task file, and `resolve_tier` returned D for every session.
     The sessions it builds are counted into `populated` for the same reason
     every other key computed is.
+
+    **Archival is OPT IN, and skipped -- visibly -- when it is not
+    configured.** Controller ruling F: `archive_session` needs `nas_root`,
+    `host` and `share` to publish anywhere, and the NAS this pipeline would
+    publish to does not exist yet. `report["archived"]` is `None`, not `0`,
+    when any of the three is absent -- mirroring `count_stale_jobs`'s own
+    `None`-means-"nothing was actually inspected" convention above, for the
+    identical reason: `0` would read as "configured, and there was nothing
+    new to archive", collapsing it with the genuinely-ran-and-found-nothing
+    case. `cli/main.py`'s `daemon` dispatch prints this distinction rather
+    than flattening it to a bare number. Every one of the three must be
+    present, not just one -- `archive_session(session_dir, nas_root, host,
+    share)` has no partial-configuration mode, so a lone `--host` with no
+    `--nas-root` is exactly as unusable as none of the three at all.
     """
     activate_all(prefix=prefix)
 
@@ -571,4 +700,16 @@ def run_once(prefix: str = DEFAULT_PREFIX) -> dict:
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")
 
-    return {"populated": populated, "errors": errors, "stale_jobs_reaped": reaped}
+    archived: int | None
+    if nas_root is None or host is None or share is None:
+        archived = None
+    else:
+        archived, archive_errors = _archive_stage(nas_root, host, share, prefix=prefix)
+        errors.extend(archive_errors)
+
+    return {
+        "populated": populated,
+        "errors": errors,
+        "stale_jobs_reaped": reaped,
+        "archived": archived,
+    }
