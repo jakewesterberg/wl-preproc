@@ -93,8 +93,13 @@ def reclaim_conditions(
         ),
         # Design spec section 5.2, from parent section 8.4's surviving clause:
         # a queued re-sort keeps its fast copy. Both halves are unbuilt --
-        # paramset requests reach here in 2b-5 and the warm tier in the
-        # rehydration plan -- so this passes today and gains its query then.
+        # paramset requests reach here in 2b-5; the warm tier has no query of
+        # its own yet, and no task named here commits to when it will (fix
+        # round: an earlier draft cited "the rehydration plan" as if that
+        # were a document -- checked docs/superpowers/specs/ and .../plans/
+        # directly, and no such document exists; the design spec treats
+        # rehydration as a supported PATH, section 8.4, not a named artifact)
+        # -- so this passes today and gains its query once each half does.
         Condition(
             "no_pending_paramset_or_warm_copy",
             True,

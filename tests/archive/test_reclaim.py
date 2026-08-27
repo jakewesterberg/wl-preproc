@@ -150,23 +150,39 @@ def _timing(key, *, tier: str):
     """A `TimingProvenance` row pinning `tier`, the one field `not_tier_d`
     reads.
 
-    `TimingProvenance` is `dj.Computed`, and nothing else in this repository
-    inserts into one directly -- every other Computed table this suite
-    exercises goes through `.populate()`. That recipe exists
+    `TimingProvenance` is `dj.Computed`, filled by `.populate()` everywhere
+    else THIS test file exercises it -- but a direct `insert1` into an
+    auto-populated table is an established pattern in this codebase, not a
+    novelty introduced here (fix round: a first draft of this docstring
+    claimed the opposite -- "nothing else in this repository inserts into
+    one directly" -- which was false, and the false premise traces back to
+    Controller ruling D's own framing, taken on trust rather than checked;
+    `grep -rn allow_direct_insert` surfaces the counterexamples in seconds).
+    `tests/schema/test_core.py::_insert_segment` inserts directly into
+    `core.Segment` (also `dj.Computed`) via `allow_direct_insert=True`,
+    "asserting what a table STORES, separately from what its `make()`
+    decides to store" (that helper's own docstring). Production goes
+    further: `wl_preproc/schema/events.py` fills `pipeline.event.Event`,
+    `pipeline.trial.Trial`, `.Block` and `.BlockTrial` (all `dj.Imported`,
+    confirmed directly against the installed `element_event` package) by
+    direct insert unconditionally -- not as a fallback, but because
+    `Event.make()` itself raises `NotImplementedError` for these
+    element-event tables, so `.populate()` is not an option for them at all.
+    That module's own docstring: "element-event's Imported tables are filled
+    by direct insert, not by `populate()`."
+
+    The choice made here follows that same precedent, for a narrower reason
+    specific to this test. The recipe that reaches tier D honestly
     (`tests/schema/test_timebase.py::test_block_disagreement_forces_d_even_
-    with_two_agreeing_full_code_records`) and genuinely reaches tier D, but
-    only by way of session generation, real event decoding across the
-    recipe's `syncbox` and `spikeglx` systems, and a deliberately disagreeing
-    `core.Block` row --
-    none of which has anything to do with the one comparison this module
-    checks (`tier_rows[0] != "D"`). Routing through it would make a failure
-    here just as likely to mean "the synthetic recipe changed shape" as "the
+    with_two_agreeing_full_code_records`) pulls in session generation, real
+    event decoding across the recipe's `syncbox` and `spikeglx` systems, and
+    a deliberately disagreeing `core.Block` row -- none of which has
+    anything to do with the one comparison this module checks
+    (`tier_rows[0] != "D"`). Routing through it would make a failure here
+    just as likely to mean "the synthetic recipe changed shape" as "the
     comparison broke". `insert1` supplying every required column reaches the
     identical stored fact -- a `tier` column that reads back `"D"` (or does
-    not) -- without that unrelated machinery, confirmed to work because
-    `dj.Computed` adds `.populate()`/`.make()` on top of the same
-    `Table.insert` every other tier uses rather than replacing it. This is
-    the trade Controller ruling D leaves to the implementer's judgment.
+    not) -- without that unrelated machinery.
     """
     from wl_preproc.schema import timebase
 
@@ -274,6 +290,37 @@ def test_a_hold_blocks_reclaim_from_a_real_row(session, prefix):
 
     assert blocking(conditions) == ["no_hold"]
     assert _condition(conditions, "no_hold").detail == "held"
+
+
+def test_a_force_verdict_does_not_block_reclaim(session, prefix):
+    """`ReclamationHold.verdict` has a second value, `'force'`
+    (`schema/archive.py:74`'s own comment: "a human blocking OR FORCING
+    reclamation" -- both verbs, one enum). Until this test (reviewer
+    finding, fix round) nothing exercised `'force'` against a real row:
+    every other test here either inserts no `ReclamationHold` row at all or
+    inserts `'hold'`, so `holds[0] == "hold"` reading `False` for a genuine
+    `'force'` row -- not only for an absent one -- was reasoned about but
+    never checked.
+
+    Scoped to exactly what `no_hold` itself does, no further: this condition
+    only asks whether the most recent verdict is `'hold'`, so within it
+    `'force'` reads the same as no row at all. It does NOT make `'force'`
+    override any of the other four conditions -- `reclaimable()` is `all()`
+    over the whole list, so a `'force'` row next to a real tier-D row would
+    still leave the session unreclaimable overall; that composition is a
+    different claim this test does not make and does not need a
+    `_timing(tier="D")` session to avoid implying."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmfrc")
+    _archive_and_verify(key, n_files=1)
+    _timing(key, tier="A")
+    _hold(key, verdict="force")
+
+    conditions = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert _condition(conditions, "no_hold").passed is True
+    assert "no_hold" not in blocking(conditions)
 
 
 def test_no_timing_provenance_row_reports_no_tier_resolved(session, prefix):
