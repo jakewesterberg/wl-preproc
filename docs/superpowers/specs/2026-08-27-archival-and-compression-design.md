@@ -449,12 +449,24 @@ of it is testable today with no hardware and no real recording.
 3. **The high-water mark has no chosen value** (§6). It depends on the real
    scratch device and on what Phase 2's sorting actually consumes, neither of
    which exists yet.
-4. **Whether archival needs IO throttling** (§3.1). It runs immediately after
+4. **Compression is not reproducible, and the digest is of an artifact rather
+   than of a session.** Found 2026-08-27 building the writer: `numcodecs.Blosc`
+   multi-threaded emits different compressed bytes for identical input across
+   calls, all decoding correctly. §8's manifest digest is unaffected — it exists
+   for §3's confirm step, which re-hashes *the same bytes* after a copy — but two
+   archives of one session are two different digests and both are valid. Pinning
+   Blosc to one thread would make them agree, at a real cost on a ~360 GB session,
+   for a property nothing in this design consumes.
+5. **The writer holds whole arrays and whole files in memory.** Fine on the
+   fixture, whose largest array is ~4.7 MB; a real ~100 GB session needs
+   streaming. Named here rather than built into a task whose contract is "write
+   the store".
+6. **Whether archival needs IO throttling** (§3.1). It runs immediately after
    ingest, and once sorting exists the two are this box's heavy IO stages
    competing on the same device. Deferred deliberately: the thing to measure
    does not exist, and a throttle wrong in either direction is worse than
    none.
-5. **Whether the artifact should be one file rather than a tree.** A Zarr store
+7. **Whether the artifact should be one file rather than a tree.** A Zarr store
    is a directory; `fileCount` accommodates it, and tar-on-write was rejected as
    it would defeat partial reads during rehydration. Worth revisiting if the
    tape workflow turns out to prefer single objects.
