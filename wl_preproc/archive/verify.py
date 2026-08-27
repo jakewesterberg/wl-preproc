@@ -122,24 +122,51 @@ def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
     was itself computed from a file.
 
     `reconstruct` is allowed to raise, and this catches it -- broadly,
-    deliberately. A corrupted store does not fail in one tidy way. Confirmed
-    empirically against this exact zarr layout, in three separate checks:
-    `test_a_corrupted_artifact_fails_verification` zeroes whatever file sorts
-    first under `streams/`, which is `streams/.zgroup` -- a plain directory
-    listing puts a group's own metadata ahead of any array's `.zarray`,
-    `.zattrs`, or chunk files -- and that raises `json.JSONDecodeError`
-    (itself a `ValueError`) while zarr tries to parse it back. Corrupting an
-    array chunk's compressed bytes directly, checked separately from that
-    test, raises `RuntimeError` from blosc ("error during blosc
-    decompression"). A path the DONE marker names but the store never
-    received raises `KeyError`, also checked separately. Three exception
-    types from three checks, not an exhaustive list -- a fourth kind of
-    damage finding a fourth exception type next is the expected shape of
-    this problem, not a surprise to special-case for. The contract that
-    matters is the caller's: nothing reconstructing this artifact ever
-    crashes verification instead of reporting it. A verdict of
-    `matched=False` with the exception recorded in `actual` is strictly more
-    useful than a traceback, and no less honest.
+    deliberately, and the breadth is a decision made here, not a default left
+    unexamined. Confirmed empirically against this exact zarr layout, in
+    three separate checks: `test_a_corrupted_artifact_fails_verification`
+    zeroes whatever file sorts first under `streams/`, which is
+    `streams/.zgroup` -- a plain directory listing puts a group's own
+    metadata ahead of any array's `.zarray`, `.zattrs`, or chunk files --
+    and that raises `json.JSONDecodeError` (itself a `ValueError`) while
+    zarr tries to parse it back. Corrupting an array chunk's compressed
+    bytes directly, checked separately from that test, raises `RuntimeError`
+    from blosc ("error during blosc decompression"). A path the DONE marker
+    names but the store never received raises `KeyError`, also checked
+    separately.
+
+    Narrowing to exactly those three types was considered and rejected.
+    `ingest/verify.py` narrows its own per-file catch to specific types for
+    a specific reason stated there; the reason does not transfer here as
+    cleanly as it looks. A fourth, unanticipated kind of damage raising a
+    fourth exception type is exactly the case a narrow `except` would crash
+    this whole function on: an uncaught exception anywhere in this loop
+    means `verify_store` never reaches `return verdicts` at all, so one
+    file's corruption loses every verdict, including the ones already found
+    to match -- worse than the thing this function exists to avoid. And from
+    the caller's side, `reconstruct` raising and `reconstruct` returning the
+    wrong bytes resolve to the same action: do not trust this artifact. A
+    `FileVerdict` does not need to tell those two apart to be useful; it
+    needs to never claim `matched=True` when it cannot back that claim, and
+    never crash instead of reporting.
+
+    The usual risk of `except Exception` -- silently hiding a real bug in
+    this module's own code behind a plausible-looking "corrupted store"
+    verdict -- is bounded two ways rather than left open. `reconstruct`
+    itself still raises directly, uncaught, so a suspicious verdict can be
+    re-run outside this loop for a full traceback. And a `reconstruct` bug
+    that broke good, uncorrupted data -- not just corrupted data -- would
+    already fail `test_every_file_reconstructs_to_its_original_bytes` and
+    its siblings loudly, in CI, rather than pass here disguised as a
+    corruption finding.
+
+    A verdict of `matched=False` with the exception recorded in `actual` is
+    strictly more useful than a traceback, and no less honest -- and that
+    claim is no longer just prose: `actual` carries the literal substring
+    `"error reconstructing file"` on this path, and
+    `test_a_corrupted_artifacts_verdict_explains_why` pins it, so a future
+    edit that reworded or dropped it fails a test rather than passing
+    silently.
     """
     verdicts = []
     for relative_path, expected in sorted(_expected_digests(session_dir).items()):

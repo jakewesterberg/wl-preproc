@@ -54,6 +54,28 @@ def test_a_corrupted_artifact_fails_verification(tmp_path):
     assert any(not v.matched for v in verdicts)
 
 
+def test_a_corrupted_artifacts_verdict_explains_why(tmp_path):
+    """The previous test only asserts `matched=False`. A verdict on a
+    reconstruction crash and a verdict on a genuine hash disagreement both
+    look like `matched=False, actual=<some string>` unless the crash case is
+    pinned to something recognisable on purpose -- `verify_store`'s own
+    docstring claims `actual` carries that diagnostic, and nothing before
+    this test checked the claim. Without a test, the
+    `"error reconstructing file"` convention is just prose: reword it or
+    drop it and nothing would notice, and a future caller trying to branch
+    on it would have no guarantee it still says what the docstring says."""
+    session, result = _archived(tmp_path)
+    victim = next(
+        p for p in sorted((result.path / "streams").rglob("*")) if p.is_file()
+    )
+    victim.write_bytes(b"\x00" * victim.stat().st_size)
+
+    verdicts = verify_store(result.path, session)
+    crashed = [v for v in verdicts if not v.matched]
+    assert crashed
+    assert all("error reconstructing file" in v.actual for v in crashed)
+
+
 def test_a_transposed_reconstruction_is_caught(tmp_path):
     """The case comparing samples to samples cannot catch: identical values,
     wrong layout. Rewrite one array transposed and assert the digest differs."""
