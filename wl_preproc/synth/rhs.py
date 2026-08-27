@@ -27,6 +27,7 @@ from wl_preproc.synth.timeline import (
     code_word_span_s,
 )
 from wl_preproc.synth.truth import GroundTruth
+from wl_preproc.synth.units import linear_sites
 from wl_preproc.synth.waveforms import render_traces
 
 # The RHS controller has its own clock, so recipe.ap_sample_rate_hz — which
@@ -64,24 +65,6 @@ STROBE_WIDTH_S = 0.0005
 # read. A linear array is declared here instead -- and declared rather than
 # borrowed from Neuropixels, because an RHS session on NP geometry would be a
 # fixture describing hardware this lab does not have.
-RHS_SITE_PITCH_UM = 50.0
-
-
-def linear_sites(n_channels: int) -> list[dict]:
-    """Rows in `electrode_rows`' shape, so `waveforms.py` needs no RHS branch."""
-    return [
-        {
-            "electrode": index,
-            "shank": 0,
-            "shank_col": 0,
-            "shank_row": index,
-            "x_coord": 0.0,
-            "y_coord": index * RHS_SITE_PITCH_UM,
-        }
-        for index in range(n_channels)
-    ]
-
-
 def write_rhs(
     dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
 ) -> Path:

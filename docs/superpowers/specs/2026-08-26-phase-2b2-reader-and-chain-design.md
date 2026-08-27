@@ -756,6 +756,32 @@ belongs to whoever reads repeatedly — 2b-3, 2b-5 — not here.
    whether it matches its own. Not fixed here — this is design work, and
    changing it changes what every RHS fixture's amplitude field looks like.
 
+   > **Closed 2026-08-27.** Placement now happens in the frame that will
+   > render: `synth/units.py::recording_sites(recipe)` returns the linear Intan
+   > array for an RHS-only session and the probe table otherwise, and
+   > `build_timeline` uses it. `linear_sites` and `RHS_SITE_PITCH_UM` moved
+   > from `synth/rhs.py` into `synth/units.py` beside `place_units` — "which
+   > sites" belongs next to "where in them", and `timeline.py` cannot import
+   > `rhs.py` without closing a cycle, since `rhs.py` already imports it.
+   > `STIM_RECIPE`'s three units now sit at y = 24.0, 66.8 and 118.9 µm across
+   > an array spanning 0–150, where all three previously fell inside its top
+   > 16 µm.
+   >
+   > **The two-probe case is refused rather than guessed.** A recipe planting
+   > units while recording through both ephys systems now raises
+   > `TwoProbePopulationsUnsupported`. Two probes sit in different brain
+   > locations and record two different populations; one `GroundTruth.units`
+   > cannot express that, and silently choosing a frame would position the
+   > other system's units against geometry they were never placed in — the
+   > same fault, moved rather than fixed. No shipped recipe hits this
+   > (`DRIFT_RECIPE` is the only dual-system one and plants no units), so the
+   > refusal costs nothing today and hands the two-population design to
+   > whoever first needs it, most likely 2b-4.
+   >
+   > This did change `STIM_RECIPE`'s emitted bytes, as the entry warned. No
+   > test pinned them — the determinism tests compare two generations of one
+   > recipe rather than a stored fixture — and the RHS suite passes unchanged.
+
 ---
 
 ## 12. What this emits

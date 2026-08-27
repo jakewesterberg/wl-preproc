@@ -14,6 +14,69 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from wl_preproc.ephys.geometry import electrode_rows
+
+class TwoProbePopulationsUnsupported(ValueError):
+    """A recipe plants units and records through both ephys systems.
+
+    Two probes sit in different brain locations and record two different
+    populations; one `GroundTruth.units` cannot express that. Raised rather
+    than picking a frame, because picking one silently positions the OTHER
+    system's units against geometry they were never placed in -- which is the
+    exact fault design spec section 11 item 7 records. Whoever first needs a
+    dual-system session with units owns the two-population design.
+    """
+
+
+# Intan headstages carry no probe part number, so there is no offline table to
+# read. A linear array is declared here rather than borrowed from Neuropixels:
+# an RHS session on NP geometry would be a fixture describing hardware this lab
+# does not have. Lives beside `place_units` rather than in `rhs.py` because
+# `timeline.py` needs it to choose a frame, and importing `rhs.py` from
+# `timeline.py` would close an import cycle -- `rhs.py` already imports
+# `timeline.py`.
+RHS_SITE_PITCH_UM = 50.0
+
+
+def linear_sites(n_channels: int) -> list[dict]:
+    """Rows in `electrode_rows`' shape, so `waveforms.py` needs no RHS branch."""
+    return [
+        {
+            "electrode": index,
+            "shank": 0,
+            "shank_col": 0,
+            "shank_row": index,
+            "x_coord": 0.0,
+            "y_coord": index * RHS_SITE_PITCH_UM,
+        }
+        for index in range(n_channels)
+    ]
+
+
+def recording_sites(recipe) -> list[dict]:
+    """The sites this session's ephys system actually records through.
+
+    **Placement must happen in the frame that will render.** Before this,
+    `build_timeline` reached for `recipe.probe_part_number` unconditionally, so
+    an RHS-only session had its units positioned against Neuropixels geometry
+    and then rendered against a linear Intan array. On STIM_RECIPE that put all
+    three units inside the top 16 um of an array spanning 150 um -- breaking
+    `place_units`' own promise that a unit is bounded by the sites the session
+    records. Design spec section 11 item 7.
+    """
+    systems = set(recipe.systems)
+    if recipe.n_units and {"spikeglx", "rhs"} <= systems:
+        raise TwoProbePopulationsUnsupported(
+            f"{recipe.session_id} records through both spikeglx and rhs and "
+            f"plants {recipe.n_units} units. Two probes are two populations; "
+            "GroundTruth.units holds one. Give the recipe a single ephys "
+            "system, or design the two-population model."
+        )
+    if "rhs" in systems and "spikeglx" not in systems:
+        return linear_sites(recipe.n_ap_channels)
+    return electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+
+
 # Absolute refractory period. A Poisson train without one produces intervals no
 # neuron can make, and any ISI-violation metric computed against such a fixture
 # measures the generator rather than the pipeline.

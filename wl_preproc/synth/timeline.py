@@ -10,11 +10,10 @@ from __future__ import annotations
 import numpy as np
 
 from wl_preproc.contracts.events import Escape, Marker, encode_payload
-from wl_preproc.ephys.geometry import electrode_rows
 from wl_preproc.synth.recipe import SessionRecipe
 from wl_preproc.synth.stim import STIM_GUARD_S, STIM_PULSE_DURATION_S, StimEvent
 from wl_preproc.synth.truth import BlockTruth, GroundTruth, TrialTruth
-from wl_preproc.synth.units import place_units, spike_train
+from wl_preproc.synth.units import place_units, recording_sites, spike_train
 
 BARCODE_INTERVAL_S = 1.0
 CODE_WORD_SPACING_S = 0.001
@@ -177,11 +176,12 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
 
     # A unit has a position; which channels it appears on is a CONSEQUENCE of
     # that position, derived downstream by each emitter -- not, as before, an
-    # independent random draw. `sites` is bounded by what this session actually
-    # records (recipe.n_ap_channels), same as `place_units` requires: a unit
-    # placed against the full probe could sit outside the recorded span.
-    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
-    units = place_units(sites, recipe.n_units, rng)
+    # independent random draw. `recording_sites` is bounded by what this
+    # session actually records, same as `place_units` requires: a unit placed
+    # against the full probe could sit outside the recorded span. It also picks
+    # the right FRAME -- an RHS-only session records through a linear headstage,
+    # not a Neuropixels shank (design spec section 11 item 7).
+    units = place_units(recording_sites(recipe), recipe.n_units, rng)
     spikes = tuple(
         (time_s, unit.unit_id)
         for unit in units
