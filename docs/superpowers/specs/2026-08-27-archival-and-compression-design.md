@@ -188,6 +188,21 @@ That makes throttling an honest deferral rather than an omission (§10). When
 sorting does land, the two are the box's two IO-heavy stages and the interaction
 becomes real; deciding it now would be deciding it without the thing to measure.
 
+> **"Verification passes" means `integrity == 'verified'`, not "the session
+> landed".** Found 2026-08-27 while reviewing `archive/layout.py`:
+> `wlpp ingest --no-verify` (`cli/main.py:115-120`) makes `ingest/verify.py`
+> return `Integrity.SKIPPED` with an **empty** mismatch list, and
+> `watcher.py`'s `if mismatches:` cannot tell that from a genuine pass — so the
+> session lands as `INGESTED` with no size or blake3 check ever run, and
+> `SKIPPED` is recorded and then read by nothing.
+>
+> On its own that does not defeat archival, which re-does the same digest
+> comparison. What it defeats is §4's *shape* guarantee: reconstruction
+> reproduces identical bytes for any valid factorization, so a `time.dat` torn
+> on a 4-byte boundary in a session ingested with `--no-verify` yields a
+> silently wrong shape in an artifact that verifies clean. The trigger must
+> therefore branch on the recorded integrity value, not on arrival.
+
 ### 3.2 Somebody has to tell the rig it is safe
 
 The retention arrangement above has a loose end: the rig holds its copy **until

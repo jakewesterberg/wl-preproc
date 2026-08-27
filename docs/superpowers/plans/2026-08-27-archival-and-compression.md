@@ -1464,6 +1464,12 @@ Read `wl_preproc/ingest/watcher.py` and `wl_preproc/daemon.py` and identify the
 single point after `ingest/verify.py` reports success. Archival attaches there
 and nowhere else — two trigger sites would be two policies.
 
+**"Success" is `integrity == 'verified'`, not an empty mismatch list.**
+`wlpp ingest --no-verify` (`cli/main.py:115-120`) returns `Integrity.SKIPPED`
+with an empty list, which `watcher.py`'s `if mismatches:` cannot distinguish
+from a genuine pass. `schema/ingest.py` already records the value; nothing reads
+it back today, and this is the first thing that must.
+
 - [ ] **Step 2: Write the failing test**
 
 Create `tests/ingest/test_archive_trigger.py`:
@@ -1482,6 +1488,21 @@ def test_a_verified_session_is_handed_to_archival(tmp_path):
     with patch("wl_preproc.ingest.watcher.archive_session") as archived:
         _run_the_watcher_over(tmp_path)   # replace with the real entry point
     assert archived.called
+
+
+def test_a_session_ingested_with_no_verify_is_not_archived(tmp_path):
+    """`--no-verify` makes `ingest/verify.py` return `Integrity.SKIPPED` with an
+    EMPTY mismatch list, so `watcher.py`'s `if mismatches:` cannot tell it from a
+    genuine pass. The trigger must branch on the recorded integrity value, not on
+    the session having landed -- design spec section 3.1's 2026-08-27 note.
+
+    It matters because reconstruction reproduces identical bytes for any valid
+    factorization (section 4), so an unverified session with a torn `time.dat`
+    produces a silently wrong shape in an artifact that verifies clean."""
+    generate_session(tmp_path, CI_RECIPE)
+    with patch("wl_preproc.ingest.watcher.archive_session") as archived:
+        _run_the_watcher_over(tmp_path, verify=False)   # replace with the real entry point
+    assert not archived.called
 
 
 def test_a_quarantined_session_is_not_archived(tmp_path):
