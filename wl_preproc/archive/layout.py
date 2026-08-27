@@ -20,19 +20,36 @@ with a plausible-but-wrong (n_channels, n_samples) round-trips Task 3's own
 verification clean. Design spec section 4's "byte reconstruction catches a
 channel-order error, an interleaving mistake, or a dtype slip" is true of a
 genuine transformation of the data and false of a mislabelling of its shape.
-This module's own checks are therefore the only guard that exists.
+Nothing else in this pipeline inspects shape at all -- ingest verification
+(next paragraph) checks a file's size and hash, never what gets derived from
+it, and Task 3's reconstruction-verify cannot tell factorizations apart, as
+just shown -- so this module's own checks are the only place a shape
+mislabelling is ever caught, by anything, in this whole pipeline.
 
-**The `%4` check on `time.dat` is defence in depth, not the only guard.** Any
-file reaching this module through the running pipeline has already had its
-exact size, and then its blake3 digest, verified against the DONE marker at
-landing: `ingest/verify.py`'s `verify_session` compares the file's own size
-against what the DONE marker declared before it ever hashes anything -- "a
-size mismatch is decisive and cheap" -- and a mismatch on any declared file
-quarantines the session in
+**That "only guard" claim is about shape specifically, and it does not make
+the `%4` check this module's only defense against a bad `time.dat` -- a
+separate guard, upstream and ordinarily stronger, keeps a corrupted one from
+arriving here at all.** A file reaching this module through the running
+pipeline has ordinarily already had its exact size, and then its blake3
+digest, verified against the DONE marker at landing: `ingest/verify.py`'s
+`verify_session` compares the file's own size against what the DONE marker
+declared before it ever hashes anything -- "a size mismatch is decisive and
+cheap" -- and a mismatch on any declared file quarantines the session in
 `ingest/watcher.py` before `landing.land_session` runs, which is before this
-plan's archival trigger can run at all. A `time.dat` whose size disagrees with
-what the acquisition system declared for it -- 4-byte-aligned or not -- cannot
-reach `bulk_streams` by that route.
+plan's archival trigger can run at all.
+
+"Ordinarily" is carrying real weight in that paragraph. `wlpp ingest
+--no-verify` (`cli/main.py`) skips the comparison outright: `verify_session`
+then returns `Integrity.SKIPPED` with an empty mismatch list, which
+`watcher.py`'s own `if mismatches:` cannot tell apart from a session that was
+actually checked and passed, so the session lands either way.
+`Integrity.SKIPPED` is recorded on that landed row (`schema/ingest.py`'s
+`Ingestion.integrity`), but nothing in this repository currently branches on
+it -- not here, and not yet in the archival trigger, which is where that
+decision belongs rather than in this module. So: a `time.dat` whose size
+disagrees with what the acquisition system declared for it -- 4-byte-aligned
+or not -- cannot reach `bulk_streams` through a session that was actually
+verified. It can through one that opted out of verification.
 
 **The asymmetry with SpikeGLX is real, though, and worth naming rather than
 hiding behind the ingest backstop.** SpikeGLX's shape is checked against
@@ -45,9 +62,11 @@ inside this module. Confirmed against a real STIM_RECIPE session (true shape
 n_channels=4, n_samples=373546): a `time.dat` torn exactly on a 4-byte
 boundary -- half its real size -- still divides evenly, and `bulk_streams`
 alone reports the self-consistent but wrong n_channels=8, n_samples=186773
-with no exception. Reaching that outcome requires calling `bulk_streams` on a
-session that bypassed ingest verification, which is how it was found and not
-how this pipeline runs. The `%4` check above stays regardless: it is cheap, it
+with no exception. Reaching that outcome requires either calling `bulk_streams`
+directly on a session that bypassed ingest verification (how it was found),
+or running the real pipeline with `--no-verify` over a `time.dat` corrupted on
+exactly that boundary -- narrow, but real, now that both paths are named. The
+`%4` check above stays regardless: it is cheap, it
 turns an off-boundary truncation into a loud failure at the point of use
 rather than a mysterious one downstream, and "raise `LayoutUndetermined` when
 it cannot be sure" is this module's own contract independent of what any
@@ -143,8 +162,9 @@ def bulk_streams(session_dir: Path) -> list[StreamLayout]:
     # is int32 sample indices, one per sample, so the channel count falls out of
     # two file sizes -- derived from the data rather than parsed from a header
     # this repo would otherwise have to learn to read. See the module
-    # docstring's "known gap" paragraph for what this derivation still cannot
-    # catch.
+    # docstring for what backstops this derivation (ingest verification,
+    # ordinarily) and the one case -- `--no-verify` plus a time.dat torn
+    # exactly on a 4-byte boundary -- where nothing but the check below does.
     for amplifier in sorted(session_dir.rglob("amplifier.dat")):
         time_dat = amplifier.with_name("time.dat")
         if not time_dat.exists():
