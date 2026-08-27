@@ -289,32 +289,93 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.schema import archive as archive_schema
 
         session_dir = Path(args.session)
-        outcome = archive_session(session_dir, args.nas_root, args.host, args.share)
+        # Key first, before `archive_session` runs: the NAS publish path
+        # below is namespaced by subject, which the CLI knows before
+        # publishing happens, not only after.
+        key = _session_key_from_dir(session_dir)
+        # Namespaced by subject -- review found that `archive_session`'s own
+        # publish path (`archive/stage.py`: `nas_root / f"{session_dir.name}
+        # .zarr"`) is a bare `SessionId` (date + index, `wl_sync.session`),
+        # which carries no subject at all. Reproduced directly against a
+        # real MySQL container: two different subjects sharing one session
+        # id -- a real, reachable state; nothing anywhere enforces that
+        # session ids are subject-scoped -- published to the IDENTICAL NAS
+        # path, the second silently `rmtree`-ing and replacing the first,
+        # with both `ArchiveArtifact` rows left recording that same path.
+        # That defeats the settled triple's whole stated purpose (Controller
+        # ruling C: "so another agent can open the file from elsewhere").
+        # Fixed entirely at this call site rather than in `archive/stage.py`
+        # (outside this task's assigned files, and inherited from Task 5):
+        # passing a per-subject subdirectory as `nas_root` makes stage.py's
+        # own unchanged logic publish to a unique path with no change there
+        # at all. `archive_path` below is still computed relative to the
+        # SHARE root (`args.nas_root`), not this nested one, so it stays
+        # "relative to the share" exactly as ruling C requires -- it just
+        # now includes the subject as its first path component.
+        nas_root_for_session = args.nas_root / key["subject"]
+        outcome = archive_session(session_dir, nas_root_for_session, args.host, args.share)
         for verdict in outcome.verdicts:
             if not verdict.matched:
                 print(f"MISMATCH {verdict.relative_path}")
         print("verified" if outcome.all_matched else "NOT verified")
+
+        archive_schema.activate(prefix=args.prefix)
+        # `archive_session` has ALREADY overwritten the NAS artifact
+        # unconditionally by this point, regardless of `all_matched`
+        # (`archive/stage.py`: publish -- rmtree the old `published`, copy
+        # the new one -- runs before the confirm/all_matched check, not
+        # after it). So any PRIOR `ArchiveArtifact` row for this session now
+        # describes bytes that no longer exist on the NAS, whether or not
+        # THIS run verified. Deleted here, before the `all_matched` branch
+        # below, so "no row" always honestly means "not archived" -- never
+        # "was archived once, may or may not still be" (review, Important:
+        # "the failure path leaves the database describing bytes that no
+        # longer exist").
+        #
+        # `.delete(prompt=False)`, not `replace=True` on the insert below.
+        # DataJoint declares every foreign key `ON DELETE RESTRICT`
+        # (`datajoint/declare.py`), so a plain `REPLACE INTO` on
+        # `ArchiveArtifact` -- MySQL's REPLACE is DELETE-then-INSERT -- while
+        # its own `ArchiveVerification` children still exist from a PRIOR
+        # run raises `IntegrityError`. Reproduced directly against a real
+        # MySQL container with this schema (review, CRITICAL): a second
+        # `wlpp archive` over an already-archived session got as far as
+        # re-publishing a genuinely new artifact to the NAS, then crashed on
+        # exactly this insert -- leaving the database recording the FIRST
+        # run's digest for bytes the second run had already deleted, so
+        # `manifest_digest(published) != ArchiveArtifact.manifest_digest`
+        # afterward. `.delete()` cascades through the real dependency graph
+        # instead (confirmed directly: deleting `ArchiveArtifact & key` also
+        # removes its `ArchiveVerification` rows), which a bare `REPLACE
+        # INTO` cannot do under `ON DELETE RESTRICT`. `prompt=False` is
+        # required explicitly, not left to `dj.config["safemode"]`'s
+        # default: that default is `True` outside this project's own test
+        # fixtures (which set it `False` for the whole suite), and an
+        # interactive y/n confirmation would hang a non-interactive cron/
+        # systemd invocation of this command forever.
+        (archive_schema.ArchiveArtifact & key).delete(prompt=False)
+
         if not outcome.all_matched:
             return 1
 
-        # Written only on the all-matched path (Controller ruling C: "Write
-        # the row only when outcome.all_matched"). `ArchiveVerification`
-        # rows are written here too, alongside it, though the ruling names
-        # only `ArchiveArtifact` explicitly: nothing else in this codebase
-        # ever writes an `ArchiveVerification` row (confirmed by grepping
+        # `ArchiveVerification` rows are written here too, alongside
+        # `ArchiveArtifact`, though Controller ruling C's own text names
+        # only the latter explicitly ("write the row only when outcome.
+        # all_matched" -- singular). Before this task, nothing in this
+        # codebase wrote either table: confirmed by grepping
         # `ArchiveVerification.insert` across wl_preproc/ and tests/ before
-        # writing this -- the only hits are this line and this task's own
-        # test helpers), and `ArchiveVerification -> ArchiveArtifact` (see
-        # `schema/archive.py`) means there is no row shape that could record
-        # one without the other anyway. Leaving it unwritten would make
-        # `reclaim_conditions`'s `every_file_verified` condition (`archive/
-        # reclaim.py`) and `_staged_entries` below fail closed forever, on
-        # every session -- the exact "tape-manifest prints an empty manifest
-        # when artifacts exist" failure this task's own brief warns to catch
-        # with a real test rather than trust.
-        key = _session_key_from_dir(session_dir)
+        # writing this -- the only hits were Task 7's own `tests/archive/
+        # test_reclaim.py::_archive_and_verify` helper (pre-existing, not
+        # this task's) and this task's own `tests/cli/test_archive_cli.py`.
+        # `ArchiveVerification -> ArchiveArtifact` (`schema/archive.py`)
+        # means there is no row shape that could record one without the
+        # other anyway. Leaving it unwritten would make `reclaim_conditions`
+        # 's `every_file_verified` condition (`archive/reclaim.py`) and
+        # `_staged_entries` below fail closed forever, on every session --
+        # the exact "tape-manifest prints an empty manifest when artifacts
+        # exist" failure this task's own brief warns to catch with a real
+        # test rather than trust.
         archive_path = str(outcome.artifact_path.relative_to(args.nas_root))
-        archive_schema.activate(prefix=args.prefix)
         # One instant reused for every row this call writes, not a fresh
         # `datetime.now()` per row: `StoreResult` (`archive/store.py`) carries
         # no timestamp of its own -- compression already finished by the time
@@ -322,18 +383,9 @@ def main(argv: list[str] | None = None) -> int:
         # when the artifact was CONFIRMED good, the same moment `stage.py`'s
         # own sentinel is stamped.
         now = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
-        # `replace=True`, not a bare insert: `archive_session` itself
-        # overwrites `published` on a re-run of the same session
-        # (`if published.exists(): shutil.rmtree(published)`, archive/
-        # stage.py), and `write_store`'s own docstring records that a second
-        # compression of identical input yields "a different, EQUALLY VALID"
-        # digest. A plain `insert1` would raise on the resulting duplicate
-        # key; `skip_duplicates` would silently keep describing bytes this
-        # run just deleted from the NAS. `replace=True` is `ingest/
-        # landing.py`'s own precedent for exactly this shape -- that module's
-        # `quarantine()` uses it so "the latest call wins", on the identical
-        # reasoning that the newest attempt is the one that should be on
-        # record.
+        # No `replace=True` needed here (or below): the prior row for this
+        # key, if any, was just deleted above, so this is always a fresh
+        # insert now.
         archive_schema.ArchiveArtifact.insert1(
             {
                 **key,
@@ -345,8 +397,7 @@ def main(argv: list[str] | None = None) -> int:
                 "compressed_bytes": outcome.store.compressed_bytes,
                 "manifest_digest": outcome.store.manifest_digest,
                 "compressed_at": now,
-            },
-            replace=True,
+            }
         )
         archive_schema.ArchiveVerification.insert(
             [
@@ -359,8 +410,7 @@ def main(argv: list[str] | None = None) -> int:
                     "verified_at": now,
                 }
                 for verdict in outcome.verdicts
-            ],
-            replace=True,
+            ]
         )
         print(
             f"archived: {key['subject']} @ {key['session_datetime']} -> "
@@ -386,10 +436,14 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"reclaim preview for session {key['subject']} @ {key['session_datetime']}:")
         # Every condition, not merely the blocking ones -- design spec
-        # section 5.2's "a NAMED LIST, not a verdict", and the same reason
-        # `blocking()` alone is not enough for `wlpp reclaim`'s own preview:
-        # a reader must be able to tell "this passed" from "this was never
-        # evaluated", which only printing every row can show.
+        # section 5.2's own words: "A named list, not a boolean." (Review
+        # round: an earlier version of this comment misquoted this as "a
+        # NAMED LIST, not a verdict", a quotation that appears in no source
+        # -- exactly the falsehood class this project's own CLAUDE.md
+        # already names once.) The same reason `blocking()` alone is not
+        # enough for `wlpp reclaim`'s own preview: a reader must be able to
+        # tell "this passed" from "this was never evaluated", which only
+        # printing every row can show.
         for condition in conditions:
             status = "OK" if condition.passed else "BLOCKED"
             detail = f" -- {condition.detail}" if condition.detail else ""
@@ -404,21 +458,34 @@ def main(argv: list[str] | None = None) -> int:
             print("re-run with --no-dry-run --confirm <session> to proceed.")
             return 0
         if args.confirm != args.session:
-            print("\nrefusing: --confirm must repeat the session id exactly.")
+            # "session path", not "session id": `--session` names a
+            # directory here (this file's own `--session` help text says so),
+            # never a bare id -- review round: an earlier version of this
+            # message copied `wlpp delete`'s wording verbatim, which is
+            # accurate for THAT command's own `--session` but not this one's.
+            print("\nrefusing: --confirm must repeat the session path exactly.")
             return 2
         # Controller ruling A: reclaim previews and deletes nothing in this
         # build, on PURPOSE, regardless of --no-dry-run/--confirm -- not an
-        # oversight to fix later. Rehydration (design spec section 8.4's "the
-        # path that makes reclamation safe") is not in this plan yet ("Not in
-        # this plan": "it is the natural next plan"), and freeing a session's
-        # only fast copy with no built path back is the identical loss `wlpp
-        # delete`'s own guardrail refuses a few branches above, for the same
-        # reason.
+        # oversight to fix later. Rehydration is not in this plan yet -- the
+        # PLAN's own "Not in this plan" section (`docs/superpowers/plans/
+        # 2026-08-27-archival-and-compression.md`, "Not in this plan"):
+        # "Rehydration -- decompress-to-scratch. [Parent design spec] §8.4
+        # names it as the path that makes reclamation safe, and it is the
+        # natural next plan." (Review round: an earlier version of this
+        # comment attributed that quote to "design spec section 8.4" of
+        # THIS archival design document, which has no such section -- its
+        # own `## 8` is "Schema", with no subsections at all, and every
+        # "§8.4"/"§8.5" this document itself uses names the PARENT spec,
+        # e.g. its own section 5's title, "Reclamation, and the reversal of
+        # §8.5".) Freeing a session's only fast copy with no built path back
+        # is the identical loss `wlpp delete`'s own guardrail refuses a few
+        # branches above, for the same reason.
         print(
-            "\nthis build never performs a real reclamation (see the design "
-            "spec, sections 5.1 and 8.4): rehydration -- the path that makes "
-            "freeing scratch safe to reverse -- is not built yet, so the "
-            "preview above is as far as this command goes."
+            "\nthis build never performs a real reclamation: rehydration "
+            "(decompress-to-scratch), the path that makes freeing scratch "
+            "safe to reverse, is not built yet -- so the preview above is "
+            "as far as this command goes."
         )
         return 0
 

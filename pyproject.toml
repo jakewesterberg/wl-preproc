@@ -91,13 +91,28 @@ dependencies = [
     # workstation missing software this package uses.
     "zarr>=2,<3",
     # Blosc/zstd, the codec `archive/store.py` compresses the archive with
-    # via `numcodecs.Blosc`. WavPack would compress ~6% better but wraps a
-    # system library that will not install from pip -- see that design's
-    # section 2.1. `>=0.15` is a floor for the `Blosc` call signature
-    # `store.py` uses; no upper bound is invented to match zarr's, since
-    # nothing here depends on numcodecs staying below any particular major
-    # version.
-    "numcodecs>=0.15",
+    # via `numcodecs.Blosc(cname=..., clevel=..., shuffle=numcodecs.Blosc.
+    # NOSHUFFLE)`. WavPack would compress ~6% better but wraps a system
+    # library that will not install from pip -- see that design's section
+    # 2.1.
+    #
+    # Originally declared here as `>=0.15` with no verified floor for that
+    # call signature and no upper bound at all -- both wrong, caught in
+    # review: `>=0.15` was invented, not checked, and the two dependencies
+    # that already require numcodecs both cap it well below that. Confirmed
+    # against installed distribution metadata: zarr 2.18.7 (already pinned
+    # above) itself requires `numcodecs!=0.14.0,!=0.14.1,<0.16,>=0.10.0`,
+    # and spikeinterface separately requires `numcodecs<0.16.0`. So an
+    # unbounded `>=0.15` understated a real, already-enforced ceiling, and
+    # `wlo stack` reading this file alone would have no way to know
+    # numcodecs 0.16 cannot resolve on a clean install here. `>=0.10,<0.16`
+    # brackets both dependents' real constraints rather than restating
+    # zarr's own oddly-specific point exclusions (0.14.0/0.14.1), which this
+    # repository has no independent reason to assert. The Blosc call
+    # signature `store.py` uses is not independently verified against a
+    # specific numcodecs release -- this floor is deliberately no tighter
+    # than what the dependencies that already require numcodecs enforce.
+    "numcodecs>=0.10,<0.16",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the

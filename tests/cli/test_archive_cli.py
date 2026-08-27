@@ -28,6 +28,7 @@ derive a session key that could quietly drift from `manifest_session_key`'s.
 from __future__ import annotations
 
 import datetime
+import re
 
 import pytest
 
@@ -100,6 +101,42 @@ def _corrupt_a_done_marker(session_dir):
     marker.write_text(text.replace("blake3: ", "blake3: 0"), encoding="utf-8")
 
 
+def _digest_of_published_content(store_dir):
+    """`archive.store.manifest_digest`'s own algorithm, with the sentinel
+    (`archive/stage.py::SENTINEL_NAME`) excluded.
+
+    Not the same thing as calling `manifest_digest` directly on a published
+    artifact -- confirmed empirically while writing this, before trusting
+    it: `archive_session`'s own publish order is compress, verify, publish,
+    confirm, THEN sentinel (`archive/stage.py`'s own module docstring), so
+    `write_store` computes and locks in the digest this test compares
+    against BEFORE the sentinel file exists anywhere. A real published
+    directory therefore always has exactly one more file than whatever the
+    recorded digest was computed over, and a bare `manifest_digest(published)`
+    call disagrees with the recorded value on every session, archived
+    correctly or not -- reproduced directly: a probe session's row digest,
+    a bare re-hash of the same published directory, and a re-hash
+    excluding the sentinel came back as three different-looking numbers,
+    the first and third identical and the second not. This is not a defect
+    in `archive/stage.py` to work around quietly: `SENTINEL_NAME`'s own
+    purpose is to be written last, after the artifact is already known
+    good, so it is process metadata about the archive attempt, not session
+    data the digest was ever meant to cover.
+    """
+    import blake3 as _blake3
+
+    from wl_preproc.archive.stage import SENTINEL_NAME
+    from wl_preproc.contracts.done import blake3_file
+
+    digest = _blake3.blake3()
+    for path in sorted(
+        p for p in store_dir.rglob("*") if p.is_file() and p.name != SENTINEL_NAME
+    ):
+        digest.update(str(path.relative_to(store_dir)).encode("utf-8"))
+        digest.update(blake3_file(path).encode("ascii"))
+    return digest.hexdigest()
+
+
 def _section(body: str, heading: str) -> str:
     """The slice of the report under one `##` heading, and nothing else.
 
@@ -151,10 +188,34 @@ def test_archive_writes_the_artifact_row_with_a_nas_relative_path(landed, prefix
     # machine, and would also silently start with "/", which the assertion
     # below catches.
     assert not row["archive_path"].startswith("/")
-    published = nas_root / f"{session_dir.name}.zarr"
+    # Namespaced by subject (`nas_root/<subject>/<session>.zarr`), not bare
+    # `nas_root/<session>.zarr` -- review found that a bare session-id path
+    # collides silently between two subjects sharing one session id (a real,
+    # reachable state; nothing enforces session ids are subject-scoped --
+    # see test_two_subjects_sharing_a_session_id_do_not_collide_on_the_nas
+    # below). `archive_path` is still relative to the SHARE root, just with
+    # subject as its own leading component.
+    published = nas_root / key["subject"] / f"{session_dir.name}.zarr"
     assert row["archive_path"] == str(published.relative_to(nas_root))
     assert row["compressed_bytes"] > 0
     assert len(row["manifest_digest"]) == 64  # blake3 hex
+
+    # Ruling C's central prohibition, pinned directly rather than merely by
+    # format: "it cannot re-derive [codec, clevel, compressed_bytes and
+    # manifest_digest] by calling write_store a second time -- Blosc's
+    # multi-threaded compression is not reproducible... so a second call
+    # yields a different, equally valid digest that no longer matches the
+    # artifact on the NAS" (archive/stage.py's own `ArchiveOutcome.store`
+    # comment). A bare `len(...) == 64` format check cannot tell a reused
+    # digest from a freshly (and wrongly) recomputed one -- both are 64 hex
+    # characters -- so this compares the row's digest against the digest of
+    # the bytes ACTUALLY published to the NAS, computed independently here.
+    # A recompute-via-a-second-write_store-call mutation would almost
+    # certainly produce a digest that does not match what is really on disk
+    # (probed directly: see the report's fix-round section).
+    assert row["codec"] == "zstd"
+    assert row["clevel"] == 5
+    assert row["manifest_digest"] == _digest_of_published_content(published)
 
 
 def test_archive_prints_verified_and_writes_one_verification_row_per_file(landed, prefix, capsys):
@@ -221,6 +282,142 @@ def test_archive_writes_no_rows_when_verification_fails(landed, prefix, capsys):
     assert "NOT verified" in out
     assert len(archive.ArchiveArtifact & key) == 0
     assert len(archive.ArchiveVerification & key) == 0
+
+
+def test_archiving_the_same_session_twice_succeeds_and_the_digest_matches_the_nas(landed, prefix):
+    """Review round, CRITICAL. Ruling C's own reasoning ("a second call
+    yields a different, equally valid digest that no longer matches the
+    artifact on the NAS", `archive/stage.py`'s `ArchiveOutcome.store`
+    comment) only holds if the SECOND run's row describes what is actually
+    on the NAS once it finishes -- and before this fix it did not.
+    DataJoint declares every foreign key `ON DELETE RESTRICT` (`datajoint/
+    declare.py`), so a plain `insert1(replace=True)` on `ArchiveArtifact`
+    (MySQL's `REPLACE INTO` is DELETE-then-INSERT) raised `IntegrityError`
+    while its own `ArchiveVerification` children from the FIRST run still
+    existed -- reproduced directly against a real MySQL container before
+    this fix, with `archive_session` having ALREADY re-published a new
+    artifact to the NAS by the time the crash happened, leaving the
+    database recording the first run's digest for bytes that no longer
+    existed."""
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed("arcrr1")
+    nas_root = session_dir.parent.parent / "nas"
+    archive_args = [
+        "archive",
+        "--session",
+        str(session_dir),
+        "--nas-root",
+        str(nas_root),
+        "--host",
+        "vault",
+        "--share",
+        "cold",
+        "--prefix",
+        prefix,
+    ]
+
+    assert main(archive_args) == 0
+    # Must not raise, and must not leave a stale row -- this is the call
+    # that crashed with IntegrityError before this fix.
+    assert main(archive_args) == 0
+
+    rows = (archive.ArchiveArtifact & key).to_dicts()
+    assert len(rows) == 1, rows
+    published = nas_root / key["subject"] / f"{session_dir.name}.zarr"
+    assert rows[0]["manifest_digest"] == _digest_of_published_content(published)
+    # The child rows survive the re-run too (proving the delete-then-insert
+    # path actually completed, not merely that the parent row exists).
+    expected = _expected_digests(session_dir)
+    assert len(archive.ArchiveVerification & key) == len(expected)
+
+
+def test_a_failed_rearchive_invalidates_the_prior_good_row(landed, prefix):
+    """Review round, Important. `archive_session` publishes to the NAS
+    UNCONDITIONALLY, even on a verification failure (`archive/stage.py`:
+    the rmtree-and-copytree publish step runs before the confirm/
+    all_matched check, not after it) -- so a session archived successfully
+    once, then re-archived from a now-corrupted source, has its GOOD NAS
+    artifact overwritten by the bad one regardless of the second run's own
+    outcome. A stale `ArchiveArtifact` row surviving that would keep telling
+    `tape-manifest` and the report's rig-may-clear section this session's
+    archive is still verified, when what is actually on the NAS no longer
+    is."""
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed("arcrr2")
+    nas_root = session_dir.parent.parent / "nas"
+    archive_args = [
+        "archive",
+        "--session",
+        str(session_dir),
+        "--nas-root",
+        str(nas_root),
+        "--host",
+        "vault",
+        "--share",
+        "cold",
+        "--prefix",
+        prefix,
+    ]
+
+    assert main(archive_args) == 0
+    assert len(archive.ArchiveArtifact & key) == 1
+
+    _corrupt_a_done_marker(session_dir)
+    code2 = main(archive_args)
+
+    assert code2 == 1
+    assert len(archive.ArchiveArtifact & key) == 0
+    assert len(archive.ArchiveVerification & key) == 0
+
+
+def test_two_subjects_sharing_a_session_id_do_not_collide_on_the_nas(landed, prefix):
+    """Review round, Important. `archive_session`'s own publish path
+    (`archive/stage.py`) is a bare `SessionId` -- date plus index
+    (`wl_sync.session`), carrying no subject -- so two different subjects
+    recorded under the identical session id (a real, reachable state:
+    nothing anywhere enforces that session ids are subject-scoped)
+    published to the SAME NAS path before this fix, the second silently
+    `rmtree`-ing and replacing the first's bytes while both `ArchiveArtifact`
+    rows recorded that same path. CI_RECIPE's own `session_id` is fixed, so
+    the `landed` fixture already gives every subject the identical id --
+    this test needs no special setup beyond landing two."""
+    from wl_preproc.schema import archive
+
+    session_dir_a, key_a = landed("subA")
+    session_dir_b, key_b = landed("subB")
+    assert session_dir_a.name == session_dir_b.name  # same session_id, different subjects
+
+    nas_root = session_dir_a.parent.parent / "nas"
+    for session_dir in (session_dir_a, session_dir_b):
+        code = main(
+            [
+                "archive",
+                "--session",
+                str(session_dir),
+                "--nas-root",
+                str(nas_root),
+                "--host",
+                "vault",
+                "--share",
+                "cold",
+                "--prefix",
+                prefix,
+            ]
+        )
+        assert code == 0
+
+    row_a = (archive.ArchiveArtifact & key_a).to_dicts()[0]
+    row_b = (archive.ArchiveArtifact & key_b).to_dicts()[0]
+    assert row_a["archive_path"] != row_b["archive_path"]
+
+    published_a = nas_root / "subA" / f"{session_dir_a.name}.zarr"
+    published_b = nas_root / "subB" / f"{session_dir_b.name}.zarr"
+    assert published_a.exists()
+    assert published_b.exists()
+    assert _digest_of_published_content(published_a) == row_a["manifest_digest"]
+    assert _digest_of_published_content(published_b) == row_b["manifest_digest"]
 
 
 # -- wlpp reclaim ---------------------------------------------------------
@@ -481,6 +678,28 @@ def _timing(key, prefix, *, tier: str):
     )
 
 
+def test_report_counts_a_landed_but_never_archived_session_separately(landed, prefix):
+    """Review round, Important: a landed session that has never been
+    archived at all must not read the same as a fine, fully-reclaimable
+    one -- `build_report`'s own module docstring states the principle one
+    level up: "a missing section and an empty one must never render
+    identically". Nothing archives automatically in this build (Task 10,
+    not this one), so a session landed via `landed()` alone -- no `wlpp
+    archive` call -- is exactly this state, and the section must say so
+    rather than silently reading "0"."""
+    session_dir, key = landed("rptnv1")
+
+    body = build_report(session_dir.parent, prefix=prefix)
+
+    section = _section(body, "Archived sessions blocked from reclamation")
+    assert "never been archived" in section
+    # At least the one session this test itself landed -- other tests in
+    # this shared-database suite may also contribute landed-but-unarchived
+    # sessions, so this checks presence and a nonzero count, not an exact
+    # number tied to this test's own isolation.
+    assert re.search(r"\d+ landed session\(s\) have never been archived", section)
+
+
 def test_report_names_a_verified_archive_as_clear_to_the_rig(landed, prefix):
     session_dir, key = landed("rptcl1")
     nas_root = session_dir.parent.parent / "nas"
@@ -537,7 +756,7 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
 
     body = build_report(session_dir.parent, prefix=prefix)
 
-    section = _section(body, "Unreclaimed sessions")
+    section = _section(body, "Archived sessions blocked from reclamation")
     line = [ln for ln in section.splitlines() if key["subject"] in ln]
     assert len(line) == 1, section
     assert "not_tier_d" in line[0]
@@ -565,5 +784,5 @@ def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefi
 
     body = build_report(session_dir.parent, prefix=prefix)
 
-    section = _section(body, "Unreclaimed sessions")
+    section = _section(body, "Archived sessions blocked from reclamation")
     assert key["subject"] not in section
