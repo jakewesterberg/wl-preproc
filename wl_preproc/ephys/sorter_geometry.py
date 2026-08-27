@@ -1,15 +1,35 @@
 """Kilosort spacing parameters, derived from the probe rather than defaulted.
 
-**Why this lives at the reader seam and not in the sorting phase.** KS4's
-`dminx` and `max_channel_distance` both default to 32 um, and its own parameter
-documentation says that "should work well for Neuropixels 1 and Neuropixels 2
-probes". This lab's probe is NP1032, whose two columns sit 103 um apart. At the
-default, a channel in one column is never compared with any channel in the
-other -- the mechanism by which a spike straddling both COULD become two units,
-confirmed directly in Kilosort's own source. Whether it does in practice is
-narrower than that (design spec section 7's 2026-08-26 amendment). The geometry
-is known here, where the probe is read; leaving the constant to 2b-5 would put
-a probe-dependent number in the phase furthest from the probe.
+**UNVALIDATED. Do not adopt these values without measuring first.**
+
+This module was written to prevent a specific failure, and that failure turned
+out not to exist. The original reasoning ran: KS4's `dminx` and
+`max_channel_distance` both default to 32 um, its own parameter documentation
+says that "should work well for Neuropixels 1 and Neuropixels 2 probes", this
+lab's probe is NP1032 with columns 103 um apart, and so at the default a
+channel in one column would never be compared with one in the other -- splitting
+any unit straddling the gap.
+
+**Measured 2026-08-27, and the last step is false.** Instrumenting
+`template_centers()` and `nearest_chans()` on this probe's own geometry: at the
+default, 158 of the 252 surviving templates draw channels from BOTH columns,
+against 95 of 189 at the derived spacing. The surviving grid columns are
+{0, 17.2, 85.8, 103}, and every template at 17.2 and 85.8 spans the gap --
+`nearest_chans` gives its tenth slot to the far column at 85.8 um rather than to
+a same-column site two rows further out at 101.5 um. The default bridges the
+columns MORE than the derived spacing does. See design spec section 7's
+2026-08-27 amendment.
+
+**What is still true**: the parameter defaults are what they are, Kilosort's
+docs really do scope them to NP1 and NP2, this probe is neither, and the
+arithmetic below is sound. What is gone is any evidence that the derived values
+sort BETTER. They differ -- the derived spacing puts a template at the 51.5 um
+midpoint where the default has none, and widens `max_channel_distance` to
+103 um, which against a ~60 um footprint decay may admit channels carrying
+mostly noise -- and which is preferable is unmeasured in both directions.
+
+So this stays as arithmetic worth having, and 2b-5 owns the comparison against
+ground truth that would justify using it.
 """
 
 from __future__ import annotations

@@ -79,10 +79,24 @@ of what actually happened; see the design spec's 2026-08-26 section 7
 amendment (`docs/superpowers/specs/2026-08-26-phase-2b2-reader-and-chain-
 design.md`) for what they do and do not settle about the underlying claim.
 
-Whether spec section 7's claim needs revising, whether more seeds would
-settle it, or whether this fixture's noise regime is the wrong instrument for
-this specific comparison, is not this file's call. It measures; it does not
-rule.
+**Settled 2026-08-27, and the answer is that the tie is a clean null.** The
+paragraphs above left open whether section 7's claim needed revising, whether
+more seeds would settle it, or whether this fixture was the wrong instrument.
+A better-powered run was designed -- more units, placed deliberately at the
+51.5 um midpoint rather than drawn uniformly -- and then cancelled, because a
+free check of the mechanism run beforehand retired it. At the 32 um default,
+158 of 252 surviving templates draw channels from BOTH columns, against 95 of
+189 at the derived spacing: `nearest_chans` gives its tenth slot to the far
+column rather than to a same-column site two rows further out. The default
+bridges the gap more than the derived spacing does, so there was no effect for
+these three seeds to miss.
+
+That measurement lives in
+`tests/ephys/test_sorter_geometry.py::test_the_32um_default_does_not_isolate_the_columns_as_section_7_claimed`,
+which runs in milliseconds and will fail if a future Kilosort changes the
+relationship. The numbers recorded above stand as what six real sorts produced;
+what changed is only their interpretation. See design spec section 7's
+2026-08-27 amendment.
 """
 
 import os

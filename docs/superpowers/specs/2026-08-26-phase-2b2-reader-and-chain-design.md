@@ -10,9 +10,9 @@ synthetic generator turned out to be unable to answer any question this phase
 asks (§1), so the fixture work is now this piece's front half. And a survey of
 what Allen, IBL, SpikeGLX and SpikeInterface actually do (§2) falsified the step
 order in §6.1, replaced the reference choice with a four-way enum, and turned up
-a Kilosort default that splits units on this lab's probe by mechanism — the
-fixture's demonstration of that consequence turned out narrower than first
-stated (§7).
+a Kilosort default suspected of splitting units on this lab's probe. Testing
+it retired the suspicion: the mechanism does not hold, and §7 records how the
+claim was falsified.
 
 ---
 
@@ -530,6 +530,58 @@ where the probe is known.
 > which now records the measurement rather than asserting a direction it did
 > not find.
 
+> **Amended again 2026-08-27, and this block supersedes the reading above.**
+> The 2026-08-26 amendment concluded that the tie *"reads as underpowered
+> rather than as a clean null"* and that *"the mechanism is independently
+> confirmed in KS4's own source"*. **The second claim is false, and it makes
+> the first moot.**
+>
+> Instrumenting `template_centers()` and `nearest_chans()` directly on this
+> probe's own 64-site geometry — once through Kilosort's own functions, once
+> reimplemented from the published formulas touching no Kilosort code, both
+> returning identical counts — gives:
+>
+> | Setting | Templates surviving `igood` | Drawing channels from BOTH columns |
+> |---|---|---|
+> | KS4 default (32 µm) | 252 | **158** |
+> | Derived (103 µm) | 189 | 95 |
+>
+> **The default bridges the columns on more templates than the derived
+> spacing, not fewer.**
+>
+> What the earlier block got right: the grid does include 51.5, and `igood`
+> does discard it at `max_channel_distance=32`. What it got wrong is the
+> inference — that discarding the *midpoint* template prevents cross-column
+> comparison. It does not. The surviving grid columns at the default are
+> `{0, 17.2, 85.8, 103}`, and **every one of the 126 templates at 17.2 and
+> 85.8 spans both columns.** For a template at (17.17, 300) the ten nearest
+> channels are nine same-column sites out to ±90 µm, and then the far column
+> at 85.83 µm — which beats the same-column alternative two rows further out
+> at 101.46 µm. `nearest_chans` reaches across the gap. The bridge this
+> section said cannot form is formed, 158 times.
+>
+> **So the three-seed tie is a clean null, not an underpowered one.** There
+> was no effect to detect. The power analysis above is not wrong arithmetic —
+> 3, 4 and 4 of 12 units per seed really do sit near cross-column parity — it
+> answers a question that stops arising once the mechanism is gone. The
+> better-powered experiment it recommended was designed and then **cancelled**:
+> the free mechanism check, run first precisely so it could make the expensive
+> run pointless, did exactly that.
+>
+> **What survives.** The parameter facts are untouched and were never in
+> doubt: `dminx` and `max_channel_distance` both default to 32 µm, Kilosort's
+> own docs say that *"should work well for Neuropixels 1 and Neuropixels 2
+> probes"*, and NP1032 is neither. `kilosort_spacing()` still derives 103 from
+> the probe and that arithmetic is sound. **What does not survive is the
+> reason it was written.** There is no known failure the default produces on
+> this probe. The two settings do differ — the derived spacing puts a template
+> exactly at the midpoint where the default has none, and stretches
+> `max_channel_distance` to 103 µm, which against a footprint decaying over
+> ~60 µm may pull in channels carrying mostly noise — but which is preferable
+> is unmeasured in both directions. **2b-5 must not adopt the derived block by
+> default on this section's authority.** Settling it needs a sorting-quality
+> comparison against ground truth, which is 2b-5's work, not this section's.
+
 ---
 
 ## 8. Paramsets, provenance, and the table that does not exist
@@ -656,6 +708,12 @@ belongs to whoever reads repeatedly — 2b-3, 2b-5 — not here.
 > demonstrated. See §7's 2026-08-26 amendment for the full numbers, the
 > raw-count metric they replaced, and why a tie at this sample size reads as
 > underpowered rather than as a refutation of §7's claim.
+
+> **Superseded 2026-08-27.** "Underpowered" was the wrong reading: §7's
+> 2026-08-27 amendment shows the mechanism itself does not hold on this probe,
+> so the tie is a clean null. The bullet's original promise stays retired —
+> the fixture measures, it does not demonstrate — but the reason is now that
+> there is nothing to demonstrate.
 
 ---
 
