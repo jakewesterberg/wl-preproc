@@ -54,6 +54,29 @@ third_party:
     why: >-
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
+  - name: zarr
+    constraint: ">=2,<3"
+    why: >-
+      The archive is a Zarr store (2026-08-27-archival-and-compression-design
+      section 1); archive/store.py calls the 2.x create_dataset(...,
+      compressor=...) API directly at store.py:99 and :116-117, verified by
+      reading that file, so the upper bound is load-bearing rather than
+      precautionary. Not currently a fix for anything broken -- spikeinterface
+      already declares zarr<3,>=2.18 as a hard dependency, confirmed against
+      installed distribution metadata, so a clean install already resolves
+      2.18.x without this entry. Declared anyway because the dependency is
+      this package's own: store.py and verify.py import zarr directly, and
+      today it arrives only because spikeinterface happens to require it. If
+      spikeinterface ever drops or relaxes that pin, this repository would
+      break with nothing on record saying it needed zarr at all, and wlo
+      stack would build a workstation missing software this package uses.
+  - name: numcodecs
+    constraint: ">=0.15"
+    why: >-
+      The Blosc/zstd codec archive/store.py compresses the archive with, via
+      numcodecs.Blosc. The floor is for the Blosc call signature that module
+      uses; no upper bound is declared, unlike zarr's, since nothing here
+      depends on numcodecs staying below any particular major version.
 
 # The only place this edge is written down where another repository can see it.
 # The dependency itself lives in pyproject.toml, which nothing outside this

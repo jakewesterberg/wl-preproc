@@ -180,6 +180,54 @@ def _quarantine_lines(row: dict, new_since: datetime.datetime) -> list[str]:
     return [head, f"  - {detail}"] if detail else [head]
 
 
+def _verified_archives(prefix: str = DEFAULT_PREFIX) -> list[dict]:
+    """Every archived session whose every original file verified.
+
+    This is design spec section 5.2 condition 2 -- "every original file's
+    reconstructed bytes matched the DONE marker's blake3" -- read on its own,
+    with none of the predicate's other four conditions attached (task-9
+    Controller ruling E: this report section "needs no predicate at all").
+    An `ArchiveArtifact` row with ZERO `ArchiveVerification` children is not
+    verified -- the same `len(matched) > 0` trap `archive/reclaim.py`'s own
+    `every_file_verified` condition guards against (task-7 Controller ruling
+    B) -- so an artifact nothing has checked yet never reads as though it had.
+
+    Shared by two callers that must never define "verified" two different
+    ways: `cli/main.py`'s `_staged_entries` (`wlpp tape-manifest` -- a session
+    staged for a cartridge and a session whose rig may clear its copy are the
+    identical fact, design spec section 3.2's own words, "the same list
+    section 5.2 already computes, read for a different purpose") and
+    `gather_readings` below. Living here rather than in a third module: this
+    file's whole job is already "read state, never write" (see this module's
+    own docstring), and this predicate reads, nothing else. Underscored and
+    imported across a module boundary anyway, the same as `_candidate_dirs`
+    a few lines below in `gather_readings` -- package-internal, not public
+    API, and this docstring is what names both callers.
+    """
+    from wl_preproc.schema import archive as archive_schema
+
+    archive_schema.activate(prefix=prefix)
+    verified = []
+    for row in archive_schema.ArchiveArtifact.to_dicts():
+        key = {"subject": row["subject"], "session_datetime": row["session_datetime"]}
+        verifications = archive_schema.ArchiveVerification & key
+        matched = verifications & "matched = 1"
+        if len(verifications) == 0 or len(matched) != len(verifications):
+            continue
+        verified.append(
+            {
+                "subject": row["subject"],
+                "session_datetime": row["session_datetime"],
+                "archive_host": row["archive_host"],
+                "archive_share": row["archive_share"],
+                "archive_path": row["archive_path"],
+                "compressed_bytes": row["compressed_bytes"],
+                "manifest_digest": row["manifest_digest"],
+            }
+        )
+    return verified
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:
     """Everything both renderings need, computed once.
@@ -200,6 +248,33 @@ class Readings:
     free_gib: int
     headroom_ok: bool
     disk_error: str | None
+    # Design spec section 8.5: the reclamation gate must be surfaced in this
+    # report "since an ungated session is what will eventually fill scratch".
+    # One dict per archived session that `reclaim.blocking()` finds at least
+    # one failing condition for -- see `gather_readings` for how each is
+    # built, and Controller ruling E (task-9) for why this needs a real
+    # filesystem walk that `verified_archives` below does not.
+    #
+    # Defaulted to empty, unlike every field above: `tests/responder/
+    # test_health.py`'s own `_base_readings` constructs a `Readings` directly
+    # rather than through `gather_readings` (deliberately -- its docstring:
+    # "bypasses the real filesystem/database walk entirely"), so it knows
+    # nothing about archival state and never will need to. A field added
+    # here without a default turned every one of that file's ten tests into
+    # a `TypeError` inside `build_health`'s own `except Exception` -- caught
+    # by running the full suite, not anticipated -- which silently reported
+    # `verdict="down"` instead of failing the way a missing constructor
+    # argument should. `dataclasses` requires every field after a defaulted
+    # one to be defaulted too, which is satisfied here since both archival
+    # fields are declared last.
+    unreclaimed: list[dict] = dataclasses.field(default_factory=list)
+    # Design spec section 3.2: "somebody has to tell the rig it is safe" --
+    # the rig holds its own copy until THIS report says the archive is
+    # verified, because this pipeline cannot reach the rig and transport is
+    # pull-only. One dict per session whose every `ArchiveVerification` row
+    # matched. See `_verified_archives`. Defaulted for the identical reason
+    # `unreclaimed` above is.
+    verified_archives: list[dict] = dataclasses.field(default_factory=list)
 
 
 def gather_readings(
@@ -282,6 +357,18 @@ def gather_readings(
 
     candidates, root_fault = _candidate_dirs(Path(root))
     stalled: list[tuple[Path, list[str]]] = []
+    # `(subject, session_datetime) -> its scratch directory`, built in the
+    # SAME walk as `stalled` rather than a second pass over `candidates`:
+    # every entry comes from the identical parsed manifest, via
+    # `manifest_session_key` -- the same derivation `land_session` used to
+    # write the row in the first place (`ingest/landing.py`), so a directory
+    # found here and an `ArchiveArtifact` row queried below resolve to the
+    # same key whenever they describe the same session. Feeds the
+    # `unreclaimed` computation below: `reclaim_conditions` needs
+    # `expected_file_count`, which comes only from the DONE markers under a
+    # session's own directory (task-9 Controller ruling E), and this is the
+    # one place this function already has that directory in hand.
+    dir_by_key: dict[tuple, Path] = {}
     for child in candidates:
         try:
             manifest = SessionManifest.from_yaml((child / MANIFEST_FILENAME).read_text())
@@ -305,6 +392,55 @@ def gather_readings(
             # systems that is the difference between knowing a transfer
             # stalled and knowing which rig to go look at.
             stalled.append((child, missing_systems(layout, manifest)))
+        session_key = landing.manifest_session_key(manifest)
+        dir_by_key[(session_key["subject"], session_key["session_datetime"])] = child
+
+    # Design spec section 8.5: "an ungated session is what will eventually
+    # fill scratch" -- so every archived session that `reclaim.blocking()`
+    # finds at least one failing condition for is named here, with which
+    # condition. Scoped to sessions that already have an `ArchiveArtifact`
+    # row (not every session under `root`): a session never archived at all
+    # is not a reclamation candidate in any actionable sense yet -- it has no
+    # NAS copy to make scratch a mere cache of -- and `Stalled transfers`
+    # above already covers a session still landing. Iterated from
+    # `ArchiveArtifact` rather than `dir_by_key`, so a session whose
+    # directory this walk could not find (root not fully readable, or simply
+    # a different root than the one it was archived from) is skipped rather
+    # than guessed at -- see the `continue` below and task-9 Controller
+    # ruling E, "do not fake a count to make the section render".
+    from wl_preproc.archive import reclaim as archive_reclaim
+    from wl_preproc.archive.verify import _expected_digests
+    from wl_preproc.schema import archive as archive_schema
+
+    archive_schema.activate(prefix=prefix)
+    unreclaimed: list[dict] = []
+    for row in archive_schema.ArchiveArtifact.to_dicts():
+        session_key = {"subject": row["subject"], "session_datetime": row["session_datetime"]}
+        session_dir = dir_by_key.get((row["subject"], row["session_datetime"]))
+        if session_dir is None:
+            continue
+        try:
+            # Reused, not re-derived: `_expected_digests` is `archive/
+            # verify.py`'s own count of a session's expected files, and
+            # `reclaim_conditions` below needs the identical number
+            # `verify_store` used, not a second, independently-walked one
+            # that could silently disagree with it.
+            expected_file_count = len(_expected_digests(session_dir))
+        except Exception:
+            # A session archived once can still be MID a second, not-yet-
+            # complete transfer of new files, or its markers can be
+            # genuinely unreadable -- either way `_expected_digests`'
+            # own "nothing to check" case (see its docstring), not a reason
+            # to crash a daily report over one session.
+            continue
+        conditions = archive_reclaim.reclaim_conditions(
+            session_key, expected_file_count, prefix=prefix
+        )
+        blocked = archive_reclaim.blocking(conditions)
+        if blocked:
+            unreclaimed.append({**session_key, "session_dir": session_dir, "blocking": blocked})
+
+    verified_archives = _verified_archives(prefix=prefix)
 
     # `walk_error` mirrors `ScanResult.root_error` (wl_preproc/ingest/watcher.py)
     # exactly -- same construction, `f"{type}: {message}"` or `None` -- for the
@@ -359,6 +495,8 @@ def gather_readings(
         free_gib=free_gib,
         headroom_ok=headroom_ok,
         disk_error=disk_error,
+        unreclaimed=unreclaimed,
+        verified_archives=verified_archives,
     )
 
 
@@ -443,6 +581,39 @@ def build_report(
         f"- `{path}` — missing: "
         + (", ".join(missing) if missing else "none (markers landed mid-scan)")
         for path, missing in readings.stalled
+    ] or ["- none"]
+
+    # Design spec section 8.5: the reclamation gate, surfaced here "since an
+    # ungated session is what will eventually fill scratch". Only sessions
+    # `reclaim.blocking()` finds at least one failing condition for -- a
+    # fully reclaimable session (every condition already passing) has
+    # nothing here to act on and is silent, on purpose, the same as the
+    # sections above reading "- none" rather than listing what is FINE.
+    lines += ["", f"## Unreclaimed sessions — {len(readings.unreclaimed)}", ""]
+    lines += [
+        f"- `{row['session_dir'].name}` — `{row['subject']}` @ "
+        f"{row['session_datetime']:%Y-%m-%d %H:%M} — blocked on: "
+        + ", ".join(row["blocking"])
+        for row in readings.unreclaimed
+    ] or ["- none"]
+
+    # Design spec section 3.2: "somebody has to tell the rig it is safe" --
+    # the rig holds its own copy until THIS line says the archive verified,
+    # because this pipeline cannot reach the rig (transport is pull-only)
+    # and a report nobody reads is, in that section's own words, a failure
+    # that "surfaces at the rig, hours away from the pipeline that caused
+    # it." Named unconditionally, the same reason `Ingested`/`Quarantined`
+    # above print "- none" rather than omit the heading when empty: a
+    # missing section and an empty one must never render identically.
+    lines += [
+        "",
+        f"## Sessions whose rig may clear its copy — {len(readings.verified_archives)}",
+        "",
+    ]
+    lines += [
+        f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"verified at `{row['archive_host']}:{row['archive_share']}/{row['archive_path']}`"
+        for row in readings.verified_archives
     ] or ["- none"]
 
     lines += ["", "## Deferred (transient contention)", ""]

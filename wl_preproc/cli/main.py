@@ -12,6 +12,7 @@ there is one place to fetch every contract and only one definition of each.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -71,6 +72,60 @@ def tcp_port(value: str) -> int:
     if not 0 <= port <= 65535:
         raise argparse.ArgumentTypeError(f"{value} is not a TCP port (must be 0-65535)")
     return port
+
+
+def _session_key_from_dir(session_dir: Path) -> dict:
+    """`(subject, session_datetime)` for the session at `session_dir`, read
+    from its own manifest.
+
+    `--session` names a session DIRECTORY for `archive`, `reclaim` and `hold`
+    alike, the same thing `archive_session`'s own first parameter takes --
+    not a bare id. `wl_sync.session.SessionId` (what a bare id like
+    "2027-03-14_01" parses to) carries only a date and an index, never a
+    subject or a time-of-day, so a string in that shape alone cannot resolve
+    to the `(subject, session_datetime)` a database row is keyed on; the
+    directory's manifest already carries both.
+
+    Built through `manifest_session_key` -- the identical derivation
+    `ingest/landing.py::land_session` uses to write the `pipeline.Session`
+    row in the first place -- rather than re-deriving the two fields here, so
+    a session identified this way and one already landed by `wlpp ingest`
+    resolve to the exact same row rather than two keys that merely look
+    alike.
+    """
+    from wl_preproc.contracts.manifest import SessionManifest
+    from wl_preproc.contracts.paths import MANIFEST_FILENAME
+    from wl_preproc.ingest.landing import manifest_session_key
+
+    manifest = SessionManifest.from_yaml(
+        (session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    return manifest_session_key(manifest)
+
+
+def _staged_entries(prefix: str = DEFAULT_PREFIX) -> list[TapeEntry]:
+    """Verified artifacts, shaped for `staging_manifest`.
+
+    The "every file verified" predicate this wraps is NOT re-derived here --
+    it lives once, at `cli/report.py::_verified_archives`, which this design
+    spec section 3.2's report section and this command both need identically
+    (a session `tape-manifest` stages for a cartridge and a session whose rig
+    may clear its copy are the same fact, read for two different audiences).
+    `main.py` already imports from `report.py` for the `report` subcommand
+    below, so this adds no new edge, just a second name crossing it.
+    """
+    from wl_preproc.archive.tape import TapeEntry
+    from wl_preproc.cli.report import _verified_archives
+
+    return [
+        TapeEntry(
+            session_id=f"{row['subject']} @ {row['session_datetime']:%Y-%m-%d %H:%M:%S}",
+            artifact_path=row["archive_path"],
+            bytes=row["compressed_bytes"],
+            manifest_digest=row["manifest_digest"],
+        )
+        for row in _verified_archives(prefix=prefix)
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,6 +195,41 @@ def main(argv: list[str] | None = None) -> int:
     responder_parser.add_argument("--root", required=True, help="directory holding session dirs")
     responder_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    archive_p = subparsers.add_parser("archive", help="compress and verify a session")
+    archive_p.add_argument("--session", required=True, help="path to the session directory")
+    archive_p.add_argument("--nas-root", required=True, type=Path)
+    archive_p.add_argument("--host", required=True)
+    archive_p.add_argument("--share", required=True)
+    archive_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    reclaim_p = subparsers.add_parser(
+        "reclaim", help="preview whether a session's scratch copy may be freed"
+    )
+    reclaim_p.add_argument("--session", required=True, help="path to the session directory")
+    # `--no-dry-run` + `--confirm`, not the brief's own `--dry-run` (Controller
+    # ruling B): `--dry-run store_true default=True` can never be turned off
+    # -- passing the flag sets True, omitting it leaves the default True.
+    # This is the same shape `delete` already uses (cli/main.py, `delete`
+    # parser above) so the two guardrails teach one convention, not two.
+    reclaim_p.add_argument("--no-dry-run", action="store_true")
+    reclaim_p.add_argument("--confirm", default=None)
+    reclaim_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    hold_p = subparsers.add_parser("hold", help="block or force reclamation")
+    hold_p.add_argument("--session", required=True, help="path to the session directory")
+    hold_p.add_argument("--verdict", choices=("hold", "force"), required=True)
+    hold_p.add_argument("--actor", required=True)
+    hold_p.add_argument("--reason", required=True)
+    hold_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
+    # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
+    # in the `tape-manifest` dispatch branch with no `add_argument` for it
+    # anywhere -- the identical `AttributeError`-on-first-run shape
+    # Controller ruling C names for `archive`'s `--nas-root`/`--host`/
+    # `--share`, just not one of the five rulings that already lists it.
+    tape_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -191,6 +281,174 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print("\nthis build never performs a real delete (see the design spec, "
               "section 10): the cascade above is preview-only.")
+        return 0
+
+    if args.group == "archive":
+        from wl_preproc.archive.stage import archive_session
+        from wl_preproc.ingest import landing
+        from wl_preproc.schema import archive as archive_schema
+
+        session_dir = Path(args.session)
+        outcome = archive_session(session_dir, args.nas_root, args.host, args.share)
+        for verdict in outcome.verdicts:
+            if not verdict.matched:
+                print(f"MISMATCH {verdict.relative_path}")
+        print("verified" if outcome.all_matched else "NOT verified")
+        if not outcome.all_matched:
+            return 1
+
+        # Written only on the all-matched path (Controller ruling C: "Write
+        # the row only when outcome.all_matched"). `ArchiveVerification`
+        # rows are written here too, alongside it, though the ruling names
+        # only `ArchiveArtifact` explicitly: nothing else in this codebase
+        # ever writes an `ArchiveVerification` row (confirmed by grepping
+        # `ArchiveVerification.insert` across wl_preproc/ and tests/ before
+        # writing this -- the only hits are this line and this task's own
+        # test helpers), and `ArchiveVerification -> ArchiveArtifact` (see
+        # `schema/archive.py`) means there is no row shape that could record
+        # one without the other anyway. Leaving it unwritten would make
+        # `reclaim_conditions`'s `every_file_verified` condition (`archive/
+        # reclaim.py`) and `_staged_entries` below fail closed forever, on
+        # every session -- the exact "tape-manifest prints an empty manifest
+        # when artifacts exist" failure this task's own brief warns to catch
+        # with a real test rather than trust.
+        key = _session_key_from_dir(session_dir)
+        archive_path = str(outcome.artifact_path.relative_to(args.nas_root))
+        archive_schema.activate(prefix=args.prefix)
+        # One instant reused for every row this call writes, not a fresh
+        # `datetime.now()` per row: `StoreResult` (`archive/store.py`) carries
+        # no timestamp of its own -- compression already finished by the time
+        # this line runs -- so "now" is this pipeline's best honest record of
+        # when the artifact was CONFIRMED good, the same moment `stage.py`'s
+        # own sentinel is stamped.
+        now = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
+        # `replace=True`, not a bare insert: `archive_session` itself
+        # overwrites `published` on a re-run of the same session
+        # (`if published.exists(): shutil.rmtree(published)`, archive/
+        # stage.py), and `write_store`'s own docstring records that a second
+        # compression of identical input yields "a different, EQUALLY VALID"
+        # digest. A plain `insert1` would raise on the resulting duplicate
+        # key; `skip_duplicates` would silently keep describing bytes this
+        # run just deleted from the NAS. `replace=True` is `ingest/
+        # landing.py`'s own precedent for exactly this shape -- that module's
+        # `quarantine()` uses it so "the latest call wins", on the identical
+        # reasoning that the newest attempt is the one that should be on
+        # record.
+        archive_schema.ArchiveArtifact.insert1(
+            {
+                **key,
+                "archive_host": args.host,
+                "archive_share": args.share,
+                "archive_path": archive_path,
+                "codec": outcome.store.codec,
+                "clevel": outcome.store.clevel,
+                "compressed_bytes": outcome.store.compressed_bytes,
+                "manifest_digest": outcome.store.manifest_digest,
+                "compressed_at": now,
+            },
+            replace=True,
+        )
+        archive_schema.ArchiveVerification.insert(
+            [
+                {
+                    **key,
+                    "relative_path": verdict.relative_path,
+                    "expected_blake3": verdict.expected,
+                    "actual_blake3": verdict.actual,
+                    "matched": 1 if verdict.matched else 0,
+                    "verified_at": now,
+                }
+                for verdict in outcome.verdicts
+            ],
+            replace=True,
+        )
+        print(
+            f"archived: {key['subject']} @ {key['session_datetime']} -> "
+            f"{args.host}:{args.share}/{archive_path}"
+        )
+        return 0
+
+    if args.group == "reclaim":
+        from wl_preproc.archive import reclaim as archive_reclaim
+        from wl_preproc.archive.verify import _expected_digests
+
+        session_dir = Path(args.session)
+        key = _session_key_from_dir(session_dir)
+        # `_expected_digests` (package-internal, underscored) rather than a
+        # second walk of the DONE markers: it is the one place this
+        # repository counts a session's expected files (`archive/verify.py`),
+        # and re-deriving the count a second way here risks silently
+        # disagreeing with what `verify_store` itself checked against.
+        expected_file_count = len(_expected_digests(session_dir))
+        conditions = archive_reclaim.reclaim_conditions(
+            key, expected_file_count, prefix=args.prefix
+        )
+
+        print(f"reclaim preview for session {key['subject']} @ {key['session_datetime']}:")
+        # Every condition, not merely the blocking ones -- design spec
+        # section 5.2's "a NAMED LIST, not a verdict", and the same reason
+        # `blocking()` alone is not enough for `wlpp reclaim`'s own preview:
+        # a reader must be able to tell "this passed" from "this was never
+        # evaluated", which only printing every row can show.
+        for condition in conditions:
+            status = "OK" if condition.passed else "BLOCKED"
+            detail = f" -- {condition.detail}" if condition.detail else ""
+            print(f"  [{status}] {condition.name}{detail}")
+
+        would_free = sum(p.stat().st_size for p in session_dir.rglob("*") if p.is_file())
+        verdict = "reclaimable" if archive_reclaim.reclaimable(conditions) else "NOT reclaimable"
+        print(f"\n{verdict} -- would free {would_free} bytes from {session_dir} if it were.")
+
+        if not args.no_dry_run:
+            print("\nthis was a DRY RUN — nothing was freed.")
+            print("re-run with --no-dry-run --confirm <session> to proceed.")
+            return 0
+        if args.confirm != args.session:
+            print("\nrefusing: --confirm must repeat the session id exactly.")
+            return 2
+        # Controller ruling A: reclaim previews and deletes nothing in this
+        # build, on PURPOSE, regardless of --no-dry-run/--confirm -- not an
+        # oversight to fix later. Rehydration (design spec section 8.4's "the
+        # path that makes reclamation safe") is not in this plan yet ("Not in
+        # this plan": "it is the natural next plan"), and freeing a session's
+        # only fast copy with no built path back is the identical loss `wlpp
+        # delete`'s own guardrail refuses a few branches above, for the same
+        # reason.
+        print(
+            "\nthis build never performs a real reclamation (see the design "
+            "spec, sections 5.1 and 8.4): rehydration -- the path that makes "
+            "freeing scratch safe to reverse -- is not built yet, so the "
+            "preview above is as far as this command goes."
+        )
+        return 0
+
+    if args.group == "hold":
+        from wl_preproc.ingest import landing
+        from wl_preproc.schema import archive as archive_schema
+
+        session_dir = Path(args.session)
+        key = _session_key_from_dir(session_dir)
+        archive_schema.activate(prefix=args.prefix)
+        held_at = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
+        archive_schema.ReclamationHold.insert1(
+            {
+                **key,
+                "held_at": held_at,
+                "actor": args.actor,
+                "verdict": args.verdict,
+                "reason": args.reason,
+            }
+        )
+        print(
+            f"{args.verdict}: {key['subject']} @ {key['session_datetime']} "
+            f"recorded by {args.actor} at {held_at:%Y-%m-%d %H:%M:%S} -- {args.reason}"
+        )
+        return 0
+
+    if args.group == "tape-manifest":
+        from wl_preproc.archive.tape import staging_manifest
+
+        print(staging_manifest(_staged_entries(prefix=args.prefix)))
         return 0
 
     if args.group == "daemon":

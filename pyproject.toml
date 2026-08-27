@@ -69,6 +69,35 @@ dependencies = [
     # ONLINE lookup against the probeinterface library repository and must
     # never enter this path; it 404s without network access.
     "probeinterface>=0.3,<0.4",
+    # The archive is a Zarr store (2026-08-27-archival-and-compression-design
+    # section 1). Upper-bounded below 3 because `archive/store.py` calls the
+    # 2.x `create_dataset(..., compressor=...)` API directly (store.py:99 and
+    # :116-117 -- verified by reading that file, not inferred). Zarr 3.x is
+    # not installed anywhere in this environment, so this repository cannot
+    # itself confirm what changed there; the bound exists so an eventual
+    # upgrade is a deliberate migration of those two call sites rather than a
+    # silent break, not because a specific 3.x replacement is known here.
+    #
+    # Not currently a fix for anything broken: `spikeinterface` already
+    # declares `zarr<3,>=2.18` as a hard (non-extra) dependency -- confirmed
+    # against this venv's installed distribution metadata directly, not
+    # inferred -- so a clean install already resolves zarr 2.18.x and the <3
+    # bound is already enforced without this line. It is declared anyway
+    # because the dependency is this package's OWN: `store.py` and
+    # `verify.py` import `zarr` directly, and today it arrives only because
+    # spikeinterface happens to require it. If spikeinterface ever drops or
+    # relaxes that pin, this repository would break with nothing on record
+    # saying it ever needed zarr at all -- and `wlo stack` would build a
+    # workstation missing software this package uses.
+    "zarr>=2,<3",
+    # Blosc/zstd, the codec `archive/store.py` compresses the archive with
+    # via `numcodecs.Blosc`. WavPack would compress ~6% better but wraps a
+    # system library that will not install from pip -- see that design's
+    # section 2.1. `>=0.15` is a floor for the `Blosc` call signature
+    # `store.py` uses; no upper bound is invented to match zarr's, since
+    # nothing here depends on numcodecs staying below any particular major
+    # version.
+    "numcodecs>=0.15",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
