@@ -22,22 +22,36 @@ channel-order error, an interleaving mistake, or a dtype slip" is true of a
 genuine transformation of the data and false of a mislabelling of its shape.
 This module's own checks are therefore the only guard that exists.
 
-**Known gap: Intan's channel count is derived, not declared.** SpikeGLX's shape
-is checked against `nSavedChans`, a value the recording software itself wrote;
-an inconsistent `.bin` is caught because it disagrees with something external
-to it. `amplifier.dat` carries no such header -- its channel count is derived
-by dividing its size by a sample count read out of `time.dat`, and `time.dat`
-is checked only for being a whole multiple of 4 bytes (one int32 index). A
-`time.dat` truncated exactly ON a 4-byte boundary -- the shape an interrupted
-copy takes -- still divides evenly and reports a self-consistent but wrong
-shape: confirmed against a real STIM_RECIPE session (true shape n_channels=4,
-n_samples=373546) truncated to exactly half, which reports n_channels=8,
-n_samples=186773 with no exception raised. The real fix is reading Intan's own
-channel count out of `info.rhs`'s signal-group headers and cross-checking it
-against the derived value; this module does not, because `info.rhs` has no
-reader in this repository and gaining one means parsing those headers -- more
-than a byte-layout oracle should carry. Named here rather than silently relied
-on.
+**The `%4` check on `time.dat` is defence in depth, not the only guard.** Any
+file reaching this module through the running pipeline has already had its
+exact size, and then its blake3 digest, verified against the DONE marker at
+landing: `ingest/verify.py`'s `verify_session` compares the file's own size
+against what the DONE marker declared before it ever hashes anything -- "a
+size mismatch is decisive and cheap" -- and a mismatch on any declared file
+quarantines the session in
+`ingest/watcher.py` before `landing.land_session` runs, which is before this
+plan's archival trigger can run at all. A `time.dat` whose size disagrees with
+what the acquisition system declared for it -- 4-byte-aligned or not -- cannot
+reach `bulk_streams` by that route.
+
+**The asymmetry with SpikeGLX is real, though, and worth naming rather than
+hiding behind the ingest backstop.** SpikeGLX's shape is checked against
+`nSavedChans`, a value the recording software declared for itself, so a wrong
+`.bin` is caught because it disagrees with something external to it.
+`amplifier.dat` carries no equivalent header -- its channel count is *derived*
+from a sample count read out of `time.dat`, never declared a second time -- so
+that derivation is backstopped by ingest rather than by a second declaration
+inside this module. Confirmed against a real STIM_RECIPE session (true shape
+n_channels=4, n_samples=373546): a `time.dat` torn exactly on a 4-byte
+boundary -- half its real size -- still divides evenly, and `bulk_streams`
+alone reports the self-consistent but wrong n_channels=8, n_samples=186773
+with no exception. Reaching that outcome requires calling `bulk_streams` on a
+session that bypassed ingest verification, which is how it was found and not
+how this pipeline runs. The `%4` check above stays regardless: it is cheap, it
+turns an off-boundary truncation into a loud failure at the point of use
+rather than a mysterious one downstream, and "raise `LayoutUndetermined` when
+it cannot be sure" is this module's own contract independent of what any
+caller already checked.
 """
 
 from __future__ import annotations
