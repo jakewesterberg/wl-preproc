@@ -254,6 +254,7 @@ import zarr
 
 from wl_preproc.archive.layout import bulk_streams
 from wl_preproc.archive.store import manifest_digest, write_store
+from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.session import generate_session
 
@@ -275,7 +276,7 @@ def test_a_non_stream_file_is_stored_verbatim(tmp_path):
     session = tmp_path / "in" / CI_RECIPE.session_id
     result = write_store(session, tmp_path / "out")
 
-    original = next(session.rglob("*.done.json"))
+    original = next(session.rglob(DONE_MARKER_FILENAME))
     relative = str(original.relative_to(session))
     root = zarr.open(str(result.path), mode="r")
     stored = bytes(root["verbatim"][relative][:])
@@ -469,6 +470,7 @@ import zarr
 
 from wl_preproc.archive.store import write_store
 from wl_preproc.archive.verify import reconstruct, verify_store
+from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.session import generate_session
 
@@ -547,7 +549,7 @@ def test_the_roundtrip_holds_for_intan_too(tmp_path):
 def test_a_missing_done_marker_entry_is_an_error_not_a_pass(tmp_path):
     """No reference digest must never read as 'verified'."""
     session, result = _archived(tmp_path)
-    for marker in session.rglob("*.done.json"):
+    for marker in session.rglob(DONE_MARKER_FILENAME):
         marker.unlink()
     with pytest.raises(ValueError):
         verify_store(result.path, session)
@@ -581,16 +583,16 @@ the chain rig -> landing -> archive with one hash.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import blake3 as _blake3
-import numpy as np
 import zarr
 
 from wl_preproc.archive.layout import SAMPLE_DTYPE
 from wl_preproc.archive.store import ARRAY_GROUP, VERBATIM_GROUP
+from wl_preproc.contracts.done import DoneMarker
+from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,14 +604,22 @@ class FileVerdict:
 
 
 def _expected_digests(session_dir: Path) -> dict[str, str]:
-    """Every `(relative path -> blake3)` the DONE markers claim."""
+    """Every `(relative path -> blake3)` the DONE markers claim.
+
+    The marker is named `DONE` and is YAML, not JSON -- see
+    `contracts/paths.py::DONE_MARKER_FILENAME` and `contracts/done.py`. Parsed
+    through `DoneMarker.from_yaml` rather than `yaml.safe_load` directly,
+    because that model also rejects a `path` containing `..` or an absolute
+    path, and this function joins `path` onto a system directory exactly as
+    `ingest/verify.py` does.
+    """
     digests: dict[str, str] = {}
-    for marker in sorted(session_dir.rglob("*.done.json")):
-        payload = json.loads(marker.read_text(encoding="utf-8"))
+    for marker in sorted(session_dir.rglob(DONE_MARKER_FILENAME)):
+        payload = DoneMarker.from_yaml(marker.read_text(encoding="utf-8"))
         system_dir = marker.parent
-        for entry in payload["files"]:
-            resolved = (system_dir / entry["path"]).resolve()
-            digests[str(resolved.relative_to(session_dir.resolve()))] = entry["blake3"]
+        for entry in payload.files:
+            resolved = (system_dir / entry.path).resolve()
+            digests[str(resolved.relative_to(session_dir.resolve()))] = entry.blake3
     if not digests:
         raise ValueError(
             f"{session_dir} has no DONE marker entries; there is no reference "
@@ -831,6 +841,7 @@ Create `tests/archive/test_stage.py`:
 
 ```python
 from wl_preproc.archive.stage import SENTINEL_NAME, archive_session
+from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.session import generate_session
 
@@ -850,9 +861,10 @@ def test_the_sentinel_is_absent_when_verification_fails(tmp_path):
     believes it."""
     generate_session(tmp_path / "in", CI_RECIPE)
     session = tmp_path / "in" / CI_RECIPE.session_id
-    marker = next(session.rglob("*.done.json"))
+    marker = next(session.rglob(DONE_MARKER_FILENAME))
     text = marker.read_text(encoding="utf-8")
-    marker.write_text(text.replace('"blake3": "', '"blake3": "0'), encoding="utf-8")
+    # YAML, not JSON: `blake3: <hex>` on its own line.
+    marker.write_text(text.replace("blake3: ", "blake3: 0"), encoding="utf-8")
 
     outcome = archive_session(session, tmp_path / "nas", "wl-nas", "archive")
     assert not outcome.all_matched
@@ -1475,8 +1487,10 @@ def test_a_verified_session_is_handed_to_archival(tmp_path):
 def test_a_quarantined_session_is_not_archived(tmp_path):
     """Verification failing is exactly when NOT to spend an hour compressing."""
     generate_session(tmp_path, CI_RECIPE)
-    marker = next(tmp_path.rglob("*.done.json"))
-    marker.write_text(marker.read_text().replace('"bytes": ', '"bytes": 1'), encoding="utf-8")
+    from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
+
+    marker = next(tmp_path.rglob(DONE_MARKER_FILENAME))
+    marker.write_text(marker.read_text().replace("bytes: ", "bytes: 1"), encoding="utf-8")
     with patch("wl_preproc.ingest.watcher.archive_session") as archived:
         _run_the_watcher_over(tmp_path)
     assert not archived.called
