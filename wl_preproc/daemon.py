@@ -35,6 +35,7 @@ from wl_preproc.schema import (
     coverage,
     ephys,
     events,
+    eye,
     ingest,
     paramset,
     # Imported, but deliberately NOT one of `_PROJECT_SCHEMA_MODULES` below --
@@ -89,6 +90,20 @@ def _computed_tables() -> list:
     from the codes against a non-zero task file, so `trial_count_agreement`
     was False and `events.agreement.resolve_tier` returned D at its
     `trial_count_agreement is False` guard for every session.
+
+    **`eye.EyeCalibration`/`eye.EyeQuality` are registered but currently
+    inert.** The 2026-08-30 eye-ohdpi-calibration-and-gaze design's own Task 9
+    is schema only -- neither table defines `make()`, and each overrides
+    `key_source` to stay permanently empty rather than fall back to
+    DataJoint's default (the join of FK parents, here bare `pipeline.Session`)
+    -- see `eye.EyeCalibration.key_source`'s own docstring for why leaving
+    that default would have broken this very loop the moment these tables
+    joined it. Their position here is therefore not load-bearing today the
+    way the rest of this list's ordering is; placed after `TrialCoverage` and
+    before `TimingProvenance` because design spec section 6's real
+    `key_source` -- a later task's work -- restricts to sessions with an
+    ohDPI recording and assembled events, both already satisfied by this
+    point in a `run_once` pass.
     """
     return [
         timebase.SystemTimebase,
@@ -101,6 +116,9 @@ def _computed_tables() -> list:
         # stage before this whole list, so the second half is satisfied by
         # position rather than needing an entry here.
         coverage.TrialCoverage,
+        # Currently no-ops -- see this function's own docstring above.
+        eye.EyeCalibration,
+        eye.EyeQuality,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
@@ -171,12 +189,21 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # `ScratchReclamation` — are `dj.Manual`, nothing Computed or Imported, so it
 # owns no `~jobs` table of its own either; it is listed here only so the
 # completeness claim above stays true.
+#
+# It became TEN with the 2026-08-30 eye-ohdpi-calibration-and-gaze design's
+# `eye` module, caught by the same test a fourth time. Unlike `ephys` and
+# `archive`, `eye` DOES declare two `@schema`-decorated `dj.Computed` tables
+# of its own (`EyeCalibration`, `EyeQuality`) — so it owns real `~jobs`
+# tables, like `timebase` — but unlike `timebase`'s, neither is populated by
+# anything yet: Task 9 is schema only, and `_computed_tables()`'s own
+# docstring names exactly what keeps that safe to register today.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
     ("core", core),
     ("coverage", coverage),
     ("ephys", ephys),
     ("events", events),
+    ("eye", eye),
     ("ingest", ingest),
     ("paramset", paramset),
     ("request", request),
