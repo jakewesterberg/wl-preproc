@@ -151,9 +151,18 @@ def read_ohdpi(path: Path) -> OhdpiRecording:
     # would inherit.
     fs_hz = (frames.size - 1) / span_s
 
+    digital = data[SYNC_WORD_COLUMN]
+    # `frozen=True` on OhdpiRecording blocks `rec.frame_numbers = other`, but
+    # does not reach through to the array's own contents --
+    # `rec.frame_numbers[0] = 0` silently succeeds otherwise. Task 2 gives
+    # this dataclass its first consumer, which is exactly why this is cheap
+    # to close now rather than after something depends on mutating it.
+    frames.setflags(write=False)
+    digital.setflags(write=False)
+
     return OhdpiRecording(
         frame_numbers=frames,
-        digital=data[SYNC_WORD_COLUMN],
+        digital=digital,
         fs_hz=fs_hz,
         n_frames=int(frames.size),
     )

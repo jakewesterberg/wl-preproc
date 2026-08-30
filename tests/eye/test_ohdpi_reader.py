@@ -91,9 +91,12 @@ def test_one_absent_required_column_is_named_specifically(tmp_path):
 
 
 def test_seconds_is_never_offered_as_session_time():
-    """`LeftSeconds` and `RightSeconds` differ by a constant 49.48 ms while
-    frame numbers agree exactly -- the cameras are frame-locked, their clocks
-    are not. At 500 Hz that offset is ~25 frames.
+    """`LeftSeconds` and `RightSeconds` differ by ~49.48 ms over this 200-row
+    fixture (min 49.40, max 49.50) while frame numbers agree exactly. That gap
+    is not fixed over a full session: across the whole 1,177,799-row reference
+    recording it drifts smoothly from 49.5 ms to 45.8 ms -- the cameras are
+    frame-locked by the trigger chain, their clocks are not. At 500 Hz the
+    fixture's offset alone is ~25 frames.
 
     `OhdpiRecording` therefore exposes no per-eye timestamp at all. Frame
     number is the index; the rate is derived internally and `Seconds` does not
@@ -103,3 +106,37 @@ def test_seconds_is_never_offered_as_session_time():
 
     assert not hasattr(rec, "seconds")
     assert not hasattr(rec, "left_seconds")
+
+
+def test_the_arrays_reject_in_place_mutation():
+    """`frozen=True` blocks `rec.frame_numbers = other_array` but not
+    `rec.frame_numbers[0] = 0` -- frozen stops attribute reassignment, not
+    array mutation, and a frozen dataclass holding a mutable array is only
+    frozen in name. Task 2 is this dataclass's first consumer; closing this
+    before there IS a consumer is what makes it cheap.
+
+    Does NOT currently discriminate `read_ohdpi`'s own `.setflags(write=
+    False)` calls from pandas' default behaviour -- checked by mutation, not
+    assumed: removing them, this test still passes, because pandas >= 3.0
+    makes copy-on-write mandatory (confirmed directly: pandas itself warns
+    "Copy-on-Write can no longer be disabled" when asked to), and CoW's
+    `to_numpy()` already returns a read-only view before this function ever
+    calls `.setflags`. The explicit calls stay anyway: `pandas` is not yet a
+    declared dependency here (arriving unconditionally via `datajoint` until
+    Task 12 pins a floor), and nothing today stops an environment with
+    pandas < 3.0, where `to_numpy()` returns a writeable array by default --
+    at which point this is the only thing protecting Task 2 from a silent
+    in-place mutation. A test that pins that outcome for the versions
+    actually installed anywhere this runs is still worth having even though
+    it cannot currently isolate which of the two mechanisms produced it.
+    """
+    rec = read_ohdpi(FIXTURE)
+
+    assert rec.frame_numbers.flags.writeable is False
+    assert rec.digital.flags.writeable is False
+
+    with pytest.raises(ValueError, match="read-only"):
+        rec.frame_numbers[0] = 0
+
+    with pytest.raises(ValueError, match="read-only"):
+        rec.digital[0] = 0
