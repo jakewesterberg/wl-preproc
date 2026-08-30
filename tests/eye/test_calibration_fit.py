@@ -49,7 +49,31 @@ def test_collinear_targets_are_refused():
         fit_affine(raw, target)
 
 
-def test_too_few_points_is_refused_before_conditioning_is_computed():
+def test_too_few_points_is_refused_with_its_own_diagnostic():
+    """NOT "...before conditioning is computed" (this test's original name):
+    that framing was untrue. At n=2, conditioning IS computed, and computes to
+    exactly 0 regardless of which two points are given -- any 2-point array is
+    collinear after mean-centring by construction (a point and its own mirror
+    image around their shared mean always lie on one line through the
+    origin), so the conditioning branch would independently refuse this input
+    too. `match="at least"` used to pass either way, since both raise sites
+    contain that phrase ("needs at least 3..." / "...at least one
+    direction..."); grepping wl_preproc/eye/calibration.py confirms
+    "six-parameter affine needs" appears only in the _MIN_POINTS message, so
+    matching it pins which branch actually fired.
+    """
     raw = np.array([[0.0, 0.0], [1.0, 1.0]])
-    with pytest.raises(DegenerateGeometry, match="at least"):
+    with pytest.raises(DegenerateGeometry, match="six-parameter affine needs"):
         fit_affine(raw, np.zeros((2, 2)))
+
+
+def test_an_empty_array_is_refused_not_crashed():
+    """The _MIN_POINTS guard's actual, verified value. Called `_conditioning`
+    directly on a zero-row target: it raises `IndexError: index 0 is out of
+    bounds for axis 0 with size 0` indexing `singular[0]` on an empty SVD,
+    not a `DegenerateGeometry` -- so without this guard running first,
+    `fit_affine` would crash an operator with a NumPy internals error instead
+    of stating that a session recorded no fixations at all.
+    """
+    with pytest.raises(DegenerateGeometry, match="six-parameter affine needs"):
+        fit_affine(np.zeros((0, 2)), np.zeros((0, 2)))
