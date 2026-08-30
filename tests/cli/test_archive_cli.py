@@ -726,6 +726,29 @@ def test_a_db_row_with_no_sentinel_on_disk_is_not_verified(landed, prefix):
     assert key["subject"] not in section
 
 
+def test_tape_manifest_with_no_nas_root_says_not_checked(prefix, dj_conn, capsys):
+    """The identical fail-closed contract `test_no_nas_root_reports_not_
+    checked_rather_than_a_fabricated_zero` (`tests/cli/test_report.py`)
+    pins for `build_report`, at the OTHER consumer of `_verified_archives`
+    (Task 10 whole-branch review, final gate: "no test defended it"). Pinned
+    separately, not assumed to follow from the `build_report` test alone:
+    `cli/main.py`'s `tape-manifest` dispatch has its own `entries is None`
+    branch and its own message, independent code that could regress on its
+    own even with `build_report`'s fully correct.
+
+    Asserts the ABSENCE of `staging_manifest([])`'s own "No sessions are
+    staged for tape." specifically -- the exact string an empty-but-checked
+    manifest renders, and the exact collapse a `None`-into-`[]` mutation at
+    either layer would produce.
+    """
+    code = main(["tape-manifest", "--prefix", prefix])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "not checked" in out
+    assert "No sessions are staged for tape." not in out
+
+
 def test_tape_manifest_lists_a_verified_session_and_excludes_an_unverified_one(landed, prefix, capsys):
     session_dir, verified_key = landed("tpm1")
     _, unverified_key = landed("tpm2")

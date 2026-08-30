@@ -840,3 +840,28 @@ def test_no_orphaned_archiving_directory_is_silent_in_the_disk_section(scanned):
 
     section = _section(body, "Disk")
     assert "orphaned `.archiving`" not in section
+
+
+def test_no_nas_root_reports_not_checked_rather_than_a_fabricated_zero(scanned):
+    """BLOCKING fix 2's own fail-closed contract, pinned directly (Task 10
+    whole-branch review, final gate: "no test defended it" -- confirmed by
+    the reviewer swapping `_verified_archives` to `return []` instead of
+    `None` and finding all 883 tests still passed).
+
+    Checks three independent things a mutation could break separately:
+    the heading carries no count suffix at all (not even "— 0"), the
+    dashed-count form does not appear ANYWHERE in the body (catching a
+    mutation that adds the count back without touching the "not checked"
+    line), and the section body says "not checked" rather than "- none" --
+    the exact "checked, genuinely zero" collapse this test exists to
+    forbid on the one channel that tells a rig to delete data.
+    """
+    root, prefix = scanned("nonasrt1")
+
+    body = build_report(root, prefix=prefix)
+
+    assert "\n## Sessions whose rig may clear its copy\n" in body
+    assert "## Sessions whose rig may clear its copy —" not in body
+    section = _section(body, "Sessions whose rig may clear its copy")
+    assert "not checked" in section
+    assert "- none" not in section

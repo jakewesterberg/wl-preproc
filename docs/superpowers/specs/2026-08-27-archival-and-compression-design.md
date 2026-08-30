@@ -193,7 +193,7 @@ becomes real; deciding it now would be deciding it without the thing to measure.
 
 > **"Verification passes" means `integrity == 'verified'`, not "the session
 > landed".** Found 2026-08-27 while reviewing `archive/layout.py`:
-> `wlpp ingest --no-verify` (`cli/main.py:183-189`) makes `ingest/verify.py`
+> `wlpp ingest --no-verify` (`cli/main.py`'s `--no-verify` argument) makes `ingest/verify.py`
 > return `Integrity.SKIPPED` with an **empty** mismatch list, and
 > `watcher.py`'s `if mismatches:` cannot tell that from a genuine pass — so the
 > session lands as `INGESTED` with no size or blake3 check ever run.
@@ -206,9 +206,11 @@ becomes real; deciding it now would be deciding it without the thing to measure.
 > §3.1's own rule below exists at all, and corrected here rather than left
 > silently stale now that the rule has an implementation).
 >
-> (Citation also corrected 2026-08-27, Task 10 whole-branch review: `cli/
-> main.py`'s `--no-verify` argument moved to lines 183–189 as earlier
-> subcommands were added above it; the passage it names has not moved.)
+> (Citation corrected a second time, 2026-08-27, Task 10 whole-branch
+> review: the first correction replaced one stale line number with another
+> -- the same commit that fixed it had already added lines above the
+> target. Cited by argument name now, not a line number, which survives
+> edits above it.)
 >
 > On its own that does not defeat archival, which re-does the same digest
 > comparison. What it defeats is §4's *shape* guarantee: reconstruction

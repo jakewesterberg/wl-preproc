@@ -213,8 +213,22 @@ def main(argv: list[str] | None = None) -> int:
     # may clear its copy" prints "not checked" rather than a fabricated zero.
     report_parser.add_argument("--nas-root", type=Path, default=None)
 
+    # No section citation in the help string itself, deliberately (Task 10
+    # whole-branch review, round 3): "parent spec section 8/9" was wrong --
+    # neither §8 (NWB export and archival) nor §9 (Testing strategy) mentions
+    # the responder at all. The real citation is parent spec §11
+    # ("Integration with wl.works"), named directly by its own §3.1
+    # component table (row 4, "Responder" ... "(§11)") -- verified by
+    # reading §11 itself, not merely trusted from that cross-reference. A
+    # wrong section number shipped in `--help` output is worse than none,
+    # and this specific string has now been wrong twice; dropping the
+    # reference here removes the citation-staleness risk from this one
+    # user-facing string rather than re-deriving a number a future edit to
+    # either document can silently break again. The full protocol reasoning
+    # lives in §11 for anyone who goes looking, and in the protocol
+    # document itself (Task 10).
     responder_parser = subparsers.add_parser(
-        "responder", help="run the HTTP responder wl.works polls (parent spec section 8/9)"
+        "responder", help="run the HTTP responder wl.works polls"
     )
     # No default -- controller ruling for Task 9: the port must be stated
     # identically in the systemd unit, the protocol document (Task 10) and
@@ -343,15 +357,24 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"MISMATCH {verdict.relative_path}")
         print("verified" if outcome.all_matched else "NOT verified")
 
-        # The database bookkeeping -- delete any stale row unconditionally,
-        # write a fresh `ArchiveArtifact` (+ `ArchiveVerification` children)
-        # only when verified -- is `archive/stage.py::record_archive_outcome`
-        # now, not inline here: `wl_preproc.daemon`'s archival stage (Task 10)
-        # needs the identical sequence, and this is the shared body rather
-        # than a second, divergent implementation of it. See that function's
-        # own docstring for the reasoning this dispatch used to carry inline
-        # (the `IntegrityError` history, why `.delete(prompt=False)` and not
-        # `replace=True`, why the delete is unconditional).
+        # The database bookkeeping is split across two functions in
+        # `archive/stage.py` now, not inline here (corrected 2026-08-27,
+        # Task 10 whole-branch review round 3: this comment used to send a
+        # reader to `record_archive_outcome` for "why the delete is
+        # unconditional", but that function no longer deletes anything --
+        # its own docstring now opens with "Does NOT delete a stale prior
+        # row itself"). `archive_session` (already called above) invalidates
+        # any stale prior `ArchiveArtifact` row itself, at the exact moment
+        # it is about to start mutating the NAS -- see that function's own
+        # comment for the "not earlier, not later" reasoning: a fault
+        # reading SCRATCH, before any NAS mutation, must leave a still-good
+        # prior row alone, while anything reaching the first NAS mutation
+        # must not. `record_archive_outcome` (below) then writes a fresh
+        # `ArchiveArtifact` row, with its `ArchiveVerification` children,
+        # only when `outcome.all_matched`. Both functions are the one shared
+        # body `wl_preproc.daemon`'s archival stage (Task 10) also calls,
+        # rather than a second, divergent implementation of the same
+        # sequence.
         archive_path = record_archive_outcome(
             key, outcome, args.nas_root, args.host, args.share, prefix=args.prefix
         )
