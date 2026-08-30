@@ -258,6 +258,25 @@ def test_every_system_has_an_extractor():
     assert set(EXTRACTORS) == set(SYSTEMS)
 
 
+#  `wl_preproc/synth/ohdpi.py` still writes the pre-task-2 guessed CSV format
+#  (`frame_index,timestamp_us,digital`, comma-separated) -- rewriting it to
+#  the real OpenIris shape `eye/ohdpi.py` reads is Task 3's job, left alone
+#  here per the task-2 brief. `extract_ohdpi` now reads exclusively through
+#  that real reader (`wl_preproc.eye.ohdpi.read_ohdpi`), which refuses the old
+#  fixture's header outright -- these two tests describe properties that are
+#  real again only once Task 3 lands. `xfail(strict=True)` rather than
+#  deleting them: the test bodies stay as the record of what to re-verify, and
+#  `strict=True` turns an unnoticed synth rewrite into a loud XPASS failure
+#  instead of a silently-stale skip.
+_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER = pytest.mark.xfail(
+    raises=ValueError,
+    strict=True,
+    reason="synth/ohdpi.py writes the pre-task-2 guessed format; Task 3 rewrites it "
+    "to match the real reader's columns",
+)
+
+
+@_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER
 def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
     """At 500 Hz this is 2.5 samples per 5 ms bit — the thinnest margin in the
     design (design spec section 3), so it is the case most likely to lose a
@@ -274,6 +293,7 @@ def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
     assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
 
 
+@_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER
 def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
     """The file carries a native timestamp per frame, so the rate is a
     measurement rather than an assumption — and `OHDPI_FPS` is the fixture's
@@ -363,14 +383,20 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
     Emitting the counts is the point. A regression in margin then shows up as a
     number that moved, in the suite's own output, rather than as a test that
     started failing intermittently for no visible reason.
-    """
-    from wl_preproc.synth.ohdpi import FILENAME
 
+    ohdpi is not measured here: `synth/ohdpi.py` still writes the pre-task-2
+    guessed format, which the real reader `extract_ohdpi` now uses cannot
+    parse at all (Task 3 rewrites that fixture). There is no reliability
+    number to print for a system whose fixture the current reader refuses
+    outright -- that is a harder failure than a margin regression, not a
+    smaller one, and printing a fabricated 0% would misstate which case this
+    is.
+    """
     measured: dict[str, tuple[int, int]] = {}
     for profile, cases in (
         ("ci", (("syncbox", "syncbox/syncbox.log"), ("bcam", "bcam/frames.yaml"))),
         ("stim", (("rhs", "rhs"),)),
-        ("eye", (("ohdpi", f"ohdpi/{FILENAME}"), ("spikeglx", None))),
+        ("eye", (("spikeglx", None),)),
     ):
         root = tmp_path / profile
         root.mkdir()
@@ -387,10 +413,14 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
             emitted = {value for value, _ in truth.barcodes}
             measured[system] = (len(recovered & emitted), len(emitted))
 
-    assert set(measured) == set(SYSTEMS), f"unmeasured: {set(SYSTEMS) - set(measured)}"
+    measured_systems = set(SYSTEMS) - {"ohdpi"}
+    assert set(measured) == measured_systems, f"unmeasured: {measured_systems - set(measured)}"
     with capsys.disabled():
         print("\n  decode reliability, clean fixtures:")
         for system in SYSTEMS:
+            if system == "ohdpi":
+                print(f"    {system:9s} not measured -- synth/ohdpi.py predates the real reader")
+                continue
             found, emitted = measured[system]
             print(f"    {system:9s} {found:3d}/{emitted:<3d} {100 * found / emitted:5.1f}%")
 
@@ -402,15 +432,45 @@ def test_every_system_can_find_its_own_recordings(tmp_path: Path):
     """Discovery is per-system knowledge, and a system that finds nothing looks
     exactly like a system that was not recording. So this asserts each one
     finds precisely the recording the generator wrote — on the profile that
-    carries all five at once."""
+    carries all five at once.
+
+    ohdpi excluded: the corrected glob (`*.txt`) correctly does not match
+    `synth/ohdpi.py`'s still-guessed `ohdpi_frames.csv` (Task 3 rewrites that
+    fixture). See `test_ohdpi_is_not_yet_discoverable_from_a_generated_session`
+    just below, which pins that exact gap as an active tripwire rather than
+    silently dropping ohdpi from this claim.
+    """
     generate_session(tmp_path, RECIPES["drift"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
 
     for system in SYSTEMS:
+        if system == "ohdpi":
+            continue
         found = find_recordings(system, session_dir / system)
         assert len(found) == 1, f"{system}: found {[p.name for p in found]}"
         # And what was found is what the extractor can actually open.
         assert EXTRACTORS[system](found[0]).n_samples > 0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="synth/ohdpi.py writes the pre-task-2 guessed format (`ohdpi_frames.csv`); "
+    "Task 3 rewrites it to the real `<session>.txt` shape the corrected glob expects",
+)
+def test_ohdpi_is_not_yet_discoverable_from_a_generated_session(tmp_path: Path):
+    """The other half of the exclusion above, pinned rather than silent.
+
+    `strict=True` so this flips the moment `synth/ohdpi.py` starts writing a
+    real-shaped `.txt` file: an unexpected pass here is exactly the signal
+    that `test_every_system_can_find_its_own_recordings`'s ohdpi exclusion
+    should be removed.
+    """
+    generate_session(tmp_path, RECIPES["drift"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    found = find_recordings("ohdpi", session_dir / "ohdpi")
+
+    assert len(found) == 1, f"ohdpi: found {[p.name for p in found]}"
 
 
 def test_spikeglx_discovery_does_not_match_the_imec_binary(tmp_path: Path):
