@@ -167,17 +167,6 @@ def test_each_systems_stored_drift_is_the_drift_that_was_planted(populated):
             assert row["drift_ppm"] == 0.0
             assert row["fitted_rate_hz"] == row["nominal_rate_hz"]
             continue
-        if row["system"] == "ohdpi":
-            # `wl_preproc/synth/ohdpi.py` still writes the pre-task-2 guessed
-            # format, which the corrected `*.txt` glob correctly does not
-            # match -- so `make()` cannot find a file to fit at all and
-            # stores `fit_status="no_recording"` with every fit column NULL
-            # (nominal_rate_hz included). Asserting a drift against a NULL
-            # rate is not "the fit was wrong", it is "there was no fit" --
-            # Task 3's fixture rewrite is what makes this system reachable
-            # again.
-            assert row["fit_status"] == "no_recording"
-            continue
         tolerance_ppm = 2.0 * (1.0 / row["nominal_rate_hz"]) / 14.0 * 1e6
         assert row["drift_ppm"] == pytest.approx(
             planted[row["system"]], abs=tolerance_ppm

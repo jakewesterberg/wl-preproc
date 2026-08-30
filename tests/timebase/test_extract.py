@@ -258,25 +258,6 @@ def test_every_system_has_an_extractor():
     assert set(EXTRACTORS) == set(SYSTEMS)
 
 
-#  `wl_preproc/synth/ohdpi.py` still writes the pre-task-2 guessed CSV format
-#  (`frame_index,timestamp_us,digital`, comma-separated) -- rewriting it to
-#  the real OpenIris shape `eye/ohdpi.py` reads is Task 3's job, left alone
-#  here per the task-2 brief. `extract_ohdpi` now reads exclusively through
-#  that real reader (`wl_preproc.eye.ohdpi.read_ohdpi`), which refuses the old
-#  fixture's header outright -- these two tests describe properties that are
-#  real again only once Task 3 lands. `xfail(strict=True)` rather than
-#  deleting them: the test bodies stay as the record of what to re-verify, and
-#  `strict=True` turns an unnoticed synth rewrite into a loud XPASS failure
-#  instead of a silently-stale skip.
-_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER = pytest.mark.xfail(
-    raises=ValueError,
-    strict=True,
-    reason="synth/ohdpi.py writes the pre-task-2 guessed format; Task 3 rewrites it "
-    "to match the real reader's columns",
-)
-
-
-@_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER
 def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
     """At 500 Hz this is 2.5 samples per 5 ms bit — the thinnest margin in the
     design (design spec section 3), so it is the case most likely to lose a
@@ -293,17 +274,17 @@ def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
     assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
 
 
-@_SYNTH_OHDPI_FORMAT_PREDATES_THE_REAL_READER
 def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
-    """The file carries a native timestamp per frame, so the rate is a
-    measurement rather than an assumption — and `OHDPI_FPS` is the fixture's
-    rate, not the instrument's.
+    """The file carries a native timestamp per frame (`LeftSeconds`), so the
+    rate is a measurement rather than an assumption — and `OHDPI_FPS` is the
+    fixture's rate, not the instrument's.
 
-    The timestamps are rewritten to a different rate to prove it: a derivation
-    that ignored them and returned `OHDPI_FPS` passes any test written against
-    an unmodified fixture.
+    `LeftSeconds` is rewritten to a different rate to prove it: a derivation
+    that ignored it and returned `OHDPI_FPS` passes any test written against
+    an unmodified fixture. Frame numbers are left untouched -- only the
+    timestamp column changes -- since `read_ohdpi` requires them contiguous.
     """
-    from wl_preproc.synth.ohdpi import FILENAME, OHDPI_FPS
+    from wl_preproc.synth.ohdpi import FILENAME, HEADER, OHDPI_FPS
 
     generate_session(tmp_path, RECIPES["eye"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
@@ -311,14 +292,22 @@ def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
     slower_hz = 400.0
     assert slower_hz != OHDPI_FPS
 
-    rows = path.read_text(encoding="utf-8").splitlines()
-    rewritten = [rows[0]]
-    for row in rows[1:]:
-        index, _timestamp, digital = row.split(",")
-        rewritten.append(f"{index},{round(int(index) * 1e6 / slower_hz)},{digital}")
+    frame_column = HEADER.index("LeftFrameNumber")
+    seconds_column = HEADER.index("LeftSeconds")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rewritten = [lines[0]]
+    for line in lines[1:]:
+        fields = line.split(" ")
+        fields[seconds_column] = f"{int(fields[frame_column]) / slower_hz:.4f}"
+        rewritten.append(" ".join(fields))
     path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 
-    assert extract_ohdpi(path).fs_hz == pytest.approx(slower_hz)
+    # abs, not the default rel=1e-6: LeftSeconds is quantised to 4 decimal
+    # places, and over this fixture's ~15 s span that quantisation alone is
+    # larger than the default tolerance -- see `synth/test_ohdpi.py`'s
+    # `test_native_timestamps_agree_with_the_frame_rate` for the same
+    # quantisation applied to the un-rewritten fixture.
+    assert extract_ohdpi(path).fs_hz == pytest.approx(slower_hz, abs=0.1)
 
 
 def test_bcam_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
@@ -383,20 +372,14 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
     Emitting the counts is the point. A regression in margin then shows up as a
     number that moved, in the suite's own output, rather than as a test that
     started failing intermittently for no visible reason.
-
-    ohdpi is not measured here: `synth/ohdpi.py` still writes the pre-task-2
-    guessed format, which the real reader `extract_ohdpi` now uses cannot
-    parse at all (Task 3 rewrites that fixture). There is no reliability
-    number to print for a system whose fixture the current reader refuses
-    outright -- that is a harder failure than a margin regression, not a
-    smaller one, and printing a fabricated 0% would misstate which case this
-    is.
     """
+    from wl_preproc.synth.ohdpi import FILENAME
+
     measured: dict[str, tuple[int, int]] = {}
     for profile, cases in (
         ("ci", (("syncbox", "syncbox/syncbox.log"), ("bcam", "bcam/frames.yaml"))),
         ("stim", (("rhs", "rhs"),)),
-        ("eye", (("spikeglx", None),)),
+        ("eye", (("ohdpi", f"ohdpi/{FILENAME}"), ("spikeglx", None))),
     ):
         root = tmp_path / profile
         root.mkdir()
@@ -413,14 +396,10 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
             emitted = {value for value, _ in truth.barcodes}
             measured[system] = (len(recovered & emitted), len(emitted))
 
-    measured_systems = set(SYSTEMS) - {"ohdpi"}
-    assert set(measured) == measured_systems, f"unmeasured: {measured_systems - set(measured)}"
+    assert set(measured) == set(SYSTEMS), f"unmeasured: {set(SYSTEMS) - set(measured)}"
     with capsys.disabled():
         print("\n  decode reliability, clean fixtures:")
         for system in SYSTEMS:
-            if system == "ohdpi":
-                print(f"    {system:9s} not measured -- synth/ohdpi.py predates the real reader")
-                continue
             found, emitted = measured[system]
             print(f"    {system:9s} {found:3d}/{emitted:<3d} {100 * found / emitted:5.1f}%")
 
@@ -432,38 +411,27 @@ def test_every_system_can_find_its_own_recordings(tmp_path: Path):
     """Discovery is per-system knowledge, and a system that finds nothing looks
     exactly like a system that was not recording. So this asserts each one
     finds precisely the recording the generator wrote — on the profile that
-    carries all five at once.
-
-    ohdpi excluded: the corrected glob (`*.txt`) correctly does not match
-    `synth/ohdpi.py`'s still-guessed `ohdpi_frames.csv` (Task 3 rewrites that
-    fixture). See `test_ohdpi_is_not_yet_discoverable_from_a_generated_session`
-    just below, which pins that exact gap as an active tripwire rather than
-    silently dropping ohdpi from this claim.
-    """
+    carries all five at once."""
     generate_session(tmp_path, RECIPES["drift"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
 
     for system in SYSTEMS:
-        if system == "ohdpi":
-            continue
         found = find_recordings(system, session_dir / system)
         assert len(found) == 1, f"{system}: found {[p.name for p in found]}"
         # And what was found is what the extractor can actually open.
         assert EXTRACTORS[system](found[0]).n_samples > 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="synth/ohdpi.py writes the pre-task-2 guessed format (`ohdpi_frames.csv`); "
-    "Task 3 rewrites it to the real `<session>.txt` shape the corrected glob expects",
-)
-def test_ohdpi_is_not_yet_discoverable_from_a_generated_session(tmp_path: Path):
-    """The other half of the exclusion above, pinned rather than silent.
+def test_ohdpi_is_discoverable_from_a_generated_session(tmp_path: Path):
+    """ohdpi's own discovery, isolated from the other four systems'.
 
-    `strict=True` so this flips the moment `synth/ohdpi.py` starts writing a
-    real-shaped `.txt` file: an unexpected pass here is exactly the signal
-    that `test_every_system_can_find_its_own_recordings`'s ohdpi exclusion
-    should be removed.
+    Renamed from `test_ohdpi_is_not_yet_discoverable_from_a_generated_session`:
+    that name and its strict tripwire marker recorded a real, temporary gap
+    between Task 2 (which pointed `extract_ohdpi` at the real reader) and this
+    task (which makes the generator emit what that reader expects) -- a name
+    asserting non-discoverability would now be a false claim. Duplicates part
+    of `test_every_system_can_find_its_own_recordings` above; kept anyway as
+    the standalone, single-system case.
     """
     generate_session(tmp_path, RECIPES["drift"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())

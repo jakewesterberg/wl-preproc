@@ -68,4 +68,4 @@ def test_the_eye_profile_generates_an_ohdpi_session(tmp_path):
         timeout=300,
     )
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "2027-03-14_04" / "ohdpi" / "ohdpi_frames.csv").exists()
+    assert (tmp_path / "2027-03-14_04" / "ohdpi" / "OpenIris-synthetic.txt").exists()

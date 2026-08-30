@@ -175,7 +175,7 @@ _RECORDING_PATHS: dict[str, str | None] = {
     "syncbox": "syncbox/syncbox.log",
     "spikeglx": None,
     "rhs": "rhs",
-    "ohdpi": "ohdpi/ohdpi_frames.csv",
+    "ohdpi": "ohdpi/OpenIris-synthetic.txt",
     "bcam": "bcam/frames.yaml",
 }
 
@@ -230,14 +230,6 @@ def test_the_whole_chain_recovers_each_systems_clock(tmp_path: Path):
     proves the arithmetic. It runs on the `drift` profile because that is the
     only one carrying all five systems and the only one where the clocks
     actually differ — four distinct drifts, none of them the reference's.
-
-    ohdpi is excluded from the loop below (fifth system, still planted with
-    its own drift in `recipe.system_drift_ppm`): `synth/ohdpi.py` still
-    writes the pre-task-2 guessed CSV, which `extract_ohdpi` -- now reading
-    exclusively through `wl_preproc.eye.ohdpi.read_ohdpi` -- refuses outright.
-    Task 3 rewrites that fixture to the real format; until then this proves
-    the chain on four of the five systems rather than claiming a fifth that
-    cannot currently run.
     """
     from wl_preproc.synth.recipe import RECIPES
     from wl_preproc.timebase.extract import EXTRACTORS
@@ -252,7 +244,7 @@ def test_the_whole_chain_recovers_each_systems_clock(tmp_path: Path):
 
     fitted: dict[str, tuple[float, float]] = {}
     for system in recipe.systems:
-        if system in ("syncbox", "ohdpi"):
+        if system == "syncbox":
             continue
         stream = EXTRACTORS[system](_recording(session_dir, system))
         decoded = decode_edges(list(stream.edges))
@@ -261,10 +253,8 @@ def test_the_whole_chain_recovers_each_systems_clock(tmp_path: Path):
             _resolvable_ppm(stream.fs_hz, span_s),
         )
 
-    assert set(fitted) == set(planted) - {"ohdpi"}
+    assert set(fitted) == set(planted)
     for system, expected_ppm in planted.items():
-        if system == "ohdpi":
-            continue
         drift_ppm, tolerance_ppm = fitted[system]
         assert drift_ppm == pytest.approx(expected_ppm, abs=tolerance_ppm), (
             f"{system}: planted {expected_ppm} ppm, fitted {drift_ppm:.2f} ppm, "
@@ -299,14 +289,8 @@ def test_a_devices_offset_places_it_at_its_own_tick_origin(tmp_path: Path):
     fit is what recovers that. Checking it against the emitters' own pre-roll
     constants is what makes the offset a measurement rather than a number that
     merely makes the residual small.
-
-    ohdpi is absent from `expected_offset_s` below (rather than checked
-    against `synth.ohdpi.OHDPI_PRE_ROLL_S`): `synth/ohdpi.py` still writes the
-    pre-task-2 guessed CSV, which `extract_ohdpi` -- now reading exclusively
-    through `wl_preproc.eye.ohdpi.read_ohdpi` -- refuses outright, so there is
-    no stream to fit an offset from at all. Task 3's fixture rewrite is what
-    makes ohdpi's own tick origin checkable here again.
     """
+    from wl_preproc.synth.ohdpi import OHDPI_PRE_ROLL_S
     from wl_preproc.synth.peripherals import BCAM_PRE_ROLL_S
     from wl_preproc.synth.recipe import RECIPES
     from wl_preproc.synth.rhs import RHS_PRE_ROLL_S
@@ -322,6 +306,7 @@ def test_a_devices_offset_places_it_at_its_own_tick_origin(tmp_path: Path):
     expected_offset_s = {
         "spikeglx": -SPIKEGLX_PRE_ROLL_S,
         "rhs": -RHS_PRE_ROLL_S,
+        "ohdpi": -OHDPI_PRE_ROLL_S,
         "bcam": -BCAM_PRE_ROLL_S,
     }
 

@@ -223,17 +223,6 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
     return session_key, recipe
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="provenance_session plants ohdpi in RECIPES['drift'], and "
-    "synth/ohdpi.py still writes the pre-task-2 guessed format that the real "
-    "reader (wl_preproc.eye.ohdpi.read_ohdpi) refuses. SystemTimebase.make() "
-    "then stores ohdpi's row as fit_status='no_recording', which forces "
-    "TimingProvenance.make()'s `failed = len(aligned) < len(systems)` guard, "
-    "and `tier = 'D' if failed else resolve_tier(inputs)` short-circuits "
-    "straight to D regardless of how strong the actual evidence is. Task 3's "
-    "fixture rewrite is what makes tier A reachable here again.",
-)
 def test_the_tier_resolves_to_a_once_two_full_code_records_genuinely_agree(
     schemas, provenance_session
 ):
@@ -390,18 +379,9 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
 
     row = (timebase.TimingProvenance & session_key).fetch1()
 
-    # ohdpi is planted in recipe.systems (5) but is not counted among the
-    # ALIGNED systems or their SEGMENTs (4): synth/ohdpi.py still writes the
-    # pre-task-2 guessed format, which the real reader now used by
-    # extract_ohdpi refuses, so SystemTimebase.make() records ohdpi as
-    # fit_status='no_recording' and Segment.make() has no scan to build a
-    # segment from at all. Everything below this point -- the seven
-    # TierInputs columns -- is unaffected: they come from syncbox, spikeglx,
-    # rhs and bcam alone, none of which route through ohdpi.
-    n_systems_with_a_working_fixture = len(recipe.systems) - 1
     assert row["n_barcodes_emitted"] > 0
-    assert row["n_systems_aligned"] == n_systems_with_a_working_fixture
-    assert row["n_segments"] == n_systems_with_a_working_fixture
+    assert row["n_systems_aligned"] == len(recipe.systems)
+    assert row["n_segments"] == len(recipe.systems)
     assert row["n_rejected_segments"] == 0
     assert row["worst_residual_us"] >= 0.0
     # The largest planted magnitude, recovered through the database.
@@ -793,26 +773,20 @@ def test_block_agreement_true_has_teeth_against_a_real_perturbation(
     assert row["n_full_code_records"] == 2, (
         f"this must be genuine A-territory apart from the perturbation: {row}"
     )
-    # This is the assertion that actually has teeth right now: block_agreement
-    # is computed independently of `failed` (gated on `syncbox_fitted` alone,
-    # per TimingProvenance.make()'s own comment), so it still genuinely proves
-    # the 100ms perturbation was detected through the full production path.
+    # block_agreement is computed independently of `failed` (gated on
+    # `syncbox_fitted` alone, per TimingProvenance.make()'s own comment), so
+    # this genuinely proves the 100ms perturbation was detected through the
+    # full production path.
     assert row["block_agreement"] == 0, row
-    # This one, by contrast, is temporarily NOT discriminating (found by
-    # reading TimingProvenance.make(), not by a failure -- it still passes):
-    # `RECIPES["drift"]` plants ohdpi, synth/ohdpi.py still writes the
-    # pre-task-2 guessed format the real reader refuses, and
-    # `tier = "D" if failed else resolve_tier(inputs)` means ohdpi's resulting
-    # `failed=True` forces D on its own, unconditionally, before
-    # `resolve_tier` -- and therefore `block_agreement` -- is even consulted.
-    # So this line would currently read "D" even if resolve_tier's own
-    # block_agreement branch were broken. That branch is NOT unguarded,
-    # though: tests/events/test_agreement.py's
+    # Every system in `RECIPES["drift"]`, ohdpi included, now aligns
+    # (`n_systems_aligned == len(recipe.systems)`, checked directly while
+    # restoring this assertion), so `failed` is False and `tier` comes from
+    # `resolve_tier(inputs)` -- the `block_agreement` branch above, not the
+    # `tier = "D" if failed else ...` short-circuit. This is a genuine
+    # second, end-to-end check of the same branch
+    # tests/events/test_agreement.py's
     # test_block_disagreement_is_D_even_with_two_agreeing_full_code_records
-    # and test_block_agreement_true_does_not_block_tier_a call
-    # `agreement.resolve_tier` directly and are unaffected by ohdpi. Once
-    # Task 3 rewrites synth/ohdpi.py to the real format, this line becomes a
-    # meaningful second, end-to-end check again rather than a redundant one.
+    # and test_block_agreement_true_does_not_block_tier_a exercise directly.
     assert row["tier"] == "D", (
         f"a 100ms start_s perturbation must move the tier off A: {row}"
     )
