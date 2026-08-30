@@ -56,6 +56,38 @@ def test_a_file_with_the_wrong_header_is_refused(tmp_path):
         read_ohdpi(bad)
 
 
+def test_one_absent_required_column_is_named_specifically(tmp_path):
+    """Pins the diagnostic, not just the refusal.
+
+    `test_a_file_with_the_wrong_header_is_refused` cannot tell OUR check from
+    pandas' own: `pd.read_csv(usecols=...)` raises "Usecols do not match
+    columns" for ANY column absent from the header, before `read_columns`
+    ever sees a DataFrame -- and `read_ohdpi`'s wrapper says "unrecognised
+    header" regardless of which one fired, so that test still passes with our
+    check deleted (task-1 fix round, found by mutation, not assumed). Only our
+    own message ever says "header is missing"; pandas' never does. A header
+    that is otherwise real OpenIris, short exactly one required column, is the
+    case an actual format change would produce -- and the one where pandas'
+    generic message would waste someone's afternoon.
+
+    Matches on the two-word phrase "header is missing", not just "missing":
+    `tmp_path` names its directory after this test function, and an earlier
+    draft of this test was itself named with "missing" in it, which leaked
+    into the asserted-on path and made a bare `match="missing"` pass for a
+    reason that had nothing to do with the diagnostic under test -- the same
+    trap this whole fix round exists to close, one level up, in the test's
+    own name rather than in the production code.
+    """
+    header = "LeftFrameNumber LeftSeconds Int0 LeftCR1X SomeOtherColumn\n"
+    rows = "308788 5416.9374 12 434.8742 0\n308789 5416.9394 12 434.8742 0\n"
+    bad = tmp_path / "one_column_short.txt"
+    bad.write_text(header + rows, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="header is missing") as excinfo:
+        read_ohdpi(bad)
+    assert "LeftCR4X" in str(excinfo.value)
+
+
 def test_seconds_is_never_offered_as_session_time():
     """`LeftSeconds` and `RightSeconds` differ by a constant 49.48 ms while
     frame numbers agree exactly -- the cameras are frame-locked, their clocks

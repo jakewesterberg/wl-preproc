@@ -80,13 +80,27 @@ def read_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
     reference recording, reading 10 columns takes 2.5 s and 94 MB against
     roughly a gigabyte for the whole file.
     """
-    frame = pd.read_csv(path, sep=r"\s+", usecols=columns, engine="c")
-    missing = set(columns) - set(frame.columns)
-    if missing:
-        raise ValueError(
-            f"{path}: header is missing {sorted(missing)}. This is not an "
-            "OpenIris recording, or its format has changed since 2026-08-30"
-        )
+    try:
+        frame = pd.read_csv(path, sep=r"\s+", usecols=columns, engine="c")
+    except ValueError as exc:
+        # pandas validates `usecols` against the header BEFORE ever returning a
+        # frame, so it beats the check this function used to run on
+        # `frame.columns` to every real bad-header file -- that check was
+        # unreachable dead code, not merely untested (task-1 fix round: found
+        # by mutation, since dropping it changed nothing). Read the header
+        # alone -- `nrows=0`, effectively free, one line -- to name exactly
+        # which requested columns are missing in our own words, rather than
+        # leave a caller with pandas' "Usecols do not match columns," which
+        # says the same thing for a genuinely malformed file and never says
+        # which case this is.
+        header = pd.read_csv(path, sep=r"\s+", nrows=0, engine="c")
+        missing = set(columns) - set(header.columns)
+        if missing:
+            raise ValueError(
+                f"{path}: header is missing {sorted(missing)}. This is not an "
+                "OpenIris recording, or its format has changed since 2026-08-30"
+            ) from exc
+        raise
     return {name: frame[name].to_numpy() for name in columns}
 
 
