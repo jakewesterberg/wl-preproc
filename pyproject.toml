@@ -69,6 +69,50 @@ dependencies = [
     # ONLINE lookup against the probeinterface library repository and must
     # never enter this path; it 404s without network access.
     "probeinterface>=0.3,<0.4",
+    # The archive is a Zarr store (2026-08-27-archival-and-compression-design
+    # section 1). Upper-bounded below 3 because `archive/store.py` calls the
+    # 2.x `create_dataset(..., compressor=...)` API directly (store.py:99 and
+    # :116-117 -- verified by reading that file, not inferred). Zarr 3.x is
+    # not installed anywhere in this environment, so this repository cannot
+    # itself confirm what changed there; the bound exists so an eventual
+    # upgrade is a deliberate migration of those two call sites rather than a
+    # silent break, not because a specific 3.x replacement is known here.
+    #
+    # Not currently a fix for anything broken: `spikeinterface` already
+    # declares `zarr<3,>=2.18` as a hard (non-extra) dependency -- confirmed
+    # against this venv's installed distribution metadata directly, not
+    # inferred -- so a clean install already resolves zarr 2.18.x and the <3
+    # bound is already enforced without this line. It is declared anyway
+    # because the dependency is this package's OWN: `store.py` and
+    # `verify.py` import `zarr` directly, and today it arrives only because
+    # spikeinterface happens to require it. If spikeinterface ever drops or
+    # relaxes that pin, this repository would break with nothing on record
+    # saying it ever needed zarr at all -- and `wlo stack` would build a
+    # workstation missing software this package uses.
+    "zarr>=2,<3",
+    # Blosc/zstd, the codec `archive/store.py` compresses the archive with
+    # via `numcodecs.Blosc(cname=..., clevel=..., shuffle=numcodecs.Blosc.
+    # NOSHUFFLE)`. WavPack would compress ~6% better but wraps a system
+    # library that will not install from pip -- see that design's section
+    # 2.1.
+    #
+    # Originally declared here as `>=0.15` with no verified floor for that
+    # call signature and no upper bound at all -- both wrong, caught in
+    # review: `>=0.15` was invented, not checked, and the two dependencies
+    # that already require numcodecs both cap it well below that. Confirmed
+    # against installed distribution metadata: zarr 2.18.7 (already pinned
+    # above) itself requires `numcodecs!=0.14.0,!=0.14.1,<0.16,>=0.10.0`,
+    # and spikeinterface separately requires `numcodecs<0.16.0`. So an
+    # unbounded `>=0.15` understated a real, already-enforced ceiling, and
+    # `wlo stack` reading this file alone would have no way to know
+    # numcodecs 0.16 cannot resolve on a clean install here. `>=0.10,<0.16`
+    # brackets both dependents' real constraints rather than restating
+    # zarr's own oddly-specific point exclusions (0.14.0/0.14.1), which this
+    # repository has no independent reason to assert. The Blosc call
+    # signature `store.py` uses is not independently verified against a
+    # specific numcodecs release -- this floor is deliberately no tighter
+    # than what the dependencies that already require numcodecs enforce.
+    "numcodecs>=0.10,<0.16",
 ]
 
 # No upper Python bound. An earlier draft pinned <3.12, justified as the
@@ -128,7 +172,16 @@ filterwarnings = [
 # in one place what it means. `slow` is for a test that runs a real sorter --
 # spec section 7's tests/ephys/test_kilosort_defaults_split_units.py, minutes
 # not seconds on CPU -- rather than anything about the rest of this fast suite.
-markers = ["slow: runs a real sorter; excluded from CI, run by hand"]
+# `real_scratch` is unrelated to `slow` and not excluded by the `addopts`
+# below: it opts one test out of tests/conftest.py's autouse scratch-headroom
+# mock (see that fixture's own docstring) so it can check `watcher.
+# scratch_headroom` is genuinely `doctor.scratch_headroom`, not a same-named
+# local reimplementation -- an identity check, not a real-disk one, so it
+# costs nothing to run everywhere the rest of the suite does.
+markers = [
+    "slow: runs a real sorter; excluded from CI, run by hand",
+    "real_scratch: opts one test out of the autouse scratch-headroom mock",
+]
 # Deselects `slow` by default. CI runs bare `pytest -v` and, separately,
 # `python -m pytest tests/schema/test_guardrails.py -v` (.github/workflows/ci.yml
 # and the Guardrails step) -- neither passes `-m`, so both rely on this default

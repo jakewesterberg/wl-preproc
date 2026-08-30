@@ -135,6 +135,8 @@ Rig transfers land **directly on server scratch**, not via the NAS. The NAS neve
 
 **T1 is a cache, not a fourth format.** It stores the identical verified artifact that goes to cold storage, so rehydration for reprocessing is "decompress to scratch" — the same code path as a cold fetch, minus the slow retrieval.
 
+> **Amended 2026-08-27 by the archival-and-compression design.** The compression ratio above assumes 2.0 (~360 GB raw to ~180 GB compressed). Buccino et al., *Compression strategies for large-scale electrophysiology data*, J. Neural Eng. 2023 (PMID 37651998) measures **CR 3.59 ± 0.12** for lossless audio codecs on Neuropixels 1.0 — not yet confirmed on this lab's own NP1032 (Neuropixels 1.0 NHP), though it shares NP1's AP-band format and sample rate. At 3.59 a session is **~100 GB** compressed, and at two sessions/week the permanent-storage figure is **~10.4 TB/year**, not 15–20 TB — conservative by roughly 1.8×. Kept rather than corrected in place: a purchasing decision may already rest on the larger number, and a reader needs to see both (2026-08-27 archival-and-compression design, §2).
+
 ### 3.4 Repository layout
 
 **The sync box is a separate repository, `wl-sync`.** It runs on different hardware (Pi 5), carries a different dependency (`piolib`, behind an optional extra), and is useful to any rig independently of this pipeline. It owns **everything it produces** — session identity, the barcode codec, and the log format — and `wl-preproc` depends on it. The dependency runs one way only; `wl-sync` must never import from here.
@@ -1102,6 +1104,8 @@ row itself.
 - **Scratch is reclaimed only when** archived + roundtrip verified + cold copy confirmed, **the human "checked good" gate has passed** (below), *and* either no pending paramset requests exist or a warm copy is present.
 - **Backpressure at ingest:** the watcher refuses new sessions below a scratch high-water mark and alerts, rather than filling scratch and stalling mid-sort.
 
+> **Amended 2026-08-27 by the archival-and-compression design.** "Cold copy confirmed" above is not a precondition this pipeline can observe. Writing tape is out of this pipeline's own scope — "this pipeline prepares, a human writes" (2026-08-27 archival-and-compression design, §0) — and this repository "records no tape state" at all (its §7; the tape tables belong to wl.works Plan 25 §4). The reclamation predicate this pipeline actually implements (its §5.2) has five named conditions — artifact present, every file's bytes verified, not tier D, no pending paramset request or a warm copy present, no human hold — and "cold copy confirmed" is not one of them. What this pipeline offers instead is the list of verified sessions staged for tape (`wlpp tape-manifest`; its §7); a human still carries that list to a drive and confirms the copy is written.
+
 ### 8.5 The "checked good" gate — an item wl.works explicitly leaves to this pipeline
 
 Plan 23 §12 records two facts that arrived mid-session and that no spec there owns. Item 2 became roadmap row 25. **Item 1 is still owned by nobody, deliberately:**
@@ -1125,7 +1129,11 @@ This gives the gate what it is actually for — *don't throw away the fast copy 
 
 **The verdict is recorded, not inferred:** an actor, a timestamp, a verdict and a reason, in the shape wl.works uses for every other judgment. It is surfaced in the daily report alongside stuck jobs, since an ungated session is what will eventually fill scratch.
 
+> **Amended 2026-08-27 by the archival-and-compression design.** The human "checked good" verdict above is replaced by a derived predicate plus a hold — a reversal, not a refinement, argued from §3.3, not from "this section's own neighbor" as an earlier draft of this sentence said (§8.4 lists reclamation's own preconditions but never itself mentions rehydration; §3.3 is where the T1 cache and "decompress to scratch" are actually described): once an artifact is verified on the NAS, reprocessing means "decompress to scratch," the same code path as a cold fetch, minus the slow retrieval — so the scratch copy is a cache, not the only copy of record, and reclaiming it costs time, not data, not the irrecoverable loss this gate was written to guard against. The gate above was guarding against a loss that cannot occur, at the price of the failure mode it names itself, above: "A researcher on holiday stalls acquisition." The human role inverts rather than disappears: not a verdict that unblocks, but a hold that blocks and a force that overrides, both recorded with actor, timestamp and reason exactly as specified above — the default becomes proceed unless held, not wait unless approved (2026-08-27 archival-and-compression design, §5). **The predicate above is designed and implemented** (`archive/reclaim.py::reclaim_conditions`) **— reclamation itself stays preview-only.** Rehydration, the decompress-to-scratch path that is what makes freeing scratch safe to reverse, is not built yet, so `wlpp reclaim` computes and prints the predicate above but deletes nothing in this build, regardless of `--no-dry-run`/`--confirm`, until rehydration lands as the next plan.
+
 > **OPEN:** verify and cite the compression-strategy reference (Buccino et al., compression for large-scale electrophysiology) at implementation.
+
+> **Amended 2026-08-27 by the archival-and-compression design: this OPEN is discharged.** Buccino et al., *Compression strategies for large-scale electrophysiology data*, J. Neural Eng. 2023, PMID 37651998 (preprint: https://doi.org/10.1101/2023.05.22.541700) reports **CR 3.59 ± 0.12** for lossless audio codecs on Neuropixels 1.0 (~28% of raw), and a lossy WavPack-hybrid mode reaching CR 7.08 "without adverse effects on spike sorting accuracy or spike waveforms" — the lossy mode is out of scope for this pipeline's archive, which is the copy of record and keeps everything losslessly (2026-08-27 archival-and-compression design, §2). See the amendment to §3.3 above for what the 3.59 figure changes about the storage budget.
 
 ---
 
@@ -1183,6 +1191,8 @@ Written for a DataJoint first-timer. The four real DataJoint hazards, each with 
 - `wlpp pin` / `wlpp unpin` — warm-tier cache management
 
 **Daily status report:** ingested / populated / failed / **stuck** / quarantined, disk headroom, tier-D sessions, eye-detector disagreement outliers.
+
+> **Amended 2026-08-27 by the archival-and-compression design.** The daily report gains two more sections beyond the list above: the blocking reclamation condition — "A named list, not a boolean" — for each archived session not yet reclaimable (2026-08-27 archival-and-compression design, §5.2), and the list of sessions whose rig may clear its copy because their archive is verified (its §3.2) — the channel that tells a rig it is safe, since this pipeline cannot reach the rig itself and transport is pull-only.
 
 **MySQL backup is a first-class pipeline component.** Provenance lives in the DB. Nightly dump → NAS → cold tier, with restore tested on a schedule.
 

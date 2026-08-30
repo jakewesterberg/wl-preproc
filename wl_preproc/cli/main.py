@@ -12,6 +12,7 @@ there is one place to fetch every contract and only one definition of each.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -73,6 +74,73 @@ def tcp_port(value: str) -> int:
     return port
 
 
+def _session_key_from_dir(session_dir: Path) -> dict:
+    """`(subject, session_datetime)` for the session at `session_dir`, read
+    from its own manifest.
+
+    `--session` names a session DIRECTORY for `archive`, `reclaim` and `hold`
+    alike, the same thing `archive_session`'s own first parameter takes --
+    not a bare id. `wl_sync.session.SessionId` (what a bare id like
+    "2027-03-14_01" parses to) carries only a date and an index, never a
+    subject or a time-of-day, so a string in that shape alone cannot resolve
+    to the `(subject, session_datetime)` a database row is keyed on; the
+    directory's manifest already carries both.
+
+    Built through `manifest_session_key` -- the identical derivation
+    `ingest/landing.py::land_session` uses to write the `pipeline.Session`
+    row in the first place -- rather than re-deriving the two fields here, so
+    a session identified this way and one already landed by `wlpp ingest`
+    resolve to the exact same row rather than two keys that merely look
+    alike.
+    """
+    from wl_preproc.contracts.manifest import SessionManifest
+    from wl_preproc.contracts.paths import MANIFEST_FILENAME
+    from wl_preproc.ingest.landing import manifest_session_key
+
+    manifest = SessionManifest.from_yaml(
+        (session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    return manifest_session_key(manifest)
+
+
+def _staged_entries(
+    prefix: str = DEFAULT_PREFIX, nas_root: Path | None = None
+) -> list[TapeEntry] | None:
+    """Verified artifacts, shaped for `staging_manifest`.
+
+    The "every file verified" predicate this wraps is NOT re-derived here --
+    it lives once, at `cli/report.py::_verified_archives`, which this design
+    spec section 3.2's report section and this command both need identically
+    (a session `tape-manifest` stages for a cartridge and a session whose rig
+    may clear its copy are the same fact, read for two different audiences).
+    `main.py` already imports from `report.py` for the `report` subcommand
+    below, so this adds no new edge, just a second name crossing it.
+
+    Returns `None`, not `[]`, when `nas_root` is not given -- propagated
+    straight from `_verified_archives`' own fail-closed contract (Task 10
+    whole-branch review, BLOCKING fix 2: the completion sentinel could not
+    be confirmed on the NAS for anything, so nothing is "verified" here
+    either). The `tape-manifest` dispatch below prints this distinctly from
+    `staging_manifest([])`'s own "No sessions are staged for tape." --
+    "not checked" and "checked, genuinely zero" must never read the same.
+    """
+    from wl_preproc.archive.tape import TapeEntry
+    from wl_preproc.cli.report import _verified_archives
+
+    verified = _verified_archives(prefix=prefix, nas_root=nas_root)
+    if verified is None:
+        return None
+    return [
+        TapeEntry(
+            session_id=f"{row['subject']} @ {row['session_datetime']:%Y-%m-%d %H:%M:%S}",
+            artifact_path=row["archive_path"],
+            bytes=row["compressed_bytes"],
+            manifest_digest=row["manifest_digest"],
+        )
+        for row in verified
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wlpp")
     subparsers = parser.add_subparsers(dest="group", required=True)
@@ -108,6 +176,20 @@ def main(argv: list[str] | None = None) -> int:
     # DEFAULT_PREFIX, not a second literal: the prefix carries its own
     # separator and a copy here is exactly how `wlpplab` would come back.
     daemon_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # All three OPTIONAL, unlike `archive_p`'s own `--nas-root`/`--host`/
+    # `--share` below -- Controller ruling F. `archive_session` needs all
+    # three to publish anywhere, but the NAS this would publish to does not
+    # exist yet: a daemon stage that REQUIRED them would make `wlpp daemon`
+    # unrunnable today, which is worse than the stage not existing. Absent,
+    # `run_once` skips the archival stage entirely and says so in its
+    # returned dict -- see the `daemon` dispatch below. `type=Path`, not a
+    # bare string, for the identical reason `archive_p.add_argument
+    # ("--nas-root", ..., type=Path)` already uses it: every caller
+    # downstream (`nas_root_for_subject`, `record_archive_outcome`) does path
+    # arithmetic on it.
+    daemon_p.add_argument("--nas-root", type=Path, default=None)
+    daemon_p.add_argument("--host", default=None)
+    daemon_p.add_argument("--share", default=None)
 
     ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
     ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
@@ -123,9 +205,30 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("--root", required=True, help="directory holding session dirs")
     report_parser.add_argument("--out", default="/var/lib/wlpp/reports")
     report_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # Optional, matching `wlpp daemon`'s own `--nas-root` (Controller ruling
+    # F) for the identical reason: the NAS does not exist yet, so a report
+    # that REQUIRED it would be unrunnable today. Absent, `_verified_archives`
+    # cannot confirm the completion sentinel for anything and fails closed
+    # (Task 10 whole-branch review, BLOCKING fix 2) -- "Sessions whose rig
+    # may clear its copy" prints "not checked" rather than a fabricated zero.
+    report_parser.add_argument("--nas-root", type=Path, default=None)
 
+    # No section citation in the help string itself, deliberately (Task 10
+    # whole-branch review, round 3): "parent spec section 8/9" was wrong --
+    # neither §8 (NWB export and archival) nor §9 (Testing strategy) mentions
+    # the responder at all. The real citation is parent spec §11
+    # ("Integration with wl.works"), named directly by its own §3.1
+    # component table (row 4, "Responder" ... "(§11)") -- verified by
+    # reading §11 itself, not merely trusted from that cross-reference. A
+    # wrong section number shipped in `--help` output is worse than none,
+    # and this specific string has now been wrong twice; dropping the
+    # reference here removes the citation-staleness risk from this one
+    # user-facing string rather than re-deriving a number a future edit to
+    # either document can silently break again. The full protocol reasoning
+    # lives in §11 for anyone who goes looking, and in the protocol
+    # document itself (Task 10).
     responder_parser = subparsers.add_parser(
-        "responder", help="run the HTTP responder wl.works polls (design spec section 8/9)"
+        "responder", help="run the HTTP responder wl.works polls"
     )
     # No default -- controller ruling for Task 9: the port must be stated
     # identically in the systemd unit, the protocol document (Task 10) and
@@ -139,6 +242,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     responder_parser.add_argument("--root", required=True, help="directory holding session dirs")
     responder_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    archive_p = subparsers.add_parser("archive", help="compress and verify a session")
+    archive_p.add_argument("--session", required=True, help="path to the session directory")
+    archive_p.add_argument("--nas-root", required=True, type=Path)
+    archive_p.add_argument("--host", required=True)
+    archive_p.add_argument("--share", required=True)
+    archive_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    reclaim_p = subparsers.add_parser(
+        "reclaim", help="preview whether a session's scratch copy may be freed"
+    )
+    reclaim_p.add_argument("--session", required=True, help="path to the session directory")
+    # `--no-dry-run` + `--confirm`, not the brief's own `--dry-run` (Controller
+    # ruling B): `--dry-run store_true default=True` can never be turned off
+    # -- passing the flag sets True, omitting it leaves the default True.
+    # This is the same shape `delete` already uses (cli/main.py, `delete`
+    # parser above) so the two guardrails teach one convention, not two.
+    reclaim_p.add_argument("--no-dry-run", action="store_true")
+    reclaim_p.add_argument("--confirm", default=None)
+    reclaim_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    hold_p = subparsers.add_parser("hold", help="block or force reclamation")
+    hold_p.add_argument("--session", required=True, help="path to the session directory")
+    hold_p.add_argument("--verdict", choices=("hold", "force"), required=True)
+    hold_p.add_argument("--actor", required=True)
+    hold_p.add_argument("--reason", required=True)
+    hold_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
+    tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
+    # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
+    # in the `tape-manifest` dispatch branch with no `add_argument` for it
+    # anywhere -- the identical `AttributeError`-on-first-run shape
+    # Controller ruling C names for `archive`'s `--nas-root`/`--host`/
+    # `--share`, just not one of the five rulings that already lists it.
+    tape_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # Optional, matching `wlpp report`'s own `--nas-root` and for the
+    # identical reason (Controller ruling F's pattern): absent,
+    # `_staged_entries` cannot confirm the completion sentinel on the NAS
+    # for anything and fails closed (Task 10 whole-branch review, BLOCKING
+    # fix 2).
+    tape_p.add_argument("--nas-root", type=Path, default=None)
 
     try:
         args = parser.parse_args(argv)
@@ -193,12 +337,182 @@ def main(argv: list[str] | None = None) -> int:
               "section 10): the cascade above is preview-only.")
         return 0
 
+    if args.group == "archive":
+        from wl_preproc.archive.stage import (
+            archive_session,
+            nas_root_for_subject,
+            record_archive_outcome,
+        )
+
+        session_dir = Path(args.session)
+        # Key first, before `archive_session` runs: the NAS publish path
+        # below is namespaced by subject, which the CLI knows before
+        # publishing happens, not only after.
+        key = _session_key_from_dir(session_dir)
+        outcome = archive_session(
+            session_dir, nas_root_for_subject(args.nas_root, key), key, prefix=args.prefix
+        )
+        for verdict in outcome.verdicts:
+            if not verdict.matched:
+                print(f"MISMATCH {verdict.relative_path}")
+        print("verified" if outcome.all_matched else "NOT verified")
+
+        # The database bookkeeping is split across two functions in
+        # `archive/stage.py` now, not inline here (corrected 2026-08-27,
+        # Task 10 whole-branch review round 3: this comment used to send a
+        # reader to `record_archive_outcome` for "why the delete is
+        # unconditional", but that function no longer deletes anything --
+        # its own docstring now opens with "Does NOT delete a stale prior
+        # row itself"). `archive_session` (already called above) invalidates
+        # any stale prior `ArchiveArtifact` row itself, at the exact moment
+        # it is about to start mutating the NAS -- see that function's own
+        # comment for the "not earlier, not later" reasoning: a fault
+        # reading SCRATCH, before any NAS mutation, must leave a still-good
+        # prior row alone, while anything reaching the first NAS mutation
+        # must not. `record_archive_outcome` (below) then writes a fresh
+        # `ArchiveArtifact` row, with its `ArchiveVerification` children,
+        # only when `outcome.all_matched`. Both functions are the one shared
+        # body `wl_preproc.daemon`'s archival stage (Task 10) also calls,
+        # rather than a second, divergent implementation of the same
+        # sequence.
+        archive_path = record_archive_outcome(
+            key, outcome, args.nas_root, args.host, args.share, prefix=args.prefix
+        )
+
+        if not outcome.all_matched:
+            return 1
+
+        print(
+            f"archived: {key['subject']} @ {key['session_datetime']} -> "
+            f"{args.host}:{args.share}/{archive_path}"
+        )
+        return 0
+
+    if args.group == "reclaim":
+        from wl_preproc.archive import reclaim as archive_reclaim
+        from wl_preproc.archive.verify import _expected_digests
+
+        session_dir = Path(args.session)
+        key = _session_key_from_dir(session_dir)
+        # `_expected_digests` (package-internal, underscored) rather than a
+        # second walk of the DONE markers: it is the one place this
+        # repository counts a session's expected files (`archive/verify.py`),
+        # and re-deriving the count a second way here risks silently
+        # disagreeing with what `verify_store` itself checked against.
+        expected_file_count = len(_expected_digests(session_dir))
+        conditions = archive_reclaim.reclaim_conditions(
+            key, expected_file_count, prefix=args.prefix
+        )
+
+        print(f"reclaim preview for session {key['subject']} @ {key['session_datetime']}:")
+        # Every condition, not merely the blocking ones -- design spec
+        # section 5.2's own words: "A named list, not a boolean." (Review
+        # round: an earlier version of this comment misquoted this as "a
+        # NAMED LIST, not a verdict", a quotation that appears in no source
+        # -- exactly the falsehood class this project's own CLAUDE.md
+        # already names once.) The same reason `blocking()` alone is not
+        # enough for `wlpp reclaim`'s own preview: a reader must be able to
+        # tell "this passed" from "this was never evaluated", which only
+        # printing every row can show.
+        for condition in conditions:
+            status = "OK" if condition.passed else "BLOCKED"
+            detail = f" -- {condition.detail}" if condition.detail else ""
+            print(f"  [{status}] {condition.name}{detail}")
+
+        would_free = sum(p.stat().st_size for p in session_dir.rglob("*") if p.is_file())
+        verdict = "reclaimable" if archive_reclaim.reclaimable(conditions) else "NOT reclaimable"
+        print(f"\n{verdict} -- would free {would_free} bytes from {session_dir} if it were.")
+
+        if not args.no_dry_run:
+            print("\nthis was a DRY RUN — nothing was freed.")
+            print("re-run with --no-dry-run --confirm <session> to proceed.")
+            return 0
+        if args.confirm != args.session:
+            # "session path", not "session id": `--session` names a
+            # directory here (this file's own `--session` help text says so),
+            # never a bare id -- review round: an earlier version of this
+            # message copied `wlpp delete`'s wording verbatim, which is
+            # accurate for THAT command's own `--session` but not this one's.
+            print("\nrefusing: --confirm must repeat the session path exactly.")
+            return 2
+        # Controller ruling A: reclaim previews and deletes nothing in this
+        # build, on PURPOSE, regardless of --no-dry-run/--confirm -- not an
+        # oversight to fix later. Rehydration is not in this plan yet -- the
+        # PLAN's own "Not in this plan" section (`docs/superpowers/plans/
+        # 2026-08-27-archival-and-compression.md`, "Not in this plan"):
+        # "Rehydration -- decompress-to-scratch. [Parent design spec] §8.4
+        # names it as the path that makes reclamation safe, and it is the
+        # natural next plan." (Review round: an earlier version of this
+        # comment attributed that quote to "design spec section 8.4" of
+        # THIS archival design document, which has no such section -- its
+        # own `## 8` is "Schema", with no subsections at all, and every
+        # "§8.4"/"§8.5" this document itself uses names the PARENT spec,
+        # e.g. its own section 5's title, "Reclamation, and the reversal of
+        # §8.5".) Freeing a session's only fast copy with no built path back
+        # is the identical loss `wlpp delete`'s own guardrail refuses a few
+        # branches above, for the same reason.
+        print(
+            "\nthis build never performs a real reclamation: rehydration "
+            "(decompress-to-scratch), the path that makes freeing scratch "
+            "safe to reverse, is not built yet -- so the preview above is "
+            "as far as this command goes."
+        )
+        return 0
+
+    if args.group == "hold":
+        from wl_preproc.ingest import landing
+        from wl_preproc.schema import archive as archive_schema
+
+        session_dir = Path(args.session)
+        key = _session_key_from_dir(session_dir)
+        archive_schema.activate(prefix=args.prefix)
+        held_at = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
+        archive_schema.ReclamationHold.insert1(
+            {
+                **key,
+                "held_at": held_at,
+                "actor": args.actor,
+                "verdict": args.verdict,
+                "reason": args.reason,
+            }
+        )
+        print(
+            f"{args.verdict}: {key['subject']} @ {key['session_datetime']} "
+            f"recorded by {args.actor} at {held_at:%Y-%m-%d %H:%M:%S} -- {args.reason}"
+        )
+        return 0
+
+    if args.group == "tape-manifest":
+        from wl_preproc.archive.tape import staging_manifest
+
+        entries = _staged_entries(prefix=args.prefix, nas_root=args.nas_root)
+        if entries is None:
+            print(
+                "not checked: no --nas-root given; the completion sentinel "
+                "could not be confirmed on the NAS for any session, so "
+                "nothing is listed as staged until it can be."
+            )
+            return 0
+        print(staging_manifest(entries))
+        return 0
+
     if args.group == "daemon":
         from wl_preproc.daemon import run_once
 
-        report = run_once(prefix=args.prefix)
+        report = run_once(
+            prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share
+        )
         print(f"populated: {report['populated']}")
         print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
+        # `None`, not `0`: `run_once` returns `None` specifically when
+        # archival was never configured, so this is never collapsed into the
+        # same line a genuinely-ran-and-found-nothing pass would print --
+        # Controller ruling F's own words, "a stage that silently does
+        # nothing is the shape this project has already been bitten by."
+        if report["archived"] is None:
+            print("archived: skipped (no --nas-root/--host/--share)")
+        else:
+            print(f"archived: {report['archived']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:
@@ -220,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
         # branch is ever reached, for every subcommand, not just `ingest`.
         # Found by running the full suite after adding this branch: every CLI
         # guardrail test failed with exactly that traceback.
-        from wl_preproc.ingest.watcher import scan_once
+        from wl_preproc.ingest.watcher import Outcome, scan_once
 
         result = scan_once(Path(args.root), prefix=args.prefix, verify=not args.no_verify)
         # Outcomes are printed FIRST, unconditionally, before root_error is
@@ -233,6 +547,30 @@ def main(argv: list[str] | None = None) -> int:
         # dropped from the one place an operator would see it.
         for session_dir, outcome in sorted(result.outcomes.items()):
             print(f"  [{outcome}] {session_dir}")
+        # A refused scan WITH WAITING SESSIONS admitted nothing at all --
+        # every one of them was turned away by scratch headroom
+        # (watcher.refuses_new_sessions), never evaluated -- and exiting 0
+        # here would read exactly like a scan that ingested cleanly to
+        # anything watching this command's exit code (a cron wrapper, a
+        # systemd unit). Checked independently of root_error below: the two
+        # name different faults (tight scratch vs. an unreadable root), and
+        # either one, or both at once, must be non-zero.
+        #
+        # A root with NO waiting candidates stays quiet here on purpose,
+        # even when scratch is tight: `outcomes` is then empty regardless of
+        # `refuses_new_sessions`, so there is nothing to report turning
+        # away, and `responder/health.py` already surfaces low headroom as
+        # `degraded` on every wl.works poll (parent spec section 8.4's "and
+        # alerts" half) -- a second alerting path here would be a second
+        # definition of "is this host degraded", which `_featured_key`'s own
+        # docstring says this project has already found in four separate
+        # shapes.
+        refused = Outcome.REFUSED in result.outcomes.values()
+        if refused:
+            print(
+                f"error: {args.root} was not scanned: scratch headroom is below the "
+                "floor or could not be measured; refusing new sessions"
+            )
         if result.root_error is not None:
             # An unreadable, missing, or mistyped --root produces the same
             # empty outcomes dict a genuinely empty root does -- exit 0, no
@@ -241,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
             # reporting success is exactly "a session simply never appears"
             # arriving through the front door instead of a stalled transfer.
             print(f"error: {args.root} was not fully scanned: {result.root_error}")
+        if refused or result.root_error is not None:
             return 1
         return 0
 
@@ -257,7 +596,9 @@ def main(argv: list[str] | None = None) -> int:
         # found and fixed for `ingest`; the brief for this task repeated it.
         from wl_preproc.cli.report import write_report
 
-        path = write_report(Path(args.out), Path(args.root), prefix=args.prefix)
+        path = write_report(
+            Path(args.out), Path(args.root), prefix=args.prefix, nas_root=args.nas_root
+        )
         print(path.read_text(), end="")
         return 0
 

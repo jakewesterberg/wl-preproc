@@ -17,6 +17,22 @@ from typing import NamedTuple
 
 import blake3 as _blake3
 
+# A layering inversion: `wl_preproc.ingest` (this package) now depends on
+# `wl_preproc.cli` (nominally the outer layer wrapping this one), not the
+# usual direction. Brief-mandated for Task 6 (parent spec section 8.4 --
+# qualified 2026-08-27, Task 10 ruling G; see `refuses_new_sessions`'s own
+# docstring below for why "design spec" alone stopped being unambiguous) --
+# moving `scratch_headroom` out of the CLI package to fix the layering
+# properly is a refactor beyond this task's scope, not something to do
+# unilaterally here. Safe today only because `wl_preproc/cli/__init__.py`
+# is empty and `doctor.py` itself imports nothing from `wl_preproc` at
+# module level (only `shutil` -- its `datajoint`/`wl_preproc.daemon`
+# imports are local, inside `run_checks`, confirmed by reading the file
+# directly). This becomes a real import cycle the day `doctor.py`, or
+# anything `wl_preproc/cli/__init__.py` comes to import, gains a
+# module-level import from `wl_preproc.ingest` -- worth knowing before
+# adding one, not a reason to avoid this one.
+from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.contracts.manifest import SCHEMA_VERSION, SessionManifest
 from wl_preproc.contracts.paths import MANIFEST_FILENAME, SessionLayout
 from wl_preproc.ingest import landing
@@ -60,6 +76,38 @@ class Outcome(StrEnum):
     # invisible to every report section. See `_scan_one`'s outer boundary,
     # which is what every OTHER unclassified failure reaches instead.
     DEFERRED = "deferred"
+    # Applied to every waiting candidate at once, from `scan_once`, when
+    # `refuses_new_sessions(root)` says scratch is too tight to accept
+    # another session -- 2026-08-27 archival-and-compression design section
+    # 6, "Backpressure at ingest" (which quotes parent spec section 8.4's
+    # own sentence on this; see `refuses_new_sessions`'s docstring below).
+    # Corrected 2026-08-27, Task 10 ruling G: "Backpressure at ingest" is
+    # THIS section's own title, not the parent's -- the parent's section 8.4
+    # is titled "Compression and archival" and has no sub-heading of its
+    # own, so citing it alongside that title, unqualified, named the wrong
+    # document even before a second spec existed to be ambiguous with.
+    # Unlike QUARANTINED, nothing about any ONE session's own files is
+    # wrong; unlike INCOMPLETE/STALLED, this is not a property of a
+    # session's own on-disk state at all. And unlike DEFERRED -- also
+    # produced inside `scan_once`, also not a session-caused defect -- this
+    # is not decided per session: it is a single scan-wide admission
+    # decision, made once before any candidate's manifest is actually read,
+    # and applied identically to every one of them regardless of what any
+    # individual candidate contains. (`_candidate_dirs` has already
+    # confirmed each candidate's manifest FILE exists, by stat, before this
+    # decision runs -- this precedes reading what is IN it, not every
+    # filesystem call that has touched the directory.) A session refused
+    # this way may be perfectly complete and valid; it was never evaluated.
+    #
+    # REFUSED has no durable row anywhere -- no Ingestion, no Quarantine --
+    # so, exactly like DEFERRED, it is invisible to every report section
+    # built from stored rows: only this one scan's own `ScanResult.
+    # outcomes` says it happened. The next `scan_once` call re-evaluates
+    # every still-waiting candidate from scratch once headroom clears,
+    # exactly as a deferred session is retried -- there is nothing here for
+    # a human to triage, only scratch to free. See `scan_once` and
+    # `refuses_new_sessions`.
+    REFUSED = "refused"
 
 
 class ScanResult(NamedTuple):
@@ -523,6 +571,64 @@ def _scan_one(
         return Outcome.QUARANTINED
 
 
+def refuses_new_sessions(root: Path) -> bool:
+    """True when scratch is too tight to accept another session at `root`.
+
+    Parent spec section 8.4: the watcher "refuses new sessions below a
+    scratch high-water mark and alerts, rather than filling scratch and
+    stalling mid-sort".
+
+    Qualified 2026-08-27 (Task 10, Controller ruling G) from this file's
+    prior unqualified "design spec section 8.4": Task 6 wrote that when this
+    repository had exactly one design spec, and it was unambiguous then. The
+    2026-08-27 archival-and-compression design now exists too, and its own
+    `## 8` is "Schema" with no subsections at all -- so "design spec section
+    8.4", read today, could misname either document depending on which one a
+    reader assumes. The sentence above is genuinely the parent's, verbatim
+    (`2026-08-12-wl-preproc-design.md`, its own section 8.4), so this is a
+    qualification, not a correction -- Task 9's review found and fixed the
+    identical shape elsewhere first (`cli/main.py`, `cli/report.py`) and
+    adopted this same "parent spec section N" form. The archival design's
+    own `## 6. Backpressure at ingest` quotes this identical sentence too,
+    for the code path it adds on top of this one (`Outcome.REFUSED`, above).
+
+    **The threshold is `doctor.scratch_headroom()`'s and is not redefined
+    here.** `responder/health.py::_featured_key` already turns the same
+    `headroom_ok` into a `degraded` verdict that wl.works sees on its next
+    poll -- which is the "and alerts" half, needing no new mechanism here,
+    and matters because transport is pull-only. A second threshold in this
+    module would be a second definition of "is this host degraded", which
+    that function's own docstring names as a defect this project has
+    already found in four separate shapes.
+
+    `root`, not `scratch_headroom`'s own `/` default: that default is a
+    proxy "only for callers with nothing better" (that function's own
+    docstring), and this caller already holds a real storage root --
+    `scan_once`'s own first argument, passed through unchanged. `wl_preproc/
+    cli/report.py`'s daily-report call made and fixed this exact mistake
+    already, measuring "a different disk than the one the question is
+    about, on any host where scratch is its own mount" (that call site's own
+    comment).
+
+    Fails closed on an unmeasurable disk: `scratch_headroom` "raises
+    whatever `os.statvfs` raises for a missing or unsearchable path" (its
+    own docstring), and unhandled that would escape straight out of
+    `scan_once` and abort the whole scan -- the exact blast radius
+    `_scan_one`'s boundary exists to prevent, arriving through a door that
+    boundary does not cover, since this decision is made before any
+    candidate is even opened for evaluation. Refusing on that failure,
+    rather than admitting, is the deliberately asymmetric choice: a refusal
+    pauses the pipeline visibly while the rig still holds the data, whereas
+    admitting on a disk of unknown headroom risks the very mid-sort stall on
+    a full volume that parent spec section 8.4 exists to prevent.
+    """
+    try:
+        _free_gib, headroom_ok = scratch_headroom(str(root))
+    except OSError:
+        return True
+    return not headroom_ok
+
+
 def scan_once(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
@@ -546,10 +652,25 @@ def scan_once(
         at = at.replace(tzinfo=datetime.UTC)
 
     candidates, root_fault = _candidate_dirs(Path(root))
+    root_error = f"{type(root_fault).__name__}: {root_fault}" if root_fault else None
+
+    if refuses_new_sessions(Path(root)):
+        # Parent spec section 8.4: refuse every waiting candidate rather
+        # than admit one and risk stalling mid-sort on a full scratch disk
+        # hours later. `root_error` is preserved unchanged here -- it
+        # describes whatever stopped `_candidate_dirs` from listing `root`
+        # itself, a fact this branch does not touch, so a root that is BOTH
+        # unreadable and refused for headroom still reports the walk fault
+        # rather than losing it to this branch.
+        return ScanResult(
+            outcomes={str(session_dir): Outcome.REFUSED for session_dir in candidates},
+            root_error=root_error,
+        )
+
     return ScanResult(
         outcomes={
             str(session_dir): _scan_one(session_dir, prefix, verify, at)
             for session_dir in candidates
         },
-        root_error=f"{type(root_fault).__name__}: {root_fault}" if root_fault else None,
+        root_error=root_error,
     )

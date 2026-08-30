@@ -786,3 +786,82 @@ def test_a_stale_reservation_is_both_counted_and_visible_to_the_snapshot(
         ReportJobsProbeDerived.jobs.drop()
         ReportJobsProbeDerived.drop_quick()
         ReportJobsProbeSource.drop_quick()
+
+
+def test_an_orphaned_archiving_directory_is_named_in_the_disk_section(scanned):
+    """Task 10 whole-branch review, cheap correction: `archive/stage.py`'s
+    `scratch = session_dir.parent / f".{session_dir.name}.archiving"` is
+    reaped only when `all_matched` -- a session whose most recent archive
+    attempt failed verification leaves this directory sitting on scratch,
+    a full-size compressed copy nothing named anywhere before this. No real
+    `archive_session` call is run here (this suite already covers that path
+    end to end, expensively, in `tests/archive/test_stage.py`); this test's
+    only claim is about `build_report`'s own rendering, so the directory is
+    created directly, matching the exact name `archive_session` would have
+    used for this session.
+    """
+    root, prefix = scanned("orph1")
+    session_id = CI_RECIPE.session_id
+    scratch = root / f".{session_id}.archiving"
+    scratch.mkdir()
+    (scratch / "some-chunk.bin").write_bytes(b"not a real zarr chunk")
+
+    body = build_report(root, prefix=prefix)
+
+    section = _section(body, "Disk")
+    # The specific phrase, not the bare word "orphaned": pytest's own
+    # `tmp_path` is named after the TEST FUNCTION, and this test's own name
+    # contains "orphaned" -- a bare substring check against `section` would
+    # pass on the temp path alone, proving nothing about the report line
+    # (found directly: the negative test below failed on exactly this before
+    # its own assertion was narrowed the identical way).
+    assert "orphaned `.archiving`" in section
+    assert str(scratch) in section
+
+
+def test_no_orphaned_archiving_directory_is_silent_in_the_disk_section(scanned):
+    """The negative direction, pinned separately rather than assumed: a
+    session with no leftover `.archiving` directory must not print the
+    orphaned-directory line at all -- proving it is genuinely conditional
+    on what `_orphaned_archiving_dirs` finds, not a hardcoded string every
+    report carries regardless.
+
+    Checks the specific phrase, not the bare word "orphaned": this test's
+    OWN name contains "orphaned", and pytest names `tmp_path` after the
+    test function, so a bare substring check against `section` (which
+    includes the scratch path) passed on the temp path alone before this
+    fix -- proving nothing about whether the report line itself appeared,
+    caught by reading the actual failure rather than assuming the first
+    version was right.
+    """
+    root, prefix = scanned("orph2")
+
+    body = build_report(root, prefix=prefix)
+
+    section = _section(body, "Disk")
+    assert "orphaned `.archiving`" not in section
+
+
+def test_no_nas_root_reports_not_checked_rather_than_a_fabricated_zero(scanned):
+    """BLOCKING fix 2's own fail-closed contract, pinned directly (Task 10
+    whole-branch review, final gate: "no test defended it" -- confirmed by
+    the reviewer swapping `_verified_archives` to `return []` instead of
+    `None` and finding all 883 tests still passed).
+
+    Checks three independent things a mutation could break separately:
+    the heading carries no count suffix at all (not even "— 0"), the
+    dashed-count form does not appear ANYWHERE in the body (catching a
+    mutation that adds the count back without touching the "not checked"
+    line), and the section body says "not checked" rather than "- none" --
+    the exact "checked, genuinely zero" collapse this test exists to
+    forbid on the one channel that tells a rig to delete data.
+    """
+    root, prefix = scanned("nonasrt1")
+
+    body = build_report(root, prefix=prefix)
+
+    assert "\n## Sessions whose rig may clear its copy\n" in body
+    assert "## Sessions whose rig may clear its copy —" not in body
+    section = _section(body, "Sessions whose rig may clear its copy")
+    assert "not checked" in section
+    assert "- none" not in section
