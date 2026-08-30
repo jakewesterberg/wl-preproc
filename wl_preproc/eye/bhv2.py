@@ -89,16 +89,89 @@ per calibration method) and `MLConfig.EyeCalibration` (the active method,
 1-3) directly. So this module looks for those three fields of `MLConfig`,
 not for a `ScreenInfo` block.
 
-**MonkeyLogic's own calibration is not always six numbers.** Method 1 ("Raw
-Signal") stores an `offset` (2 doubles); method 2 ("Origin & Gain") stores
-`origin`, `gain` and `rotation` (5 doubles, from `mlcalibrate.m`); method 3
-("2-D Spatial Transformation") stores a `projective_transform` object
-dominated by a function handle and fit data, essentially opaque to a reader
-this narrow. `Bhv2Calibration.a` is therefore whatever plain `double`
-fields this module finds as DIRECT children of the active method's struct,
-in field order, concatenated -- not asserted to be six of anything.
-`as_affine_map` is where a six-number `a` becomes usable and anything else
-is declined; see its own docstring.
+**MonkeyLogic's own calibration is not always six numbers, and method 2's real
+shape is UNVERIFIED.** Method 1 ("Raw Signal") stores an `offset` (2
+doubles) -- confirmed directly against a real file, below. Method 2 ("Origin
+& Gain") does NOT verifiably store "origin, gain and rotation (5 doubles)":
+an earlier version of this docstring made that claim from `mlcalibrate.m`
+alone, which is wrong -- `mlcalibrate.m` only reads a SUBSET of the fields
+the calibration-AUTHORING tool actually creates. `mlcalibrate_origin_gain.m`'s
+own `init_tform()` initialises 16 fields: 14 plain `double`
+(`operator_view`, `origin`, `gain`, `rotation`, `rotation_t`,
+`rotation_rev_t`, `fixshape`, `fixcolor`, `fixsize`, `fixinterval`,
+`windowsize`, `waittime`, `holdtime`, `jittertolerance` -- 24 numbers by
+direct count), one `char` (`fiximage`), and one nested struct
+(`RewardFuncArgs`). None of the 15 real files checked (below) use method 2,
+so whether the SAVED `EyeTransform{2}` mirrors this UI-authoring-time struct
+or a leaner runtime-only subset is not established either way -- this
+module states only what `init_tform()` itself contains, not what ends up on
+disk. Method 3 ("2-D Spatial Transformation") stores a `projective_transform`
+object dominated by a function handle and fit data, likewise unverified and
+essentially opaque to a reader this narrow. `Bhv2Calibration.a` is therefore
+whatever plain `double` fields this module finds as DIRECT children of the
+active method's struct, in field order, concatenated -- not asserted to be
+six of anything, for any method. `as_affine_map` is where a six-number `a`
+becomes usable and anything else is declined; see its own docstring.
+
+**`PixelsPerDegree` is two numbers, not one.** Confirmed directly against a
+real file (below): `(41.24200792470175, -41.24200792470175)`. This matches
+`mlconfig.m`'s own getter, `val = [1 -1] * pixels_in_diagonal / viewing_deg`
+-- equal magnitude, sign-flipped by construction, not two independent
+measurements. `Bhv2Calibration.pixels_per_degree` takes element 0 (the
+positive one) and discards element 1, which loses no information given the
+sign relationship is fixed -- and matches NIMH ML's own convention:
+`mlscreen.m` does exactly the same thing
+(`obj.PixelsPerDegree = MLConfig.PixelsPerDegree(1);`).
+
+**`EyeTransform` decode is narrowed to the selected method only.**
+`EyeCalibration` (1-3) is read before `EyeTransform` is reached -- true in
+the field order MonkeyLogic actually writes (`mlconfig.m`'s own property
+declaration lists `EyeCalibration` before `EyeTransform`, and every one of
+15 real files checked follows it) -- and only that one cell is materialised;
+the other two are walked past via `_skip_value`, never decoded. This is
+foremost an EFFICIENCY change, stated precisely rather than overclaimed: in
+this module's own implementation, `_skip_value` is exactly as exposed as
+full materialisation to a length overrun or an unrecognised type tag inside
+a compound block, since neither can be skipped without being walked --
+nothing in the format records a compound block's total byte size (`_walk`'s
+docstring) -- so an anomalous UNSELECTED cell can still raise
+`Bhv2Unreadable` either way. What narrowing buys: two-thirds of
+`EyeTransform` is no longer decoded into Python objects that would be
+discarded unread, and every unselected cell now goes through the one code
+path (`_skip_value`) every other unwanted block in the file already uses,
+rather than a second, less-exercised path (full materialisation) that used
+to run for cells nobody asked for. If `EyeTransform` is somehow reached
+before `EyeCalibration` is known -- an ordering never observed -- this
+declines rather than guesses: no cell is selected, and `a` comes back
+`None`, the same as absence.
+
+**Real files exist; this module has been run against one.** The GitHub
+mirror cited above (`Doug1983/MonkeyLogic`) ships 15 real `.bhv2` files
+under `task/**/*.bhv2` -- genuine recordings, not this module's own
+synthetic round-trip fixture (`tests/eye/test_bhv2.py`). None is committed
+to this repository: the mirror declares no licence (`license: None` via the
+GitHub API, no `LICENSE`/`COPYING`/`NOTICE` file anywhere in its tree) and
+the official <https://monkeylogic.nimh.nih.gov> site states no explicit
+public-domain or licensing terms either (checked `about.html` and
+`download.html`, both 2026-08-30, for "licen"/"copyright"/"public
+domain"/"government work" -- zero hits), so redistribution rights are
+unclear; see the task-6 report for the fuller reasoning and the open
+request for a ruling. The smallest of the 15
+(`task/UE4_Test/171213_Me_UE_Test.bhv2`, 6,586 bytes) was fetched and run
+against this module locally -- never committed, deleted after this check --
+and parsed in well under 1 ms: `present=True`, `a=(0.0, 0.0)` (method 1,
+`EyeTransform{1}.offset`), `pixels_per_degree=41.24200792470175` -- the
+exact figures cited in the two paragraphs above.
+
+**`mlbhv2.m`'s legacy compatibility branch is not implemented.**
+`read_variable` has `if strncmp(type,'ml',2), type = 'struct'; end`,
+implying an older writer tagged struct-like blocks with an `'ml'`-prefixed
+class-name string instead of the literal tag `'struct'`. This module
+requires `type_tag == "struct"` exactly, so a file using that legacy
+convention would be misclassified as unreadable rather than as a struct --
+but that failure is a caught, catchable `Bhv2Unreadable` (unrecognised type
+tag), not a silent misparse. Not observed in any of the 15 real files
+checked (all use the literal `'struct'` tag).
 """
 
 from __future__ import annotations
@@ -124,15 +197,13 @@ _PRIMITIVE_ITEMSIZE: dict[str, int] = {
     "int64": 8, "uint64": 8, "double": 8,
 }
 
-# See the module docstring's penultimate section for why these are "MLConfig"
-# and its own fields, not the "ScreenInfo" name this task's brief used.
+# See the module docstring's "Which top-level block" section for why these
+# are "MLConfig" and its own fields, not the "ScreenInfo" name this task's
+# brief originally used.
 _TOP_LEVEL_BLOCK = "MLConfig"
 _PIXELS_PER_DEGREE_FIELD = "PixelsPerDegree"
 _EYE_CALIBRATION_FIELD = "EyeCalibration"
 _EYE_TRANSFORM_FIELD = "EyeTransform"
-_MLCONFIG_WANTED = frozenset(
-    {_PIXELS_PER_DEGREE_FIELD, _EYE_CALIBRATION_FIELD, _EYE_TRANSFORM_FIELD}
-)
 
 
 class Bhv2Unreadable(ValueError):
@@ -179,18 +250,7 @@ def read_calibration(path: str | Path) -> Bhv2Calibration:
     except FileNotFoundError:
         return Bhv2Calibration(present=False, a=None, pixels_per_degree=None)
 
-    fields = _walk(buf)
-
-    pixels_per_degree: float | None = None
-    a: tuple[float, ...] | None = None
-
-    if fields is not None:
-        ppd_value = fields.get(_PIXELS_PER_DEGREE_FIELD)
-        if isinstance(ppd_value, tuple) and ppd_value:
-            pixels_per_degree = float(ppd_value[0])
-
-        a = _extract_calibration(fields)
-
+    pixels_per_degree, a = _walk(buf)
     return Bhv2Calibration(present=a is not None, a=a, pixels_per_degree=pixels_per_degree)
 
 
@@ -199,9 +259,11 @@ def as_affine_map(cal: Bhv2Calibration) -> AffineMap | None:
     numbers.
 
     MonkeyLogic's own calibration is not always six numbers (module
-    docstring): Origin & Gain gives five, the 2-D Spatial Transformation
-    method gives however many plain `double` fields happen to sit directly
-    on an otherwise-opaque projective/polynomial object. Forcing a
+    docstring): Raw Signal gives two, Origin & Gain's real saved shape is
+    unverified but its calibration-authoring UI alone initialises on the
+    order of twenty numbers, and the 2-D Spatial Transformation method gives
+    however many plain `double` fields happen to sit directly on an
+    otherwise-opaque projective/polynomial object. Forcing a
     mismatched count into the documented `(a00, a01, b0, a10, a11, b1)`
     slots would silently misassign a gain term to an offset, or drop one
     entirely -- worse than declining. Task 7 (design spec section 4.5)
@@ -214,63 +276,119 @@ def as_affine_map(cal: Bhv2Calibration) -> AffineMap | None:
     return AffineMap(a=(a0, a1, a2, a3, a4, a5))
 
 
-def _extract_calibration(fields: dict[str, object]) -> tuple[float, ...] | None:
-    """The active calibration method's own `double` fields, in field order.
-
-    "Active" comes from `EyeCalibration` (1-3, MATLAB-indexed) selecting one
-    of `EyeTransform`'s three cells (module docstring). Fields of that
-    struct that are not plain `double` (a `char` note, a nested struct or
-    cell) are not re-descended -- this module goes no deeper than the
-    method's own immediate fields.
+def _harvest_doubles(materialized_struct: object) -> list[float]:
+    """All plain `double` fields of a `_materialize`d struct's first (and,
+    for everything this module reads, only) array element, in field order,
+    concatenated. `materialized_struct` is `_materialize`'s own struct
+    return shape -- a list of per-element `{field_name: value}` dicts,
+    e.g. `EyeTransform`'s selected cell -- or anything else (`None`, an
+    empty list, a non-struct value), which yields no doubles rather than
+    raising. A `char` field or a nested struct/cell is present in the dict
+    but is not itself a `tuple[float, ...]`, so it is skipped here, not
+    re-descended -- this module goes no deeper than the method's own
+    immediate fields.
     """
-    method_value = fields.get(_EYE_CALIBRATION_FIELD)
-    transform_value = fields.get(_EYE_TRANSFORM_FIELD)
-    if not (isinstance(method_value, tuple) and method_value):
-        return None
-    if not isinstance(transform_value, list):
-        return None
-
-    method_index = int(round(method_value[0])) - 1  # MATLAB is 1-based.
-    if not (0 <= method_index < len(transform_value)):
-        return None
-
-    chosen = transform_value[method_index]
-    if not (isinstance(chosen, list) and chosen and isinstance(chosen[0], dict)):
-        return None  # the chosen cell was not a struct -- nothing to harvest
-
+    if not (isinstance(materialized_struct, list) and materialized_struct):
+        return []
+    fields = materialized_struct[0]
+    if not isinstance(fields, dict):
+        return []
     harvested: list[float] = []
-    for value in chosen[0].values():
+    for value in fields.values():
         if isinstance(value, tuple) and value and all(isinstance(v, float) for v in value):
             harvested.extend(value)
-    return tuple(harvested) if harvested else None
+    return harvested
 
 
-def _walk(buf: bytes) -> dict[str, object] | None:
-    """Every top-level block, until EOF; `MLConfig`'s wanted fields if found.
+def _extract_mlconfig(
+    buf: bytes, offset: int, nfield: int, n_elements: int
+) -> tuple[int, float | None, tuple[float, ...] | None]:
+    """One pass over `MLConfig`'s own fields, in wire order.
+
+    `PixelsPerDegree` and `EyeCalibration` are small and always
+    materialised. `EyeTransform` -- three calibration-method structs, only
+    one of them active -- is handled specially: by the time it is reached,
+    `EyeCalibration` has (in the field order MonkeyLogic actually writes,
+    and every one of 15 real files checked -- module docstring) already
+    been seen, so only the SELECTED cell (1-based, MATLAB-indexed) is
+    materialised; the other two are walked past by `_skip_value`, never
+    decoded (module docstring's efficiency note -- this narrows which code
+    path an unselected cell's bytes go through, it does not make an
+    unselected cell immune to a length overrun or an unrecognised type
+    tag, since nothing can be skipped without being walked). If
+    `EyeTransform` is somehow reached before `EyeCalibration` is known --
+    an ordering never observed -- no cell is selected and `a` comes back
+    `None`, the same as absence, rather than guessing.
+
+    `MLConfig` is realistically always a 1x1 struct (one configuration per
+    session), but `n_elements` is still honoured for any additional
+    elements' own bytes to be walked correctly -- only element 0's values
+    are kept, matching what a struct array walk already does everywhere
+    else in this module.
+    """
+    pixels_per_degree: float | None = None
+    a: tuple[float, ...] | None = None
+
+    for element_index in range(n_elements):
+        element_ppd: float | None = None
+        method_index: int | None = None
+        harvested: list[float] | None = None
+
+        for _ in range(nfield):
+            offset, name, type_tag, dims = _read_header(buf, offset)
+            if name == _PIXELS_PER_DEGREE_FIELD:
+                offset, value = _materialize(buf, offset, type_tag, dims)
+                if isinstance(value, tuple) and value:
+                    element_ppd = float(value[0])
+            elif name == _EYE_CALIBRATION_FIELD:
+                offset, value = _materialize(buf, offset, type_tag, dims)
+                if isinstance(value, tuple) and value:
+                    method_index = int(round(value[0])) - 1  # MATLAB is 1-based.
+            elif name == _EYE_TRANSFORM_FIELD and type_tag == "cell":
+                selected: object = None
+                for cell_index in range(_prod(dims)):
+                    offset, _ename, etype, edims = _read_header(buf, offset)
+                    if method_index is not None and cell_index == method_index:
+                        offset, selected = _materialize(buf, offset, etype, edims)
+                    else:
+                        offset = _skip_value(buf, offset, etype, edims)
+                harvested = _harvest_doubles(selected)
+            else:
+                offset = _skip_value(buf, offset, type_tag, dims)
+
+        if element_index == 0:
+            pixels_per_degree = element_ppd
+            a = tuple(harvested) if harvested else None
+
+    return offset, pixels_per_degree, a
+
+
+def _walk(buf: bytes) -> tuple[float | None, tuple[float, ...] | None]:
+    """Every top-level block, until EOF; `MLConfig`'s `PixelsPerDegree` and
+    calibration if found, else `(None, None)`.
 
     Every OTHER top-level block (`BehavioralCodes`, `AnalogData`, trial
     structure, and anything else) is walked structurally -- struct and cell
     blocks cannot be skipped by arithmetic alone, since nothing in the
-    format records a compound block's total byte size (module docstring) --
-    but never materialised into Python values. That is what "skip by its
-    declared length without parsing it" means here for a compound block: its
-    bytes are consumed, never its meaning.
+    format records a compound block's total byte size -- but never
+    materialised into Python values. That is what "skip by its declared
+    length without parsing it" means here for a compound block: its bytes
+    are consumed, never its meaning.
     """
     offset = 0
     n = len(buf)
-    mlconfig_fields: dict[str, object] | None = None
+    found = False
+    pixels_per_degree: float | None = None
+    a: tuple[float, ...] | None = None
     while offset < n:
         offset, name, type_tag, dims = _read_header(buf, offset)
         if name == _TOP_LEVEL_BLOCK and type_tag == "struct":
             offset, nfield = _read_uint64(buf, offset)
-            offset, elements = _read_struct_fields(
-                buf, offset, nfield, _prod(dims), wanted=_MLCONFIG_WANTED
-            )
-            if elements:
-                mlconfig_fields = elements[0]
+            offset, pixels_per_degree, a = _extract_mlconfig(buf, offset, nfield, _prod(dims))
+            found = True
         else:
             offset = _skip_value(buf, offset, type_tag, dims)
-    return mlconfig_fields
+    return (pixels_per_degree, a) if found else (None, None)
 
 
 def _require(buf: bytes, offset: int, nbytes: int) -> None:

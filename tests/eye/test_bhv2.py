@@ -99,7 +99,13 @@ def _pack_cell_block(name: str, element_blocks: list[bytes]) -> bytes:
 
 
 def _write_minimal_bhv2(path) -> None:
-    """A synthetic but format-correct `.bhv2`, for lack of a real one.
+    """A synthetic but format-correct `.bhv2`, for lack of a real one --
+    though not for lack of trying: see `wl_preproc/eye/bhv2.py`'s module
+    docstring's "Real files exist" section for the 15 genuine recordings
+    found (via the same GitHub mirror this format was verified against) and
+    run against this reader directly, and for why none of them is the
+    fixture here instead (an unresolved redistribution-rights question, not
+    a technical one -- see the task-6 report).
 
     Layout (see `wl_preproc/eye/bhv2.py`'s module docstring for why these
     are the block/field names looked for): a `BehavioralCodes` block before
@@ -107,14 +113,18 @@ def _write_minimal_bhv2(path) -> None:
     calibration, proving the walk passes over both without materialising
     them; then `MLConfig` itself, with one field before the three wanted
     ones (`SomeOtherField`, proving unwanted fields inside `MLConfig` are
-    ALSO skipped, not just unwanted top-level blocks); `PixelsPerDegree`;
-    `EyeCalibration` selecting method 2 (1-based, MATLAB's own indexing);
-    and `EyeTransform`, a `cell(1,3)` whose non-selected cells (1 and 3) are
-    single-field decoys and whose selected cell (2) has FOUR fields --
-    `origin`, `gain`, a `char` field (`note`) that must be skipped rather
-    than corrupting the harvested tuple, and `extra` -- to prove the
-    `double`-field harvest spans multiple fields, preserves field order,
-    and ignores a non-`double` field interleaved between them.
+    ALSO skipped, not just unwanted top-level blocks); `PixelsPerDegree` as
+    the real two-element, sign-flipped pair a genuine file contains (module
+    docstring), not a bare scalar; `EyeCalibration`, selecting method 2
+    (1-based, MATLAB's own indexing) and placed BEFORE `EyeTransform` --
+    the field order every real file checked uses, and the one this reader's
+    selective `EyeTransform` decode depends on; and `EyeTransform`, a
+    `cell(1,3)` whose non-selected cells (1 and 3) are single-field decoys
+    and whose selected cell (2) has FOUR fields -- `origin`, `gain`, a
+    `char` field (`note`) that must be skipped rather than corrupting the
+    harvested tuple, and `extra` -- to prove the `double`-field harvest
+    spans multiple fields, preserves field order, and ignores a
+    non-`double` field interleaved between them.
     """
     behavioral_codes = _pack_struct_block(
         "BehavioralCodes", [_pack_double_block("CodeNumbers", (9.0, 18.0))]
@@ -139,7 +149,11 @@ def _write_minimal_bhv2(path) -> None:
         "MLConfig",
         [
             _pack_double_block("SomeOtherField", (7.0,)),
-            _pack_double_block("PixelsPerDegree", (45.859,)),
+            # (45.859, -45.859): the docs page's own example magnitude, kept
+            # for continuity with earlier drafts of this fixture, in the
+            # real equal-magnitude-sign-flipped SHAPE a genuine file uses
+            # (confirmed directly against one: (41.242..., -41.242...)).
+            _pack_double_block("PixelsPerDegree", (45.859, -45.859)),
             _pack_double_block("EyeCalibration", (2.0,)),
             eye_transform,
         ],
@@ -153,7 +167,13 @@ def _write_minimal_bhv2(path) -> None:
 def test_the_reader_recovers_what_the_minimal_writer_encoded(tmp_path):
     """The round trip this task's own instructions call for in place of a
     real sample file (see `_write_minimal_bhv2`'s docstring for why that
-    substitution is acceptable here and nowhere else in this plan)."""
+    substitution is acceptable here and nowhere else in this plan -- and,
+    now, why a genuine one exists but still is not this fixture). Takes
+    `pixels_per_degree` == 45.859 (element 0 of the fixture's own
+    `(45.859, -45.859)` pair) as READING element 0 correctly, not as a claim
+    that a real file's magnitude is 45.859 -- the real, confirmed magnitude
+    is ~41.242 (module docstring), and the fixture keeps 45.859 only for
+    continuity with the docs page's own worked example."""
     path = tmp_path / "session.bhv2"
     _write_minimal_bhv2(path)
 
@@ -164,6 +184,33 @@ def test_the_reader_recovers_what_the_minimal_writer_encoded(tmp_path):
     assert result.pixels_per_degree == pytest.approx(45.859)
 
 
+def test_eye_transform_before_eye_calibration_declines_rather_than_guesses(tmp_path):
+    """The field order this reader depends on for its selective `EyeTransform`
+    decode -- `EyeCalibration` before `EyeTransform` -- is true in every real
+    file checked and in `mlconfig.m`'s own declared property order
+    (`wl_preproc/eye/bhv2.py`'s module docstring), but is not enforced by the
+    format itself, only assumed. If a file somehow has them the other way
+    round, this reader must not guess: `a` must come back exactly like
+    absence, not like cell 1 (or any other) was silently picked as if it
+    were the selected one."""
+    decoy_cell = _pack_struct_block("", [_pack_double_block("offset", (1.0, 2.0))])
+    eye_transform = _pack_cell_block("EyeTransform", [decoy_cell, decoy_cell, decoy_cell])
+    mlconfig = _pack_struct_block(
+        "MLConfig",
+        [
+            eye_transform,  # written BEFORE EyeCalibration, unlike every real file
+            _pack_double_block("EyeCalibration", (1.0,)),
+        ],
+    )
+    path = tmp_path / "reversed_order.bhv2"
+    path.write_bytes(mlconfig)
+
+    result = read_calibration(path)
+
+    assert result.present is False
+    assert result.a is None
+
+
 def test_a_well_formed_file_without_mlconfig_is_also_absence_not_an_error(tmp_path):
     """Absence is not only "the file does not exist". A `.bhv2` that walks
     fine end-to-end but simply has no `MLConfig` block -- e.g. a stripped-down
@@ -171,7 +218,15 @@ def test_a_well_formed_file_without_mlconfig_is_also_absence_not_an_error(tmp_pa
     contain what this reader looks for. That is a different code path from
     the missing-file case above (this one reads real bytes and reaches EOF
     normally) reaching the same `present=False` outcome, not the same code
-    path reused."""
+    path reused.
+
+    Its input is built with the same self-referential helpers as
+    `_write_minimal_bhv2` (`_pack_struct_block`/`_pack_double_block`), so it
+    carries the identical circularity that fixture's own docstring admits --
+    this reader's own writer agreeing with itself, not a real file. Worth
+    saying here too rather than only on its sibling, since a
+    `BehavioralCodes`-only file is exactly the kind of thing this reader
+    must still walk correctly past to reach EOF."""
     path = tmp_path / "no_config.bhv2"
     behavioral_codes = _pack_struct_block(
         "BehavioralCodes", [_pack_double_block("CodeNumbers", (9.0, 18.0))]
