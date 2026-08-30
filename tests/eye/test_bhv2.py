@@ -1,0 +1,232 @@
+import math
+import struct
+
+import pytest
+
+from wl_preproc.eye.bhv2 import (
+    Bhv2Calibration,
+    Bhv2Unreadable,
+    as_affine_map,
+    read_calibration,
+)
+
+
+def test_a_missing_file_is_absence_not_an_error(tmp_path):
+    """Design spec section 4.5: a missing `.bhv2` skips step 2 of the fallback
+    chain. It is not a fault -- MonkeyLogic's log is a cross-check, and
+    calibration works from the code stream alone."""
+    result = read_calibration(tmp_path / "nope.bhv2")
+
+    assert result.present is False
+    assert result.a is None
+
+
+def test_a_truncated_file_raises_rather_than_returning_absence(tmp_path):
+    """A file that exists but cannot be parsed is a different fact from a file
+    that is not there, and the two must not render identically -- the caller
+    decides what to do, but it must be able to tell them apart."""
+    bad = tmp_path / "truncated.bhv2"
+    bad.write_bytes(b"\x04\x00\x00\x00test\xff\xff")
+
+    with pytest.raises(Bhv2Unreadable):
+        read_calibration(bad)
+
+
+# ---------------------------------------------------------------------------
+# A minimal BHV2 writer, for the round-trip tests below.
+#
+# No real `.bhv2` file was obtainable for this task (task-6 brief, and the
+# design spec section this task implements). This writer exists ONLY because
+# of that absence, and a real file's bytes must replace it -- and be checked
+# against it -- the day one is obtained. Until then, every byte width and
+# ordering choice below is the SAME one `wl_preproc/eye/bhv2.py` documents as
+# verified against the format's own documentation page and against NIMH
+# MonkeyLogic's own `mlbhv2.m` reader/writer source (see that module's
+# docstring for citations); this writer is not an independent second opinion
+# on the format, it is the same understanding written the other direction.
+#
+# **This is therefore the one fixture in this plan that agrees with its own
+# reader by construction** -- exactly the circularity Task 1 (the ohDPI
+# reader) exists to break by testing against bytes a real recording actually
+# wrote. It is acceptable here only because Task 7's fallback chain validates
+# whatever `read_calibration` returns against the session's own fixation
+# data before accepting it: a wrong parse here produces a candidate
+# calibration that fails that validation and falls through, not a silently
+# wrong gaze. A round trip against this writer proves internal consistency
+# (the reader recovers what was encoded) -- it cannot and does not prove
+# that a real MonkeyLogic file is encoded this way.
+# ---------------------------------------------------------------------------
+
+
+def _pack_len_prefixed(text: str) -> bytes:
+    """One `(length, chars)` header pair -- used for both a block's name and
+    its type tag, which share this exact shape (`bhv2.py`'s module
+    docstring: `uint64` length, then 1 byte per character)."""
+    encoded = text.encode("latin-1")
+    return len(encoded).to_bytes(8, "little") + encoded
+
+
+def _pack_dims(dims: tuple[int, ...]) -> bytes:
+    return len(dims).to_bytes(8, "little") + b"".join(d.to_bytes(8, "little") for d in dims)
+
+
+def _pack_block(name: str, type_tag: str, dims: tuple[int, ...], content: bytes) -> bytes:
+    """The 6 header fields common to every block, plus its content -- the one
+    shape every block shares, top-level or nested, named or (name="") anonymous."""
+    return _pack_len_prefixed(name) + _pack_len_prefixed(type_tag) + _pack_dims(dims) + content
+
+
+def _pack_double_block(name: str, values: tuple[float, ...]) -> bytes:
+    content = b"".join(struct.pack("<d", v) for v in values)
+    return _pack_block(name, "double", (1, len(values)), content)
+
+
+def _pack_char_block(name: str, text: str) -> bytes:
+    encoded = text.encode("latin-1")
+    return _pack_block(name, "char", (1, len(encoded)), encoded)
+
+
+def _pack_struct_block(name: str, field_blocks: list[bytes]) -> bytes:
+    """A 1x1 struct array (the only shape this task's scope ever needs) whose
+    fields are already-packed blocks, in field order."""
+    content = len(field_blocks).to_bytes(8, "little") + b"".join(field_blocks)
+    return _pack_block(name, "struct", (1, 1), content)
+
+
+def _pack_cell_block(name: str, element_blocks: list[bytes]) -> bytes:
+    content = b"".join(element_blocks)
+    return _pack_block(name, "cell", (1, len(element_blocks)), content)
+
+
+def _write_minimal_bhv2(path) -> None:
+    """A synthetic but format-correct `.bhv2`, for lack of a real one.
+
+    Layout (see `wl_preproc/eye/bhv2.py`'s module docstring for why these
+    are the block/field names looked for): a `BehavioralCodes` block before
+    `MLConfig` and an `AnalogData` block after it, neither one relevant to
+    calibration, proving the walk passes over both without materialising
+    them; then `MLConfig` itself, with one field before the three wanted
+    ones (`SomeOtherField`, proving unwanted fields inside `MLConfig` are
+    ALSO skipped, not just unwanted top-level blocks); `PixelsPerDegree`;
+    `EyeCalibration` selecting method 2 (1-based, MATLAB's own indexing);
+    and `EyeTransform`, a `cell(1,3)` whose non-selected cells (1 and 3) are
+    single-field decoys and whose selected cell (2) has FOUR fields --
+    `origin`, `gain`, a `char` field (`note`) that must be skipped rather
+    than corrupting the harvested tuple, and `extra` -- to prove the
+    `double`-field harvest spans multiple fields, preserves field order,
+    and ignores a non-`double` field interleaved between them.
+    """
+    behavioral_codes = _pack_struct_block(
+        "BehavioralCodes", [_pack_double_block("CodeNumbers", (9.0, 18.0))]
+    )
+
+    decoy_cell = _pack_struct_block("", [_pack_double_block("unused", (999.0,))])
+    chosen_cell = _pack_struct_block(
+        "",
+        [
+            _pack_double_block("origin", (10.0, 20.0)),
+            _pack_double_block("gain", (0.5,)),
+            _pack_char_block("note", "unused"),
+            _pack_double_block("extra", (1.0, 2.0, 3.0)),
+        ],
+    )
+    other_decoy_cell = _pack_struct_block("", [_pack_double_block("unused", (888.0,))])
+    eye_transform = _pack_cell_block(
+        "EyeTransform", [decoy_cell, chosen_cell, other_decoy_cell]
+    )
+
+    mlconfig = _pack_struct_block(
+        "MLConfig",
+        [
+            _pack_double_block("SomeOtherField", (7.0,)),
+            _pack_double_block("PixelsPerDegree", (45.859,)),
+            _pack_double_block("EyeCalibration", (2.0,)),
+            eye_transform,
+        ],
+    )
+
+    analog_data = _pack_struct_block("AnalogData", [_pack_double_block("Eye", (0.1, 0.2, 0.3))])
+
+    path.write_bytes(behavioral_codes + mlconfig + analog_data)
+
+
+def test_the_reader_recovers_what_the_minimal_writer_encoded(tmp_path):
+    """The round trip this task's own instructions call for in place of a
+    real sample file (see `_write_minimal_bhv2`'s docstring for why that
+    substitution is acceptable here and nowhere else in this plan)."""
+    path = tmp_path / "session.bhv2"
+    _write_minimal_bhv2(path)
+
+    result = read_calibration(path)
+
+    assert result.present is True
+    assert result.a == pytest.approx((10.0, 20.0, 0.5, 1.0, 2.0, 3.0))
+    assert result.pixels_per_degree == pytest.approx(45.859)
+
+
+def test_a_well_formed_file_without_mlconfig_is_also_absence_not_an_error(tmp_path):
+    """Absence is not only "the file does not exist". A `.bhv2` that walks
+    fine end-to-end but simply has no `MLConfig` block -- e.g. a stripped-down
+    or non-eye-tracking session log -- parsed successfully; it just did not
+    contain what this reader looks for. That is a different code path from
+    the missing-file case above (this one reads real bytes and reaches EOF
+    normally) reaching the same `present=False` outcome, not the same code
+    path reused."""
+    path = tmp_path / "no_config.bhv2"
+    behavioral_codes = _pack_struct_block(
+        "BehavioralCodes", [_pack_double_block("CodeNumbers", (9.0, 18.0))]
+    )
+    path.write_bytes(behavioral_codes)
+
+    result = read_calibration(path)
+
+    assert result.present is False
+    assert result.a is None
+    assert result.pixels_per_degree is None
+
+
+def test_an_unrecognised_type_tag_raises_not_just_a_length_overrun(tmp_path):
+    """The brief's OTHER named structural inconsistency (Step 4): "an unknown
+    type tag where one is required". This is a distinct raise site from the
+    one the brief's own truncated-file fixture exercises above -- that
+    fixture's bogus name length runs off the end of the file before any type
+    tag is ever read, so it pins the length-overrun branch, not this one."""
+    bad = tmp_path / "bogus_type.bhv2"
+    block = _pack_block("X", "bogus", (1, 1), struct.pack("<d", 1.0))
+    bad.write_bytes(block)
+
+    with pytest.raises(Bhv2Unreadable, match="type tag"):
+        read_calibration(bad)
+
+
+def test_as_affine_map_converts_a_six_number_calibration():
+    cal = Bhv2Calibration(
+        present=True, a=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0), pixels_per_degree=40.0
+    )
+
+    result = as_affine_map(cal)
+
+    assert result is not None
+    assert result.a == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    # A borrowed map was never fit by fit_affine and has no such history to
+    # report (calibration.py's own AffineMap docstring) -- these must be the
+    # library-wide defaults, not fabricated evidence.
+    assert result.n_points == 0
+    assert math.isnan(result.conditioning)
+
+
+def test_as_affine_map_declines_a_calibration_that_is_not_six_numbers():
+    """MonkeyLogic's Origin & Gain method alone yields 5 raw numbers (origin
+    x2, gain x2, rotation x1) -- a real, expected shape this must decline
+    rather than misassign into 6 affine slots (bhv2.py's own docstring)."""
+    cal = Bhv2Calibration(
+        present=True, a=(1.0, 2.0, 3.0, 4.0, 5.0), pixels_per_degree=40.0
+    )
+
+    assert as_affine_map(cal) is None
+
+
+def test_as_affine_map_declines_absence():
+    cal = Bhv2Calibration(present=False, a=None, pixels_per_degree=None)
+
+    assert as_affine_map(cal) is None
