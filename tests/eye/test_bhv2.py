@@ -1,5 +1,7 @@
 import math
+import os
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -271,9 +273,14 @@ def test_as_affine_map_converts_a_six_number_calibration():
 
 
 def test_as_affine_map_declines_a_calibration_that_is_not_six_numbers():
-    """MonkeyLogic's Origin & Gain method alone yields 5 raw numbers (origin
-    x2, gain x2, rotation x1) -- a real, expected shape this must decline
-    rather than misassign into 6 affine slots (bhv2.py's own docstring)."""
+    """Five is an arbitrary not-six count, not a claim about which real
+    MonkeyLogic method produces exactly five -- an earlier version of this
+    docstring said Origin & Gain does, which `bhv2.py`'s module docstring's
+    own fix-round correction retracts (its calibration-authoring UI alone
+    initialises 16 fields, ~24 numbers, and no real file confirms what
+    actually reaches disk). The property under test does not depend on
+    which real method produces which count: any non-six-length `a` must be
+    declined, not misassigned into 6 affine slots."""
     cal = Bhv2Calibration(
         present=True, a=(1.0, 2.0, 3.0, 4.0, 5.0), pixels_per_degree=40.0
     )
@@ -285,3 +292,87 @@ def test_as_affine_map_declines_absence():
     cal = Bhv2Calibration(present=False, a=None, pixels_per_degree=None)
 
     assert as_affine_map(cal) is None
+
+
+def _read_raw_pixels_per_degree(path) -> tuple[float, ...] | None:
+    """`MLConfig.PixelsPerDegree`, RAW -- independent of `read_calibration`'s
+    own orchestration (`_walk`/`_extract_mlconfig`, which immediately
+    reduces the field to a scalar and would never surface a shape bug in
+    that reduction). Reuses only the lower-level, already-tested block
+    primitives (`_read_header`/`_materialize`/`_skip_value`, exercised
+    directly by every other test in this file) to walk to the field and
+    return it as found, so the real-file test below can check the
+    two-element shape itself rather than trust the already-reduced public
+    value alone. Assumes `MLConfig` is 1x1 (true of every real file this
+    reader has ever seen) -- not a general reader, just enough for this one
+    diagnostic.
+    """
+    from wl_preproc.eye import bhv2 as _bhv2_internals
+
+    buf = Path(path).read_bytes()
+    offset = 0
+    n = len(buf)
+    while offset < n:
+        offset, name, type_tag, dims = _bhv2_internals._read_header(buf, offset)
+        if name == "MLConfig" and type_tag == "struct":
+            offset, nfield = _bhv2_internals._read_uint64(buf, offset)
+            for _ in range(nfield):
+                offset, fname, ftype, fdims = _bhv2_internals._read_header(buf, offset)
+                if fname == "PixelsPerDegree":
+                    _, value = _bhv2_internals._materialize(buf, offset, ftype, fdims)
+                    return value
+                offset = _bhv2_internals._skip_value(buf, offset, ftype, fdims)
+            return None
+        offset = _bhv2_internals._skip_value(buf, offset, type_tag, dims)
+    return None
+
+
+def test_a_real_monkeylogic_file_parses_to_the_observed_values():
+    """Not synthetic: proves this reader against genuine MonkeyLogic bytes,
+    the way `test_real_low_scratch_degrades_the_verdict_on_this_host`
+    (`tests/responder/test_health.py`) proves the disk-headroom rule against
+    this host's real filesystem rather than only a hand-built value --
+    same shape, a different real condition.
+
+    No `.bhv2` file is committed to this repository: the coordinator ruled
+    against it even for a private repo (task-6 report, fix round 2) --
+    `license: null` is all-rights-reserved by default, not permission by
+    silence; the 15 real files this reader was validated against
+    (`github.com/Doug1983/MonkeyLogic`) are another lab's own session
+    output, not NIMH's shipped example data; and a fixture from THIS lab's
+    own rig, once one exists, is worth more than a borrowed one anyway,
+    since it would exercise this pipeline's actual MonkeyLogic build and
+    calibration method rather than a 2017 Raw-Signal-only test file.
+
+    Set `WLPP_BHV2_SAMPLE` to a real `.bhv2` file's path to run this test.
+    The assertions below are pinned to the ONE file this reader has actually
+    been validated against --
+    `task/UE4_Test/171213_Me_UE_Test.bhv2` (6,586 bytes) from the mirror
+    above, fetched, run, and deleted, never committed (`bhv2.py`'s own
+    module docstring carries the same figures as recorded evidence) -- so a
+    byte-identical copy of THAT file is what makes this test pass. A
+    genuinely different real file (this lab's own future rig recording, in
+    particular -- the coordinator's own preferred long-term source) will
+    have its own real `PixelsPerDegree` and calibration method, and pointing
+    this test at one is expected to FAIL these specific numbers, not
+    silently pass; treat that as a prompt to give the new file its own
+    dedicated test with its own observed values, not to loosen this one.
+    """
+    sample = os.environ.get("WLPP_BHV2_SAMPLE")
+    if not sample:
+        pytest.skip(
+            "WLPP_BHV2_SAMPLE is not set. Point it at a real .bhv2 file to run "
+            "this test -- either a copy of task/UE4_Test/171213_Me_UE_Test.bhv2 "
+            "from github.com/Doug1983/MonkeyLogic (the exact file this test's "
+            "assertions are pinned to), or a real recording from this lab's own "
+            "MonkeyLogic rig once one exists (see this test's docstring for why "
+            "that would need its own separate assertions, not these ones)"
+        )
+
+    result = read_calibration(sample)
+
+    assert result.present is True
+    assert result.pixels_per_degree == 41.24200792470175
+
+    raw_ppd = _read_raw_pixels_per_degree(sample)
+    assert raw_ppd == (41.24200792470175, -41.24200792470175)
