@@ -330,7 +330,7 @@ Worked example — fixation point at centre, target 10° right and 5° up:
 no viewing distance, no pixel pitch — and acquiring it would mean a second
 transport for numbers that differ per rig and change whenever a monitor moves.
 The task already knows the geometry because it renders the stimulus, and
-MonkeyLogic holds `ScreenInfo.PixelsPerDegree`. Converting at the source makes
+MonkeyLogic holds `PixelsPerDegree`. Converting at the source makes
 the code stream self-sufficient; emitting pixels would make calibration depend
 on a channel that does not exist.
 
@@ -358,7 +358,7 @@ most recent `TARGET_POSITION` of the relevant role. Five codes per fixation.
 
 The task is MonkeyLogic, which saves `TrialData.BehavioralCodes`
 (`CodeNumbers`, `CodeTimes`), `TrialData.AnalogData.EyeSignal`, and
-`ScreenInfo.PixelsPerDegree`. `.bhv2` is a headerless binary of MATLAB variables
+`PixelsPerDegree`. `.bhv2` is a headerless binary of MATLAB variables
 with a simple recursive structure.
 
 **The code stream is authoritative for *when*; the log is authoritative for
@@ -371,8 +371,8 @@ alone and a session missing its log still gets canonical gaze.
 ### 4.5 Reading `.bhv2`, narrowly
 
 §3.5's fallback chain needs MonkeyLogic's calibration, so a `.bhv2` reader is in
-scope — but a **minimal** one. It reads the calibration and `ScreenInfo`, and
-nothing else. `BehavioralCodes`, `AnalogData` and the trial structure are not
+scope — but a **minimal** one. It reads the calibration and the configuration
+block holding `PixelsPerDegree`, and nothing else. `BehavioralCodes`, `AnalogData` and the trial structure are not
 read here: the code stream already carries what calibration needs, and reading
 the rest would duplicate the event assembly this pipeline already does from a
 source it trusts more.
@@ -538,7 +538,7 @@ originals left visible, per this repository's correction convention:
   with no version pins, needing a `wl.yaml` `third_party` entry with a `why`),
   and the OpenIrisDPI tutorial notebook, which covers saccade detection directly
   and may change the approach. It also needs the fixture this spec rewrites.
-- **Reading `.bhv2` beyond the calibration and `ScreenInfo`** — §4.5 keeps the
+- **Reading `.bhv2` beyond the calibration and `PixelsPerDegree`** — §4.5 keeps the
   reader narrow. The behavioural codes, analog data and trial structure stay out:
   the code stream already carries what calibration needs, from a source this
   pipeline trusts more.
@@ -546,3 +546,27 @@ originals left visible, per this repository's correction convention:
   from that evidence.
 - **Behaviour cameras (`bcam`)** — parent §7 covers eye; 1c-4's open question 1
   named `bcam` alongside `ohdpi` and this spec settles only the latter.
+
+
+---
+
+## 12. Corrections found during implementation
+
+> **Corrected 2026-08-30, Task 6.** This spec named the MonkeyLogic block holding
+> the pixels-per-degree conversion **`ScreenInfo`**. There is no such block. A
+> GitHub code search across MonkeyLogic's repository returns **zero** hits for
+> `ScreenInfo`; `PixelsPerDegree` is a property of the `mlconfig` classdef
+> (`mlconfig.m`), saved as `MLConfig`. The wrong name entered this spec from a
+> web-search *summary* rather than from MonkeyLogic's own source — the same
+> error class as §1.3's original "constant offset" claim, and the second in this
+> document. Verified independently against `mlconfig.m` before amending.
+>
+> **Also corrected:** the `.bhv2` documentation page labels a variable block's
+> dimension field `double`. `mlbhv2.m`, which writes the format, uses
+> `fwrite(obj.fid, dim, 'uint64')` — as it does for every other header field.
+> The source is authoritative over the docs page here.
+>
+> **And recorded:** `monkeylogic.nimh.nih.gov` serves an incomplete TLS chain
+> (verify code 21). That is a server-side misconfiguration, not an attack; the
+> leaf certificate was checked as legitimate before its content was relied on.
+> A reader who cannot fetch that page should expect the same failure.
