@@ -43,15 +43,32 @@ both eyes (only `Seconds` differed), so `LeftCR1X == RightCR1X` and
 `LeftCR4X == RightCR4X` at every frame: any downstream test or calibration
 step comparing the two eyes would pass, or run, without exercising anything
 -- the same defect shape as every other silently-vacuous test this project
-has found (fix round, 2026-08-30). The right eye now gets its own rotation
-term (`RIGHT_EYE_ROTATION_OFFSET_PX`, a small constant offset from the
-left's, not a physiologically-derived vergence angle -- the only requirement
-is that the two eyes be numerically distinguishable, the way two
-independently-tracked eyes always are). The shared common/translational
-component, and P1 itself, stay shared: moving those independently per eye
-would still leave `P1 - P4` as the right calibration feature, but would lose
-the "one eye moving in one socket" model this fixture is going for, for no
-benefit -- the rotation term alone is enough to make the two eyes disagree.
+has found (fix round, 2026-08-30). A first attempt fixed only P4's X axis,
+leaving Y and P1 itself still shared -- narrowing the defect rather than
+retiring it, since a metric or test isolating elevation, or reading P1 at
+all, would still find the two eyes indistinguishable. Two independent fixes
+now apply:
+
+- P4's rotation term gets its own version per eye, on BOTH axes
+  (`RIGHT_EYE_ROTATION_OFFSET_PX`, a small constant offset from the left
+  eye's, not a physiologically-derived vergence angle -- the only
+  requirement is that the two eyes' P4 be numerically distinguishable, on
+  either axis alone, the way two independently-tracked eyes always are).
+  The shared common/translational component stays shared: `P4_eye =
+  common - rotation_eye`, so `P1 - P4` is still exactly the per-eye
+  rotation term, undiluted by anything else.
+- P1 itself gets independent per-eye, per-axis noise
+  (`P1_JITTER_STD_PX`): measured against the reference recording,
+  `LeftCR1X` never equals `RightCR1X` across its 200 rows, drifting by up
+  to ~20 px frame to frame -- two cameras looking at two different eyes
+  never report exactly the same absolute coordinate, and that is a
+  genuinely varying difference, not a fixed camera-calibration constant
+  the way P4's fix is. `P1 - P4` per eye is therefore `jitter_eye +
+  rotation_eye` rather than the rotation term alone -- a small amount of
+  realistic measurement noise on top of the true signal, not a
+  contradiction of "P1 and P4 share the drift": the shared `common` term
+  is still what both P1 and P4 are built from, on both axes, for both
+  eyes.
 """
 
 from __future__ import annotations
@@ -123,13 +140,25 @@ HEADER: tuple[str, ...] = (
 RIGHT_SECONDS_OFFSET_S = -0.04948
 
 # A constant offset from the LEFT eye's rotation term, added only to the
-# RIGHT eye's (see "Why the two eyes are not byte-identical" above and
-# `write_ohdpi`). Not derived from any real vergence angle -- "small" is the
-# whole requirement, so the two eyes are numerically distinguishable without
-# either one's motion dominating the other's. Fixed rather than
-# time-varying: a constant offset can never coincide with zero, so the two
-# eyes' P4 differ at every single frame instead of merely almost always.
+# RIGHT eye's, on BOTH the X and Y axes independently (see "Why the two eyes
+# are not byte-identical" above and `write_ohdpi`) -- an earlier version of
+# this fix applied it to X only, leaving Y still shared, which a metric or
+# test isolating elevation would not have caught. Not derived from any real
+# vergence angle -- "small" is the whole requirement, so the two eyes are
+# numerically distinguishable without either one's motion dominating the
+# other's. Fixed rather than time-varying: a constant offset can never
+# coincide with zero, so the two eyes' P4 differ at every single frame, on
+# every axis, instead of merely almost always.
 RIGHT_EYE_ROTATION_OFFSET_PX = 6.0
+
+# The standard deviation of each eye's OWN, independent P1 jitter (see "Why
+# the two eyes are not byte-identical" above). Unlike
+# `RIGHT_EYE_ROTATION_OFFSET_PX`, this is not a fixed offset: it is drawn
+# separately for each eye and each axis, so the Left/Right difference itself
+# varies frame to frame rather than being one constant nudge -- matching what
+# the reference recording actually shows for `CR1X`, rather than merely
+# avoiding equality.
+P1_JITTER_STD_PX = 6.0
 
 # `Int0` = 12 with bit 0 carrying the barcode, matching the reference
 # recording's {12, 13} (bits 2 and 3 constant-high, bit 1 always low). The
@@ -191,14 +220,15 @@ def write_ohdpi(
     `Seconds` carries the reference recording's constant offset
     (`RIGHT_SECONDS_OFFSET_S`).
 
-    Pupil and Purkinje positions follow a slow common drift (translation) plus
-    per-frame noise; P1 and P4 share the drift and differ by a rotation term
-    only P4 sees, so `P1 - P4` carries the signal a calibration can recover
-    (see the module docstring). P1 and the common drift are shared between the
-    two eyes; the rotation term is not -- the right eye's own version is
-    offset by `RIGHT_EYE_ROTATION_OFFSET_PX`, so each eye's P4, and each eye's
-    own `P1 - P4`, is numerically distinguishable from the other's (see "Why
-    the two eyes are not byte-identical" in the module docstring).
+    Pupil and Purkinje positions follow a slow common drift (translation)
+    shared by both eyes. P4 adds a rotation term on top of it, one version per
+    eye and per axis, so `P1 - P4` carries that per-eye rotation term plus
+    P1's own jitter (below) -- realistic measurement noise on top of the
+    signal a calibration can recover, not a contradiction of it (see the
+    module docstring). P1 adds its own independent per-eye, per-axis jitter,
+    so the two eyes' raw traces are never byte-identical on either P1 or P4,
+    on either axis (see "Why the two eyes are not byte-identical" in the
+    module docstring).
     """
     line = _digital_line(recipe, truth, drift_ppm)
     n = len(line)
@@ -209,31 +239,46 @@ def write_ohdpi(
     # CONTIGUOUS rather than starting at any particular position.
     frame0 = 308788
     t = np.arange(n) / OHDPI_FPS
-    # Slow common motion (translation), shared by both eyes.
+    # Slow common motion (translation), shared by both eyes -- feeds both P1
+    # and P4 below, for both eyes, on both axes.
     common_x = 500.0 + 20.0 * np.sin(2 * np.pi * 0.05 * t)
     common_y = 220.0 + 15.0 * np.cos(2 * np.pi * 0.03 * t)
-    # The rotation term only P4 sees -- one version per eye, so the two eyes'
-    # P4 (and their own P1 - P4) are never equal. Same shape, offset by a
-    # constant: sharing the shape keeps both eyes' P4 responding to the same
-    # underlying signal, the way two eyes actually would, while the offset is
-    # what makes them numerically distinguishable.
-    rot_x = 40.0 * np.sin(2 * np.pi * 0.20 * t) + rng.normal(0, 0.5, n)
-    rot_y = 30.0 * np.cos(2 * np.pi * 0.17 * t) + rng.normal(0, 0.5, n)
-    rot_x_right = rot_x + RIGHT_EYE_ROTATION_OFFSET_PX
+
+    # Each eye's own P1, layered on the shared common motion: two cameras
+    # looking at two different eyes never report exactly the same absolute
+    # coordinate (see `P1_JITTER_STD_PX`). Independent draws per eye AND per
+    # axis, so Left and Right (and X and Y) cannot be collapsed back to
+    # identical by any single shared term.
+    p1x_jitter_left = rng.normal(0, P1_JITTER_STD_PX, n)
+    p1y_jitter_left = rng.normal(0, P1_JITTER_STD_PX, n)
+    p1x_jitter_right = rng.normal(0, P1_JITTER_STD_PX, n)
+    p1y_jitter_right = rng.normal(0, P1_JITTER_STD_PX, n)
+
+    # The rotation term only P4 sees -- one version per eye, on BOTH axes, so
+    # the two eyes' P4 (and their own P1 - P4) are never equal on either axis
+    # alone. Same shape per axis, offset by a constant per eye: sharing the
+    # shape keeps both eyes' P4 responding to the same underlying signal, the
+    # way two eyes actually would; the offset is what makes them numerically
+    # distinguishable (see `RIGHT_EYE_ROTATION_OFFSET_PX`).
+    rot_x_left = 40.0 * np.sin(2 * np.pi * 0.20 * t) + rng.normal(0, 0.5, n)
+    rot_y_left = 30.0 * np.cos(2 * np.pi * 0.17 * t) + rng.normal(0, 0.5, n)
+    rot_x_right = rot_x_left + RIGHT_EYE_ROTATION_OFFSET_PX
+    rot_y_right = rot_y_left + RIGHT_EYE_ROTATION_OFFSET_PX
 
     path = dir_path / FILENAME
     with path.open("w", encoding="utf-8") as handle:
         handle.write(" ".join(HEADER) + "\n")
         for i in range(n):
-            p1x, p1y = common_x[i], common_y[i]
             row: list[str] = []
             for eye_index in range(2):
                 if eye_index == 0:
                     offset = 0.0
-                    p4x, p4y = common_x[i] - rot_x[i], common_y[i] - rot_y[i]
+                    p1x, p1y = common_x[i] + p1x_jitter_left[i], common_y[i] + p1y_jitter_left[i]
+                    p4x, p4y = common_x[i] - rot_x_left[i], common_y[i] - rot_y_left[i]
                 else:
                     offset = RIGHT_SECONDS_OFFSET_S
-                    p4x, p4y = common_x[i] - rot_x_right[i], common_y[i] - rot_y[i]
+                    p1x, p1y = common_x[i] + p1x_jitter_right[i], common_y[i] + p1y_jitter_right[i]
+                    p4x, p4y = common_x[i] - rot_x_right[i], common_y[i] - rot_y_right[i]
                 row += [
                     str(frame0 + i), str(frame0 + i - 1), _fmt(t[i] + offset),
                     _fmt(p1x), _fmt(p1y), _fmt(60.0), _fmt(58.0), _fmt(0.0),

@@ -221,7 +221,7 @@ def test_the_two_eyes_purkinje_traces_are_not_identical(tmp_path):
     """Design spec section 3.7 treats binocular agreement between the two
     eyes' independently-calibrated gaze estimates as a free quality signal --
     meaningless if the two eyes' raw traces agree by construction rather than
-    by measurement. Before the fix round of 2026-08-30, one P1/P4 pair was
+    by measurement. Before the fix rounds of 2026-08-30, one P1/P4 pair was
     computed and written to both eyes (only `Seconds` differed), so
     `purkinje_vector(path, "Left")` and `purkinje_vector(path, "Right")`
     would have returned the same array, and any test or downstream
@@ -229,12 +229,13 @@ def test_the_two_eyes_purkinje_traces_are_not_identical(tmp_path):
     exercising anything -- this fixture's own instance of the defect this
     project keeps finding.
 
-    CR1 (P1) is unaffected and stays identical between eyes by design: it is
-    the shared common/translational component, not the per-eye rotation term
-    (see `write_ohdpi`'s and the module's docstrings). CR4 (P4) is where
-    `RIGHT_EYE_ROTATION_OFFSET_PX` shows up, so the combined CR1/CR4 trace --
-    what a binocular comparison actually reads -- differs between the two
-    eyes at every frame.
+    A first fix gave the right eye its own X-axis rotation term but left Y,
+    and P1 itself, still shared -- a metric or test isolating elevation, or
+    reading P1 at all, would still have found the two eyes indistinguishable,
+    and a whole-array check like the one below alone would not have caught
+    it (X differing is enough to make the combined array unequal even with Y
+    collapsed). So every axis of both CR1 and CR4 is pinned separately here,
+    not just the combined trace.
     """
     from wl_preproc.eye.ohdpi import read_columns
     from wl_preproc.synth.ohdpi import FILENAME
@@ -251,8 +252,13 @@ def test_the_two_eyes_purkinje_traces_are_not_identical(tmp_path):
     right = np.stack([cols[f"Right{part}"] for part in parts], axis=1)
 
     assert not np.array_equal(left, right)
-    # CR4 alone is enough to prove the pair above, and pins WHERE the
-    # difference lives: a regression that collapsed the two eyes back to
-    # identical would have to break this line specifically, not merely
-    # something anywhere in the four-column comparison above.
-    assert (cols["LeftCR4X"] != cols["RightCR4X"]).all()
+    # Each of the four columns pinned separately: a regression that
+    # collapsed any ONE axis or ONE Purkinje image back to shared between
+    # eyes has to break its own line here, not merely something anywhere in
+    # the eight-column comparison above. CR4's two axes are guaranteed
+    # unequal at every frame by construction (a fixed offset can never
+    # coincide with zero); CR1's are independent per-eye noise, verified
+    # empirically to differ at every one of this fixture's frames for this
+    # recipe's seed, not merely almost always.
+    for part in parts:
+        assert (cols[f"Left{part}"] != cols[f"Right{part}"]).all(), part
