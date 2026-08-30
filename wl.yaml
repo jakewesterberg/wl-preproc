@@ -46,7 +46,7 @@ third_party:
   - name: kilosort
     where: serv
     why: >-
-      Spike sorting runs on the preprocessing server. wl-softrepo's rig scope
+      Spike sorting runs on the preprocessing server. wl-stack's rig scope
       ruling of 2026-08-23 is explicit that rigs run lean, with no
       spike-sorting infrastructure at all.
   - name: spikeinterface
