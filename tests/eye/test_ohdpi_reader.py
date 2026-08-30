@@ -59,30 +59,32 @@ def test_a_file_with_the_wrong_header_is_refused(tmp_path):
 def test_one_absent_required_column_is_named_specifically(tmp_path):
     """Pins the diagnostic, not just the refusal.
 
-    `test_a_file_with_the_wrong_header_is_refused` cannot tell OUR check from
-    pandas' own: `pd.read_csv(usecols=...)` raises "Usecols do not match
-    columns" for ANY column absent from the header, before `read_columns`
-    ever sees a DataFrame -- and `read_ohdpi`'s wrapper says "unrecognised
-    header" regardless of which one fired, so that test still passes with our
-    check deleted (task-1 fix round, found by mutation, not assumed). Only our
-    own message ever says "header is missing"; pandas' never does. A header
-    that is otherwise real OpenIris, short exactly one required column, is the
-    case an actual format change would produce -- and the one where pandas'
-    generic message would waste someone's afternoon.
-
-    Matches on the two-word phrase "header is missing", not just "missing":
-    `tmp_path` names its directory after this test function, and an earlier
-    draft of this test was itself named with "missing" in it, which leaked
-    into the asserted-on path and made a bare `match="missing"` pass for a
-    reason that had nothing to do with the diagnostic under test -- the same
-    trap this whole fix round exists to close, one level up, in the test's
-    own name rather than in the production code.
+    Before this task's fix round, this test alone could not tell OUR check
+    from pandas' own: pandas' `usecols` mismatch fires for ANY absent column
+    before `read_columns` ever sees a DataFrame, and `read_ohdpi` used to
+    re-wrap every failure as "unrecognised header" regardless of cause -- so
+    deleting our check changed nothing observable (found by mutation, not
+    assumed). Both are gone now: `read_columns` raises its own "header is
+    missing [...]" naming exactly what's absent, and `read_ohdpi` no longer
+    wraps anything, so a caller always sees the real cause. A header that is
+    otherwise real OpenIris, short exactly one required column, is the case
+    an actual format change would produce -- and the one where a generic
+    message would waste someone's afternoon.
     """
     header = "LeftFrameNumber LeftSeconds Int0 LeftCR1X SomeOtherColumn\n"
     rows = "308788 5416.9374 12 434.8742 0\n308789 5416.9394 12 434.8742 0\n"
     bad = tmp_path / "one_column_short.txt"
     bad.write_text(header + rows, encoding="utf-8")
 
+    # Matches on the two-word PHRASE "header is missing", never a bare word:
+    # `tmp_path` names its own directory after this test function, and the
+    # error message embeds the full file path -- so a bare `match="missing"`
+    # here would be satisfied by a sanitised path segment like
+    # "test_a_missing_required_column0" regardless of whether read_columns'
+    # own diagnostic had even run. (Found the hard way: an earlier,
+    # differently-named draft of this exact test did exactly that.) A phrase
+    # with a literal space cannot come from a path segment -- pytest
+    # sanitises those to identifier characters joined by "_", never " ".
     with pytest.raises(ValueError, match="header is missing") as excinfo:
         read_ohdpi(bad)
     assert "LeftCR4X" in str(excinfo.value)

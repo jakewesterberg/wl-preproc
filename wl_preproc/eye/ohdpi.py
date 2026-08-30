@@ -106,10 +106,15 @@ def read_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
 
 def read_ohdpi(path: Path) -> OhdpiRecording:
     """Read the sync line and establish the recording's own rate."""
-    try:
-        data = read_columns(path, list(_REQUIRED))
-    except ValueError as exc:
-        raise ValueError(f"{path}: unrecognised header -- {exc}") from exc
+    # No try/except here (fix round 2). A blanket `except ValueError: raise
+    # ValueError(f"...unrecognised header -- {exc}")` used to relabel EVERY
+    # failure from `read_columns` as a header problem -- a malformed numeric
+    # field or a truncated row has nothing to do with the header, and was
+    # reported to the operator as one anyway. `read_columns` already raises
+    # its own specific "header is missing [...]" for that case; anything else
+    # is whatever pandas raised, which names the real fault better than this
+    # function could by relabelling it.
+    data = read_columns(path, list(_REQUIRED))
 
     frames = data[_FRAME_NUMBER]
     if frames.size < 2:
