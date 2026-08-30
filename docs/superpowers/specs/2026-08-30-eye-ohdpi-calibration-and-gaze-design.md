@@ -201,7 +201,7 @@ Fixation geometry varies by task type (ruled 2026-08-30): some tasks fixate
 centrally, others use spread targets. The pipeline therefore reads target
 geometry from the code stream per block rather than assuming it — see §4.
 
-### 3.5 The degeneracy refusal is the load-bearing safety property
+### 3.5 Degenerate geometry, and the fallback chain
 
 A six-parameter affine needs at least three non-collinear target positions. Given
 a single central fixation point, least squares still returns *something* — a
@@ -209,11 +209,45 @@ minimum-norm solution that looks like a calibration and means nothing.
 
 That is this project's signature failure: a plausible number with nothing saying
 it is unconstrained. So the fit computes the spatial spread of its target
-positions and **refuses below a conditioning threshold**, recording why.
+positions and **refuses to fit below a conditioning threshold**.
 
-**A session that cannot be calibrated gets no canonical gaze and says so.** It
-must never be indistinguishable from one that calibrated badly — the same rule
-the archival report's "not checked" versus "0" enforces.
+**One point cannot fit a map, but it is entirely adequate to test one.** That
+asymmetry is what makes borrowing a calibration safe rather than blind: apply a
+candidate map to the session's own fixation and check where the target lands. A
+map that has drifted, or that was never valid for this data at all, fails
+immediately.
+
+So a session with degenerate geometry does not refuse outright. It works down a
+chain, and **every step is validated against the session's own fixation points
+before being accepted**:
+
+| Order | Source | `calibration_source` |
+|---|---|---|
+| 1 | Our own affine fit, when well-conditioned | `fitted` |
+| 2 | MonkeyLogic's calibration, read from `.bhv2` (§4.5) | `monkeylogic` |
+| 3 | The best-conditioned map from the same subject and date | `carried_forward` |
+| 4 | None validated | `refused` |
+
+MonkeyLogic's precedes carry-forward because it comes from the **same session**
+and is the map the animal was actually held to — a gaze-contingent task cannot
+define a fixation window without it (ruled 2026-08-30).
+
+**Carry-forward scope** is the same `(subject, date)`, nearest in time,
+preferring a preceding session. The source session and the time delta are
+recorded, so a borrowed map is never mistaken for a fitted one.
+
+**The validation step also resolves an unknown we cannot otherwise settle.**
+MonkeyLogic's calibration maps *its own input space* to degrees, and which space
+that is depends on transport: over the OpenIrisDPI UDP path it receives pixel
+coordinates and its map is directly usable, while over the ACCESIO analog path
+it receives a voltage and its map is not. Both may be in use. Rather than
+designing against a guess, the chain simply tries it: a volts-to-degrees map fed
+pixel differences fails validation by an enormous margin and falls through to
+step 3. The transport need not be known in advance.
+
+**A session that reaches step 4 gets no canonical gaze and says so**, with the
+specific reason. It must never be indistinguishable from one that calibrated
+badly — the same rule the archival report's "not checked" versus "0" enforces.
 
 ### 3.6 Drift is measured, not corrected
 
@@ -319,8 +353,25 @@ with a simple recursive structure.
 `TimingProvenance`'s existing `block_agreement`, not a silent preference.
 
 Because positions travel in the code stream, calibration works from the codes
-alone and a session missing its log still gets canonical gaze. Reading `.bhv2`
-is **not in this spec** (§11).
+alone and a session missing its log still gets canonical gaze.
+
+### 4.5 Reading `.bhv2`, narrowly
+
+§3.5's fallback chain needs MonkeyLogic's calibration, so a `.bhv2` reader is in
+scope — but a **minimal** one. It reads the calibration and `ScreenInfo`, and
+nothing else. `BehavioralCodes`, `AnalogData` and the trial structure are not
+read here: the code stream already carries what calibration needs, and reading
+the rest would duplicate the event assembly this pipeline already does from a
+source it trusts more.
+
+The format is a headerless sequence of variable blocks with a simple recursive
+structure, so this is bounded work rather than a general MATLAB reader.
+
+**A missing or unreadable `.bhv2` is not an error.** It skips step 2 of the
+chain and falls through to carry-forward, exactly as a failed validation does.
+Sessions where MonkeyLogic's map was unusable are counted in the daily report
+(§8), because a persistent skip is worth noticing even though each individual
+one is handled.
 
 ---
 
@@ -348,11 +399,18 @@ DataJoint silently stores a numpy array as its truncated string repr; a
 `eye : enum('left','right')`:
 
 - the six affine parameters, **nullable**
+- `calibration_source : enum('fitted','monkeylogic','carried_forward','refused')`
+  — §3.5's chain, so a borrowed map is never mistaken for a fitted one
+- `carried_from_session_datetime`, nullable, plus the time delta, when
+  `carried_forward`
 - `n_points`, split by source: calibration block, task fixation
-- the conditioning measure §3.5's refusal used
-- `residual_deg_rms`, `residual_deg_max`
-- a refusal reason when unfitted — degenerate geometry, no known targets, no
-  good frames
+- the conditioning measure §3.5 used to decide whether to fit
+- `validation_error_deg` — where the session's own fixation lands under the
+  accepted map. Populated for every source including `fitted`, since it is the
+  one number comparable across all four
+- `residual_deg_rms`, `residual_deg_max` — for a `fitted` map only
+- a reason when `refused` — degenerate geometry with no usable fallback, no
+  known targets, no good frames
 
 `EyeCalibration.BlockResidual` — part table, per block: point count and
 residual. Where §3.6's drift becomes visible.
@@ -402,12 +460,24 @@ The tests that carry weight:
 
 ## 8. The daily report
 
-Parent §10 already asks for eye quality. This spec supplies: tracking-loss
-percentage, blink rate, and calibration residual per session; plus sessions with
-**no** canonical gaze and the reason — degenerate geometry, no ohDPI file,
-events not assembled.
+Parent §10 already asks for eye quality. This spec supplies, per session and
+per eye:
+
+- tracking-loss percentage and blink rate
+- `validation_error_deg`, and residual for a `fitted` map
+- **how the calibration was obtained** — the `calibration_source` breakdown. A
+  session running on a carried-forward map is working, and worth seeing.
+- sessions with **no** canonical gaze, and the specific reason: degenerate
+  geometry with no usable fallback, no ohDPI file, events not assembled
 
 Distinct reasons, never collapsed into one "no gaze" count.
+
+**A persistent step-2 skip is worth noticing.** §4.5 lets a missing, unreadable
+or space-incompatible MonkeyLogic calibration fall through silently *per
+session*, which is right — but if it skips on every session, something is
+systematically wrong (open question 3's transport, most likely) and nobody would
+learn it from any individual session. The `calibration_source` breakdown makes
+that visible without adding a second alerting path.
 
 ---
 
@@ -432,11 +502,18 @@ originals left visible, per this repository's correction convention:
 2. **Whether `<session>-events.txt` is ever written by this lab's
    configuration.** Absent from the sample. *Blocks:* nothing — §4 makes the
    code stream self-sufficient.
-3. **Whether MonkeyLogic's `AnalogData.EyeSignal`, already in degrees from its
-   own calibration of the ACCESIO analog path, should become a second agreement
-   signal.** It is an independent measurement of the same quantity, and this
+3. **Which transport carries gaze into MonkeyLogic** — the OpenIrisDPI UDP path
+   (pixels, port 9003), the ACCESIO analog output (voltage), or both. This
+   decides whether MonkeyLogic's saved calibration is in a space our pixel
+   feature can use. *Blocks:* nothing — §3.5's validation step tries the map and
+   rejects it if the space is wrong, so the chain is correct either way. Worth
+   settling because a permanent step-2 skip should be understood rather than
+   tolerated.
+4. **Whether MonkeyLogic's `AnalogData.EyeSignal` should also become an
+   agreement signal** against our canonical gaze, beyond its role in §3.5's
+   fallback. It is an independent measurement of the same quantity, and this
    pipeline treats those as agreement metrics rather than choosing silently.
-   *Blocks:* nothing; it needs `.bhv2` reading, which is §11.
+   *Blocks:* nothing.
 
 ---
 
@@ -448,8 +525,10 @@ originals left visible, per this repository's correction convention:
   with no version pins, needing a `wl.yaml` `third_party` entry with a `why`),
   and the OpenIrisDPI tutorial notebook, which covers saccade detection directly
   and may change the approach. It also needs the fixture this spec rewrites.
-- **Reading `.bhv2`** — the MonkeyLogic log. §4 deliberately makes calibration
-  work without it.
+- **Reading `.bhv2` beyond the calibration and `ScreenInfo`** — §4.5 keeps the
+  reader narrow. The behavioural codes, analog data and trial structure stay out:
+  the code stream already carries what calibration needs, from a source this
+  pipeline trusts more.
 - **Drift correction** — §3.6 measures drift; correcting it is a later decision
   from that evidence.
 - **Behaviour cameras (`bcam`)** — parent §7 covers eye; 1c-4's open question 1
