@@ -33,6 +33,25 @@ signal to recover, not merely two columns that happen to be nonzero: P1 and P4
 here share a slow common translation (the eye moving in the socket) and differ
 by an added rotation term that only P4 sees, so `P1 - P4` carries the
 corneal-curvature signal a dual-Purkinje calibration exists to recover.
+
+**Why the two eyes are not byte-identical.** Design spec section 3.7 treats
+binocular agreement between the two eyes' independently-calibrated gaze
+estimates as a free quality signal -- which is meaningless if the two eyes'
+raw Purkinje traces agree by construction rather than by measurement. An
+earlier version of this generator computed one P1/P4 pair and wrote it to
+both eyes (only `Seconds` differed), so `LeftCR1X == RightCR1X` and
+`LeftCR4X == RightCR4X` at every frame: any downstream test or calibration
+step comparing the two eyes would pass, or run, without exercising anything
+-- the same defect shape as every other silently-vacuous test this project
+has found (fix round, 2026-08-30). The right eye now gets its own rotation
+term (`RIGHT_EYE_ROTATION_OFFSET_PX`, a small constant offset from the
+left's, not a physiologically-derived vergence angle -- the only requirement
+is that the two eyes be numerically distinguishable, the way two
+independently-tracked eyes always are). The shared common/translational
+component, and P1 itself, stay shared: moving those independently per eye
+would still leave `P1 - P4` as the right calibration feature, but would lose
+the "one eye moving in one socket" model this fixture is going for, for no
+benefit -- the rotation term alone is enough to make the two eyes disagree.
 """
 
 from __future__ import annotations
@@ -103,6 +122,15 @@ HEADER: tuple[str, ...] = (
 # rather than reading a fixture where the two cameras' clocks happen to agree.
 RIGHT_SECONDS_OFFSET_S = -0.04948
 
+# A constant offset from the LEFT eye's rotation term, added only to the
+# RIGHT eye's (see "Why the two eyes are not byte-identical" above and
+# `write_ohdpi`). Not derived from any real vergence angle -- "small" is the
+# whole requirement, so the two eyes are numerically distinguishable without
+# either one's motion dominating the other's. Fixed rather than
+# time-varying: a constant offset can never coincide with zero, so the two
+# eyes' P4 differ at every single frame instead of merely almost always.
+RIGHT_EYE_ROTATION_OFFSET_PX = 6.0
+
 # `Int0` = 12 with bit 0 carrying the barcode, matching the reference
 # recording's {12, 13} (bits 2 and 3 constant-high, bit 1 always low). The
 # constant-high bits are reproduced, not just the toggling one, because a
@@ -166,9 +194,11 @@ def write_ohdpi(
     Pupil and Purkinje positions follow a slow common drift (translation) plus
     per-frame noise; P1 and P4 share the drift and differ by a rotation term
     only P4 sees, so `P1 - P4` carries the signal a calibration can recover
-    (see the module docstring). Both eyes are given the same Purkinje
-    geometry -- only `Seconds` differs between them -- since nothing downstream
-    of this fixture needs independent left/right eye positions yet.
+    (see the module docstring). P1 and the common drift are shared between the
+    two eyes; the rotation term is not -- the right eye's own version is
+    offset by `RIGHT_EYE_ROTATION_OFFSET_PX`, so each eye's P4, and each eye's
+    own `P1 - P4`, is numerically distinguishable from the other's (see "Why
+    the two eyes are not byte-identical" in the module docstring).
     """
     line = _digital_line(recipe, truth, drift_ppm)
     n = len(line)
@@ -179,21 +209,31 @@ def write_ohdpi(
     # CONTIGUOUS rather than starting at any particular position.
     frame0 = 308788
     t = np.arange(n) / OHDPI_FPS
-    # Slow common motion (translation), plus a rotation term only P4 sees.
+    # Slow common motion (translation), shared by both eyes.
     common_x = 500.0 + 20.0 * np.sin(2 * np.pi * 0.05 * t)
     common_y = 220.0 + 15.0 * np.cos(2 * np.pi * 0.03 * t)
+    # The rotation term only P4 sees -- one version per eye, so the two eyes'
+    # P4 (and their own P1 - P4) are never equal. Same shape, offset by a
+    # constant: sharing the shape keeps both eyes' P4 responding to the same
+    # underlying signal, the way two eyes actually would, while the offset is
+    # what makes them numerically distinguishable.
     rot_x = 40.0 * np.sin(2 * np.pi * 0.20 * t) + rng.normal(0, 0.5, n)
     rot_y = 30.0 * np.cos(2 * np.pi * 0.17 * t) + rng.normal(0, 0.5, n)
+    rot_x_right = rot_x + RIGHT_EYE_ROTATION_OFFSET_PX
 
     path = dir_path / FILENAME
     with path.open("w", encoding="utf-8") as handle:
         handle.write(" ".join(HEADER) + "\n")
         for i in range(n):
             p1x, p1y = common_x[i], common_y[i]
-            p4x, p4y = common_x[i] - rot_x[i], common_y[i] - rot_y[i]
             row: list[str] = []
             for eye_index in range(2):
-                offset = 0.0 if eye_index == 0 else RIGHT_SECONDS_OFFSET_S
+                if eye_index == 0:
+                    offset = 0.0
+                    p4x, p4y = common_x[i] - rot_x[i], common_y[i] - rot_y[i]
+                else:
+                    offset = RIGHT_SECONDS_OFFSET_S
+                    p4x, p4y = common_x[i] - rot_x_right[i], common_y[i] - rot_y[i]
                 row += [
                     str(frame0 + i), str(frame0 + i - 1), _fmt(t[i] + offset),
                     _fmt(p1x), _fmt(p1y), _fmt(60.0), _fmt(58.0), _fmt(0.0),
