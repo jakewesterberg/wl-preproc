@@ -95,10 +95,23 @@ default. A different rig changes one constant.
 
 ### 1.3 `Seconds` is a per-camera clock, and the two disagree
 
-`LeftSeconds` and `RightSeconds` differ by a **constant 49.48 ms** (min 49.40,
-max 49.50 over 10,000 rows — a spread of exactly one timestamp tick, so an
-origin offset rather than jitter). Over the same rows, `LeftFrameNumber` and
-`RightFrameNumber` are **identical in every row**.
+`LeftSeconds` and `RightSeconds` differ by an offset that **drifts**: 49.50 ms
+at the start of the reference recording, 45.80 ms at its end — about 3.7 ms over
+39 minutes, or ~1.6 ppm of relative clock skew between the two cameras. Over the
+same rows, `LeftFrameNumber` and `RightFrameNumber` are **identical in every
+row**.
+
+> **Corrected 2026-08-30.** This section first called the offset a *constant*
+> 49.48 ms, "an origin offset rather than jitter". That was measured over 10,000
+> rows — the first twenty seconds — and generalised to the whole file. Over all
+> 1,177,799 rows it drifts monotonically. The original claim is kept visible
+> because the error is instructive: a narrow measurement asserted as a global
+> property is the defect class this repository tracks, and it survived into a
+> spec that was otherwise built on real bytes.
+
+The correction strengthens the conclusion rather than weakening it. A *fixed*
+inter-camera offset could in principle be subtracted; a drifting one cannot be,
+without modelling two clocks.
 
 The cameras are frame-locked by the trigger chain; their clocks are not. At
 500 Hz that offset is ~25 frames, and choosing the wrong column would shift
