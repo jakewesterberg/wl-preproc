@@ -458,3 +458,25 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
         )
         is None
     )
+
+
+def test_count_true_runs_counts_contiguous_runs_not_frames():
+    """`EyeQuality.make()`'s blink-rate computation needs this to count
+    RUNS, not lost frames -- and no fixture anywhere in this file exercises
+    it, since `synth/ohdpi.py::write_ohdpi` always writes `DataQuality=100`
+    (checked directly: `_fmt(100.0)` is hardcoded there, no fault ever
+    varies it). A pure numpy helper, so this needs no session, no database,
+    and no file -- there is no reason its own correctness should wait on
+    those."""
+    import numpy as np
+
+    from wl_preproc.schema.eye import _count_true_runs
+
+    assert _count_true_runs(np.array([], dtype=bool)) == 0
+    assert _count_true_runs(np.array([False, False, False])) == 0
+    assert _count_true_runs(np.array([True, True, True])) == 1
+    # [T, T, F, T]: two runs, not the three frames a bare `.sum()` would give.
+    assert _count_true_runs(np.array([True, True, False, True])) == 2
+    assert _count_true_runs(np.array([True, False, True, False, True])) == 3
+    # A run touching either edge of the array still counts as exactly one.
+    assert _count_true_runs(np.array([True, False, False, True, True])) == 2
