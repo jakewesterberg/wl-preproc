@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.validity import (
@@ -58,14 +57,17 @@ def test_a_frame_gap_invalidates_the_samples_either_side_of_it():
     """Criterion 4, and the reason `read_ohdpi` reports `frame_gaps` instead of
     refusing a recording: a velocity computed ACROSS a gap is a spurious
     saccade, so the samples whose estimate spans the discontinuity are the
-    ones that must go."""
+    ones that must go. With a 5-point velocity estimator, a gap at row r
+    corrupts estimates at indices r-1, r, r+1, r+2."""
     from wl_preproc.eye.ohdpi import FrameGap
 
-    gaze, vel, quality, _ = _clean(20)
+    gaze, vel, quality, _ = _clean(25)
     labels = validity_labels(gaze, vel, quality, (FrameGap(row=9, n_missing=3),), _QUIET)
 
-    assert labels[9] is Label.INVALID and labels[10] is Label.INVALID
-    assert labels[6] is None and labels[13] is None
+    # Gap between rows 9 and 10 corrupts velocity at indices 8, 9, 10, 11
+    assert all(labels[i] is Label.INVALID for i in range(8, 12))
+    # Samples before and after are available
+    assert labels[7] is None and labels[12] is None
 
 
 def test_blink_wins_over_invalid_when_a_sample_qualifies_for_both():
@@ -80,14 +82,18 @@ def test_blink_wins_over_invalid_when_a_sample_qualifies_for_both():
 
 def test_invalid_regions_are_dilated_by_the_stated_number_of_samples():
     """The notebook's fifth criterion. A tracking failure does not begin and
-    end cleanly on the sample the tracker admits it."""
+    end cleanly on the sample the tracker admits it. A blink is a specific
+    reason (tracked failure), and the dilated halo must be marked INVALID
+    (generic reason), not BLINK."""
     params = ValidityParams(20.0, 15.0, 1000.0, dilate_samples=2, min_epoch_samples=1)
     gaze, vel, quality, gaps = _clean(20)
     quality[10] = 0.0
 
     labels = validity_labels(gaze, vel, quality, gaps, params)
 
-    assert all(labels[i] is not None for i in range(8, 13))
+    # Center sample 10 is BLINK; dilated halo samples 8, 9, 11, 12 are INVALID
+    assert labels[10] is Label.BLINK
+    assert all(labels[i] is Label.INVALID for i in [8, 9, 11, 12])
     assert labels[7] is None and labels[13] is None
 
 

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Label
+from wl_preproc.eye.detect.velocity import _HALF_WINDOW
 from wl_preproc.eye.ohdpi import FrameGap
 
 # `EyeQuality`'s own `_FULL_TRACKING_QUALITY`, restated rather than imported --
@@ -70,12 +71,14 @@ def validity_labels(
     )
     too_fast = np.hypot(velocity_deg_s[:, 0], velocity_deg_s[:, 1]) > params.max_speed_deg_s
 
-    # A gap sits between rows `row` and `row + 1`; both estimates span the
-    # discontinuity, so both go. `read_ohdpi` reports gaps rather than refusing
-    # the recording precisely so this can happen here (design spec section 2).
+    # A gap sits between rows `row` and `row + 1`. The velocity estimator spans
+    # `[n-2, n+2]`, so it corrupts four velocity estimates: those at indices
+    # `[row-1, row, row+1, row+2]`. Their gaze samples are unavailable for
+    # detection. The coupling to `_HALF_WINDOW` is deliberate: if the
+    # estimator's window changes, the mask's excluded range changes with it.
     across_gap = np.zeros(n, dtype=bool)
     for gap in frame_gaps:
-        across_gap[max(gap.row, 0) : min(gap.row + 2, n)] = True
+        across_gap[max(gap.row + 1 - _HALF_WINDOW, 0) : min(gap.row + _HALF_WINDOW + 1, n)] = True
 
     unusable = blink | outside | too_fast | across_gap
     unusable = _dilate(unusable, params.dilate_samples)
