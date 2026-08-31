@@ -421,6 +421,97 @@ stays readable when it does.
 
 ---
 
+## 6.5 Saccade vigor
+
+**Vigor is peak velocity relative to what the main sequence predicts for that
+amplitude**, and it costs almost nothing to add here because both inputs are
+already columns on every saccade run row (§5), measured centrally so they are
+comparable across all seven detectors.
+
+It is worth having as more than a curiosity. Shadmehr et al. frame vigor as "a
+new, real-time metric with which to quantify subjective utility", where
+"expectation of reward increases speed of saccadic eye movements, whereas
+expectation of effort decreases this speed"
+([10.1016/j.tins.2019.02.003](https://doi.org/10.1016/j.tins.2019.02.003)).
+And Choi, Vaswani & Shadmehr measured saccadic vigor "as much as 50% greater
+in one subject than another"
+([10.1523/JNEUROSCI.2798-13.2014](https://doi.org/10.1523/JNEUROSCI.2798-13.2014))
+— so it is a between-individual trait as well as a within-session state, and
+what it is normalised against decides which of the two you can see.
+
+### 6.5.1 Store the fit, compute the vigor
+
+The main-sequence fit is stored; **per-saccade vigor is not**. Vigor is a pure
+function of `(amplitude, peak_velocity, fit)` and all three are stored, so this
+is the same call gaze already gets.
+
+That is not only tidiness. A fit pooled across a subject's sessions would be a
+row needing **recomputation every time a new session lands**, and DataJoint
+never recomputes a populated key — the permanence trap `EyeCalibration.
+key_source` already documents at length. Storing per-session fits sidesteps it
+completely: any pooled or rolling normalisation remains computable, forever,
+without a single recompute.
+
+Fitted per **trace** and per **detection paramset**, which makes the main
+sequence another consensus axis at no extra cost: seven detectors disagreeing
+about a subject's main sequence is a different and more interesting signal than
+seven disagreeing about individual events.
+
+### 6.5.2 Three grains, and a degenerate-fit guard that is not new
+
+Fits at three grains — **session, block, and trial condition** — as a master
+and two parts, mirroring `EyeCalibration`/`BlockResidual`:
+
+| Table | Key | |
+|---|---|---|
+| `SaccadeMainSequence` | `(session, trace, validity_ps, detection_ps)` | the session-level fit |
+| `.Block` | `+ block_id` | per block |
+| `.Condition` | `+ block_id, condition` | per condition |
+
+Each row holds `v_max`, the saturation constant, `n_saccades`,
+`amplitude_min_deg`, `amplitude_max_deg`, `r_squared`, and a
+`fit_status`/`reason` pair.
+
+**The finest grain will often be underpowered, and that is handled by refusing
+rather than by fitting anyway.** A saturating two-parameter fit over twenty
+saccades spanning 6–9° returns a plausible-looking `v_max` that means nothing —
+which is this project's signature defect, and one it has already solved once in
+a different costume. **The amplitude span of a set of saccades is the
+conditioning of a main-sequence fit**, exactly as the spread of a target
+constellation is the conditioning of a calibration: a narrow span cannot pin
+the saturation constant for the same reason collinear targets cannot pin an
+affine map, and least squares returns a confident answer in both cases.
+
+So the guard has the same shape as `eye/calibration.py`'s, deliberately: a
+minimum saccade count **and** a minimum amplitude span, checked in that order,
+with a refusal carrying a stated reason. A refused fit is a first-class outcome
+here too, never a fabricated one, and `amplitude_min_deg`/`amplitude_max_deg`
+are stored so a reader can judge a fit that passed.
+
+Two parameters, both stated rather than assumed: the **fit form** (a saturating
+exponential by default) and whether **microsaccades join the fit**. Including
+them extends the amplitude range downward and stabilises the saturation
+constant; excluding them matches the classical saccade literature. It is a
+paramset choice because it changes what the number means.
+
+### 6.5.3 Two consequences worth naming
+
+**PSO handling decides whether vigor means anything.** If a detector's saccade
+offset runs into the glissade, the amplitude is inflated and the whole main
+sequence shifts. §2.5 was argued from the agreement metric; vigor is a second,
+independent reason it matters, and one that bites even if only a single
+detector were ever used.
+
+**The synthetic generator cannot express a trial condition yet.**
+`Escape.CONDITION` exists in the protocol and `schema/events.py` stores a
+`condition` trial attribute, but that module records the gap directly:
+"checked: `synth/timeline.py` builds no CONDITION payload". So the
+condition-grain fit has nothing to test against until the generator emits
+conditions — the same shape as the gap that `SessionRecipe.eye_fixations`
+closed for calibration, and it is fixed the same way: correct the fixture.
+
+---
+
 ## 7. Schema
 
 | Table | Key | Holds |
@@ -430,6 +521,9 @@ stays readable when it does.
 | `EyeDetection.Run` | `+ run_index` | `run_start_row, run_end_row, label, amplitude_deg, peak_velocity_deg_s, reliability` |
 | `DetectorAgreement` | `(…, trace, validity_paramset_idx, paramset_a, paramset_b, metric, vocabulary, pso_as)` | `value, n_samples_compared` |
 | `DetectionQuality` | `(subject, session_datetime)` | `blended_agreement`, session summary |
+| `SaccadeMainSequence` | `(…, trace, validity_paramset_idx, paramset_idx)` | `v_max`, saturation constant, `n_saccades`, amplitude span, `r_squared`, `fit_status`, `reason` |
+| `SaccadeMainSequence.Block` | `+ block_id` | the same, per block |
+| `SaccadeMainSequence.Condition` | `+ block_id, condition` | the same, per condition |
 
 Every one is a `dj.Computed` and every one joins `daemon._computed_tables()` —
 the sweep that exists because `TrialCoverage` was once missing from it and
@@ -493,6 +587,16 @@ agreement rows per detector pair, the sessions whose detection was refused
 with their stated reasons, and the fraction of each session's samples labelled
 `invalid` or `blink`.
 
+**Vigor appears here as a session-versus-history line**, not as a bare number:
+this session's fitted main sequence against the median of that subject's prior
+sessions. That comparison is computed at report time from stored per-session
+fits (§6.5.1), which is exactly why the fits are stored per session and the
+normalisation is not — a subject-pooled reference changes with every new
+session, and a stored one would go stale the moment it was written. A session
+whose vigor drops against its own subject's history is fatigued, disengaged, or
+mis-tracked, and the point of putting it beside the agreement rows is that
+those three look different from each other there.
+
 Computed in `build_report`, never `gather_readings` — that runs on every
 wl.works poll under the lock that also serialises job accepts, and the
 responder reads none of these.
@@ -526,6 +630,21 @@ expose.
 **U'n'Eye is exercised on both interpreters.** The local suite runs 3.11
 alone; CI runs 3.11 and 3.13, and a 2020 package that pins nothing is exactly
 the kind that breaks on one and not the other.
+
+**The main sequence is tested against a planted one.** The generator's held
+fixations (`SessionRecipe.eye_fixations`) already let a fixture step the gaze
+between known positions; giving those steps known peak velocities plants a
+main sequence whose parameters the fit must recover — the same
+recover-a-known-map discipline the calibration round-trip uses, and the only
+thing that distinguishes a fit from a plausible number.
+
+**The degenerate-fit guard needs its own fixture**: a condition whose saccades
+all span 6-9 degrees must be REFUSED with a stated reason, not fitted. Without
+that test the guard is the kind of code that looks alive and never fires.
+
+**Condition-grain fits cannot be tested until the generator emits conditions**
+(§6.5.3). That fixture gap is part of this work, not a prerequisite someone
+else supplies.
 
 ---
 
@@ -605,6 +724,12 @@ appears in no source, and these numbers drive design decisions.
   detection performance using deep neural networks*, J Neurophysiol.
   [10.1152/jn.00601.2018](https://doi.org/10.1152/jn.00601.2018) — cited by
   parent §7.2; not re-verified here.
+- Shadmehr, Reppert, Summerside, Yoon & Ahmed (2019), *Movement Vigor as a
+  Reflection of Subjective Economic Utility*, Trends in Neurosciences
+  42(5):323-336. [10.1016/j.tins.2019.02.003](https://doi.org/10.1016/j.tins.2019.02.003)
+- Choi, Vaswani & Shadmehr (2014), *Vigor of movements and the cost of time in
+  decision making*, J Neurosci 34(4):1212-23.
+  [10.1523/JNEUROSCI.2798-13.2014](https://doi.org/10.1523/JNEUROSCI.2798-13.2014)
 - Engbert & Kliegl (2003) and Otero-Millan et al. (2014)
   [10.1167/14.2.18](https://doi.org/10.1167/14.2.18) — both cited by parent
   §7.2; not re-verified here.
