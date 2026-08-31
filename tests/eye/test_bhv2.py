@@ -8,9 +8,10 @@ import pytest
 from wl_preproc.eye.bhv2 import (
     Bhv2Calibration,
     Bhv2Unreadable,
-    as_affine_map,
+    as_calibration_map,
     read_calibration,
 )
+from wl_preproc.eye.calibration import CalibrationModel
 
 
 def test_a_missing_file_is_absence_not_an_error(tmp_path):
@@ -256,23 +257,29 @@ def test_an_unrecognised_type_tag_raises_not_just_a_length_overrun(tmp_path):
         read_calibration(bad)
 
 
-def test_as_affine_map_converts_a_six_number_calibration():
+def test_as_calibration_map_converts_a_six_number_calibration():
+    """The six numbers keep their documented `(a00, a01, b0, a10, a11, b1)`
+    meaning and are re-expressed into `basis(_, AFFINE)`'s `[1, dx, dy]`
+    order -- constant first. Asserted on the tuples themselves, so a
+    reordering at this vendor boundary cannot pass."""
     cal = Bhv2Calibration(
         present=True, a=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0), pixels_per_degree=40.0
     )
 
-    result = as_affine_map(cal)
+    result = as_calibration_map(cal)
 
     assert result is not None
-    assert result.a == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-    # A borrowed map was never fit by fit_affine and has no such history to
-    # report (calibration.py's own AffineMap docstring) -- these must be the
-    # library-wide defaults, not fabricated evidence.
+    assert result.model is CalibrationModel.AFFINE
+    assert result.x == (3.0, 1.0, 2.0)
+    assert result.y == (6.0, 4.0, 5.0)
+    # A borrowed map was never fit by fit_map and has no such history to
+    # report (calibration.py's own CalibrationMap docstring) -- these must be
+    # the library-wide defaults, not fabricated evidence.
     assert result.n_points == 0
     assert math.isnan(result.conditioning)
 
 
-def test_as_affine_map_declines_a_calibration_that_is_not_six_numbers():
+def test_as_calibration_map_declines_a_calibration_that_is_not_six_numbers():
     """Five is an arbitrary not-six count, not a claim about which real
     MonkeyLogic method produces exactly five -- an earlier version of this
     docstring said Origin & Gain does, which `bhv2.py`'s module docstring's
@@ -285,13 +292,52 @@ def test_as_affine_map_declines_a_calibration_that_is_not_six_numbers():
         present=True, a=(1.0, 2.0, 3.0, 4.0, 5.0), pixels_per_degree=40.0
     )
 
-    assert as_affine_map(cal) is None
+    assert as_calibration_map(cal) is None
 
 
-def test_as_affine_map_declines_absence():
+def test_as_calibration_map_converts_a_twelve_number_calibration():
+    """Twelve numbers become a second-order map: the first six are the x-axis
+    coefficients in `basis(_, SECOND_ORDER)` order, the next six the y-axis
+    ones. Asserted on the split point specifically -- the numbers are chosen
+    so an interleaved reading, or a six/six swap, gives different tuples.
+
+    No real `.bhv2` has shown a twelve-number calibration; this pins the
+    documented assumption so it is at least stable and stated, and
+    `as_calibration_map`'s own docstring says what bounds its cost.
+    """
+    cal = Bhv2Calibration(
+        present=True,
+        a=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0),
+        pixels_per_degree=40.0,
+    )
+
+    result = as_calibration_map(cal)
+
+    assert result is not None
+    assert result.model is CalibrationModel.SECOND_ORDER
+    assert result.x == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    assert result.y == (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    assert result.n_points == 0
+    assert math.isnan(result.conditioning)
+
+
+def test_as_calibration_map_declines_counts_between_and_beyond_the_two_rungs():
+    """Six and twelve, and nothing else -- not "six or more". Nine is between
+    the two rungs and eighteen is past both; each would have to be forced into
+    a shape neither model has, which is exactly what declining exists to
+    avoid.
+    """
+    for count in (9, 18):
+        cal = Bhv2Calibration(
+            present=True, a=tuple(float(i) for i in range(count)), pixels_per_degree=40.0
+        )
+        assert as_calibration_map(cal) is None
+
+
+def test_as_calibration_map_declines_absence():
     cal = Bhv2Calibration(present=False, a=None, pixels_per_degree=None)
 
-    assert as_affine_map(cal) is None
+    assert as_calibration_map(cal) is None
 
 
 def _read_raw_pixels_per_degree(path) -> tuple[float, ...] | None:

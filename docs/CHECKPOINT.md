@@ -1,7 +1,10 @@
 # Where this build actually is
 
-**Last updated 2026-08-31**, on `main` at `e7c8ea4` (the eye subsystem's merge). Check
-`git log --oneline -1` against that; if it has moved, this file is stale and the spec wins.
+**Last updated 2026-08-31**, on `spec/second-order-calibration` at `2fca563` (the
+second-order calibration branch's tip). `main` is at `a95d73b`; **this branch is not
+merged** -- that decision was left to your human partner, the same way the eye branch's
+was. Check `git log --oneline -1` against `2fca563`; if it has moved, this file is stale
+and the spec wins.
 
 This file went **nine days and three merged subsystems stale** before this update — it still
 claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
@@ -17,7 +20,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **980 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
+| **wl-preproc** | private, CI green, **1016 tests, 1 skipped, 1 deselected** (980 on `main`) | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -114,10 +117,31 @@ deliberately: rehydration is what makes reclamation safe and it is not built. In
 refuses new sessions below the scratch floor `doctor.py` already owned.
 
 **wl-preproc eye: reader, calibration, gaze** — merged 2026-08-31 (`e7c8ea4`).
-`wl_preproc/eye/`. Reads the real OpenIrisDPI format, fits a per-eye affine over the
+`wl_preproc/eye/`. Reads the real OpenIrisDPI format, fits a per-eye map over the
 dual-Purkinje vector, exposes canonical gaze as a **computation, never a stored array**.
-Records per session how the calibration was obtained — fitted, borrowed from MonkeyLogic,
-carried forward, or refused with a stated reason.
+Records per session how the calibration was obtained — fitted, borrowed from the map in
+use online during acquisition, carried forward, or refused with a stated reason.
+
+**wl-preproc second-order calibration** — built 2026-08-31 on
+`spec/second-order-calibration`, eight tasks, **not merged**. Replaces that branch's
+affine choice with a **model ladder**: second-order first, affine where the geometry
+cannot constrain twelve parameters, both `calibration_source = fitted`. Twelve schema
+columns named for the basis term each multiplies, plus a `calibration_model` column that
+is the authority rather than a derivation. `monkeylogic` becomes `online` everywhere it is
+a *role*; `eye/bhv2.py` keeps the vendor name. The protocol gains
+`TaskTypeCode.CALIBRATION` and a `CALIBRATION_START`/`END` pair — both mechanisms, ruled
+2026-08-31.
+
+Three corrections it forced, each measured rather than argued:
+`_conditioning` moved from bare target positions to their **mean-centred basis expansion**
+(a ring of 8 constrains an affine perfectly at 1.0000 and a quadratic not at all at
+0.0000; dropping the centring would have falsely refused an off-axis grid at 0.0404
+against 0.1966); the **synthetic generator could not produce a session reaching the
+second-order rung at all** — best quadratic conditioning 0.0739 over 40,000 window
+placements — so `SessionRecipe.eye_fixations` now holds the gaze at stated raw positions,
+which is what a calibration block is; and `read_ohdpi` **reports dropped-frame gaps
+instead of losing the session over one**, with the refusal moved to `extract_ohdpi`, the
+one caller whose sample-index-to-time map a gap actually breaks.
 
 **This corrected five wrong assumptions Phase 1c-4 shipped**, which survived because the
 fixture generator and the reader agreed with each other by construction: three wrong column
@@ -131,14 +155,16 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 
 **2026-08-31 — what is actually next, and what each needs.**
 
-1. **Second-order calibration** — spec and plan written 2026-08-31, nothing implemented.
+1. **Second-order calibration — BUILT 2026-08-31**, all eight tasks, on
+   `spec/second-order-calibration` (`2fca563`). **Not merged.**
    `specs/2026-08-31-second-order-calibration-design.md`,
-   `plans/2026-08-31-second-order-calibration.md`. **This supersedes the eye spec's §3.3
-   affine choice**: OpenIrisDPI's own tutorial notebook shows the P1−P4 nonlinearity is real
-   and a second-order term accounts for much of it. Eight tasks, revising merged code.
-   **Sequenced before detection deliberately** — detection thresholds are tuned against the
-   gaze signal, so tuning against affine gaze and then changing the model means validating
-   twice.
+   `plans/2026-08-31-second-order-calibration.md`, and
+   `handoffs/2026-08-31-second-order-calibration-built-detection-is-next.md` for what it
+   changed and what it left open. It superseded the eye spec's §3.3 affine choice:
+   OpenIrisDPI's own tutorial notebook shows the P1−P4 nonlinearity is real and a
+   second-order term accounts for much of it. **Sequenced before detection deliberately** —
+   detection thresholds are tuned against the gaze signal, so tuning against affine gaze
+   and then changing the model means validating twice. That ordering held.
 2. **Saccade detection** — the second half of parent §7, split from the eye spec deliberately.
    Three detectors, each its own paramset: Engbert–Kliegl (baseline, no dependencies),
    Otero-Millan (threshold-free, per-detection reliability, no PyTorch), and U'n'Eye (a CNN,

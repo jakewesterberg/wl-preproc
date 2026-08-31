@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX, SYNC_WORD_COLUMN, read_ohdpi
+from wl_preproc.eye.ohdpi import (
+    SYNC_BIT_INDEX,
+    SYNC_WORD_COLUMN,
+    FrameGap,
+    read_ohdpi,
+)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
 
@@ -140,3 +145,105 @@ def test_the_arrays_reject_in_place_mutation():
 
     with pytest.raises(ValueError, match="read-only"):
         rec.digital[0] = 0
+
+
+def _minimal_rows(frame_numbers, fs_hz=500.0) -> str:
+    """The five columns `read_ohdpi` requires, for a hand-built file.
+
+    `LeftSeconds` is derived from the FRAME NUMBER, not the row index, so a
+    dropped frame costs real elapsed time exactly as it does on the
+    instrument -- a fixture that timestamped by row would make a gapped file
+    indistinguishable from a clean one on the rate, which is the thing these
+    tests measure.
+    """
+    header = " ".join(["LeftFrameNumber", "LeftSeconds", "Int0", "LeftCR1X", "LeftCR4X"])
+    first = frame_numbers[0]
+    rows = [
+        f"{number} {(number - first) / fs_hz:.4f} {12 + (index % 2)} 100.0000 40.0000"
+        for index, number in enumerate(frame_numbers)
+    ]
+    return header + "\n" + "\n".join(rows) + "\n"
+
+
+def test_a_clean_recording_reports_no_gaps():
+    assert read_ohdpi(FIXTURE).frame_gaps == ()
+
+
+def test_a_dropped_frame_is_a_gap_not_a_lost_session(tmp_path):
+    """The shipped reader raised on any frame-number jump, so a 39-minute
+    recording was lost over one dropped frame.
+
+    OpenIrisDPI's own tutorial notebook treats gaps as ordinary -- "this can
+    happen if the computer is too slow to process the image in time" -- and
+    marks them as invalid REGIONS. The reference recording happened to have
+    zero gaps across 1,177,799 rows, which is why nothing caught this.
+    """
+    path = tmp_path / "gapped.txt"
+    # 308788..308792, then 308796..308798: three frames dropped after row 4.
+    numbers = [308788, 308789, 308790, 308791, 308792, 308796, 308797, 308798]
+    path.write_text(_minimal_rows(numbers), encoding="utf-8")
+
+    rec = read_ohdpi(path)
+
+    assert rec.n_frames == 8
+    assert rec.frame_gaps == (FrameGap(row=4, n_missing=3),)
+    # The gap is REPORTED, not repaired: the rows themselves are untouched, so
+    # a consumer excludes the region rather than receiving a silently
+    # renumbered trace.
+    assert rec.frame_numbers[4] == 308792
+    assert rec.frame_numbers[5] == 308796
+
+
+def test_every_gap_is_reported_not_only_the_first(tmp_path):
+    """A caller excluding invalid regions needs all of them. The shipped
+    reader raised on `gaps[0]` and never looked further, so "the first gap" is
+    the shape a careless port of that logic would keep."""
+    path = tmp_path / "two_gaps.txt"
+    numbers = [100, 101, 103, 104, 105, 110, 111]
+    path.write_text(_minimal_rows(numbers), encoding="utf-8")
+
+    assert read_ohdpi(path).frame_gaps == (
+        FrameGap(row=1, n_missing=1),
+        FrameGap(row=4, n_missing=4),
+    )
+
+
+def test_the_rate_counts_dropped_frames_as_elapsed_time(tmp_path):
+    """Frame numbers, not rows. The camera kept running through a gap, so the
+    elapsed span covers frame periods the file has no row for; dividing by the
+    row count instead would UNDERSTATE the rate by exactly the dropped frames.
+
+    Here 7 rows span 11 frame periods at 500 Hz. Rows would give
+    `6 / 0.0220 = 272.7 Hz`; frame numbers give 500.
+    """
+    path = tmp_path / "gapped_rate.txt"
+    numbers = [100, 101, 103, 104, 105, 110, 111]
+    path.write_text(_minimal_rows(numbers, fs_hz=500.0), encoding="utf-8")
+
+    rec = read_ohdpi(path)
+
+    assert rec.fs_hz == pytest.approx(500.0, rel=1e-6)
+    assert rec.n_frames == 7  # and NOT 12, the frame span -- rows are rows
+
+
+def test_the_barcode_extractor_refuses_a_gapped_recording(tmp_path):
+    """The refusal `read_ohdpi` used to make, moved to the one caller that
+    genuinely cannot tolerate a gap.
+
+    `edges_from_samples` turns a sample INDEX into a time by dividing by
+    `fs_hz`, so every edge after a gap is early by the dropped frames'
+    duration and the barcodes decoded from them would name sync times that
+    never happened -- a silently wrong alignment for the whole session rather
+    than a visibly absent one. The eye path has no such indexing and keeps the
+    recording.
+    """
+    from wl_preproc.timebase.extract import extract_ohdpi
+
+    path = tmp_path / "gapped_for_barcode.txt"
+    path.write_text(_minimal_rows([100, 101, 103, 104, 105, 106]), encoding="utf-8")
+
+    # The reader itself is content.
+    assert read_ohdpi(path).frame_gaps == (FrameGap(row=1, n_missing=1),)
+
+    with pytest.raises(ValueError, match="dropped-frame gap"):
+        extract_ohdpi(path)

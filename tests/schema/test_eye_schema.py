@@ -43,15 +43,57 @@ def test_no_bare_longblob(schemas):
 def test_calibration_source_names_all_four_chain_steps(schemas, enum_values):
     attr = schemas.EyeCalibration.heading.attributes["calibration_source"]
     assert enum_values(attr.type) == {
-        "fitted", "monkeylogic", "carried_forward", "refused"
+        "fitted", "online", "carried_forward", "refused"
     }
 
 
-def test_the_affine_parameters_are_nullable(schemas):
+def test_all_twelve_coefficients_are_nullable(schemas):
     """A refused calibration is a first-class outcome with a stated reason,
-    not an error and not a fabricated map."""
-    for name in ("a00", "a01", "b0", "a10", "a11", "b1"):
-        assert schemas.EyeCalibration.heading.attributes[name].nullable
+    not an error and not a fabricated map -- and an affine-tier fit leaves the
+    six quadratic columns NULL, so nullability is load-bearing at BOTH rungs,
+    not only for refusal."""
+    for axis in ("gx", "gy"):
+        for suffix in ("const", "dx", "dy", "dx2", "dy2", "dxdy"):
+            attribute = schemas.EyeCalibration.heading.attributes[f"{axis}_{suffix}"]
+            assert attribute.nullable, f"{axis}_{suffix}"
+
+
+def test_the_coefficient_columns_are_named_for_their_basis_terms(schemas):
+    """The column names ARE the documented basis order (`eye/calibration.py::
+    basis`), which is what makes "which sessions have a large dx^2 term" a
+    query. Asserted against `_COEFF_SUFFIXES` itself so the schema and the
+    basis cannot drift apart silently."""
+    from wl_preproc.eye.calibration import CalibrationModel, n_terms
+    from wl_preproc.schema.eye import _COEFF_SUFFIXES
+
+    assert _COEFF_SUFFIXES == ("const", "dx", "dy", "dx2", "dy2", "dxdy")
+    assert len(_COEFF_SUFFIXES) == n_terms(CalibrationModel.SECOND_ORDER)
+    # The affine basis is the quadratic one's first three columns, which is
+    # why one suffix tuple serves both rungs.
+    assert n_terms(CalibrationModel.AFFINE) == 3
+
+    for axis in ("gx", "gy"):
+        for suffix in _COEFF_SUFFIXES:
+            assert f"{axis}_{suffix}" in schemas.EyeCalibration.heading.attributes
+
+
+def test_calibration_model_names_exactly_the_two_rungs(schemas, enum_values):
+    """The enum values must equal `CalibrationModel`'s exactly. A value in one
+    and not the other is not a type error anywhere -- it is a silent insert
+    failure on whichever session first reaches that rung, months later."""
+    from wl_preproc.eye.calibration import CalibrationModel
+
+    attr = schemas.EyeCalibration.heading.attributes["calibration_model"]
+    assert enum_values(attr.type) == {model.value for model in CalibrationModel}
+    assert attr.nullable
+
+
+def test_calibration_source_enum_matches_the_source_type_exactly(schemas, enum_values):
+    """The same argument as `calibration_model`'s, for the other axis."""
+    from wl_preproc.eye.calibration import CalibrationSource
+
+    attr = schemas.EyeCalibration.heading.attributes["calibration_source"]
+    assert enum_values(attr.type) == {source.value for source in CalibrationSource}
 
 
 def test_both_computed_tables_are_daemon_stages():

@@ -110,7 +110,7 @@ object dominated by a function handle and fit data, likewise unverified and
 essentially opaque to a reader this narrow. `Bhv2Calibration.a` is therefore
 whatever plain `double` fields this module finds as DIRECT children of the
 active method's struct, in field order, concatenated -- not asserted to be
-six of anything, for any method. `as_affine_map` is where a six-number `a`
+six of anything, for any method. `as_calibration_map` is where a six-number `a`
 becomes usable and anything else is declined; see its own docstring.
 
 **`PixelsPerDegree` is two numbers, not one.** Confirmed directly against a
@@ -181,7 +181,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wl_preproc.eye.calibration import AffineMap
+from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel
 
 _UINT64 = np.dtype("<u8")
 _FLOAT64 = np.dtype("<f8")
@@ -254,26 +254,65 @@ def read_calibration(path: str | Path) -> Bhv2Calibration:
     return Bhv2Calibration(present=a is not None, a=a, pixels_per_degree=pixels_per_degree)
 
 
-def as_affine_map(cal: Bhv2Calibration) -> AffineMap | None:
-    """`cal.a` as a borrowed `AffineMap`, if and only if it is exactly six
-    numbers.
+def as_calibration_map(cal: Bhv2Calibration) -> CalibrationMap | None:
+    """`cal.a` as a borrowed `CalibrationMap`, if and only if it is exactly
+    six or exactly twelve numbers.
 
-    MonkeyLogic's own calibration is not always six numbers (module
+    **Six is affine, twelve is second-order**, matching this project's own two
+    rungs (`eye/calibration.py::CalibrationModel`). Every other count is
+    declined. MonkeyLogic's own calibration is not always six numbers (module
     docstring): Raw Signal gives two, Origin & Gain's real saved shape is
-    unverified but its calibration-authoring UI alone initialises on the
-    order of twenty numbers, and the 2-D Spatial Transformation method gives
-    however many plain `double` fields happen to sit directly on an
-    otherwise-opaque projective/polynomial object. Forcing a
-    mismatched count into the documented `(a00, a01, b0, a10, a11, b1)`
-    slots would silently misassign a gain term to an offset, or drop one
-    entirely -- worse than declining. Task 7 (design spec section 4.5)
-    treats `None` exactly like every other declined source and falls
-    through to the next one.
+    unverified but its calibration-authoring UI alone initialises on the order
+    of twenty numbers, and the 2-D Spatial Transformation method gives however
+    many plain `double` fields happen to sit directly on an otherwise-opaque
+    projective/polynomial object. Forcing a mismatched count into the
+    documented slots would silently misassign a gain term to an offset, or
+    drop one entirely -- worse than declining.
+
+    **The twelve-number layout is an assumption, and no real file has shown
+    one.** It is read as the x-axis coefficients in `basis(_, SECOND_ORDER)`
+    order followed by the y-axis ones -- the same axis-major shape the
+    six-number case has, extended -- because that is the shape
+    `CalibrationMap` itself holds and there is no observed alternative to
+    prefer over it. Stated rather than hidden: this is the one claim in this
+    function nothing has verified.
+
+    What bounds the cost of that assumption is that this map is a CANDIDATE,
+    never an accepted calibration. `resolve_calibration` validates every
+    borrowed map against the session's own fixation before accepting it
+    (design spec section 3.5), and a map assembled in the wrong order is a
+    map in the wrong space -- which is exactly the case that misses by orders
+    of magnitude and gets refused. A wrong guess here costs a fallback, not a
+    wrong calibration.
+
+    **`present` is `a is not None`** (`read_calibration`'s own return, and
+    `Bhv2Calibration`'s docstring), so a present-but-unusable calibration
+    reaches here as `present=True` with a wrong-length `a` and is declined on
+    the length check, not on `a is None`. Absence carries `a=None` and is
+    declined on the first clause. Both return `None`, which is all the
+    fallback chain needs, but they are not the same state.
     """
-    if cal.a is None or len(cal.a) != 6:
+    if cal.a is None:
         return None
-    a0, a1, a2, a3, a4, a5 = (float(x) for x in cal.a)
-    return AffineMap(a=(a0, a1, a2, a3, a4, a5))
+
+    if len(cal.a) == 6:
+        a00, a01, b0, a10, a11, b1 = (float(value) for value in cal.a)
+        # Re-expressed into `basis(_, AFFINE)` column order -- `[1, dx, dy]`
+        # -- from the flat `(a00, a01, b0, a10, a11, b1)` order MonkeyLogic's
+        # own six numbers are documented in above. The reordering happens
+        # HERE, at the vendor boundary, so no reshape and no reordering
+        # exists anywhere downstream.
+        return CalibrationMap(
+            model=CalibrationModel.AFFINE, x=(b0, a00, a01), y=(b1, a10, a11)
+        )
+
+    if len(cal.a) == 12:
+        values = tuple(float(value) for value in cal.a)
+        return CalibrationMap(
+            model=CalibrationModel.SECOND_ORDER, x=values[:6], y=values[6:]
+        )
+
+    return None
 
 
 def _harvest_doubles(materialized_struct: object) -> list[float]:

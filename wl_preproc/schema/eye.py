@@ -3,7 +3,8 @@
 
 Design spec `docs/superpowers/specs/2026-08-30-eye-ohdpi-calibration-and-gaze-
 design.md` section 6. Calibration is fitted from this session's own targets,
-borrowed from MonkeyLogic, carried forward from another session the same day,
+borrowed from the map in use online during acquisition, carried forward from
+another session the same day,
 or refused (section 3.5's chain, `wl_preproc.eye.calibration.
 CalibrationSource`). A refused calibration is a first-class outcome with a
 stated reason -- not an error, and never a fabricated map -- which is why the
@@ -47,14 +48,16 @@ from wl_preproc.contracts.events import (
     decode_stream,
 )
 from wl_preproc.eye.calibration import (
-    AffineMap,
+    CalibrationMap,
+    CalibrationModel,
     CalibrationSource,
-    apply_affine,
-    read_monkeylogic_map,
+    _conditioning,
+    apply_map,
+    n_terms,
+    read_online_map,
     resolve_calibration,
     validate_map,
 )
-from wl_preproc.eye.calibration import _conditioning as _target_conditioning
 from wl_preproc.eye.gaze import purkinje_vector
 from wl_preproc.eye.ohdpi import read_columns
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
@@ -67,6 +70,12 @@ schema = dj.Schema()
 # rather than imported -- it is a private name in that module, and the value
 # is the frozen recording format's, not a choice free to drift between the
 # two places it is read.
+#
+# It is NECESSARY, not sufficient -- see `eye/gaze.py`'s own copy of this
+# constant for the full correction and the notebook quotation behind it. In
+# short: a frame at 100 is one the tracker did not declare a failure on, which
+# is not the same as one it tracked correctly, and the validity mask that
+# closes the gap belongs with saccade detection.
 _FULL_TRACKING_QUALITY = 100
 
 # `EyeCalibration.reason` is `varchar(255)` (that class's own `definition`,
@@ -77,7 +86,7 @@ _FULL_TRACKING_QUALITY = 100
 # kind of number free to drift from the column it is supposed to describe.
 #
 # This is not a defensive margin against a hypothetical: a combined reason
-# CAN exceed it for real. `calibration.py::fit_affine`'s own
+# CAN exceed it for real. `calibration.py::fit_map`'s own
 # collinear/coincident-target message is 221 characters on its own;
 # `resolve_calibration`'s "; no fallback map validated" suffix makes 248;
 # and `EyeCalibration.make()`'s own coverage-drop note (below) adds another
@@ -148,6 +157,56 @@ def _combine_reason(primary: str, note: str) -> str:
     return f"{_bounded_reason(primary, budget)}{joiner}{note}"
 
 
+# `basis(_, SECOND_ORDER)`'s own column order, which the affine basis is the
+# first three of. One tuple, used to build BOTH the column names and the
+# read-back, so a column can never be named for one basis term and filled from
+# another.
+_COEFF_SUFFIXES = ("const", "dx", "dy", "dx2", "dy2", "dxdy")
+
+
+def _coefficient_columns(map_: CalibrationMap | None) -> dict[str, float | None]:
+    """The twelve `gx_`/`gy_` columns for `map_`, or all NULL for no map.
+
+    `n_terms(map_.model)` decides how many are filled; the rest stay NULL.
+    Nothing here counts, slices or reshapes by a literal -- an affine map
+    simply has three coefficients per axis and runs out, which is the same
+    fact `CalibrationMap.__post_init__` already enforces.
+    """
+    columns: dict[str, float | None] = {
+        f"g{axis}_{suffix}": None for axis in ("x", "y") for suffix in _COEFF_SUFFIXES
+    }
+    if map_ is None:
+        return columns
+    suffixes = _COEFF_SUFFIXES[: n_terms(map_.model)]
+    for axis, coefficients in (("x", map_.x), ("y", map_.y)):
+        # `strict=True` against the model's OWN term count, not against the
+        # full six: it checks the map, and a map whose tuples disagree with
+        # its model raises here rather than writing a short row.
+        for suffix, value in zip(suffixes, coefficients, strict=True):
+            columns[f"g{axis}_{suffix}"] = float(value)
+    return columns
+
+
+def _map_from_row(row: dict) -> CalibrationMap | None:
+    """A stored row back into a `CalibrationMap`, branching on
+    `calibration_model` and never on which columns happen to be NULL.
+
+    A refused row has no model and no map. Anything else reads exactly
+    `n_terms(model)` coefficients per axis, in `_COEFF_SUFFIXES` order.
+    """
+    if row["calibration_model"] is None:
+        return None
+    model = CalibrationModel(row["calibration_model"])
+    suffixes = _COEFF_SUFFIXES[: n_terms(model)]
+    return CalibrationMap(
+        model=model,
+        x=tuple(row[f"gx_{suffix}"] for suffix in suffixes),
+        y=tuple(row[f"gy_{suffix}"] for suffix in suffixes),
+        n_points=row["n_points"],
+        conditioning=row["conditioning"] if row["conditioning"] is not None else float("nan"),
+    )
+
+
 @schema
 class EyeCalibration(dj.Computed):
     definition = """
@@ -158,16 +217,44 @@ class EyeCalibration(dj.Computed):
     ---
     # Which step of section 3.5's chain produced this map. A borrowed map must
     # never be mistaken for a fitted one.
-    calibration_source : enum('fitted','monkeylogic','carried_forward','refused')
-    # The six affine parameters, NULL when refused. A refused calibration is a
-    # first-class outcome with a stated reason -- not an error, and never a
-    # fabricated map.
-    a00=null : double
-    a01=null : double
-    b0=null  : double
-    a10=null : double
-    a11=null : double
-    b1=null  : double
+    calibration_source : enum('fitted','online','carried_forward','refused')
+    # WHAT SHAPE the map is, a different question from whose it is. NULL only
+    # when refused. **Read this before any coefficient column below** --
+    # `SystemTimebase.fit_status`'s own phrasing, and the same relationship:
+    # the coefficients are this column's payload.
+    #
+    # This column is the AUTHORITY, never a derivation. Null quadratic columns
+    # would IMPLY affine, but deriving the model from the nulls would put one
+    # fact in two places -- the defect this repository names most often -- and
+    # would silently misread a second-order fit whose `gx_dx2` happened to
+    # come back exactly zero.
+    calibration_model=null : enum('affine','second_order')
+    # The coefficients, one column per basis term it multiplies, NULL when
+    # refused. `gx_` is the gaze-x axis, `gy_` the gaze-y; the suffixes are
+    # `basis(_, SECOND_ORDER)`'s own column order, and the affine basis is
+    # that basis's first three columns -- so on an affine-tier fit the six
+    # quadratic columns are NULL and the first three carry the whole map.
+    #
+    # Named columns rather than a blob because this is what makes the
+    # nonlinearity queryable: "which sessions have a large dx^2 term" is the
+    # question to ask when deciding whether it is real on this lab's own rig,
+    # and it is a WHERE clause here and a full-table scan plus a decode
+    # otherwise.
+    #
+    # A refused calibration is a first-class outcome with a stated reason --
+    # not an error, and never a fabricated map.
+    gx_const=null : double
+    gx_dx=null    : double
+    gx_dy=null    : double
+    gx_dx2=null   : double
+    gx_dy2=null   : double
+    gx_dxdy=null  : double
+    gy_const=null : double
+    gy_dx=null    : double
+    gy_dy=null    : double
+    gy_dx2=null   : double
+    gy_dy2=null   : double
+    gy_dxdy=null  : double
     # Where this session's own fixation lands under the accepted map. Populated
     # for EVERY source including 'fitted', because it is the one number
     # comparable across all four.
@@ -342,8 +429,8 @@ class EyeCalibration(dj.Computed):
                         **session_key,
                         "eye": eye_value,
                         "calibration_source": "refused",
-                        "a00": None, "a01": None, "b0": None,
-                        "a10": None, "a11": None, "b1": None,
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
                         "validation_error_deg": None,
                         "n_points": 0,
                         "n_from_calibration_block": 0,
@@ -372,14 +459,19 @@ class EyeCalibration(dj.Computed):
         # relevant role being FIXATION_POINT, since a fixation HOLD is, by
         # construction, held on the fixation point rather than on whatever
         # secondary/saccade target a task also has on screen at once.
-        windows: list[tuple[float, float, tuple[float, float], int | None, int | None]] = []
+        # A window carries `is_calibration` rather than its raw task type: the
+        # ONLY thing the task type was ever read for downstream is that
+        # distinction, and deciding it here is what lets both of the
+        # protocol's two mechanisms feed one flag (below).
+        windows: list[tuple[float, float, tuple[float, float], int | None, bool]] = []
         current_targets: dict[int, tuple[float, float]] = {}
         current_block_id: int | None = None
         current_task_type: int | None = None
+        in_calibration_epoch = False
         open_start: float | None = None
         open_target: tuple[float, float] | None = None
         open_block_id: int | None = None
-        open_task_type: int | None = None
+        open_is_calibration = False
 
         for event in decoded:
             if isinstance(event, PayloadEvent):
@@ -388,19 +480,46 @@ class EyeCalibration(dj.Computed):
                     current_targets[role] = (decode_dva(x_word), decode_dva(y_word))
                 elif event.escape is Escape.BLOCK_START:
                     current_block_id, current_task_type = event.words
+                    # A new block ends any epoch left open by the last one: an
+                    # unclosed CALIBRATION_START must not silently reclassify
+                    # every fixation in every block that follows it.
+                    in_calibration_epoch = False
                 continue
             if isinstance(event, SimpleEvent):
-                if event.code == TaskEvent.FIXATION_ACQUIRED:
+                if event.code == TaskEvent.CALIBRATION_START:
+                    in_calibration_epoch = True
+                elif event.code == TaskEvent.CALIBRATION_END:
+                    in_calibration_epoch = False
+                elif event.code == TaskEvent.FIXATION_ACQUIRED:
                     open_start = event.time_s
                     open_target = current_targets.get(TargetRole.FIXATION_POINT)
-                    open_block_id, open_task_type = current_block_id, current_task_type
+                    open_block_id = current_block_id
+                    # **Either mechanism counts** (contracts/events.py, ruled
+                    # 2026-08-31): a whole block declaring itself
+                    # `TaskTypeCode.CALIBRATION` in its own `BLOCK_START`, or
+                    # a `CALIBRATION_START`/`END` epoch inside any other task.
+                    # The distinction this flag draws is "a point gathered
+                    # deliberately for calibration" against "an incidental
+                    # task fixation", and both mechanisms produce the former.
+                    #
+                    # This replaces a PROVISIONAL reading of
+                    # `MEMORY_GUIDED_SACCADE` as a calibration block -- a task
+                    # the design spec motivates the `role` word with and never
+                    # characterises as one. That placeholder, and the note
+                    # recording that it was a guess, are both gone.
+                    open_is_calibration = (
+                        current_task_type == int(TaskTypeCode.CALIBRATION)
+                        or in_calibration_epoch
+                    )
                 elif event.code == TaskEvent.FIXATION_END and open_start is not None:
                     if open_target is not None:
                         windows.append(
-                            (open_start, event.time_s, open_target, open_block_id, open_task_type)
+                            (open_start, event.time_s, open_target, open_block_id,
+                             open_is_calibration)
                         )
                     open_start = open_target = None
-                    open_block_id = open_task_type = None
+                    open_block_id = None
+                    open_is_calibration = False
                 continue
             # DecodeError: a corrupt payload elsewhere in the stream must not
             # cost this session its calibration -- ignored here exactly as
@@ -422,9 +541,9 @@ class EyeCalibration(dj.Computed):
         # a `n_windows_found`/`len(row_ranges)` gap below is what makes that
         # distinction visible instead of silently absorbed.
         row_ranges: list[
-            tuple[int, int, tuple[float, float], int | None, int | None, dict]
+            tuple[int, int, tuple[float, float], int | None, bool, dict]
         ] = []
-        for t_start, t_end, target_xy, block_id, task_type in windows:
+        for t_start, t_end, target_xy, block_id, is_calibration in windows:
             segment = _containing_segment(segments, t_start, t_end)
             if segment is None:
                 continue
@@ -433,7 +552,7 @@ class EyeCalibration(dj.Computed):
             if row_start is None or row_end is None:
                 continue
             lo, hi = sorted((row_start, row_end))
-            row_ranges.append((lo, hi, target_xy, block_id, task_type, segment))
+            row_ranges.append((lo, hi, target_xy, block_id, is_calibration, segment))
 
         n_windows_found = len(windows)
         n_windows_dropped = n_windows_found - len(row_ranges)
@@ -457,8 +576,8 @@ class EyeCalibration(dj.Computed):
                         **session_key,
                         "eye": eye_value,
                         "calibration_source": "refused",
-                        "a00": None, "a01": None, "b0": None,
-                        "a10": None, "a11": None, "b1": None,
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
                         "validation_error_deg": None,
                         "n_points": 0,
                         "n_from_calibration_block": 0,
@@ -474,9 +593,9 @@ class EyeCalibration(dj.Computed):
             )
             return
 
-        # -- MonkeyLogic's candidate: one map for the whole session (Task 6's
+        # -- The online candidate: one map for the whole session (Task 6's
         # reader has no per-eye split), tried identically for both eyes below.
-        monkeylogic = read_monkeylogic_map(_find_bhv2(session_dir))
+        online = read_online_map(_find_bhv2(session_dir))
 
         rows = []
         block_rows = []
@@ -487,7 +606,7 @@ class EyeCalibration(dj.Computed):
             n_from_task_fixation = 0
             cache: dict[Path, np.ndarray] = {}
 
-            for lo, hi, target_xy, _block_id, task_type, segment in row_ranges:
+            for lo, hi, target_xy, _block_id, is_calibration, segment in row_ranges:
                 path = session_dir / "ohdpi" / segment["file_path"]
                 trace = cache.get(path)
                 if trace is None:
@@ -495,30 +614,7 @@ class EyeCalibration(dj.Computed):
                     cache[path] = trace
                 raw_points.append(trace[lo : hi + 1].mean(axis=0))
                 target_points.append(target_xy)
-                # PROVISIONAL READING, NOT A SETTLED FACT (fix round,
-                # reviewer finding 6): no literal "calibration" task type
-                # exists in `contracts.events.TaskTypeCode`, and design spec
-                # section 4.2 motivates the `role` word with
-                # MEMORY_GUIDED_SACCADE -- "that task has a fixation point
-                # and a target on screen simultaneously" -- WITHOUT ever
-                # characterising it as a dedicated calibration block. Reading
-                # it as one is this implementation's own choice, not
-                # something section 3.4's "calibration block or a task
-                # fixation" distinction independently settles. A future task
-                # that names a real calibration task type, or decides
-                # MEMORY_GUIDED_SACCADE is not one, changes only this `if`.
-                #
-                # Recorded, not fixed: for MEMORY_GUIDED_SACCADE specifically
-                # -- the one type bucketed as "calibration block" -- every
-                # window here is still paired with `TargetRole.
-                # FIXATION_POINT` only (this method's own loop, above), never
-                # `SACCADE_TARGET` (role 1), which is what a POST-saccade
-                # hold would need. Whether MGS ever emits a
-                # FIXATION_ACQUIRED/END pair around the saccade target rather
-                # than the fixation point is undetermined until that task's
-                # own code exists; if it does, this bucket is fit against the
-                # wrong target for exactly the task type it claims to favour.
-                if task_type == int(TaskTypeCode.MEMORY_GUIDED_SACCADE):
+                if is_calibration:
                     n_from_calibration_block += 1
                 else:
                     n_from_task_fixation += 1
@@ -535,10 +631,21 @@ class EyeCalibration(dj.Computed):
                 carry_datetime, candidate_map = candidate
                 carried = (candidate_map, carry_datetime.isoformat())
 
-            result = resolve_calibration(raw_xy, target_xy_arr, monkeylogic, carried)
+            result = resolve_calibration(raw_xy, target_xy_arr, online, carried)
 
+            # **The AFFINE basis, for every row, whatever model was used.**
+            # One definition of one column: how well this session's own target
+            # constellation constrains a calibration at all -- the question a
+            # refused or borrowed row raises. The second-order verdict needs no
+            # column of its own because `calibration_model` already IS that
+            # verdict, thresholded. Measured on the targets rather than on the
+            # raw design matrix for the reason `_conditioning`'s own docstring
+            # gives: a well-spread raw cloud from one target location scores
+            # 0.857 and means nothing.
             conditioning = (
-                float(_target_conditioning(target_xy_arr)) if target_xy_arr.shape[0] else None
+                float(_conditioning(target_xy_arr, CalibrationModel.AFFINE))
+                if target_xy_arr.shape[0]
+                else None
             )
 
             residual_rms = None
@@ -551,7 +658,7 @@ class EyeCalibration(dj.Computed):
                 # not come from). The RMS is therefore not recomputed; the
                 # MAX is, since `validate_map` reports only the RMS.
                 residual_rms = result.validation_error_deg
-                predicted = apply_affine(result.map_, raw_xy)
+                predicted = apply_map(result.map_, raw_xy)
                 residual_max = float(
                     np.sqrt(np.max(np.sum((predicted - target_xy_arr) ** 2, axis=1)))
                 )
@@ -559,12 +666,6 @@ class EyeCalibration(dj.Computed):
             carried_from_dt = (
                 carry_datetime if result.source == CalibrationSource.CARRIED_FORWARD else None
             )
-            a = (
-                result.map_.a
-                if result.map_ is not None
-                else (None, None, None, None, None, None)
-            )
-
             # A PARTIAL drop -- some windows sampled fine, at least one did
             # not -- must still be visible even when calibration otherwise
             # SUCCEEDS from what remained: a coverage gap that happens not
@@ -573,7 +674,7 @@ class EyeCalibration(dj.Computed):
             # `_combine_reason` rather than a bare f-string concatenation,
             # deliberately: `result.reason` alone already reaches 248
             # characters for a real refusal (a collinear/coincident-target
-            # message from `calibration.py::fit_affine`, plus
+            # message from `calibration.py::fit_map`, plus
             # `resolve_calibration`'s own "; no fallback map validated"),
             # and this column is `varchar(255)` -- a bare concatenation
             # would either overflow the column outright (raising inside
@@ -596,8 +697,15 @@ class EyeCalibration(dj.Computed):
                     **session_key,
                     "eye": eye_value,
                     "calibration_source": result.source.value,
-                    "a00": a[0], "a01": a[1], "b0": a[2],
-                    "a10": a[3], "a11": a[4], "b1": a[5],
+                    # The map's own model, whichever rung produced it -- and
+                    # for a borrowed map, the shape it arrived in. Written
+                    # from the map rather than inferred from the source, so
+                    # a carried-forward second-order map is not silently
+                    # recorded as affine.
+                    "calibration_model": (
+                        result.map_.model.value if result.map_ is not None else None
+                    ),
+                    **_coefficient_columns(result.map_),
                     "validation_error_deg": result.validation_error_deg,
                     "n_points": len(raw_points),
                     "n_from_calibration_block": n_from_calibration_block,
@@ -615,7 +723,7 @@ class EyeCalibration(dj.Computed):
                 # drift over a long session shows as a residual that grows --
                 # measured here, never corrected.
                 by_block: dict[int, list[int]] = {}
-                for index, (_lo, _hi, _target, block_id, _task_type, _segment) in enumerate(
+                for index, (_lo, _hi, _target, block_id, _is_calib, _segment) in enumerate(
                     row_ranges
                 ):
                     if block_id is not None:
@@ -678,7 +786,7 @@ def _find_bhv2(session_dir: Path) -> Path | None:
     synthetic generator produces, since `synth/peripherals.py::
     write_task_file` "stands in for MonkeyLogic's .bhv2 until the task stack
     is chosen" and writes `task.json`, never a real `.bhv2` -- finds nothing,
-    which `read_monkeylogic_map(None)` already treats as an ordinary skip
+    which `read_online_map(None)` already treats as an ordinary skip
     (design spec section 4.5: "a missing or unreadable .bhv2 is not an
     error").
     """
@@ -688,7 +796,7 @@ def _find_bhv2(session_dir: Path) -> Path | None:
 
 def _best_carry_forward_candidate(
     eye_value: str, session_key: dict
-) -> tuple[datetime.datetime, AffineMap] | None:
+) -> tuple[datetime.datetime, CalibrationMap] | None:
     """Design spec section 3.5 step 3, and a real ambiguity in it, resolved
     rather than hidden (fix round, reviewer finding 6).
 
@@ -710,8 +818,8 @@ def _best_carry_forward_candidate(
 
     Separately, and not as a resolution of the disagreement above:
     candidates are restricted to `calibration_source='fitted'` rows, the
-    only source with a real, non-NaN `conditioning` of its own (`AffineMap`'s
-    own docstring: a borrowed map "was never fit by `fit_affine` here and
+    only source with a real, non-NaN `conditioning` of its own
+    (`CalibrationMap`'s own docstring: a borrowed map "was never fit by `fit_map` here and
     has no such history to report"). This filter stands on its own
     reasoning -- carrying forward a map that was ITSELF already borrowed
     would compound provenance across an unbounded chain, precisely what
@@ -748,11 +856,24 @@ def _best_carry_forward_candidate(
         return (abs(delta), 0 if delta < 0 else 1)
 
     best = min(same_day, key=sort_key)
-    return best["session_datetime"], AffineMap(
-        a=(best["a00"], best["a01"], best["b0"], best["a10"], best["a11"], best["b1"]),
-        n_points=best["n_points"],
-        conditioning=best["conditioning"] if best["conditioning"] is not None else float("nan"),
-    )
+    # `_map_from_row` branches on `calibration_model`, so a carried-forward
+    # candidate keeps whichever shape it was fitted at rather than being
+    # flattened to affine on the way out.
+    #
+    # It can return `None` in general -- a refused row has no model -- but not
+    # here: the restriction above is `calibration_source='fitted'`, and every
+    # fitted row was written from a real map (`make()` sets the model from
+    # `result.map_`, which `CalibrationSource.FITTED` guarantees is not None).
+    # Asserted rather than assumed, because "a source implies a model" is
+    # exactly the kind of cross-column invariant nothing in the schema
+    # enforces.
+    borrowed = _map_from_row(best)
+    if borrowed is None:  # pragma: no cover -- see above
+        raise ValueError(
+            f"fitted calibration at {best['session_datetime']} has no "
+            "calibration_model; a fitted row is always written from a real map"
+        )
+    return best["session_datetime"], borrowed
 
 
 def _count_true_runs(mask: np.ndarray) -> int:
@@ -786,7 +907,10 @@ class EyeQuality(dj.Computed):
     eye : enum('left','right')
     ---
     # From the file's own DataQuality column (0/50/100), so tracking loss is
-    # STATED by the recording rather than inferred from missing values.
+    # STATED by the recording rather than inferred from missing values -- but
+    # necessary, not sufficient: it reports that detection succeeded, never
+    # that it was correct (`_FULL_TRACKING_QUALITY`, above). These two numbers
+    # are a lower bound on how much of a session is unusable.
     tracking_loss_fraction : double
     blink_rate_hz          : double
     """
@@ -835,7 +959,12 @@ class EyeQuality(dj.Computed):
 
     def make(self, key: dict) -> None:
         """Tracking loss and blink rate, per eye, straight off
-        `DataQuality`'s 0/50/100 -- stated by the recording, never inferred.
+        `DataQuality`'s 0/50/100 -- stated by the recording, never inferred,
+        and a LOWER BOUND on unusable frames rather than the whole of it: the
+        tracker reports that detection succeeded, not that it was correct
+        (`_FULL_TRACKING_QUALITY`'s own comment, and the notebook quotation
+        there). A frame where P4 was mis-detected from an aberrant glint reads
+        100 here and is counted as tracked.
 
         A "blink" is read here as one CONTIGUOUS run of tracking loss
         (`DataQuality < 100`; design spec section 1.1: "DataQuality =

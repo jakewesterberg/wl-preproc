@@ -3,17 +3,24 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from wl_preproc.eye.calibration import AffineMap, apply_affine
+from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel, apply_map
 from wl_preproc.eye.gaze import gaze_trace, purkinje_vector, tracking_loss_fraction
 from wl_preproc.eye.ohdpi import read_columns
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
-IDENTITY = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0), n_points=4, conditioning=0.9)
+_AFFINE = CalibrationModel.AFFINE
+
+# `basis(_, AFFINE)` column order: (const, dx, dy) per axis.
+IDENTITY = CalibrationMap(
+    model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0), n_points=4, conditioning=0.9
+)
 
 # Scale, shear AND offset all nonzero on both rows, so a map applied to any
 # nonzero vector moves it off the original -- unlike IDENTITY, which cannot
 # tell "the map was applied" from "the map was skipped".
-SCALE_SHEAR = AffineMap(a=(2.0, 0.5, 1.0, -0.5, 3.0, -2.0), n_points=4, conditioning=0.9)
+SCALE_SHEAR = CalibrationMap(
+    model=_AFFINE, x=(1.0, 2.0, 0.5), y=(-2.0, -0.5, 3.0), n_points=4, conditioning=0.9
+)
 
 
 def test_the_feature_is_p1_minus_p4():
@@ -64,17 +71,17 @@ def test_gaze_trace_discriminates_eyes():
 
 def test_gaze_actually_applies_the_map_not_just_the_feature():
     """The identity-map test above proves the plumbing (path, eye, and column
-    selection all line up) but NOT that `apply_affine` runs at all -- an
+    selection all line up) but NOT that `apply_map` runs at all -- an
     implementation that returns `purkinje_vector(...)` unchanged, skipping the
     map entirely, would still satisfy it under IDENTITY. `SCALE_SHEAR` has
     nonzero scale, shear and offset on both output rows, so gaze_trace can
-    only match `apply_affine(SCALE_SHEAR, feature)` if the map was genuinely
+    only match `apply_map(SCALE_SHEAR, feature)` if the map was genuinely
     applied, and cannot equal the untransformed feature itself."""
     feature = purkinje_vector(FIXTURE, "Left")
 
     trace = gaze_trace(FIXTURE, "Left", SCALE_SHEAR)
 
-    assert trace == pytest.approx(apply_affine(SCALE_SHEAR, feature))
+    assert trace == pytest.approx(apply_map(SCALE_SHEAR, feature))
     assert not np.allclose(trace, feature)
 
 
@@ -90,7 +97,10 @@ def test_tracking_loss_is_zero_on_this_clean_fixture():
 def test_tracking_loss_counts_frames_below_100_per_eye(tmp_path):
     """`DataQuality` is 50*P1_valid + 50*P4_valid (design spec section 1.1), so
     loss is stated by the recording rather than inferred from missing values
-    or a heuristic threshold on the signal itself.
+    or a heuristic threshold on the signal itself -- necessary but not
+    sufficient, since the tracker reports that detection succeeded and not
+    that it was correct (`gaze.py`'s own `_FULL_TRACKING_QUALITY` comment).
+    What this function measures is therefore a LOWER bound on unusable frames.
 
     Built rather than read from the real fixture, which never dips below 100
     and so cannot exercise this at all (see the clean-fixture test above).

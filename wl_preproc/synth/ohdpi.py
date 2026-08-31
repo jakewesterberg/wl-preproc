@@ -229,6 +229,12 @@ def write_ohdpi(
     so the two eyes' raw traces are never byte-identical on either P1 or P4,
     on either axis (see "Why the two eyes are not byte-identical" in the
     module docstring).
+
+    `recipe.eye_fixations` HOLDS the gaze at a stated raw position for a
+    stated window, overriding the drift there. Empty by default, so every
+    profile predating it is unchanged. It exists because free viewing cannot
+    represent a calibration session at all -- see `EyeFixationSpec`, which
+    carries the measurement.
     """
     line = _digital_line(recipe, truth, drift_ppm)
     n = len(line)
@@ -262,6 +268,35 @@ def write_ohdpi(
     # distinguishable (see `RIGHT_EYE_ROTATION_OFFSET_PX`).
     rot_x_left = 40.0 * np.sin(2 * np.pi * 0.20 * t) + rng.normal(0, 0.5, n)
     rot_y_left = 30.0 * np.cos(2 * np.pi * 0.17 * t) + rng.normal(0, 0.5, n)
+
+    # Held fixations OVERWRITE the drift for their own frames, rather than
+    # adding to it: a calibration hold is the eye stopping, not the eye
+    # drifting around a new centre, and a fixture that added would get a
+    # window mean displaced by however much drift its window happened to
+    # span. Applied to the LEFT eye's term before the right eye is derived
+    # from it, so both eyes hold together -- which is what two eyes fixating
+    # one target do, and what keeps `RIGHT_EYE_ROTATION_OFFSET_PX` the only
+    # difference between them.
+    #
+    # `apply_drift` and `OHDPI_PRE_ROLL_S` put a session-time hold where the
+    # BARCODE for that same instant goes (`_digital_line`, above), so a
+    # fixture naming a session time gets frames the pipeline's own alignment
+    # will resolve back to it. Duplicating either would let a hold drift away
+    # from the window that names it on any recipe with a nonzero drift.
+    for fixation in recipe.eye_fixations:
+        start_frame = int((apply_drift(fixation.start_s, drift_ppm) + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
+        stop_frame = int((apply_drift(fixation.end_s, drift_ppm) + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
+        start_frame, stop_frame = max(start_frame, 0), min(stop_frame, n)
+        held = stop_frame - start_frame
+        if held <= 0:
+            continue
+        # The same 0.5 px measurement noise the drift carries, so a held
+        # window is not noiselessly perfect in a way no real fixation is --
+        # over a 0.6 s window at 500 Hz that averages down to ~0.03 px,
+        # negligible against the tens of pixels a target constellation spans.
+        rot_x_left[start_frame:stop_frame] = fixation.x_px + rng.normal(0, 0.5, held)
+        rot_y_left[start_frame:stop_frame] = fixation.y_px + rng.normal(0, 0.5, held)
+
     rot_x_right = rot_x_left + RIGHT_EYE_ROTATION_OFFSET_PX
     rot_y_right = rot_y_left + RIGHT_EYE_ROTATION_OFFSET_PX
 

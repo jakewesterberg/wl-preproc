@@ -282,7 +282,9 @@ def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
     `LeftSeconds` is rewritten to a different rate to prove it: a derivation
     that ignored it and returned `OHDPI_FPS` passes any test written against
     an unmodified fixture. Frame numbers are left untouched -- only the
-    timestamp column changes -- since `read_ohdpi` requires them contiguous.
+    timestamp column changes -- since the rate is now derived from the frame
+    NUMBERS spanned rather than the row count (`read_ohdpi`), so altering them
+    would change the very quantity under test.
     """
     from wl_preproc.synth.ohdpi import FILENAME, HEADER, OHDPI_FPS
 
