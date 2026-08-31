@@ -37,12 +37,52 @@ third_party:
     why: >-
       3.11 is the floor wl-sync also supports; 3.13 is what Fedora ships on the
       preprocessing server. CI tests both ends.
+  - name: numpy
+    constraint: ">=1.26"
+    why: >-
+      Imported directly throughout the package -- eye/, archive/, schema/,
+      timebase/, synth/, ephys/ and events/ (19 modules) -- and already a
+      direct, non-transitive dependency in pyproject.toml (numpy>=1.26).
+      Missing here only because this file's third_party list was never
+      updated to match: two earlier task reports in this plan claimed numpy
+      was already declared here, and a review repeated the error, but a
+      direct grep of both files shows it was not. wlo stack reads
+      third_party alone, so a workstation built from this file was missing
+      software nearly every module in this package uses.
   - name: datajoint
     constraint: ">=2.3,<3"
     why: >-
       The Elements are mid-migration to DataJoint 2.x and no fork is taken.
       element-array-ephys is deliberately absent: its issue #230 is unfixed and
       its tables silently destroy array data under 2.x.
+  - name: pandas
+    constraint: ">=2"
+    why: >-
+      wl_preproc/eye/ohdpi.py imports pandas directly for read_ohdpi's
+      column-selective CSV reads. It already arrives unconditionally with
+      datajoint (above), a hard, non-extra requirement confirmed against
+      installed distribution metadata, so a clean install already resolves
+      some pandas without this entry. Declared anyway for the same reason as
+      zarr below: the dependency is this package's own, and wlo stack reads
+      third_party alone.
+
+      The floor is a decision, not a formality. Task 1 closed
+      OhdpiRecording's arrays against in-place mutation with an explicit
+      frames.setflags(write=False) in read_ohdpi. Under the installed
+      pandas 3.0.5 that call is already redundant: to_numpy() returns a
+      read-only array by construction, because pandas >= 3.0 makes
+      copy-on-write mandatory -- confirmed directly, not assumed: pandas
+      itself raises Pandas4Warning ("Copy-on-Write can no longer be
+      disabled") when asked to turn it off. A >=3 floor would make that
+      guard, and the test asserting it
+      (tests/eye/test_ohdpi_reader.py::test_the_arrays_reject_in_place_mutation),
+      permanently unable to fail. >=2 keeps a pandas 2.x resolution valid,
+      where to_numpy() returns a writeable array by default and the
+      explicit call is what actually protects the frozen dataclass. No
+      ceiling: datajoint requires bare pandas, unconstrained, and
+      spikeinterface caps pandas<3 only under its full/metrics/docs extras,
+      none of which this project installs -- both confirmed against
+      installed distribution metadata.
   - name: kilosort
     where: serv
     why: >-
