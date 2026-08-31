@@ -563,6 +563,31 @@ originals left visible, per this repository's correction convention:
    fallback. It is an independent measurement of the same quantity, and this
    pipeline treats those as agreement metrics rather than choosing silently.
    *Blocks:* nothing.
+5. **What grain per-trial gaze staleness needs, added 2026-08-31**
+   (`HANDOVER-wl-expcontroller.md` Offer 1, accepted in principle). Every
+   gaze-contingent decision their controller makes records how stale the
+   sample it acted on was — a fourth quality signal `EyeQuality`'s existing
+   `tracking_loss_fraction`/`blink_rate_hz` cannot give: `DataQuality` says
+   detection succeeded, not that the sample the CONTROLLER used was fresh,
+   and when a stall overlaps a gaze-contingent epoch their trial now
+   proceeds and is marked rather than aborting (their rig owner's own
+   ruling) — a per-trial staleness summary is what keeps that decision
+   honest downstream, "a column an analysis must actively drop rather than
+   a flag it can miss" in their own words.
+
+   Accepted in principle, not as a column here. `EyeQuality` is keyed
+   `(subject, session_datetime, eye)`; staleness is PER TRIAL, a finer
+   grain nothing in that key can hold without a part table or a table of
+   its own — and the source format for it does not exist yet, so there is
+   nothing yet to populate one from. Not the same decision as adding a
+   value to an already-existing enum (the saccade-detection registry's own
+   label vocabulary, offered alongside this one and accepted the same day):
+   a column nothing can populate is an unmade design decision about a new
+   table's own grain, not a small addition deferred for convenience.
+   *Blocks:* nothing today — but the lab starts January 2027
+   (`docs/CHECKPOINT.md`), and the grain question should be settled before
+   wl-expcontroller sessions are the only kind landing, not discovered
+   after.
 
 ---
 
