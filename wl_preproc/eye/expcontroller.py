@@ -27,12 +27,37 @@ shape rather than inventing a fourth pattern for a fourth cross-repo file.
 `pyyaml` and `pydantic` are both already hard dependencies (`pyproject.toml`),
 so this costs nothing new.
 
-**The field list is the contract** (HANDOVER-wl-expcontroller.md Ask 1):
-`mapping_version`, `model`, `coefficients` (`x`/`y`, in `basis()` column
-order), `raw_definition`, `targets` (degrees), `conditioning`,
-`rms_residual_deg`. `_ExpcontrollerCalibration` below declares exactly these
-seven and nothing else (`extra="forbid"`): a file missing one, or carrying an
-eighth, is declined rather than partially trusted.
+**The field list is the contract** (HANDOVER-wl-expcontroller.md Ask 1), now
+split across two levels rather than one flat record -- review round 1: "The
+YAML format carries coefficients per eye. Read them per eye." `mapping_version`,
+`raw_definition` and `targets` (degrees) are FILE-WIDE facts: one calibration
+run, one raw-vector definition, one target constellation, regardless of how
+many eyes it produced a usable fit for. `model`, `coefficients` (`x`/`y`, in
+`basis()` column order), `conditioning` and `rms_residual_deg` are PER EYE,
+each living under an optional `left:`/`right:` key -- they are properties of
+ONE eye's own fit against ONE eye's own raw vector, and nothing about them is
+shared just because the file that carries them is. `_ExpcontrollerCalibration`
+declares the three file-wide fields and nothing else at its own level
+(`extra="forbid"`); `_EyeRecord` declares the four per-eye fields and nothing
+else, independently, for whichever of `left`/`right` is present. A file
+missing a file-wide field, or carrying an unexpected one at either level, is
+declined; see "Per eye, independently", below, for what a bad or absent EYE
+record does instead.
+
+**Per eye, independently -- not one gate for both.** A file offering a
+usable map for only one eye is an ordinary, valid outcome ("a file offering
+a map for only one eye is fine", review round 1) -- the tracking that
+produced it may simply have been better on one side this session. So `left`
+and `right` are validated SEPARATELY, each against its own copy of
+`_EyeRecord`, and a failure in one (an unknown `model`, a coefficient count
+that disagrees with it) declines only that eye's own candidate rather than
+the whole file: `_ExpcontrollerCalibration.left`/`.right` are typed as loose
+`dict[str, Any] | None`, not `_EyeRecord | None`, specifically so that a
+malformed `right` cannot make pydantic refuse to construct the outer model
+at all and take a perfectly good `left` down with it. `_eye_map`, below, is
+where each side's own `_EyeRecord.model_validate` actually runs, isolated by
+construction rather than by a `try` a future edit could accidentally widen
+to cover both sides at once.
 
 **Coefficients arrive pre-ordered.** `eye/bhv2.py::as_calibration_map`
 re-orders MonkeyLogic's own flat six numbers into `basis()` column order at
@@ -54,7 +79,11 @@ for that change would be silently misapplied to `purkinje_vector`'s CR1-CR4
 difference if this reader trusted them anyway. Not one of the two refusal
 cases the brief calls out by name (unknown `model`, wrong coefficient count)
 but the identical principle applied to a third way a file can claim more
-than this reader can verify.
+than this reader can verify. File-wide rather than per eye: both eyes' raw
+vectors are read off the same two-column CR1-CR4 convention
+(`purkinje_vector`'s own `eye` argument only ever changes WHICH file columns
+are read, `LeftCR1X` versus `RightCR1X`, never the CR1-CR4 shape itself), so
+one statement of the formula covers both.
 
 **`mapping_version` is read and required, not yet interpreted.** Every
 sibling cross-repo file above carries a `schema_version` int for exactly this
@@ -63,53 +92,22 @@ a guess it has to make. This field fills that role under the name the
 contract gives it. Nothing here enforces a specific value, because nothing
 in the brief specifies what a mismatch should mean -- inventing that rule
 would be exactly the guessing this module otherwise refuses to do. A future
-version of this format that needs to branch on it can.
-
-**No per-eye split, like the reader beside it.** `schema/eye.py::
-EyeCalibration.make()` already accepts this for `.bhv2`: "one map for the
-whole session (Task 6's reader has no per-eye split), tried identically for
-both eyes" -- MonkeyLogic's own Origin & Gain calibration is not per-eye, and
-`read_online_map`'s contract (one path in, one `CalibrationMap` out, called
-once per session) is built around that shape. wl-expcontroller's own fitting
-process is genuinely per-eye ("We fit your basis to your raw vector",
-HANDOVER-wl-expcontroller.md Ask 1) -- richer than MonkeyLogic's, not
-poorer -- but surfacing that through `read_online_map` would mean calling it
-per eye, which reaches into `EyeCalibration.make()`'s calling code and
-contradicts the brief's own "nothing above either changes" for this task.
-This module's contract therefore asks wl-expcontroller for ONE calibration
-record per file -- whichever eye it represents is theirs to decide, exactly
-the choice MonkeyLogic's single Origin & Gain map already made for them
-today. This is a real, named limitation, not a silent one: it costs nothing
-relative to today (MonkeyLogic's online source was never per-eye either),
-and `mapping_version` is exactly the seam a later version of this format
-would use to carry two records and let `read_online_map`'s per-session
-contract be revisited on purpose, rather than by accretion.
-
-**What this does NOT establish, stated rather than hidden the way
-`eye/bhv2.py::as_calibration_map` states its own unverified twelve-number
-layout.** `resolve_calibration` validates every borrowed map against each
-eye's own fixation before accepting it, which BOUNDS the cost of a map
-written for the wrong eye -- it cannot be silently accepted as a correct
-calibration for an eye it was never fit to. But whether it reliably FAILS
-that validation, rather than sometimes landing under `MAX_VALIDATION_ERROR_DEG`
-by chance, depends on how far apart the two eyes' own raw P1-P4 vectors
-actually sit on this lab's rigs -- a quantity nobody has measured. The one
-test that demonstrates a genuine over-threshold rejection,
-`test_a_map_from_the_wrong_input_space_fails_validation_enormously`, is a
-units mismatch (volts fed as pixels, ~56,568 degrees) two to three orders of
-magnitude past the threshold -- evidence about a wrong INPUT SPACE, not
-about the much smaller displacement two eyes on the same head plausibly
-produce. This is the one claim in this section nothing has measured.
+version of this format that needs to branch on it can; the per-eye split
+above is already such a change, made within version 1 rather than deferred
+to a version 2 this field was originally reserved for -- review round 1
+found the single-record v1 this reservation assumed was itself the wrong
+call, not merely something to defer correcting.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel
+from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel, OnlineCalibration
 
 # The one raw feature this reader accepts coefficients against -- ASCII
 # hyphen-minus with single spaces either side, matching both the brief's own
@@ -124,8 +122,8 @@ class _Coefficients(BaseModel):
     against its own model's `n_terms`, and repeating that comparison here
     would put the same fact in two places for no reason (`EyeCalibration`'s
     own `calibration_model` column comment names this "the defect this
-    repository names most often"). `read_expcontroller_map` reuses that
-    existing check by constructing a real `CalibrationMap` and catching the
+    repository names most often"). `_eye_map`, below, reuses that existing
+    check by constructing a real `CalibrationMap` and catching the
     `ValueError` it raises on a mismatch, rather than re-deriving it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -134,35 +132,33 @@ class _Coefficients(BaseModel):
     y: list[float]
 
 
-class _ExpcontrollerCalibration(BaseModel):
-    """The file's own seven fields (HANDOVER-wl-expcontroller.md Ask 1),
-    structurally validated. `model` and `raw_definition` are checked here,
-    at the field level, because each is a self-contained fact about one
-    value; the coefficient-count check is NOT here for the reason
-    `_Coefficients` gives.
+class _EyeRecord(BaseModel):
+    """One eye's own calibration: which model it reached, its coefficients,
+    and how wl-expcontroller judged its own fit. Validated from an already
+    isolated raw `dict` (`_ExpcontrollerCalibration.left`/`.right`'s own
+    loose typing, module docstring's "Per eye, independently"), never as a
+    nested field of that outer model directly -- the isolation is what lets
+    a bad `right` decline only `right` rather than taking a good `left`
+    down with it when the outer model is built.
 
-    `targets`, `conditioning` and `rms_residual_deg` are required and typed,
-    matching "the field list above is the contract", but never read again
-    past this class: they do not become part of the `CalibrationMap` this
-    module returns. `CalibrationMap`'s own docstring is explicit that
-    `n_points` and `conditioning` "describe how THIS package fit the
-    coefficients" and default to `0`/`nan` for every borrowed source,
-    `online` included, because "fabricating a point count or a conditioning
-    score for it would claim evidence that does not exist" -- true here
-    exactly as it is for `eye/bhv2.py::as_calibration_map`, whose own
-    `CalibrationMap(...)` calls likewise never pass either. wl-expcontroller's
-    own `conditioning`/`rms_residual_deg` describe how THEY fit THEIR
-    coefficients, a different fact this reader has no column to misreport it
-    into.
+    `conditioning`/`rms_residual_deg` are required and typed here, matching
+    "the field list is the contract", but never read again once this class
+    validates: they do not become part of the `CalibrationMap` `_eye_map`
+    returns. `CalibrationMap`'s own docstring is explicit that `n_points`
+    and `conditioning` "describe how THIS package fit the coefficients" and
+    default to `0`/`nan` for every borrowed source, `online` included,
+    because "fabricating a point count or a conditioning score for it would
+    claim evidence that does not exist" -- true here exactly as it is for
+    `eye/bhv2.py::as_calibration_map`, whose own `CalibrationMap(...)` calls
+    likewise never pass either. wl-expcontroller's own `conditioning`/
+    `rms_residual_deg` describe how THEY fit THEIR coefficients for THIS
+    eye, a different fact this reader has no column to misreport it into.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    mapping_version: int
     model: str
     coefficients: _Coefficients
-    raw_definition: str
-    targets: list[tuple[float, float]]
     conditioning: float
     rms_residual_deg: float
 
@@ -175,6 +171,28 @@ class _ExpcontrollerCalibration(BaseModel):
             known = ", ".join(member.value for member in CalibrationModel)
             raise ValueError(f"model {value!r} is not one of: {known}") from exc
         return value
+
+
+class _ExpcontrollerCalibration(BaseModel):
+    """The file's own three FILE-WIDE fields (module docstring), plus
+    `left`/`right` -- each an already-isolated raw `dict` or absent,
+    deliberately NOT typed as `_EyeRecord | None` here. Typing them as
+    `_EyeRecord` at this level would make pydantic validate both eyes as
+    one nested operation: a malformed `right` would raise for the WHOLE
+    model, refusing a perfectly good `left` along with it. Kept as `dict`
+    so each side can be handed to its own, independent `_EyeRecord.model_validate`
+    call in `_eye_map` -- see the module docstring's "Per
+    eye, independently" for why that independence is the point, not an
+    implementation detail.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mapping_version: int
+    raw_definition: str
+    targets: list[tuple[float, float]]
+    left: dict[str, Any] | None = None
+    right: dict[str, Any] | None = None
 
     @field_validator("raw_definition")
     @classmethod
@@ -189,39 +207,67 @@ class _ExpcontrollerCalibration(BaseModel):
         return value
 
 
-def read_expcontroller_map(path: str | Path) -> CalibrationMap | None:
-    """The file at `path` as a borrowed `CalibrationMap`, or `None`.
+def _eye_map(record: dict[str, Any] | None) -> CalibrationMap | None:
+    """One eye's own record as a borrowed `CalibrationMap`, independently of
+    whatever its sibling eye's own record does. `None` in, `None` out --
+    the eye simply was not offered (module docstring's "Per eye,
+    independently"). A present record that fails ITS OWN validation --
+    `_EyeRecord`'s `ValidationError` (a `ValueError` subclass, confirmed
+    elsewhere in this codebase -- `responder/handler.py`'s own docstring)
+    for an unknown `model` or a missing/extra field, or
+    `CalibrationMap.__post_init__`'s own `ValueError` for a coefficient count that
+    disagrees with `model` (not re-derived here -- see `_Coefficients`'s
+    own docstring) -- also declines to `None` rather than raising, so one
+    eye's bad record can never surface as an exception out of
+    `read_expcontroller_map` for a session whose OTHER eye might be fine.
+    """
+    if record is None:
+        return None
 
-    **Every failure declines; none raises**, unlike `eye/bhv2.py::
-    read_calibration` (which raises `Bhv2Unreadable` for a present-but-
-    unwalkable file -- a distinction that format needs because a corrupt
-    `.bhv2` and an absent one are different facts about MonkeyLogic's own
-    recording). This format has no equivalent second outcome to preserve:
-    HANDOVER-wl-expcontroller.md Ask 1 asks for exactly one boundary --
-    usable, or declined -- and `read_online_map` already treats a `None`
-    from either reader as an ordinary nothing-to-offer, so a raised
-    exception here would only be caught one frame up for no benefit.
+    try:
+        parsed = _EyeRecord.model_validate(record)
+    except ValueError:
+        return None
 
-    Two passes, deliberately not one. The first reads and structurally
-    validates the file -- I/O, YAML syntax, the seven-field envelope, the
-    known-`model` and matching-`raw_definition` checks above -- and
-    declines on `OSError` (missing file, a permissions fault, ...),
-    `yaml.YAMLError` (not valid YAML), `TypeError` (verified directly:
-    `Path(None)` raises `TypeError: expected str, bytes or os.PathLike object, not NoneType`,
+    try:
+        return CalibrationMap(
+            model=CalibrationModel(parsed.model),
+            x=tuple(parsed.coefficients.x),
+            y=tuple(parsed.coefficients.y),
+        )
+    except ValueError:
+        return None
+
+
+def read_expcontroller_map(path: str | Path) -> OnlineCalibration | None:
+    """The file at `path` as an `OnlineCalibration`, or `None`.
+
+    **`None` means the file itself could not be read at all** -- missing,
+    unparseable YAML, or missing/misshapen at the FILE-WIDE level
+    (`mapping_version`, `raw_definition`, `targets`). That is a fact about
+    the file as a whole and both eyes decline together, exactly as this
+    function already declined as a whole before per-eye reading existed.
+    A file that reads fine at that level but offers a usable record for
+    only one eye is NOT this case: it returns a real `OnlineCalibration`
+    with one field populated and the other `None` -- "a file offering a map
+    for only one eye is fine" (review round 1) -- so absence at the FILE
+    level and absence for ONE EYE are different facts, deliberately not
+    collapsed onto each other the way `Bhv2Calibration.present` and
+    `as_calibration_map`'s own length check are kept apart in `bhv2.py` for
+    the same reason: they are different facts even when downstream code
+    reacts to them the same way.
+
+    Declines (never raises) on `OSError` (missing file, a permissions
+    fault, ...), `yaml.YAMLError` (not valid YAML), `TypeError` (verified
+    directly: `Path(None)` raises `TypeError: expected str, bytes or os.PathLike object, not NoneType`,
     so a caller that ignores this function's own `str | Path` signature and
     passes `None` anyway declines rather than crashing), or `ValueError`
-    (`pydantic.ValidationError` is a `ValueError` subclass, confirmed
-    elsewhere in this codebase -- `responder/handler.py`'s own docstring --
-    so one `except` catches both the field validators above and every
-    ordinary pydantic shape failure: a missing field, an extra one,
-    `coefficients.x` holding a string that will not parse as a float). The
-    second constructs the `CalibrationMap` itself and declines on the
-    `ValueError` `CalibrationMap.__post_init__` raises for a coefficient
-    count that disagrees with `model` -- see
-    `_Coefficients`'s own docstring for why that check is not duplicated
-    here. Kept separate so the second block's `except` cannot accidentally
-    swallow a bug in the first: each guards exactly the step named above it,
-    nothing more.
+    (`pydantic.ValidationError` is a `ValueError` subclass -- the
+    `raw_definition` field validator above, and every ordinary pydantic
+    shape failure at the file-wide level: a missing field, an extra one,
+    `targets` holding something that will not parse as a list of pairs).
+    Per-eye failures are handled separately, inside `_eye_map`, and never
+    reach this function's own `except` at all.
     """
     try:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -229,11 +275,4 @@ def read_expcontroller_map(path: str | Path) -> CalibrationMap | None:
     except (OSError, yaml.YAMLError, TypeError, ValueError):
         return None
 
-    try:
-        return CalibrationMap(
-            model=CalibrationModel(cal.model),
-            x=tuple(cal.coefficients.x),
-            y=tuple(cal.coefficients.y),
-        )
-    except ValueError:
-        return None
+    return OnlineCalibration(left=_eye_map(cal.left), right=_eye_map(cal.right))

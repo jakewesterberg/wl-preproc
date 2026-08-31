@@ -403,8 +403,10 @@ class EyeCalibration(dj.Computed):
 
     def make(self, key: dict) -> None:
         """Both eyes' calibration for one session, through design spec
-        section 3.5's fallback chain in full: fit our own, try MonkeyLogic's,
-        try the best same-day carried-forward map, or refuse and say why.
+        section 3.5's fallback chain in full: fit our own, try the online
+        candidate (MonkeyLogic's `.bhv2` or wl-expcontroller's own format,
+        `eye/calibration.py::read_online_map`'s own two branches), try the
+        best same-day carried-forward map, or refuse and say why.
 
         **Ruling A: `eye` is native to this table's own primary key, not
         inherited through a foreign key.** `key_source` yields one key per
@@ -623,8 +625,16 @@ class EyeCalibration(dj.Computed):
             )
             return
 
-        # -- The online candidate: one map for the whole session (Task 6's
-        # reader has no per-eye split), tried identically for both eyes below.
+        # -- The online candidate. `.bhv2` genuinely has no per-eye split
+        # (MonkeyLogic's own Origin & Gain calibration is one map, read_
+        # online_map's own bhv2 branch wraps it into the same OnlineCalibration
+        # for both eyes); wl-expcontroller's own format is genuinely per eye
+        # (eye/expcontroller.py's own module docstring), so this ONE call
+        # resolves the file once and `.for_eye(eye_value)` picks the right
+        # side inside the loop below -- review round 1's correction to an
+        # earlier version of this line, which passed one shared candidate to
+        # `resolve_calibration` for both eyes regardless of which reader
+        # produced it.
         online = read_online_map(_find_expcontroller_log(session_dir))
 
         rows = []
@@ -661,7 +671,8 @@ class EyeCalibration(dj.Computed):
                 carry_datetime, candidate_map = candidate
                 carried = (candidate_map, carry_datetime.isoformat())
 
-            result = resolve_calibration(raw_xy, target_xy_arr, online, carried)
+            online_for_eye = online.for_eye(eye_value) if online is not None else None
+            result = resolve_calibration(raw_xy, target_xy_arr, online_for_eye, carried)
 
             # **The AFFINE basis, for every row, whatever model was used.**
             # One definition of one column: how well this session's own target
