@@ -295,6 +295,45 @@ def test_as_calibration_map_declines_a_calibration_that_is_not_six_numbers():
     assert as_calibration_map(cal) is None
 
 
+def test_as_calibration_map_converts_a_twelve_number_calibration():
+    """Twelve numbers become a second-order map: the first six are the x-axis
+    coefficients in `basis(_, SECOND_ORDER)` order, the next six the y-axis
+    ones. Asserted on the split point specifically -- the numbers are chosen
+    so an interleaved reading, or a six/six swap, gives different tuples.
+
+    No real `.bhv2` has shown a twelve-number calibration; this pins the
+    documented assumption so it is at least stable and stated, and
+    `as_calibration_map`'s own docstring says what bounds its cost.
+    """
+    cal = Bhv2Calibration(
+        present=True,
+        a=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0),
+        pixels_per_degree=40.0,
+    )
+
+    result = as_calibration_map(cal)
+
+    assert result is not None
+    assert result.model is CalibrationModel.SECOND_ORDER
+    assert result.x == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    assert result.y == (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    assert result.n_points == 0
+    assert math.isnan(result.conditioning)
+
+
+def test_as_calibration_map_declines_counts_between_and_beyond_the_two_rungs():
+    """Six and twelve, and nothing else -- not "six or more". Nine is between
+    the two rungs and eighteen is past both; each would have to be forced into
+    a shape neither model has, which is exactly what declining exists to
+    avoid.
+    """
+    for count in (9, 18):
+        cal = Bhv2Calibration(
+            present=True, a=tuple(float(i) for i in range(count)), pixels_per_degree=40.0
+        )
+        assert as_calibration_map(cal) is None
+
+
 def test_as_calibration_map_declines_absence():
     cal = Bhv2Calibration(present=False, a=None, pixels_per_degree=None)
 
