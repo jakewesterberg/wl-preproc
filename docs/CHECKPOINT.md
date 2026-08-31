@@ -1,8 +1,11 @@
 # Where this build actually is
 
-**Last updated 2026-08-22**, mid **Phase 1c-4** on branch `feat/phase-1c4-timebase` (last
-merge to `main` was `0ac4753`). Check `git log --oneline -1` against that; if it has moved,
-this file is stale and the spec wins.
+**Last updated 2026-08-31**, on `main` at `e7c8ea4` (the eye subsystem's merge). Check
+`git log --oneline -1` against that; if it has moved, this file is stale and the spec wins.
+
+This file went **nine days and three merged subsystems stale** before this update — it still
+claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
+numbers before you distrust the reasoning.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
 so that January validates rather than discovers.
@@ -14,7 +17,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **688 tests, no xfails, zero warnings** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4 (timebase, coverage) is complete on `feat/phase-1c4-timebase`, all ten tasks, not yet merged.** With it, **Phase 1c is done.** |
+| **wl-preproc** | private, CI green, **980 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -103,7 +106,50 @@ per system on every run, currently 100% on clean fixtures for all five including
 
 ---
 
+**wl-preproc archival and compression** — merged 2026-08-27 (`25cd7bf`). `wl_preproc/archive/`.
+A session compresses to a Zarr store, verifies the store reconstructs the original bytes,
+publishes to the NAS, confirms the copy and stamps a sentinel. A five-condition predicate
+decides when the scratch copy may be freed. **`wlpp reclaim` previews and deletes nothing**,
+deliberately: rehydration is what makes reclamation safe and it is not built. Ingest now
+refuses new sessions below the scratch floor `doctor.py` already owned.
+
+**wl-preproc eye: reader, calibration, gaze** — merged 2026-08-31 (`e7c8ea4`).
+`wl_preproc/eye/`. Reads the real OpenIrisDPI format, fits a per-eye affine over the
+dual-Purkinje vector, exposes canonical gaze as a **computation, never a stored array**.
+Records per session how the calibration was obtained — fitted, borrowed from MonkeyLogic,
+carried forward, or refused with a stated reason.
+
+**This corrected five wrong assumptions Phase 1c-4 shipped**, which survived because the
+fixture generator and the reader agreed with each other by construction: three wrong column
+names, a timestamp unit off by 10⁶, a contiguity check requiring a zero start, and a `*.csv`
+glob for `.txt` files. `find_recordings` returned nothing on every real session.
+`tests/fixtures/ohdpi/OpenIris-sample.txt` is now a committed slice of a genuine recording,
+and a test pins the synthetic generator's header to it. 1c-4's spec carries a new §14.
+
+
 ## What is next
+
+**2026-08-31 — what is actually next, and what each needs.**
+
+1. **Saccade detection** — the second half of parent §7, split from the eye spec deliberately.
+   Three detectors, each its own paramset: Engbert–Kliegl (baseline, no dependencies),
+   Otero-Millan (threshold-free, per-detection reliability, no PyTorch), and U'n'Eye (a CNN,
+   vendored at a pinned commit). **Ruled 2026-08-31: all three, with PyTorch declared
+   properly** rather than worked around — `where: serv`, following `kilosort`'s precedent,
+   since a CNN detector belongs on the preprocessing server and not a rig. Their agreement
+   becomes a three-way data-quality metric.
+2. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
+   reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
+   Worth doing before the hardware lands.
+3. **Two eye gaps needing a human decision**, both recorded in
+   `docs/handoffs/2026-08-31-eye-reader-and-calibration-built-detection-is-next.md`: nothing
+   in the code protocol marks a block as a *calibration block*, and no convention says where a
+   `.bhv2` sits in a session directory. Both pair with implementing §4's `TARGET_POSITION`
+   encoding in MonkeyLogic, which the eye spec now specifies exactly.
+
+**Everything in Phase 2b proper still needs the compute machine.** The two subsystems merged
+this week were chosen precisely because they needed no GPU and no container — and both are now
+done, so that gap is open again.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
