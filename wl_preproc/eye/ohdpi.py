@@ -49,6 +49,20 @@ _REQUIRED = (_FRAME_NUMBER, _SECONDS, SYNC_WORD_COLUMN, "LeftCR1X", "LeftCR4X")
 
 
 @dataclass(frozen=True, slots=True)
+class FrameGap:
+    """A run of frames the camera dropped, stated rather than raised on.
+
+    `row` is the 0-based index of the last row BEFORE the gap and `n_missing`
+    how many frame numbers are absent after it, so the gap sits between rows
+    `row` and `row + 1` and a consumer excludes the region around it by row
+    index without re-deriving anything from the frame numbers.
+    """
+
+    row: int
+    n_missing: int
+
+
+@dataclass(frozen=True, slots=True)
 class OhdpiRecording:
     """The sync line per frame, and the rate that sampled it.
 
@@ -75,6 +89,9 @@ class OhdpiRecording:
     digital: np.ndarray
     fs_hz: float
     n_frames: int
+    # Empty on a clean recording. See `read_ohdpi`, which reports gaps rather
+    # than refusing the file over them.
+    frame_gaps: tuple[FrameGap, ...] = ()
 
 
 def read_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
@@ -110,7 +127,8 @@ def read_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
 
 
 def read_ohdpi(path: Path) -> OhdpiRecording:
-    """Read the sync line and establish the recording's own rate."""
+    """Read the sync line, establish the recording's own rate, and report any
+    dropped-frame gaps rather than refusing the file over them."""
     # No try/except here (fix round 2). A blanket `except ValueError: raise
     # ValueError(f"...unrecognised header -- {exc}")` used to relabel EVERY
     # failure from `read_columns` as a header problem -- a malformed numeric
@@ -128,19 +146,29 @@ def read_ohdpi(path: Path) -> OhdpiRecording:
             "so nothing here can be timed"
         )
 
-    # Contiguity, NOT a zero start. The shipped reader required
+    # **A gap is REPORTED, not raised on.** The shipped reader required
     # `frame_index == position`; the reference recording runs 308788 to
-    # 1486586, so that check rejects every real file. A gap is still a dropped
-    # frame the file does not declare, and reading past it shifts every later
-    # sample against its true time.
-    gaps = np.flatnonzero(np.diff(frames) != 1)
-    if gaps.size:
-        first = int(gaps[0])
-        raise ValueError(
-            f"{path}: frame numbers jump from {frames[first]} to "
-            f"{frames[first + 1]} at row {first}; a gap is a dropped frame the "
-            "file does not declare"
-        )
+    # 1486586, so that check rejected every real file. Requiring contiguity
+    # instead was the right correction with the wrong blast radius: it loses a
+    # 39-minute recording over one dropped frame, and OpenIrisDPI's own
+    # tutorial notebook treats gaps as ordinary -- "this can happen if the
+    # computer is too slow to process the image in time" -- marking them as
+    # invalid REGIONS rather than as a lost session. The reference recording
+    # happened to have zero gaps across 1,177,799 rows, which is why nothing
+    # caught it.
+    #
+    # The original comment's reasoning stands and is why these are not
+    # silently dropped: a gap still shifts every later sample against its true
+    # time, so a consumer that indexes rows as if they were contiguous is
+    # wrong after the first one. Stating where the gaps are lets a consumer
+    # exclude those regions -- and lets one that CANNOT tolerate them refuse
+    # for itself, which `timebase/extract.py::extract_ohdpi` does, because a
+    # barcode's sample-index-to-time map is exactly such an indexing.
+    steps = np.diff(frames)
+    gap_rows = np.flatnonzero(steps != 1)
+    frame_gaps = tuple(
+        FrameGap(row=int(row), n_missing=int(steps[row]) - 1) for row in gap_rows
+    )
 
     seconds = data[_SECONDS]
     span_s = float(seconds[-1] - seconds[0])
@@ -154,7 +182,14 @@ def read_ohdpi(path: Path) -> OhdpiRecording:
     # interval is quantised to the timestamp's own resolution (0.1 ms here),
     # and at 500 Hz that quantisation is a percent-level error the entire fit
     # would inherit.
-    fs_hz = (frames.size - 1) / span_s
+    #
+    # Counted in FRAME NUMBERS, not rows. On a gapless file the two are the
+    # same (`frames[-1] - frames[0] == frames.size - 1`) and this changes
+    # nothing; once gaps are tolerated they diverge, and rows would
+    # UNDERSTATE the rate by exactly the dropped frames -- the camera kept
+    # running through them, so the elapsed span covers frame periods the file
+    # has no row for.
+    fs_hz = float(frames[-1] - frames[0]) / span_s
 
     digital = data[SYNC_WORD_COLUMN]
     # `frozen=True` on OhdpiRecording blocks `rec.frame_numbers = other`, but
@@ -170,4 +205,5 @@ def read_ohdpi(path: Path) -> OhdpiRecording:
         digital=digital,
         fs_hz=fs_hz,
         n_frames=int(frames.size),
+        frame_gaps=frame_gaps,
     )

@@ -257,6 +257,32 @@ def extract_ohdpi(path: Path) -> BitStream:
     from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX, read_ohdpi
 
     recording = read_ohdpi(path)
+    if recording.frame_gaps:
+        # **The refusal `read_ohdpi` used to make, moved to the caller that
+        # actually cannot tolerate a gap.** That reader now REPORTS gaps
+        # instead, because losing a 39-minute recording over one dropped frame
+        # is the wrong blast radius for the eye path, which can exclude the
+        # affected regions. This path cannot: `edges_from_samples` turns a
+        # sample INDEX into a time by dividing by `fs_hz`, so every edge after
+        # a gap is early by the dropped frames' own duration, and a barcode
+        # decoded from those edges names a sync time that never happened. That
+        # is a silently wrong alignment for the whole session rather than a
+        # visibly absent one.
+        #
+        # Refused rather than truncated at the first gap: a partial BitStream
+        # would align the session on its prefix alone and report success, and
+        # `BitStream`'s own floor check cannot tell a deliberately truncated
+        # stream from a short recording. Gap-aware segmentation -- decoding
+        # each contiguous run and fitting them separately -- is a real option
+        # and a `core.Segment` decision, not something to improvise here.
+        first = recording.frame_gaps[0]
+        raise ValueError(
+            f"{path}: {len(recording.frame_gaps)} dropped-frame gap(s), the "
+            f"first {first.n_missing} frame(s) after row {first.row}. A frame "
+            "index is a time on this line, so every edge after a gap would be "
+            "early by the dropped frames' duration and the barcodes decoded "
+            "from them would name sync times that never happened"
+        )
     bits = (recording.digital >> SYNC_BIT_INDEX) & 1
     return BitStream(
         edges=tuple(edges_from_samples(list(bits), fs_hz=recording.fs_hz)),

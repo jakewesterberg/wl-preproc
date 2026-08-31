@@ -97,7 +97,10 @@ def test_tracking_loss_is_zero_on_this_clean_fixture():
 def test_tracking_loss_counts_frames_below_100_per_eye(tmp_path):
     """`DataQuality` is 50*P1_valid + 50*P4_valid (design spec section 1.1), so
     loss is stated by the recording rather than inferred from missing values
-    or a heuristic threshold on the signal itself.
+    or a heuristic threshold on the signal itself -- necessary but not
+    sufficient, since the tracker reports that detection succeeded and not
+    that it was correct (`gaze.py`'s own `_FULL_TRACKING_QUALITY` comment).
+    What this function measures is therefore a LOWER bound on unusable frames.
 
     Built rather than read from the real fixture, which never dips below 100
     and so cannot exercise this at all (see the clean-fixture test above).

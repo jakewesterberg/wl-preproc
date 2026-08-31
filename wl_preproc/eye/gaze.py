@@ -20,10 +20,25 @@ import numpy as np
 from wl_preproc.eye.calibration import CalibrationMap, apply_map
 from wl_preproc.eye.ohdpi import read_columns
 
-# DataQuality is exactly 50*P1_valid + 50*P4_valid (design spec section 1.1):
-# tracking loss is therefore stated by the recording, not inferred from
-# missing values or a threshold on the signal itself. Anything short of this
-# means at least one of the two Purkinje images failed on that frame.
+# DataQuality is exactly 50*P1_valid + 50*P4_valid (design spec section 1.1),
+# so a frame below 100 is one the tracker itself declared a failure on --
+# stated by the recording rather than inferred from missing values or a
+# threshold on the signal.
+#
+# **Necessary, not sufficient.** An earlier version of this comment stopped at
+# "stated, not inferred", which overclaims: OpenIrisDPI's own tutorial
+# notebook is explicit that "OpenIrisDPI does not determine when the image
+# processing algorithm has failed, so the user must find ways to be sure they
+# only analyse epochs when the corneal reflection and P4 are tracked
+# correctly." `DataQuality` reports that detection SUCCEEDED, not that it was
+# CORRECT: P4 can be mis-detected from an aberrant glint or an occluding iris
+# and still report a confident position at 100.
+#
+# The validity mask that closes the gap -- eye open, gaze in region, plausible
+# speed, no frame discontinuity, invalid regions expanded and short epochs
+# dropped -- belongs with saccade detection, which is what consumes it and
+# which must run per valid epoch, since a velocity computed across a gap is a
+# spurious saccade. It is deliberately not built here.
 _FULL_TRACKING_QUALITY = 100
 
 

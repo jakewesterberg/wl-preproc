@@ -70,6 +70,12 @@ schema = dj.Schema()
 # rather than imported -- it is a private name in that module, and the value
 # is the frozen recording format's, not a choice free to drift between the
 # two places it is read.
+#
+# It is NECESSARY, not sufficient -- see `eye/gaze.py`'s own copy of this
+# constant for the full correction and the notebook quotation behind it. In
+# short: a frame at 100 is one the tracker did not declare a failure on, which
+# is not the same as one it tracked correctly, and the validity mask that
+# closes the gap belongs with saccade detection.
 _FULL_TRACKING_QUALITY = 100
 
 # `EyeCalibration.reason` is `varchar(255)` (that class's own `definition`,
@@ -901,7 +907,10 @@ class EyeQuality(dj.Computed):
     eye : enum('left','right')
     ---
     # From the file's own DataQuality column (0/50/100), so tracking loss is
-    # STATED by the recording rather than inferred from missing values.
+    # STATED by the recording rather than inferred from missing values -- but
+    # necessary, not sufficient: it reports that detection succeeded, never
+    # that it was correct (`_FULL_TRACKING_QUALITY`, above). These two numbers
+    # are a lower bound on how much of a session is unusable.
     tracking_loss_fraction : double
     blink_rate_hz          : double
     """
@@ -950,7 +959,12 @@ class EyeQuality(dj.Computed):
 
     def make(self, key: dict) -> None:
         """Tracking loss and blink rate, per eye, straight off
-        `DataQuality`'s 0/50/100 -- stated by the recording, never inferred.
+        `DataQuality`'s 0/50/100 -- stated by the recording, never inferred,
+        and a LOWER BOUND on unusable frames rather than the whole of it: the
+        tracker reports that detection succeeded, not that it was correct
+        (`_FULL_TRACKING_QUALITY`'s own comment, and the notebook quotation
+        there). A frame where P4 was mis-detected from an aberrant glint reads
+        100 here and is counted as tracked.
 
         A "blink" is read here as one CONTIGUOUS run of tracking loss
         (`DataQuality < 100`; design spec section 1.1: "DataQuality =
