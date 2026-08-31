@@ -80,14 +80,26 @@ This module's contract therefore asks wl-expcontroller for ONE calibration
 record per file -- whichever eye it represents is theirs to decide, exactly
 the choice MonkeyLogic's single Origin & Gain map already made for them
 today. This is a real, named limitation, not a silent one: it costs nothing
-relative to today (MonkeyLogic's online source was never per-eye either), it
-does not risk a wrong-but-accepted map (`resolve_calibration` validates every
-borrowed map against each eye's own fixation before accepting it, so a map
-written for the other eye simply fails validation and falls through rather
-than being silently applied), and `mapping_version` is exactly the seam a
-later version of this format would use to carry two records and let
-`read_online_map`'s per-session contract be revisited on purpose, rather
-than by accretion.
+relative to today (MonkeyLogic's online source was never per-eye either),
+and `mapping_version` is exactly the seam a later version of this format
+would use to carry two records and let `read_online_map`'s per-session
+contract be revisited on purpose, rather than by accretion.
+
+**What this does NOT establish, stated rather than hidden the way
+`eye/bhv2.py::as_calibration_map` states its own unverified twelve-number
+layout.** `resolve_calibration` validates every borrowed map against each
+eye's own fixation before accepting it, which BOUNDS the cost of a map
+written for the wrong eye -- it cannot be silently accepted as a correct
+calibration for an eye it was never fit to. But whether it reliably FAILS
+that validation, rather than sometimes landing under `MAX_VALIDATION_ERROR_DEG`
+by chance, depends on how far apart the two eyes' own raw P1-P4 vectors
+actually sit on this lab's rigs -- a quantity nobody has measured. The one
+test that demonstrates a genuine over-threshold rejection,
+`test_a_map_from_the_wrong_input_space_fails_validation_enormously`, is a
+units mismatch (volts fed as pixels, ~56,568 degrees) two to three orders of
+magnitude past the threshold -- evidence about a wrong INPUT SPACE, not
+about the much smaller displacement two eyes on the same head plausibly
+produce. This is the one claim in this section nothing has measured.
 """
 
 from __future__ import annotations
@@ -192,16 +204,20 @@ def read_expcontroller_map(path: str | Path) -> CalibrationMap | None:
 
     Two passes, deliberately not one. The first reads and structurally
     validates the file -- I/O, YAML syntax, the seven-field envelope, the
-    known-`model` and matching-`raw_definition` checks above -- and declines
-    on `OSError` (missing file, a permissions fault, ...), `yaml.YAMLError`
-    (not valid YAML), or `ValueError` (`pydantic.ValidationError` is a
-    `ValueError` subclass, confirmed elsewhere in this codebase --
-    `responder/handler.py`'s own docstring -- so one `except` catches both
-    the field validators above and every ordinary pydantic shape failure:
-    a missing field, an extra one, `coefficients.x` holding a string that
-    will not parse as a float). The second constructs the `CalibrationMap`
-    itself and declines on the `ValueError` `CalibrationMap.__post_init__`
-    raises for a coefficient count that disagrees with `model` -- see
+    known-`model` and matching-`raw_definition` checks above -- and
+    declines on `OSError` (missing file, a permissions fault, ...),
+    `yaml.YAMLError` (not valid YAML), `TypeError` (verified directly:
+    `Path(None)` raises `TypeError: expected str, bytes or os.PathLike object, not NoneType`,
+    so a caller that ignores this function's own `str | Path` signature and
+    passes `None` anyway declines rather than crashing), or `ValueError`
+    (`pydantic.ValidationError` is a `ValueError` subclass, confirmed
+    elsewhere in this codebase -- `responder/handler.py`'s own docstring --
+    so one `except` catches both the field validators above and every
+    ordinary pydantic shape failure: a missing field, an extra one,
+    `coefficients.x` holding a string that will not parse as a float). The
+    second constructs the `CalibrationMap` itself and declines on the
+    `ValueError` `CalibrationMap.__post_init__` raises for a coefficient
+    count that disagrees with `model` -- see
     `_Coefficients`'s own docstring for why that check is not duplicated
     here. Kept separate so the second block's `except` cannot accidentally
     swallow a bug in the first: each guards exactly the step named above it,
