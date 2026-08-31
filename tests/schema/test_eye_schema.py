@@ -43,7 +43,7 @@ def test_no_bare_longblob(schemas):
 def test_calibration_source_names_all_four_chain_steps(schemas, enum_values):
     attr = schemas.EyeCalibration.heading.attributes["calibration_source"]
     assert enum_values(attr.type) == {
-        "fitted", "monkeylogic", "carried_forward", "refused"
+        "fitted", "online", "carried_forward", "refused"
     }
 
 

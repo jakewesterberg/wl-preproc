@@ -123,12 +123,12 @@ _DEFERRED_NOTE = (
 # section 8, and that same document's section 10 open question 3) is worth
 # noticing precisely because no individual session reveals it -- but nothing
 # in `schema/eye.py::EyeCalibration` records whether a `.bhv2` was even
-# found. `read_monkeylogic_map`'s own `None` return (`eye/calibration.py`)
+# found. `read_online_map`'s own `None` return (`eye/calibration.py`)
 # already collapses every step-2 non-outcome -- no `.bhv2` found, one found
 # but unreadable, one found but with no usable calibration inside it -- into
 # a single `None` signal upstream of this report (that function's own
 # docstring: absence and a present-but-unusable `Bhv2Calibration` reach
-# `None` from `as_affine_map` by two different mechanisms -- `a is None` for
+# `None` from `as_calibration_map` by two different mechanisms -- `a is None` for
 # the first, a non-six-element `a` for the second, per `bhv2.py`'s own
 # `present = a is not None`; "Unparseable is different in kind... caught
 # here"), and
@@ -140,9 +140,9 @@ _DEFERRED_NOTE = (
 # identically" principle this module's own docstring states one level up
 # for a missing vs. empty section, applied to a single line within one
 # instead of a whole section.
-_EYE_MONKEYLOGIC_GAP_NOTE = (
-    "this breakdown cannot separate a session whose MonkeyLogic calibration "
-    "was tried and rejected from one where no `.bhv2` was ever found -- "
+_EYE_ONLINE_GAP_NOTE = (
+    "this breakdown cannot separate a session whose online calibration was "
+    "tried and rejected from one where no `.bhv2` was ever found -- "
     "nothing in `EyeCalibration` records whether a `.bhv2` was found at all, "
     "so both render identically here, folded into whichever source the "
     "session actually resolved to"
@@ -1082,16 +1082,16 @@ def build_report(
     # systematically wrong" -- shows up as a ratio across ALL history, not
     # in one night's rows. Windowing this to 24 h would hide the exact
     # signal it exists to surface.
-    source_counts = {source: 0 for source in ("fitted", "monkeylogic", "carried_forward", "refused")}
+    source_counts = {source: 0 for source in ("fitted", "online", "carried_forward", "refused")}
     for row in eye_calibration_rows:
         source_counts[row["calibration_source"]] += 1
 
     lines += ["", "### Calibration source (running total)", ""]
     lines += [
         f"- {source}: {source_counts[source]}"
-        for source in ("fitted", "monkeylogic", "carried_forward", "refused")
+        for source in ("fitted", "online", "carried_forward", "refused")
     ]
-    lines += [f"- _{_EYE_MONKEYLOGIC_GAP_NOTE}._"]
+    lines += [f"- _{_EYE_ONLINE_GAP_NOTE}._"]
 
     # Controller ruling B: distinct causes, distinct lines -- never a single
     # "no gaze: N" count. Each row prints its OWN stored `reason` verbatim,

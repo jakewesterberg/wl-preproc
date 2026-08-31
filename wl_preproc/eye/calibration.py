@@ -231,8 +231,25 @@ MAX_VALIDATION_ERROR_DEG = 3.0
 
 
 class CalibrationSource(StrEnum):
+    """WHOSE map this is -- a different question from what shape it is,
+    which is `CalibrationModel`'s.
+
+    `ONLINE` is named for its ROLE, not for a vendor: it is the calibration
+    that was in use during acquisition, as opposed to our offline fit -- the
+    map the animal was actually held to, which is why it outranks
+    carry-forward. The behavioural control system will change, and whatever
+    replaces MonkeyLogic will also save a calibration. Format-specific things
+    keep format names (`eye/bhv2.py` reads a genuinely MonkeyLogic binary and
+    says so); role-specific things get role names.
+
+    **Both fitted rungs are `FITTED`.** An affine-tier fit is still this
+    session's own map from this session's own targets, in a simpler shape.
+    Making it a separate source would answer "whose map" with a statement
+    about geometry, and the two questions would stop being separable.
+    """
+
     FITTED = "fitted"
-    MONKEYLOGIC = "monkeylogic"
+    ONLINE = "online"
     CARRIED_FORWARD = "carried_forward"
     REFUSED = "refused"
 
@@ -256,7 +273,7 @@ class Calibration:
 
     `carried_from` names the source session only for
     `CalibrationSource.CARRIED_FORWARD` -- every other source's map either
-    belongs to this session (`FITTED`, `MONKEYLOGIC`) or does not exist
+    belongs to this session (`FITTED`, `ONLINE`) or does not exist
     (`REFUSED`) -- so a borrowed map is never mistaken for a fitted one
     (design spec section 3.5).
     """
@@ -268,9 +285,16 @@ class Calibration:
     carried_from: str | None = None
 
 
-def read_monkeylogic_map(bhv2_path: str | Path | None) -> CalibrationMap | None:
-    """The fallback chain's step-2 candidate: MonkeyLogic's own calibration,
-    read from `.bhv2` (design spec section 4.5) and converted at Task 6's own
+def read_online_map(bhv2_path: str | Path | None) -> CalibrationMap | None:
+    """The fallback chain's step-3 candidate: the map in use ONLINE during
+    acquisition.
+
+    Named for the role, not the vendor -- but today that role has exactly one
+    reader, MonkeyLogic's `.bhv2`, and this function is where the two meet.
+    A second control system adds a reader beside `bhv2.py` and a branch here;
+    it touches neither `resolve_calibration`, the schema, nor the report.
+
+    Read from `.bhv2` (design spec section 4.5) and converted at Task 6's own
     boundary, `as_calibration_map` -- not reassembled here from `Bhv2Calibration`'s
     fields (Controller ruling C, task-7 brief). Task 6 owns what counts as a
     usable six-number calibration, including the fact that a real Origin &
@@ -320,7 +344,7 @@ def read_monkeylogic_map(bhv2_path: str | Path | None) -> CalibrationMap | None:
 def resolve_calibration(
     raw_xy: np.ndarray,
     target_xy: np.ndarray,
-    monkeylogic: CalibrationMap | None,
+    online: CalibrationMap | None,
     carried: tuple[CalibrationMap, str] | None,
 ) -> Calibration:
     """Design spec section 3.5's four steps, in order.
@@ -331,10 +355,10 @@ def resolve_calibration(
     one point cannot fit six parameters but is entirely adequate to falsify a
     candidate.
 
-    `monkeylogic` arrives already resolved to `CalibrationMap | None` -- ordinarily
-    via `read_monkeylogic_map` -- rather than as a `.bhv2` path, so this
-    function never touches the filesystem itself and stays testable against
-    hand-built candidates alone.
+    `online` arrives already resolved to `CalibrationMap | None` --
+    ordinarily via `read_online_map` -- rather than as a `.bhv2` path, so the
+    vendor boundary lives in `bhv2.py` alone: this function never touches the
+    filesystem, and supporting a second control system does not reach it.
     """
     if raw_xy.shape[0] == 0:
         return Calibration(
@@ -342,21 +366,35 @@ def resolve_calibration(
             "no fixation epoch named a target position",
         )
 
-    try:
-        fitted = fit_map(raw_xy, target_xy, CalibrationModel.AFFINE)
-    except DegenerateGeometry as exc:
-        degenerate_reason = str(exc)
-    else:
-        return Calibration(
-            CalibrationSource.FITTED, fitted,
-            validate_map(fitted, raw_xy, target_xy), "",
-        )
+    # **The model ladder.** Second-order first, affine where the geometry
+    # cannot constrain twelve parameters -- both this session's own map from
+    # its own targets, so both `FITTED`. More sessions will land on the
+    # affine rung than currently fit at all, since twelve parameters is a
+    # harder bar than six; that is the ladder working, and
+    # `calibration_model` is what tells an operator which rung a session
+    # reached.
+    #
+    # `degenerate_reason` ends holding the AFFINE failure, deliberately: the
+    # chain only reaches a refusal when the lower rung failed too, so the
+    # affine message is the binding constraint. It names its own model
+    # ("...for the affine model"), so a reader can see the ladder descended
+    # without both messages being stored.
+    for model in (CalibrationModel.SECOND_ORDER, CalibrationModel.AFFINE):
+        try:
+            fitted = fit_map(raw_xy, target_xy, model)
+        except DegenerateGeometry as exc:
+            degenerate_reason = str(exc)
+        else:
+            return Calibration(
+                CalibrationSource.FITTED, fitted,
+                validate_map(fitted, raw_xy, target_xy), "",
+            )
 
-    # MonkeyLogic's precedes carry-forward: it comes from the SAME session and
-    # is the map the animal was actually held to, since a gaze-contingent task
-    # cannot define a fixation window without one.
+    # The online map precedes carry-forward: it comes from the SAME session
+    # and is the map the animal was actually held to, since a gaze-contingent
+    # task cannot define a fixation window without one.
     for source, candidate, origin in (
-        (CalibrationSource.MONKEYLOGIC, monkeylogic, None),
+        (CalibrationSource.ONLINE, online, None),
         (CalibrationSource.CARRIED_FORWARD,
          carried[0] if carried else None,
          carried[1] if carried else None),

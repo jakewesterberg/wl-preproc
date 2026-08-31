@@ -84,7 +84,7 @@ def _breakdown_counts(section: str) -> dict[str, int]:
     way."""
     return {
         source: int(_line_for(section, f"{source}:").rsplit(":", 1)[1].strip())
-        for source in ("fitted", "monkeylogic", "carried_forward", "refused")
+        for source in ("fitted", "online", "carried_forward", "refused")
     }
 
 
@@ -395,7 +395,7 @@ def test_the_calibration_source_breakdown_counts_every_source_distinctly(
     dt = datetime.datetime(2027, 5, 2, 9, 0)
     plan = {
         "fitted": ["erpt1001", "erpt1002", "erpt1003"],
-        "monkeylogic": ["erpt1004"],
+        "online": ["erpt1004"],
         "carried_forward": ["erpt1005", "erpt1006"],
         "refused": ["erpt1007", "erpt1008", "erpt1009", "erpt1010"],
     }
@@ -419,12 +419,12 @@ def test_the_calibration_source_breakdown_counts_every_source_distinctly(
     )
 
     assert after["fitted"] - before["fitted"] == 3
-    assert after["monkeylogic"] - before["monkeylogic"] == 1
+    assert after["online"] - before["online"] == 1
     assert after["carried_forward"] - before["carried_forward"] == 2
     assert after["refused"] - before["refused"] == 4
 
 
-def test_the_monkeylogic_ambiguity_is_named_not_silently_complete(eye_schema, tmp_path, prefix):
+def test_the_online_calibration_ambiguity_is_named_not_silently_complete(eye_schema, tmp_path, prefix):
     """Controller ruling D (task-11 brief): nothing in `EyeCalibration`
     records whether a `.bhv2` was even found, so the breakdown above cannot
     separate "no log present" from "log present, map rejected by

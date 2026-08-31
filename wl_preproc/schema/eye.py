@@ -3,7 +3,8 @@
 
 Design spec `docs/superpowers/specs/2026-08-30-eye-ohdpi-calibration-and-gaze-
 design.md` section 6. Calibration is fitted from this session's own targets,
-borrowed from MonkeyLogic, carried forward from another session the same day,
+borrowed from the map in use online during acquisition, carried forward from
+another session the same day,
 or refused (section 3.5's chain, `wl_preproc.eye.calibration.
 CalibrationSource`). A refused calibration is a first-class outcome with a
 stated reason -- not an error, and never a fabricated map -- which is why the
@@ -53,7 +54,7 @@ from wl_preproc.eye.calibration import (
     _conditioning,
     apply_map,
     basis,
-    read_monkeylogic_map,
+    read_online_map,
     resolve_calibration,
     validate_map,
 )
@@ -160,7 +161,7 @@ class EyeCalibration(dj.Computed):
     ---
     # Which step of section 3.5's chain produced this map. A borrowed map must
     # never be mistaken for a fitted one.
-    calibration_source : enum('fitted','monkeylogic','carried_forward','refused')
+    calibration_source : enum('fitted','online','carried_forward','refused')
     # The six affine parameters, NULL when refused. A refused calibration is a
     # first-class outcome with a stated reason -- not an error, and never a
     # fabricated map.
@@ -476,9 +477,9 @@ class EyeCalibration(dj.Computed):
             )
             return
 
-        # -- MonkeyLogic's candidate: one map for the whole session (Task 6's
+        # -- The online candidate: one map for the whole session (Task 6's
         # reader has no per-eye split), tried identically for both eyes below.
-        monkeylogic = read_monkeylogic_map(_find_bhv2(session_dir))
+        online = read_online_map(_find_bhv2(session_dir))
 
         rows = []
         block_rows = []
@@ -537,7 +538,7 @@ class EyeCalibration(dj.Computed):
                 carry_datetime, candidate_map = candidate
                 carried = (candidate_map, carry_datetime.isoformat())
 
-            result = resolve_calibration(raw_xy, target_xy_arr, monkeylogic, carried)
+            result = resolve_calibration(raw_xy, target_xy_arr, online, carried)
 
             # **The AFFINE basis, for every row, whatever model was used.**
             # One definition of one column: how well this session's own target
@@ -697,7 +698,7 @@ def _find_bhv2(session_dir: Path) -> Path | None:
     synthetic generator produces, since `synth/peripherals.py::
     write_task_file` "stands in for MonkeyLogic's .bhv2 until the task stack
     is chosen" and writes `task.json`, never a real `.bhv2` -- finds nothing,
-    which `read_monkeylogic_map(None)` already treats as an ordinary skip
+    which `read_online_map(None)` already treats as an ordinary skip
     (design spec section 4.5: "a missing or unreadable .bhv2 is not an
     error").
     """
