@@ -83,14 +83,17 @@ def test_non_linear_input_verifies_the_formula():
     """The five-point estimator must be validated on non-linear input. A linear
     ramp has constant slope everywhere, so multiple formulas (e.g., a scaled
     two-point difference) could pass that test while being wrong on curved
-    traces. This test uses quadratic-in-x input and verifies the explicit
-    Engbert & Kliegl formula: (x[n+2] + x[n+1] - x[n-1] - x[n-2]) / (6 * dt).
+    traces. This test uses cubic-in-x input (which has non-zero third derivative)
+    and verifies the explicit Engbert & Kliegl formula:
+    (x[n+2] + x[n+1] - x[n-1] - x[n-2]) / (6 * dt). The cubic is essential to
+    discriminate this formula from wrong alternatives that happen to agree on
+    lower-order polynomials.
     """
     fs_hz = 1000.0
     dt = 1.0 / fs_hz
-    # Quadratic: x(t) = t^2, y(t) = 0. Derivative is 2*t, so velocity is 2000*t deg/s
+    # Cubic: x(t) = t^3, y(t) = 0. Derivative is 3*t^2, so velocity is 3*t^2 deg/s.
     t = np.arange(20) / fs_hz
-    gaze = np.column_stack([t**2, np.zeros(20)])
+    gaze = np.column_stack([t**3, np.zeros(20)])
 
     result = velocity(gaze, fs_hz)
 
