@@ -33,6 +33,7 @@ from wl_preproc.schema import (
     archive,
     core,
     coverage,
+    detect,
     ephys,
     events,
     eye,
@@ -112,6 +113,22 @@ def _computed_tables() -> list:
     before `TimingProvenance` is still the right position, now for the
     reason it always should have been rather than merely because nothing yet
     depended on it.
+
+    **`detect.EyeValidity`/`detect.EyeDetection` are registered inert, the
+    identical shape `eye.EyeCalibration`/`eye.EyeQuality` were under Task 9.**
+    The 2026-08-31 saccade-detection design's own Task 6 ships both as schema
+    only -- `make()` is Task 7, and each overrides `key_source` to stay
+    permanently empty for the exact reason recorded above and in
+    `wl_preproc/schema/eye.py`'s own git history (commit 3a8a121): a
+    `dj.Computed` with a real `key_source` and no `make()` raises
+    `NotImplementedError` on every session already landed the moment it
+    joins this list. Placed after the eye tables and before
+    `TimingProvenance` for the same reason `eye.EyeCalibration`/
+    `eye.EyeQuality` were: an empty `key_source` means position is not yet
+    load-bearing, so it is chosen for where it will belong once Task 7 gives
+    both a real one (validity and detection both need this session's own
+    calibration and gaze, which is downstream of everything already placed
+    above this point), not because anything below reads their output today.
     """
     return [
         timebase.SystemTimebase,
@@ -128,6 +145,10 @@ def _computed_tables() -> list:
         # why their position here still is not what makes them correct.
         eye.EyeCalibration,
         eye.EyeQuality,
+        # Registered inert as of Task 6 -- see this function's own docstring
+        # above for why an empty key_source keeps this harmless until Task 7.
+        detect.EyeValidity,
+        detect.EyeDetection,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
@@ -207,10 +228,19 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # permanently empty `key_source` — `_computed_tables()`'s own docstring
 # named exactly what kept that safe to register at the time — and Task 10
 # gave both a real `key_source` and `make()`; they populate for real now.
+#
+# It became ELEVEN with the 2026-08-31 saccade-detection design's `detect`
+# module. A fourth case shaped like `eye`, not like `ephys`/`archive`/
+# `events`: `detect` declares two real `@schema`-decorated `dj.Computed`
+# tables (`EyeValidity`, `EyeDetection`), so it owns real `~jobs` tables too.
+# Task 6 ships both schema-only, with a permanently empty `key_source` for
+# the identical reason recorded above for Task 9's `eye` tables; a later
+# task gives both a real `key_source` and `make()`.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
     ("core", core),
     ("coverage", coverage),
+    ("detect", detect),
     ("ephys", ephys),
     ("events", events),
     ("eye", eye),
