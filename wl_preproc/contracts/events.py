@@ -39,7 +39,25 @@ class Marker(IntEnum):
 
 
 class TaskTypeCode(IntEnum):
-    """Standing mapping tasks get reserved codes; lab-defined tasks start at 100."""
+    """Standing mapping tasks get reserved codes; lab-defined tasks start at 100.
+
+    **`CALIBRATION` is one of two mechanisms, for two different situations**
+    (ruled 2026-08-31; second-order design spec section 7 open question 2).
+    This one marks a WHOLE BLOCK as a calibration block: it declares itself in
+    its own `BLOCK_START` payload and needs no extra channel, which is what
+    makes a dedicated block self-describing in the recording. For a
+    calibration epoch that sits INSIDE another task, see
+    `TaskEvent.CALIBRATION_START`/`CALIBRATION_END`.
+
+    This is what `schema/eye.py` splits `n_from_calibration_block` from
+    `n_from_task_fixation` on. Before it existed, that split was a provisional
+    reading of `MEMORY_GUIDED_SACCADE` -- a task the design spec motivates the
+    `role` word with, and never characterises as a calibration block.
+
+    **Values are frozen and never renumbered.** A separate piece of software
+    is written against these numbers, and a renumbering silently relabels
+    every block in every recording made before it.
+    """
 
     RESTING_DARK = 1
     RF_MAP = 2
@@ -47,6 +65,7 @@ class TaskTypeCode(IntEnum):
     SHAPE_MAP = 4
     COLOR_MAP = 5
     MEMORY_GUIDED_SACCADE = 6
+    CALIBRATION = 7
 
 
 class TargetRole(IntEnum):
@@ -81,12 +100,30 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
 class TaskEvent(IntEnum):
     """Task events. Range 256-4095.
 
-    `Marker.TRIAL_FIXATION_BREAK` already covers a failed hold; these bound a
-    successful one, which is the window calibration fits against.
+    `Marker.TRIAL_FIXATION_BREAK` already covers a failed hold;
+    `FIXATION_ACQUIRED`/`FIXATION_END` bound a successful one, which is the
+    window calibration fits against.
+
+    **`CALIBRATION_START`/`CALIBRATION_END` are the second of the two
+    calibration mechanisms** (ruled 2026-08-31; the first is
+    `TaskTypeCode.CALIBRATION`). They bound a calibration epoch WITHIN any
+    task, so gathering calibration points does not require giving them their
+    own block -- the case a `TaskTypeCode` alone cannot express, since a block
+    has exactly one type.
+
+    The two are complementary, not alternatives: a dedicated block reliably
+    supplies six well-spread targets, which is what decides whether a session
+    reaches the second-order rung at all, while an in-task epoch is what makes
+    the points a normal task already produces attributable.
+
+    **Values are frozen and never renumbered**, for the reason
+    `TaskTypeCode`'s own docstring gives.
     """
 
     FIXATION_ACQUIRED = 256
     FIXATION_END = 257
+    CALIBRATION_START = 258
+    CALIBRATION_END = 259
 
 
 # Degrees of visual angle, offset-binary, hundredths of a degree.

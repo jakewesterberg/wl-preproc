@@ -5,6 +5,8 @@ from wl_preproc.contracts.events import (
     PAYLOAD_WORD_COUNTS,
     Escape,
     TargetRole,
+    TaskEvent,
+    TaskTypeCode,
     decode_dva,
     encode_dva,
 )
@@ -49,3 +51,68 @@ def test_roles_are_distinct_and_start_at_the_fixation_point():
     assert TargetRole.FIXATION_POINT == 0
     assert TargetRole.SACCADE_TARGET == 1
     assert len(set(TargetRole)) == len(list(TargetRole))
+
+
+# --- Calibration blocks and calibration epochs ------------------------------
+#
+# Ruled 2026-08-31: BOTH mechanisms, for two different situations. A whole
+# dedicated block declares itself in its own `BLOCK_START` payload
+# (`TaskTypeCode.CALIBRATION`); an epoch inside any other task is bounded by a
+# marker pair (`TaskEvent.CALIBRATION_START`/`CALIBRATION_END`), the case a
+# block type alone cannot express since a block has exactly one type.
+
+
+def test_no_pre_existing_task_type_code_moved():
+    """This is a frozen interface a separate piece of software is written
+    against. Adding `CALIBRATION` must not renumber anything: a shifted value
+    silently relabels every block in every recording made before the shift,
+    and nothing downstream could detect it.
+
+    Every pre-existing member is pinned by name AND value, not merely counted,
+    so an insertion in the middle fails here rather than in the field.
+    """
+    assert TaskTypeCode.RESTING_DARK == 1
+    assert TaskTypeCode.RF_MAP == 2
+    assert TaskTypeCode.PASSIVE_FLASH == 3
+    assert TaskTypeCode.SHAPE_MAP == 4
+    assert TaskTypeCode.COLOR_MAP == 5
+    assert TaskTypeCode.MEMORY_GUIDED_SACCADE == 6
+
+
+def test_the_calibration_block_takes_the_next_free_task_type_code():
+    assert TaskTypeCode.CALIBRATION == 7
+    # Still inside the reserved standing-task range: this class's own
+    # docstring puts lab-defined tasks at 100 and above, so 7 cannot collide
+    # with one the lab defines later.
+    assert TaskTypeCode.CALIBRATION < 100
+
+
+def test_no_pre_existing_task_event_moved():
+    assert TaskEvent.FIXATION_ACQUIRED == 256
+    assert TaskEvent.FIXATION_END == 257
+
+
+def test_the_calibration_epoch_markers_take_the_next_free_task_events():
+    assert TaskEvent.CALIBRATION_START == 258
+    assert TaskEvent.CALIBRATION_END == 259
+
+
+def test_every_task_event_sits_in_its_own_allocated_range():
+    """256-4095 (module docstring's range allocation). Below 256 collides with
+    `Marker`'s session/block/trial namespace, which shares the same wire and
+    is decoded by value alone -- `decode_stream` has no way to tell the two
+    apart, so an out-of-range task event would decode AS a marker."""
+    for event in TaskEvent:
+        assert 256 <= event.value <= 4095
+
+
+def test_task_type_codes_and_task_events_are_each_distinct():
+    """An IntEnum silently ALIASES a duplicate value rather than refusing it:
+    a second member declared `= 7` would become `TaskTypeCode.CALIBRATION`
+    under a different name, and iteration would not even list it. Comparing
+    the value set's size against the declared-member count is what catches
+    that, since `len(TaskTypeCode)` counts canonical members only."""
+    for enum_type in (TaskTypeCode, TaskEvent):
+        values = [member.value for member in enum_type]
+        assert len(set(values)) == len(values)
+        assert len(values) == len(enum_type.__members__)
