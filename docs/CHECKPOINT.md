@@ -131,21 +131,30 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 
 **2026-08-31 — what is actually next, and what each needs.**
 
-1. **Saccade detection** — the second half of parent §7, split from the eye spec deliberately.
+1. **Second-order calibration** — spec and plan written 2026-08-31, nothing implemented.
+   `specs/2026-08-31-second-order-calibration-design.md`,
+   `plans/2026-08-31-second-order-calibration.md`. **This supersedes the eye spec's §3.3
+   affine choice**: OpenIrisDPI's own tutorial notebook shows the P1−P4 nonlinearity is real
+   and a second-order term accounts for much of it. Eight tasks, revising merged code.
+   **Sequenced before detection deliberately** — detection thresholds are tuned against the
+   gaze signal, so tuning against affine gaze and then changing the model means validating
+   twice.
+2. **Saccade detection** — the second half of parent §7, split from the eye spec deliberately.
    Three detectors, each its own paramset: Engbert–Kliegl (baseline, no dependencies),
    Otero-Millan (threshold-free, per-detection reliability, no PyTorch), and U'n'Eye (a CNN,
    vendored at a pinned commit). **Ruled 2026-08-31: all three, with PyTorch declared
    properly** rather than worked around — `where: serv`, following `kilosort`'s precedent,
    since a CNN detector belongs on the preprocessing server and not a rig. Their agreement
    becomes a three-way data-quality metric.
-2. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
+3. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
    Worth doing before the hardware lands.
-3. **Two eye gaps needing a human decision**, both recorded in
-   `docs/handoffs/2026-08-31-eye-reader-and-calibration-built-detection-is-next.md`: nothing
-   in the code protocol marks a block as a *calibration block*, and no convention says where a
-   `.bhv2` sits in a session directory. Both pair with implementing §4's `TARGET_POSITION`
-   encoding in MonkeyLogic, which the eye spec now specifies exactly.
+4. **One eye gap needing a human decision**, both recorded in
+   `docs/handoffs/2026-08-31-eye-reader-and-calibration-built-detection-is-next.md`: no convention says where a
+   `.bhv2` sits in a session directory. (**The calibration-block marker was settled
+   2026-08-31**: both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END` pair, Task 4
+   of the second-order plan.) Pairs with implementing §4's `TARGET_POSITION` encoding, which
+   the eye spec specifies exactly.
 
 **Everything in Phase 2b proper still needs the compute machine.** The two subsystems merged
 this week were chosen precisely because they needed no GPU and no container — and both are now

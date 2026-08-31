@@ -5,6 +5,15 @@ branch `spec/eye-ohdpi-calibration-and-gaze` is 29 commits, 980 tests passing,
 one skipped, one deselected, `wl-check` clean. **It is not merged** — that
 decision was left to your human partner.
 
+> **Superseded in part, same day.** The affine calibration described below is being
+> replaced by a second-order model — OpenIrisDPI's own tutorial notebook shows the P1−P4
+> nonlinearity is real. See `specs/2026-08-31-second-order-calibration-design.md` and its
+> plan. **Detection is no longer next; the calibration upgrade is.** Everything else here —
+> the format findings, the `TARGET_POSITION` encoding, the known limits — still holds.
+>
+> The calibration-block gap this document flags as needing a decision **was settled**: a
+> reserved `TaskTypeCode` *and* a `CALIBRATION_START`/`END` marker pair.
+
 ## The one-paragraph version
 
 The pipeline can now read a real OpenIrisDPI recording, fit a per-eye calibration
