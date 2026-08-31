@@ -13,6 +13,26 @@ from wl_sync.session import SessionId
 
 SYSTEMS: tuple[str, ...] = ("syncbox", "spikeglx", "rhs", "ohdpi", "bcam")
 
+# Where the experiment controller writes its own log for a session.
+#
+# **Named for the ROLE, not the vendor**, the same split
+# `eye.calibration.CalibrationSource.ONLINE` draws: MonkeyLogic writes a
+# `.bhv2` here today, and `wl-expcontroller` will write whatever it writes.
+# A directory called `monkeylogic/` would need renaming the day the second
+# controller lands, and every path already written against it would be wrong.
+#
+# **Deliberately NOT a `SYSTEMS` entry**, and that is a real distinction
+# rather than a naming preference. `SYSTEMS` members are acquisition systems:
+# `ingest/discover.py` expects a `DONE` marker under each, `core.
+# AcquisitionSystem` records one row per member, and `timebase/extract.py`
+# asserts `set(EXTRACTORS) == set(SYSTEMS)` as its own completeness claim --
+# a system with no extractor is one that silently never aligns. An experiment
+# controller's log carries no barcode and needs no alignment, so adding it
+# there would demand an extractor that cannot exist and break that assertion.
+# Discovery iterates `SYSTEMS` explicitly, so an extra directory beside them
+# is simply ignored rather than treated as an unknown system.
+EXPCONTROLLER_DIRNAME = "expcontroller"
+
 MANIFEST_FILENAME = "session_manifest.yaml"
 DONE_MARKER_FILENAME = "DONE"
 
@@ -29,6 +49,16 @@ class SessionLayout:
     @property
     def manifest_path(self) -> Path:
         return self.dir / MANIFEST_FILENAME
+
+    @property
+    def expcontroller_dir(self) -> Path:
+        """The experiment controller's own log directory for this session.
+
+        Not reached through `system_dir`, which validates against `SYSTEMS`
+        and would reject this name -- correctly, for the reason
+        `EXPCONTROLLER_DIRNAME` gives.
+        """
+        return self.dir / EXPCONTROLLER_DIRNAME
 
     def system_dir(self, system: str) -> Path:
         if system not in SYSTEMS:

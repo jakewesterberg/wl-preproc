@@ -60,6 +60,7 @@ from wl_preproc.eye.calibration import (
 )
 from wl_preproc.eye.gaze import purkinje_vector
 from wl_preproc.eye.ohdpi import read_columns
+from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
 schema = dj.Schema()
@@ -262,9 +263,24 @@ class EyeCalibration(dj.Computed):
     n_points                    : int unsigned
     n_from_calibration_block    : int unsigned
     n_from_task_fixation        : int unsigned
-    # The target constellation's minor/major spread ratio (`wl_preproc.eye.
-    # calibration._conditioning`), which section 3.5's refusal is keyed on.
+    # `wl_preproc.eye.calibration._conditioning` of this session's own target
+    # constellation, on the AFFINE basis -- how well the geometry constrains a
+    # calibration at all, which is the question a refused or borrowed row
+    # raises. One definition, every row, never branching on source or model.
     conditioning=null           : double
+    # The SAME measure at the quadratic basis: what the second-order rung was
+    # judged on. `calibration_model` records the verdict; this records the
+    # margin, which is the difference between "nudge the target grid" and
+    # "redesign the task" when a run of sessions lands on affine.
+    #
+    # NULL below `n_terms(SECOND_ORDER)` points, deliberately, and not because
+    # it cannot be computed there -- it can, and the number is a trap. A 4x6
+    # design yields only four singular values and their ratio is structurally
+    # blind to the two missing dimensions: four spread targets read a healthy
+    # 0.2787 while being underdetermined outright (second-order design spec
+    # section 2.3). Storing that would invite reading a point-count failure as
+    # a geometry success. `n_points` is what says which one happened.
+    conditioning_second_order=null : double
     # A fitted map only: how well it explains the points it was fitted from.
     residual_deg_rms=null       : double
     residual_deg_max=null       : double
@@ -436,6 +452,7 @@ class EyeCalibration(dj.Computed):
                         "n_from_calibration_block": 0,
                         "n_from_task_fixation": 0,
                         "conditioning": None,
+                        "conditioning_second_order": None,
                         "residual_deg_rms": None,
                         "residual_deg_max": None,
                         "carried_from_session_datetime": None,
@@ -583,6 +600,7 @@ class EyeCalibration(dj.Computed):
                         "n_from_calibration_block": 0,
                         "n_from_task_fixation": 0,
                         "conditioning": None,
+                        "conditioning_second_order": None,
                         "residual_deg_rms": None,
                         "residual_deg_max": None,
                         "carried_from_session_datetime": None,
@@ -595,7 +613,7 @@ class EyeCalibration(dj.Computed):
 
         # -- The online candidate: one map for the whole session (Task 6's
         # reader has no per-eye split), tried identically for both eyes below.
-        online = read_online_map(_find_bhv2(session_dir))
+        online = read_online_map(_find_expcontroller_log(session_dir))
 
         rows = []
         block_rows = []
@@ -645,6 +663,14 @@ class EyeCalibration(dj.Computed):
             conditioning = (
                 float(_conditioning(target_xy_arr, CalibrationModel.AFFINE))
                 if target_xy_arr.shape[0]
+                else None
+            )
+            # Only where the count guard would not have refused it first --
+            # see the column's own comment for why the number is misleading
+            # below that, rather than merely unavailable.
+            conditioning_second_order = (
+                float(_conditioning(target_xy_arr, CalibrationModel.SECOND_ORDER))
+                if target_xy_arr.shape[0] >= n_terms(CalibrationModel.SECOND_ORDER)
                 else None
             )
 
@@ -711,6 +737,7 @@ class EyeCalibration(dj.Computed):
                     "n_from_calibration_block": n_from_calibration_block,
                     "n_from_task_fixation": n_from_task_fixation,
                     "conditioning": conditioning,
+                    "conditioning_second_order": conditioning_second_order,
                     "residual_deg_rms": residual_rms,
                     "residual_deg_max": residual_max,
                     "carried_from_session_datetime": carried_from_dt,
@@ -774,23 +801,39 @@ def _session_time_to_row(segment: dict, session_s: float) -> int | None:
     return min(max(row, 0), n_samples - 1)
 
 
-def _find_bhv2(session_dir: Path) -> Path | None:
-    """The session's own MonkeyLogic log, if one exists.
+def _find_expcontroller_log(session_dir: Path) -> Path | None:
+    """The session's own experiment-controller log, if one exists.
 
-    No path convention for it exists anywhere in this repository yet --
-    `.bhv2` names no `contracts.paths.SYSTEMS` entry (MonkeyLogic is a task
-    stack, not an acquisition system this pipeline lays out a directory for),
-    and nothing else in this codebase locates one either. Searching the
-    whole session tree and taking the first match is the least assuming
-    choice available; a session with none -- every session this project's
-    synthetic generator produces, since `synth/peripherals.py::
-    write_task_file` "stands in for MonkeyLogic's .bhv2 until the task stack
-    is chosen" and writes `task.json`, never a real `.bhv2` -- finds nothing,
-    which `read_online_map(None)` already treats as an ordinary skip
-    (design spec section 4.5: "a missing or unreadable .bhv2 is not an
-    error").
+    **A convention now exists, and this reads it**: `contracts.paths.
+    EXPCONTROLLER_DIRNAME` -- `<session>/expcontroller/`. This function used
+    to `rglob("*.bhv2")` over the whole session tree and take the first match,
+    which was the least-assuming choice available when nothing said where such
+    a file sits; that gap was recorded as needing a human decision through two
+    handoffs, and it is settled.
+
+    Reading ONLY that directory, with no whole-tree fallback, is the point. A
+    fallback would keep the ambiguity the convention exists to remove: a file
+    found somewhere unexpected would be used silently, and "no log" would stay
+    indistinguishable from "log in the wrong place". A log the transfer put
+    elsewhere is now a visibly absent one.
+
+    Still `*.bhv2` specifically, because that is the only format
+    `eye/bhv2.py` can read. The DIRECTORY is role-named so a second controller
+    needs no path change; the glob is format-named because a reader for that
+    controller's own format does not exist yet. When it does, this is where
+    the second glob goes, and nothing above it changes.
+
+    A session with no such directory -- every session this project's synthetic
+    generator produces, since `synth/peripherals.py::write_task_file` "stands
+    in for MonkeyLogic's .bhv2 until the task stack is chosen" and writes
+    `task.json` -- finds nothing, which `read_online_map(None)` already treats
+    as an ordinary skip (design spec section 4.5: "a missing or unreadable
+    .bhv2 is not an error").
     """
-    matches = sorted(session_dir.rglob("*.bhv2"))
+    directory = session_dir / EXPCONTROLLER_DIRNAME
+    if not directory.is_dir():
+        return None
+    matches = sorted(directory.glob("*.bhv2"))
     return matches[0] if matches else None
 
 
