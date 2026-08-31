@@ -1,4 +1,4 @@
-# Saccade detection, and what three detectors agreeing is worth
+# Saccade detection, and what seven detectors agreeing is worth
 
 **Design spec, 2026-08-31.** Implements the second half of parent design spec
 §7.2, which the eye spec
@@ -19,10 +19,10 @@ data-quality metric. Sessions where the two detectors diverge indicate
 degraded tracking, surfaced automatically in the daily report rather than
 discovered during analysis months later."*
 
-That sentence was written for two detectors. **Three run now** (ruled
-2026-08-31), and a third detector breaks the sentence's arithmetic: with two,
-"they disagree" has one meaning; with three it has four, and blending them
-into a single number destroys the only reading that matters.
+That sentence was written for two detectors. **Seven run now** (ruled
+2026-08-31), and that breaks the sentence's arithmetic completely: with two,
+"they disagree" has one meaning; with seven there are twenty-one pairs, and
+blending them into a single number destroys every reading that matters.
 
 The reason is specific and known in advance. Parent §7.2 records it as a
 caveat: *"U'n'Eye's pretrained weights come from datasets dominated by
@@ -42,7 +42,7 @@ agree at 0.94 and both disagree with the CNN" is a diagnosis. "Agreement:
 
 ## 1. The label taxonomy
 
-Five labels per sample, assigned by **strict precedence**, because a sample
+Eight labels per sample, assigned by **strict precedence**, because a sample
 can qualify for several and an unstated overlap is how two definitions of one
 fact are created.
 
@@ -51,11 +51,24 @@ fact are created.
 | 1 | `blink` | `DataQuality < 100` — the tracker's own stated failure |
 | 2 | `invalid` | any other validity-mask criterion (§2) |
 | 3 | `saccade` *or* `microsaccade` | a detected event, split by amplitude at the threshold |
-| 4 | `fixation` | everything else |
+| 4 | `pso` | post-saccadic oscillation, in the window following a saccade (§2.5) |
+| 5 | `pursuit` | a detected smooth-pursuit segment |
+| 6 | `drift` | slow fixational motion, where a detector distinguishes it |
+| 7 | `fixation` | everything else |
 
 `saccade` and `microsaccade` share one precedence level deliberately: they are
 a **split**, not a ranking. A sample inside a detected event is one or the
 other by that event's amplitude — never both, and never in contention.
+
+**`pso` sits below the saccade it follows and above everything slow**, which
+is what makes lens wobble nameable instead of arriving as a spurious
+microsaccade (§2.5). **`drift` and `pursuit` are refinements of what was
+previously all `fixation`** — a still eye, a slowly drifting one and a
+pursuing one are three states, and on a 500 Hz dual-Purkinje tracker the
+difference is measurable rather than notional.
+
+**Not every detector can emit every label**, and that is a first-class fact
+rather than a wrinkle — see §3.1 and §6.1.
 
 **`blink` outranks `invalid`, and the order is load-bearing.** A blink *is* a
 validity failure, so generic-first would mean no sample is ever labelled
@@ -87,14 +100,14 @@ calibration alone. That is why the mask is its own Computed table
 inside each detector's paramset.
 
 The alternative was considered and rejected: with mask parameters inside each
-detection paramset, three detectors can silently run against three different
+detection paramset, seven detectors can silently run against seven different
 masks, and the agreement metric would then be comparing **masks as well as
 detections** — measuring the thing it exists to hold constant. Sharing one
-mask makes `invalid` and `blink` identical across all three traces *by
+mask makes `invalid` and `blink` identical across every trace *by
 construction*, so a disagreement can only be a detector disagreement. The
 cost, stated: detection's primary key carries two paramset columns, and
-detection rows multiply with validity paramsets. With one mask and three
-detectors that is three rows.
+detection rows multiply with validity paramsets. With one mask, seven
+detectors and three traces that is 21 rows per session.
 
 **Criterion 4 already has its input.** `read_ohdpi` reports `frame_gaps` as
 `(row, n_missing)` pairs rather than refusing a recording over a dropped
@@ -107,6 +120,51 @@ parameters with no measured value yet; §11 records that.
 
 ---
 
+## 2.5 Post-saccadic oscillation is not an edge case on this instrument
+
+**Measured on a dual-Purkinje tracker, against a scleral search coil.** Deubel
+& Bridgeman recorded saccades simultaneously with both and found "considerable
+dynamic deviations during and immediately after the saccade, which we ascribe
+to the movements of the eye lens relative to the optical axis of the eye",
+with retinal image displacement from lens movement alone "as large as 0.5 deg"
+— larger at near accommodation, smaller in older subjects
+(*Vision Research* 1995, [10.1016/0042-6989(94)00146-d](https://doi.org/10.1016/0042-6989(94)00146-d)).
+
+That is this rig's instrument and P4 is this pipeline's signal. **0.5° is half
+the default microsaccade threshold**, so lens ringing after every real saccade
+lands squarely in microsaccade territory. A detector that does not model it
+will report those samples as a microsaccade, and it will do so immediately
+after every saccade, systematically, in a way no amount of averaging removes.
+
+**And the disagreement it causes is arbitrary rather than informative.**
+Nyström & Holmqvist found glissades in "about half of the saccades", mean
+duration close to 24 ms, and concluded that researchers "must actively choose
+whether to assign the glissades to saccades or fixations; the choice affects
+dependent variables such as fixation and saccade duration significantly.
+Current algorithms do not offer this choice, and their assignments of each
+glissade are largely arbitrary" (*Behavior Research Methods* 2010,
+[10.3758/BRM.42.1.188](https://doi.org/10.3758/BRM.42.1.188)).
+
+Two consequences for this design, and they are the reason `pso` is a label
+rather than a footnote:
+
+1. **The assignment is an explicit parameter, never a default.** Whether a
+   `pso` run counts as saccade or as fixation is stated per comparison (§6.1),
+   which is precisely the choice Nyström & Holmqvist say algorithms fail to
+   offer.
+2. **Without it, the agreement metric measures glissade-handling conventions
+   rather than tracking quality** — in half of all saccades. The metric exists
+   to flag degraded tracking; a systematic artifact of the instrument firing it
+   on every good session would make it worthless in exactly the month it is
+   needed.
+
+The refractory window has an empirical basis rather than a guessed one: ~24 ms
+mean glissade duration, against ≤0.5° of lens displacement. Its value is a
+paramset parameter and the lab's own recordings settle it, since Deubel &
+Bridgeman found the magnitude varies with accommodation and with age.
+
+---
+
 ## 3. The detector interface
 
 A registry, following `timebase/extract.py::EXTRACTORS`' precedent, whose set
@@ -114,33 +172,100 @@ equality against the registered paramsets is this subsystem's completeness
 claim:
 
 ```python
-DETECTORS: dict[str, Detector]      # name -> callable
-def detect(gaze_deg, fs_hz, valid, params) -> list[Interval]
+DETECTORS: dict[str, Detector]              # name -> callable + declared vocabulary
+def detect(gaze_deg, velocity, valid, params) -> list[LabelledInterval]
 ```
 
-**Detectors return intervals. Shared code measures them.** All three natively
-produce different things — Engbert–Kliegl a velocity-threshold crossing,
-Otero-Millan a cluster membership with a per-detection reliability index,
-U'n'Eye a per-sample probability that is thresholded into intervals. If each
-computed its own amplitude, the agreement metric would compare *measurements*
-as well as detections and a disagreement would be uninterpretable. So
-amplitude, peak velocity and duration are computed once, downstream,
-identically for all three.
+**Velocity is computed once, upstream, and passed in.** Every
+threshold-based method inherits its differentiator, and if each filtered its
+own way the agreement metric would compare *differentiators* as well as
+detections — the same argument as measuring amplitude centrally, one level
+further upstream. The validity mask's speed criterion needs velocity anyway
+(§2), so it exists before any detector runs. **This is the single most
+consequential preprocessing decision in this spec**: it is what makes a
+disagreement attributable to a method rather than to a smoothing window.
 
-The three:
+**Detectors return labelled intervals. Shared code measures them.** Amplitude,
+peak velocity and duration are computed once, downstream, identically for all
+seven, so a disagreement is never a disagreement about measurement.
 
-1. **Engbert–Kliegl** — velocity threshold at λ multiples of a median-based
-   SD estimate, with a minimum duration. The always-on baseline: small, no
-   dependencies, and the algorithm every other method is benchmarked against.
-2. **Otero-Millan** — unsupervised clustering, threshold-free, with a
-   per-detection reliability index, and by the author of OpenIris itself.
-   numpy and scipy only.
-3. **U'n'Eye** — a CNN at human-level accuracy, validated on *Macaca
-   mulatta*. Vendored (§8).
+### 3.1 Seven detectors, and what each can say
 
-Each is one `ParamSet` row of type `eye_detection`, using the existing
-`(paramset_type, paramset_idx)` table. Parent §7.2 puts revisability here
-deliberately: *"Detection lives in its own Computed table keyed by
+| Detector | Vocabulary it can emit | Source |
+|---|---|---|
+| Engbert–Kliegl | saccade / microsaccade | reimplemented |
+| Otero-Millan | microsaccade | ported from a BSD-3 reference |
+| Nyström–Holmqvist | saccade / pso / fixation | reimplemented |
+| NSLR | saccade / pso / pursuit / fixation | reimplemented |
+| REMoDNaV | saccade / pso / pursuit / fixation | reimplemented |
+| Bayesian microsaccade detection | microsaccade / drift | reimplemented |
+| U'n'Eye | saccade | **vendored** (§8) |
+
+**Vocabularies differ, and that is a first-class fact.** A detector that
+cannot emit `pso` is not disagreeing with one that can; it has nothing to say.
+Each registry entry therefore declares the labels it produces, and §6.1 makes
+every comparison happen in a vocabulary both sides can express.
+
+The three that were in this spec's first draft carry their original
+justification: **Engbert–Kliegl** is the zero-dependency baseline every other
+method is benchmarked against; **Otero-Millan** is threshold-free with a
+per-detection reliability index, by the author of OpenIris itself; **U'n'Eye**
+is a CNN at human-level accuracy validated on *Macaca mulatta*. The four added
+2026-08-31 each close a specific gap:
+
+- **Nyström–Holmqvist** ([10.3758/BRM.42.1.188](https://doi.org/10.3758/BRM.42.1.188))
+  — adaptive thresholds, settings-free, and the first method here that names
+  glissades at all. On this instrument that is not a refinement (§2.5).
+- **NSLR** ([10.1038/s41598-017-17983-x](https://doi.org/10.1038/s41598-017-17983-x))
+  — segmented linear regression that "simultaneously denoises the signal and
+  determines event boundaries", O(n), adding pursuit and PSO.
+- **REMoDNaV** ([10.3758/s13428-020-01428-x](https://doi.org/10.3758/s13428-020-01428-x))
+  — adaptive, robust to temporally varying noise, saccades/PSO/fixation/pursuit.
+- **Bayesian microsaccade detection**
+  ([10.1167/17.1.13](https://doi.org/10.1167/17.1.13)) — the only probabilistic
+  member. It "returns probabilities rather than binary judgments", models
+  **drift** as an explicit state, and was validated on Dual Purkinje Image
+  data, "whose higher precision justifies defining the inferred microsaccades
+  as ground truth"; at EyeLink-comparable noise it recovered true microsaccades
+  with 54% fewer errors than velocity thresholding. Its posteriors are what
+  let the consensus suite carry soft measures rather than hard-label votes
+  alone.
+
+### 3.2 Reimplemented, not vendored — and the risk that carries
+
+**Everything except U'n'Eye is this project's own code.** The principle:
+vendor what cannot be reproduced, reimplement what a paper fully specifies. A
+trained CNN's weights are the artifact and cannot be rewritten from the paper,
+which is why U'n'Eye is vendored and nothing else is. Three things this buys:
+one shared velocity estimator across all seven rather than seven private ones;
+no licence question in any code that runs (NSLR's classification half is
+AGPL-3.0 and its segmentation half declares no licence — reimplementing
+dissolves that entirely); and no dependency on repositories last touched in
+2019 and 2020.
+
+**The risk it carries is specific and must be designed against: a buggy
+reimplementation is indistinguishable from a genuine detector disagreement.**
+Seven methods whose whole purpose is to be compared, six of them written here,
+means a reimplementation defect does not look like a defect — it looks like a
+finding, and it looks like exactly the finding this subsystem exists to
+surface. Mitigation is not optional:
+
+- **Published output statistics are checkable predictions.** Nyström &
+  Holmqvist report glissades in about half of saccades at ~24 ms mean
+  duration; a reimplementation that produces neither is wrong regardless of
+  whether it runs.
+- **Permissively licensed implementations are test-time oracles**, the pattern
+  this repository already uses when SpikeInterface validates the synthetic
+  generator's output. REMoDNaV is MIT and on PyPI; Otero-Millan's reference is
+  BSD-3-Clause. Both are development dependencies used to check our output,
+  never runtime dependencies and never shipped.
+- **BMD has no usable oracle** — its reference is C++ and unlicensed — so it
+  is validated against the paper's own simulated-data claims instead, and its
+  rows are marked provisional until it is.
+
+Each detector is one `ParamSet` row of type `eye_detection`, using the
+existing `(paramset_type, paramset_idx)` table. Parent §7.2 puts revisability
+here deliberately: *"Detection lives in its own Computed table keyed by
 `paramset_idx`, so detection parameters are revisable per project without
 recomputing gaze or touching anything upstream."*
 
@@ -213,8 +338,8 @@ gaze array the eye spec refused to store is ~38 MB, so the label trace is
 ~32× smaller and the objection does not transfer at the same magnitude. As
 runs, at a typical 3 detected events per second — saccades and microsaccades
 together, each contributing its own run plus the fixation run that follows it
-— roughly **14,000 runs per eye per detector**, so ~126,000 rows per session
-across three traces and three detectors. **That
+— roughly **14,000 runs per eye per detector**, so ~294,000 rows per session
+across three traces and seven detectors. **That
 figure is extrapolated from typical saccade rates, not measured** — nothing
 has run a detector on a real recording yet, and the implementation plan must
 measure it against one before this design is trusted on storage grounds.
@@ -232,11 +357,44 @@ rows, never a schema migration**. The migration window closes in January
 (second-order spec §4.1); a metrics registry is how this subsystem stays
 extensible past that date without one.
 
+### 6.1 Comparisons happen in a vocabulary both sides can express
+
+With seven detectors emitting between one and four label classes each (§3.1),
+the naive comparison is broken before it starts: Engbert–Kliegl saying
+`saccade` where NSLR says `pso` is not a disagreement about the data, it is
+Engbert–Kliegl having no word for what NSLR saw. Scored literally, the most
+capable detectors would look like the least reliable ones.
+
+So every pair is compared in the **coarsest vocabulary both declare**, and the
+row records which vocabulary that was. The coarsening lattice:
+
+```
+microsaccade -> saccade          (the amplitude split collapses)
+drift        -> fixation         (slow motion is still not an event)
+pursuit      -> fixation         (where one side cannot see pursuit)
+pso          -> saccade | fixation      <-- a stated parameter, never a default
+```
+
+**The `pso` coarsening is the one that is deliberately not defaulted.** It is
+exactly the choice Nyström & Holmqvist say current algorithms fail to offer
+and assign "largely arbitrarily", affecting saccade and fixation durations
+significantly (§2.5). Making it a comparison parameter means the arbitrary
+choice becomes a stated one, and a pair can be scored both ways to show how
+much of the disagreement was only ever a convention.
+
+Two consequences worth stating plainly. A pair scored in a coarse vocabulary
+is **not** comparable to a pair scored in a fine one, so the vocabulary is in
+the row and any report that aggregates across pairs must group by it. And
+`n_samples_compared` excludes samples either side called `blink` or `invalid`,
+since those come from the shared mask (§2) and are identical by construction —
+counting them would inflate every score toward agreement for reasons no
+detector is responsible for.
+
 Two arities, kept in two places rather than in one table with nullable halves:
 
 **Pairwise**, keyed `(session, trace, validity_paramset_idx, paramset_a,
-paramset_b, metric)` with a canonical `a < b` ordering, since both shipped
-metrics are symmetric. The validity paramset belongs in the key for the same
+paramset_b, metric, vocabulary, pso_as)` with a canonical `a < b` ordering,
+since both shipped metrics are symmetric. The validity paramset belongs in the key for the same
 reason it belongs in `EyeDetection`'s: two traces are comparable only if they
 were masked identically, and a key omitting it could not say which mask a
 score was computed under. Ships with:
@@ -270,7 +428,7 @@ stays readable when it does.
 | `EyeValidity` | `(subject, session_datetime, eye, paramset_idx)` | the mask, as runs; per-criterion rejected fractions |
 | `EyeDetection` | `(subject, session_datetime, trace, validity_paramset_idx, paramset_idx)` | status, reason, event counts, label fractions |
 | `EyeDetection.Run` | `+ run_index` | `run_start_row, run_end_row, label, amplitude_deg, peak_velocity_deg_s, reliability` |
-| `DetectorAgreement` | `(…, trace, validity_paramset_idx, paramset_a, paramset_b, metric)` | `value, n_samples_compared` |
+| `DetectorAgreement` | `(…, trace, validity_paramset_idx, paramset_a, paramset_b, metric, vocabulary, pso_as)` | `value, n_samples_compared` |
 | `DetectionQuality` | `(subject, session_datetime)` | `blended_agreement`, session summary |
 
 Every one is a `dj.Computed` and every one joins `daemon._computed_tables()` —
@@ -283,7 +441,7 @@ error and never a fabricated event list, exactly as `EyeCalibration`'s
 
 ---
 
-## 8. U'n'Eye: vendoring an unlicensed dependency, deliberately
+## 8. U'n'Eye: the one thing that cannot be reimplemented
 
 **Measured 2026-08-31 against the repository itself**, not assumed:
 `berenslab/uneye` declares **`license: null`** — no licence file, no licence
@@ -293,8 +451,11 @@ means by "no version pins". It is **not on PyPI** (404). The package is
 ~57 KB of Python (`classifier.py`, `functions.py`) plus six pretrained weight
 files of 82–85 KB in `training/`.
 
-**Ruled 2026-08-31: vendor it at that pinned commit anyway.** Recorded here as
-a deliberate departure rather than an oversight, because this repository has
+**Ruled 2026-08-31: vendor it at that pinned commit anyway** — and it is the
+ONLY vendored detector (§3.2). The principle that separates it from the other
+six is that its weights are the artifact: an architecture can be rewritten
+from a paper, a trained network cannot. Recorded here as a
+deliberate departure rather than an oversight, because this repository has
 already ruled the other way on the same facts: `eye/bhv2.py` records refusing
 to commit 6.5 KB of real `.bhv2` test data because the mirror "declares no
 licence… so redistribution rights are unclear". The next person to find both
@@ -379,11 +540,20 @@ the kind that breaks on one and not the other.
    split_units.py` already uses.
 3. **The run-count estimate in §5 is not a measurement.** ~126,000 rows per
    session is extrapolated. Measure it before trusting the storage argument.
-4. **Post-saccadic oscillation.** A dual-Purkinje tracker shows PSOs
-   prominently, and none of the three detectors models them; they will land
-   inside or beside saccade events depending on the detector. Not addressed
-   here, and a real source of between-detector disagreement that is not a
-   tracking fault.
+4. **~~Post-saccadic oscillation.~~ Addressed 2026-08-31**, in §2.5 and as
+   the `pso` label — after Deubel & Bridgeman's ≤0.5° lens displacement
+   measured on a DPI turned it from a refinement into the artifact most likely
+   to poison the metric. What remains open is its magnitude *on this rig*:
+   that figure came from a fifth-generation tracker and varies with
+   accommodation and age.
+5. **Six reimplementations are six opportunities to disagree with the
+   literature rather than with each other** (§3.2). Each needs validating
+   against published statistics or a permissively-licensed oracle before its
+   rows are trusted, and BMD has no oracle at all.
+6. **Whether seven detectors is too many to run nightly.** Seven per eye plus
+   three conjunctions, over a 1.18M-sample recording, on every session. The
+   plan must measure total runtime before this is a nightly stage rather than
+   an on-demand one.
 5. **Fine-tuning U'n'Eye** on hand-labelled lab data is post-January, per
    parent §7.2. Until then its rows are provisional and the pairwise design
    is what keeps that from contaminating the readable metrics.
@@ -398,5 +568,46 @@ the kind that breaks on one and not the other.
   later decision from that evidence, and unchanged by this spec.
 - **Gaze-corrected receptive field mapping** (parent §8), which consumes
   detection but is its own subsystem.
-- **A fourth detector.** The registry makes one cheap; nothing here argues for
-  one.
+- **An eighth detector.** The registry makes one cheap, and adding one is
+  now a demonstrated operation rather than a claimed one — four were added to
+  this spec on the day it was written. Nothing here argues for another.
+- **Tremor.** The third fixational eye movement, alongside microsaccades and
+  drift. At 500 Hz it sits at or below the sampling limit, and none of the
+  seven detectors claims it.
+- **Deconvolving lens wobble from P1 − P4.** Deubel & Bridgeman characterise
+  the artifact well enough that modelling it is conceivable; that is research,
+  not a pipeline stage. §2.5 excludes the affected window instead.
+
+---
+
+## 13. References
+
+Every figure quoted in this spec was verified against PubMed on 2026-08-31
+rather than recalled — this repository's own history records a quotation that
+appears in no source, and these numbers drive design decisions.
+
+- Deubel & Bridgeman (1995), *Fourth Purkinje image signals reveal eye-lens
+  deviations and retinal image distortions during saccades*, Vision Research
+  35(4):529–38. [10.1016/0042-6989(94)00146-d](https://doi.org/10.1016/0042-6989(94)00146-d)
+- Nyström & Holmqvist (2010), *An adaptive algorithm for fixation, saccade,
+  and glissade detection in eyetracking data*, Behavior Research Methods
+  42(1):188–204. [10.3758/BRM.42.1.188](https://doi.org/10.3758/BRM.42.1.188)
+- Mihali, van Opheusden & Ma (2017), *Bayesian microsaccade detection*,
+  Journal of Vision 17(1):13. [10.1167/17.1.13](https://doi.org/10.1167/17.1.13)
+- Pekkanen & Lappi (2017), *A new and general approach to signal denoising and
+  eye movement classification based on segmented linear regression*,
+  Scientific Reports 7(1):17726.
+  [10.1038/s41598-017-17983-x](https://doi.org/10.1038/s41598-017-17983-x)
+- Dar, Wagner & Hanke (2021), *REMoDNaV: robust eye-movement classification
+  for dynamic stimulation*, Behavior Research Methods 53(1):399–414.
+  [10.3758/s13428-020-01428-x](https://doi.org/10.3758/s13428-020-01428-x)
+- Bellet, Bellet, Nienborg, Hafed & Berens (2019), *Human-level saccade
+  detection performance using deep neural networks*, J Neurophysiol.
+  [10.1152/jn.00601.2018](https://doi.org/10.1152/jn.00601.2018) — cited by
+  parent §7.2; not re-verified here.
+- Engbert & Kliegl (2003) and Otero-Millan et al. (2014)
+  [10.1167/14.2.18](https://doi.org/10.1167/14.2.18) — both cited by parent
+  §7.2; not re-verified here.
+
+Licence and maintenance facts (§3.2, §8) were read from the GitHub and PyPI
+APIs on 2026-08-31, not assumed.
