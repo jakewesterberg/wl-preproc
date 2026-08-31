@@ -74,8 +74,14 @@ type alone cannot express, since a block has exactly one type. Both feed one
 flag in `EyeCalibration.make()`. The provisional `MEMORY_GUIDED_SACCADE`
 reading, and the note recording that it was a guess, are deleted.
 
-**Still yours, unchanged from the eye handoff: where a `.bhv2` lives in a
-session directory.** No convention exists anywhere in this repository.
+**Settled the same day, after this was written** (`ac7ead2`): an
+experiment-controller log lives in `<session>/expcontroller/`, role-named so
+MonkeyLogic's `.bhv2` and `wl-expcontroller`'s own format share one path, and
+deliberately not a `SYSTEMS` entry. The paragraph below describes the state
+this document was written in.
+
+**~~Still yours: where a `.bhv2` lives in a session directory.~~** No
+convention existed anywhere in this repository.
 `_find_bhv2` takes the first match under `rglob("*.bhv2")` and records nothing
 about what it found — which is why the daily report still cannot distinguish
 "no MonkeyLogic log present" from "log present, map rejected by validation".

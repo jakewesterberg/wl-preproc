@@ -180,16 +180,18 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 3. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
    Worth doing before the hardware lands.
-4. **One eye gap needing a human decision**, both recorded in
-   `docs/handoffs/2026-08-31-eye-reader-and-calibration-built-detection-is-next.md`: no convention says where a
-   `.bhv2` sits in a session directory. (**The calibration-block marker was settled
-   2026-08-31**: both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END` pair, Task 4
-   of the second-order plan.) Pairs with implementing §4's `TARGET_POSITION` encoding, which
-   the eye spec specifies exactly.
+4. **The eye subsystem's two open decisions are both settled.** The calibration-block
+   marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
+   pair, Task 4 of the second-order plan. And where an experiment-controller log sits
+   (2026-08-31, `ac7ead2`): `<session>/expcontroller/`, named for the ROLE so MonkeyLogic's
+   `.bhv2` and `wl-expcontroller`'s own format share one path, and deliberately not a
+   `SYSTEMS` entry — see `contracts/paths.py::EXPCONTROLLER_DIRNAME`. **What remains is
+   yours to emit, not to decide**: §4's `TARGET_POSITION` encoding from the task, which the
+   eye spec specifies exactly.
 
-**Everything in Phase 2b proper still needs the compute machine.** The two subsystems merged
-this week were chosen precisely because they needed no GPU and no container — and both are now
-done, so that gap is open again.
+**Everything in Phase 2b proper still needs the compute machine.** The subsystems merged
+this week were chosen precisely because they needed no GPU and no container. Saccade
+detection is the next of that kind, and rehydration the one after.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief

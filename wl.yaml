@@ -28,7 +28,7 @@ status:
     hardware-blocked. Rehydration — decompress-to-scratch, which turns
     `wlpp reclaim` from a preview into real disk-freeing — is the other
     hardware-free piece outstanding.
-  describes: 2b75720
+  describes: ac7ead2
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
