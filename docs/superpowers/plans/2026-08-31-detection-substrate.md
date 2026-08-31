@@ -1427,6 +1427,7 @@ class EyeValidity(dj.Computed):
     class Run(dj.Part):
         definition = f"""
         # One maximal stretch of a single mask label. `run_stop` is EXCLUSIVE.
+        # Key: (subject, session_datetime, eye, validity paramset, run_index).
         -> master
         run_index : int unsigned
         ---
@@ -1455,7 +1456,15 @@ class EyeDetection(dj.Computed):
     -> pipeline.Session
     # `trace`, not `eye`: a conjunction is honestly not an eye.
     trace : enum('left','right','conjunction')
-    -> paramset.ParamSet.proj(validity_paramset_idx='paramset_idx')
+    # BOTH of ParamSet's own primary-key columns are renamed, not only
+    # `paramset_idx`. `ParamSet` is keyed `(paramset_type, paramset_idx)`, so
+    # renaming the index alone leaves `paramset_type` SHARED between the two
+    # references -- forcing the validity paramset and the detector paramset to
+    # carry one identical type string, which is impossible when one is
+    # `eye_validity` and the other `eye_detection`. DataJoint declares that
+    # without complaint; it surfaces as an IntegrityError at insert time, far
+    # from the declaration at fault.
+    -> paramset.ParamSet.proj(validity_paramset_type='paramset_type', validity_paramset_idx='paramset_idx')
     -> paramset.ParamSet
     ---
     status : enum('computed','refused')
@@ -1469,6 +1478,7 @@ class EyeDetection(dj.Computed):
         definition = f"""
         # One maximal stretch of a single label. `run_stop` is EXCLUSIVE, and
         # the runs of one master row tile [0, n_samples) exactly.
+        # Key: (subject, session_datetime, trace, both paramsets, run_index).
         -> master
         run_index : int unsigned
         ---
@@ -1501,6 +1511,12 @@ def activate(prefix: str = DEFAULT_PREFIX) -> None:
 Then register both in `wl_preproc/daemon.py::_computed_tables()`, after the
 eye tables — `EyeValidity` before `EyeDetection`, since the ordering in that
 list IS the dependency ordering and nothing else enforces it.
+
+**And add `detect` to `daemon.py::_PROJECT_SCHEMA_MODULES`.** Registering the
+tables without registering the module breaks three `test_daemon.py` tests by two
+separate mechanisms — a declarative discovery mismatch, and a runtime
+`.populate()` against an unactivated schema. The two registrations are not
+alternatives.
 
 - [ ] **Step 4: Run**
 

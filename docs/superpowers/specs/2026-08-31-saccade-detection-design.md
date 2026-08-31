@@ -346,6 +346,18 @@ measure it against one before this design is trusted on storage grounds.
 
 ---
 
+> **Column names corrected 2026-09-01, during implementation.** This spec's
+> first draft wrote `run_start_row` / `run_end_row` and named `EyeValidity`'s own
+> paramset `paramset_idx`. The shipped schema uses `run_start` / `run_stop`,
+> mirroring `eye/detect/labels.py::Run`'s own `start` / `stop` — which is what
+> `make()` translates from — and `run_end_row` never paired symmetrically with
+> `run_start_row` in the first place. `EyeValidity.validity_paramset_idx` is
+> renamed once, at the table that owns it, rather than at every table that
+> references it. Corrected here rather than in the code because the code's
+> choice is the better one, and because a spec and a schema that disagree about
+> a column name is exactly the drift the January migration window makes
+> expensive.
+
 ## 6. The consensus suite
 
 ```python
@@ -516,9 +528,9 @@ closed for calibration, and it is fixed the same way: correct the fixture.
 
 | Table | Key | Holds |
 |---|---|---|
-| `EyeValidity` | `(subject, session_datetime, eye, paramset_idx)` | the mask, as runs; per-criterion rejected fractions |
+| `EyeValidity` | `(subject, session_datetime, eye, validity_paramset_idx)` | the mask, as runs; per-criterion rejected fractions |
 | `EyeDetection` | `(subject, session_datetime, trace, validity_paramset_idx, paramset_idx)` | status, reason, event counts, label fractions |
-| `EyeDetection.Run` | `+ run_index` | `run_start_row, run_end_row, label, amplitude_deg, peak_velocity_deg_s, reliability` |
+| `EyeDetection.Run` | `+ run_index` | `run_start, run_stop, label, amplitude_deg, peak_velocity_deg_s, reliability` |
 | `DetectorAgreement` | `(…, trace, validity_paramset_idx, paramset_a, paramset_b, metric, vocabulary, pso_as)` | `value, n_samples_compared` |
 | `DetectionQuality` | `(subject, session_datetime)` | `blended_agreement`, session summary |
 | `SaccadeMainSequence` | `(…, trace, validity_paramset_idx, paramset_idx)` | `v_max`, saturation constant, `n_saccades`, amplitude span, `r_squared`, `fit_status`, `reason` |
