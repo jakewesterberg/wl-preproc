@@ -105,5 +105,5 @@ def test_non_linear_input_verifies_the_formula():
         expected[n, 0] = x_diff * (fs_hz / 6.0)
 
     # Compare interior samples only
-    assert result[2:18, 0] == pytest.approx(expected[2:18, 0], abs=1e-6)
-    assert result[2:18, 1] == pytest.approx(expected[2:18, 1], abs=1e-6)
+    assert result[2:18, 0] == pytest.approx(expected[2:18, 0], abs=1e-9)
+    assert result[2:18, 1] == pytest.approx(expected[2:18, 1], abs=1e-9)
