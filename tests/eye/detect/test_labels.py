@@ -57,3 +57,37 @@ def test_adjacent_runs_never_share_a_label():
     is not canonical and two equal traces could store differently."""
     labels = np.array([Label.SACCADE] * 4)
     assert runs_from_labels(labels) == [Run(0, 4, Label.SACCADE)]
+
+
+def test_reversed_or_empty_run_raises_error():
+    """A run with stop <= start is either empty or reversed. numpy silently
+    treats out[4:2] = x as a no-op on an empty slice, leaving those samples
+    uninitialised with nothing raised. This guard is the only protection."""
+    with pytest.raises(TilingError, match="empty or reversed"):
+        labels_from_runs([Run(0, 3, Label.FIXATION), Run(3, 3, Label.SACCADE)], 6)
+    with pytest.raises(TilingError, match="empty or reversed"):
+        labels_from_runs([Run(0, 4, Label.FIXATION), Run(4, 2, Label.SACCADE)], 6)
+
+
+def test_nonzero_runs_for_zero_sample_trace_raises_error():
+    """A zero-sample trace must have no runs. Otherwise the tiling invariant
+    is violated without detection."""
+    with pytest.raises(TilingError, match="for a zero-sample trace"):
+        labels_from_runs([Run(0, 1, Label.FIXATION)], 0)
+
+
+def test_runs_round_trip_both_directions():
+    """Round-trip must hold in both directions: labels → runs → labels and
+    runs → labels → runs. Only one direction was previously tested."""
+    # Start with a hand-specified, valid Run list
+    original_runs = [
+        Run(start=0, stop=2, label=Label.BLINK),
+        Run(start=2, stop=5, label=Label.FIXATION),
+        Run(start=5, stop=7, label=Label.SACCADE),
+    ]
+    # Decode to labels
+    labels = labels_from_runs(original_runs, 7)
+    # Re-encode to runs
+    recovered_runs = runs_from_labels(labels)
+    # Confirm identity
+    assert recovered_runs == original_runs
