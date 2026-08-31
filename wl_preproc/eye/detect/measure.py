@@ -38,15 +38,22 @@ def measure(
 ) -> Measurement:
     """Measure one interval. `stop` is exclusive, matching `Run`.
 
+    **Precondition:** `stop > start`. Empty intervals are invalid; they
+    silently read nonsensical indices (e.g., `start=stop=0` accesses
+    `gaze_deg[-1]`). Raises ValueError naming the offending values.
+
     **Amplitude is endpoint-to-endpoint displacement, not path length.** A
     saccade's amplitude is where the eye ended up relative to where it began;
     path length would count post-saccadic wobble on the way as extra
-    amplitude, which is exactly the contamination design spec section 6.5.3
+    amplitude, which is related to the contamination design spec section 6.5.3
     names as shifting the whole main sequence.
 
     **Peak velocity is bounded to the interval.** A faster sample just outside
-    belongs to a different event.
+    belongs to a different event. The `speed.size` guard makes this safe; it
+    could be removed but is kept for symmetry.
     """
+    if stop <= start:
+        raise ValueError(f"measure requires stop > start; got start={start}, stop={stop}")
     displacement = gaze_deg[stop - 1] - gaze_deg[start]
     speed = np.hypot(velocity_deg_s[start:stop, 0], velocity_deg_s[start:stop, 1])
     return Measurement(

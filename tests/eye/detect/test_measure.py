@@ -61,3 +61,12 @@ def test_classify_splits_at_the_threshold_and_the_boundary_is_a_saccade():
 
 def test_the_threshold_default_is_the_conventional_one_degree():
     assert MICROSACCADE_MAX_DEG == 1.0
+
+
+def test_measure_requires_stop_greater_than_start():
+    """Empty intervals silently read nonsensical indices; measure rejects them
+    explicitly."""
+    with pytest.raises(ValueError, match="stop > start.*start=2.*stop=2"):
+        measure(np.zeros((5, 2)), np.zeros((5, 2)), start=2, stop=2, fs_hz=500.0)
+    with pytest.raises(ValueError, match="stop > start.*start=5.*stop=3"):
+        measure(np.zeros((5, 2)), np.zeros((5, 2)), start=5, stop=3, fs_hz=500.0)
