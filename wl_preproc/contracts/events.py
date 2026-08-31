@@ -81,12 +81,34 @@ class TargetRole(IntEnum):
 
 
 class Escape(IntEnum):
-    """Escape codes introducing multi-word payloads. Range 32768+."""
+    """Escape codes introducing multi-word payloads. Range 32768+.
+
+    **`PARAM_CHANGE` carries a sequence number, not the values that
+    changed** (HANDOVER-wl-expcontroller.md Ask 2). wl-expcontroller
+    supports live parameter editing between trials -- their own example is
+    changing a search array's eccentricity from 0 to 10 degrees while the
+    animal works -- and a change at trial 300 is otherwise invisible at
+    analysis: the per-trial snapshot holds the content, but not the moment
+    on the recorded clock it took effect.
+
+    Follows this module's own reasoning for `BLOCK_START` (module
+    docstring: a block is self-describing "even when the ELN is wrong or
+    late"): content belongs in the stream when the recording must stay
+    interpretable without external files. A task type qualifies; parameter
+    VALUES do not, since they always travel with the session directory --
+    the same shape `ingest/params.py`'s own `session_params.yaml` already
+    gives session parameters that reach this pipeline outside the code
+    stream -- and encoding floats into 16-bit words would cost precision
+    and buy nothing the session directory does not already have. Two words
+    for a uint32 reuses the shape `TRIAL_NUMBER` and `CONDITION` already
+    have, below.
+    """
 
     TRIAL_NUMBER = 0x8001
     BLOCK_START = 0x8002
     CONDITION = 0x8003
     TARGET_POSITION = 0x8004
+    PARAM_CHANGE = 0x8005
 
 
 PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
@@ -94,6 +116,7 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
     Escape.BLOCK_START: 2,  # (block_number, task_type_code)
     Escape.CONDITION: 2,  # uint32, high word first
     Escape.TARGET_POSITION: 3,  # (role, x_dva, y_dva)
+    Escape.PARAM_CHANGE: 2,  # uint32 sequence number, high word first
 }
 
 

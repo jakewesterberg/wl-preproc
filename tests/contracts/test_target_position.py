@@ -53,6 +53,38 @@ def test_roles_are_distinct_and_start_at_the_fixation_point():
     assert len(set(TargetRole)) == len(list(TargetRole))
 
 
+# --- PARAM_CHANGE (HANDOVER-wl-expcontroller.md Ask 2) ----------------------
+#
+# wl-expcontroller supports live parameter editing between trials; a change
+# at trial 300 is otherwise invisible at analysis. Carries a sequence number,
+# not the changed values -- Escape's own docstring gives the reasoning, the
+# same one BLOCK_START already follows: content belongs in the stream when
+# the recording must stay interpretable without external files, and
+# parameter values always travel with the session directory instead.
+
+
+def test_no_pre_existing_escape_value_moved():
+    """A frozen interface a separate piece of software is written against
+    (Escape's own docstring: wl-expcontroller emits against this codec).
+    Adding `PARAM_CHANGE` must not renumber anything -- pinned by name AND
+    value, the same discipline `test_no_pre_existing_task_type_code_moved`
+    applies to `TaskTypeCode`."""
+    assert Escape.TRIAL_NUMBER == 0x8001
+    assert Escape.BLOCK_START == 0x8002
+    assert Escape.CONDITION == 0x8003
+    assert Escape.TARGET_POSITION == 0x8004
+
+
+def test_param_change_takes_the_next_free_escape():
+    assert Escape.PARAM_CHANGE == 0x8005
+
+
+def test_param_change_declares_two_payload_words():
+    """A uint32 sequence number, high word first -- the same shape
+    `TRIAL_NUMBER` and `CONDITION` already have."""
+    assert PAYLOAD_WORD_COUNTS[Escape.PARAM_CHANGE] == 2
+
+
 # --- Calibration blocks and calibration epochs ------------------------------
 #
 # Ruled 2026-08-31: BOTH mechanisms, for two different situations. A whole
@@ -106,13 +138,19 @@ def test_every_task_event_sits_in_its_own_allocated_range():
         assert 256 <= event.value <= 4095
 
 
-def test_task_type_codes_and_task_events_are_each_distinct():
+def test_task_type_codes_task_events_and_escapes_are_each_distinct():
     """An IntEnum silently ALIASES a duplicate value rather than refusing it:
     a second member declared `= 7` would become `TaskTypeCode.CALIBRATION`
     under a different name, and iteration would not even list it. Comparing
     the value set's size against the declared-member count is what catches
-    that, since `len(TaskTypeCode)` counts canonical members only."""
-    for enum_type in (TaskTypeCode, TaskEvent):
+    that, since `len(TaskTypeCode)` counts canonical members only.
+
+    `Escape` joins `TaskTypeCode`/`TaskEvent` here rather than getting a
+    fourth, separately-written copy of the same check: `PARAM_CHANGE` is a
+    new member of exactly the same kind of frozen, by-value interface, and
+    this is the one place that must catch it colliding with an existing
+    Escape value, such as `TARGET_POSITION`."""
+    for enum_type in (TaskTypeCode, TaskEvent, Escape):
         values = [member.value for member in enum_type]
         assert len(set(values)) == len(values)
         assert len(values) == len(enum_type.__members__)
