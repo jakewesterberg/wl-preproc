@@ -389,6 +389,45 @@ def test_a_corrupt_bhv2_still_lets_the_chain_reach_carried_forward(tmp_path):
     assert result.carried_from == "2026-08-20_subjA"
 
 
+def test_read_online_map_dispatches_a_yaml_path_to_the_expcontroller_reader(tmp_path):
+    """`read_online_map` gains a branch, not a second entry point
+    (HANDOVER-wl-expcontroller.md Ask 1): `.bhv2` still reaches `bhv2.py`
+    (every test above this one proves that path untouched), and `.yaml` now
+    reaches `wl_preproc.eye.expcontroller.read_expcontroller_map` --
+    `tests/eye/test_expcontroller.py` covers that reader's own contract in
+    full; this only proves the dispatch itself picks it for a `.yaml` path.
+    """
+    path = tmp_path / "session.yaml"
+    path.write_text(
+        "mapping_version: 1\n"
+        "model: affine\n"
+        "coefficients:\n"
+        "  x: [0.0, 0.05, 0.0]\n"
+        "  y: [0.0, 0.0, 0.05]\n"
+        'raw_definition: "CR1 - CR4"\n'
+        "targets:\n"
+        "  - [0.0, 0.0]\n"
+        "conditioning: 0.9\n"
+        "rms_residual_deg: 0.1\n"
+    )
+
+    assert read_online_map(path) == CalibrationMap(
+        model=_AFFINE, x=(0.0, 0.05, 0.0), y=(0.0, 0.0, 0.05)
+    )
+
+
+def test_read_online_map_declines_a_malformed_yaml_file_without_raising(tmp_path):
+    """The `.yaml` branch's own failure mode reaches the fallback chain the
+    same way the `.bhv2` branch's does
+    (`test_read_online_map_catches_an_unreadable_file_rather_than_raising`,
+    above): declined, not raised, so one bad expcontroller log cannot cost a
+    session its whole calibration chain."""
+    path = tmp_path / "session.yaml"
+    path.write_text("{not: valid: yaml: [")
+
+    assert read_online_map(path) is None
+
+
 # --- The model ladder -------------------------------------------------------
 #
 # `basis(_, SECOND_ORDER)` needs six well-spread targets; a 3x3 grid supplies

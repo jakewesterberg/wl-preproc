@@ -817,11 +817,29 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
     indistinguishable from "log in the wrong place". A log the transfer put
     elsewhere is now a visibly absent one.
 
-    Still `*.bhv2` specifically, because that is the only format
-    `eye/bhv2.py` can read. The DIRECTORY is role-named so a second controller
-    needs no path change; the glob is format-named because a reader for that
-    controller's own format does not exist yet. When it does, this is where
-    the second glob goes, and nothing above it changes.
+    Two globs now, both format-named, because two readers exist:
+    `*.bhv2` for `eye/bhv2.py` (MonkeyLogic), and `*.yaml` for
+    `eye/expcontroller.py` (wl-expcontroller, added when ADR-0005 made
+    MonkeyLogic permanently undeployed and `.bhv2` therefore permanently
+    absent -- HANDOVER-wl-expcontroller.md Ask 1). This is the second glob
+    this function's own prior docstring reserved a place for: "the glob is
+    format-named because a reader for that controller's own format does not
+    exist yet. When it does, this is where the second glob goes, and nothing
+    above it changes" -- true on both counts. The DIRECTORY stays role-named
+    (`EXPCONTROLLER_DIRNAME`), so neither glob nor either reader needed a
+    path change; `read_online_map` itself picks the reader by extension, so
+    this function still returns a bare `Path | None` and nothing above it
+    (`EyeCalibration.make()`, `resolve_calibration`, the schema, the report)
+    changed to add the second format.
+
+    Both globs are sorted together, not tried one after the other, matching
+    this function's own prior behaviour for several `.bhv2` files (still
+    proven by `test_the_first_log_by_name_is_taken_when_a_session_has_several`):
+    the choice among matches is by name, not by format. In practice a given
+    session has files from exactly one controller, so this ordering is never
+    exercised by two DIFFERENT formats at once -- but it is the same rule
+    applied uniformly rather than a second, format-aware rule invented for a
+    case that is not expected to occur.
 
     A session with no such directory -- every session this project's synthetic
     generator produces, since `synth/peripherals.py::write_task_file` "stands
@@ -833,7 +851,7 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
     directory = session_dir / EXPCONTROLLER_DIRNAME
     if not directory.is_dir():
         return None
-    matches = sorted(directory.glob("*.bhv2"))
+    matches = sorted((*directory.glob("*.bhv2"), *directory.glob("*.yaml")))
     return matches[0] if matches else None
 
 

@@ -1568,6 +1568,65 @@ def test_the_first_log_by_name_is_taken_when_a_session_has_several(tmp_path):
     assert found is not None and found.name == "a.bhv2"
 
 
+def _write_expcontroller_yaml(path) -> None:
+    """A minimal, syntactically-valid YAML file at `path`.
+
+    Deliberately not a full `read_expcontroller_map` contract (no
+    `mapping_version`/`model`/... ) -- these tests are about WHICH FILE
+    `_find_expcontroller_log` finds, never about what is inside one, exactly
+    the same restriction `_write_walkable_bhv2`'s own docstring states for
+    its `.bhv2` counterpart. `tests/eye/test_expcontroller.py` covers the
+    contract itself.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("placeholder: true\n")
+
+
+def test_the_expcontroller_log_is_found_when_it_is_the_new_format(tmp_path):
+    """The second glob `_find_expcontroller_log`'s own docstring reserved a
+    place for (HANDOVER-wl-expcontroller.md Ask 1): `*.yaml`, alongside the
+    pre-existing `*.bhv2`, in the same role-named directory."""
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    log = tmp_path / EXPCONTROLLER_DIRNAME / "session.yaml"
+    _write_expcontroller_yaml(log)
+
+    assert eye._find_expcontroller_log(tmp_path) == log
+
+
+def test_a_yaml_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
+    """The convention `test_a_log_outside_the_expcontroller_directory_is_not_
+    found` proves for `.bhv2` applies identically to the new format: reading
+    ONLY `EXPCONTROLLER_DIRNAME`, with no whole-tree fallback, is the point,
+    regardless of which controller wrote the stray file."""
+    from wl_preproc.schema import eye
+
+    _write_expcontroller_yaml(tmp_path / "stray.yaml")
+    _write_expcontroller_yaml(tmp_path / "ohdpi" / "misfiled.yaml")
+
+    assert eye._find_expcontroller_log(tmp_path) is None
+
+
+def test_matches_across_both_formats_are_sorted_together(tmp_path):
+    """`_find_expcontroller_log`'s own docstring states the two globs are
+    sorted TOGETHER, not tried one format after the other: the choice among
+    matches is by name, never by format. Proven here with one file of each
+    format, named so the alphabetically-first one is the `.yaml`, the
+    opposite of the two globs' own textual order (`*.bhv2` before `*.yaml`)
+    -- a test that would still pass if the implementation silently preferred
+    `.bhv2` regardless of name would prove nothing.
+    """
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    _write_walkable_bhv2(tmp_path / EXPCONTROLLER_DIRNAME / "z_session.bhv2")
+    _write_expcontroller_yaml(tmp_path / EXPCONTROLLER_DIRNAME / "a_session.yaml")
+
+    found = eye._find_expcontroller_log(tmp_path)
+    assert found is not None and found.name == "a_session.yaml"
+
+
 # --- The second-order conditioning margin -----------------------------------
 
 
