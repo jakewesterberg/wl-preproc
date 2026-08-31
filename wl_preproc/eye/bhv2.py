@@ -110,7 +110,7 @@ object dominated by a function handle and fit data, likewise unverified and
 essentially opaque to a reader this narrow. `Bhv2Calibration.a` is therefore
 whatever plain `double` fields this module finds as DIRECT children of the
 active method's struct, in field order, concatenated -- not asserted to be
-six of anything, for any method. `as_affine_map` is where a six-number `a`
+six of anything, for any method. `as_calibration_map` is where a six-number `a`
 becomes usable and anything else is declined; see its own docstring.
 
 **`PixelsPerDegree` is two numbers, not one.** Confirmed directly against a
@@ -181,7 +181,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wl_preproc.eye.calibration import AffineMap
+from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel
 
 _UINT64 = np.dtype("<u8")
 _FLOAT64 = np.dtype("<f8")
@@ -254,9 +254,9 @@ def read_calibration(path: str | Path) -> Bhv2Calibration:
     return Bhv2Calibration(present=a is not None, a=a, pixels_per_degree=pixels_per_degree)
 
 
-def as_affine_map(cal: Bhv2Calibration) -> AffineMap | None:
-    """`cal.a` as a borrowed `AffineMap`, if and only if it is exactly six
-    numbers.
+def as_calibration_map(cal: Bhv2Calibration) -> CalibrationMap | None:
+    """`cal.a` as a borrowed `CalibrationMap`, if and only if it is exactly
+    six numbers.
 
     MonkeyLogic's own calibration is not always six numbers (module
     docstring): Raw Signal gives two, Origin & Gain's real saved shape is
@@ -272,8 +272,14 @@ def as_affine_map(cal: Bhv2Calibration) -> AffineMap | None:
     """
     if cal.a is None or len(cal.a) != 6:
         return None
-    a0, a1, a2, a3, a4, a5 = (float(x) for x in cal.a)
-    return AffineMap(a=(a0, a1, a2, a3, a4, a5))
+    a00, a01, b0, a10, a11, b1 = (float(value) for value in cal.a)
+    # Re-expressed into `basis(_, AFFINE)` column order -- `[1, dx, dy]` --
+    # from the flat `(a00, a01, b0, a10, a11, b1)` order MonkeyLogic's own
+    # six numbers are documented in above. The reordering happens HERE, at the
+    # vendor boundary, so no reshape or reordering exists anywhere downstream.
+    return CalibrationMap(
+        model=CalibrationModel.AFFINE, x=(b0, a00, a01), y=(b1, a10, a11)
+    )
 
 
 def _harvest_doubles(materialized_struct: object) -> list[float]:

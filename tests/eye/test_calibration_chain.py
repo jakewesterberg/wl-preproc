@@ -2,21 +2,26 @@ import numpy as np
 import pytest
 
 from wl_preproc.eye.calibration import (
-    AffineMap,
     Calibration,
+    CalibrationMap,
+    CalibrationModel,
     CalibrationSource,
     MAX_VALIDATION_ERROR_DEG,
-    apply_affine,
+    apply_map,
     read_monkeylogic_map,
     resolve_calibration,
     validate_map,
 )
 
-GOOD = AffineMap(a=(0.05, 0.0, 0.0, 0.0, 0.05, 0.0), n_points=4, conditioning=0.9)
+_AFFINE = CalibrationModel.AFFINE
+
+GOOD = CalibrationMap(
+    model=_AFFINE, x=(0.0, 0.05, 0.0), y=(0.0, 0.0, 0.05), n_points=4, conditioning=0.9
+)
 
 # A single central fixation, repeated with jitter -- Task 5's own degenerate
 # fixture (test_calibration_fit.py's test_a_single_target_location_is_refused).
-# fit_affine refuses this (conditioning 0, targets coincident at the origin),
+# fit_map refuses this (conditioning 0, targets coincident at the origin),
 # so every resolve_calibration test below that wants step 1 to fail reuses it.
 _DEGENERATE_RAW = np.array([[10.0, 10.0], [10.4, 9.6], [9.7, 10.2], [10.1, 10.1]])
 _DEGENERATE_TARGET = np.zeros((4, 2))
@@ -27,7 +32,9 @@ _DEGENERATE_TARGET = np.zeros((4, 2))
 # (~0.71 degrees against the fixture above), so a precedence test cannot pass
 # by accident if the implementation were to pick the lowest-error candidate
 # instead of the first one in chain order.
-_ZERO_MAP = AffineMap(a=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), n_points=6, conditioning=0.7)
+_ZERO_MAP = CalibrationMap(
+    model=_AFFINE, x=(0.0, 0.0, 0.0), y=(0.0, 0.0, 0.0), n_points=6, conditioning=0.7
+)
 
 
 def test_one_point_cannot_fit_a_map_but_can_falsify_one():
@@ -57,7 +64,10 @@ def test_a_map_from_the_wrong_input_space_fails_validation_enormously():
     alone cannot tell "wrong input space" apart from "merely drifted" --
     the stronger bound below can.
     """
-    volts_map = AffineMap(a=(4000.0, 0.0, 0.0, 0.0, 4000.0, 0.0), n_points=4, conditioning=0.9)
+    volts_map = CalibrationMap(
+        model=_AFFINE, x=(0.0, 4000.0, 0.0), y=(0.0, 0.0, 4000.0),
+        n_points=4, conditioning=0.9,
+    )
     raw = np.array([[10.0, 10.0]])
     target = np.array([[0.5, 0.5]])
 
@@ -67,7 +77,10 @@ def test_a_map_from_the_wrong_input_space_fails_validation_enormously():
 
 
 def test_a_drifted_map_is_rejected_by_the_same_check():
-    drifted = AffineMap(a=(0.05, 0.0, 8.0, 0.0, 0.05, 0.0), n_points=4, conditioning=0.9)
+    drifted = CalibrationMap(
+        model=_AFFINE, x=(8.0, 0.05, 0.0), y=(0.0, 0.0, 0.05),
+        n_points=4, conditioning=0.9,
+    )
     raw = np.array([[0.0, 0.0]])
     target = np.array([[0.0, 0.0]])
 
@@ -85,7 +98,7 @@ def test_validate_map_computes_the_rms_error_in_degrees():
     target -- squared distance 0. Mean of {25, 0} is 12.5; RMS error is
     sqrt(12.5).
     """
-    identity = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0))
+    identity = CalibrationMap(model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0))
     raw = np.array([[3.0, 4.0], [0.0, 0.0]])
     target = np.zeros((2, 2))
 
@@ -98,60 +111,68 @@ def test_the_source_enum_names_all_four_steps():
     ]
 
 
-def test_apply_affine_matches_the_documented_parameter_order_for_an_asymmetric_map():
-    """Controller ruling A (task-7 brief, carried from Task 5's review):
-    test_it_recovers_a_known_affine is a fit-then-apply round trip, which only
-    proves fit_affine and apply_affine agree with EACH OTHER -- a consistent
-    a01/a10 transposition in both would still round-trip clean.
+def test_apply_map_matches_a_matrix_multiply_for_an_asymmetric_affine():
+    """The affine rung still has to agree with the matrix form everyone
+    outside this module thinks in.
 
-    This task makes that gap dangerous: resolve_calibration constructs
-    AffineMap directly from MonkeyLogic and carried-forward sources, so
-    apply_affine's contract with those maps rests on AffineMap.a's documented
-    order -- (a00, a01, b0, a10, a11, b1) -- alone. Build a map DIRECTLY (not
-    via fit_affine) with deliberately asymmetric a01/a10 so a transposition
-    would change the result, and check against an independently assembled
-    matrix multiply, not apply_affine's own element-wise formula.
+    `CalibrationMap` stores `[1, dx, dy]` coefficients per axis, so an affine
+    map's `(a00, a01, b0, a10, a11, b1)` is spread across two tuples in a
+    different order. This checks the whole round trip against an
+    independently assembled `raw @ A.T + b` -- not against `apply_map`'s own
+    formula -- with deliberately asymmetric off-diagonal terms, so a mix-up
+    between the `dx` and `dy` columns of either axis changes the result.
+
+    `tests/eye/test_calibration_fit.py::test_apply_map_never_transposes_its_
+    two_axes` pins the same property on the second-order rung, where there is
+    no matrix form to compare against.
     """
     a00, a01, b0, a10, a11, b1 = 2.0, 3.0, 5.0, 7.0, 11.0, 13.0
-    map_ = AffineMap(a=(a00, a01, b0, a10, a11, b1), n_points=4, conditioning=0.8)
+    map_ = CalibrationMap(
+        model=_AFFINE, x=(b0, a00, a01), y=(b1, a10, a11), n_points=4, conditioning=0.8
+    )
     raw = np.array([[1.0, 0.0], [0.0, 1.0], [2.0, -3.0], [-4.0, 5.0]])
 
     a_matrix = np.array([[a00, a01], [a10, a11]])
     b_vector = np.array([b0, b1])
     expected = raw @ a_matrix.T + b_vector
 
-    assert apply_affine(map_, raw) == pytest.approx(expected)
+    assert apply_map(map_, raw) == pytest.approx(expected)
 
 
-def test_affine_map_equality_is_unusable_by_design():
-    """Controller ruling B (task-7 brief) says two AffineMaps built with the
+def test_calibration_map_equality_is_unusable_by_design():
+    """Controller ruling B (task-7 brief) says two maps built with the
     defaults never compare equal, because `conditioning` defaults to nan and
     nan != nan. Checked directly, that is NOT what happens: a dataclass
     default is evaluated once, at class definition, and reused for every
-    instance that does not override it, so two such AffineMaps share the
-    exact same `float("nan")` OBJECT. list/tuple equality -- which is what
-    the dataclass-generated `__eq__` reduces to -- short-circuits
-    per-element on `is` before falling back to `==` (a long-standing CPython
-    optimisation for sequence types), so that shared identity makes the pair
-    compare EQUAL without nan's own "never equal to itself" behaviour ever
-    being exercised. Passing a fresh `float("nan")` explicitly to each side
-    avoids the shared object and restores the naive nan behaviour.
+    instance that does not override it, so two such maps share the exact same
+    `float("nan")` OBJECT. list/tuple equality -- which is what the
+    dataclass-generated `__eq__` reduces to -- short-circuits per-element on
+    `is` before falling back to `==` (a long-standing CPython optimisation
+    for sequence types), so that shared identity makes the pair compare EQUAL
+    without nan's own "never equal to itself" behaviour ever being exercised.
+    Passing a fresh `float("nan")` explicitly to each side avoids the shared
+    object and restores the naive nan behaviour.
 
     The ruling's bottom line survives anyway, just for a sharper reason than
-    stated: `==` on AffineMap returns True or False depending on an invisible
-    object-identity coincidence in how each side happened to be constructed,
-    not on whether two maps are the same calibration. That inconsistency --
-    not a reliable "always False" -- is what makes it unusable for "is this
-    the same map I already tried", and why resolve_calibration must do that
-    on `a` alone, or on identity, as the ruling says.
+    stated: `==` on a `CalibrationMap` returns True or False depending on an
+    invisible object-identity coincidence in how each side happened to be
+    constructed, not on whether two maps are the same calibration. That
+    inconsistency -- not a reliable "always False" -- is what makes it
+    unusable for "is this the same map I already tried", and why
+    resolve_calibration must do that on the coefficient tuples alone, or on
+    identity, as the ruling says.
     """
-    same_defaults_a = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0))
-    same_defaults_b = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0))
+    same_defaults_a = CalibrationMap(model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0))
+    same_defaults_b = CalibrationMap(model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0))
     assert same_defaults_a == same_defaults_b  # equal only by a shared-default-object coincidence
 
-    fresh_nan_a = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0), conditioning=float("nan"))
-    fresh_nan_b = AffineMap(a=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0), conditioning=float("nan"))
-    assert fresh_nan_a != fresh_nan_b  # same `a`, "same" calibration in every sense that matters -- yet not equal
+    fresh_nan_a = CalibrationMap(
+        model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0), conditioning=float("nan")
+    )
+    fresh_nan_b = CalibrationMap(
+        model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0), conditioning=float("nan")
+    )
+    assert fresh_nan_a != fresh_nan_b  # same coefficients, "same" calibration -- yet not equal
 
 
 def test_calibration_fields_are_positional_in_the_documented_order():
@@ -171,7 +192,7 @@ def test_calibration_fields_are_positional_in_the_documented_order():
 
 def test_fitted_wins_even_when_fallback_candidates_also_validate():
     """Step 1 of design spec section 3.5's table. Well-conditioned geometry
-    means fit_affine succeeds -- and it must be PREFERRED even when a
+    means fit_map succeeds -- and it must be PREFERRED even when a
     validating MonkeyLogic candidate and a validating carried-forward
     candidate are both on offer, not merely returned because it was the only
     option. Pins the table's order, not just "some result came back".
@@ -184,7 +205,7 @@ def test_fitted_wins_even_when_fallback_candidates_also_validate():
     assert result.source == CalibrationSource.FITTED
     assert result.reason == ""
     assert result.carried_from is None
-    assert apply_affine(result.map_, raw) == pytest.approx(target, abs=1e-6)
+    assert apply_map(result.map_, raw) == pytest.approx(target, abs=1e-6)
 
 
 def test_monkeylogic_wins_over_carried_forward_when_both_validate():
@@ -211,7 +232,10 @@ def test_a_monkeylogic_map_that_fails_validation_falls_through_to_carried_forwar
     concrete, checkable reason (wrong input space) rather than simply being
     absent, and a distinct, valid carried candidate that step 3 then picks up.
     """
-    volts_map = AffineMap(a=(4000.0, 0.0, 0.0, 0.0, 4000.0, 0.0), n_points=4, conditioning=0.9)
+    volts_map = CalibrationMap(
+        model=_AFFINE, x=(0.0, 4000.0, 0.0), y=(0.0, 0.0, 4000.0),
+        n_points=4, conditioning=0.9,
+    )
 
     result = resolve_calibration(
         _DEGENERATE_RAW, _DEGENERATE_TARGET, volts_map, (GOOD, "2026-08-19_subjA")
@@ -243,7 +267,10 @@ def test_a_carried_forward_map_that_fails_validation_is_refused():
     just fall through to step 2 having already failed, but genuinely check
     this candidate and find it wanting.
     """
-    drifted = AffineMap(a=(0.05, 0.0, 8.0, 0.0, 0.05, 0.0), n_points=4, conditioning=0.9)
+    drifted = CalibrationMap(
+        model=_AFFINE, x=(8.0, 0.05, 0.0), y=(0.0, 0.0, 0.05),
+        n_points=4, conditioning=0.9,
+    )
 
     result = resolve_calibration(_DEGENERATE_RAW, _DEGENERATE_TARGET, None, (drifted, "2026-08-20_subjA"))
 
@@ -265,7 +292,7 @@ def test_refused_reason_names_the_degenerate_geometry_when_no_fallback_validates
     assert result.source == CalibrationSource.REFUSED
     assert result.map_ is None
     assert result.validation_error_deg is None
-    assert "collinear or coincident" in result.reason
+    assert "collinear, coincident or conic targets" in result.reason
     assert "no fallback map validated" in result.reason
 
 
@@ -273,7 +300,7 @@ def test_an_empty_fixation_epoch_is_refused_without_naming_a_target():
     """A session with no fixation epoch at all cannot even be TESTED, let
     alone fit -- a distinct diagnostic from "geometry was degenerate", pinned
     with an exact match so a mutation that instead falls through to
-    fit_affine's own (different) empty-input message is caught.
+    fit_map's own (different) empty-input message is caught.
     """
     raw = np.zeros((0, 2))
     target = np.zeros((0, 2))

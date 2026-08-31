@@ -29,6 +29,7 @@ import datetime
 
 import pytest
 
+from wl_preproc.eye.calibration import CalibrationModel
 from wl_preproc.contracts.events import (
     Escape,
     TargetRole,
@@ -572,7 +573,7 @@ def test_a_combined_reason_that_would_overflow_is_bounded_and_marked(overlong_re
         # `_combine_reason` reserves that note's own room rather than
         # letting a from-the-end slice of the whole combined string
         # silently drop it.
-        assert "collinear or coincident" in reason
+        assert "collinear, coincident or conic targets" in reason
         assert reason.endswith("1 of 5 fixation windows had no ohDPI coverage")
 
 
@@ -651,9 +652,10 @@ def test_a_central_target_only_session_falls_through_to_refused(degenerate_sessi
         assert row["calibration_source"] == "refused"
         assert row["a00"] is None
         assert row["n_points"] == N_TRIALS
-        # `_conditioning` on four coincident points: the centred spread is
-        # exactly zero, so this is not merely "small" but the guard's own
-        # floor case.
+        # `_conditioning` on the affine basis of four COINCIDENT targets.
+        # Identical target rows make all three normalised basis columns the
+        # same column, so the smallest singular value is exactly zero -- not
+        # merely "small", but the guard's own floor case.
         assert row["conditioning"] == pytest.approx(0.0)
         assert "no fallback map validated" in row["reason"]
 
@@ -801,7 +803,11 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
     assert candidate is not None
     winning_datetime, winning_map = candidate
     assert winning_datetime == fitted_datetimes["near_before"]
-    assert winning_map.a == (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    # `basis(_, AFFINE)` order, (const, dx, dy) per axis: the identity map
+    # the inserted row's own a00/a01/b0/a10/a11/b1 columns describe.
+    assert winning_map.model is CalibrationModel.AFFINE
+    assert winning_map.x == (0.0, 1.0, 0.0)
+    assert winning_map.y == (0.0, 0.0, 1.0)
 
     # A different eye at the identical set of datetimes has no candidates at
     # all: `eye` restricts the pool exactly as `subject` and the date do.

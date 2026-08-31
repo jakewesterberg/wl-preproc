@@ -47,14 +47,16 @@ from wl_preproc.contracts.events import (
     decode_stream,
 )
 from wl_preproc.eye.calibration import (
-    AffineMap,
+    CalibrationMap,
+    CalibrationModel,
     CalibrationSource,
-    apply_affine,
+    _conditioning,
+    apply_map,
+    basis,
     read_monkeylogic_map,
     resolve_calibration,
     validate_map,
 )
-from wl_preproc.eye.calibration import _conditioning as _target_conditioning
 from wl_preproc.eye.gaze import purkinje_vector
 from wl_preproc.eye.ohdpi import read_columns
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
@@ -77,7 +79,7 @@ _FULL_TRACKING_QUALITY = 100
 # kind of number free to drift from the column it is supposed to describe.
 #
 # This is not a defensive margin against a hypothetical: a combined reason
-# CAN exceed it for real. `calibration.py::fit_affine`'s own
+# CAN exceed it for real. `calibration.py::fit_map`'s own
 # collinear/coincident-target message is 221 characters on its own;
 # `resolve_calibration`'s "; no fallback map validated" suffix makes 248;
 # and `EyeCalibration.make()`'s own coverage-drop note (below) adds another
@@ -537,8 +539,19 @@ class EyeCalibration(dj.Computed):
 
             result = resolve_calibration(raw_xy, target_xy_arr, monkeylogic, carried)
 
+            # **The AFFINE basis, for every row, whatever model was used.**
+            # One definition of one column: how well this session's own target
+            # constellation constrains a calibration at all -- the question a
+            # refused or borrowed row raises. The second-order verdict needs no
+            # column of its own because `calibration_model` already IS that
+            # verdict, thresholded. Measured on the targets rather than on the
+            # raw design matrix for the reason `_conditioning`'s own docstring
+            # gives: a well-spread raw cloud from one target location scores
+            # 0.857 and means nothing.
             conditioning = (
-                float(_target_conditioning(target_xy_arr)) if target_xy_arr.shape[0] else None
+                float(_conditioning(basis(target_xy_arr, CalibrationModel.AFFINE)))
+                if target_xy_arr.shape[0]
+                else None
             )
 
             residual_rms = None
@@ -551,7 +564,7 @@ class EyeCalibration(dj.Computed):
                 # not come from). The RMS is therefore not recomputed; the
                 # MAX is, since `validate_map` reports only the RMS.
                 residual_rms = result.validation_error_deg
-                predicted = apply_affine(result.map_, raw_xy)
+                predicted = apply_map(result.map_, raw_xy)
                 residual_max = float(
                     np.sqrt(np.max(np.sum((predicted - target_xy_arr) ** 2, axis=1)))
                 )
@@ -559,11 +572,17 @@ class EyeCalibration(dj.Computed):
             carried_from_dt = (
                 carry_datetime if result.source == CalibrationSource.CARRIED_FORWARD else None
             )
-            a = (
-                result.map_.a
-                if result.map_ is not None
-                else (None, None, None, None, None, None)
-            )
+            # Back into this table's own flat `(a00, a01, b0, a10, a11, b1)`
+            # order from `basis(_, AFFINE)`'s `[1, dx, dy]`. TEMPORARY: Task 5
+            # replaces these six columns with twelve named for the basis term
+            # each multiplies, at which point this reordering goes away
+            # entirely and the tuples are written straight through. Every map
+            # reaching here is affine until Task 2 opens the second-order rung.
+            if result.map_ is not None:
+                map_x, map_y = result.map_.x, result.map_.y
+                a = (map_x[1], map_x[2], map_x[0], map_y[1], map_y[2], map_y[0])
+            else:
+                a = (None, None, None, None, None, None)
 
             # A PARTIAL drop -- some windows sampled fine, at least one did
             # not -- must still be visible even when calibration otherwise
@@ -573,7 +592,7 @@ class EyeCalibration(dj.Computed):
             # `_combine_reason` rather than a bare f-string concatenation,
             # deliberately: `result.reason` alone already reaches 248
             # characters for a real refusal (a collinear/coincident-target
-            # message from `calibration.py::fit_affine`, plus
+            # message from `calibration.py::fit_map`, plus
             # `resolve_calibration`'s own "; no fallback map validated"),
             # and this column is `varchar(255)` -- a bare concatenation
             # would either overflow the column outright (raising inside
@@ -688,7 +707,7 @@ def _find_bhv2(session_dir: Path) -> Path | None:
 
 def _best_carry_forward_candidate(
     eye_value: str, session_key: dict
-) -> tuple[datetime.datetime, AffineMap] | None:
+) -> tuple[datetime.datetime, CalibrationMap] | None:
     """Design spec section 3.5 step 3, and a real ambiguity in it, resolved
     rather than hidden (fix round, reviewer finding 6).
 
@@ -710,8 +729,8 @@ def _best_carry_forward_candidate(
 
     Separately, and not as a resolution of the disagreement above:
     candidates are restricted to `calibration_source='fitted'` rows, the
-    only source with a real, non-NaN `conditioning` of its own (`AffineMap`'s
-    own docstring: a borrowed map "was never fit by `fit_affine` here and
+    only source with a real, non-NaN `conditioning` of its own
+    (`CalibrationMap`'s own docstring: a borrowed map "was never fit by `fit_map` here and
     has no such history to report"). This filter stands on its own
     reasoning -- carrying forward a map that was ITSELF already borrowed
     would compound provenance across an unbounded chain, precisely what
@@ -748,8 +767,10 @@ def _best_carry_forward_candidate(
         return (abs(delta), 0 if delta < 0 else 1)
 
     best = min(same_day, key=sort_key)
-    return best["session_datetime"], AffineMap(
-        a=(best["a00"], best["a01"], best["b0"], best["a10"], best["a11"], best["b1"]),
+    return best["session_datetime"], CalibrationMap(
+        model=CalibrationModel.AFFINE,
+        x=(best["b0"], best["a00"], best["a01"]),
+        y=(best["b1"], best["a10"], best["a11"]),
         n_points=best["n_points"],
         conditioning=best["conditioning"] if best["conditioning"] is not None else float("nan"),
     )
