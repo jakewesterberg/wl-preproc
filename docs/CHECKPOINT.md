@@ -1,9 +1,7 @@
 # Where this build actually is
 
-**Last updated 2026-08-31**, on `spec/second-order-calibration` at `2fca563` (the
-second-order calibration branch's tip). `main` is at `a95d73b`; **this branch is not
-merged** -- that decision was left to your human partner, the same way the eye branch's
-was. Check `git log --oneline -1` against `2fca563`; if it has moved, this file is stale
+**Last updated 2026-08-31**, on `main` at `2b75720` (the second-order calibration
+merge). Check `git log --oneline -1` against that; if it has moved, this file is stale
 and the spec wins.
 
 This file went **nine days and three merged subsystems stale** before this update — it still
@@ -20,7 +18,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **1016 tests, 1 skipped, 1 deselected** (980 on `main`) | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
+| **wl-preproc** | private, CI green, **1016 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -122,8 +120,8 @@ dual-Purkinje vector, exposes canonical gaze as a **computation, never a stored 
 Records per session how the calibration was obtained — fitted, borrowed from the map in
 use online during acquisition, carried forward, or refused with a stated reason.
 
-**wl-preproc second-order calibration** — built 2026-08-31 on
-`spec/second-order-calibration`, eight tasks, **not merged**. Replaces that branch's
+**wl-preproc second-order calibration** — merged 2026-08-31 (`2b75720`), eight
+tasks. Replaces the eye branch's
 affine choice with a **model ladder**: second-order first, affine where the geometry
 cannot constrain twelve parameters, both `calibration_source = fitted`. Twelve schema
 columns named for the basis term each multiplies, plus a `calibration_model` column that
@@ -155,8 +153,7 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 
 **2026-08-31 — what is actually next, and what each needs.**
 
-1. **Second-order calibration — BUILT 2026-08-31**, all eight tasks, on
-   `spec/second-order-calibration` (`2fca563`). **Not merged.**
+1. **Second-order calibration — MERGED 2026-08-31** (`2b75720`), all eight tasks.
    `specs/2026-08-31-second-order-calibration-design.md`,
    `plans/2026-08-31-second-order-calibration.md`, and
    `handoffs/2026-08-31-second-order-calibration-built-detection-is-next.md` for what it

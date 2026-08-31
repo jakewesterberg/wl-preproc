@@ -3,8 +3,11 @@
 **Written 2026-08-31, at the close of the second-order calibration plan.** The
 branch `spec/second-order-calibration` is nine commits — eight implementation, one
 documentation — with **1016 tests passing**, one
-skipped, one deselected, `wl-check` clean. **It is not merged** — that decision
-was left to your human partner, the same way the eye branch's was.
+skipped, one deselected, `wl-check` clean.
+
+> **Merged the same day, into `main` at `2b75720`.** This document was written at
+> the close of the plan, before that decision; everything below still describes what
+> the work did and what it left open, and only its "not merged" status has changed.
 
 Baseline it started from: 980 passing on `main` at `a95d73b`.
 
