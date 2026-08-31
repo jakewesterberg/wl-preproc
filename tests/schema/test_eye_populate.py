@@ -1490,3 +1490,145 @@ def test_a_carried_forward_second_order_map_keeps_its_shape(daemon_module, prefi
     assert borrowed.y == (-1.5, -0.02, 0.06, 1e-4, 4e-4, -2e-4)
     assert borrowed.n_points == 9
     assert borrowed.conditioning == pytest.approx(0.75)
+
+
+# --- The experiment controller's log, and where it is allowed to be ---------
+
+
+def _write_walkable_bhv2(path) -> None:
+    """A structurally walkable `.bhv2` with no `MLConfig` in it.
+
+    `read_calibration` returns absence for it rather than raising -- "a file
+    that walks fine but simply has no MLConfig is ALSO absence, not an error"
+    (that function's own docstring). That is all these tests need: they are
+    about WHICH FILE gets found, never about what is inside one, which
+    `tests/eye/test_bhv2.py` covers against a real binary layout.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+
+
+def test_the_expcontroller_log_is_found_in_its_own_directory(tmp_path):
+    """The first positive coverage `_find_expcontroller_log` has ever had.
+
+    Every fixture in this file produces a session with no such log at all --
+    the synthetic generator writes `task.json`, never a `.bhv2` -- so the
+    lookup returned `None` in every test that existed and a lookup hardcoded
+    to `return None` would have passed all of them.
+    """
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    log = tmp_path / EXPCONTROLLER_DIRNAME / "session.bhv2"
+    _write_walkable_bhv2(log)
+
+    assert eye._find_expcontroller_log(tmp_path) == log
+
+
+def test_a_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
+    """THE point of settling the convention.
+
+    This function used to `rglob` the whole session tree and take the first
+    match. Keeping that as a fallback would keep the ambiguity the convention
+    exists to remove: a file somewhere unexpected would be used silently, and
+    "no log" would stay indistinguishable from "log in the wrong place". A log
+    the transfer put elsewhere is now a visibly absent one.
+    """
+    from wl_preproc.schema import eye
+
+    _write_walkable_bhv2(tmp_path / "stray.bhv2")
+    _write_walkable_bhv2(tmp_path / "ohdpi" / "misfiled.bhv2")
+    _write_walkable_bhv2(tmp_path / "monkeylogic" / "old_convention.bhv2")
+
+    assert eye._find_expcontroller_log(tmp_path) is None
+
+
+def test_an_absent_or_empty_expcontroller_directory_is_an_ordinary_skip(tmp_path):
+    """Neither is an error: design spec section 4.5, "a missing or unreadable
+    .bhv2 is not an error"."""
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    assert eye._find_expcontroller_log(tmp_path) is None
+
+    (tmp_path / EXPCONTROLLER_DIRNAME).mkdir()
+    assert eye._find_expcontroller_log(tmp_path) is None
+
+
+def test_the_first_log_by_name_is_taken_when_a_session_has_several(tmp_path):
+    """Sorted, so the choice is stable rather than filesystem-order dependent
+    -- the same guarantee the whole-tree search gave, kept."""
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    for name in ("c.bhv2", "a.bhv2", "b.bhv2"):
+        _write_walkable_bhv2(tmp_path / EXPCONTROLLER_DIRNAME / name)
+
+    found = eye._find_expcontroller_log(tmp_path)
+    assert found is not None and found.name == "a.bhv2"
+
+
+# --- The second-order conditioning margin -----------------------------------
+
+
+def test_the_second_order_margin_is_recorded_where_the_geometry_cleared_it(
+    second_order_session,
+):
+    """`calibration_model` records the verdict; this column records the
+    margin. A grid session clears the 0.10 bar with room."""
+    from wl_preproc.eye.calibration import MIN_CONDITIONING, CalibrationModel
+    from wl_preproc.schema import eye
+
+    session_key, _report, _raw = second_order_session
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+
+    assert row["calibration_model"] == "second_order"
+    assert row["conditioning_second_order"] > MIN_CONDITIONING[CalibrationModel.SECOND_ORDER]
+
+
+def test_the_second_order_margin_shows_why_a_ring_fell_to_affine(ring_session):
+    """The difference between "nudge the target grid" and "redesign the task".
+
+    Points on a circle satisfy `x^2 + y^2 = r^2`, so the quadratic columns
+    collapse onto the constant one and no amount of nudging the grid helps --
+    the geometry itself has to change. Without this column the row says only
+    `affine`, and a hopeless constellation reads identically to a near miss.
+
+    **Measured 0.0055, not exactly zero**, and the difference is the point of
+    testing this end to end rather than on paper: the held gaze carries 0.5 px
+    of measurement noise, so the sampled window means sit slightly off the
+    exact conic and the degeneracy is near-exact rather than algebraic.
+    `tests/eye/test_calibration_fit.py::test_a_ring_of_eight_is_refused_for_
+    second_order` pins the exact 0.0000 on exact coordinates; this pins that
+    real noise does not lift it anywhere near the 0.10 threshold -- it stays
+    more than an order of magnitude below.
+    """
+    from wl_preproc.eye.calibration import MIN_CONDITIONING, CalibrationModel
+    from wl_preproc.schema import eye
+
+    session_key, _report, _raw = ring_session
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+
+    assert row["calibration_model"] == "affine"
+    assert row["conditioning_second_order"] < MIN_CONDITIONING[CalibrationModel.SECOND_ORDER] / 5
+    # The affine measure is healthy on the same points -- which is exactly the
+    # pair of numbers that says "the geometry is fine, the MODEL is not".
+    assert row["conditioning"] > 0.5
+
+
+def test_the_margin_is_null_below_the_point_count_rather_than_misleading(fitted_session):
+    """NOT because it cannot be computed there -- it can, and the number is a
+    trap. A 4x6 design yields only four singular values and their ratio is
+    structurally blind to the two missing dimensions: four spread targets read
+    a healthy 0.2787 while being underdetermined outright. Storing that would
+    invite reading a point-count failure as a geometry success.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, _report = fitted_session
+    for row in (eye.EyeCalibration & session_key).to_dicts():
+        assert row["n_points"] == N_TRIALS < 6
+        assert row["conditioning_second_order"] is None
+        # The affine measure is still recorded: that one IS meaningful at four
+        # points, and it is what says whether the fit that ran was constrained.
+        assert row["conditioning"] is not None

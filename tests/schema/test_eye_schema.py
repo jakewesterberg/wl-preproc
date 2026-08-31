@@ -58,6 +58,19 @@ def test_all_twelve_coefficients_are_nullable(schemas):
             assert attribute.nullable, f"{axis}_{suffix}"
 
 
+def test_both_conditioning_columns_are_nullable_and_distinct(schemas):
+    """Two readings of one measure at two bases, not one column doing both
+    jobs. `conditioning` is the affine reading, recorded for every row that
+    had points; `conditioning_second_order` is the quadratic one, NULL below
+    six points because the number is a trap there rather than merely
+    unavailable (see the column's own comment)."""
+    attributes = schemas.EyeCalibration.heading.attributes
+
+    assert attributes["conditioning"].nullable
+    assert attributes["conditioning_second_order"].nullable
+    assert attributes["conditioning"].type == attributes["conditioning_second_order"].type
+
+
 def test_the_coefficient_columns_are_named_for_their_basis_terms(schemas):
     """The column names ARE the documented basis order (`eye/calibration.py::
     basis`), which is what makes "which sessions have a large dx^2 term" a
