@@ -54,3 +54,53 @@ def test_a_trace_shorter_than_the_window_is_all_zero_not_an_error():
     zeros lets a caller proceed and find nothing, rather than raising from deep
     inside a daemon pass."""
     assert velocity(np.zeros((4, 2)), 500.0) == pytest.approx(np.zeros((4, 2)))
+
+
+def test_exactly_five_samples_computes_one_interior_value():
+    """Five samples is the shortest trace that supports one interior velocity
+    computation. The threshold `< 2 * _HALF_WINDOW + 1` must be strict: a
+    5-sample trace has interior = slice(2, 3), which yields exactly one
+    computed value at index 2. Mutating < to <= would silently return all
+    zeros instead."""
+    fs_hz = 500.0
+    # Linear ramp: 10 deg/s in x
+    t = np.arange(5) / fs_hz
+    gaze = np.column_stack([10.0 * t, np.zeros(5)])
+
+    result = velocity(gaze, fs_hz)
+
+    # Indices 0, 1, 3, 4 should be zero (no window)
+    assert result[0] == pytest.approx([0.0, 0.0])
+    assert result[1] == pytest.approx([0.0, 0.0])
+    assert result[3] == pytest.approx([0.0, 0.0])
+    assert result[4] == pytest.approx([0.0, 0.0])
+    # Index 2 should be the computed value: 10 deg/s
+    assert result[2, 0] == pytest.approx(10.0, abs=1e-9)
+    assert result[2, 1] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_non_linear_input_verifies_the_formula():
+    """The five-point estimator must be validated on non-linear input. A linear
+    ramp has constant slope everywhere, so multiple formulas (e.g., a scaled
+    two-point difference) could pass that test while being wrong on curved
+    traces. This test uses quadratic-in-x input and verifies the explicit
+    Engbert & Kliegl formula: (x[n+2] + x[n+1] - x[n-1] - x[n-2]) / (6 * dt).
+    """
+    fs_hz = 1000.0
+    dt = 1.0 / fs_hz
+    # Quadratic: x(t) = t^2, y(t) = 0. Derivative is 2*t, so velocity is 2000*t deg/s
+    t = np.arange(20) / fs_hz
+    gaze = np.column_stack([t**2, np.zeros(20)])
+
+    result = velocity(gaze, fs_hz)
+
+    # Compute expected velocity independently using the formula
+    # velocity = (gaze[n+2] + gaze[n+1] - gaze[n-1] - gaze[n-2]) * (fs_hz / 6)
+    expected = np.zeros((20, 2))
+    for n in range(2, 18):  # Interior samples where the window exists
+        x_diff = gaze[n + 2, 0] + gaze[n + 1, 0] - gaze[n - 1, 0] - gaze[n - 2, 0]
+        expected[n, 0] = x_diff * (fs_hz / 6.0)
+
+    # Compare interior samples only
+    assert result[2:18, 0] == pytest.approx(expected[2:18, 0], abs=1e-6)
+    assert result[2:18, 1] == pytest.approx(expected[2:18, 1], abs=1e-6)
