@@ -687,9 +687,28 @@ else supplies.
   later decision from that evidence, and unchanged by this spec.
 - **Gaze-corrected receptive field mapping** (parent §8), which consumes
   detection but is its own subsystem.
-- **An eighth detector.** The registry makes one cheap, and adding one is
-  now a demonstrated operation rather than a claimed one — four were added to
-  this spec on the day it was written. Nothing here argues for another.
+- **An eighth OFFLINE detector.** The registry makes one cheap, and adding one
+  is now a demonstrated operation rather than a claimed one — four were added
+  to this spec on the day it was written. Nothing here argues for another.
+
+  **But an eighth entry is accepted, and it is not an offline detector.**
+  Ruled 2026-08-31, on wl-expcontroller's offer: their **online** detector —
+  the one actually in the control loop — joins the registry in stage 2. Its
+  output is already recorded as `SACCADE_ONSET` events on the shared clock, so
+  it needs no new transport, and §3.1's vocabulary declaration already
+  accommodates a detector that emits one class.
+
+  What it yields that nothing else here can: **how often the detector that
+  actually controlled the experiment agreed with the offline consensus.** That
+  is a data-quality metric about the *control loop* rather than about
+  tracking, and no repository can see it alone — theirs holds the online
+  decisions, this one holds the offline consensus. It also sits naturally in
+  §6.1's coarsening lattice, since a single-class vocabulary compares against
+  any other in the coarsest shared vocabulary.
+
+  It does not change what the offline suite means. The seven remain an offline
+  consensus for data quality; this eighth is a different kind of thing,
+  compared against them rather than averaged into them.
 - **Tremor.** The third fixational eye movement, alongside microsaccades and
   drift. At 500 Hz it sits at or below the sampling limit, and none of the
   seven detectors claims it.
