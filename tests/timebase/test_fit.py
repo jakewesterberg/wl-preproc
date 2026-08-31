@@ -175,7 +175,7 @@ _RECORDING_PATHS: dict[str, str | None] = {
     "syncbox": "syncbox/syncbox.log",
     "spikeglx": None,
     "rhs": "rhs",
-    "ohdpi": "ohdpi/ohdpi_frames.csv",
+    "ohdpi": "ohdpi/OpenIris-synthetic.txt",
     "bcam": "bcam/frames.yaml",
 }
 

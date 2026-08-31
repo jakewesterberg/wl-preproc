@@ -249,14 +249,17 @@ def extract_ohdpi(path: Path) -> BitStream:
     at this rate -- three orders of magnitude worse than the 33 us at 30 kHz,
     and larger than a whole frame. A rate that is also wrong compounds it.
 
-    Every column this reads is a **proposal** (design spec section 12.1); they
-    live in `_ohdpi_file.py` so a real recording moves them and nothing else.
+    Columns were **verified against a real recording** on 2026-08-30; they live
+    in `wl_preproc/eye/ohdpi.py`, which is the format's only reader. The sync
+    line is `Int0` and the bit within it is `eye.ohdpi.SYNC_BIT_INDEX` -- rig
+    wiring, and the one thing here another rig can change.
     """
-    from wl_preproc.timebase._ohdpi_file import read_ohdpi
+    from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX, read_ohdpi
 
     recording = read_ohdpi(path)
+    bits = (recording.digital >> SYNC_BIT_INDEX) & 1
     return BitStream(
-        edges=tuple(edges_from_samples(list(recording.digital), fs_hz=recording.fs_hz)),
+        edges=tuple(edges_from_samples(list(bits), fs_hz=recording.fs_hz)),
         fs_hz=recording.fs_hz,
         n_samples=recording.n_frames,
     )
@@ -351,8 +354,28 @@ _RECORDING_GLOBS: dict[str, str] = {
     # silent line and a file rejected for `no_barcode` -- a diagnosis pointing
     # at a dead cable when the real fault is a glob.
     "spikeglx": "*.nidq.bin",
-    "ohdpi": "*.csv",
+    # OpenIris writes `<session>.txt`. NOT "*.csv", which this shipped with and
+    # which matches nothing real -- `find_recordings` returned an empty list on
+    # every genuine session.
+    "ohdpi": "*.txt",
     "bcam": "*.yaml",
+}
+
+# Names a system's glob matches that are not recordings. OpenIris writes
+# `<session>-events.txt` into the same folder as `<session>.txt`, and it is a
+# different format entirely -- the same class of hazard the spikeglx glob
+# comment above describes, where a pattern quietly matching the wrong sibling
+# produces a diagnosis pointing at the wrong fault.
+#
+# An explicit suffix list rather than a cleverer glob (e.g. "*[!s].txt", which
+# also happens to exclude only "-events.txt" here): that pattern's exclusion
+# criterion is "the stem does not end in s", which has nothing to do with the
+# actual reason and would silently drop a session legitimately named
+# "...-pass.txt". Encoding an accident of spelling instead of the intent is
+# the shape of defect this repository keeps finding (Controller ruling,
+# 2026-08-30, task 2).
+_RECORDING_EXCLUDE_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "ohdpi": ("-events.txt",),
 }
 
 
@@ -385,4 +408,9 @@ def find_recordings(system: str, system_dir: Path) -> list[Path]:
             if child.is_dir() and (child / INFO_FILENAME).is_file()
         )
 
-    return sorted(system_dir.glob(_RECORDING_GLOBS[system]))
+    excluded = _RECORDING_EXCLUDE_SUFFIXES.get(system, ())
+    return sorted(
+        path
+        for path in system_dir.glob(_RECORDING_GLOBS[system])
+        if not any(path.name.endswith(suffix) for suffix in excluded)
+    )

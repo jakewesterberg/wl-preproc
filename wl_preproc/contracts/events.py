@@ -49,19 +49,76 @@ class TaskTypeCode(IntEnum):
     MEMORY_GUIDED_SACCADE = 6
 
 
+class TargetRole(IntEnum):
+    """Which on-screen target a `TARGET_POSITION` payload describes.
+
+    `TaskTypeCode.MEMORY_GUIDED_SACCADE` puts a fixation point and a target on
+    screen simultaneously; without a role two payloads are ambiguous. It also
+    tells calibration which target the animal was demonstrably looking at.
+    """
+
+    FIXATION_POINT = 0
+    SACCADE_TARGET = 1
+
+
 class Escape(IntEnum):
     """Escape codes introducing multi-word payloads. Range 32768+."""
 
     TRIAL_NUMBER = 0x8001
     BLOCK_START = 0x8002
     CONDITION = 0x8003
+    TARGET_POSITION = 0x8004
 
 
 PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
     Escape.TRIAL_NUMBER: 2,  # uint32, high word first
     Escape.BLOCK_START: 2,  # (block_number, task_type_code)
     Escape.CONDITION: 2,  # uint32, high word first
+    Escape.TARGET_POSITION: 3,  # (role, x_dva, y_dva)
 }
+
+
+class TaskEvent(IntEnum):
+    """Task events. Range 256-4095.
+
+    `Marker.TRIAL_FIXATION_BREAK` already covers a failed hold; these bound a
+    successful one, which is the window calibration fits against.
+    """
+
+    FIXATION_ACQUIRED = 256
+    FIXATION_END = 257
+
+
+# Degrees of visual angle, offset-binary, hundredths of a degree.
+#
+# **Degrees, not pixels:** this pipeline holds no screen geometry -- no viewing
+# distance, no pixel pitch -- and acquiring it would mean a second transport for
+# numbers that differ per rig and change whenever a monitor moves. The task
+# already knows the geometry because it renders the stimulus, and MonkeyLogic
+# holds `ScreenInfo.PixelsPerDegree`.
+#
+# **Offset-binary, not two's complement:** no sign-extension convention to get
+# wrong across the task, the sync box and this decoder.
+DVA_SCALE = 100
+DVA_OFFSET = 32768
+_DVA_MIN = -DVA_OFFSET / DVA_SCALE
+_DVA_MAX = (0xFFFF - DVA_OFFSET) / DVA_SCALE
+
+
+def encode_dva(degrees: float) -> int:
+    """One axis of a target position, as a payload word."""
+    if not _DVA_MIN <= degrees <= _DVA_MAX:
+        raise ValueError(
+            f"target position {degrees} deg is out of range "
+            f"[{_DVA_MIN}, {_DVA_MAX}]; refused rather than clamped, because a "
+            "clamped target reports a position the task did not use"
+        )
+    return round(degrees * DVA_SCALE) + DVA_OFFSET
+
+
+def decode_dva(word: int) -> float:
+    """The inverse of `encode_dva`."""
+    return (word - DVA_OFFSET) / DVA_SCALE
 
 
 @dataclass(frozen=True, slots=True)

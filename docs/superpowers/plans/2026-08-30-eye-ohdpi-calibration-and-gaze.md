@@ -19,7 +19,7 @@
 - **`Seconds` is seconds**, not microseconds. Measured rate 498.554 Hz.
 - **`Int0` carries the sync line**, values `{12, 13}`; bit 0 toggles. The bit index is rig wiring and must be a named constant, not a literal.
 - **Frame numbers are contiguous but do not start at zero** (308788 → 1486586, zero gaps). `FrameNumberRaw = FrameNumber − 1`.
-- **`LeftSeconds` and `RightSeconds` differ by a constant 49.48 ms.** Frame number is the index; `Seconds` is never session time.
+- **`LeftSeconds` and `RightSeconds` differ by a DRIFTING offset** — 49.50 ms at the start of the reference recording, 45.80 ms at its end (~1.6 ppm of relative camera clock skew). Frame number is the index; `Seconds` is never session time. (Corrected 2026-08-30: this plan first said "constant", from a 10,000-row measurement generalised to the whole file.)
 - **No bare `longblob`.** A repo-wide guardrail sweep enforces this; `<blob>` codec is the safe form. This plan stores no arrays.
 - **Test module basenames must be globally unique** across `tests/` — the layout is deliberately `__init__.py`-free.
 - Comments explain **why**, and are held to the same truth standard as code. Cite by **symbol name, not line number** — line citations in this repo have gone stale three times, twice in the commit that fixed the previous one.
@@ -114,9 +114,11 @@ def test_a_file_with_the_wrong_header_is_refused(tmp_path):
 
 
 def test_seconds_is_never_offered_as_session_time():
-    """`LeftSeconds` and `RightSeconds` differ by a constant 49.48 ms while
-    frame numbers agree exactly -- the cameras are frame-locked, their clocks
-    are not. At 500 Hz that offset is ~25 frames.
+    """`LeftSeconds` and `RightSeconds` differ by an offset that DRIFTS --
+    49.50 ms at the start of the reference recording, 45.80 ms at its end --
+    while frame numbers agree exactly. The cameras are frame-locked; their
+    clocks are not, and the disagreement is not even a fixed one that could be
+    subtracted.
 
     `OhdpiRecording` therefore exposes no per-eye timestamp at all. Frame
     number is the index; the rate is derived internally and `Seconds` does not

@@ -334,6 +334,12 @@ Named rather than hidden, each with what it blocks.
    sample file was available when this was written. *Blocks:* only the two extraction functions.
    The spec defines their signature, and the format assumptions must be isolated in one place per
    system and testable against a real file when one exists.
+
+   > **Discharged 2026-08-31 (Task 12) — for `ohdpi` only.** A real recording
+   > settled it: the digital line is `Int0`. See §14 for the full record,
+   > including two more wrong assumptions this same work found alongside it.
+   > `bcam`'s half of this question is untouched by this plan and remains
+   > open.
 2. **Can the sync box also trigger `ohdpi`'s frames?** If yes, §3.1's 2 ms quantisation disappears
    and `time_source` becomes `trigger`. *Blocks:* nothing — barcode-only alignment works and its
    precision is recorded.
@@ -370,3 +376,70 @@ generator emits the proposed shape, so the code is exercised, and a real file se
 >
 > **What is still owed to the FLIR project:** agreement. Neither field has been proposed to them in
 > writing yet.
+
+## 14. Corrections found during implementation
+
+> **Corrected 2026-08-31, Task 12.** This phase's own `ohdpi` reader
+> (`wl_preproc/timebase/_ohdpi_file.py`, written 2026-08-22, now deleted) and
+> its recording glob (`wl_preproc/timebase/extract.py`) shipped **five**
+> wrong assumptions about the OpenIrisDPI file format, not the three
+> `2026-08-30-eye-ohdpi-calibration-and-gaze-design.md` §0 already recorded.
+> Checked against a real OpenIris recording (`OpenIris-2024Jul31-114628`,
+> 1,177,799 rows, obtained 2026-08-30) and against the original shipped
+> source (`git show 926472a:wl_preproc/timebase/_ohdpi_file.py`), not merely
+> repeated from that spec.
+>
+> | Shipped assumption | Reality | Consequence if unfixed |
+> |---|---|---|
+> | Column `frame_index` | `LeftFrameNumber` / `RightFrameNumber` | `KeyError` on a real file |
+> | Column `timestamp_us`, **microseconds** | `LeftSeconds`, **seconds** | Rate wrong by 10⁶ |
+> | Column `digital` | `Int0` | `KeyError` on a real file |
+> | Contiguity required `frame_index == position` (a zero start) | Real files start wherever the camera counter was; the reference recording runs 308788 → 1486586 | Every real file rejected |
+> | `_RECORDING_GLOBS["ohdpi"]` was `"*.csv"` | OpenIris writes `<session>.txt` | `find_recordings` returned `[]` for every real session |
+>
+> The first three rows were already recorded in
+> `2026-08-30-eye-ohdpi-calibration-and-gaze-design.md` §0. The last two are
+> recorded for the first time here. The shipped `_ohdpi_file.py` read:
+>
+> ```python
+> for position, (frame_index, _timestamp_us, _digital) in enumerate(rows):
+>     if frame_index != position:
+>         raise ValueError(...)
+> ```
+>
+> Contiguity itself was never the error — this spec does not require it, but
+> both the original and current readers do, on their own reasoning: a gap is
+> still a dropped frame the file does not declare, and reading past it shifts
+> every later sample against its true time. Demanding the index equal the
+> loop position additionally demanded the file *start* at zero, which no real
+> recording does. `wl_preproc/eye/ohdpi.py` (Task 1) checks contiguity alone
+> (`np.diff(frames) != 1`, on the array read from the frame-number column) and
+> carries no start-value assumption. Separately, `extract.py`'s `_RECORDING_GLOBS`
+> mapped `"ohdpi"` to `"*.csv"`, which matches no file OpenIris actually
+> writes; Task 2 (commit `12b3e0e`) moved it to `"*.txt"`, with a
+> `_RECORDING_EXCLUDE_SUFFIXES` mechanism added alongside it so the glob does
+> not also match the `<session>-events.txt` sibling OpenIris writes into the
+> same directory.
+>
+> **This closes open question 1 (§12) for `ohdpi` only.** `bcam`'s per-frame
+> digital field names remain unmeasured; that half of the question is still
+> open, and out of this plan's scope
+> (`docs/superpowers/plans/2026-08-30-eye-ohdpi-calibration-and-gaze.md`,
+> "Not in this plan").
+>
+> **The original reasoning about which assumption would fail silently was
+> already correct — just off by three orders of magnitude on the size**, as
+> `2026-08-30-eye-ohdpi-calibration-and-gaze-design.md` §0 also records.
+> `_ohdpi_file.py`'s own comment, above `_TIMESTAMP_UNITS_PER_SECOND`, called
+> the timestamp unit *"the assumption most likely to be wrong and least
+> likely to fail loudly: a file in milliseconds read as microseconds yields a
+> rate off by 1000x, which is a fit wrong by exactly that ratio and a
+> residual that does not say so."* That instinct named the right assumption
+> and the right failure mode — a fit silently wrong, not a crash. The
+> magnitude was not 1000x: the real file is in seconds, not milliseconds, so
+> the actual error is 10⁶, three orders of magnitude past what was
+> anticipated.
+>
+> All five are superseded by `wl_preproc/eye/ohdpi.py` (Task 1) and
+> `wl_preproc/timebase/extract.py`'s glob (Task 2); `_ohdpi_file.py` is
+> deleted.

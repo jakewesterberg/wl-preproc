@@ -118,6 +118,36 @@ _DEFERRED_NOTE = (
     "record of a pass that deferred rather than landed or quarantined."
 )
 
+# Task-11 brief, Controller ruling D: a persistent step-2 skip (design spec
+# `docs/superpowers/specs/2026-08-30-eye-ohdpi-calibration-and-gaze-design.md`
+# section 8, and that same document's section 10 open question 3) is worth
+# noticing precisely because no individual session reveals it -- but nothing
+# in `schema/eye.py::EyeCalibration` records whether a `.bhv2` was even
+# found. `read_monkeylogic_map`'s own `None` return (`eye/calibration.py`)
+# already collapses every step-2 non-outcome -- no `.bhv2` found, one found
+# but unreadable, one found but with no usable calibration inside it -- into
+# a single `None` signal upstream of this report (that function's own
+# docstring: absence and a present-but-unusable `Bhv2Calibration` reach
+# `None` from `as_affine_map` by two different mechanisms -- `a is None` for
+# the first, a non-six-element `a` for the second, per `bhv2.py`'s own
+# `present = a is not None`; "Unparseable is different in kind... caught
+# here"), and
+# `resolve_calibration`'s reason text never names which fallback source was
+# tried and rejected versus never offered at all -- so the
+# `calibration_source` breakdown below cannot tell any of those apart
+# either. Named here rather than silently rendered as though the breakdown
+# were complete: the same "a missing distinction must never render
+# identically" principle this module's own docstring states one level up
+# for a missing vs. empty section, applied to a single line within one
+# instead of a whole section.
+_EYE_MONKEYLOGIC_GAP_NOTE = (
+    "this breakdown cannot separate a session whose MonkeyLogic calibration "
+    "was tried and rejected from one where no `.bhv2` was ever found -- "
+    "nothing in `EyeCalibration` records whether a `.bhv2` was found at all, "
+    "so both render identically here, folded into whichever source the "
+    "session actually resolved to"
+)
+
 
 def _compact(value) -> str:
     """One `detail` value as a single line, bounded, never raising.
@@ -440,6 +470,161 @@ def _unreclaimed_sessions(
     return blocked, unarchived_count
 
 
+def _eye_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict]]:
+    """Every `EyeQuality` and `EyeCalibration` row on record: `(quality_rows,
+    calibration_rows)`. Query only, no rendering -- `build_report` below
+    does that itself, the same split `_unreclaimed_sessions`/`_verified_
+    archives` above use.
+
+    **Not part of `Readings`/`gather_readings` (task-11 brief, Controller
+    ruling A).** `gather_readings` is called by `responder/health.py::
+    build_health` on every wl.works poll, under the single global lock that
+    also serialises job accepts (`responder/server.py`'s own docstring), and
+    the responder reads none of the values this function returns --
+    `EyeQuality`/`EyeCalibration` name nothing `contracts/protocol.py`
+    defines a wire shape for. This exact mistake was made and fixed once
+    already in this project, for `_unreclaimed_sessions`/`_verified_
+    archives` themselves (see each one's own docstring): putting a report-
+    only computation inside `gather_readings` adds its full cost -- here,
+    two more `to_dicts()` calls -- to a hot, lock-held path for nothing,
+    forever, growing as this pipeline's session count grows. Kept here
+    instead, called directly by `build_report`, so only `wlpp report` -- a
+    periodic batch job -- ever pays for it.
+
+    **This function itself is unwindowed, and stays that way -- `build_report`
+    below applies windowing, not this query.** Neither table carries a
+    timestamp of when ITS OWN row was computed -- `schema/eye.py`'s
+    `EyeCalibration`/`EyeQuality` are both keyed `(subject, session_datetime,
+    eye)` with no such column -- so there is no column here to filter on the
+    way `gather_readings` filters `ingest.Ingestion` on `ingested_at`. That
+    is not a gap: the two rows this function returns feed THREE different
+    renderings in `build_report`, and each rendering picks its own scope
+    from the SAME unfiltered rows rather than this function guessing at one.
+
+    **Only the `calibration_source` breakdown is a true all-time running
+    total (task-11 fix round, second Controller review).** It is four
+    numbers that cannot grow without bound, and Controller ruling D's
+    persistent-skip detection needs a ratio across all history, not one
+    night's rows or one week's. The other two renderings ARE windowed, at
+    two different widths, and the first fix round's own analogy to
+    `_unreclaimed_sessions`' unwindowed "Archived sessions blocked from
+    reclamation" list turned out to hold for neither: that list is a LIVE,
+    re-evaluated predicate -- `archive_reclaim.blocking()` runs fresh on
+    every report, so a session that clears every condition simply stops
+    appearing, and no row there is permanent. A refused `EyeCalibration` row
+    is the opposite -- `EyeCalibration.key_source`'s own docstring: "once
+    written, that row is PERMANENT: DataJoint never recomputes an already-
+    populated key" -- so it is `Quarantine`-shaped, not "Archived sessions"-
+    shaped, and both the per-session listing and the "No canonical gaze"
+    list are windowed accordingly: the per-session-per-eye listing to the
+    same 24 hours `readings.ingested` already covers (reusing that row set
+    rather than computing a second, independently-derived boundary -- it
+    answers "what did the pipeline calibrate overnight, and what went
+    wrong"), and "No canonical gaze" to the same 7 days `_QUARANTINE_
+    WINDOW_DAYS` gives `Quarantine` -- see that constant's own comment for
+    why 7 beats 24 h for a list of PERMANENT rows: "a session that fails
+    late on a Friday would drop off Monday's report -- the exact case where
+    the row most needs a human." Windowed at 7 days rather than left
+    unwindowed for a sharper reason than that comment gives, too: under the
+    exact scenario ruling D exists to detect -- MonkeyLogic's map never
+    validating, the refusal rate climbing toward 100% -- this list grows at
+    the same unbounded rate the per-session listing's own windowing was
+    written to prevent, precisely during the incident the report most needs
+    to stay readable for. Nothing is lost either way: `no_gaze`/`source_
+    counts["refused"]` in `build_report` below are the identical predicate
+    over these same unfiltered rows, so the all-time count the breakdown
+    carries is never a second, independently-computed figure that could
+    silently disagree with what the windowed list is a subset of.
+    """
+    from wl_preproc.schema import eye as eye_schema
+
+    eye_schema.activate(prefix=prefix)
+    return eye_schema.EyeQuality.to_dicts(), eye_schema.EyeCalibration.to_dicts()
+
+
+def _eye_row_line(
+    subject: str,
+    session_datetime: datetime.datetime,
+    eye_value: str,
+    quality: dict | None,
+    calibration: dict | None,
+) -> str:
+    """One `(subject, session_datetime, eye)` line for the Eye section's
+    "Calibration and quality" list -- design spec section 8's first two
+    asks ("tracking-loss percentage and blink rate", "validation_error_deg,
+    and the residual for a fitted map") combined into one place, the same
+    "everything needed to act on it" reasoning `_quarantine_lines` gives for
+    combining `who`/`detail` rather than spreading one session's own facts
+    across two lists a reader has to cross-reference.
+
+    `quality`/`calibration` are `None` when that table has no row for this
+    key YET -- a real state, not a bug. The two tables' `key_source`s
+    differ on purpose: `EyeQuality` needs only an aligned ohDPI recording,
+    while `EyeCalibration` also needs assembled events (`schema/eye.py`'s
+    own `EyeQuality.key_source` docstring states the difference directly:
+    "tracking loss and blink rate need only an ohDPI recording, not
+    assembled events"), and `EyeCalibration`'s own gate is coarser still in
+    the OTHER direction for its "no ohDPI recording could be aligned" branch
+    (that table's own `key_source` docstring) -- a session can have either
+    row well before, or entirely without, the other. `build_report` below
+    calls this once per key in the UNION of both tables, never their
+    intersection, so a row missing from one table is rendered as "not yet
+    computed" rather than silently dropping the whole line -- the same "a
+    missing section and an empty one must never render identically"
+    principle this module's own docstring states one level up, applied to
+    one row's own two halves.
+    """
+    who = f"`{subject}` @ {session_datetime:%Y-%m-%d %H:%M} — {eye_value}"
+
+    if quality is None:
+        quality_bit = "tracking loss/blink rate: not yet computed"
+    else:
+        quality_bit = (
+            f"tracking loss {quality['tracking_loss_fraction'] * 100:.1f}%, "
+            f"blink rate {quality['blink_rate_hz']:.2f} Hz"
+        )
+
+    if calibration is None:
+        calibration_bit = "calibration: not yet computed"
+    elif calibration["calibration_source"] == "refused":
+        # The reason itself is not repeated here -- it has its own section
+        # below ("No canonical gaze"). Controller ruling B's "never render a
+        # single 'no gaze: N' count" is about THAT list, not this one; this
+        # line still names the row as refused so the per-session list stays
+        # a complete UNION (every key that exists in either table), without
+        # printing a possibly-long reason string twice.
+        calibration_bit = 'source: refused (see "No canonical gaze" below)'
+    else:
+        source = calibration["calibration_source"]
+        calibration_bit = f"source: {source}"
+        if source == "carried_forward" and calibration["carried_from_session_datetime"] is not None:
+            calibration_bit += (
+                f" (from {calibration['carried_from_session_datetime']:%Y-%m-%d %H:%M})"
+            )
+        if calibration["validation_error_deg"] is not None:
+            calibration_bit += f", validation error {calibration['validation_error_deg']:.2f} deg"
+        if source == "fitted" and calibration["residual_deg_rms"] is not None:
+            calibration_bit += (
+                f", residual {calibration['residual_deg_rms']:.2f}/"
+                f"{calibration['residual_deg_max']:.2f} deg (rms/max)"
+            )
+        if calibration["reason"]:
+            # A session can SUCCEED and still carry a note: `schema/eye.py::
+            # EyeCalibration.make()`'s own `_combine_reason` stores a
+            # partial-coverage-drop note in `reason` even when
+            # `calibration_source` is not `refused` -- `resolve_calibration`
+            # returns `reason=""` on every successful outcome, so a non-
+            # empty `reason` reaching here is purely that method's own
+            # coverage note ("a coverage gap that happens not to change the
+            # verdict this time is still worth knowing about before it
+            # grows into one that does" -- that method's own comment).
+            # Skipping this because the row is not `refused` would drop
+            # exactly the signal that comment calls out.
+            calibration_bit += f" (note: {calibration['reason']})"
+
+    return f"- {who} — {quality_bit} — {calibration_bit}"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:
     """Everything both renderings need, computed once.
@@ -663,6 +848,9 @@ def build_report(
     # treated as zero.
     verified_archives = _verified_archives(prefix=prefix, nas_root=nas_root)
     orphaned_archiving = _orphaned_archiving_dirs(root)
+    # Task-11 brief, Controller ruling A: computed here, not inside
+    # `gather_readings` -- see `_eye_rows`' own docstring for why.
+    eye_quality_rows, eye_calibration_rows = _eye_rows(prefix=prefix)
 
     # Two things `gather_readings` deliberately does not compute, because
     # neither is a status number the responder needs -- both are markdown-
@@ -828,6 +1016,141 @@ def build_report(
             "(a failed archive attempt's compressed copy, reclaimed only by "
             "a future successful archive of the same session): "
             + ", ".join(f"`{path}`" for path in orphaned_archiving)
+        ]
+
+    # Design spec section 8: per session and per eye, tracking-loss
+    # percentage, blink rate, `validation_error_deg` and a fitted map's own
+    # residual, the `calibration_source` breakdown, and every session with
+    # no canonical gaze -- each with its own specific reason, never
+    # collapsed into one count (task-11 brief, Controller rulings B and C).
+    # `### ` subheadings, a first for this file: three genuinely different
+    # questions (per-session numbers, an aggregate breakdown, and the
+    # sessions with no canonical gaze at all) do not read as one flat list,
+    # and nothing about `_section`'s own `## `-only boundary (every other
+    # report test's own helper) is disturbed by a heading level it never
+    # looks for.
+    lines += ["", "## Eye", ""]
+
+    quality_by_key = {
+        (row["subject"], row["session_datetime"], row["eye"]): row for row in eye_quality_rows
+    }
+    calibration_by_key = {
+        (row["subject"], row["session_datetime"], row["eye"]): row
+        for row in eye_calibration_rows
+    }
+    # UNION, not intersection -- see `_eye_row_line`'s own docstring: the two
+    # tables' `key_source`s differ, so a session can clear one gate well
+    # before, or entirely without, the other.
+    eye_keys_all = set(quality_by_key) | set(calibration_by_key)
+
+    # Task-11 fix round (Controller review): this list used to print one
+    # line per session per eye for EVERY session ever calibrated. Neither
+    # `EyeCalibration` nor `EyeQuality` carries a "when was this row
+    # computed" column to window on directly (`_eye_rows`' own docstring),
+    # but `readings.ingested` is already exactly "the same 24 hours
+    # `Ingested` uses" -- the identical row set that section itself renders,
+    # fetched once by `gather_readings` and reused here rather than run a
+    # second, independently-windowed query that could silently disagree
+    # with it. `Ingested`'s own reasoning applies unchanged: the question
+    # this list answers is "what did the pipeline calibrate overnight, and
+    # what went wrong" -- not "what has this pipeline ever calibrated".
+    ingested_keys = {(row["subject"], row["session_datetime"]) for row in readings.ingested}
+    eye_keys = sorted(key for key in eye_keys_all if (key[0], key[1]) in ingested_keys)
+
+    lines += [f"### Calibration and quality, per session per eye (24 h) — {len(eye_keys)}", ""]
+    lines += [
+        _eye_row_line(
+            subject, session_datetime, eye_value,
+            quality_by_key.get((subject, session_datetime, eye_value)),
+            calibration_by_key.get((subject, session_datetime, eye_value)),
+        )
+        for subject, session_datetime, eye_value in eye_keys
+    ] or ["- none"]
+
+    # `calibration_source` is a MySQL enum restricted to exactly these four
+    # values (`tests/schema/test_eye_schema.py::
+    # test_calibration_source_names_all_four_chain_steps` pins it), so
+    # pre-seeding every key at 0 rather than building the dict from whatever
+    # sources happen to appear is what keeps a source with ZERO rows so far
+    # (every session refused today, say) from silently vanishing from the
+    # breakdown instead of reading "0".
+    #
+    # Deliberately UNWINDOWED, unlike the list above (task-11 fix round):
+    # it is four numbers, it cannot grow without bound the way a per-session
+    # listing does, and Controller ruling D's persistent-skip detection --
+    # "if MonkeyLogic's calibration is never usable, something is
+    # systematically wrong" -- shows up as a ratio across ALL history, not
+    # in one night's rows. Windowing this to 24 h would hide the exact
+    # signal it exists to surface.
+    source_counts = {source: 0 for source in ("fitted", "monkeylogic", "carried_forward", "refused")}
+    for row in eye_calibration_rows:
+        source_counts[row["calibration_source"]] += 1
+
+    lines += ["", "### Calibration source (running total)", ""]
+    lines += [
+        f"- {source}: {source_counts[source]}"
+        for source in ("fitted", "monkeylogic", "carried_forward", "refused")
+    ]
+    lines += [f"- _{_EYE_MONKEYLOGIC_GAP_NOTE}._"]
+
+    # Controller ruling B: distinct causes, distinct lines -- never a single
+    # "no gaze: N" count. Each row prints its OWN stored `reason` verbatim,
+    # so two sessions refused for unrelated causes render as two different
+    # lines by construction, not by any special-casing here.
+    #
+    # Windowed to 7 days (task-11 fix round, second Controller review) --
+    # `_QUARANTINE_WINDOW_DAYS`, not a new constant, because this really is
+    # the same list `Quarantine` already is, not merely a similarly-sized
+    # one: a refused `EyeCalibration` row is PERMANENT once written
+    # (`EyeCalibration.key_source`'s own docstring; `_eye_rows`' own
+    # docstring above quotes it in full), unlike `_unreclaimed_sessions`'
+    # "Archived sessions blocked from reclamation" list, whose predicate is
+    # re-evaluated fresh on every report. `_QUARANTINE_WINDOW_DAYS`'s own
+    # comment already gives the reason 7 days beats 24 h for exactly this
+    # shape of list: a session that fails (here: is refused) late on a
+    # Friday must not drop off Monday's report before a human sees it.
+    #
+    # A SEPARATE `ingest.Ingestion` query, not `readings.ingested` or
+    # `ingested_keys` above -- those are windowed to 24 h, the per-session
+    # listing's own width, and reusing them here would silently give this
+    # list the WRONG window rather than its own.
+    no_gaze_since = landing.to_naive_utc(at - datetime.timedelta(days=_QUARANTINE_WINDOW_DAYS))
+    no_gaze_ingested_keys = {
+        (row["subject"], row["session_datetime"])
+        for row in (
+            ingest.Ingestion & f"ingested_at > '{no_gaze_since:%Y-%m-%d %H:%M:%S}'"
+        ).to_dicts()
+    }
+    # UNFILTERED -- this is the identical predicate `source_counts["refused"]`
+    # above already counts, over the same `eye_calibration_rows`, so
+    # `len(no_gaze_all) == source_counts["refused"]` always holds. Nothing
+    # is lost by windowing the LIST below: the all-time total is the
+    # breakdown, not a second copy kept here.
+    no_gaze_all = sorted(
+        (row for row in eye_calibration_rows if row["calibration_source"] == "refused"),
+        key=lambda row: (row["subject"], row["session_datetime"], row["eye"]),
+    )
+    no_gaze = [
+        row for row in no_gaze_all
+        if (row["subject"], row["session_datetime"]) in no_gaze_ingested_keys
+    ]
+    older_no_gaze = len(no_gaze_all) - len(no_gaze)
+
+    lines += ["", f"### No canonical gaze ({_QUARANTINE_WINDOW_DAYS} d) — {len(no_gaze)}", ""]
+    lines += [
+        f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"{row['eye']}: {row['reason']}"
+        for row in no_gaze
+    ] or ["- none"]
+    if older_no_gaze:
+        # Same shape as `older_quarantines` above: rows outside the window
+        # are counted, not silently dropped -- the all-time figure is the
+        # `refused` line in the breakdown, pointed at rather than repeated.
+        lines += [
+            f"- _{older_no_gaze} older row(s) not shown — a refused calibration "
+            f"is a permanent row (see the `refused` count in the breakdown "
+            f"above for the all-time total), so this section shows the last "
+            f"{_QUARANTINE_WINDOW_DAYS} days only._"
         ]
 
     lines += ["", "## Not yet reported", ""]

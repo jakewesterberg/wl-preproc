@@ -275,15 +275,16 @@ def test_ohdpi_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
 
 
 def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
-    """The file carries a native timestamp per frame, so the rate is a
-    measurement rather than an assumption — and `OHDPI_FPS` is the fixture's
-    rate, not the instrument's.
+    """The file carries a native timestamp per frame (`LeftSeconds`), so the
+    rate is a measurement rather than an assumption — and `OHDPI_FPS` is the
+    fixture's rate, not the instrument's.
 
-    The timestamps are rewritten to a different rate to prove it: a derivation
-    that ignored them and returned `OHDPI_FPS` passes any test written against
-    an unmodified fixture.
+    `LeftSeconds` is rewritten to a different rate to prove it: a derivation
+    that ignored it and returned `OHDPI_FPS` passes any test written against
+    an unmodified fixture. Frame numbers are left untouched -- only the
+    timestamp column changes -- since `read_ohdpi` requires them contiguous.
     """
-    from wl_preproc.synth.ohdpi import FILENAME, OHDPI_FPS
+    from wl_preproc.synth.ohdpi import FILENAME, HEADER, OHDPI_FPS
 
     generate_session(tmp_path, RECIPES["eye"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
@@ -291,14 +292,22 @@ def test_ohdpi_rate_is_derived_from_the_files_own_timestamps(tmp_path: Path):
     slower_hz = 400.0
     assert slower_hz != OHDPI_FPS
 
-    rows = path.read_text(encoding="utf-8").splitlines()
-    rewritten = [rows[0]]
-    for row in rows[1:]:
-        index, _timestamp, digital = row.split(",")
-        rewritten.append(f"{index},{round(int(index) * 1e6 / slower_hz)},{digital}")
+    frame_column = HEADER.index("LeftFrameNumber")
+    seconds_column = HEADER.index("LeftSeconds")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rewritten = [lines[0]]
+    for line in lines[1:]:
+        fields = line.split(" ")
+        fields[seconds_column] = f"{int(fields[frame_column]) / slower_hz:.4f}"
+        rewritten.append(" ".join(fields))
     path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 
-    assert extract_ohdpi(path).fs_hz == pytest.approx(slower_hz)
+    # abs, not the default rel=1e-6: LeftSeconds is quantised to 4 decimal
+    # places, and over this fixture's ~15 s span that quantisation alone is
+    # larger than the default tolerance -- see `synth/test_ohdpi.py`'s
+    # `test_native_timestamps_agree_with_the_frame_rate` for the same
+    # quantisation applied to the un-rewritten fixture.
+    assert extract_ohdpi(path).fs_hz == pytest.approx(slower_hz, abs=0.1)
 
 
 def test_bcam_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
@@ -411,6 +420,25 @@ def test_every_system_can_find_its_own_recordings(tmp_path: Path):
         assert len(found) == 1, f"{system}: found {[p.name for p in found]}"
         # And what was found is what the extractor can actually open.
         assert EXTRACTORS[system](found[0]).n_samples > 0
+
+
+def test_ohdpi_is_discoverable_from_a_generated_session(tmp_path: Path):
+    """ohdpi's own discovery, isolated from the other four systems'.
+
+    Renamed from `test_ohdpi_is_not_yet_discoverable_from_a_generated_session`:
+    that name and its strict tripwire marker recorded a real, temporary gap
+    between Task 2 (which pointed `extract_ohdpi` at the real reader) and this
+    task (which makes the generator emit what that reader expects) -- a name
+    asserting non-discoverability would now be a false claim. Duplicates part
+    of `test_every_system_can_find_its_own_recordings` above; kept anyway as
+    the standalone, single-system case.
+    """
+    generate_session(tmp_path, RECIPES["drift"])
+    session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
+
+    found = find_recordings("ohdpi", session_dir / "ohdpi")
+
+    assert len(found) == 1, f"ohdpi: found {[p.name for p in found]}"
 
 
 def test_spikeglx_discovery_does_not_match_the_imec_binary(tmp_path: Path):

@@ -22,6 +22,38 @@ dependencies = [
     # this repo at all. Resolved 2026-08-14 with `git ls-remote <url> main`.
     "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@90b931e8d4714a0b199510d5ccb8813114bb076e",  # main
     "datajoint>=2.3,<3",
+    # `wl_preproc/eye/ohdpi.py` imports pandas directly, for `read_ohdpi`'s
+    # column-selective CSV reads. It already arrives unconditionally with
+    # `datajoint` above -- a hard, non-extra requirement, confirmed against
+    # installed distribution metadata -- so a clean install already resolves
+    # some pandas without this line. Declared anyway for the same reason as
+    # `zarr` below: `wlo stack` reads `third_party` from every package's own
+    # manifest alone, and an import this package makes directly needs to be on
+    # record here.
+    #
+    # The floor is a decision, not a formality. Task 1 closed `OhdpiRecording`
+    # against in-place mutation with an explicit `frames.setflags(write=
+    # False)` in `read_ohdpi`. Under the installed pandas 3.0.5 that call is
+    # already redundant: `to_numpy()` returns a read-only array by
+    # construction, because pandas >= 3.0 makes copy-on-write mandatory --
+    # confirmed directly here, not assumed: `pandas.Series([1]).to_numpy().
+    # flags.writeable` is `False`, and asking pandas to disable CoW raises
+    # `Pandas4Warning: Copy-on-Write can no longer be disabled`. A `>=3` floor
+    # would make that guard, and the test asserting it
+    # (tests/eye/test_ohdpi_reader.py::test_the_arrays_reject_in_place_mutation,
+    # which already documents this exact ambiguity), permanently unable to
+    # fail -- dead code with a test that can only ever pass. `>=2` keeps a
+    # pandas 2.x resolution valid, where `to_numpy()` returns a writeable
+    # array by default and the explicit call is what actually protects the
+    # frozen dataclass from a silent in-place mutation.
+    #
+    # No ceiling, for the same reason zarr's and numcodecs' bounds are not
+    # invented: `datajoint` requires bare `pandas`, unconstrained, and
+    # `spikeinterface` caps `pandas<3` only under its `full`/`metrics`/`docs`
+    # extras, none of which this project installs -- both confirmed against
+    # installed distribution metadata. Nothing here forces `<3`, and 3.0.5 is
+    # what is actually installed and tested against.
+    "pandas>=2",
     # The Elements are mid-migration to DataJoint 2.x and no fork is taken.
     # element-animal pins to the open PR that does its migration, which is zero
     # divergence by construction; the other three already activate cleanly on

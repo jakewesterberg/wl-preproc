@@ -95,10 +95,23 @@ default. A different rig changes one constant.
 
 ### 1.3 `Seconds` is a per-camera clock, and the two disagree
 
-`LeftSeconds` and `RightSeconds` differ by a **constant 49.48 ms** (min 49.40,
-max 49.50 over 10,000 rows — a spread of exactly one timestamp tick, so an
-origin offset rather than jitter). Over the same rows, `LeftFrameNumber` and
-`RightFrameNumber` are **identical in every row**.
+`LeftSeconds` and `RightSeconds` differ by an offset that **drifts**: 49.50 ms
+at the start of the reference recording, 45.80 ms at its end — about 3.7 ms over
+39 minutes, or ~1.6 ppm of relative clock skew between the two cameras. Over the
+same rows, `LeftFrameNumber` and `RightFrameNumber` are **identical in every
+row**.
+
+> **Corrected 2026-08-30.** This section first called the offset a *constant*
+> 49.48 ms, "an origin offset rather than jitter". That was measured over 10,000
+> rows — the first twenty seconds — and generalised to the whole file. Over all
+> 1,177,799 rows it drifts monotonically. The original claim is kept visible
+> because the error is instructive: a narrow measurement asserted as a global
+> property is the defect class this repository tracks, and it survived into a
+> spec that was otherwise built on real bytes.
+
+The correction strengthens the conclusion rather than weakening it. A *fixed*
+inter-camera offset could in principle be subtracted; a drifting one cannot be,
+without modelling two clocks.
 
 The cameras are frame-locked by the trigger chain; their clocks are not. At
 500 Hz that offset is ~25 frames, and choosing the wrong column would shift
@@ -317,7 +330,7 @@ Worked example — fixation point at centre, target 10° right and 5° up:
 no viewing distance, no pixel pitch — and acquiring it would mean a second
 transport for numbers that differ per rig and change whenever a monitor moves.
 The task already knows the geometry because it renders the stimulus, and
-MonkeyLogic holds `ScreenInfo.PixelsPerDegree`. Converting at the source makes
+MonkeyLogic holds `PixelsPerDegree`. Converting at the source makes
 the code stream self-sufficient; emitting pixels would make calibration depend
 on a channel that does not exist.
 
@@ -345,7 +358,7 @@ most recent `TARGET_POSITION` of the relevant role. Five codes per fixation.
 
 The task is MonkeyLogic, which saves `TrialData.BehavioralCodes`
 (`CodeNumbers`, `CodeTimes`), `TrialData.AnalogData.EyeSignal`, and
-`ScreenInfo.PixelsPerDegree`. `.bhv2` is a headerless binary of MATLAB variables
+`PixelsPerDegree`. `.bhv2` is a headerless binary of MATLAB variables
 with a simple recursive structure.
 
 **The code stream is authoritative for *when*; the log is authoritative for
@@ -358,8 +371,8 @@ alone and a session missing its log still gets canonical gaze.
 ### 4.5 Reading `.bhv2`, narrowly
 
 §3.5's fallback chain needs MonkeyLogic's calibration, so a `.bhv2` reader is in
-scope — but a **minimal** one. It reads the calibration and `ScreenInfo`, and
-nothing else. `BehavioralCodes`, `AnalogData` and the trial structure are not
+scope — but a **minimal** one. It reads the calibration and the configuration
+block holding `PixelsPerDegree`, and nothing else. `BehavioralCodes`, `AnalogData` and the trial structure are not
 read here: the code stream already carries what calibration needs, and reading
 the rest would duplicate the event assembly this pipeline already does from a
 source it trusts more.
@@ -525,7 +538,7 @@ originals left visible, per this repository's correction convention:
   with no version pins, needing a `wl.yaml` `third_party` entry with a `why`),
   and the OpenIrisDPI tutorial notebook, which covers saccade detection directly
   and may change the approach. It also needs the fixture this spec rewrites.
-- **Reading `.bhv2` beyond the calibration and `ScreenInfo`** — §4.5 keeps the
+- **Reading `.bhv2` beyond the calibration and `PixelsPerDegree`** — §4.5 keeps the
   reader narrow. The behavioural codes, analog data and trial structure stay out:
   the code stream already carries what calibration needs, from a source this
   pipeline trusts more.
@@ -533,3 +546,27 @@ originals left visible, per this repository's correction convention:
   from that evidence.
 - **Behaviour cameras (`bcam`)** — parent §7 covers eye; 1c-4's open question 1
   named `bcam` alongside `ohdpi` and this spec settles only the latter.
+
+
+---
+
+## 12. Corrections found during implementation
+
+> **Corrected 2026-08-30, Task 6.** This spec named the MonkeyLogic block holding
+> the pixels-per-degree conversion **`ScreenInfo`**. There is no such block. A
+> GitHub code search across MonkeyLogic's repository returns **zero** hits for
+> `ScreenInfo`; `PixelsPerDegree` is a property of the `mlconfig` classdef
+> (`mlconfig.m`), saved as `MLConfig`. The wrong name entered this spec from a
+> web-search *summary* rather than from MonkeyLogic's own source — the same
+> error class as §1.3's original "constant offset" claim, and the second in this
+> document. Verified independently against `mlconfig.m` before amending.
+>
+> **Also corrected:** the `.bhv2` documentation page labels a variable block's
+> dimension field `double`. `mlbhv2.m`, which writes the format, uses
+> `fwrite(obj.fid, dim, 'uint64')` — as it does for every other header field.
+> The source is authoritative over the docs page here.
+>
+> **And recorded:** `monkeylogic.nimh.nih.gov` serves an incomplete TLS chain
+> (verify code 21). That is a server-side misconfiguration, not an attack; the
+> leaf certificate was checked as legitimate before its content was relied on.
+> A reader who cannot fetch that page should expect the same failure.

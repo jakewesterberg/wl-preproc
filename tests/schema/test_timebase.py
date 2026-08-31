@@ -773,7 +773,20 @@ def test_block_agreement_true_has_teeth_against_a_real_perturbation(
     assert row["n_full_code_records"] == 2, (
         f"this must be genuine A-territory apart from the perturbation: {row}"
     )
+    # block_agreement is computed independently of `failed` (gated on
+    # `syncbox_fitted` alone, per TimingProvenance.make()'s own comment), so
+    # this genuinely proves the 100ms perturbation was detected through the
+    # full production path.
     assert row["block_agreement"] == 0, row
+    # Every system in `RECIPES["drift"]`, ohdpi included, now aligns
+    # (`n_systems_aligned == len(recipe.systems)`, checked directly while
+    # restoring this assertion), so `failed` is False and `tier` comes from
+    # `resolve_tier(inputs)` -- the `block_agreement` branch above, not the
+    # `tier = "D" if failed else ...` short-circuit. This is a genuine
+    # second, end-to-end check of the same branch
+    # tests/events/test_agreement.py's
+    # test_block_disagreement_is_D_even_with_two_agreeing_full_code_records
+    # and test_block_agreement_true_does_not_block_tier_a exercise directly.
     assert row["tier"] == "D", (
         f"a 100ms start_s perturbation must move the tier off A: {row}"
     )
