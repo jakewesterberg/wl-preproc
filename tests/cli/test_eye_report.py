@@ -95,22 +95,91 @@ def eye_schema(dj_conn, prefix):
     `tests/schema/conftest.py` -- nothing here is used by another test
     module, which is the bar that fixture's own docstring sets for living
     there instead.
+
+    Also activates `ingest` and `timebase` (fix round): `_land_session` now
+    plants a real `ingest.Ingestion` row alongside the bare `pipeline.
+    Session` one, since `build_report`'s "Calibration and quality" list is
+    windowed to the same 24 h `Ingested` uses and needs a real `Ingestion.
+    ingested_at` to window against -- and, to keep that `Ingestion` row from
+    leaving these sessions outstanding for `daemon.run_once()` on every
+    OTHER test file's own pass (see `_land_session`'s own docstring for the
+    real failure this caught), a `timebase.TimingProvenance` "done" marker
+    too. `eye.activate()` cascades through `core`/`pipeline` but never
+    reaches `ingest` or `timebase` -- confirmed directly by reading
+    `schema/eye.py::activate` and `schema/core.py::activate`, neither
+    imports either -- so both are activated here explicitly, once per
+    module, the same idempotent-activation contract every `activate()` in
+    this codebase carries.
     """
-    from wl_preproc.schema import eye
+    from wl_preproc.schema import eye, ingest, timebase
 
     eye.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
+    timebase.activate(prefix=prefix)
     return eye
 
 
-def _land_session(subject: str, session_datetime: datetime.datetime) -> None:
-    """A bare `pipeline.Session` row -- not a landed one, and no ohDPI
-    recording behind it. `EyeCalibration`/`EyeQuality` are `dj.Computed`
-    tables whose `key_source` this file never exercises (that is Task 10's
-    `tests/schema/test_eye_populate.py`'s job) -- rows are inserted directly
-    below, and all a direct insert needs is the `-> pipeline.Session` FK
-    target to exist first.
+def _land_session(
+    subject: str,
+    session_datetime: datetime.datetime,
+    *,
+    ingested_at: datetime.datetime | None = None,
+) -> None:
+    """A bare `pipeline.Session` row plus a real `ingest.Ingestion` row --
+    not a landed session in the full `scan_once` sense (no manifest, no
+    files on disk), and no ohDPI recording behind it. `EyeCalibration`/
+    `EyeQuality` are `dj.Computed` tables whose `key_source` this file never
+    exercises (that is Task 10's `tests/schema/test_eye_populate.py`'s job)
+    -- rows are inserted directly below, and all a direct insert needs is
+    the `-> pipeline.Session` FK target to exist first.
+
+    **`ingest.Ingestion` added in the fix round.** `build_report`'s
+    "Calibration and quality, per session per eye" list now windows to the
+    same 24 h `Ingested` uses (`report.py`'s own comment where it reuses
+    `readings.ingested`), so a session with no `Ingestion` row at all would
+    never appear there regardless of what `EyeCalibration`/`EyeQuality` hold
+    for it -- every existing test in this file wants its own session
+    VISIBLE in that list by default, which is why `ingested_at` defaults to
+    real "now" (always inside any 24 h window computed off real wall-clock
+    time) rather than requiring every call site to supply one. A test that
+    specifically wants a session OUTSIDE the window passes `ingested_at`
+    explicitly (see `test_a_session_older_than_the_window_is_not_listed_
+    but_is_still_counted`).
+
+    `session_dir`/`topology`/`manifest_hash` are provenance this file's own
+    assertions never read -- placeholder values, matching the shape
+    `tests/schema/test_eye_populate.py`'s own `_land` helper already uses
+    for the identical columns.
+
+    **Also plants `pipeline.event.BehaviorRecording` and `timebase.
+    TimingProvenance` "done" markers -- a real bug this fix round's own
+    manual full-suite run caught, not a guess.** A real `ingest.Ingestion`
+    row is GLOBALLY VISIBLE to every other test file sharing this suite's
+    one session-scoped database for the rest of the run, and
+    `daemon.run_once()` -- which several OTHER test files call, in
+    `tests/schema/test_daemon.py` and `tests/schema/test_eye_schema.py`'s
+    own `test_registering_them_does_not_break_a_clean_daemon_pass` -- sweeps
+    EVERY outstanding `(subject, session_datetime)` pair, not just the one
+    the calling test cares about. Two stages key on nothing but `(pipeline.
+    Session & ingest.Ingestion)`, with no `core.AcquisitionSystem` gate to
+    exclude a session this bare: `daemon.py::_event_stage_keys()` (`(Session
+    & Ingestion) - pipeline.event.BehaviorRecording`) and `timebase.
+    TimingProvenance.key_source` ("Sessions that landed. Same reasoning as
+    `SystemTimebase.key_source`" -- that table's own docstring). Without a
+    real `session_dir` behind these sessions, both stages tried to decode a
+    sync box log that does not exist and failed on every one of these
+    subjects, on EVERY daemon pass any other test ran afterward --
+    confirmed directly: the first full-suite run after adding the bare
+    `Ingestion` insert above failed four tests in `test_daemon.py`/
+    `test_eye_schema.py`, all with the identical `"no sync box log"` error,
+    naming this file's own subjects. Every OTHER computed table's
+    `key_source` requires `core.AcquisitionSystem` (or something that itself
+    requires it), which these sessions never get, so this pair is the
+    complete set -- planting their own "already done" markers directly is
+    what makes a bare session look like one the daemon has already finished
+    with, instead of one still outstanding and unreachable.
     """
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import ingest, pipeline, timebase
 
     pipeline.lab.Lab.insert1(
         {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
@@ -127,6 +196,48 @@ def _land_session(subject: str, session_datetime: datetime.datetime) -> None:
     )
     pipeline.Session.insert1(
         {"subject": subject, "session_datetime": session_datetime}, skip_duplicates=True
+    )
+    ingest.Ingestion.insert1(
+        {
+            "subject": subject,
+            "session_datetime": session_datetime,
+            "ingested_at": (
+                ingested_at
+                if ingested_at is not None
+                else datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+            ),
+            "session_dir": f"/synthetic/{subject}",
+            "integrity": "verified",
+            "topology": {},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    pipeline.event.BehaviorRecording.insert1(
+        {"subject": subject, "session_datetime": session_datetime}, skip_duplicates=True
+    )
+    timebase.TimingProvenance.insert1(
+        {
+            "subject": subject,
+            "session_datetime": session_datetime,
+            "tier": "D",
+            "n_barcodes_emitted": 0,
+            "n_systems_aligned": 0,
+            "n_segments": 0,
+            "n_rejected_segments": 0,
+            "worst_residual_us": 0.0,
+            "worst_drift_ppm": 0.0,
+            "pending_inputs": "",
+            "event_code_agreement": None,
+            "trial_count_agreement": None,
+            "camera_trigger_count": None,
+            "n_full_code_records": 0,
+            "n_strobe_witnesses": 0,
+            "decode_errors": 0,
+            "block_agreement": None,
+        },
+        allow_direct_insert=True,
+        skip_duplicates=True,
     )
 
 
@@ -478,3 +589,85 @@ def test_a_successful_calibration_still_surfaces_a_partial_coverage_note(
     line = _line_for(quality, subject)
     assert note in line, f"a coverage note on a SUCCESSFUL row was dropped: {line}"
     assert "fitted" in line
+
+
+def test_a_session_older_than_the_window_is_not_listed_but_is_still_counted(
+    eye_schema, tmp_path, prefix
+):
+    """Fix round (Controller review, task-11 report): the per-session
+    listing used to print one line per session per eye for EVERY session
+    ever calibrated -- at this lab's two sessions a week that is roughly
+    400 lines within a year, in a report generated DAILY, burying a
+    refusal or a bad residual under a wall of sessions that were already
+    fine yesterday. Windowed to the same 24 h `Ingested` uses (literally
+    `readings.ingested`, the identical row set that section itself
+    renders -- `report.py`'s own comment where it is reused).
+
+    The `calibration_source` breakdown stays a running total on purpose --
+    it is four numbers, it cannot grow without bound the way a per-session
+    listing does, and Controller ruling D's persistent-skip detection needs
+    a ratio across ALL history, not one night's rows. This test pins BOTH
+    halves of that split: the old session is invisible to the listing but
+    still present in the breakdown -- proving the breakdown reads
+    `EyeCalibration` directly rather than being filtered from whatever the
+    (now-windowed) listing happens to show.
+
+    Delta-based for the breakdown half, for the identical pollution reason
+    `test_the_calibration_source_breakdown_counts_every_source_distinctly`
+    already gives: this suite's database is shared for the whole test
+    session.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+    before = _breakdown_counts(
+        _subsection(_section(build_report(root, prefix=prefix), "Eye"), "Calibration source")
+    )
+
+    subject = "erpt6001"
+    dt = datetime.datetime(2027, 5, 7, 9, 0)
+    old_ingested_at = (
+        datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(days=9)
+    )
+    _land_session(subject, dt, ingested_at=old_ingested_at)
+    _insert_calibration(
+        eye_schema,
+        _calibration_row(subject, dt, "left", calibration_source="fitted", validation_error_deg=0.2),
+    )
+
+    body = build_report(root, prefix=prefix)
+
+    quality = _subsection(
+        _section(body, "Eye"), "Calibration and quality, per session per eye"
+    )
+    assert subject not in quality, (
+        f"a session ingested 9 days ago still appears in the 24h-windowed listing: {quality}"
+    )
+
+    after = _breakdown_counts(
+        _subsection(_section(body, "Eye"), "Calibration source")
+    )
+    assert after["fitted"] - before["fitted"] == 1, (
+        "a session outside the listing's window must still be counted in the "
+        "all-time calibration_source breakdown"
+    )
+
+
+def test_each_eye_subsection_states_its_own_scope(eye_schema, tmp_path, prefix):
+    """Fix round: a windowed listing sitting above two all-time views under
+    one `## Eye` heading are three different scopes, and a reader must not
+    have to infer which is which -- `report.py`'s own module docstring
+    states that principle already ("a missing section and an empty one must
+    never render identically"), and this file already labels scope in its
+    OWN headings elsewhere ("## Ingested (24 h)", "## Quarantined (7 d)").
+    The three Eye subsections now match that convention; this pins the
+    exact labels so a future edit cannot quietly drop one.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    body = build_report(root, prefix=prefix)
+
+    eye_section = _section(body, "Eye")
+    assert "\n### Calibration and quality, per session per eye (24 h)" in eye_section
+    assert "\n### Calibration source (running total)" in eye_section
+    assert "\n### No canonical gaze (all time)" in eye_section
