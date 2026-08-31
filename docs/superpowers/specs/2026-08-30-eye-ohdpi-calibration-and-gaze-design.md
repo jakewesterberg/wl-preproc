@@ -280,6 +280,33 @@ Correcting it means a time-varying map, which is a real design decision that
 should be made from evidence. This spec generates that evidence and does not
 pre-empt it.
 
+> **Added 2026-08-31** (`HANDOVER-wl-expcontroller.md`, "One interaction
+> worth knowing about, no ask attached"):
+> This section's residual must be measured on the RAW channel, never a
+> corrected one. wl-expcontroller performs drift correction ONLINE, during
+> the session, because gaze-contingent work needs it — so a residual computed
+> on their corrected trace would measure the correction rather than the
+> animal's own drift, understating it, sometimes down to zero. Their own
+> words: "the failure would look like unusually good tracking."
+>
+> **This pipeline is safe today, and only STRUCTURALLY.** `eye/gaze.py::
+> purkinje_vector` reads `CR1X`/`CR1Y`/`CR4X`/`CR4Y` straight off the ohDPI
+> recording — columns wl-expcontroller's own controller does not write — so
+> every `BlockResidual` this pipeline computes is built from the raw channel
+> by construction, not because anything here checks for a corrected one and
+> refuses it. Nothing above this paragraph said that was load-bearing; now
+> it is recorded where the next person to touch gaze ingestion will read it,
+> and as a comment on `EyeCalibration.BlockResidual` itself
+> (`wl_preproc/schema/eye.py`).
+>
+> wl-expcontroller confirms automatic drift correction never overwrites the
+> raw signal: both traces are recorded, and every adjustment is logged and
+> reversible offline. That is their own design, not a constraint this
+> pipeline imposes on them — recorded here because the risk if it ever
+> stopped being true would surface as a silently-too-good residual, the one
+> failure mode this section's own measurement cannot distinguish from a
+> genuinely well-tracked session.
+
 ### 3.7 Both eyes, independently
 
 Separate maps and separate residuals — and, for free, binocular agreement as a

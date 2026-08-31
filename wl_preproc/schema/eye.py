@@ -294,6 +294,18 @@ class EyeCalibration(dj.Computed):
         # correcting it: over a ~40 minute session, drift appears as a residual
         # that grows, at no additional cost and without pre-empting the
         # decision to correct it.
+        #
+        # MUST be measured on the RAW channel, never a corrected one --
+        # load-bearing now that wl-expcontroller corrects drift ONLINE, during
+        # the session (design spec section 3.6's 2026-08-31 addition,
+        # HANDOVER-wl-expcontroller.md): a residual computed on their
+        # corrected trace would measure the correction rather than the
+        # animal's own drift, understating it down to zero -- "would look
+        # like unusually good tracking" in their own words. True here only
+        # because `eye.gaze.purkinje_vector` reads CR1/CR4 straight off the
+        # ohDPI recording, columns wl-expcontroller's own controller does not
+        # write -- not because this table checks for a corrected trace and
+        # refuses it.
         # Key: (subject, session_datetime, eye, block_id).
         -> master
         -> pipeline.trial.Block
