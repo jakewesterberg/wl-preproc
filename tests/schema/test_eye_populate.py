@@ -515,7 +515,7 @@ REASON_COLUMN_MAX_LEN = 255
 def overlong_reason_session(daemon_module, prefix, tmp_path_factory):
     """A session that combines TWO of this file's other fixtures' own
     shapes: `degenerate_session`'s four coincident central targets (so
-    `resolve_calibration` refuses with `calibration.py::fit_affine`'s own
+    `resolve_calibration` refuses with `calibration.py::fit_map`'s own
     221-character collinear/coincident message, "; no fallback map
     validated" making 248) AND `partial_coverage_session`'s fifth,
     out-of-coverage window (so `make()`'s own coverage-drop note gets

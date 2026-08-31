@@ -1093,6 +1093,38 @@ def build_report(
     ]
     lines += [f"- _{_EYE_ONLINE_GAP_NOTE}._"]
 
+    # **The model breakdown, beside the source breakdown and not replacing
+    # it.** They answer two independent questions -- whose map this is, and
+    # what shape it is -- and the second-order design spec's section 1 turns
+    # on their staying separable.
+    #
+    # What this line is FOR: twelve parameters is a harder bar than six, so
+    # more sessions land on the affine rung than currently fit at all, and
+    # this ratio is the only thing that tells an operator whether the task
+    # geometry supplies enough spread to reach second-order. A run of
+    # `affine` is not a fault -- it is the ladder working -- but a run of
+    # nothing BUT `affine` means the rig's targets never spread far enough,
+    # and that is a task-design decision nobody can make without seeing this.
+    #
+    # Unwindowed for the same reason the source breakdown is: it is three
+    # numbers, it cannot grow, and the signal is a ratio across all history
+    # rather than one night's rows.
+    #
+    # `none` counts rows with a NULL model -- exactly the refused ones, since
+    # every accepted map has a shape. Counted from the column rather than
+    # cross-checked against `calibration_source`, so the two breakdowns stay
+    # independent readings of independent columns and a disagreement between
+    # them would be visible here rather than hidden by one deriving the other.
+    model_counts = {model: 0 for model in ("second_order", "affine", "none")}
+    for row in eye_calibration_rows:
+        model_counts[row["calibration_model"] or "none"] += 1
+
+    lines += ["", "### Calibration model (running total)", ""]
+    lines += [
+        f"- {model}: {model_counts[model]}"
+        for model in ("second_order", "affine", "none")
+    ]
+
     # Controller ruling B: distinct causes, distinct lines -- never a single
     # "no gaze: N" count. Each row prints its OWN stored `reason` verbatim,
     # so two sessions refused for unrelated causes render as two different

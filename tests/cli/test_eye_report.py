@@ -88,6 +88,17 @@ def _breakdown_counts(section: str) -> dict[str, int]:
     }
 
 
+def _model_counts(section: str) -> dict[str, int]:
+    """The three `calibration_model` counts the "Calibration model"
+    subsection prints, by name -- read the same way `_breakdown_counts` reads
+    the source subsection, so a mutation that reordered the lines cannot fool
+    either."""
+    return {
+        model: int(_line_for(section, f"{model}:").rsplit(":", 1)[1].strip())
+        for model in ("second_order", "affine", "none")
+    }
+
+
 def _older_no_gaze_count(section: str) -> int:
     """The `N` in "No canonical gaze"'s own "N older row(s) not shown" note
     (`report.py`'s own `older_no_gaze` rollup, second fix round -- the same
@@ -803,3 +814,85 @@ def test_an_old_refused_session_is_still_counted_with_the_note_saying_so(
     assert after_older - before_older == 1, (
         "the 'older row(s) not shown' rollup did not grow when a row aged out of the window"
     )
+
+
+def test_the_model_breakdown_counts_each_rung_and_the_refused(eye_schema, tmp_path, prefix):
+    """The second axis, rendered beside the first rather than instead of it.
+
+    `calibration_source` answers whose map this is and `calibration_model`
+    what shape it is; the second-order design spec's section 1 turns on the
+    two staying separable, so the report has to show both. What this line is
+    for: twelve parameters is a harder bar than six, and this ratio is the
+    only thing that tells an operator whether the rig's task geometry
+    supplies enough spread to reach the second-order rung at all.
+
+    Deltas against a `before` reading rather than absolute counts, exactly as
+    the source-breakdown test does -- this subsection is an all-time running
+    total and other tests in this module insert rows into the same schema.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    eye_section = lambda: _section(build_report(root, prefix=prefix), "Eye")  # noqa: E731
+    before = _model_counts(_subsection(eye_section(), "Calibration model"))
+
+    dt = datetime.datetime(2027, 6, 3, 9, 0)
+    plan = {
+        ("second_order", "fitted"): ["erpt2001", "erpt2002", "erpt2003"],
+        ("affine", "fitted"): ["erpt2004", "erpt2005"],
+        # A borrowed map has a shape too: the model column is written from the
+        # map, not from the source, so a carried-forward affine still counts
+        # as `affine` here and not as something the source breakdown owns.
+        ("affine", "carried_forward"): ["erpt2006"],
+        (None, "refused"): ["erpt2007", "erpt2008", "erpt2009", "erpt2010"],
+    }
+    for (model, source), subjects in plan.items():
+        for index, subject in enumerate(subjects):
+            _land_session(subject, dt)
+            overrides: dict = {"calibration_model": model}
+            if source == "refused":
+                overrides["reason"] = f"synthetic model-breakdown refusal {index}"
+            else:
+                overrides["validation_error_deg"] = 0.4
+                overrides["gx_const"] = 1.0
+                if model == "second_order":
+                    overrides["gx_dx2"] = 3e-4
+                if source == "carried_forward":
+                    overrides["carried_from_session_datetime"] = dt - datetime.timedelta(days=1)
+            _insert_calibration(
+                eye_schema,
+                _calibration_row(subject, dt, "left", calibration_source=source, **overrides),
+            )
+
+    after = _model_counts(_subsection(eye_section(), "Calibration model"))
+
+    assert after["second_order"] - before["second_order"] == 3
+    assert after["affine"] - before["affine"] == 3
+    assert after["none"] - before["none"] == 4
+
+
+def test_the_model_and_source_breakdowns_are_separate_subsections(eye_schema, tmp_path, prefix):
+    """Two independent readings of two independent columns, and neither
+    derived from the other.
+
+    A `calibration_model` count reconstructed from `calibration_source`
+    (treating every `fitted` row as second-order, say) would agree with the
+    real thing on any session set where the ladder never descended -- which is
+    most of them -- and disagree silently on exactly the sessions this line
+    exists to surface. Pinning them as distinct subsections with distinct
+    labels is what keeps `_subsection` able to tell them apart at all.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    section = _section(build_report(root, prefix=prefix), "Eye")
+
+    source_text = _subsection(section, "Calibration source")
+    model_text = _subsection(section, "Calibration model")
+
+    # Every source value appears under the source heading and no model value
+    # does, and vice versa -- so a mutation merging the two lists is caught.
+    for source in ("fitted", "online", "carried_forward", "refused"):
+        assert f"- {source}:" in source_text
+        assert f"- {source}:" not in model_text
+    for model in ("second_order", "affine", "none"):
+        assert f"- {model}:" in model_text
+        assert f"- {model}:" not in source_text
