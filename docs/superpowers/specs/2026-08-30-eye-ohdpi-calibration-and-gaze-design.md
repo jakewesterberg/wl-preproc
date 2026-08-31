@@ -198,6 +198,15 @@ is recorded here as a measurement rather than a citation.
 **Not scale-plus-offset:** the camera is never perfectly aligned to the eye's
 axes, and the cross-terms are real.
 
+> **Superseded 2026-08-31 by `2026-08-31-second-order-calibration-design.md`.**
+> The reasoning below was sound and its conclusion was wrong. OpenIrisDPI's own
+> authors state the P1−P4 nonlinearity is real and that a second-order term
+> accounts for much of it — evidence this section did not have. The model
+> becomes a ladder: second-order where the geometry constrains twelve
+> parameters, affine where it does not, then §3.5's borrow chain unchanged.
+> Kept visible because the argument for measuring rather than anticipating still
+> holds; only the evidence changed.
+
 **Not a polynomial:** parent §7.2 makes gaze canonical and computed once, and
 places revisability in *detection*, keyed by `paramset_idx`, deliberately
 downstream. If nonlinearity matters at large eccentricities, §3.6's recorded
