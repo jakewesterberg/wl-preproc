@@ -54,6 +54,7 @@ from wl_preproc.eye.calibration import (
     _conditioning,
     apply_map,
     basis,
+    n_terms,
     read_online_map,
     resolve_calibration,
     validate_map,
@@ -151,6 +152,56 @@ def _combine_reason(primary: str, note: str) -> str:
     return f"{_bounded_reason(primary, budget)}{joiner}{note}"
 
 
+# `basis(_, SECOND_ORDER)`'s own column order, which the affine basis is the
+# first three of. One tuple, used to build BOTH the column names and the
+# read-back, so a column can never be named for one basis term and filled from
+# another.
+_COEFF_SUFFIXES = ("const", "dx", "dy", "dx2", "dy2", "dxdy")
+
+
+def _coefficient_columns(map_: CalibrationMap | None) -> dict[str, float | None]:
+    """The twelve `gx_`/`gy_` columns for `map_`, or all NULL for no map.
+
+    `n_terms(map_.model)` decides how many are filled; the rest stay NULL.
+    Nothing here counts, slices or reshapes by a literal -- an affine map
+    simply has three coefficients per axis and runs out, which is the same
+    fact `CalibrationMap.__post_init__` already enforces.
+    """
+    columns: dict[str, float | None] = {
+        f"g{axis}_{suffix}": None for axis in ("x", "y") for suffix in _COEFF_SUFFIXES
+    }
+    if map_ is None:
+        return columns
+    suffixes = _COEFF_SUFFIXES[: n_terms(map_.model)]
+    for axis, coefficients in (("x", map_.x), ("y", map_.y)):
+        # `strict=True` against the model's OWN term count, not against the
+        # full six: it checks the map, and a map whose tuples disagree with
+        # its model raises here rather than writing a short row.
+        for suffix, value in zip(suffixes, coefficients, strict=True):
+            columns[f"g{axis}_{suffix}"] = float(value)
+    return columns
+
+
+def _map_from_row(row: dict) -> CalibrationMap | None:
+    """A stored row back into a `CalibrationMap`, branching on
+    `calibration_model` and never on which columns happen to be NULL.
+
+    A refused row has no model and no map. Anything else reads exactly
+    `n_terms(model)` coefficients per axis, in `_COEFF_SUFFIXES` order.
+    """
+    if row["calibration_model"] is None:
+        return None
+    model = CalibrationModel(row["calibration_model"])
+    suffixes = _COEFF_SUFFIXES[: n_terms(model)]
+    return CalibrationMap(
+        model=model,
+        x=tuple(row[f"gx_{suffix}"] for suffix in suffixes),
+        y=tuple(row[f"gy_{suffix}"] for suffix in suffixes),
+        n_points=row["n_points"],
+        conditioning=row["conditioning"] if row["conditioning"] is not None else float("nan"),
+    )
+
+
 @schema
 class EyeCalibration(dj.Computed):
     definition = """
@@ -162,15 +213,43 @@ class EyeCalibration(dj.Computed):
     # Which step of section 3.5's chain produced this map. A borrowed map must
     # never be mistaken for a fitted one.
     calibration_source : enum('fitted','online','carried_forward','refused')
-    # The six affine parameters, NULL when refused. A refused calibration is a
-    # first-class outcome with a stated reason -- not an error, and never a
-    # fabricated map.
-    a00=null : double
-    a01=null : double
-    b0=null  : double
-    a10=null : double
-    a11=null : double
-    b1=null  : double
+    # WHAT SHAPE the map is, a different question from whose it is. NULL only
+    # when refused. **Read this before any coefficient column below** --
+    # `SystemTimebase.fit_status`'s own phrasing, and the same relationship:
+    # the coefficients are this column's payload.
+    #
+    # This column is the AUTHORITY, never a derivation. Null quadratic columns
+    # would IMPLY affine, but deriving the model from the nulls would put one
+    # fact in two places -- the defect this repository names most often -- and
+    # would silently misread a second-order fit whose `gx_dx2` happened to
+    # come back exactly zero.
+    calibration_model=null : enum('affine','second_order')
+    # The coefficients, one column per basis term it multiplies, NULL when
+    # refused. `gx_` is the gaze-x axis, `gy_` the gaze-y; the suffixes are
+    # `basis(_, SECOND_ORDER)`'s own column order, and the affine basis is
+    # that basis's first three columns -- so on an affine-tier fit the six
+    # quadratic columns are NULL and the first three carry the whole map.
+    #
+    # Named columns rather than a blob because this is what makes the
+    # nonlinearity queryable: "which sessions have a large dx^2 term" is the
+    # question to ask when deciding whether it is real on this lab's own rig,
+    # and it is a WHERE clause here and a full-table scan plus a decode
+    # otherwise.
+    #
+    # A refused calibration is a first-class outcome with a stated reason --
+    # not an error, and never a fabricated map.
+    gx_const=null : double
+    gx_dx=null    : double
+    gx_dy=null    : double
+    gx_dx2=null   : double
+    gx_dy2=null   : double
+    gx_dxdy=null  : double
+    gy_const=null : double
+    gy_dx=null    : double
+    gy_dy=null    : double
+    gy_dx2=null   : double
+    gy_dy2=null   : double
+    gy_dxdy=null  : double
     # Where this session's own fixation lands under the accepted map. Populated
     # for EVERY source including 'fitted', because it is the one number
     # comparable across all four.
@@ -345,8 +424,8 @@ class EyeCalibration(dj.Computed):
                         **session_key,
                         "eye": eye_value,
                         "calibration_source": "refused",
-                        "a00": None, "a01": None, "b0": None,
-                        "a10": None, "a11": None, "b1": None,
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
                         "validation_error_deg": None,
                         "n_points": 0,
                         "n_from_calibration_block": 0,
@@ -460,8 +539,8 @@ class EyeCalibration(dj.Computed):
                         **session_key,
                         "eye": eye_value,
                         "calibration_source": "refused",
-                        "a00": None, "a01": None, "b0": None,
-                        "a10": None, "a11": None, "b1": None,
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
                         "validation_error_deg": None,
                         "n_points": 0,
                         "n_from_calibration_block": 0,
@@ -573,18 +652,6 @@ class EyeCalibration(dj.Computed):
             carried_from_dt = (
                 carry_datetime if result.source == CalibrationSource.CARRIED_FORWARD else None
             )
-            # Back into this table's own flat `(a00, a01, b0, a10, a11, b1)`
-            # order from `basis(_, AFFINE)`'s `[1, dx, dy]`. TEMPORARY: Task 5
-            # replaces these six columns with twelve named for the basis term
-            # each multiplies, at which point this reordering goes away
-            # entirely and the tuples are written straight through. Every map
-            # reaching here is affine until Task 2 opens the second-order rung.
-            if result.map_ is not None:
-                map_x, map_y = result.map_.x, result.map_.y
-                a = (map_x[1], map_x[2], map_x[0], map_y[1], map_y[2], map_y[0])
-            else:
-                a = (None, None, None, None, None, None)
-
             # A PARTIAL drop -- some windows sampled fine, at least one did
             # not -- must still be visible even when calibration otherwise
             # SUCCEEDS from what remained: a coverage gap that happens not
@@ -616,8 +683,15 @@ class EyeCalibration(dj.Computed):
                     **session_key,
                     "eye": eye_value,
                     "calibration_source": result.source.value,
-                    "a00": a[0], "a01": a[1], "b0": a[2],
-                    "a10": a[3], "a11": a[4], "b1": a[5],
+                    # The map's own model, whichever rung produced it -- and
+                    # for a borrowed map, the shape it arrived in. Written
+                    # from the map rather than inferred from the source, so
+                    # a carried-forward second-order map is not silently
+                    # recorded as affine.
+                    "calibration_model": (
+                        result.map_.model.value if result.map_ is not None else None
+                    ),
+                    **_coefficient_columns(result.map_),
                     "validation_error_deg": result.validation_error_deg,
                     "n_points": len(raw_points),
                     "n_from_calibration_block": n_from_calibration_block,
@@ -768,13 +842,24 @@ def _best_carry_forward_candidate(
         return (abs(delta), 0 if delta < 0 else 1)
 
     best = min(same_day, key=sort_key)
-    return best["session_datetime"], CalibrationMap(
-        model=CalibrationModel.AFFINE,
-        x=(best["b0"], best["a00"], best["a01"]),
-        y=(best["b1"], best["a10"], best["a11"]),
-        n_points=best["n_points"],
-        conditioning=best["conditioning"] if best["conditioning"] is not None else float("nan"),
-    )
+    # `_map_from_row` branches on `calibration_model`, so a carried-forward
+    # candidate keeps whichever shape it was fitted at rather than being
+    # flattened to affine on the way out.
+    #
+    # It can return `None` in general -- a refused row has no model -- but not
+    # here: the restriction above is `calibration_source='fitted'`, and every
+    # fitted row was written from a real map (`make()` sets the model from
+    # `result.map_`, which `CalibrationSource.FITTED` guarantees is not None).
+    # Asserted rather than assumed, because "a source implies a model" is
+    # exactly the kind of cross-column invariant nothing in the schema
+    # enforces.
+    borrowed = _map_from_row(best)
+    if borrowed is None:  # pragma: no cover -- see above
+        raise ValueError(
+            f"fitted calibration at {best['session_datetime']} has no "
+            "calibration_model; a fitted row is always written from a real map"
+        )
+    return best["session_datetime"], borrowed
 
 
 def _count_true_runs(mask: np.ndarray) -> int:

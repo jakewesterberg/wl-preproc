@@ -626,7 +626,8 @@ def test_a_well_conditioned_session_yields_fitted(fitted_session):
     for row in by_eye.values():
         assert row["calibration_source"] == "fitted"
         assert row["n_points"] == N_TRIALS
-        assert row["a00"] is not None
+        assert row["calibration_model"] in ("affine", "second_order")
+        assert row["gx_const"] is not None
         assert row["conditioning"] is not None and row["conditioning"] > 0.0
         assert row["residual_deg_rms"] is not None
         assert row["reason"] == ""
@@ -637,8 +638,10 @@ def test_a_well_conditioned_session_yields_fitted(fitted_session):
     # `file_eye="Left"` unconditionally regardless of `eye` would pass every
     # assertion above for BOTH rows and still be broken -- this is what
     # catches it.
-    left_params = (by_eye["left"]["a00"], by_eye["left"]["b0"], by_eye["left"]["b1"])
-    right_params = (by_eye["right"]["a00"], by_eye["right"]["b0"], by_eye["right"]["b1"])
+    left_params = (by_eye["left"]["gx_dx"], by_eye["left"]["gx_const"], by_eye["left"]["gy_const"])
+    right_params = (
+        by_eye["right"]["gx_dx"], by_eye["right"]["gx_const"], by_eye["right"]["gy_const"]
+    )
     assert left_params != right_params
 
 
@@ -650,7 +653,8 @@ def test_a_central_target_only_session_falls_through_to_refused(degenerate_sessi
     assert len(rows) == 2
     for row in rows:
         assert row["calibration_source"] == "refused"
-        assert row["a00"] is None
+        assert row["calibration_model"] is None
+        assert row["gx_const"] is None
         assert row["n_points"] == N_TRIALS
         # `_conditioning` on the affine basis of four COINCIDENT targets.
         # Identical target rows make all three normalised basis columns the
@@ -762,8 +766,13 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
     base_fitted = {
         "eye": "left",
         "calibration_source": "fitted",
-        "a00": 1.0, "a01": 0.0, "b0": 0.0,
-        "a10": 0.0, "a11": 1.0, "b1": 0.0,
+        # The identity map, in `basis(_, AFFINE)` order; the six quadratic
+        # columns stay NULL, which is what an affine-tier fit looks like.
+        "calibration_model": "affine",
+        "gx_const": 0.0, "gx_dx": 1.0, "gx_dy": 0.0,
+        "gx_dx2": None, "gx_dy2": None, "gx_dxdy": None,
+        "gy_const": 0.0, "gy_dx": 0.0, "gy_dy": 1.0,
+        "gy_dx2": None, "gy_dy2": None, "gy_dxdy": None,
         "validation_error_deg": 0.1,
         "n_points": 4,
         "n_from_calibration_block": 0,
@@ -784,8 +793,9 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
             "subject": subject,
             "session_datetime": refused_datetime,
             "calibration_source": "refused",
-            "a00": None, "a01": None, "b0": None,
-            "a10": None, "a11": None, "b1": None,
+            "calibration_model": None,
+            "gx_const": None, "gx_dx": None, "gx_dy": None,
+            "gy_const": None, "gy_dx": None, "gy_dy": None,
             "validation_error_deg": None,
             "n_points": 0,
             "n_from_task_fixation": 0,
@@ -804,7 +814,7 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
     winning_datetime, winning_map = candidate
     assert winning_datetime == fitted_datetimes["near_before"]
     # `basis(_, AFFINE)` order, (const, dx, dy) per axis: the identity map
-    # the inserted row's own a00/a01/b0/a10/a11/b1 columns describe.
+    # the inserted row's own `gx_`/`gy_` columns describe.
     assert winning_map.model is CalibrationModel.AFFINE
     assert winning_map.x == (0.0, 1.0, 0.0)
     assert winning_map.y == (0.0, 0.0, 1.0)
@@ -931,7 +941,12 @@ def test_a_known_affine_round_trips_through_the_fit(round_trip_session):
     row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
 
     assert row["calibration_source"] == "fitted"
-    recovered = (row["a00"], row["a01"], row["b0"], row["a10"], row["a11"], row["b1"])
+    # `true_a` is in this fixture's own flat `(a00, a01, b0, a10, a11, b1)`
+    # order; the columns are in `basis(_, AFFINE)` order, constant first.
+    recovered = (
+        row["gx_dx"], row["gx_dy"], row["gx_const"],
+        row["gy_dx"], row["gy_dy"], row["gy_const"],
+    )
     for got, want in zip(recovered, true_a, strict=True):
         assert got == pytest.approx(want, abs=0.01)
     # The only real error source is `encode_dva`/`decode_dva`'s 0.01-degree
@@ -1049,7 +1064,10 @@ def test_carried_forward_writes_the_candidates_real_datetime(carried_forward_ses
 
     assert row["calibration_source"] == "carried_forward"
     assert row["carried_from_session_datetime"] == session_key_a["session_datetime"]
-    assert row["a00"] is not None
+    assert row["gx_const"] is not None
+    # A borrowed map keeps the shape it was fitted at, rather than being
+    # flattened on the way through `_map_from_row`.
+    assert row["calibration_model"] in ("affine", "second_order")
     assert row["validation_error_deg"] is not None
     assert row["validation_error_deg"] <= MAX_VALIDATION_ERROR_DEG
 
