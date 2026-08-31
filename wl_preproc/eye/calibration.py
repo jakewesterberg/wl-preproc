@@ -109,7 +109,10 @@ def apply_affine(map_: AffineMap, raw_xy: np.ndarray) -> np.ndarray:
 
 # How far a candidate map may place the session's own fixation before it is
 # rejected. Generous relative to a good calibration's residual (well under a
-# degree) and far below the error a wrong-input-space map produces (hundreds).
+# degree) and far below the error a wrong-input-space map produces: ~56,568
+# degrees for the volts-fed-as-pixels case in
+# `test_a_map_from_the_wrong_input_space_fails_validation_enormously` -- two
+# to three orders of magnitude past this threshold, not merely "hundreds".
 MAX_VALIDATION_ERROR_DEG = 3.0
 
 
@@ -162,15 +165,19 @@ def read_monkeylogic_map(bhv2_path: str | Path | None) -> AffineMap | None:
 
     `read_calibration` has three outcomes (Controller ruling D), which
     collapse to two here. Absent (`Bhv2Calibration(present=False, a=None,
-    ...)`) and present-but-no-usable-calibration (also `present=False,
-    a=None`, reached by a different path inside `read_calibration`) already
-    carry `a=None`, and `as_affine_map` turns that into `None` -- an ordinary
-    nothing-to-offer, ranked no differently from a candidate that was never
-    offered. Unparseable is different in kind: it raises `Bhv2Unreadable`. A
-    corrupt `.bhv2` is a fact about MonkeyLogic's own recording, not about
-    whether this session still has a carried-forward calibration to fall back
-    on, so it is caught here rather than left to deny step 3 -- design spec
-    section 4.5: "a missing or unreadable `.bhv2` is not an error."
+    ...)`) carries `a=None`, and `as_affine_map` turns that into `None` -- an
+    ordinary nothing-to-offer, ranked no differently from a candidate that
+    was never offered. Present-but-no-usable-calibration is NOT the same
+    state, even though it collapses to the same result: `bhv2.py` computes
+    `present = a is not None`, so this case is `present=True` with a
+    non-six-element `a` (Raw Signal's own two numbers, say) -- `as_affine_map`
+    declines it on its length check, not on `a=None`. Both still reach `None`
+    from this function, which is the only fact this module needs. Unparseable
+    is different in kind: it raises `Bhv2Unreadable`. A corrupt `.bhv2` is a
+    fact about MonkeyLogic's own recording, not about whether this session
+    still has a carried-forward calibration to fall back on, so it is caught
+    here rather than left to deny step 3 -- design spec section 4.5: "a
+    missing or unreadable `.bhv2` is not an error."
 
     The import below is local, not at module scope: `wl_preproc.eye.bhv2`
     imports `AffineMap` from this module (its own module docstring), and a

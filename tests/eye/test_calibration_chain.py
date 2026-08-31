@@ -48,12 +48,22 @@ def test_a_map_from_the_wrong_input_space_fails_validation_enormously():
     over the OpenIrisDPI UDP path, volts over ACCESIO, and both may be in use.
     We do not need to know which: a volts-to-degrees map fed pixel differences
     misses by an enormous margin and the chain falls through.
+
+    Pins the order of magnitude, not just "exceeds the threshold" --
+    `MAX_VALIDATION_ERROR_DEG`'s own comment now cites this case's measured
+    error, and only an assertion on the magnitude keeps that comment honest.
+    `test_a_drifted_map_is_rejected_by_the_same_check` below also exceeds
+    `MAX_VALIDATION_ERROR_DEG` (error 8.0), so `> MAX_VALIDATION_ERROR_DEG`
+    alone cannot tell "wrong input space" apart from "merely drifted" --
+    the stronger bound below can.
     """
     volts_map = AffineMap(a=(4000.0, 0.0, 0.0, 0.0, 4000.0, 0.0), n_points=4, conditioning=0.9)
     raw = np.array([[10.0, 10.0]])
     target = np.array([[0.5, 0.5]])
 
-    assert validate_map(volts_map, raw, target) > MAX_VALIDATION_ERROR_DEG
+    error = validate_map(volts_map, raw, target)
+    assert error > MAX_VALIDATION_ERROR_DEG
+    assert error > 10_000  # measured ~56,568; an order of magnitude, not a tight pin
 
 
 def test_a_drifted_map_is_rejected_by_the_same_check():

@@ -91,9 +91,9 @@ def test_one_absent_required_column_is_named_specifically(tmp_path):
 
 
 def test_seconds_is_never_offered_as_session_time():
-    """`LeftSeconds` and `RightSeconds` differ by ~49.48 ms over this 200-row
-    fixture (min 49.40, max 49.50) while frame numbers agree exactly. That gap
-    is not fixed over a full session: across the whole 1,177,799-row reference
+    """`LeftSeconds` and `RightSeconds` differ by 49.40-49.50 ms over this
+    200-row fixture while frame numbers agree exactly. That gap is not fixed
+    over a full session: across the whole 1,177,799-row reference
     recording it drifts smoothly from 49.5 ms to 45.8 ms -- the cameras are
     frame-locked by the trigger chain, their clocks are not. At 500 Hz the
     fixture's offset alone is ~25 frames.

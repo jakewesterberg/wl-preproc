@@ -127,8 +127,11 @@ _DEFERRED_NOTE = (
 # already collapses every step-2 non-outcome -- no `.bhv2` found, one found
 # but unreadable, one found but with no usable calibration inside it -- into
 # a single `None` signal upstream of this report (that function's own
-# docstring: "Absent... and present-but-no-usable-calibration... already
-# carry `a=None`"; "Unparseable is different in kind... caught here"), and
+# docstring: absence and a present-but-unusable `Bhv2Calibration` reach
+# `None` from `as_affine_map` by two different mechanisms -- `a is None` for
+# the first, a non-six-element `a` for the second, per `bhv2.py`'s own
+# `present = a is not None`; "Unparseable is different in kind... caught
+# here"), and
 # `resolve_calibration`'s reason text never names which fallback source was
 # tried and rejected versus never offered at all -- so the
 # `calibration_source` breakdown below cannot tell any of those apart

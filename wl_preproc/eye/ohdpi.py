@@ -24,8 +24,13 @@ import pandas as pd
 EYES: tuple[str, ...] = ("Left", "Right")
 
 # The generic extra-data slot OpenIris writes the digital input into. Measured:
-# `Int0` takes exactly {12, 13} across the whole reference recording, while
-# every other Int slot is 0.
+# `Int0` takes exactly {12, 13} across the whole reference recording. `Int1`
+# is not idle either: in this module's 200-row test fixture it takes {0, 1},
+# set on 62 of 200 rows, bit-for-bit identical to `Int0`'s bit 0 at every
+# transition -- OpenIris appears to write the sync line twice, packed into
+# `Int0` (bits 2 and 3 constant-high) and bare in `Int1`. That makes `Int1`
+# the natural alternative if a rig wiring change ever needs this signal from
+# a different slot.
 SYNC_WORD_COLUMN = "Int0"
 
 # **Rig wiring, not a property of the format.** On the reference recording bit 0
@@ -48,13 +53,13 @@ class OhdpiRecording:
     """The sync line per frame, and the rate that sampled it.
 
     **No timestamp column is exposed, deliberately.** `LeftSeconds` and
-    `RightSeconds` differ by a constant 49.48 ms over this module's 200-row
-    test fixture (min 49.40, max 49.50 -- one timestamp tick of spread there;
-    design spec section 1.3 measured the same 49.40-49.50 ms range over
-    10,000 rows), while `LeftFrameNumber` and `RightFrameNumber` are identical
-    in every row. That offset is not fixed over a full session either: across
-    the whole 1,177,799-row reference recording it drifts smoothly from
-    49.5 ms to 45.8 ms (checked at 10 points spread through the file) --
+    `RightSeconds` differ by 49.40-49.50 ms over this module's 200-row test
+    fixture (one timestamp tick of spread there; design spec section 1.3
+    measured the same 49.40-49.50 ms range over 10,000 rows), while
+    `LeftFrameNumber` and `RightFrameNumber` are identical in every row.
+    That offset is not fixed over a full session either: across the whole
+    1,177,799-row reference recording it drifts smoothly from 49.5 ms to
+    45.8 ms (checked at 10 points spread through the file) --
     confirmation that this is per-camera clock drift, not shared jitter around
     a fixed origin. The cameras are frame-locked by the trigger chain; their
     clocks free-run independently, and at 500 Hz this offset is on the order

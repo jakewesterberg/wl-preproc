@@ -9,12 +9,15 @@ these tests now assert against the real format, the same authority
 `tests/eye/test_ohdpi_reader.py` pins the production reader against.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from wl_sync.barcode import IDLE_MIN_US, decode_edges, edges_from_samples
 
 from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX, SYNC_WORD_COLUMN, read_columns
 from wl_preproc.synth.ohdpi import (
+    HEADER,
     OHDPI_FPS,
     OHDPI_PRE_ROLL_S,
     SAMPLE_DTYPE_DECIMALS,
@@ -262,3 +265,24 @@ def test_the_two_eyes_purkinje_traces_are_not_identical(tmp_path):
     # recipe's seed, not merely almost always.
     for part in parts:
         assert (cols[f"Left{part}"] != cols[f"Right{part}"]).all(), part
+
+
+def test_header_matches_the_real_fixtures_first_line():
+    """Closes the one circularity `usecols`-validated tests cannot touch.
+
+    Every column a consumer actually reads is already cross-checked against
+    real bytes: `read_columns`' `usecols` fails loudly on a name the header
+    does not have, and the tests above read real columns out of THIS
+    module's own emitted file. But `HEADER` also carries columns nothing
+    reads yet -- `PupilX`, `PupilY`, the IMU triad, `Double0`-`Double7` --
+    and no `usecols` call ever names them, so nothing notices if one of
+    those drifts from what OpenIris actually writes. This pins the literal
+    text instead: the same single-space join `write_ohdpi` emits
+    (`" ".join(HEADER)`), compared against `OpenIris-sample.txt`'s own first
+    line, verbatim.
+    """
+    fixture = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
+    with fixture.open(encoding="utf-8") as handle:
+        fixture_header = handle.readline().rstrip("\n")
+
+    assert " ".join(HEADER) == fixture_header

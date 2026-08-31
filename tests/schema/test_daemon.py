@@ -621,14 +621,15 @@ def test_every_computed_table_is_a_daemon_stage():
     module declares fails the first assertion, so an exemption cannot outlive
     its table either.
 
-    **What this test actually produces today:** five discovered tables —
+    **What this test actually produces today:** seven discovered tables —
     `core.Segment`, `coverage.BlockCoverage`, `coverage.TrialCoverage`,
-    `timebase.SystemTimebase`, `timebase.TimingProvenance` — an empty
-    exemption set, and set equality with `_computed_tables()`. Confirmed to
-    fail with `TrialCoverage` removed from `_computed_tables()` (the state
-    this branch shipped) and to fail on a stale exemption.
+    `eye.EyeCalibration`, `eye.EyeQuality`, `timebase.SystemTimebase`,
+    `timebase.TimingProvenance` — an empty exemption set, and set equality
+    with `_computed_tables()`. Confirmed to fail with `TrialCoverage` removed
+    from `_computed_tables()` (the state this branch shipped) and to fail on
+    a stale exemption.
 
-    **Scope, stated exactly:** `dj.Computed` only, across the eight modules
+    **Scope, stated exactly:** `dj.Computed` only, across the ten modules
     `_PROJECT_SCHEMA_MODULES` names. `dj.Imported` is not swept and neither is
     `pipeline` — element-event's Imported tables live there, this project fills
     them by direct insert rather than by `populate()`, and `schema/events.py`'s
