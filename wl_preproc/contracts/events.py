@@ -153,9 +153,24 @@ class TaskEvent(IntEnum):
 #
 # **Degrees, not pixels:** this pipeline holds no screen geometry -- no viewing
 # distance, no pixel pitch -- and acquiring it would mean a second transport for
-# numbers that differ per rig and change whenever a monitor moves. The task
-# already knows the geometry because it renders the stimulus, and MonkeyLogic
-# holds `ScreenInfo.PixelsPerDegree`.
+# numbers that differ per rig and change whenever a monitor moves. Whatever
+# renders the stimulus knows the geometry; this pipeline deliberately holds
+# none. (This used to name MonkeyLogic's own `ScreenInfo.PixelsPerDegree` as
+# the system that holds it. Under wl-expcontroller's ADR-0005 MonkeyLogic is
+# not deployed at all, so that clause named a system that would not exist --
+# and separately, `bhv2.py`'s own module docstring ("Which top-level block,
+# and which of its fields") already found no `ScreenInfo` block exists even
+# in MonkeyLogic itself: the real block is `MLConfig`. The argument does not
+# need either name: it holds for whichever task renders the stimulus.)
+#
+# **Not even "the" pixels-per-degree of a rig is one number, which only
+# strengthens the case above.** HANDOVER-wl-expcontroller.md Ask 5: these rigs
+# run a split-screen mirror stereoscope, so one screen carries two viewports
+# with their own centres and their own folded optical path lengths, and the
+# display itself runs in one of two modes with a different deg/pixel each.
+# Degrees stay well-defined regardless of which viewport or mode is active;
+# a single PixelsPerDegree for "the rig" would already be the wrong shape to
+# put on the wire even if this pipeline wanted screen geometry at all.
 #
 # **Offset-binary, not two's complement:** no sign-extension convention to get
 # wrong across the task, the sync box and this decoder.
