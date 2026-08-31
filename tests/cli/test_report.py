@@ -610,6 +610,21 @@ def test_the_report_opens_no_write_transaction(scanned, table_snapshot, deep_equ
     modules today, so this also catches that specific regression shape
     before it could ship.
 
+    **`eye.EyeCalibration`/`eye.EyeQuality` and `archive.ArchiveArtifact`/
+    `archive.ArchiveVerification` added (task-11 fix round, Controller
+    review).** This docstring's own claim -- "every row `build_report` could
+    plausibly touch" -- was measurably false without them: `_eye_rows`
+    (`report.py`) reads both eye tables on every call, unconditionally, and
+    `_unreclaimed_sessions`/`_verified_archives` read both archive tables --
+    `_unreclaimed_sessions` unconditionally, `_verified_archives` only when
+    `nas_root` is given, which this test does not, but the SNAPSHOT still
+    wants the table watched regardless of which branch runs, the same
+    reasoning `core.AcquisitionSystem` is watched here for a write neither
+    branch performs today. The archive half of this gap PRE-DATES this task
+    -- Tasks 9-10 added those reads and this list was never extended for
+    them either -- continued rather than introduced; closed now rather than
+    left to compound a third time.
+
     `table_snapshot`/`deep_equal` come in as fixtures now (Phase 1c-3, Task
     1) rather than the module-local `_table_snapshot`/`_deep_equal` this test
     used to call -- moved to `tests/conftest.py` so `test_gather_readings_
@@ -617,10 +632,21 @@ def test_the_report_opens_no_write_transaction(scanned, table_snapshot, deep_equ
     """
     import datajoint as dj
 
-    from wl_preproc.schema import core, pipeline
+    from wl_preproc.schema import archive, core, eye, pipeline
 
     root, prefix = scanned("rpttxn1")
     core.activate(prefix=prefix)
+    # `eye`/`archive` are PEERS of `core`, not built on top of it -- neither
+    # is reached by `core.activate()` above (confirmed directly: `schema/
+    # eye.py::activate` cascades only through `core`/`pipeline`, `schema/
+    # archive.py::activate` does not import `core` at all) -- so both need
+    # their own explicit activation here, the identical reason `core.
+    # activate(prefix=prefix)` is already called explicitly one line up
+    # rather than left for `build_report` to do implicitly: `table_snapshot`
+    # below needs every watched table BOUND before the "before" snapshot,
+    # not merely bound by the time `build_report` itself gets around to it.
+    eye.activate(prefix=prefix)
+    archive.activate(prefix=prefix)
 
     from wl_preproc.daemon import job_tables
 
@@ -630,6 +656,18 @@ def test_the_report_opens_no_write_transaction(scanned, table_snapshot, deep_equ
         pipeline.Session,
         pipeline.Subject,
         core.AcquisitionSystem,
+        # `_eye_rows` (`report.py`) reads both unconditionally on every
+        # `build_report` call -- task-11 fix round, Controller review.
+        eye.EyeCalibration,
+        eye.EyeQuality,
+        # `_unreclaimed_sessions`/`_verified_archives` (`report.py`) read
+        # both -- the first unconditionally, the second only when `nas_root`
+        # is given (not here), watched regardless so this snapshot does not
+        # silently depend on which call this test happens to make. A
+        # pre-existing gap, not a new one: Tasks 9-10 added these reads and
+        # this list was never extended for them.
+        archive.ArchiveArtifact,
+        archive.ArchiveVerification,
         # See `test_gather_readings_does_not_write` above: `build_report` reaches
         # `count_stale_jobs`, which reads these, and 1c-4 is the phase that gives
         # this project a Computed table for them to exist for at all.

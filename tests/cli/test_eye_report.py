@@ -88,6 +88,19 @@ def _breakdown_counts(section: str) -> dict[str, int]:
     }
 
 
+def _older_no_gaze_count(section: str) -> int:
+    """The `N` in "No canonical gaze"'s own "N older row(s) not shown" note
+    (`report.py`'s own `older_no_gaze` rollup, second fix round -- the same
+    shape as `test_report.py`'s Quarantine "older row(s) not shown" line),
+    or `0` when the note is absent -- every refused row currently on record
+    falls inside the 7 d window, so there is nothing to roll up."""
+    lines = [line for line in section.splitlines() if "older row(s) not shown" in line]
+    if not lines:
+        return 0
+    assert len(lines) == 1, f"expected at most one 'older row(s)' note, got {lines}"
+    return int(lines[0].split("_")[1].split()[0])
+
+
 @pytest.fixture(scope="module")
 def eye_schema(dj_conn, prefix):
     """Mirrors `tests/schema/test_eye_schema.py`'s own `schemas` fixture:
@@ -670,4 +683,120 @@ def test_each_eye_subsection_states_its_own_scope(eye_schema, tmp_path, prefix):
     eye_section = _section(body, "Eye")
     assert "\n### Calibration and quality, per session per eye (24 h)" in eye_section
     assert "\n### Calibration source (running total)" in eye_section
-    assert "\n### No canonical gaze (all time)" in eye_section
+    assert "\n### No canonical gaze (7 d)" in eye_section
+
+
+def test_no_canonical_gaze_windows_to_7_days_independently_of_the_24h_listing(
+    eye_schema, tmp_path, prefix
+):
+    """Second fix round (Controller review): "No canonical gaze" used to be
+    all-time. The reviewer's own structural argument is why it is not: a
+    refused `EyeCalibration` row is PERMANENT once written (`EyeCalibration.
+    key_source`'s own docstring, quoted in `_eye_rows`' own docstring above),
+    unlike `_unreclaimed_sessions`' "Archived sessions blocked from
+    reclamation" list, whose `blocking()` predicate is re-evaluated fresh
+    on every report -- so this is `Quarantine`-shaped, not "Archived
+    sessions"-shaped, and windows to the same 7 days `_QUARANTINE_
+    WINDOW_DAYS` gives `Quarantine`, not the per-session listing's 24 h.
+
+    Three tiers prove the window is genuinely its OWN 7-day boundary, not
+    an accidental reuse of the per-session listing's 24 h one:
+    - `subject_fresh` (ingested moments ago): inside both windows.
+    - `subject_midweek` (ingested 3 days ago): inside the 7 d "No canonical
+      gaze" window, OUTSIDE the 24 h per-session one -- if this list were
+      quietly windowing off the same `ingested_keys` the per-session list
+      uses, this subject would wrongly disappear here too.
+    - `subject_old` (ingested 9 days ago): outside both.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    dt = datetime.datetime(2027, 5, 8, 9, 0)
+
+    subject_fresh, subject_midweek, subject_old = "erpt7001", "erpt7002", "erpt7003"
+    _land_session(subject_fresh, dt, ingested_at=now)
+    _land_session(subject_midweek, dt, ingested_at=now - datetime.timedelta(days=3))
+    _land_session(subject_old, dt, ingested_at=now - datetime.timedelta(days=9))
+    for subject in (subject_fresh, subject_midweek, subject_old):
+        _insert_calibration(
+            eye_schema,
+            _calibration_row(
+                subject, dt, "left",
+                calibration_source="refused",
+                reason=f"synthetic refusal for {subject}",
+            ),
+        )
+
+    body = build_report(root, prefix=prefix)
+    eye_section = _section(body, "Eye")
+
+    no_gaze = _subsection(eye_section, "No canonical gaze")
+    assert subject_fresh in no_gaze, "a session ingested moments ago is missing from the 7d list"
+    assert subject_midweek in no_gaze, (
+        "a session ingested 3 days ago is missing from the 7d list -- the no-gaze "
+        "window is not really 7 days, or is accidentally reusing the per-session "
+        "listing's own 24h boundary"
+    )
+    assert subject_old not in no_gaze, "a session ingested 9 days ago still appears in the 7d list"
+
+    quality = _subsection(eye_section, "Calibration and quality, per session per eye")
+    assert subject_midweek not in quality, (
+        "a session ingested 3 days ago appears in the 24h-windowed per-session "
+        "listing -- the two windows are not actually different widths"
+    )
+
+
+def test_an_old_refused_session_is_still_counted_with_the_note_saying_so(
+    eye_schema, tmp_path, prefix
+):
+    """The half of the fix request the previous test does not cover: a
+    refused row outside the 7 d window must still be counted in the
+    all-time `calibration_source` breakdown (nothing is lost, exactly as
+    `_eye_rows`' own docstring argues: `no_gaze_all`/`source_counts
+    ["refused"]` are the identical predicate over the identical unfiltered
+    rows), and the list itself must say a row was hidden rather than
+    silently shrinking -- the same "older row(s) not shown" shape
+    `Quarantine` already uses (`test_report.py`'s own `older_quarantines`
+    assertions).
+
+    Delta-based throughout, for the identical shared-database pollution
+    reason `test_the_calibration_source_breakdown_counts_every_source_
+    distinctly` already gives -- including for the "older row(s)" note
+    itself, which is a single rollup line with no subject in it to search
+    for, so a delta is the only way to attribute the change to THIS test's
+    own insert rather than to whatever else the shared suite has already
+    landed outside the window.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+    before_body = build_report(root, prefix=prefix)
+    before_eye = _section(before_body, "Eye")
+    before_breakdown = _breakdown_counts(_subsection(before_eye, "Calibration source"))
+    before_older = _older_no_gaze_count(_subsection(before_eye, "No canonical gaze"))
+
+    subject = "erpt7004"
+    dt = datetime.datetime(2027, 5, 9, 9, 0)
+    old_ingested_at = (
+        datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(days=9)
+    )
+    _land_session(subject, dt, ingested_at=old_ingested_at)
+    _insert_calibration(
+        eye_schema,
+        _calibration_row(subject, dt, "left", calibration_source="refused", reason="old refusal"),
+    )
+
+    body = build_report(root, prefix=prefix)
+    eye_section = _section(body, "Eye")
+
+    no_gaze = _subsection(eye_section, "No canonical gaze")
+    assert subject not in no_gaze, "a session ingested 9 days ago still appears in the 7d list"
+
+    after_breakdown = _breakdown_counts(_subsection(eye_section, "Calibration source"))
+    assert after_breakdown["refused"] - before_breakdown["refused"] == 1, (
+        "a refused row outside the list's window was not counted in the all-time breakdown"
+    )
+
+    after_older = _older_no_gaze_count(no_gaze)
+    assert after_older - before_older == 1, (
+        "the 'older row(s) not shown' rollup did not grow when a row aged out of the window"
+    )

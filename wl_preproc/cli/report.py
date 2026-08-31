@@ -495,23 +495,43 @@ def _eye_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict]]:
     eye)` with no such column -- so there is no column here to filter on the
     way `gather_readings` filters `ingest.Ingestion` on `ingested_at`. That
     is not a gap: the two rows this function returns feed THREE different
-    renderings in `build_report`, and task-11's fix round settled that they
-    do not all want the same scope. The `calibration_source` breakdown and
-    the "No canonical gaze" list stay all-time running totals on purpose --
-    four numbers that cannot grow without bound, and Controller ruling D's
+    renderings in `build_report`, and each rendering picks its own scope
+    from the SAME unfiltered rows rather than this function guessing at one.
+
+    **Only the `calibration_source` breakdown is a true all-time running
+    total (task-11 fix round, second Controller review).** It is four
+    numbers that cannot grow without bound, and Controller ruling D's
     persistent-skip detection needs a ratio across all history, not one
-    night's rows; a session's calibration outcome does not become less true
-    a week later, the same reasoning that keeps `_unreclaimed_sessions`' own
-    "Archived sessions blocked from reclamation" list unwindowed. The
-    per-session-per-eye listing is DIFFERENT: at two sessions a week that is
-    roughly 400 lines within a year, in a report generated daily, and
-    unlike the two all-time views it is genuinely news, not standing state
-    -- so `build_report` windows THAT ONE rendering to the same 24 hours
-    `readings.ingested` already covers, reusing that row set rather than
-    computing a second, independently-derived boundary. Returning
-    everything here and letting the caller pick a scope PER RENDERING is
-    what keeps that possible without three different versions of this
-    query.
+    night's rows or one week's. The other two renderings ARE windowed, at
+    two different widths, and the first fix round's own analogy to
+    `_unreclaimed_sessions`' unwindowed "Archived sessions blocked from
+    reclamation" list turned out to hold for neither: that list is a LIVE,
+    re-evaluated predicate -- `archive_reclaim.blocking()` runs fresh on
+    every report, so a session that clears every condition simply stops
+    appearing, and no row there is permanent. A refused `EyeCalibration` row
+    is the opposite -- `EyeCalibration.key_source`'s own docstring: "once
+    written, that row is PERMANENT: DataJoint never recomputes an already-
+    populated key" -- so it is `Quarantine`-shaped, not "Archived sessions"-
+    shaped, and both the per-session listing and the "No canonical gaze"
+    list are windowed accordingly: the per-session-per-eye listing to the
+    same 24 hours `readings.ingested` already covers (reusing that row set
+    rather than computing a second, independently-derived boundary -- it
+    answers "what did the pipeline calibrate overnight, and what went
+    wrong"), and "No canonical gaze" to the same 7 days `_QUARANTINE_
+    WINDOW_DAYS` gives `Quarantine` -- see that constant's own comment for
+    why 7 beats 24 h for a list of PERMANENT rows: "a session that fails
+    late on a Friday would drop off Monday's report -- the exact case where
+    the row most needs a human." Windowed at 7 days rather than left
+    unwindowed for a sharper reason than that comment gives, too: under the
+    exact scenario ruling D exists to detect -- MonkeyLogic's map never
+    validating, the refusal rate climbing toward 100% -- this list grows at
+    the same unbounded rate the per-session listing's own windowing was
+    written to prevent, precisely during the incident the report most needs
+    to stay readable for. Nothing is lost either way: `no_gaze`/`source_
+    counts["refused"]` in `build_report` below are the identical predicate
+    over these same unfiltered rows, so the all-time count the breakdown
+    carries is never a second, independently-computed figure that could
+    silently disagree with what the windowed list is a subset of.
     """
     from wl_preproc.schema import eye as eye_schema
 
@@ -1075,23 +1095,60 @@ def build_report(
     # so two sessions refused for unrelated causes render as two different
     # lines by construction, not by any special-casing here.
     #
-    # Also unwindowed (task-11 fix round leaves this as-is; not part of the
-    # fix it asked for, which named the per-session listing above
-    # specifically). This has the identical unbounded-growth exposure the
-    # fix round's own reasoning gives for that list -- a permanently-refused
-    # session never resolves either -- and is worth the same treatment in a
-    # future pass; recorded in this task's own report rather than changed
-    # here without being asked.
-    no_gaze = sorted(
+    # Windowed to 7 days (task-11 fix round, second Controller review) --
+    # `_QUARANTINE_WINDOW_DAYS`, not a new constant, because this really is
+    # the same list `Quarantine` already is, not merely a similarly-sized
+    # one: a refused `EyeCalibration` row is PERMANENT once written
+    # (`EyeCalibration.key_source`'s own docstring; `_eye_rows`' own
+    # docstring above quotes it in full), unlike `_unreclaimed_sessions`'
+    # "Archived sessions blocked from reclamation" list, whose predicate is
+    # re-evaluated fresh on every report. `_QUARANTINE_WINDOW_DAYS`'s own
+    # comment already gives the reason 7 days beats 24 h for exactly this
+    # shape of list: a session that fails (here: is refused) late on a
+    # Friday must not drop off Monday's report before a human sees it.
+    #
+    # A SEPARATE `ingest.Ingestion` query, not `readings.ingested` or
+    # `ingested_keys` above -- those are windowed to 24 h, the per-session
+    # listing's own width, and reusing them here would silently give this
+    # list the WRONG window rather than its own.
+    no_gaze_since = landing.to_naive_utc(at - datetime.timedelta(days=_QUARANTINE_WINDOW_DAYS))
+    no_gaze_ingested_keys = {
+        (row["subject"], row["session_datetime"])
+        for row in (
+            ingest.Ingestion & f"ingested_at > '{no_gaze_since:%Y-%m-%d %H:%M:%S}'"
+        ).to_dicts()
+    }
+    # UNFILTERED -- this is the identical predicate `source_counts["refused"]`
+    # above already counts, over the same `eye_calibration_rows`, so
+    # `len(no_gaze_all) == source_counts["refused"]` always holds. Nothing
+    # is lost by windowing the LIST below: the all-time total is the
+    # breakdown, not a second copy kept here.
+    no_gaze_all = sorted(
         (row for row in eye_calibration_rows if row["calibration_source"] == "refused"),
         key=lambda row: (row["subject"], row["session_datetime"], row["eye"]),
     )
-    lines += ["", f"### No canonical gaze (all time) — {len(no_gaze)}", ""]
+    no_gaze = [
+        row for row in no_gaze_all
+        if (row["subject"], row["session_datetime"]) in no_gaze_ingested_keys
+    ]
+    older_no_gaze = len(no_gaze_all) - len(no_gaze)
+
+    lines += ["", f"### No canonical gaze ({_QUARANTINE_WINDOW_DAYS} d) — {len(no_gaze)}", ""]
     lines += [
         f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
         f"{row['eye']}: {row['reason']}"
         for row in no_gaze
     ] or ["- none"]
+    if older_no_gaze:
+        # Same shape as `older_quarantines` above: rows outside the window
+        # are counted, not silently dropped -- the all-time figure is the
+        # `refused` line in the breakdown, pointed at rather than repeated.
+        lines += [
+            f"- _{older_no_gaze} older row(s) not shown — a refused calibration "
+            f"is a permanent row (see the `refused` count in the breakdown "
+            f"above for the all-time total), so this section shows the last "
+            f"{_QUARANTINE_WINDOW_DAYS} days only._"
+        ]
 
     lines += ["", "## Not yet reported", ""]
     lines += [f"- **{name}** — {why}" for name, why in _NOT_YET_REPORTED]
