@@ -74,14 +74,16 @@ _MIN_POINTS = {model: n_terms(model) for model in CalibrationModel}
 # Measured on real constellations with this module's own `_conditioning`
 # (see tests/eye/test_calibration_fit.py, which re-measures each):
 #
-#   constellation   affine   second_order
-#   3x3 grid        1.0000   0.2277
-#   ring of 8       1.0000   0.0000
-#   plus, 5 points  1.0000   0.2361
-#   4 spread        0.7593   0.2796
-#   collinear       0.0000   0.0000
+#   constellation      affine   second_order
+#   3x3 grid           1.0000   0.2277
+#   ring of 8          1.0000   0.0000
+#   ring, off-origin   1.0000   0.0000
+#   plus, 5 points     1.0000   0.2361
+#   4 spread           0.8646   0.2893
+#   collinear          0.0000   0.0000
+#   one target only    0.0000   0.0000
 #
-# Good geometry scores 0.23-0.28 on the quadratic basis and 0.76-1.00 on the
+# Good geometry scores 0.23-0.29 on the quadratic basis and 0.86-1.00 on the
 # affine one; degenerate geometry scores 0.0000 on both. These thresholds sit
 # with margin either side. Per model because 0.05 was measured against a
 # 3-point affine and means something different on a six-term basis.
@@ -134,32 +136,47 @@ class CalibrationMap:
             )
 
 
-def _conditioning(design: np.ndarray) -> float:
-    """Smallest over largest singular value of the COLUMN-NORMALISED design.
+def _conditioning(points: np.ndarray, model: CalibrationModel) -> float:
+    """How well a constellation constrains `model`: the smallest over largest
+    singular value of its MEAN-CENTRED, COLUMN-NORMALISED basis expansion.
 
-    **Normalised** because the raw columns run `1`, `~100`, `~10,000`:
-    unnormalised, a perfect 3x3 grid scores 4.95e-05 and units dominate the
-    measure entirely. The fit itself runs on the unscaled matrix; only this
-    diagnostic is normalised, and the normalised score is scale-invariant
-    (measured: the same grid reads 0.2277 at +-8 units and at +-200).
+    Three properties, each load-bearing and each measured.
 
-    **Measured on the basis expansion, not on the bare positions**, because
-    degeneracy is model-specific: eight targets on a ring constrain an affine
-    perfectly (1.0000) and a quadratic not at all (0.0000), since points on a
-    circle satisfy `x**2 + y**2 = r**2` and the two quadratic columns
-    collapse onto the constant one. The mean-centred-positions measure this
-    replaces scored that ring 1.0000 and would have passed a minimum-norm
-    quadratic straight through.
+    **Model-specific**, via the basis expansion. Eight targets on a ring
+    constrain an affine perfectly (1.0000) and a quadratic not at all
+    (0.0000), since points on a circle satisfy `x**2 + y**2 = r**2` and the
+    two quadratic columns collapse onto the constant one. The
+    bare-positions measure this replaces scored that ring 1.0000 and would
+    have passed a minimum-norm quadratic straight through.
 
-    **Callers pass the TARGET constellation's basis, not the raw signal's**
-    -- see `fit_map`. A well-spread raw cloud from a single target location
-    is noise, not information: measured, a raw cloud straddling the sensor
-    origin from one fixation location scores 0.857 here while least squares
+    **Translation-invariant**, via the centring -- which the measure this
+    replaces also had, and which is not optional once a quadratic basis is
+    involved. Far from the origin `t**2` is approximately `c**2 + 2*c*t`, so
+    the square columns become near-linear combinations of the constant and
+    linear ones and an ordinary constellation reads as degenerate for no
+    reason but where the screen origin sits. Measured: a 3x3 grid whose
+    targets span 4 degrees centred 2.3 degrees off-axis scores 0.0404
+    uncentred and 0.1966 centred, against a 0.10 threshold -- a false refusal
+    of geometry that constrains the model perfectly well. Centring costs
+    nothing in detection: a ring off the origin, and one sampled unevenly so
+    its centroid is not even the circle's centre, both still score exactly
+    0.0000, because a conic stays a conic under translation.
+
+    **Scale-invariant**, via the column normalisation. The raw columns run
+    `1`, `~100`, `~10,000`; unnormalised, a perfect 3x3 grid scores 4.95e-05
+    and units dominate the measure entirely. The fit itself runs on the
+    unscaled, uncentred design matrix; only this diagnostic is transformed.
+
+    **Callers pass the TARGET constellation, not the raw signal** -- see
+    `fit_map`. A well-spread raw cloud from a single target location is
+    noise, not information: measured, a raw cloud straddling the sensor
+    origin from one fixation location scores 0.9838 here while least squares
     returns all-zero coefficients, a "calibration" mapping every gaze sample
     in the session onto one point. The same case measured on the targets
-    scores exactly 0.0000, because identical target rows make all three
-    normalised columns the same column.
+    scores exactly 0.0000, because identical target rows leave nothing at all
+    after centring.
     """
+    design = basis(points - points.mean(axis=0), model)
     norms = np.linalg.norm(design, axis=0)
     norms[norms == 0] = 1.0
     singular = np.linalg.svd(design / norms, compute_uv=False)
@@ -175,7 +192,7 @@ def fit_map(
     cannot detect under-determination at all.** Four spread targets against a
     six-term basis give a 4x6 design whose SVD returns four singular values;
     their ratio is structurally blind to the two missing dimensions and reads
-    a healthy 0.2296. Only the count catches that case.
+    a healthy 0.2787. Only the count catches that case.
     """
     if raw_xy.shape[0] != target_xy.shape[0]:
         raise ValueError(
@@ -190,7 +207,7 @@ def fit_map(
             f"{_MIN_POINTS[model]} target positions"
         )
 
-    conditioning = _conditioning(basis(target_xy, model))
+    conditioning = _conditioning(target_xy, model)
     if conditioning < MIN_CONDITIONING[model]:
         # Kept under ~215 characters deliberately. `schema/eye.py` stores
         # this in a `varchar(255)` and appends both "; no fallback map

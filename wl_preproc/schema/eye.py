@@ -53,7 +53,6 @@ from wl_preproc.eye.calibration import (
     CalibrationSource,
     _conditioning,
     apply_map,
-    basis,
     n_terms,
     read_online_map,
     resolve_calibration,
@@ -454,14 +453,19 @@ class EyeCalibration(dj.Computed):
         # relevant role being FIXATION_POINT, since a fixation HOLD is, by
         # construction, held on the fixation point rather than on whatever
         # secondary/saccade target a task also has on screen at once.
-        windows: list[tuple[float, float, tuple[float, float], int | None, int | None]] = []
+        # A window carries `is_calibration` rather than its raw task type: the
+        # ONLY thing the task type was ever read for downstream is that
+        # distinction, and deciding it here is what lets both of the
+        # protocol's two mechanisms feed one flag (below).
+        windows: list[tuple[float, float, tuple[float, float], int | None, bool]] = []
         current_targets: dict[int, tuple[float, float]] = {}
         current_block_id: int | None = None
         current_task_type: int | None = None
+        in_calibration_epoch = False
         open_start: float | None = None
         open_target: tuple[float, float] | None = None
         open_block_id: int | None = None
-        open_task_type: int | None = None
+        open_is_calibration = False
 
         for event in decoded:
             if isinstance(event, PayloadEvent):
@@ -470,19 +474,46 @@ class EyeCalibration(dj.Computed):
                     current_targets[role] = (decode_dva(x_word), decode_dva(y_word))
                 elif event.escape is Escape.BLOCK_START:
                     current_block_id, current_task_type = event.words
+                    # A new block ends any epoch left open by the last one: an
+                    # unclosed CALIBRATION_START must not silently reclassify
+                    # every fixation in every block that follows it.
+                    in_calibration_epoch = False
                 continue
             if isinstance(event, SimpleEvent):
-                if event.code == TaskEvent.FIXATION_ACQUIRED:
+                if event.code == TaskEvent.CALIBRATION_START:
+                    in_calibration_epoch = True
+                elif event.code == TaskEvent.CALIBRATION_END:
+                    in_calibration_epoch = False
+                elif event.code == TaskEvent.FIXATION_ACQUIRED:
                     open_start = event.time_s
                     open_target = current_targets.get(TargetRole.FIXATION_POINT)
-                    open_block_id, open_task_type = current_block_id, current_task_type
+                    open_block_id = current_block_id
+                    # **Either mechanism counts** (contracts/events.py, ruled
+                    # 2026-08-31): a whole block declaring itself
+                    # `TaskTypeCode.CALIBRATION` in its own `BLOCK_START`, or
+                    # a `CALIBRATION_START`/`END` epoch inside any other task.
+                    # The distinction this flag draws is "a point gathered
+                    # deliberately for calibration" against "an incidental
+                    # task fixation", and both mechanisms produce the former.
+                    #
+                    # This replaces a PROVISIONAL reading of
+                    # `MEMORY_GUIDED_SACCADE` as a calibration block -- a task
+                    # the design spec motivates the `role` word with and never
+                    # characterises as one. That placeholder, and the note
+                    # recording that it was a guess, are both gone.
+                    open_is_calibration = (
+                        current_task_type == int(TaskTypeCode.CALIBRATION)
+                        or in_calibration_epoch
+                    )
                 elif event.code == TaskEvent.FIXATION_END and open_start is not None:
                     if open_target is not None:
                         windows.append(
-                            (open_start, event.time_s, open_target, open_block_id, open_task_type)
+                            (open_start, event.time_s, open_target, open_block_id,
+                             open_is_calibration)
                         )
                     open_start = open_target = None
-                    open_block_id = open_task_type = None
+                    open_block_id = None
+                    open_is_calibration = False
                 continue
             # DecodeError: a corrupt payload elsewhere in the stream must not
             # cost this session its calibration -- ignored here exactly as
@@ -504,9 +535,9 @@ class EyeCalibration(dj.Computed):
         # a `n_windows_found`/`len(row_ranges)` gap below is what makes that
         # distinction visible instead of silently absorbed.
         row_ranges: list[
-            tuple[int, int, tuple[float, float], int | None, int | None, dict]
+            tuple[int, int, tuple[float, float], int | None, bool, dict]
         ] = []
-        for t_start, t_end, target_xy, block_id, task_type in windows:
+        for t_start, t_end, target_xy, block_id, is_calibration in windows:
             segment = _containing_segment(segments, t_start, t_end)
             if segment is None:
                 continue
@@ -515,7 +546,7 @@ class EyeCalibration(dj.Computed):
             if row_start is None or row_end is None:
                 continue
             lo, hi = sorted((row_start, row_end))
-            row_ranges.append((lo, hi, target_xy, block_id, task_type, segment))
+            row_ranges.append((lo, hi, target_xy, block_id, is_calibration, segment))
 
         n_windows_found = len(windows)
         n_windows_dropped = n_windows_found - len(row_ranges)
@@ -569,7 +600,7 @@ class EyeCalibration(dj.Computed):
             n_from_task_fixation = 0
             cache: dict[Path, np.ndarray] = {}
 
-            for lo, hi, target_xy, _block_id, task_type, segment in row_ranges:
+            for lo, hi, target_xy, _block_id, is_calibration, segment in row_ranges:
                 path = session_dir / "ohdpi" / segment["file_path"]
                 trace = cache.get(path)
                 if trace is None:
@@ -577,30 +608,7 @@ class EyeCalibration(dj.Computed):
                     cache[path] = trace
                 raw_points.append(trace[lo : hi + 1].mean(axis=0))
                 target_points.append(target_xy)
-                # PROVISIONAL READING, NOT A SETTLED FACT (fix round,
-                # reviewer finding 6): no literal "calibration" task type
-                # exists in `contracts.events.TaskTypeCode`, and design spec
-                # section 4.2 motivates the `role` word with
-                # MEMORY_GUIDED_SACCADE -- "that task has a fixation point
-                # and a target on screen simultaneously" -- WITHOUT ever
-                # characterising it as a dedicated calibration block. Reading
-                # it as one is this implementation's own choice, not
-                # something section 3.4's "calibration block or a task
-                # fixation" distinction independently settles. A future task
-                # that names a real calibration task type, or decides
-                # MEMORY_GUIDED_SACCADE is not one, changes only this `if`.
-                #
-                # Recorded, not fixed: for MEMORY_GUIDED_SACCADE specifically
-                # -- the one type bucketed as "calibration block" -- every
-                # window here is still paired with `TargetRole.
-                # FIXATION_POINT` only (this method's own loop, above), never
-                # `SACCADE_TARGET` (role 1), which is what a POST-saccade
-                # hold would need. Whether MGS ever emits a
-                # FIXATION_ACQUIRED/END pair around the saccade target rather
-                # than the fixation point is undetermined until that task's
-                # own code exists; if it does, this bucket is fit against the
-                # wrong target for exactly the task type it claims to favour.
-                if task_type == int(TaskTypeCode.MEMORY_GUIDED_SACCADE):
+                if is_calibration:
                     n_from_calibration_block += 1
                 else:
                     n_from_task_fixation += 1
@@ -629,7 +637,7 @@ class EyeCalibration(dj.Computed):
             # gives: a well-spread raw cloud from one target location scores
             # 0.857 and means nothing.
             conditioning = (
-                float(_conditioning(basis(target_xy_arr, CalibrationModel.AFFINE)))
+                float(_conditioning(target_xy_arr, CalibrationModel.AFFINE))
                 if target_xy_arr.shape[0]
                 else None
             )
@@ -709,7 +717,7 @@ class EyeCalibration(dj.Computed):
                 # drift over a long session shows as a residual that grows --
                 # measured here, never corrected.
                 by_block: dict[int, list[int]] = {}
-                for index, (_lo, _hi, _target, block_id, _task_type, _segment) in enumerate(
+                for index, (_lo, _hi, _target, block_id, _is_calib, _segment) in enumerate(
                     row_ranges
                 ):
                     if block_id is not None:

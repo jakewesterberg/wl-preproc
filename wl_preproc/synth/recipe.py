@@ -81,6 +81,49 @@ class BlockSpec(BaseModel):
         return self.n_trials * self.trial_duration_s
 
 
+class EyeFixationSpec(BaseModel):
+    """One held gaze position, in session time and raw Purkinje units.
+
+    **Why this exists.** The generator's ordinary eye signal is a slow
+    two-frequency drift -- a free-viewing trace, and the right default. It
+    cannot represent a CALIBRATION session, where the animal holds a spread of
+    known target positions, and that gap is not cosmetic: sampled window means
+    from a smooth drift all lie on a curve, and points on a curve sit close
+    enough to a conic that the quadratic design matrix is near rank-deficient.
+    Measured directly against `synth/ohdpi.py`'s own signal, searching 40,000
+    window placements across sessions from 27 s to 120 s, the best quadratic
+    conditioning reachable was **0.0739** -- below `MIN_CONDITIONING`'s 0.10,
+    so no generated session could reach the second-order rung at all, and the
+    rung had no end-to-end test it could pass.
+
+    That is the fixture contradicting the design rather than the threshold
+    being wrong: nine points strung along a smooth curve genuinely cannot pin
+    twelve parameters, and the guard refusing them is the guard working.
+
+    `x_px`/`y_px` are the P1 - P4 rotation term this eye is held at -- raw
+    Purkinje units, which is exactly the feature
+    `eye/gaze.py::purkinje_vector` computes, so a fixture states the raw
+    signal it wants and lets the calibration under test discover the map.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    start_s: float
+    end_s: float
+    x_px: float
+    y_px: float
+
+    @model_validator(mode="after")
+    def _ends_after_it_starts(self) -> EyeFixationSpec:
+        if self.end_s <= self.start_s:
+            raise ValueError(
+                f"eye fixation ends at {self.end_s} s, at or before its own "
+                f"{self.start_s} s start; a zero-length hold contributes no "
+                "frames and would silently leave the drift in place"
+            )
+        return self
+
+
 class MontageSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -113,6 +156,12 @@ class SessionRecipe(BaseModel):
     # waste. The spatial recipes below set it deliberately.
     n_units: int = Field(default=0, ge=0)
     channels: tuple[ChannelSpec, ...] = ()
+
+    # Gaze held at a known raw position for a stated window, overriding the
+    # ordinary drift there. Empty by default, so every existing profile's eye
+    # signal is unchanged; see `EyeFixationSpec` for why a calibration fixture
+    # needs it and free viewing cannot substitute.
+    eye_fixations: tuple[EyeFixationSpec, ...] = ()
     ap_sample_rate_hz: float
     seed: int
     faults: tuple[Fault, ...] = ()

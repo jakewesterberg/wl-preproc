@@ -27,6 +27,8 @@ from __future__ import annotations
 import dataclasses
 import datetime
 
+import numpy as np
+
 import pytest
 
 from wl_preproc.eye.calibration import CalibrationModel
@@ -1160,3 +1162,331 @@ def test_tracking_loss_and_blink_rate_are_real_and_discriminate_by_eye(lossy_qua
     assert rows["right"]["tracking_loss_fraction"] > 0.0
     assert rows["left"]["tracking_loss_fraction"] != rows["right"]["tracking_loss_fraction"]
     assert rows["left"]["blink_rate_hz"] != rows["right"]["blink_rate_hz"]
+
+
+# ---------------------------------------------------------------------------
+# The second-order rung, end to end.
+#
+# The generator's ordinary eye signal is a slow two-frequency drift, and its
+# window means all lie on a curve -- close enough to a conic that the quadratic
+# design matrix is near rank-deficient. Measured over 40,000 window placements
+# across sessions from 27 s to 120 s, the best quadratic conditioning reachable
+# from it was 0.0739, against `MIN_CONDITIONING`'s 0.10: NO generated session
+# could reach this rung, so the rung had no end-to-end test it could pass, and
+# `make()` writing `calibration_model` as a constant `"affine"` survived the
+# whole suite.
+#
+# `SessionRecipe.eye_fixations` is what fixes that -- the eye HELD at stated
+# raw positions, which is what a calibration block actually is. Held at a 3x3
+# grid, the recovered constellation scores 0.9921 affine / 0.2266 second-order,
+# inside the measured good-geometry band.
+# ---------------------------------------------------------------------------
+
+_GRID_RAW_PX = [(x, y) for x in (-35.0, 0.0, 35.0) for y in (-25.0, 0.0, 25.0)]
+
+# `basis(_, SECOND_ORDER)` order: const, dx, dy, dx^2, dy^2, dx*dy. Deliberately
+# asymmetric between the axes and nonzero in every term, so a fit recovering
+# only part of it -- the linear part, say, or the axes transposed -- is caught.
+_TRUE_X = (2.0, 0.05, 0.01, 3e-4, -2e-4, 1e-4)
+_TRUE_Y = (-1.5, -0.02, 0.06, 1e-4, 4e-4, -2e-4)
+
+
+def _apply_true_second_order(raw) -> tuple[float, float]:
+    """The known map, written longhand -- independent of `basis`, for the
+    reason `tests/eye/test_calibration_fit.py` gives: an expectation built
+    from the function under test agrees with it by construction."""
+    dx, dy = raw
+    return (
+        _TRUE_X[0] + _TRUE_X[1] * dx + _TRUE_X[2] * dy
+        + _TRUE_X[3] * dx * dx + _TRUE_X[4] * dy * dy + _TRUE_X[5] * dx * dy,
+        _TRUE_Y[0] + _TRUE_Y[1] * dx + _TRUE_Y[2] * dy
+        + _TRUE_Y[3] * dx * dx + _TRUE_Y[4] * dy * dy + _TRUE_Y[5] * dx * dy,
+    )
+
+
+def _held_gaze_recipe(
+    session_id: str, subject: str, seed: int, *, holds_px, task_type: TaskTypeCode
+) -> SessionRecipe:
+    """One trial per held position, the gaze pinned across each trial's own
+    calibration window.
+
+    The hold spans `[trial_start + 1.15, trial_start + 1.85]`, strictly
+    containing the `[trial_start + 1.2, trial_start + 1.8]` window
+    `_fixation_words` opens, so every sampled frame is a held one and the
+    window mean is the held position rather than a blend of hold and drift.
+    """
+    from wl_preproc.synth.recipe import EyeFixationSpec
+
+    n_trials = len(holds_px)
+    fixations = tuple(
+        EyeFixationSpec(
+            start_s=index * TRIAL_DURATION_S + 1.15,
+            end_s=index * TRIAL_DURATION_S + 1.85,
+            x_px=x_px,
+            y_px=y_px,
+        )
+        for index, (x_px, y_px) in enumerate(holds_px)
+    )
+    return SessionRecipe(
+        session_id=session_id,
+        subject=subject,
+        rig="rig-a",
+        systems=("syncbox", "ohdpi"),
+        blocks=(
+            BlockSpec(
+                task_type=task_type, n_trials=n_trials, trial_duration_s=TRIAL_DURATION_S
+            ),
+        ),
+        montages=(MontageSpec(start_s=0.0, end_s=n_trials * TRIAL_DURATION_S),),
+        n_ap_channels=4,
+        ap_sample_rate_hz=30_000.0,
+        seed=seed,
+        eye_fixations=fixations,
+    )
+
+
+def _held_gaze_session(
+    daemon_module, prefix, root, *, session_id, subject, seed, session_datetime,
+    holds_px, task_type, target_of,
+):
+    """Generate, land, align, then write targets derived from the REAL raw
+    points and run the daemon once.
+
+    Same ordering as `round_trip_session` and for the same reason: the ohDPI
+    file and its `core.Segment` alignment must exist before targets can be
+    computed, because the targets are a known function of the raw points the
+    pipeline will actually sample -- read here through `_expected_raw_points`,
+    which resolves rows by this file's own independent re-derivation.
+    """
+    from wl_preproc.schema import core, timebase
+
+    recipe = _held_gaze_recipe(session_id, subject, seed, holds_px=holds_px, task_type=task_type)
+    truth = generate_session(root, recipe)
+    session_dir = root / recipe.session_id
+    session_key = _land(
+        root, recipe, session_datetime, acquisition_systems=("syncbox", "ohdpi")
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+
+    window_starts = [index * TRIAL_DURATION_S + 1.0 for index in range(len(holds_px))]
+    fixation_windows = [(start + 0.2, start + 0.8) for start in window_starts]
+    raw_points = _expected_raw_points(session_dir, segment, "Left", fixation_windows)
+
+    targets = [target_of(raw) for raw in raw_points]
+    _write_fixations(session_dir, recipe, truth, list(zip(window_starts, targets, strict=True)))
+
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report, raw_points
+
+
+@pytest.fixture(scope="module")
+def second_order_session(daemon_module, prefix, tmp_path_factory):
+    root = tmp_path_factory.mktemp("eyesecondorder")
+    return _held_gaze_session(
+        daemon_module, prefix, root,
+        session_id="2027-04-14_01", subject="eyeso001", seed=414,
+        session_datetime=datetime.datetime(2027, 4, 14, 9, 0),
+        holds_px=_GRID_RAW_PX,
+        task_type=TaskTypeCode.CALIBRATION,
+        target_of=_apply_true_second_order,
+    )
+
+
+def test_a_grid_session_reaches_the_second_order_rung(second_order_session):
+    """The rung this whole plan exists for, end to end through `make()`."""
+    from wl_preproc.schema import eye
+
+    session_key, report, _raw = second_order_session
+    assert _no_eye_stage_errors(report)
+
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+    assert row["calibration_source"] == "fitted"
+    assert row["calibration_model"] == "second_order"
+    assert row["n_points"] == len(_GRID_RAW_PX)
+
+
+def test_the_second_order_coefficients_are_numerically_recovered(second_order_session):
+    """Not "a map came back": all twelve coefficients, against ground truth.
+
+    The previous plan shipped a suite in which gutting the entire
+    session-time-to-row alignment left every test green, precisely because
+    nothing asserted a fitted map was numerically correct. At twice the
+    parameter count that must not recur.
+
+    Tolerances are per basis term because the terms have wildly different
+    lever arms: the constellation spans +-35 px in `dx`, so `dx^2` reaches
+    1225 and a coefficient there is ~1e-4, while the constant is ~2. The one
+    real error source is `encode_dva`/`decode_dva`'s 0.01-degree target
+    quantisation (~0.003 deg standard deviation), which divides by each
+    term's own spread on the way into the coefficient.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, _report, _raw = second_order_session
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+
+    recovered_x = tuple(row[f"gx_{s}"] for s in ("const", "dx", "dy", "dx2", "dy2", "dxdy"))
+    recovered_y = tuple(row[f"gy_{s}"] for s in ("const", "dx", "dy", "dx2", "dy2", "dxdy"))
+
+    tolerances = (2e-2, 5e-4, 5e-4, 2e-5, 2e-5, 2e-5)
+    for got, want, tol in zip(recovered_x, _TRUE_X, tolerances, strict=True):
+        assert got == pytest.approx(want, abs=tol)
+    for got, want, tol in zip(recovered_y, _TRUE_Y, tolerances, strict=True):
+        assert got == pytest.approx(want, abs=tol)
+
+    assert row["residual_deg_rms"] < 0.02
+    assert row["validation_error_deg"] < 0.02
+
+
+def test_a_dedicated_calibration_block_is_counted_as_one(second_order_session):
+    """Task 4's real `TaskTypeCode.CALIBRATION`, replacing the provisional
+    `MEMORY_GUIDED_SACCADE` reading. Every window here sits in a block that
+    declares itself a calibration block, so every point is attributed to one
+    and none to an incidental task fixation."""
+    from wl_preproc.schema import eye
+
+    session_key, _report, _raw = second_order_session
+    for row in (eye.EyeCalibration & session_key).to_dicts():
+        assert row["n_from_calibration_block"] == len(_GRID_RAW_PX)
+        assert row["n_from_task_fixation"] == 0
+
+
+# --- The ring: the geometry that must fall to the affine rung ---------------
+
+_RING_RAW_PX = [
+    (30.0 * float(np.cos(angle)), 30.0 * float(np.sin(angle)))
+    for angle in (np.arange(8) * 2 * np.pi / 8)
+]
+
+
+def _apply_true_affine(raw) -> tuple[float, float]:
+    dx, dy = raw
+    return (_TRUE_X[0] + _TRUE_X[1] * dx + _TRUE_X[2] * dy,
+            _TRUE_Y[0] + _TRUE_Y[1] * dx + _TRUE_Y[2] * dy)
+
+
+@pytest.fixture(scope="module")
+def ring_session(daemon_module, prefix, tmp_path_factory):
+    root = tmp_path_factory.mktemp("eyering")
+    return _held_gaze_session(
+        daemon_module, prefix, root,
+        session_id="2027-04-15_01", subject="eyering1", seed=415,
+        session_datetime=datetime.datetime(2027, 4, 15, 9, 0),
+        holds_px=_RING_RAW_PX,
+        task_type=TaskTypeCode.CALIBRATION,
+        target_of=_apply_true_affine,
+    )
+
+
+def test_a_ring_session_lands_on_affine_with_null_quadratic_columns(ring_session):
+    """Eight targets on a ring are an ordinary saccade-task geometry: they
+    constrain an affine perfectly and a quadratic not at all, since points on
+    a circle satisfy `x^2 + y^2 = r^2`. The session must therefore get its OWN
+    affine map -- `fitted`, not borrowed -- and the six quadratic columns must
+    be NULL, which is what makes `calibration_model` readable as the authority
+    rather than guessable from the data.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, report, _raw = ring_session
+    assert _no_eye_stage_errors(report)
+
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+    assert row["calibration_source"] == "fitted"
+    assert row["calibration_model"] == "affine"
+    assert row["n_points"] == len(_RING_RAW_PX)
+
+    for suffix in ("dx2", "dy2", "dxdy"):
+        assert row[f"gx_{suffix}"] is None
+        assert row[f"gy_{suffix}"] is None
+    for suffix in ("const", "dx", "dy"):
+        assert row[f"gx_{suffix}"] is not None
+        assert row[f"gy_{suffix}"] is not None
+
+    # And the affine it did fit is the RIGHT one, not merely present.
+    assert row["gx_const"] == pytest.approx(_TRUE_X[0], abs=2e-2)
+    assert row["gx_dx"] == pytest.approx(_TRUE_X[1], abs=5e-4)
+    assert row["gy_dy"] == pytest.approx(_TRUE_Y[2], abs=5e-4)
+    assert row["residual_deg_rms"] < 0.02
+
+
+def test_a_carried_forward_second_order_map_keeps_its_shape(daemon_module, prefix):
+    """`_map_from_row` branches on `calibration_model`, and this is what makes
+    that branch load-bearing rather than decorative.
+
+    Found by mutation: with only affine rows on record, `_map_from_row`
+    hardcoded to read three coefficients and label them `affine` passed the
+    entire suite -- while `_best_carry_forward_candidate`'s own comment claimed
+    a borrowed second-order map keeps its shape. A comment asserting behaviour
+    nothing exercises is the defect this subsystem's handoff names twelve
+    times over.
+
+    Inserted directly rather than fitted, for the reason the nearest-tie test
+    beside it gives: the selection logic is what is under test here, not the
+    fit that produced a candidate.
+    """
+    from wl_preproc.schema import eye, pipeline
+
+    subject = "eyeso2nd"
+    source_datetime = datetime.datetime(2027, 4, 21, 8, 0)
+    this_datetime = datetime.datetime(2027, 4, 21, 11, 0)
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    pipeline.Session.insert(
+        [
+            {"subject": subject, "session_datetime": dt}
+            for dt in (source_datetime, this_datetime)
+        ],
+        skip_duplicates=True,
+    )
+    eye.EyeCalibration.insert1(
+        {
+            "subject": subject,
+            "session_datetime": source_datetime,
+            "eye": "left",
+            "calibration_source": "fitted",
+            "calibration_model": "second_order",
+            "gx_const": 2.0, "gx_dx": 0.05, "gx_dy": 0.01,
+            "gx_dx2": 3e-4, "gx_dy2": -2e-4, "gx_dxdy": 1e-4,
+            "gy_const": -1.5, "gy_dx": -0.02, "gy_dy": 0.06,
+            "gy_dx2": 1e-4, "gy_dy2": 4e-4, "gy_dxdy": -2e-4,
+            "validation_error_deg": 0.1,
+            "n_points": 9,
+            "n_from_calibration_block": 9,
+            "n_from_task_fixation": 0,
+            "conditioning": 0.75,
+            "residual_deg_rms": 0.1,
+            "residual_deg_max": 0.2,
+            "carried_from_session_datetime": None,
+            "reason": "",
+        },
+        allow_direct_insert=True,
+    )
+
+    candidate = eye._best_carry_forward_candidate(
+        "left", {"subject": subject, "session_datetime": this_datetime}
+    )
+
+    assert candidate is not None
+    when, borrowed = candidate
+    assert when == source_datetime
+    assert borrowed.model is CalibrationModel.SECOND_ORDER
+    assert borrowed.x == (2.0, 0.05, 0.01, 3e-4, -2e-4, 1e-4)
+    assert borrowed.y == (-1.5, -0.02, 0.06, 1e-4, 4e-4, -2e-4)
+    assert borrowed.n_points == 9
+    assert borrowed.conditioning == pytest.approx(0.75)

@@ -2,10 +2,10 @@
 
 Every conditioning figure quoted below was measured against this file's own
 constellations with `.venv/bin/python`, not copied from the design spec: the
-spec's own unnormalised figure (4.95e-05 for a 3x3 grid) holds only at a
-~100-unit constellation and is 7.92e-03 at a degrees-scale one, and a number
-that changes with the scale it was measured at has to be re-measured at the
-scale it is cited at.
+spec's own unnormalised figure (4.95e-05 for a 3x3 grid) reproduces only at a
+~100-unit constellation (measured: 5.07e-05) and is 7.92e-03 at a degrees-scale
+one, and a number that changes with the scale it was measured at has to be
+re-measured at the scale it is cited at.
 """
 
 import numpy as np
@@ -117,7 +117,7 @@ def test_a_ring_of_eight_is_refused_for_second_order():
     through.
     """
     target = _affine(RING, _X_COEFFS[:3], _Y_COEFFS[:3])
-    assert _conditioning(basis(target, SECOND_ORDER)) == pytest.approx(0.0, abs=1e-12)
+    assert _conditioning(target, SECOND_ORDER) == pytest.approx(0.0, abs=1e-12)
 
     with pytest.raises(DegenerateGeometry, match="target spread"):
         fit_map(RING, target, SECOND_ORDER)
@@ -140,12 +140,12 @@ def test_four_spread_targets_are_refused_on_point_count_not_conditioning():
 
     Four points against six unknowns is underdetermined outright, but the
     design matrix is 4x6, its SVD returns only four singular values, and
-    their ratio cannot see the two missing dimensions: measured 0.2296 here,
+    their ratio cannot see the two missing dimensions: measured 0.2787 here,
     against a 0.10 threshold -- comfortably "healthy". Only the point count
     catches it, which is why it is checked first.
     """
     target = _affine(SPREAD, _X_COEFFS[:3], _Y_COEFFS[:3])
-    healthy_looking = _conditioning(basis(target, SECOND_ORDER))
+    healthy_looking = _conditioning(target, SECOND_ORDER)
     assert healthy_looking > MIN_CONDITIONING[SECOND_ORDER]
 
     with pytest.raises(DegenerateGeometry, match="needs at least"):
@@ -166,8 +166,8 @@ def test_a_perfect_grid_passes_because_the_measure_normalises_its_columns():
 
     The quadratic basis columns of these targets run `1`, `~5`, `~25`, so
     units dominate the singular ratio. Measured on this grid's own targets:
-    1.74e-02 unnormalised against a 0.10 threshold -- refused -- versus
-    0.2129 normalised. The unnormalised figure is scale-dependent (the design
+    1.85e-02 unnormalised against a 0.10 threshold -- refused -- versus
+    0.2276 normalised. The unnormalised figure is scale-dependent (the design
     spec quotes 4.95e-05, which reproduces at a ~100-unit constellation;
     these targets are in degrees, so the same grid reads three orders of
     magnitude higher) and the normalised one is not, which is the whole
@@ -175,7 +175,10 @@ def test_a_perfect_grid_passes_because_the_measure_normalises_its_columns():
     """
     target = _second_order(GRID, _X_COEFFS, _Y_COEFFS)
 
-    design = basis(target, SECOND_ORDER)
+    # The same centred expansion `_conditioning` builds, with only the column
+    # normalisation left out -- so this isolates the normalisation and nothing
+    # else.
+    design = basis(target - target.mean(axis=0), SECOND_ORDER)
     unnormalised = np.linalg.svd(design, compute_uv=False)
     assert unnormalised[-1] / unnormalised[0] < MIN_CONDITIONING[SECOND_ORDER]
 
@@ -215,17 +218,17 @@ def test_a_single_target_location_is_refused_at_both_models():
 
     A well-spread raw cloud from one target location is noise, not
     information. Measured directly: for a raw cloud straddling the sensor
-    origin, `_conditioning(basis(raw, AFFINE))` is 0.857 -- passing the 0.05
+    origin, `_conditioning(raw, AFFINE)` is 0.9838 -- passing the 0.05
     threshold comfortably -- while least squares returns all-zero
     coefficients, a "calibration" mapping every gaze sample in the session
     onto the single point (0, 0). Measured on the targets the same case
-    scores exactly 0.0000, because identical target rows make all three
-    normalised basis columns the same column.
+    scores exactly 0.0000, because identical target rows leave nothing at all
+    after centring.
     """
     raw = np.array([[-6.0, 4.0], [7.0, -5.0], [-3.0, -8.0], [5.0, 9.0], [1.0, 2.0], [-2.0, 6.0]])
     target = np.zeros((6, 2))
 
-    assert _conditioning(basis(raw, AFFINE)) > MIN_CONDITIONING[AFFINE]
+    assert _conditioning(raw, AFFINE) > MIN_CONDITIONING[AFFINE]
 
     for model in (SECOND_ORDER, AFFINE):
         with pytest.raises(DegenerateGeometry, match="target spread"):
