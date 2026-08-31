@@ -91,19 +91,27 @@ def _computed_tables() -> list:
     was False and `events.agreement.resolve_tier` returned D at its
     `trial_count_agreement is False` guard for every session.
 
-    **`eye.EyeCalibration`/`eye.EyeQuality` are registered but currently
-    inert.** The 2026-08-30 eye-ohdpi-calibration-and-gaze design's own Task 9
-    is schema only -- neither table defines `make()`, and each overrides
-    `key_source` to stay permanently empty rather than fall back to
-    DataJoint's default (the join of FK parents, here bare `pipeline.Session`)
-    -- see `eye.EyeCalibration.key_source`'s own docstring for why leaving
-    that default would have broken this very loop the moment these tables
-    joined it. Their position here is therefore not load-bearing today the
-    way the rest of this list's ordering is; placed after `TrialCoverage` and
-    before `TimingProvenance` because design spec section 6's real
-    `key_source` -- a later task's work -- restricts to sessions with an
-    ohDPI recording and assembled events, both already satisfied by this
-    point in a `run_once` pass.
+    **`eye.EyeCalibration`/`eye.EyeQuality` were registered inert and are not
+    any more.** The 2026-08-30 eye-ohdpi-calibration-and-gaze design's own
+    Task 9 shipped both as schema only -- neither table defined `make()`, and
+    each overrode `key_source` to stay permanently empty rather than fall
+    back to DataJoint's default (the join of FK parents, here bare
+    `pipeline.Session`), because leaving that default would have broken this
+    very loop the moment these tables joined it -- `dj.AutoPopulate`'s own
+    base `make()` raises `NotImplementedError` unconditionally, and every
+    session already landed would have hit it. That reasoning is preserved in
+    `wl_preproc/schema/eye.py`'s own git history (each class's former
+    `key_source`), not restated in the current one, which describes the real
+    restriction instead. Task 10 replaced both `key_source`s with that real
+    restriction design spec section 6 names and gave both a real `make()`;
+    they compute for real now. Their POSITION here is still not load-bearing
+    the way the rest of this list's ordering is (nothing downstream of them
+    reads their output within this same `run_once` pass), but the restriction
+    itself needs an ohDPI recording and assembled events, both already
+    satisfied by this point in a pass -- so placed after `TrialCoverage` and
+    before `TimingProvenance` is still the right position, now for the
+    reason it always should have been rather than merely because nothing yet
+    depended on it.
     """
     return [
         timebase.SystemTimebase,
@@ -116,7 +124,8 @@ def _computed_tables() -> list:
         # stage before this whole list, so the second half is satisfied by
         # position rather than needing an entry here.
         coverage.TrialCoverage,
-        # Currently no-ops -- see this function's own docstring above.
+        # Real as of Task 10 -- see this function's own docstring above for
+        # why their position here still is not what makes them correct.
         eye.EyeCalibration,
         eye.EyeQuality,
         # Last: it counts segments and rejections, so it must run after
@@ -194,9 +203,10 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # `eye` module, caught by the same test a fourth time. Unlike `ephys` and
 # `archive`, `eye` DOES declare two `@schema`-decorated `dj.Computed` tables
 # of its own (`EyeCalibration`, `EyeQuality`) — so it owns real `~jobs`
-# tables, like `timebase` — but unlike `timebase`'s, neither is populated by
-# anything yet: Task 9 is schema only, and `_computed_tables()`'s own
-# docstring names exactly what keeps that safe to register today.
+# tables, like `timebase`. Task 9 shipped both schema-only, with a
+# permanently empty `key_source` — `_computed_tables()`'s own docstring
+# named exactly what kept that safe to register at the time — and Task 10
+# gave both a real `key_source` and `make()`; they populate for real now.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
     ("core", core),

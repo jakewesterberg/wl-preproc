@@ -67,19 +67,33 @@ def test_both_computed_tables_are_daemon_stages():
 def test_registering_them_does_not_break_a_clean_daemon_pass(schemas, dj_conn, prefix):
     """Not one of the brief's own four tests -- added because registering
     these tables surfaced a real hazard the brief does not describe (reported
-    separately): neither table defines `make()` (Task 9 is schema only), and
-    DataJoint's default `key_source` for a Computed table is the join of its
-    FK parents projected to their primary key -- here, bare `pipeline.Session`
-    -- with nothing about the extra `eye` attribute. Left at that default,
-    `daemon.run_once()` would call `.populate()` against every session already
-    in this suite's shared database (`tests/conftest.py`'s session-scoped
-    `dj_conn`/`prefix`) and hit `dj.AutoPopulate`'s own base `make()`, which
-    raises `NotImplementedError` unconditionally -- confirmed directly against
-    `datajoint/autopopulate.py` for this pinned version (2.3.2). `key_source`
-    is overridden on both tables to stay empty until a later task supplies the
-    real restriction design spec section 6 names ("the session restricted to
-    those with an ohDPI recording and assembled events") alongside `make()`
-    itself.
+    separately): at the time this test was written, neither table defined
+    `make()` (Task 9 was schema only), and DataJoint's default `key_source`
+    for a Computed table is the join of its FK parents projected to their
+    primary key -- here, bare `pipeline.Session` -- with nothing about the
+    extra `eye` attribute. Left at that default, `daemon.run_once()` would
+    call `.populate()` against every session already in this suite's shared
+    database (`tests/conftest.py`'s session-scoped `dj_conn`/`prefix`) and
+    hit `dj.AutoPopulate`'s own base `make()`, which raises
+    `NotImplementedError` unconditionally -- confirmed directly against
+    `datajoint/autopopulate.py` for this pinned version (2.3.2). Task 9's own
+    `key_source` was overridden on both tables to stay empty until a later
+    task supplied the real restriction design spec section 6 names ("the
+    session restricted to those with an ohDPI recording and assembled
+    events") alongside `make()` itself.
+
+    **Task 10 is that later task, and both now have a real `key_source` and
+    `make()` (`wl_preproc/schema/eye.py`).** This test still passes, but for
+    a different reason than the paragraph above: the bare `pipeline.Session`
+    row the fixture below plants has no `ingest.Ingestion`, no
+    `core.AcquisitionSystem` and no `pipeline.event.BehaviorRecording`, so
+    `EyeCalibration.key_source`'s real restriction (design spec section 6)
+    excludes it on its own merits now, the same way it excludes any session
+    missing either half -- not because there was nothing yet defined to run
+    against it. Kept rather than rewritten from scratch: a bare-session
+    fixture with zero errors is still the right regression guard for "does
+    registering these two tables break a clean daemon pass", regardless of
+    which `key_source` is doing the excluding underneath it.
 
     This is what actually proves that stays true end to end, through the real
     `daemon.run_once()` path -- not through `EyeCalibration.key_source` in

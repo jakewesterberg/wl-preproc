@@ -165,6 +165,35 @@ class EyeCalibration(dj.Computed):
         instead, matching `timebase.py`/`coverage.py`'s own precedent -- it
         sits structurally below every other schema module here, so no such
         hazard exists for it.
+
+        **Cost, named rather than left implicit (fix round, reviewer
+        finding 3): this coarse gate forfeits `core.Segment`'s own
+        self-healing property.** That table's own `key_source` docstring
+        states it as deliberate: a session whose files are ALL rejected
+        stays outstanding on purpose, "what lets a corrected or
+        re-transferred file be picked up with no manual step". Because
+        `core.Segment` and this table populate inside the SAME
+        `run_once()` pass, and this `key_source` needs only the coarse
+        `AcquisitionSystem` signal, a session whose ohDPI file is rejected
+        on pass 1 (`too_short`, `no_barcode`) gets `make()`'s own "no
+        segments" refusal that SAME pass -- and once written, that row is
+        PERMANENT: DataJoint never recomputes an already-populated key. If
+        the file is later corrected or re-transferred, `core.Segment`
+        would pick it up on a later pass (it keeps retrying until
+        something is accepted); this table never will, short of someone
+        deleting the row by hand. `EyeQuality`, keyed on `core.Segment`
+        directly (see its own `key_source`), does not have this problem --
+        it simply stays outstanding for as long as `core.Segment` does.
+
+        Kept anyway, deliberately: gating THIS table on `core.Segment` too
+        would swap this cost for the opposite one -- a session with a
+        GENUINELY missing or permanently unusable ohDPI file would get no
+        row here at all, ever, which is precisely the outcome this task's
+        own brief and design spec section 6 refuse ("a session with no
+        ohDPI file gets refused with that specific reason" is only
+        reachable if the file's ABSENCE itself still produces a row). Both
+        costs are real; this file accepts the one the brief states
+        explicitly over the one it does not.
         """
         from wl_preproc.schema import ingest
 
@@ -302,6 +331,18 @@ class EyeCalibration(dj.Computed):
         # -- Resolve each window to an ohDPI row range, once: identical for
         # both eyes (same file, same segment timing -- only the PURKINJE
         # VALUES sampled from it differ per eye, applied below).
+        #
+        # A window that named a real target but falls OUTSIDE every aligned
+        # segment (ohDPI started late, a restart split the window, or
+        # `core.Segment` simply never aligned that stretch) is dropped here
+        # -- silently, at this point -- rather than guessed at. Fix round
+        # (reviewer finding 2): dropping it with NO RECORD meant a session
+        # where EVERY window dropped this way fell through to
+        # `resolve_calibration`'s own "no fixation epoch named a target
+        # position" -- which is FALSE. Epochs existed and named real
+        # targets; the fault is recording coverage, not the task code, and
+        # a `n_windows_found`/`len(row_ranges)` gap below is what makes that
+        # distinction visible instead of silently absorbed.
         row_ranges: list[
             tuple[int, int, tuple[float, float], int | None, int | None, dict]
         ] = []
@@ -315,6 +356,45 @@ class EyeCalibration(dj.Computed):
                 continue
             lo, hi = sorted((row_start, row_end))
             row_ranges.append((lo, hi, target_xy, block_id, task_type, segment))
+
+        n_windows_found = len(windows)
+        n_windows_dropped = n_windows_found - len(row_ranges)
+
+        if windows and not row_ranges:
+            # Every fixation epoch that named a target still had nowhere to
+            # be sampled from. Bypassing `resolve_calibration` here matters:
+            # its own "no fixation epoch named a target position" would be
+            # ACTIVELY WRONG in this case and would point a design spec
+            # section 8 report reader at the task code for a fault that is
+            # actually the recording's own coverage.
+            reason = (
+                f"{n_windows_found} fixation epoch(s) named a target, but "
+                "none fell within an aligned ohDPI segment (recording "
+                "coverage gap: ohDPI starting late, a restart splitting the "
+                "window, or a stretch core.Segment never aligned)"
+            )
+            self.insert(
+                [
+                    {
+                        **session_key,
+                        "eye": eye_value,
+                        "calibration_source": "refused",
+                        "a00": None, "a01": None, "b0": None,
+                        "a10": None, "a11": None, "b1": None,
+                        "validation_error_deg": None,
+                        "n_points": 0,
+                        "n_from_calibration_block": 0,
+                        "n_from_task_fixation": 0,
+                        "conditioning": None,
+                        "residual_deg_rms": None,
+                        "residual_deg_max": None,
+                        "carried_from_session_datetime": None,
+                        "reason": reason,
+                    }
+                    for eye_value in ("left", "right")
+                ]
+            )
+            return
 
         # -- MonkeyLogic's candidate: one map for the whole session (Task 6's
         # reader has no per-eye split), tried identically for both eyes below.
@@ -337,14 +417,29 @@ class EyeCalibration(dj.Computed):
                     cache[path] = trace
                 raw_points.append(trace[lo : hi + 1].mean(axis=0))
                 target_points.append(target_xy)
-                # No literal "calibration" task type exists in
-                # `contracts.events.TaskTypeCode` -- design spec section 4.2
-                # ties MEMORY_GUIDED_SACCADE specifically to placing a
-                # fixation point and a target on screen together, the
-                # closest thing this protocol has to a task run FOR
-                # calibration rather than one that merely fixates in
-                # passing. Every other task type's fixation counts as
-                # ordinary task fixation instead.
+                # PROVISIONAL READING, NOT A SETTLED FACT (fix round,
+                # reviewer finding 6): no literal "calibration" task type
+                # exists in `contracts.events.TaskTypeCode`, and design spec
+                # section 4.2 motivates the `role` word with
+                # MEMORY_GUIDED_SACCADE -- "that task has a fixation point
+                # and a target on screen simultaneously" -- WITHOUT ever
+                # characterising it as a dedicated calibration block. Reading
+                # it as one is this implementation's own choice, not
+                # something section 3.4's "calibration block or a task
+                # fixation" distinction independently settles. A future task
+                # that names a real calibration task type, or decides
+                # MEMORY_GUIDED_SACCADE is not one, changes only this `if`.
+                #
+                # Recorded, not fixed: for MEMORY_GUIDED_SACCADE specifically
+                # -- the one type bucketed as "calibration block" -- every
+                # window here is still paired with `TargetRole.
+                # FIXATION_POINT` only (this method's own loop, above), never
+                # `SACCADE_TARGET` (role 1), which is what a POST-saccade
+                # hold would need. Whether MGS ever emits a
+                # FIXATION_ACQUIRED/END pair around the saccade target rather
+                # than the fixation point is undetermined until that task's
+                # own code exists; if it does, this bucket is fit against the
+                # wrong target for exactly the task type it claims to favour.
                 if task_type == int(TaskTypeCode.MEMORY_GUIDED_SACCADE):
                     n_from_calibration_block += 1
                 else:
@@ -392,6 +487,21 @@ class EyeCalibration(dj.Computed):
                 else (None, None, None, None, None, None)
             )
 
+            # A PARTIAL drop -- some windows sampled fine, at least one did
+            # not -- must still be visible even when calibration otherwise
+            # SUCCEEDS from what remained: a coverage gap that happens not
+            # to change the verdict this time is still worth knowing about
+            # before it grows into one that does. Appended rather than
+            # replacing `result.reason`, so a genuine refusal (e.g.
+            # degenerate geometry) keeps its own reason too.
+            reason = result.reason
+            if n_windows_dropped > 0:
+                coverage_note = (
+                    f"{n_windows_dropped} of {n_windows_found} fixation "
+                    "windows had no ohDPI coverage"
+                )
+                reason = f"{reason}; {coverage_note}" if reason else coverage_note
+
             rows.append(
                 {
                     **session_key,
@@ -407,7 +517,7 @@ class EyeCalibration(dj.Computed):
                     "residual_deg_rms": residual_rms,
                     "residual_deg_max": residual_max,
                     "carried_from_session_datetime": carried_from_dt,
-                    "reason": result.reason,
+                    "reason": reason,
                 }
             )
 
@@ -490,21 +600,37 @@ def _find_bhv2(session_dir: Path) -> Path | None:
 def _best_carry_forward_candidate(
     eye_value: str, session_key: dict
 ) -> tuple[datetime.datetime, AffineMap] | None:
-    """Design spec section 3.5 step 3: the same subject and calendar date,
-    nearest in time, preferring a preceding session.
+    """Design spec section 3.5 step 3, and a real ambiguity in it, resolved
+    rather than hidden (fix round, reviewer finding 6).
 
-    Restricted to `calibration_source='fitted'` rows -- the only source with
-    a real, non-NaN `conditioning` of its own (`AffineMap`'s own docstring:
-    a borrowed map "was never fit by `fit_affine` here and has no such
-    history to report"). That is what lets section 3.5's summary table
-    ("the best-conditioned map from the same subject and date") and its own
-    "Carry-forward scope" paragraph ("nearest in time, preferring a
-    preceding session") describe the SAME restriction rather than two
-    unreconciled sort keys: only a `fitted` row has a conditioning score to
-    be "best" by in the first place, and carrying forward a map that was
-    ITSELF already borrowed would compound provenance across an unbounded
-    chain -- precisely what section 3.4's "recorded, not averaged away"
-    (of which source contributed a point) argues against.
+    **Section 3.5 states two different selection rules and I picked one.**
+    Its summary table says step 3 offers "the best-conditioned map from the
+    same subject and date"; its own "Carry-forward scope" paragraph says
+    "the same `(subject, date)`, nearest in time, preferring a preceding
+    session." These do not agree in general -- given an 08:30 candidate at
+    `conditioning=0.06` and an 06:00 candidate at `0.95`, "best-conditioned"
+    picks 06:00 and "nearest in time" picks 08:30. **This function sorts by
+    nearest in time, preferring a preceding session on a tie**, and does
+    NOT compare candidates by conditioning at all. Chosen over
+    "best-conditioned" because the scope paragraph is the more specific of
+    the two -- it names an actual total order (time delta, tie-break), where
+    "best-conditioned" alone is silent on what breaks a tie in conditioning
+    -- and because a calibration drifts with time (section 3.6), so the
+    nearer session is the more defensible default borrow regardless of
+    which one happened to fit slightly better.
+
+    Separately, and not as a resolution of the disagreement above:
+    candidates are restricted to `calibration_source='fitted'` rows, the
+    only source with a real, non-NaN `conditioning` of its own (`AffineMap`'s
+    own docstring: a borrowed map "was never fit by `fit_affine` here and
+    has no such history to report"). This filter stands on its own
+    reasoning -- carrying forward a map that was ITSELF already borrowed
+    would compound provenance across an unbounded chain, precisely what
+    section 3.4's "recorded, not averaged away" (of which source contributed
+    a point) argues against -- not because it makes "best-conditioned" and
+    "nearest in time" agree; restricting to `fitted` candidates does not
+    change which of the two rules above is being applied, only which rows
+    are eligible for either.
     """
     candidates = (
         EyeCalibration
@@ -602,6 +728,15 @@ class EyeQuality(dj.Computed):
         blink rate need only an ohDPI recording, not assembled events"), and
         tracking loss reads straight off `DataQuality`, needing no decoded
         target at all.
+
+        This is also why THIS table, unlike `EyeCalibration`, keeps
+        `core.Segment`'s own self-healing property intact: a session whose
+        ohDPI file is rejected on one pass simply stays outstanding here
+        too, for as long as `core.Segment` itself does, and a later
+        correction or re-transfer is picked up with no manual step. See
+        `EyeCalibration.key_source`'s own docstring for the cost its
+        coarser gate accepts in exchange for a row -- refused, with a
+        reason -- that a permanently missing file still gets.
         """
         from wl_preproc.schema import ingest
 
