@@ -142,39 +142,62 @@ def test_apply_map_matches_a_matrix_multiply_for_an_asymmetric_affine():
 
 
 def test_calibration_map_equality_is_unusable_by_design():
-    """Controller ruling B (task-7 brief) says two maps built with the
-    defaults never compare equal, because `conditioning` defaults to nan and
-    nan != nan. Checked directly, that is NOT what happens: a dataclass
-    default is evaluated once, at class definition, and reused for every
-    instance that does not override it, so two such maps share the exact same
-    `float("nan")` OBJECT. list/tuple equality -- which is what the
-    dataclass-generated `__eq__` reduces to -- short-circuits per-element on
-    `is` before falling back to `==` (a long-standing CPython optimisation
-    for sequence types), so that shared identity makes the pair compare EQUAL
-    without nan's own "never equal to itself" behaviour ever being exercised.
-    Passing a fresh `float("nan")` explicitly to each side avoids the shared
-    object and restores the naive nan behaviour.
+    """Controller ruling B (task-7 brief) says two maps built with the defaults
+    never compare equal, because `conditioning` defaults to nan and nan != nan.
 
-    The ruling's bottom line survives anyway, just for a sharper reason than
-    stated: `==` on a `CalibrationMap` returns True or False depending on an
-    invisible object-identity coincidence in how each side happened to be
-    constructed, not on whether two maps are the same calibration. That
-    inconsistency -- not a reliable "always False" -- is what makes it
-    unusable for "is this the same map I already tried", and why
-    resolve_calibration must do that on the coefficient tuples alone, or on
-    identity, as the ruling says.
+    **The ruling's bottom line holds. Two successive explanations of WHY did
+    not, and the second one broke CI.** The ruling's own reason is wrong: a
+    dataclass default is evaluated once, at class definition, so two maps that
+    do not override `conditioning` share the exact same `float("nan")` OBJECT,
+    and nan's "never equal to itself" is never reached. This test then asserted
+    the opposite outcome -- that they compare EQUAL, through the identity
+    short-circuit -- which was true on 3.11 and is FALSE on 3.13.
+
+    Measured by disassembling the generated `__eq__` on both:
+
+      3.11  BUILD_TUPLE, BUILD_TUPLE, one COMPARE_OP -- a tuple comparison,
+            which short-circuits per element on identity, so the shared nan
+            object makes the pair EQUAL.
+      3.13  one COMPARE_OP per field, no tuple built -- `self.conditioning ==
+            other.conditioning` reaches `float.__eq__` directly, which has no
+            identity fast path, so the same pair is UNEQUAL.
+
+    Both interpreters still say `(nan,) == (nan,)` is True for a shared object;
+    what changed is that dataclasses stopped going through tuple comparison.
+    This repository supports both (`pyproject.toml`: 3.11 is wl-sync's floor,
+    3.13 is what Fedora ships on the preprocessing server), and CI runs both --
+    which is the only reason this was caught, since the local suite runs on
+    3.11 alone.
+
+    **So the answer itself is version-dependent, and that is the ruling stated
+    more strongly than the ruling stated it**: `==` on a `CalibrationMap`
+    answers a question about float identity and interpreter version, never
+    about whether two maps are the same calibration. This test therefore pins
+    only what is true on both, which is enough to make the point.
+
+    Nothing in `wl_preproc/` compares maps with `==` -- verified by sweep --
+    so the 3.13 change alters no production behaviour. `resolve_calibration`
+    does it on identity, as the ruling requires, and the chain tests above
+    assert `result.map_ is GOOD` rather than `==`.
     """
-    same_defaults_a = CalibrationMap(model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0))
-    same_defaults_b = CalibrationMap(model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0))
-    assert same_defaults_a == same_defaults_b  # equal only by a shared-default-object coincidence
+    fields = {"model": _AFFINE, "x": (0.0, 1.0, 0.0), "y": (0.0, 0.0, 1.0), "n_points": 4}
 
-    fresh_nan_a = CalibrationMap(
-        model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0), conditioning=float("nan")
-    )
-    fresh_nan_b = CalibrationMap(
-        model=_AFFINE, x=(0.0, 1.0, 0.0), y=(0.0, 0.0, 1.0), conditioning=float("nan")
-    )
-    assert fresh_nan_a != fresh_nan_b  # same coefficients, "same" calibration -- yet not equal
+    # A map whose `conditioning` is a real number equals an identical one --
+    # on both interpreters, since every field then compares by value.
+    assert CalibrationMap(**fields, conditioning=0.9) == CalibrationMap(**fields, conditioning=0.9)
+
+    # The same calibration in every sense that matters, differing only in that
+    # its `conditioning` is nan -- which is exactly what a BORROWED map's is,
+    # by `CalibrationMap`'s own documented default -- does not.
+    fresh_nan_a = CalibrationMap(**fields, conditioning=float("nan"))
+    fresh_nan_b = CalibrationMap(**fields, conditioning=float("nan"))
+    assert fresh_nan_a != fresh_nan_b
+
+    # So `==` turns on whether one field happens to be nan, which is invisible
+    # at the call site. What identifies a map is its model and coefficients,
+    # and those compare correctly whatever `conditioning` holds.
+    assert fresh_nan_a.model is fresh_nan_b.model
+    assert (fresh_nan_a.x, fresh_nan_a.y) == (fresh_nan_b.x, fresh_nan_b.y)
 
 
 def test_calibration_fields_are_positional_in_the_documented_order():

@@ -8,6 +8,14 @@ This file went **nine days and three merged subsystems stale** before this updat
 claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
 numbers before you distrust the reasoning.
 
+> **The local suite cannot see everything CI sees, and this has already cost a day.** The
+> venv is Python 3.11; CI runs **3.11 and 3.13**, because 3.11 is wl-sync's floor and 3.13
+> is what Fedora ships on the preprocessing server. The eye merge (`e7c8ea4`) left CI red
+> on 3.13 alone for a day while every local run was green, and the "CI green" claim in the
+> table below was false for that whole period. A green local run is evidence about 3.11 on
+> macOS arm64 and nothing else — **push and check `gh run list` before believing the
+> table.**
+
 **The lab starts January 2027.** Everything here is being built before any real data exists,
 so that January validates rather than discovers.
 
