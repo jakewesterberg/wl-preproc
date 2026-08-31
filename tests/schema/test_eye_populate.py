@@ -505,6 +505,77 @@ def test_a_partially_dropped_window_still_calibrates_and_says_so(partial_coverag
         assert row["reason"] == "1 of 5 fixation windows had no ohDPI coverage"
 
 
+REASON_COLUMN_MAX_LEN = 255
+
+
+@pytest.fixture(scope="module")
+def overlong_reason_session(daemon_module, prefix, tmp_path_factory):
+    """A session that combines TWO of this file's other fixtures' own
+    shapes: `degenerate_session`'s four coincident central targets (so
+    `resolve_calibration` refuses with `calibration.py::fit_affine`'s own
+    221-character collinear/coincident message, "; no fallback map
+    validated" making 248) AND `partial_coverage_session`'s fifth,
+    out-of-coverage window (so `make()`'s own coverage-drop note gets
+    appended too). Coordinator's own worked case: 248 + "; " + a
+    coverage note comfortably exceeds `EyeCalibration.reason`'s
+    `varchar(255)`, and this is the first fixture in this file to
+    reach it -- `degenerate_session` alone has zero dropped windows, and
+    `partial_coverage_session` alone always succeeds as `fitted`, whose
+    own `reason` never carries `resolve_calibration`'s own text at all.
+    """
+    root = tmp_path_factory.mktemp("eyeoverflow")
+    recipe = _recipe("2027-04-12_01", "eyeoverf", seed=416, include_ohdpi=True)
+    truth = generate_session(root, recipe)
+    session_dir = root / recipe.session_id
+    windows = [
+        (trial_index * TRIAL_DURATION_S + 1.0, (0.0, 0.0)) for trial_index in range(N_TRIALS)
+    ]
+    windows.append((200.0, (5.0, 5.0)))  # out of coverage: dropped
+    _write_fixations(session_dir, recipe, truth, windows)
+    session_key = _land(
+        root, recipe, datetime.datetime(2027, 4, 12, 9, 0),
+        acquisition_systems=("syncbox", "ohdpi"),
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
+
+
+def test_a_combined_reason_that_would_overflow_is_bounded_and_marked(overlong_reason_session):
+    """The fix round's own bug, reproduced: before it, this exact
+    combination raised `pymysql.err.DataError` inside `make()`, which
+    `daemon.run_once()`'s `suppress_errors=True` turned into a daemon
+    error rather than the graceful `refused`-with-a-reason row this
+    module's own docstring calls a first-class outcome. `report["errors"]`
+    must therefore be clean for this session -- not merely the row
+    existing -- and the stored `reason` must still name BOTH causes, not
+    just whichever one happened to be truncated away.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, report = overlong_reason_session
+    assert _no_eye_stage_errors(report)
+
+    rows = (eye.EyeCalibration & session_key).to_dicts()
+    assert len(rows) == 2
+    for row in rows:
+        reason = row["reason"]
+        assert row["calibration_source"] == "refused"
+        assert len(reason) <= REASON_COLUMN_MAX_LEN
+        # The marker sits after the truncated PRIMARY reason, not at the
+        # very end of the string: `_combine_reason` appends the coverage
+        # note (kept in full) after it, so "marked as truncated" is a
+        # substring check, not `.endswith(...)`.
+        assert "[reason truncated]" in reason
+        # Both causes survive: the degenerate-geometry text (its own
+        # beginning, since that is what a from-the-end truncation of the
+        # PRIMARY reason keeps) and the coverage-drop note IN FULL, since
+        # `_combine_reason` reserves that note's own room rather than
+        # letting a from-the-end slice of the whole combined string
+        # silently drop it.
+        assert "collinear or coincident" in reason
+        assert reason.endswith("1 of 5 fixation windows had no ohDPI coverage")
+
+
 def _no_eye_stage_errors(report: dict) -> bool:
     return not any(
         "EyeCalibration" in message or "EyeQuality" in message for message in report["errors"]

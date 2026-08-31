@@ -69,6 +69,84 @@ schema = dj.Schema()
 # two places it is read.
 _FULL_TRACKING_QUALITY = 100
 
+# `EyeCalibration.reason` is `varchar(255)` (that class's own `definition`,
+# below). Named against the column's own declared width, the same pattern
+# `ingest/landing.py`'s `INGESTION_SESSION_DIR_MAX_LEN`/
+# `QUARANTINE_SESSION_DIR_MAX_LEN` use for `Ingestion`/`Quarantine.
+# session_dir` -- a magic `255` repeated at every call site is exactly the
+# kind of number free to drift from the column it is supposed to describe.
+#
+# This is not a defensive margin against a hypothetical: a combined reason
+# CAN exceed it for real. `calibration.py::fit_affine`'s own
+# collinear/coincident-target message is 221 characters on its own;
+# `resolve_calibration`'s "; no fallback map validated" suffix makes 248;
+# and `EyeCalibration.make()`'s own coverage-drop note (below) adds another
+# ~45-50 -- 295+ characters against this 255-character column, for an
+# entirely ordinary combination (a low-variety fixation task plus a
+# recording coverage gap), not a contrived edge case. This project's own
+# MySQL 8 test container runs in strict mode (`tests/schema/test_core.py::
+# test_only_known_systems_are_accepted` already pins this for an
+# out-of-range enum; the identical strictness applies to an over-length
+# varchar), so an unbounded write here does not silently truncate --
+# it raises `pymysql.err.DataError`, which `daemon.run_once()`'s
+# `suppress_errors=True` turns into a daemon error instead of the graceful
+# `refused`-with-a-reason row this module's own docstring calls a
+# first-class outcome.
+_REASON_MAX_LEN = 255
+
+# Appended to a `reason` that had to be cut, so a reader can tell a
+# truncated reason from a complete one rather than silently receiving a
+# shorter string indistinguishable from the truth.
+_REASON_TRUNCATED_SUFFIX = " [reason truncated]"
+
+
+def _bounded_reason(text: str, max_len: int = _REASON_MAX_LEN) -> str:
+    """`text`, shortened to fit `max_len` if it does not already, cutting
+    from the END and marking the cut with `_REASON_TRUNCATED_SUFFIX`.
+
+    Deliberately NOT `landing._clamp_key`'s digest-suffix scheme: that
+    function's content digest exists so two DIFFERENT overlong values
+    cannot truncate to the IDENTICAL string when the result is also a
+    PRIMARY KEY written with `replace=True` -- there, a collision silently
+    OVERWRITES and loses an entire row. `reason` is an ordinary column
+    here, never a key, never looked up by value, and never written with
+    `replace=True`; two rows sharing an identical truncated `reason` loses
+    nothing a database operation could silently destroy. Only a marker
+    that the stored text is incomplete is needed, and this is that marker.
+    """
+    if len(text) <= max_len:
+        return text
+    keep = max(max_len - len(_REASON_TRUNCATED_SUFFIX), 0)
+    return text[:keep] + _REASON_TRUNCATED_SUFFIX
+
+
+def _combine_reason(primary: str, note: str) -> str:
+    """Combine `resolve_calibration`'s own `primary` reason (or `""`) with
+    this method's own coverage-drop `note` (or `""`) into one string
+    guaranteed to fit `_REASON_MAX_LEN`.
+
+    **`primary` is truncated FIRST, from its own end -- not the already-
+    joined string, from ITS end.** `note` is always short (`{n} of {m}
+    fixation windows had no ohDPI coverage`, bounded by how many windows a
+    real session's own code stream can hold, realistically well under 60
+    characters), so reserving its own room and truncating `primary` to
+    whatever remains is what keeps BOTH causes visible in the stored text:
+    `primary`'s own beginning -- its most load-bearing text -- survives,
+    and `note` is never silently dropped entirely the way slicing the
+    combined string from the end would drop it (`note` is always the LAST
+    thing appended, and `primary` alone already reaches 248 characters in
+    a real refusal -- see `_REASON_MAX_LEN`'s own comment -- so a plain
+    `combined[:255]` would cut `note` in full, every time, precisely when
+    there are two distinct causes worth a reader seeing both of).
+    """
+    if not primary:
+        return note
+    if not note:
+        return _bounded_reason(primary)
+    joiner = "; "
+    budget = max(_REASON_MAX_LEN - len(joiner) - len(note), 0)
+    return f"{_bounded_reason(primary, budget)}{joiner}{note}"
+
 
 @schema
 class EyeCalibration(dj.Computed):
@@ -274,7 +352,7 @@ class EyeCalibration(dj.Computed):
                         "residual_deg_rms": None,
                         "residual_deg_max": None,
                         "carried_from_session_datetime": None,
-                        "reason": reason,
+                        "reason": _bounded_reason(reason),
                     }
                     for eye_value in ("left", "right")
                 ]
@@ -389,7 +467,7 @@ class EyeCalibration(dj.Computed):
                         "residual_deg_rms": None,
                         "residual_deg_max": None,
                         "carried_from_session_datetime": None,
-                        "reason": reason,
+                        "reason": _bounded_reason(reason),
                     }
                     for eye_value in ("left", "right")
                 ]
@@ -491,16 +569,27 @@ class EyeCalibration(dj.Computed):
             # not -- must still be visible even when calibration otherwise
             # SUCCEEDS from what remained: a coverage gap that happens not
             # to change the verdict this time is still worth knowing about
-            # before it grows into one that does. Appended rather than
-            # replacing `result.reason`, so a genuine refusal (e.g.
-            # degenerate geometry) keeps its own reason too.
-            reason = result.reason
-            if n_windows_dropped > 0:
-                coverage_note = (
-                    f"{n_windows_dropped} of {n_windows_found} fixation "
-                    "windows had no ohDPI coverage"
-                )
-                reason = f"{reason}; {coverage_note}" if reason else coverage_note
+            # before it grows into one that does. Combined via
+            # `_combine_reason` rather than a bare f-string concatenation,
+            # deliberately: `result.reason` alone already reaches 248
+            # characters for a real refusal (a collinear/coincident-target
+            # message from `calibration.py::fit_affine`, plus
+            # `resolve_calibration`'s own "; no fallback map validated"),
+            # and this column is `varchar(255)` -- a bare concatenation
+            # would either overflow the column outright (raising inside
+            # `make()`, surfacing as a daemon error rather than the
+            # graceful refused-with-a-reason row this module calls a
+            # first-class outcome) or, naively sliced from the end, would
+            # silently drop this method's OWN coverage note in full every
+            # time, the one case where a reader most needs to see both
+            # causes at once. See `_combine_reason`'s own docstring.
+            coverage_note = (
+                f"{n_windows_dropped} of {n_windows_found} fixation windows "
+                "had no ohDPI coverage"
+                if n_windows_dropped > 0
+                else ""
+            )
+            reason = _combine_reason(result.reason, coverage_note)
 
             rows.append(
                 {
