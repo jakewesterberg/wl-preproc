@@ -1601,7 +1601,21 @@ def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
 
 def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session):
     """Engbert-Kliegl's own noise suppression, applied uniformly. An event in
-    one eye alone is not in the conjunction."""
+    one eye alone is not in the conjunction.
+
+    **This test is only meaningful if the fixture contains an event in ONE
+    eye.** The plan's first draft planted every step in both eyes at the same
+    sample, so intersection and union produced identical output and this
+    assertion passed under a `spans["left"] + spans["right"]` mutation --
+    a conjunction test that cannot tell intersection from union is not
+    testing the binocular criterion at all, only that something was written.
+    The fixture must inject a right-eye-only event; the assertion below then
+    fails under that mutation without needing to change.
+
+    The same fixture defect hid a second mutation: every planted event
+    exceeded 1 deg, so deleting `classify` entirely changed nothing. The
+    fixture needs a genuine sub-1-deg event too, and a test that names it.
+    """
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
@@ -1687,8 +1701,16 @@ Replace both `key_source` stubs and add `make()` to each.
         from wl_preproc.schema import eye as eye_schema, ingest
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
+        # `ParamSet`'s own primary key is `(paramset_type, paramset_idx)`,
+        # not `paramset_idx` alone (`paramset.py`'s own `# Key:` comment) --
+        # `register()` allocates indices independently PER `paramset_type`,
+        # so an `eye_validity` paramset and an `eye_detection` paramset
+        # routinely share the same raw index (both start at 0). Restricting
+        # by index alone matches BOTH once the second type exists, and
+        # `.fetch1()` raises on the ambiguity.
         params = ValidityParams(**(paramset.ParamSet & {
-            "paramset_idx": key["validity_paramset_idx"]
+            "paramset_type": key["paramset_type"],
+            "paramset_idx": key["validity_paramset_idx"],
         }).fetch1("params"))
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
@@ -1737,14 +1759,29 @@ must still tile. A detector reads the mask back and treats `fixation` there as
     @property
     def key_source(self):
         """Every validity row -- INCLUDING refused ones -- times the
-        `eye_detection` paramsets.
+        `eye_detection` paramsets, collapsed to one candidate per (session,
+        validity paramset) BEFORE the join.
 
         Refused rows are included deliberately: a session whose calibration
         failed must still produce a detection row saying so. Excluding them
         would make "no calibration" and "detector never ran" render
         identically, which is the distinction this table exists to keep.
+
+        **Not `EyeValidity * (paramset.ParamSet & {"paramset_type":
+        "eye_detection"})`.** That literal join is broken twice over. Both
+        sides carry a bare `paramset_type` column, which DataJoint matches
+        for equality -- `'eye_validity'` never equals `'eye_detection'`, so
+        the join is PERMANENTLY EMPTY and this table silently produces zero
+        rows for every session, forever. And `EyeValidity` is keyed per eye,
+        so `eye` propagates into a `key_source` whose populate target has no
+        such column. `dj.U(...)` drops `eye` before the join happens, the way
+        a `GROUP BY` would, collapsing both eyes' rows for one (session,
+        validity paramset) down to exactly one candidate key.
         """
-        return EyeValidity * (paramset.ParamSet & {"paramset_type": "eye_detection"})
+        return (
+            dj.U("subject", "session_datetime", "validity_paramset_type", "validity_paramset_idx")
+            & EyeValidity.proj(validity_paramset_type="paramset_type")
+        ) * (paramset.ParamSet & {"paramset_type": "eye_detection"})
 
     def make(self, key: dict) -> None:
         """All three traces for one session, one mask and one detector."""
@@ -1757,17 +1794,25 @@ must still tile. A detector reads the mask back and treats `fixation` there as
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         validity_key = {**session_key, "validity_paramset_idx": key["validity_paramset_idx"]}
-        params = (paramset.ParamSet & {"paramset_idx": key["paramset_idx"]}).fetch1("params")
+        # Same composite-key reasoning as `EyeValidity.make()` above.
+        params = (paramset.ParamSet & {
+            "paramset_type": key["paramset_type"],
+            "paramset_idx": key["paramset_idx"],
+        }).fetch1("params")
         detector = get_detector(params["detector"])
 
-        refused = (EyeValidity & validity_key & 'status = "refused"')
-        if refused:
-            self.insert(
-                {**key, "trace": trace, "status": "refused",
-                 "reason": (refused.fetch("reason")[0] or "validity refused")}
-                for trace in ("left", "right", "conjunction")
-            )
-            return
+        # NOT a session-wide gate. `EyeCalibration` fits and refuses each eye
+        # INDEPENDENTLY, so one usable eye is a reachable state, and design
+        # spec section 4 requires it to yield that eye's own computed trace.
+        # Testing the session (`EyeValidity & validity_key & 'status =
+        # "refused"'`, with no `eye` in the restriction) discards the good
+        # eye and stamps it with whichever reason came back first -- no
+        # `ORDER BY` makes that deterministic. The per-eye decision lives
+        # inside the loop below; see `EyeValidity.make()`, which already
+        # refuses one eye and moves on, one table earlier.
+        #
+        # `to_arrays`, never bare `fetch()`: DataJoint 2.3.2 deprecates it
+        # and warns on every call, and this suite must stay at zero warnings.
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
