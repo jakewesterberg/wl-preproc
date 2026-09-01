@@ -897,51 +897,17 @@ def test_the_registry_and_the_paramsets_still_agree():
 
 - [ ] **Step 2: Run to verify they fail**
 
+Two of these fail for a reason worth predicting so it does not read as a
+surprise: `test_reliability_is_populated_per_detection` and
+`test_a_merged_run_reports_no_reliability_rather_than_a_borrowed_one` cannot
+pass until the step below adds `reliability` to `labels.Run`. That is
+ordinary TDD, not a defect in the plan.
+
 Run: `.venv/bin/python -m pytest tests/eye/detect/test_otero_millan.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named
 'wl_preproc.eye.detect.otero_millan'`
 
-- [ ] **Step 3: Implement the detector**
-
-Create `wl_preproc/eye/detect/otero_millan.py` implementing steps 1-7 above.
-`OteroMillanParams` carries exactly these fields:
-
-```python
-@dataclass(frozen=True, slots=True)
-class OteroMillanParams:
-    #: The reference's only amplitude rule, and it is a LOWER bound: a
-    #: candidate cluster is accepted when its mean displacement exceeds this.
-    #: There is no upper bound in the method -- the "microsaccade" framing in
-    #: the reference's own Example.m comes from its plot limits, not from the
-    #: detector (design spec section 3.1, corrected 2026-09-01).
-    min_cluster_displacement_deg: float
-    #: The reference's `NumMaxClusters`. k-means is run for 2..this many and
-    #: the count is chosen by silhouette.
-    max_clusters: int
-    #: The reference's `MIN_ISI`, in samples rather than milliseconds: this
-    #: detector's contract (design spec section 3) carries no sampling rate,
-    #: and converting here would require inventing one.
-    min_isi_samples: int
-    #: Declared for the same reason `EngbertKlieglParams` declares it -- this
-    #: detector's vocabulary splits by amplitude, so it consumes the SHARED
-    #: cut rather than owning one. See `schema/detect.py::_params_for`.
-    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
-
-
-DEFAULT_OM_PARAMS = OteroMillanParams(
-    min_cluster_displacement_deg=0.2,
-    max_clusters=4,
-    min_isi_samples=15,  # 30 ms at 500 Hz, the reference's own MIN_ISI
-)
-```
-
-Label each accepted interval with `classify(amplitude(gaze_deg, start, stop),
-params.microsaccade_max_deg)` — the shared functions, never a private formula,
-so design spec §3's guarantee that a disagreement is "never a disagreement
-about measurement" holds literally. Set each interval's `reliability` to that
-peak's own silhouette value.
-
-- [ ] **Step 4: Carry `reliability` from the detector to the stored row**
+- [ ] **Step 3: Add `reliability` to `Run`, and carry it to the stored row**
 
 `labels.Run` is `(start, stop, label)` and carries no reliability, while
 `EyeDetection.Run.reliability` is a stored column that has been null on every
@@ -991,6 +957,46 @@ attributing one of their reliabilities to it would be a fabricated number in a
 column whose whole purpose is to say how much to trust a detection. `None` is
 the honest answer there. The conjunction trace gets `None` for the same reason
 it gets its label derived rather than checked: no detector produced it.
+
+- [ ] **Step 4: Implement the detector**
+
+Create `wl_preproc/eye/detect/otero_millan.py` implementing steps 1-7 above.
+`OteroMillanParams` carries exactly these fields:
+
+```python
+@dataclass(frozen=True, slots=True)
+class OteroMillanParams:
+    #: The reference's only amplitude rule, and it is a LOWER bound: a
+    #: candidate cluster is accepted when its mean displacement exceeds this.
+    #: There is no upper bound in the method -- the "microsaccade" framing in
+    #: the reference's own Example.m comes from its plot limits, not from the
+    #: detector (design spec section 3.1, corrected 2026-09-01).
+    min_cluster_displacement_deg: float
+    #: The reference's `NumMaxClusters`. k-means is run for 2..this many and
+    #: the count is chosen by silhouette.
+    max_clusters: int
+    #: The reference's `MIN_ISI`, in samples rather than milliseconds: this
+    #: detector's contract (design spec section 3) carries no sampling rate,
+    #: and converting here would require inventing one.
+    min_isi_samples: int
+    #: Declared for the same reason `EngbertKlieglParams` declares it -- this
+    #: detector's vocabulary splits by amplitude, so it consumes the SHARED
+    #: cut rather than owning one. See `schema/detect.py::_params_for`.
+    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+
+
+DEFAULT_OM_PARAMS = OteroMillanParams(
+    min_cluster_displacement_deg=0.2,
+    max_clusters=4,
+    min_isi_samples=15,  # 30 ms at 500 Hz, the reference's own MIN_ISI
+)
+```
+
+Label each accepted interval with `classify(amplitude(gaze_deg, start, stop),
+params.microsaccade_max_deg)` — the shared functions, never a private formula,
+so design spec §3's guarantee that a disagreement is "never a disagreement
+about measurement" holds literally. Set each interval's `reliability` to that
+peak's own silhouette value.
 
 - [ ] **Step 5: Test that the carry works, and that the honest gap stays honest**
 
@@ -1210,6 +1216,9 @@ git commit -m "schema: pairwise detector agreement, keyed by the vocabulary it w
 
 **Files:**
 - Modify: `wl_preproc/cli/report.py`
+- Modify: `tests/cli/test_detect_report.py` (Step 2 rewrites the stage-1
+  absence test that lives there; leaving it standing would make the suite
+  assert both that the agreement line exists and that it does not)
 - Test: `tests/cli/test_consensus_report.py`
 - Create: `docs/handoffs/YYYY-MM-DD-consensus-and-otero-millan-built.md`
 
