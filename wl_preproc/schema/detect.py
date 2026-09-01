@@ -301,7 +301,24 @@ class EyeDetection(dj.Computed):
         ) * (paramset.ParamSet & {"paramset_type": "eye_detection"})
 
     def make(self, key: dict) -> None:
-        """All three traces for one session, one mask and one detector."""
+        """All three traces for one session, one mask and one detector.
+
+        **Each eye's own `EyeValidity` status is read and acted on
+        independently here** -- echoing `EyeValidity.make()`'s own per-eye
+        loop one table earlier, which already refuses a single eye whose
+        calibration is unusable and moves on rather than failing the whole
+        session. Fix round (reviewer finding 1): the previous version
+        tested the SESSION (`EyeValidity & validity_key & 'status =
+        "refused"'`, no `eye` in the restriction), so one refused eye
+        discarded the OTHER eye's genuinely computed trace and stamped the
+        survivor with whichever eye `to_arrays("reason")[0]` happened to
+        return first -- no `ORDER BY` made that deterministic.
+        `EyeCalibration.make()` fits and refuses each eye independently, so
+        a session with exactly one usable eye is reachable, not contrived,
+        and design spec section 4 requires it to yield that eye's own
+        trace, with the other eye's own refusal and reason -- never a
+        refused session wearing one eye's excuse for the other's silence.
+        """
         from wl_preproc.eye.detect.registry import get_detector
         from wl_preproc.eye.detect.velocity import velocity
         from wl_preproc.eye.gaze import gaze_trace
@@ -321,23 +338,6 @@ class EyeDetection(dj.Computed):
         }).fetch1("params")
         detector = get_detector(params["detector"])
 
-        # `EyeValidity` rows are always `paramset_type='eye_validity'` by
-        # construction (nothing else ever writes one), so omitting it from
-        # this restriction -- unlike the `ParamSet` fetch above -- names no
-        # real ambiguity.
-        refused = (EyeValidity & validity_key & 'status = "refused"')
-        if refused:
-            # `to_arrays`, not `fetch`: `paramset.py::register`'s own
-            # standing reason applies here too -- DataJoint 2.3.2 deprecates
-            # bare `fetch()` (it warns on every call), and this project's
-            # suite must stay at zero warnings.
-            reason = refused.to_arrays("reason")[0] or "validity refused"
-            self.insert(
-                {**key, "trace": trace, "status": "refused", "reason": reason}
-                for trace in ("left", "right", "conjunction")
-            )
-            return
-
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
         path = session_dir / "ohdpi" / segment["file_path"]
@@ -345,7 +345,27 @@ class EyeDetection(dj.Computed):
 
         spans: dict[str, list[tuple[int, int]]] = {}
         per_eye: dict[str, tuple] = {}
+        refused_reason: dict[str, str] = {}
         for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
+            # `EyeValidity` rows are always `paramset_type='eye_validity'` by
+            # construction (nothing else ever writes one), so omitting it
+            # from this restriction -- unlike the `ParamSet` fetch above --
+            # names no real ambiguity.
+            status, reason = (EyeValidity & {**validity_key, "eye": eye_value}).fetch1(
+                "status", "reason"
+            )
+            if status == "refused":
+                # THIS eye, and only this eye, stops here: `_map_from_row`,
+                # `gaze_trace` and `detector.run` are never reached for it.
+                # `EyeCalibration` may itself be refused for this same eye
+                # (`EyeValidity.make()`'s own per-eye loop already refuses
+                # whenever its own `_map_from_row` comes back `None`), and
+                # there is no map for a refused eye to read -- `gaze_trace`
+                # would be handed a `None` map and fail trying to apply it,
+                # not silently produce an empty trace.
+                refused_reason[eye_value] = reason or "validity refused"
+                continue
+
             map_ = eye_schema._map_from_row(
                 (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()
             )
@@ -362,11 +382,56 @@ class EyeDetection(dj.Computed):
             spans[eye_value] = detector.run(gaze, v, offered, _params_for(detector, params))
             per_eye[eye_value] = (gaze, v, offered)
 
-        spans["conjunction"] = _overlapping(spans["left"], spans["right"])
+        for eye_value in ("left", "right"):
+            if eye_value in refused_reason:
+                self.insert1({**key, "trace": eye_value, "status": "refused",
+                              "reason": refused_reason[eye_value]})
+            else:
+                gaze, v, offered = per_eye[eye_value]
+                self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz, params)
 
-        for trace in ("left", "right", "conjunction"):
-            gaze, v, offered = per_eye["left" if trace == "conjunction" else trace]
-            self._insert_trace(key, trace, gaze, v, offered, spans[trace], fs_hz, params)
+        if refused_reason:
+            # The conjunction gets a REFUSED ROW here, never an absent one --
+            # design spec section 4's own words used to say "no `conjunction`
+            # row"; corrected by this fix round to say a REFUSED row instead,
+            # because the same sentence also requires "the reason recorded",
+            # and a row's own `reason` column is the only place this schema
+            # can ever record one. An absent row cannot be told apart from a
+            # key not yet populated -- exactly the ambiguity this module's
+            # own docstring's refusal idiom ("writes a refused row with a
+            # stated reason rather than raising") exists to remove. The
+            # reason below names the actual cause -- a conjunction needs
+            # BOTH eyes' spans and at least one is unusable -- rather than
+            # repeating either eye's own reason verbatim, which would
+            # misreport WHY the conjunction specifically is unusable.
+            if len(refused_reason) == 2:
+                reason = (
+                    "conjunction needs both eyes' detected spans, and both "
+                    "the left and right eyes are unusable -- see each eye's "
+                    "own trace for its reason"
+                )
+            else:
+                (bad_eye,) = refused_reason
+                reason = (
+                    f"conjunction needs both eyes' detected spans, and the "
+                    f"{bad_eye} eye is unusable -- see that eye's own trace "
+                    "for its reason"
+                )
+            self.insert1({**key, "trace": "conjunction", "status": "refused", "reason": reason})
+        else:
+            conjunction_spans = _overlapping(spans["left"], spans["right"])
+            # The conjunction's TIMING is binocular (`_overlapping`'s own
+            # intersection, just above), but a measurement still needs ONE
+            # eye's actual gaze -- there is no cyclopean trace any
+            # calibration in this codebase ever validated, so averaging the
+            # two eyes would measure a position nothing here calibrated
+            # against. The LEFT eye is named here rather than averaged for
+            # exactly that reason: a real, stated choice, not one the design
+            # spec makes for us.
+            gaze, v, offered = per_eye["left"]
+            self._insert_trace(
+                key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz, params
+            )
 
     def _insert_trace(self, key, trace, gaze, v, offered, spans, fs_hz, params) -> None:
         """One trace's master row and its runs.

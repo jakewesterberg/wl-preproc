@@ -183,13 +183,17 @@ def daemon_module(dj_conn, prefix):
     return daemon
 
 
-@pytest.fixture(scope="module")
-def stepped_session(daemon_module, prefix, tmp_path_factory):
-    """A hold, a ramp, a hold, a ramp, a hold, a ramp, a hold -- three
-    planted, known-onset transitions in an otherwise still trace, following
-    a calibration region built exactly like `test_eye_populate.py::
-    round_trip_session` (a fitted affine against the ordinary, untouched
-    two-frequency drift).
+def _build_stepped_session(
+    tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
+    after_generate=None,
+):
+    """The construction behind `stepped_session`, and -- without
+    `after_generate` -- behind the mixed-eye fixtures below (`left_refused_
+    session`/`right_refused_session`): a hold, a ramp, a hold, a ramp, a
+    hold, a ramp, a hold -- three planted, known-onset transitions in an
+    otherwise still trace, following a calibration region built exactly
+    like `test_eye_populate.py::round_trip_session` (a fitted affine
+    against the ordinary, untouched two-frequency drift).
 
     Five trials of `TRIAL_DURATION_S` each. Trials 0-3 supply calibration
     windows (natural drift, no `eye_fixations` override, matching `round_trip
@@ -198,13 +202,31 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     held at A, ramped to B (big), held at B, ramped to C (small -- a genuine
     microsaccade), held at C, ramped back to A (big) -- three transitions,
     this fixture's three planted onsets.
+
+    **Stops SHORT of running the daemon.** `stepped_session` runs it
+    immediately below, having nothing to intervene on; `left_refused_
+    session`/`right_refused_session` need `EyeCalibration` to compute for
+    BOTH eyes first, then one eye's row replaced with a refused one, before
+    `EyeValidity`/`EyeDetection` ever see this session -- see those
+    fixtures' own docstrings for why a single `daemon.run_once()` call
+    cannot do both (`_computed_tables()`'s own list runs every stage
+    back-to-back in one call, with no pause in between to intervene).
+
+    `after_generate`, if given, runs on the fresh `session_dir` right after
+    `generate_session` and before landing -- `stepped_session`'s own
+    `_inject_right_eye_only_step` hook. Kept OUT of this shared function by
+    default: the phantom event it plants is specific to that one fixture's
+    own conjunction test and would otherwise surface as an unplanned fourth
+    event in whichever eye survives a mixed-eye fixture built from here.
+
+    Returns `(session_key, segment, onset_times)`.
     """
     from wl_preproc.contracts.events import TaskTypeCode
     from wl_preproc.schema import core, timebase
     from wl_preproc.synth.recipe import BlockSpec, EyeFixationSpec, MontageSpec, SessionRecipe
     from wl_preproc.synth.session import generate_session
 
-    from tests.schema.test_eye_populate import _expected_raw_points, _land, _row_for_time, _write_fixations
+    from tests.schema.test_eye_populate import _expected_raw_points, _land, _write_fixations
 
     n_cal_trials = 4
     n_trials = n_cal_trials + 1
@@ -242,8 +264,8 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     )
 
     recipe = SessionRecipe(
-        session_id="2027-06-01_01",
-        subject="detstep1",
+        session_id=session_id,
+        subject=subject,
         rig="rig-a",
         systems=("syncbox", "ohdpi"),
         blocks=(
@@ -252,16 +274,17 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
         montages=(MontageSpec(start_s=0.0, end_s=n_trials * TRIAL_DURATION_S),),
         n_ap_channels=4,
         ap_sample_rate_hz=30_000.0,
-        seed=601,
+        seed=seed,
         eye_fixations=tuple(detect_fixations),
     )
 
-    root = tmp_path_factory.mktemp("detectstep")
+    root = tmp_path_factory.mktemp(dirname)
     truth = generate_session(root, recipe)
     session_dir = root / recipe.session_id
-    _inject_right_eye_only_step(session_dir)
+    if after_generate is not None:
+        after_generate(session_dir)
     session_key = _land(
-        root, recipe, datetime.datetime(2027, 6, 1, 9, 0),
+        root, recipe, session_datetime,
         acquisition_systems=("syncbox", "ohdpi"),
     )
 
@@ -278,10 +301,142 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     targets = [(CAL_SCALE * raw[0], CAL_SCALE * raw[1]) for raw in raw_points]
     _write_fixations(session_dir, recipe, truth, list(zip(window_starts, targets, strict=True)))
 
+    return session_key, segment, onset_times
+
+
+@pytest.fixture(scope="module")
+def stepped_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_stepped_session`'s own construction, with the phantom
+    right-eye-only step planted before landing (`_inject_right_eye_only_
+    step`, needed only by this fixture's own `test_the_conjunction_requires_
+    temporal_overlap_in_both_eyes`) and the daemon run immediately after --
+    this fixture has nothing to intervene on between `EyeCalibration` and
+    `EyeValidity`/`EyeDetection`, unlike `left_refused_session`/`right_
+    refused_session` below.
+    """
+    from tests.schema.test_eye_populate import _row_for_time
+
+    session_key, segment, onset_times = _build_stepped_session(
+        tmp_path_factory,
+        dirname="detectstep", session_id="2027-06-01_01", subject="detstep1",
+        session_datetime=datetime.datetime(2027, 6, 1, 9, 0), seed=601,
+        after_generate=_inject_right_eye_only_step,
+    )
+
     report = daemon_module.run_once(prefix=prefix)
 
     planted_onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
     return session_key, report, planted_onsets
+
+
+def _build_mixed_eye_session(
+    daemon_module, prefix, tmp_path_factory, *,
+    dirname, session_id, subject, session_datetime, seed, refused_eye,
+):
+    """Finding 1's own required construction: "land the session, let both
+    eyes calibrate, then replace one eye's `EyeCalibration` row with a
+    refused one before `EyeDetection` populates" -- built on top of
+    `_build_stepped_session` (no phantom step: irrelevant here, and it
+    would otherwise read as an unplanned fourth event in whichever eye
+    survives).
+
+    **Why two `run_once()` calls, with a delete in between, rather than
+    populating `EyeCalibration` alone first.** `EyeCalibration.key_source`
+    requires `pipeline.event.BehaviorRecording` -- assembled only by
+    `daemon._populate_event_stage()`, which `run_once()` runs internally
+    before its own `_computed_tables()` loop even starts. Calling
+    `eye_schema.EyeCalibration.populate()` directly, the way `stepped_
+    session` calls `core.Segment.populate()` directly, would therefore find
+    no candidate at all before that stage has run. So this calls
+    `run_once()` ONCE, letting the WHOLE pipeline compute normally from a
+    genuinely, symmetrically fully-calibrated session (`EyeValidity`/
+    `EyeDetection` included); patches `refused_eye`'s `EyeCalibration` row
+    in place (`update1`, mirroring exactly the shape `EyeCalibration.
+    make()`'s own refused-row branches write, via that module's own
+    `_coefficient_columns(None)`); deletes the now-stale `EyeValidity`/
+    `EyeDetection` rows for this session so their keys read as pending
+    again (bare `.delete()` -- safe here: safemode is off for this whole
+    suite, per `tests/schema/test_eye_populate.py`'s own `no_ohdpi_
+    acquisition_system_session` fixture, and neither table has any
+    dependent of its own beside its own `Run` part, so the cascade reaches
+    no further than intended); and calls `run_once()` a SECOND time.
+    `EyeCalibration`/`EyeQuality`'s keys are already populated by then and
+    stay untouched -- ordinary DataJoint `.populate()` behaviour, not
+    special-cased here -- while `EyeValidity`/`EyeDetection` recompute
+    fresh, this time reading the genuinely refused calibration.
+
+    `EyeCalibration.BlockResidual` rows from the eye's original real fit
+    are deliberately left in place rather than also deleted: nothing this
+    fixture or `EyeDetection.make()` reads touches that part table, and
+    scrubbing it would only be cosmetic.
+
+    Returns `(session_key, report, onset_times)` -- `report` from the
+    SECOND `run_once()` call, the one whose errors this fixture's own
+    callers actually care about.
+    """
+    from tests.schema.test_eye_populate import _row_for_time
+    from wl_preproc.schema import detect, eye as eye_schema
+    from wl_preproc.schema.eye import _coefficient_columns
+
+    session_key, segment, onset_times = _build_stepped_session(
+        tmp_path_factory,
+        dirname=dirname, session_id=session_id, subject=subject,
+        session_datetime=session_datetime, seed=seed,
+    )
+    daemon_module.run_once(prefix=prefix)
+
+    eye_schema.EyeCalibration.update1({
+        **session_key, "eye": refused_eye,
+        "calibration_source": "refused",
+        "calibration_model": None,
+        **_coefficient_columns(None),
+        "validation_error_deg": None,
+        "conditioning": None,
+        "conditioning_second_order": None,
+        "residual_deg_rms": None,
+        "residual_deg_max": None,
+        "carried_from_session_datetime": None,
+        "reason": (
+            f"test fixture: {refused_eye} eye's real fitted calibration "
+            "replaced with a refused row"
+        ),
+    })
+    (detect.EyeValidity & session_key).delete()
+    (detect.EyeDetection & session_key).delete()
+
+    report = daemon_module.run_once(prefix=prefix)
+    onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
+    return session_key, report, onsets
+
+
+@pytest.fixture(scope="module")
+def left_refused_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_mixed_eye_session`'s own construction, LEFT refused: Finding
+    1's own table, row 2 (`refused | computed`)."""
+    return _build_mixed_eye_session(
+        daemon_module, prefix, tmp_path_factory,
+        # `subject` is `varchar(8)` (element-animal's own limit, restated at
+        # `wl_preproc/schema/ingest.py`'s own comment) -- "detmixl1" is
+        # exactly 8 characters; "detrightleft1"-style spelled-out names are
+        # not an option here.
+        dirname="detectleft", session_id="2027-06-03_01", subject="detmixl1",
+        session_datetime=datetime.datetime(2027, 6, 3, 9, 0), seed=603,
+        refused_eye="left",
+    )
+
+
+@pytest.fixture(scope="module")
+def right_refused_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_mixed_eye_session`'s own construction, RIGHT refused: Finding
+    1's own table, row 3 (`computed | refused`) -- the mirror direction of
+    `left_refused_session`, because a fix that hardcodes an eye passes one
+    direction and fails the other."""
+    return _build_mixed_eye_session(
+        daemon_module, prefix, tmp_path_factory,
+        dirname="detectright", session_id="2027-06-04_01", subject="detmixr1",
+        session_datetime=datetime.datetime(2027, 6, 4, 9, 0), seed=604,
+        refused_eye="right",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -327,21 +482,27 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
 
 
 def test_the_runs_tile_the_whole_trace(stepped_session):
-    """The structural invariant, asserted on real populated rows and not only
-    in the encoder's unit tests."""
+    """The structural invariant, asserted on real populated rows and not
+    only in the encoder's unit tests -- on every trace of every fixture
+    (spec section 10), not `left` alone (fix round, reviewer finding 2).
+    `conjunction` is the trace that most needs this checked: its run
+    boundaries come from `_overlapping`'s intersection of the two eyes'
+    spans, not straight from a detector, so it is the one trace where
+    `runs_from_labels` re-tiling the result correctly is least obvious."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
-    row = (detect.EyeDetection & {**session_key, "trace": "left"}).fetch1()
-    runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
-        order_by="run_index"
-    )
+    for trace in ("left", "right", "conjunction"):
+        row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
+        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
+            order_by="run_index"
+        )
 
-    assert runs[0]["run_start"] == 0
-    assert runs[-1]["run_stop"] == row["n_samples"]
-    for earlier, later in zip(runs, runs[1:], strict=False):
-        assert earlier["run_stop"] == later["run_start"]
-        assert earlier["label"] != later["label"]
+        assert runs[0]["run_start"] == 0
+        assert runs[-1]["run_stop"] == row["n_samples"]
+        for earlier, later in zip(runs, runs[1:], strict=False):
+            assert earlier["run_stop"] == later["run_start"]
+            assert earlier["label"] != later["label"]
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
@@ -421,10 +582,106 @@ def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session)
     )
 
 
+def _assert_reason_echoes_validity(session_key, trace, eye):
+    """`EyeDetection`'s refused `trace` row must carry `EyeValidity`'s OWN
+    `eye` row's own reason -- fetched per eye, never picked arbitrarily from
+    a query spanning both (the exact shape of the original defect, fix
+    round reviewer finding 1)."""
+    from wl_preproc.schema import detect
+
+    validity_reason = (detect.EyeValidity & {**session_key, "eye": eye}).fetch1("reason")
+    row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
+    assert row["status"] == "refused"
+    assert row["reason"] == validity_reason
+    assert row["n_samples"] is None
+    return row
+
+
+def test_a_refused_left_eye_leaves_the_right_eye_computed(left_refused_session):
+    """Fix round, reviewer finding 1, row 2 of the required table: `left`
+    refused (with ITS OWN `EyeValidity` reason, not `right`'s), `right`
+    still the genuine computed trace with its three planted events intact,
+    and `conjunction` refused too -- but never silently wearing `left`'s
+    reason verbatim.
+
+    Mutation check (required by the brief): restoring the session-wide
+    `refused = EyeValidity & validity_key & 'status = "refused"'` gate
+    makes this test fail, because it refuses `right` too -- confirmed by
+    hand against the actual reverted code before this file was committed;
+    see this task's own fix report for the pasted failure.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, report, onsets = left_refused_session
+    assert not any(
+        "EyeValidity" in message or "EyeDetection" in message for message in report["errors"]
+    )
+
+    left_row = _assert_reason_echoes_validity(session_key, "left", "left")
+
+    right_status = (detect.EyeValidity & {**session_key, "eye": "right"}).fetch1("status")
+    assert right_status == "computed"
+    right_row = (detect.EyeDetection & {**session_key, "trace": "right"}).fetch1()
+    assert right_row["status"] == "computed"
+    right_runs = (detect.EyeDetection.Run & {**session_key, "trace": "right"}).to_dicts(
+        order_by="run_index"
+    )
+    right_onsets = [r["run_start"] for r in right_runs if r["label"] in ("saccade", "microsaccade")]
+    assert len(right_onsets) == len(onsets) == 3
+    for got, want in zip(right_onsets, onsets, strict=True):
+        assert abs(got - want) <= 5
+
+    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    assert conjunction_row["status"] == "refused"
+    assert conjunction_row["reason"]
+    assert conjunction_row["reason"] != left_row["reason"]
+
+
+def test_a_refused_right_eye_leaves_the_left_eye_computed(right_refused_session):
+    """The mirror of the test above -- Finding 1's own row 3 (`computed |
+    refused`). Required alongside the LEFT direction because a fix that
+    hardcodes an eye (e.g. always trusting `left`, the same shortcut
+    `_insert_trace`'s own conjunction measurement takes deliberately and
+    states in its own comment) passes one direction and fails the other."""
+    from wl_preproc.schema import detect
+
+    session_key, report, onsets = right_refused_session
+    assert not any(
+        "EyeValidity" in message or "EyeDetection" in message for message in report["errors"]
+    )
+
+    right_row = _assert_reason_echoes_validity(session_key, "right", "right")
+
+    left_status = (detect.EyeValidity & {**session_key, "eye": "left"}).fetch1("status")
+    assert left_status == "computed"
+    left_row = (detect.EyeDetection & {**session_key, "trace": "left"}).fetch1()
+    assert left_row["status"] == "computed"
+    left_runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
+        order_by="run_index"
+    )
+    left_onsets = [r["run_start"] for r in left_runs if r["label"] in ("saccade", "microsaccade")]
+    assert len(left_onsets) == len(onsets) == 3
+    for got, want in zip(left_onsets, onsets, strict=True):
+        assert abs(got - want) <= 5
+
+    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    assert conjunction_row["status"] == "refused"
+    assert conjunction_row["reason"]
+    assert conjunction_row["reason"] != right_row["reason"]
+
+
 def test_a_session_with_no_calibration_is_refused_with_a_reason(uncalibrated_session):
     """Detection reads gaze as a computation, so no calibration means no
     gaze. A refused row with a stated reason, never an error and never an
-    empty success."""
+    empty success.
+
+    `conjunction`'s own reason is checked only for PRESENCE here, not for
+    the word "calibration": fix round (reviewer finding 1) gives it its own
+    wording -- "conjunction needs both eyes' ... spans", naming that a
+    conjunction needs both eyes rather than repeating either eye's
+    calibration-flavoured reason verbatim (`test_both_eyes_refused_each_
+    trace_carries_its_own_eyes_reason`, below, checks that wording and its
+    provenance directly)."""
     from wl_preproc.schema import detect
 
     session_key, report = uncalibrated_session
@@ -437,8 +694,30 @@ def test_a_session_with_no_calibration_is_refused_with_a_reason(uncalibrated_ses
     assert rows
     for row in rows:
         assert row["status"] == "refused"
-        assert "calibration" in row["reason"]
+        assert row["reason"]
+        if row["trace"] in ("left", "right"):
+            assert "calibration" in row["reason"]
         assert row["n_samples"] is None
+
+
+def test_both_eyes_refused_each_trace_carries_its_own_eyes_reason(uncalibrated_session):
+    """Fix round, reviewer finding 1, row 4 of the required table: both
+    eyes refused, `left`'s trace carrying `left`'s own `EyeValidity` reason
+    and `right`'s carrying `right`'s -- each fetched per eye via
+    `_assert_reason_echoes_validity`, not read off one shared, unordered
+    `EyeValidity & 'status = "refused"'` query the way the original defect
+    did. `conjunction` is refused too, with its own reason stated (never
+    left blank, and never simply equal to either eye's)."""
+    from wl_preproc.schema import detect
+
+    session_key, _report = uncalibrated_session
+
+    _assert_reason_echoes_validity(session_key, "left", "left")
+    _assert_reason_echoes_validity(session_key, "right", "right")
+
+    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    assert conjunction_row["status"] == "refused"
+    assert conjunction_row["reason"]
 
 
 def test_the_registered_paramsets_match_the_detector_registry(daemon_module):

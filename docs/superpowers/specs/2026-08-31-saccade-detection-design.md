@@ -296,8 +296,9 @@ file is read once.
 
 The conjunction is derived, never independently detected: an event survives
 when the two eyes' events of the same detector overlap in time. A session with
-one usable eye yields `left` or `right` and **no** `conjunction` row, with the
-reason recorded — never a silent monocular fallback wearing a binocular name.
+one usable eye yields `left` or `right` and a **refused** `conjunction` row,
+with the reason recorded — never a silent monocular fallback wearing a
+binocular name.
 
 ---
 
