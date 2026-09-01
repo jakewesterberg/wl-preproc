@@ -383,12 +383,12 @@ names — through the real `validity_labels`/`velocity`/registered-detector
 code, not a reimplementation
 (`tests/schema/test_detect_populate.py::test_the_run_count_measured_against_the_reference_recording`).
 One detector (Engbert–Kliegl, this subsystem's zero-dependency baseline),
-three traces: **12,767 runs (left), 12,631 (right), 11,444 (conjunction) —
-36,842 rows, one session, one detector.** That is about 12% below the
+three traces: **12,767 runs (left), 12,631 (right), 10,703 (conjunction) —
+36,101 rows, one session, one detector.** That is about 14% below the
 estimate's own implied single-detector figure (3 × 14,000 = 42,000), and
-scaling the measured total up by seven detectors — 7 × 36,842 ≈ 257,900 rows
-per session — lands about 12% below the original ~294,000 by that same
-ratio. **The two "12% below" figures are not independent confirmations**;
+scaling the measured total up by seven detectors — 7 × 36,101 ≈ 252,700 rows
+per session — lands about 14% below the original ~294,000 by that same
+ratio. **The two "14% below" figures are not independent confirmations**;
 scaling by seven is a linear rescaling of the one number actually measured,
 not a second measurement. What they show is narrower but still real: the
 original 3-events/second guess was the right order of magnitude for the one
@@ -396,6 +396,26 @@ detector now measured, and the runs-as-rows decision does not need
 revisiting on the strength of this number — a few hundred thousand rows per
 session is unremarkable for a relational table, which was the entire
 argument for rows over a blob in the first place.
+
+**And the split, measured beside the count.** Those runs carry
+2,499/3,473 saccade/microsaccade on the left trace, 2,069/3,523 on the right
+and **1,731/2,819 on the conjunction** — the conjunction's being the one that
+depends on §5.1's rule as well as on the calibration scale, since its label
+is `classify` over the intersection's own amplitude.
+
+> **The conjunction figures were corrected 2026-09-01, twice, and it is worth
+> saying why rather than overwriting them.** This section first stated
+> **11,444 (conjunction) — 36,842 rows**, and §11's own recap repeated the
+> total. Those were measured before the binocular intersection inherited the
+> detector's `min_duration_samples` floor (whole-branch review, finding H3),
+> which drops 402 of 4,952 raw intersections and 741 stored runs with them:
+> re-measured, **10,703 and 36,101**, which is what stands above. The left
+> and right figures never moved, then or since. The conjunction's SPLIT moved
+> separately and for a different reason — 1,731/2,819 originally, 2,209/2,341
+> under the precedence rule §5.1 records, and back to **1,731/2,819** now that
+> the label comes from the intersection's own amplitude again. The run COUNT
+> did not move with either label change, which is what makes these two
+> independent facts rather than one restated.
 
 **Why a number could be measured at all without a validated calibration for
 this recording.** No `.bhv2` file and no known fixation-target positions
@@ -442,7 +462,7 @@ not a flaw in the count.
 
 **What remains uncertain, now that the count itself is not.** This measured
 one detector of seven — the other six may move the per-detector average, in
-either direction, by more than the ~12% the one measured detector agrees
+either direction, by more than the ~14% the one measured detector agrees
 with the original estimate by, and nothing here should be read as evidence
 about them. And the saccade/microsaccade SPLIT, unlike the run count, is
 *not* scale-invariant: `classify` thresholds an absolute degree amplitude,
@@ -833,12 +853,15 @@ else supplies.
    detector belongs behind the same "slow" marker `test_kilosort_defaults_
    split_units.py` already uses.
 3. ~~The run-count estimate in §5 is not a measurement.~~ **Measured
-   2026-09-01** (§5): 36,842 rows for one session, one detector, three
-   traces — about 12% below the ~294,000 §5 itself reasoned to (this item's
+   2026-09-01** (§5): 36,101 rows for one session, one detector, three
+   traces — about 14% below the ~294,000 §5 itself reasoned to (this item's
    own "~126,000" never matched §5's "~294,000" in the first place; that was
    drift within this document rather than a second estimate, and §5's figure
-   is the one the measurement was checked against). Still open: six of the
-   seven detectors, unmeasured.
+   is the one the measurement was checked against). The first figure recorded
+   here was 36,842, measured before the conjunction's duration floor; §5's own
+   note carries that correction and the second, later one to the conjunction's
+   saccade/microsaccade split. Still open: six of the seven detectors,
+   unmeasured.
 4. **~~Post-saccadic oscillation.~~ Addressed 2026-08-31**, in §2.5 and as
    the `pso` label — after Deubel & Bridgeman's ≤0.5° lens displacement
    measured on a DPI turned it from a refinement into the artifact most likely
