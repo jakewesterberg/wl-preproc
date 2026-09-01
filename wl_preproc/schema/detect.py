@@ -439,7 +439,10 @@ class EyeDetection(dj.Computed):
             )
             # The mask stored `fixation` where a sample is available.
             offered = np.where(available == Label.FIXATION, None, available)
-            spans[eye_value] = detector.run(gaze, v, offered, detector_params)
+            # `detector.detect`, never `detector.run`: the wrapper is what
+            # holds the detector to its own declared `vocabulary`, and this
+            # is the one place in production that runs a detector at all.
+            spans[eye_value] = detector.detect(gaze, v, offered, detector_params)
             per_eye[eye_value] = (gaze, v, offered)
 
         for eye_value in ("left", "right"):

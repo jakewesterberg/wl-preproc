@@ -1231,12 +1231,13 @@ def _bounds(intervals):
 
 def _detect(gaze, v, mask):
     """The registered Engbert-Kliegl detector (`registry.get_detector`, the
-    same lookup `EyeDetection.make()` uses), at its default parameters.
-    Returns labelled `Run`s."""
+    same lookup `EyeDetection.make()` uses), through `Detector.detect` -- the
+    vocabulary-checked entry point `make()` itself calls, not the raw `run` --
+    at its default parameters. Returns labelled `Run`s."""
     from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.registry import get_detector
 
-    return get_detector("engbert_kliegl").run(gaze, v, mask, DEFAULT_EK_PARAMS)
+    return get_detector("engbert_kliegl").detect(gaze, v, mask, DEFAULT_EK_PARAMS)
 
 
 def _encode(mask, intervals):
