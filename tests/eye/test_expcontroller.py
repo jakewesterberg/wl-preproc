@@ -69,6 +69,51 @@ left:
 """
 
 
+def _same_map(actual, expected) -> bool:
+    """Compare the fields a reader actually sets, never the whole dataclass.
+
+    `CalibrationMap.conditioning` defaults to `float("nan")`, and `27917b4`
+    established what that does to `==`: on 3.11 the generated `__eq__` builds a
+    tuple and `tuple.__eq__` checks `is` before `==`, so two maps sharing the
+    one default nan OBJECT compare equal; on 3.13 it compares field by field
+    and reaches `float.__eq__`, where nan is never equal to itself. A test
+    asserting `==` between two default-conditioning maps therefore passes on
+    3.11 and fails on 3.13 -- which is exactly how CI went red for a day after
+    the eye merge (`e7c8ea4`), and how these seven tests failed on 3.13 while
+    every local run was green.
+
+    A reader parsing an online calibration sets `model`, `x` and `y` and leaves
+    `n_points`/`conditioning` at their defaults deliberately, because it did
+    not fit the map and has no evidence for either. Those three fields are the
+    whole of what a round-trip test is entitled to assert.
+    """
+    return (
+        actual is not None
+        and actual.model == expected.model
+        and actual.x == expected.x
+        and actual.y == expected.y
+    )
+
+
+def test_the_field_comparison_helper_distinguishes_two_different_maps():
+    """`_same_map` is what every round-trip assertion in this file rests on,
+    so it gets its own test.
+
+    Without this, mutating the helper's body to `return True` leaves all
+    twelve tests in this file passing while none of them checks a parsed value
+    -- measured, not supposed. That is the same "a test that cannot fail"
+    shape this subsystem's review kept finding, and a boolean-returning helper
+    is the easiest way to reintroduce it: the assertion reads as a comparison
+    but is only as strong as the function behind it.
+    """
+    assert _same_map(_LEFT_MAP, _LEFT_MAP)
+    assert not _same_map(_LEFT_MAP, _RIGHT_MAP)
+    assert not _same_map(None, _LEFT_MAP)
+    assert not _same_map(
+        _LEFT_MAP, CalibrationMap(model=CalibrationModel.AFFINE, x=_LEFT_MAP.x, y=(9.0, 9.0, 9.0))
+    )
+
+
 def _write(tmp_path: Path, text: str, name: str = "calibration.yaml") -> Path:
     path = tmp_path / name
     path.write_text(text)
@@ -86,7 +131,8 @@ def test_a_valid_two_eye_file_yields_a_different_map_per_eye(tmp_path):
     """
     result = read_expcontroller_map(_write(tmp_path, _GOOD_TWO_EYE))
 
-    assert result == OnlineCalibration(left=_LEFT_MAP, right=_RIGHT_MAP)
+    assert _same_map(result.left, _LEFT_MAP)
+    assert _same_map(result.right, _RIGHT_MAP)
     assert result.left != result.right
 
 
@@ -97,10 +143,13 @@ def test_a_valid_second_order_file_round_trips_to_the_right_calibration_map(tmp_
     that absence proven as its own behaviour, not incidental here)."""
     result = read_expcontroller_map(_write(tmp_path, _GOOD_SECOND_ORDER_LEFT_ONLY))
 
-    assert result.left == CalibrationMap(
-        model=CalibrationModel.SECOND_ORDER,
-        x=(0.1, 0.02, 0.003, 0.0004, 0.0005, 0.0006),
-        y=(-0.1, 0.004, 0.021, 0.0007, 0.0008, 0.0009),
+    assert _same_map(
+        result.left,
+        CalibrationMap(
+            model=CalibrationModel.SECOND_ORDER,
+            x=(0.1, 0.02, 0.003, 0.0004, 0.0005, 0.0006),
+            y=(-0.1, 0.004, 0.021, 0.0007, 0.0008, 0.0009),
+        ),
     )
     assert result.right is None
 
@@ -148,7 +197,7 @@ def test_an_unknown_model_declines_only_that_eye(tmp_path):
 
     result = read_expcontroller_map(_write(tmp_path, bad))
 
-    assert result.left == _LEFT_MAP
+    assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
 
 
@@ -167,7 +216,7 @@ def test_a_coefficient_count_disagreeing_with_its_model_declines_only_that_eye(t
 
     result = read_expcontroller_map(_write(tmp_path, bad))
 
-    assert result.left == _LEFT_MAP
+    assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
 
 
@@ -181,7 +230,7 @@ def test_an_unexpected_field_inside_one_eye_record_declines_only_that_eye(tmp_pa
 
     result = read_expcontroller_map(_write(tmp_path, bad))
 
-    assert result.left == _LEFT_MAP
+    assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
 
 

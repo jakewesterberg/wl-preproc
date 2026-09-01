@@ -415,10 +415,15 @@ def test_read_online_map_dispatches_a_yaml_path_to_the_expcontroller_reader(tmp_
         "  rms_residual_deg: 0.1\n"
     )
 
-    assert read_online_map(path) == OnlineCalibration(
-        left=CalibrationMap(model=_AFFINE, x=(0.0, 0.05, 0.0), y=(0.0, 0.0, 0.05)),
-        right=None,
-    )
+    # Field by field, never `==` on the whole dataclass: `conditioning`
+    # defaults to nan, and `27917b4` records what that does across
+    # interpreters -- equal on 3.11 via `tuple.__eq__`'s identity check, unequal
+    # on 3.13 where `float.__eq__` is reached directly.
+    result = read_online_map(path)
+    assert result.left.model is _AFFINE
+    assert result.left.x == (0.0, 0.05, 0.0)
+    assert result.left.y == (0.0, 0.0, 0.05)
+    assert result.right is None
 
 
 def test_a_valid_bhv2_wraps_into_the_same_map_for_both_eyes(tmp_path):
@@ -440,8 +445,14 @@ def test_a_valid_bhv2_wraps_into_the_same_map_for_both_eyes(tmp_path):
     path = tmp_path / "session.bhv2"
     _write_minimal_bhv2(path)
 
-    expected = CalibrationMap(model=_AFFINE, x=(0.5, 10.0, 20.0), y=(3.0, 1.0, 2.0))
-    assert read_online_map(path) == OnlineCalibration(left=expected, right=expected)
+    # Same reason as above: compared field by field because `conditioning`
+    # defaults to nan. The point of this test is that BOTH eyes get the map,
+    # so it asserts each eye's fields rather than one shared object.
+    result = read_online_map(path)
+    for eye_map in (result.left, result.right):
+        assert eye_map.model is _AFFINE
+        assert eye_map.x == (0.5, 10.0, 20.0)
+        assert eye_map.y == (3.0, 1.0, 2.0)
 
 
 def test_read_online_map_declines_a_malformed_yaml_file_without_raising(tmp_path):
