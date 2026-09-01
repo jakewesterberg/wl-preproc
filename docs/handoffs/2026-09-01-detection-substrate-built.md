@@ -133,10 +133,16 @@ What changed:
   eyes' labels by `labels.py::PRECEDENCE`~~ — **withdrawn in `e66caf8`, and
   `labels.PRECEDENCE` no longer exists.** It ranked a pair spec §1 calls "a
   split, not a ranking" and silently defaulted the glissade assignment §2.5
-  says must never be defaulted. The conjunction's label now comes from
-  `classify()` of its OWN measured amplitude over its own interval, so label
-  and amplitude agree by construction; a non-amplitude vocabulary raises
-  `UndecidedConjunctionLabel`. What survives is `MASK_PRECEDENCE =
+  says must never be defaulted. The conjunction's label now comes from the
+  detector's OWN labelling rule over its own interval — `classify()` of its
+  own measured amplitude where the detector declares the whole amplitude
+  split, so label and amplitude agree by construction; the detector's single
+  declared class where it declares half of one (spec §5.1, corrected
+  2026-09-01: `classify()` unconditionally would store `saccade` rows for
+  Otero-Millan and `microsaccade` rows for U'n'Eye, each a label
+  `Detector.detect` refuses from the detector itself, and each unplaceable
+  by §6.1's coarsening lattice). A non-amplitude vocabulary, and an empty
+  one, raise `UndecidedConjunctionLabel`. What survives is `MASK_PRECEDENCE =
   (BLINK, INVALID)`, wired into `validity_labels`, where ranking is genuine.
   The paragraph below describes the withdrawn rule and is kept as the record
   of why it was tried — until now dead code whose

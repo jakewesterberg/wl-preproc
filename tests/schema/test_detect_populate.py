@@ -1677,9 +1677,107 @@ def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunctio
 
     # And the threshold is never defaulted from `measure.MICROSACCADE_MAX_DEG`:
     # a paramset that names none is a paramset nothing can honestly classify
-    # against, so it raises rather than picking a module constant.
+    # against, so it raises rather than picking a module constant. Asserted on
+    # the detector that actually classifies -- a degenerate split reads no
+    # threshold at all, which `test_a_degenerate_amplitude_split_never_labels_
+    # outside_the_declared_vocabulary` pins directly.
+    from wl_preproc.eye.detect.registry import get_detector
+
     with pytest.raises(KeyError, match="microsaccade_max_deg"):
-        _conjunction_label(subset, {"detector": "otero_millan"}, _ramp_gaze(50, 0.1))
+        _conjunction_label(
+            get_detector("engbert_kliegl"), {"detector": "engbert_kliegl"}, _ramp_gaze(50, 0.1)
+        )
+
+
+def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabulary():
+    """Reviewer finding 2. `_AMPLITUDE_DERIVED_VOCABULARY` is a SUBSET test,
+    so design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
+    (`{saccade}`) both reach the conjunction rule -- and `classify` answers
+    both sides of the cut for any detector. Before the fix a
+    `{microsaccade}`-only detector's 2.9 deg intersection came back
+    `Run(100, 130, Label.SACCADE)`, a label `registry.Detector.detect`
+    refuses from that same detector's own intervals one function earlier.
+
+    Unreachable in stage 1 -- the one registered detector declares the whole
+    split -- and reachable for two of section 3.1's seven the moment either
+    lands. It matters because section 6.1's coarsening lattice reads the
+    DECLARATION and coarsens the STORED labels into it, with
+    `microsaccade -> saccade` its only amplitude-split rule: a stored
+    `saccade` on a trace declared `{microsaccade}` has no rule to place it,
+    and the pair gets scored in a vocabulary that trace does not speak.
+
+    **Both directions, and on both sides of the cut**, because a fix that
+    pinned one class rather than reading the declaration would pass half of
+    this. The conjunction interval is the intersection and so systematically
+    shorter than either eye's event (section 5.1), which is why the U'n'Eye
+    direction -- small intersections falling below the cut on a detector
+    that cannot say `microsaccade` -- is the one most likely to fire first.
+    """
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.registry import Detector
+    from wl_preproc.schema.detect import _conjunction_label, _overlapping
+
+    # 0.1 deg per sample, so a 30-sample span is 2.9 deg and a 6-sample span
+    # 0.5 deg -- either side of the 1.0 deg cut, as in
+    # `test_the_conjunction_labels_each_span_from_its_own_amplitude`.
+    gaze = _ramp_gaze(200, 0.1)
+    big, small = Run(100, 130, Label.SACCADE), Run(100, 106, Label.SACCADE)
+
+    for name, declared in (
+        ("otero_millan", Label.MICROSACCADE),
+        ("uneye", Label.SACCADE),
+    ):
+        detector = Detector(
+            name=name, vocabulary=frozenset({declared}), run=_amplitude_blind_detect
+        )
+        # Both paramsets, and each says something different. WITH the
+        # threshold is the reviewer's own reproduction, and the case that
+        # fails on the LABEL rather than on a missing key if the degenerate
+        # split is ever dropped. WITHOUT it pins that a degenerate split
+        # reads no threshold at all: demanding a number that cannot change
+        # the answer would tell a reader the paramset governs these rows.
+        for params in ({"detector": name, "microsaccade_max_deg": 1.0}, {"detector": name}):
+            label_for = _conjunction_label(detector, params, gaze)
+
+            for span in (big, small):
+                (run,) = _overlapping([span], [span], 6, label_for)
+                assert run.label is declared, (
+                    f"{name} at {span.stop - span.start} samples, params {sorted(params)}"
+                )
+                assert run.label in detector.vocabulary
+
+    # Not vacuous: over these same two spans the FULL split really does
+    # answer both ways, so the loop above is overriding a live disagreement
+    # rather than agreeing with `classify` by coincidence.
+    from wl_preproc.eye.detect.registry import get_detector
+
+    full = _conjunction_label(
+        get_detector("engbert_kliegl"), {"microsaccade_max_deg": 1.0}, gaze
+    )
+    assert full(big.start, big.stop) is Label.SACCADE
+    assert full(small.start, small.stop) is Label.MICROSACCADE
+
+
+def test_a_detector_declaring_nothing_cannot_label_a_conjunction():
+    """`frozenset() <= anything` is True, so an empty vocabulary passes the
+    subset test that guards `_conjunction_label` -- and then EVERY label is
+    outside it, which is reviewer finding 2 in its most extreme form.
+
+    Refused with its own reason rather than folded into the `pso` ruling
+    beside it: nothing is undecided here. A detector that declares nothing
+    is one `registry.Detector.detect` refuses every interval from, so it can
+    have no per-eye spans for a conjunction to intersect either.
+    """
+    from wl_preproc.eye.detect.registry import Detector
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    silent = Detector(name="declares_nothing", vocabulary=frozenset(), run=_amplitude_blind_detect)
+
+    with pytest.raises(UndecidedConjunctionLabel) as excinfo:
+        _conjunction_label(silent, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
+
+    message = str(excinfo.value)
+    assert "declares_nothing" in message and "empty vocabulary" in message
 
 
 def test_the_detection_key_source_has_no_stray_eye_attribute(daemon_module):

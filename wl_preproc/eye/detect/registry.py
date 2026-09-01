@@ -14,6 +14,13 @@ this is where that declaration lives.
 detector whose returned labels are not a subset of what it declared. A
 declaration nothing checks is a claim, and every consumer of this one reads
 the claim rather than the output.
+
+**One stored label does not pass through `detect`:** the conjunction trace's,
+which has no detector interval to check because no detector produced it
+(`schema/detect.py::EyeDetection.make`). That path honours this declaration
+by DERIVING the label from it rather than by checking a label against it --
+see `schema/detect.py::_conjunction_label`, which is where the enforcement
+above would otherwise have a hole exactly one trace wide.
 """
 
 from __future__ import annotations

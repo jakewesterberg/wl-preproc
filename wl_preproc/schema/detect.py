@@ -34,12 +34,15 @@ the criterion a FILTER rather than a generator -- see `_overlapping`.
 conjunction's comes from its own measurement.** Design spec section 3:
 "Detectors return labelled intervals. Shared code measures them."
 `_insert_trace` writes the label each interval already carries and measures
-the final run for storage. The conjunction has no detector to speak for it,
-so `_overlapping` labels each intersection by `classify`ing THAT
-intersection's own amplitude -- the same `[start, stop)` on the same gaze
-that `_insert_trace` then stores -- rather than by arbitrating between the
-two eyes' labels. See `_conjunction_label` for the three defects that
-arbitration caused. `_insert_trace` used to assign every span's label
+the final run for storage. The conjunction has no detector interval to carry
+one, so `_overlapping` labels each intersection by the detector's OWN
+labelling rule applied to THAT intersection -- `classify` over its own
+amplitude, the same `[start, stop)` on the same gaze that `_insert_trace`
+then stores, where the detector declares the whole amplitude split; the
+detector's single declared class where it declares half of one. Never by
+arbitrating between the two eyes' labels. See `_conjunction_label` for the
+three defects that arbitration caused, and for why half a split is not
+`classify`'s question to answer. `_insert_trace` used to assign every span's label
 itself, from amplitude, via `classify` -- which can only answer `saccade` or
 `microsaccade`, so a stage-2 detector declaring `{saccade, pso, fixation}`
 would have had everything it found relabelled by amplitude and its declared
@@ -585,9 +588,10 @@ class EyeDetection(dj.Computed):
         already labelled -- by the detector for `left` and `right` (design
         spec section 3: "Detectors return labelled intervals. Shared code
         measures them."), by `_overlapping`'s `label_for` for `conjunction`,
-        which is `classify` over that same intersection's own amplitude
-        (`_conjunction_label`). It used to call `classify` on every span
-        itself, which could only ever return `saccade` or `microsaccade`: a
+        which is the detector's own labelling rule over that same
+        intersection (`_conjunction_label`). It used to call `classify` on
+        every span itself, which could only ever return `saccade` or
+        `microsaccade`: a
         stage-2 detector declaring `{saccade, pso, fixation}` would have had
         every span it detected relabelled by amplitude regardless of what it
         actually found, and four of design spec section 3.1's seven declare
@@ -746,15 +750,30 @@ def _overlapping(
 # The vocabularies whose labels ARE a split by amplitude, so a conjunction run
 # can be labelled from its own measurement. Design spec section 3.1 gives this
 # to Engbert-Kliegl (`{saccade, microsaccade}`) and, in stage 2, to
-# Otero-Millan (`{microsaccade}`) -- a SUBSET test rather than equality, so
-# the second qualifies as well as the first.
+# Otero-Millan (`{microsaccade}`) and U'n'Eye (`{saccade}`) -- a SUBSET test
+# rather than equality, so all three qualify.
+#
+# **A PROPER subset is a DEGENERATE split, and that is what decides the label
+# there** (fix round, reviewer finding 2). Otero-Millan and U'n'Eye each
+# declare one side of the cut and cannot emit the other, so `classify` -- which
+# answers both sides for any detector -- would put a word in their mouths that
+# `registry.Detector.detect` refuses from the detector itself. See
+# `_conjunction_label`, which reads this set rather than restating it.
 _AMPLITUDE_DERIVED_VOCABULARY = frozenset({Label.SACCADE, Label.MICROSACCADE})
 
 
 def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[int, int], Label]:
-    """How a conjunction run gets its label: `classify` over that run's OWN
-    amplitude, on the gaze the conjunction is measured from. Returned as a
-    callable for `_overlapping` to apply to each span it keeps.
+    """How a conjunction run gets its label: the DETECTOR's own labelling
+    rule, applied to that run's own interval on the gaze the conjunction is
+    measured from. Returned as a callable for `_overlapping` to apply to each
+    span it keeps.
+
+    For a detector declaring the whole amplitude split that rule is
+    `classify` over the run's own amplitude -- literally the rule
+    `engbert_kliegl.py::detect_engbert_kliegl` labels its own intervals with,
+    so all three of its traces are labelled the same way. For a detector
+    declaring HALF of the split it is that half, constantly; see the
+    degenerate-split section below.
 
     **The conjunction's label comes from its own measurement, over its own
     interval -- never from arbitrating between the two eyes.** The rule this
@@ -788,16 +807,61 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     what let them diverge in the first place, so the eyes' own labels are
     not consulted here at all.
 
+    That paragraph is about the detectors whose vocabulary IS the amplitude
+    split; below it is scoped, because a detector that declares half the
+    split makes no cut for a stored amplitude to agree or disagree with.
+
+    **A vocabulary that is HALF the split gets that half, and never
+    `classify`'s other answer** (fix round, reviewer finding 2).
+    `_AMPLITUDE_DERIVED_VOCABULARY` is a subset test, deliberately, so
+    design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
+    (`{saccade}`) qualify along with Engbert-Kliegl. But `classify` answers
+    both sides of the cut for any detector, and a conjunction interval is
+    the INTERSECTION of the two eyes' events -- shorter than either, and
+    systematically smaller in amplitude (section 5.1) -- so short
+    intersections fall below the cut routinely. Left as it was, U'n'Eye
+    would have stored `microsaccade` rows and Otero-Millan `saccade` rows,
+    each a label its own detector declares it cannot emit:
+
+    - `registry.Detector.detect` refuses exactly that label from the
+      detector itself, and its own docstring is why -- the declaration is
+      "enforced, not merely recorded", because "every consumer of this one
+      reads the claim rather than the output". The conjunction's labels
+      never pass through `detect`, so this is the one place that claim can
+      be broken without anything noticing.
+    - Section 6.1's coarsening lattice is the consumer that would be
+      misled. It picks "the coarsest vocabulary both declare" and coarsens
+      the STORED labels into it, and its only amplitude-split rule runs
+      `microsaccade -> saccade`. A stored `saccade` on a trace declared
+      `{microsaccade}` has no rule to place it, and the pair is scored in a
+      vocabulary that trace does not speak -- the precise failure section
+      6.1 exists to prevent.
+    - Both eyes' OWN traces already carry the detector's single class for
+      that event, whatever its amplitude, because that is all the detector
+      can say. A conjunction disagreeing with both eyes about a class
+      neither eye can express is not a binocular finding.
+
+    So the split is DEGENERATE for such a detector, and a degenerate split
+    has one answer. This is not `classify`'s output being overridden: it is
+    the amplitude cut not being asked, because the detector does not make
+    it. `classify` itself is left alone -- it is `measure.py`'s shared
+    function, called by detectors as well as by this one, and teaching it
+    about registry vocabularies would put a detector concept in the module
+    section 3 keeps deliberately free of them.
+
     **`microsaccade_max_deg` comes from the PARAMSET dict, not from the
-    detector's own params dataclass.** It is the shared key
-    `register_default_paramsets` writes once beside `detector`, and
-    `_params_for` hands it to a detector only if that detector declares a
-    field of the name -- which a detector whose vocabulary is
-    `{microsaccade}` alone has no reason to do while still needing this
-    rule. A paramset that names no threshold raises `KeyError` here rather
+    detector's own params dataclass, and is read only where a cut is
+    actually made.** It is the shared key `register_default_paramsets`
+    writes once beside `detector`, and `_params_for` hands it to a detector
+    only if that detector declares a field of the name -- which a detector
+    declaring half the split has no reason to do, and now no reason to
+    need. A paramset that names no threshold raises `KeyError` here rather
     than falling back to `measure.MICROSACCADE_MAX_DEG`: a silent module
     default is exactly what would let two `eye_detection` paramsets split
-    their conjunctions at different amplitudes with nothing on record.
+    their conjunctions at different amplitudes with nothing on record. That
+    `KeyError` is not raised for a degenerate split, where no paramset
+    could have changed the answer -- demanding a number and then ignoring
+    it would tell a reader the threshold governs those rows.
 
     **Any other vocabulary raises.** One containing `pso`, `pursuit`,
     `drift` or `fixation` is one no amplitude cut can answer for, and
@@ -808,10 +872,24 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     it enforces. Raised HERE, where the undecided question is actually
     asked, rather than at `get_detector`: such a detector's own per-eye
     traces are perfectly well defined, and it is only the conjunction that
-    has no rule.
+    has no rule. An EMPTY vocabulary raises for a related but distinct
+    reason, stated at its own guard below.
     """
     from wl_preproc.eye.detect.measure import amplitude, classify
 
+    if not detector.vocabulary:
+        # `frozenset() <= anything` is True, so the subset test below admits
+        # a detector that declares nothing at all -- and every label is then
+        # outside its vocabulary, which is finding 2's defect in its most
+        # extreme form. Separate from the ruling below because the reason is
+        # different: there is no undecided question here, only a detector
+        # `registry.Detector.detect` would refuse every interval from.
+        raise UndecidedConjunctionLabel(
+            f"detector {detector.name!r} declares an empty vocabulary, so there is no "
+            "label a conjunction run could carry that the detector itself would be "
+            "allowed to emit -- `registry.Detector.detect` refuses every label for "
+            "such a detector. Declare what it emits before asking for its conjunction"
+        )
     if not detector.vocabulary <= _AMPLITUDE_DERIVED_VOCABULARY:
         raise UndecidedConjunctionLabel(
             f"detector {detector.name!r} declares vocabulary "
@@ -822,6 +900,18 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
             "puts the choice, in a `pso_as`-style comparison parameter, rather than "
             "letting this function invent one"
         )
+
+    if len(detector.vocabulary) == 1:
+        # The degenerate split, above. Returned from the DECLARATION rather
+        # than from any amplitude, so the label is in the detector's
+        # vocabulary by construction and not by a check that could be
+        # removed.
+        (declared,) = detector.vocabulary
+        return lambda _start, _stop: declared
+
+    # Non-empty, a subset, and not of size one, so `detector.vocabulary` IS
+    # `_AMPLITUDE_DERIVED_VOCABULARY` -- which is exactly the set of answers
+    # `classify` can give. In-vocabulary by construction here too.
     microsaccade_max_deg = params["microsaccade_max_deg"]
 
     def label_for(start: int, stop: int) -> Label:

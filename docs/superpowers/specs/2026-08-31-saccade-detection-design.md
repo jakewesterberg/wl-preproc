@@ -512,17 +512,46 @@ is least visible in the residuals. `SaccadeMainSequence` is keyed per `trace`
 (§6.5.2), so the shipped tables cannot make this mistake by themselves; an
 ad-hoc query that groups across traces is where it bites.
 
-**The label follows the same interval.** A conjunction run's `label` is
+**The label follows the same interval, under the detector's own rule.** For a
+detector declaring the whole amplitude split, a conjunction run's `label` is
 `classify` applied to that run's own stored `amplitude_deg` — derived once,
 from the number that is stored, so a stored label cannot contradict the
-amplitude stored beside it. Not the two eyes' labels combined: that ranks the
-`saccade`/`microsaccade` pair §1 calls a split rather than a ranking, and
+amplitude stored beside it, and it is literally the rule that detector labels
+its own per-eye intervals with. Not the two eyes' labels combined: that ranks
+the `saccade`/`microsaccade` pair §1 calls a split rather than a ranking, and
 defaults the `pso` assignment §2.5 says must never be defaulted. Where a
 detector's declared vocabulary is **not** a split by amplitude — any
 vocabulary containing `pso`, `pursuit`, `drift` or `fixation` — the
 conjunction's label is **not decided**, and `EyeDetection.make()` raises
 rather than choosing one: that choice belongs in §6.1's `pso_as` parameter,
 stated per comparison.
+
+**Where a detector declares HALF the split, the cut is not made at all and
+the conjunction takes that half.** §3.1 gives Otero-Millan `microsaccade`
+alone and U'n'Eye `saccade` alone. `classify` answers both sides of the cut
+for any detector, so applying it to their conjunctions stores a label the
+detector declares it cannot emit — and a conjunction interval is the
+intersection, systematically shorter and smaller in amplitude than either
+eye's event (this section, above), so short intersections cross the cut
+routinely. Three things break at once, which is why the rule is stated here
+rather than left to the implementation: `registry.Detector.detect` refuses
+that same label from the detector itself one step earlier; §6.1's coarsening
+lattice reads the **declaration** and coarsens the **stored** labels into it,
+and its only amplitude-split rule runs `microsaccade → saccade`, so a stored
+`saccade` on a trace declared `{microsaccade}` has no rule to place it and
+the pair is scored in a vocabulary that trace does not speak; and both eyes'
+own traces already carry the detector's single class for that event, so a
+conjunction disagreeing with both about a class neither eye can express is
+not a binocular finding. The split is degenerate for such a detector, and a
+degenerate split has one answer. A paramset's `microsaccade_max_deg` is
+therefore not read for these detectors — no value of it could change a row.
+
+> **Recorded 2026-09-01, from a whole-branch re-review.** This was a live
+> defect in the shipped code, unreachable only because stage 1 registers one
+> detector and it declares the whole split. Reproduced directly: a detector
+> declaring `{microsaccade}` returned `Run(100, 130, saccade)` for a 2.9°
+> intersection, with `label in detector.vocabulary` False. Two of §3.1's
+> seven would have hit it the day they landed.
 
 > **Recorded 2026-09-01, after a rule that shipped briefly and was wrong.**
 > `_overlapping` first combined the two eyes' labels through a precedence
