@@ -549,9 +549,24 @@ defensible call, but it is a reversal rather than a gap.
 Spec §13 carries the full list. None now gate other work — these are named because each
 leaves something behind that does:
 
-- **AWAITING OUR ANSWER, and it is the only item here another repository is blocked on
-  deciding.** wl-expcontroller's `ADR-0007-event-vocabulary-ownership.md` is *"Accepted
-  2026-08-31, with one clause pending wl-preproc"*. The rule — ownership splits on
+- **ANSWERED 2026-09-01: we agree.** `TaskEvent` 256–4095 is wl-mllib's to allocate; our
+  256–259 transfer as **already-allocated** (ownership moving is not permission to
+  renumber — that would silently relabel every event in every recording on disk).
+  wl-expcontroller is no longer confined to 4096–32767 on our account. Recorded in
+  `contracts/events.py`'s module docstring AND on the `TaskEvent` enum itself, where
+  someone adding a value would be standing, and as a `consumes: task-event-vocabulary`
+  edge in `wl.yaml`.
+
+  **The enum stays here, as a mirror.** wl-mllib publishes `task-event-vocabulary` as
+  `stability: planned` and defines no `TaskEvent` in code, so ours is the only
+  implementation and this pipeline must decode those values today. Same shape as
+  wl-expcontroller mirroring `PAYLOAD_WORD_COUNTS`. When wl-mllib ships a package this
+  becomes a pinned `requires` edge the way wl-sync is. Until then the risk is real and
+  named: two places could disagree, and only convention stops them.
+
+  The original ask, for context — wl-expcontroller's
+  `ADR-0007-event-vocabulary-ownership.md` was *"Accepted 2026-08-31, with one clause
+  pending wl-preproc"*. The rule — ownership splits on
   **decodability versus meaning**, so framing/escapes/checksum/payload-counts/DVA and
   `Marker` 1–255 are ours while `TaskEvent`, `TaskTypeCode` and the task-specific range are
   wl-mllib's — is accepted and is now recorded in `contracts/events.py`'s own docstring

@@ -257,3 +257,22 @@ consumes:
   - name: barcode-codec
     why: >-
       Alignment onto one clock is decoded from the barcodes the sync box emits.
+  - name: task-event-vocabulary
+    why: >-
+      TaskEvent 256-4095 is ALLOCATED in wl-mllib and decoded here. Agreed
+      2026-09-01, answering the clause wl-expcontroller's ADR-0007 left pending
+      on this repository: ownership splits on decodability versus meaning, and a
+      wrong task-event number makes a recording uninterpretable rather than
+      undecodable. The four values this repository already allocated
+      (TaskEvent 256-259) transfer as already-allocated -- ownership moving is
+      not permission to renumber, and renumbering would silently relabel every
+      event in every prior recording.
+
+      The enum still lives in wl_preproc/contracts/events.py because wl-mllib
+      publishes this artifact as `stability: planned` and defines no TaskEvent
+      in code, so ours is the only implementation and this pipeline must decode
+      those values today. It is a MIRROR of wl-mllib's allocation, not the
+      source of truth, on the same reasoning wl-expcontroller mirrors
+      PAYLOAD_WORD_COUNTS rather than importing it. New task events are
+      requested there and never added here. When wl-mllib ships a package this
+      becomes a `requires` edge with a commit pin, the way wl-sync already is.

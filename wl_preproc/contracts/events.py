@@ -31,11 +31,21 @@ a frozen interface defining it. `wlo validate` cannot catch that -- it checks
 that a published name resolves to exactly one publisher, not that a description
 is true -- so it was found by reading both repositories.
 
-**One clause is not settled.** Moving `TaskEvent` 256-4095 to `wl-mllib` needs
-this repository's agreement, because `TaskEvent` 256-259 are allocated HERE
-(below) and ownership moving is explicitly not permission to renumber. Until
-that is answered, wl-expcontroller allocates only in 4096-32767, whose
-ownership is undisputed, so a decline costs no rework there.
+**That clause is now settled: AGREED 2026-09-01.** `TaskEvent` 256-4095 is
+wl-mllib's to allocate. The four values already allocated here (256-259)
+transfer as ALREADY-ALLOCATED -- ownership moving is not permission to
+renumber, and renumbering would silently relabel every event in every prior
+recording. wl-expcontroller is therefore no longer confined to 4096-32767 on
+this repository's account.
+
+The enum below stays here because wl-mllib publishes `task-event-vocabulary`
+as `stability: planned` and defines no `TaskEvent` in code, so this is the
+only implementation and this pipeline must decode those values today. It is a
+MIRROR of wl-mllib's allocation, not the source of truth -- the same shape
+`wl_expcontroller/encode.py` uses when it mirrors `PAYLOAD_WORD_COUNTS` rather
+than importing it. **New task events are requested in wl-mllib and never added
+here.** When wl-mllib ships a package this becomes a pinned dependency the way
+`wl-sync` already is; `wl.yaml`'s `consumes` entry records the edge meanwhile.
 
 Consequences of the rule that bind this module either way: no value is ever
 renumbered; a NEW ESCAPE is an amendment to a frozen layer, while a new task
@@ -152,7 +162,18 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
 
 
 class TaskEvent(IntEnum):
-    """Task events. Range 256-4095.
+    """Task events. Range 256-4095. **Allocated in wl-mllib, mirrored here.**
+
+    Do not add a value to this enum. The range is wl-mllib's to allocate
+    (wl-expcontroller ADR-0007, its pending clause agreed by this repository
+    2026-09-01); a new task event is requested there and mirrored here once it
+    exists. The four below predate the split and transfer as already-allocated
+    -- **none of them is ever renumbered**, because a renumbering silently
+    relabels every event in every recording already on disk.
+
+    Mirrored rather than imported because wl-mllib publishes this artifact as
+    `stability: planned` and has no package to import from yet; this pipeline
+    still has to decode these values today. See the module docstring.
 
     `Marker.TRIAL_FIXATION_BREAK` already covers a failed hold;
     `FIXATION_ACQUIRED`/`FIXATION_END` bound a successful one, which is the
