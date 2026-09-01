@@ -44,6 +44,22 @@ PRECEDENCE: tuple[Label, ...] = (
 )
 
 
+def higher_precedence(first: Label, second: Label) -> Label:
+    """Whichever of two labels `PRECEDENCE` ranks higher.
+
+    **This is what makes `PRECEDENCE` operative rather than declarative.** Its
+    live consumer is `schema/detect.py::_overlapping`, which needs a rule for
+    combining the two eyes' labels wherever they disagree over one binocular
+    event -- a rule that must generalise to all seven detectors (design spec
+    section 3.1), not only to the amplitude-derived vocabularies where
+    re-classifying the conjunction's own amplitude would happen to work.
+
+    Order, not distance: the tuple's positions are a ranking, so nothing here
+    reads `PRECEDENCE.index` as a magnitude.
+    """
+    return min(first, second, key=PRECEDENCE.index)
+
+
 class TilingError(ValueError):
     """Runs do not tile the sample range exactly."""
 
@@ -57,6 +73,15 @@ class Run:
     start: int
     stop: int
     label: Label
+
+
+# Design spec section 3 names a detector's return type `LabelledInterval`. It
+# is this type, not a second one: `Run` is already `(start, stop, label)` with
+# an exclusive stop, it is already what `runs_from_labels`/`labels_from_runs`
+# speak, and it is already what the schema's own run rows store. An alias
+# rather than a rename, so the spec's word and the code's word both resolve --
+# a near-identical parallel type is how two definitions of one fact get made.
+LabelledInterval = Run
 
 
 def runs_from_labels(labels: np.ndarray) -> list[Run]:

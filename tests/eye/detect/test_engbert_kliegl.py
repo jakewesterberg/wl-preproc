@@ -4,6 +4,7 @@ import pytest
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, EngbertKlieglParams, detect_engbert_kliegl,
 )
+from wl_preproc.eye.detect.labels import Label, Run
 
 FS_HZ = 500.0
 
@@ -41,9 +42,9 @@ def test_it_finds_planted_saccades_at_their_planted_times():
     found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
 
     assert len(found) == len(planted)
-    for (got_start, got_stop), (want_start, want_stop) in zip(found, planted, strict=True):
-        assert abs(got_start - want_start) <= 3
-        assert abs(got_stop - want_stop) <= 3
+    for got, (want_start, want_stop) in zip(found, planted, strict=True):
+        assert abs(got.start - want_start) <= 3
+        assert abs(got.stop - want_stop) <= 3
 
 
 def test_a_still_eye_yields_nothing():
@@ -95,7 +96,7 @@ def test_unavailable_samples_are_never_part_of_an_event():
 
     found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
 
-    assert all(not (start < 320 and stop > 295) for start, stop in found)
+    assert all(not (run.start < 320 and run.stop > 295) for run in found)
 
 
 def test_the_defaults_are_the_papers_conventional_values():
@@ -141,7 +142,10 @@ def test_a_degenerate_constant_velocity_axis_yields_nothing():
     velocity_deg_s = np.zeros((n, 2))
     velocity_deg_s[2:-2, 0] = 5.0  # exact constant -> zero dispersion
     velocity_deg_s[2:-2, 1] = rng.normal(0.0, 1.5, n - 4)  # real noise
-    gaze = np.zeros((n, 2))  # unused by detect_engbert_kliegl; velocity_deg_s is the input
+    # `gaze_deg` is read only to amplitude-label an interval that survives
+    # the threshold, and none does here -- the guard returns before any
+    # interval exists, so a flat trace is still the honest input.
+    gaze = np.zeros((n, 2))
     available = np.full(n, None, dtype=object)
 
     found = detect_engbert_kliegl(gaze, velocity_deg_s, available, DEFAULT_EK_PARAMS)
@@ -219,6 +223,127 @@ def test_a_heavily_contaminated_trace_still_finds_a_small_saccade():
     found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
 
     assert len(found) == len(planted)
-    small_start, small_stop = found[-1]
-    assert abs(small_start - small_onset) <= 3
-    assert abs(small_stop - (small_onset + dur)) <= 3
+    assert abs(found[-1].start - small_onset) <= 3
+    assert abs(found[-1].stop - (small_onset + dur)) <= 3
+
+
+# --- Below: the labelled-interval contract (design spec section 3). The
+# detector returns `Run`s carrying its own labels; nothing downstream
+# relabels them.
+
+
+def _mixed_amplitude_trace(n=2000, dur=10, seed=3):
+    """A still eye stepped three times -- 8 deg, 0.5 deg, 6 deg -- so one
+    planted event is genuinely sub-threshold against `MICROSACCADE_MAX_DEG`
+    and two are genuinely over it, at DEFAULT parameters.
+
+    0.5 deg rather than something nearer the 1.0 deg cut: `measure.amplitude`
+    is endpoint-to-endpoint over the interval the detector actually returns,
+    whose boundaries move by a sample or two with the noise seed, so a
+    planted amplitude sitting just under the threshold would make the label
+    a property of the seed. Measured directly here: 8.0/0.5/6.0 come back as
+    ~8.00/~0.54/~5.97 deg.
+    """
+    rng = np.random.default_rng(seed)
+    gaze = rng.normal(0.0, 0.01, (n, 2))
+    planted = []
+    for onset, amplitude_deg in ((300, 8.0), (900, 0.5), (1500, 6.0)):
+        gaze[onset:, 0] += amplitude_deg
+        gaze[onset : onset + dur, 0] -= amplitude_deg * (1.0 - np.linspace(0.0, 1.0, dur))
+        planted.append((onset, amplitude_deg))
+    return gaze, planted
+
+
+def test_a_big_step_labels_saccade_and_a_sub_threshold_step_labels_microsaccade():
+    """Design spec section 3.1 gives Engbert-Kliegl the vocabulary "saccade /
+    microsaccade", so the amplitude split is THIS detector's own work.
+    Asserted on the detector's own return value, not on stored rows -- the
+    schema-level test (`tests/schema/test_detect_populate.py::
+    test_the_middle_planted_step_is_classified_as_a_microsaccade`) already
+    covers the stored side, and it passed just as happily when the label was
+    assigned three layers downstream by `_insert_trace`."""
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, planted = _mixed_amplitude_trace()
+    available = np.full(len(gaze), None, dtype=object)
+
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+
+    assert len(found) == len(planted) == 3
+    assert [run.label for run in found] == [Label.SACCADE, Label.MICROSACCADE, Label.SACCADE]
+
+
+def test_every_returned_interval_is_a_run_from_the_declared_vocabulary():
+    """The type, and the vocabulary, both checked on real output: bare
+    `(start, stop)` tuples were what shipped, and `registry.py`'s declared
+    `{saccade, microsaccade}` was a claim nothing compared against."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, _ = _mixed_amplitude_trace()
+    available = np.full(len(gaze), None, dtype=object)
+
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+
+    assert found
+    assert all(isinstance(run, Run) for run in found)
+    assert {run.label for run in found} <= get_detector("engbert_kliegl").vocabulary
+
+
+def test_each_label_is_what_classify_gives_for_that_intervals_own_amplitude():
+    """The split uses the SHARED `measure.py` amplitude and `classify`, not a
+    private copy -- design spec section 3's "never a disagreement about
+    measurement" survives moving the LABELLING into each detector only if the
+    MEASUREMENT stays central. Recomputed here from `measure.py` directly, so
+    a detector that started rounding, or thresholding on path length, or
+    flipping the at-or-above boundary, fails."""
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, _ = _mixed_amplitude_trace()
+    available = np.full(len(gaze), None, dtype=object)
+
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+
+    assert found
+    for run in found:
+        expected = classify(amplitude(gaze, run.start, run.stop), MICROSACCADE_MAX_DEG)
+        assert run.label is expected
+    # Not vacuous: both sides of the split actually occur above.
+    assert {run.label for run in found} == {Label.SACCADE, Label.MICROSACCADE}
+
+
+def test_the_paramsets_own_threshold_moves_the_split():
+    """`microsaccade_max_deg` reaches this detector through the SHARED
+    `eye_detection` paramset (`schema/detect.py::_params_for`), and the
+    default is `measure.MICROSACCADE_MAX_DEG` by reference -- so a hardcoded
+    1.0 inside the detector passes every other test in this file. Moving the
+    threshold under and over every planted amplitude is what distinguishes
+    the two: the SAME three events must come back all-saccade at 0.1 deg and
+    all-microsaccade at 20 deg."""
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, _ = _mixed_amplitude_trace()
+    available = np.full(len(gaze), None, dtype=object)
+    v = velocity(gaze, FS_HZ)
+
+    def labels_at(threshold_deg):
+        params = EngbertKlieglParams(
+            lambda_=DEFAULT_EK_PARAMS.lambda_,
+            min_duration_samples=DEFAULT_EK_PARAMS.min_duration_samples,
+            microsaccade_max_deg=threshold_deg,
+        )
+        return [run.label for run in detect_engbert_kliegl(gaze, v, available, params)]
+
+    assert labels_at(0.1) == [Label.SACCADE] * 3
+    assert labels_at(20.0) == [Label.MICROSACCADE] * 3
+
+
+def test_the_default_threshold_is_the_shared_constant_not_a_second_copy():
+    """A literal `1.0` on `EngbertKlieglParams` would be a second place the
+    conventional cut could drift from `measure.MICROSACCADE_MAX_DEG`, which
+    is the one `register_default_paramsets` registers. Identity of value,
+    asserted against the shared constant rather than against `1.0`."""
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+
+    assert DEFAULT_EK_PARAMS.microsaccade_max_deg == MICROSACCADE_MAX_DEG

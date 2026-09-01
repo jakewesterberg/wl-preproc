@@ -16,6 +16,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from wl_preproc.eye.detect.labels import Run
+from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
+
 # lambda = 6 and a 6-sample minimum (12 ms at 500 Hz) are the paper's own
 # conventional values, and what nearly every reimplementation uses.
 DEFAULT_LAMBDA = 6.0
@@ -26,6 +29,25 @@ DEFAULT_MIN_DURATION_SAMPLES = 6
 class EngbertKlieglParams:
     lambda_: float
     min_duration_samples: int
+    # **Declared here, but not this detector's own parameter.** It lives in
+    # the SHARED `eye_detection` paramset (`schema/detect.py::register_
+    # default_paramsets`, which registers it beside `detector` rather than
+    # inside any one detector's defaults), because every detector whose
+    # vocabulary splits by amplitude must split at the SAME place -- design
+    # spec section 3's whole argument for measuring centrally applies to the
+    # threshold that measurement is compared against.
+    #
+    # Declaring the field is how this detector STATES that it consumes that
+    # shared key: `schema/detect.py::_params_for` hands over exactly the
+    # paramset keys a detector's own dataclass names, so a detector with no
+    # amplitude-derived labels (Otero-Millan emits `microsaccade` alone,
+    # design spec section 3.1) simply does not declare it and never receives
+    # it -- rather than being handed a threshold it has no use for.
+    #
+    # The default is `measure.MICROSACCADE_MAX_DEG` itself, by reference and
+    # never a copied literal, so this is not a second place the conventional
+    # cut could drift to.
+    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
 
 
 DEFAULT_EK_PARAMS = EngbertKlieglParams(
@@ -58,8 +80,8 @@ def detect_engbert_kliegl(
     velocity_deg_s: np.ndarray,
     available: np.ndarray,
     params: EngbertKlieglParams,
-) -> list[tuple[int, int]]:
-    """Half-open `(start, stop)` intervals, in sample indices.
+) -> list[Run]:
+    """Labelled half-open `[start, stop)` intervals, in sample indices.
 
     `available` is the validity mask: `None` where a detector may label, a
     `Label` where the mask has already claimed the sample. **Unavailable
@@ -67,9 +89,20 @@ def detect_engbert_kliegl(
     output** -- a blink's velocity spike would otherwise inflate the scale and
     desensitise the detector for the whole recording.
 
-    `gaze_deg` is part of the shared detector signature (design spec section
-    3: `detect(gaze_deg, velocity, valid, params)`) but unused here -- this
-    method thresholds velocity alone. Other registry entries need positions.
+    **The saccade/microsaccade split is THIS detector's own work, not shared
+    post-processing.** Design spec section 3.1 gives Engbert-Kliegl the
+    vocabulary "saccade / microsaccade", and four of the seven planned
+    detectors declare vocabularies including `pso`, `pursuit` or `fixation`
+    that no amplitude threshold could ever produce -- so a shared step that
+    labelled every detector's spans by amplitude would silently overwrite
+    what those four detected. Labelling belongs to each detector;
+    MEASUREMENT stays shared, which is why the split below goes through
+    `measure.py`'s own `amplitude` and `classify` rather than a private copy
+    of either.
+
+    `gaze_deg` is what that split reads -- velocity alone finds the events
+    (the elliptic test below), and position is what says how far the eye
+    actually went.
     """
     usable = np.array([entry is None for entry in available], dtype=bool)
     if not usable.any():
@@ -88,7 +121,11 @@ def detect_engbert_kliegl(
     outside &= usable
 
     return [
-        (start, stop)
+        Run(
+            start=start,
+            stop=stop,
+            label=classify(amplitude(gaze_deg, start, stop), params.microsaccade_max_deg),
+        )
         for start, stop in _true_runs(outside)
         if stop - start >= params.min_duration_samples
     ]
