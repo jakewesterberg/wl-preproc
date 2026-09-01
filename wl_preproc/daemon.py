@@ -33,6 +33,7 @@ from wl_preproc.schema import (
     archive,
     core,
     coverage,
+    detect,
     ephys,
     events,
     eye,
@@ -112,6 +113,36 @@ def _computed_tables() -> list:
     before `TimingProvenance` is still the right position, now for the
     reason it always should have been rather than merely because nothing yet
     depended on it.
+
+    **`detect.EyeValidity`/`detect.EyeDetection` were registered inert and
+    are not any more, and unlike the eye tables above their POSITION here IS
+    load-bearing.** The 2026-08-31 saccade-detection design's own Task 6
+    shipped both as schema only -- `make()` was Task 7, and each overrode
+    `key_source` to stay permanently empty for the exact reason recorded
+    above and in `wl_preproc/schema/eye.py`'s own git history (commit
+    3a8a121): a `dj.Computed` with a real `key_source` and no `make()`
+    raises `NotImplementedError` on every session already landed the moment
+    it joins this list. Commit `314d82b` gave both a real `key_source` and a
+    real `make()`. This paragraph, the comment beside the two entries below,
+    and `_PROJECT_SCHEMA_MODULES`' own comment all went on saying the
+    opposite until 2026-09-01 (whole-branch review, finding M9); the `eye`
+    paragraph above WAS updated when its own tables landed, so the pattern
+    was known and this one was simply missed.
+
+    **What their position now buys, precisely.**
+    `detect.EyeValidity.key_source` requires `eye.EyeCalibration` to have RUN
+    (whole-branch review, finding M5 -- see that property's own docstring),
+    and `detect.EyeDetection.key_source` is built from `EyeValidity`'s own
+    rows. So both must stay BELOW `eye.EyeCalibration`, and in this order.
+    The M5 restriction is what decides how badly a reordering hurts, and it
+    is worth naming both states: WITHOUT it, `EyeValidity` placed above
+    `eye.EyeCalibration` refused both eyes on the first pass with "no usable
+    calibration, so gaze is undefined" and never recomputed -- a PERMANENT
+    row that the very next pass makes false, with no error reported. WITH
+    it, the same reordering instead costs one whole `run_once` pass per
+    session, silently, because the `key_source` names no candidate until
+    calibration has landed. The restriction is the guard against the first;
+    this ordering is what avoids the second.
     """
     return [
         timebase.SystemTimebase,
@@ -128,6 +159,14 @@ def _computed_tables() -> list:
         # why their position here still is not what makes them correct.
         eye.EyeCalibration,
         eye.EyeQuality,
+        # Real as of `314d82b`, and BELOW `eye.EyeCalibration` on purpose:
+        # `EyeValidity.key_source` requires that table to have run, and
+        # `EyeDetection.key_source` is built from `EyeValidity`'s own rows.
+        # See this function's own docstring for what moving either of these
+        # two up actually costs -- it is not the same before and after the
+        # M5 restriction, and both answers are recorded there.
+        detect.EyeValidity,
+        detect.EyeDetection,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
@@ -207,10 +246,23 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # permanently empty `key_source` — `_computed_tables()`'s own docstring
 # named exactly what kept that safe to register at the time — and Task 10
 # gave both a real `key_source` and `make()`; they populate for real now.
+#
+# It became ELEVEN with the 2026-08-31 saccade-detection design's `detect`
+# module. A fourth case shaped like `eye`, not like `ephys`/`archive`/
+# `events`: `detect` declares two real `@schema`-decorated `dj.Computed`
+# tables (`EyeValidity`, `EyeDetection`), so it owns real `~jobs` tables too.
+# Task 6 shipped both schema-only, with a permanently empty `key_source`, for
+# the identical reason recorded above for Task 9's `eye` tables; commit
+# `314d82b` gave both a real `key_source` and `make()`, and they populate for
+# real now. `detect` is also the one module named in `_PARAMSET_MODULES`
+# below -- its two tables are the first `dj.Computed` in this project whose
+# `key_source` needs a `paramset.ParamSet` row to exist before it names any
+# candidate at all.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
     ("core", core),
     ("coverage", coverage),
+    ("detect", detect),
     ("ephys", ephys),
     ("events", events),
     ("eye", eye),
@@ -254,6 +306,81 @@ def activate_all(prefix: str = DEFAULT_PREFIX) -> None:
     """
     for _name, module in _project_schema_modules():
         module.activate(prefix=prefix)
+
+
+# Every schema module that declares a `register_default_paramsets` of its
+# own, as `(name, module)` -- the same written-list-plus-discovering-test
+# shape `_PROJECT_SCHEMA_MODULES` above uses, and for the same reason: a
+# `pkgutil`/`getattr` sweep inside `wl_preproc/` would be the dynamic import
+# the outbound guardrail bans, and a written list is what makes this
+# auditable by reading. One entry today.
+#
+# `test_every_schema_module_that_declares_default_paramsets_is_registered`
+# is the completeness claim: it DISCOVERS which modules declare such a
+# function and fails if one is missing here. `detect`'s own omission -- from
+# production entirely, not merely from a list -- is finding H1, and this
+# tuple exists so the second such module cannot repeat it silently.
+_PARAMSET_MODULES: tuple[tuple[str, object], ...] = (("detect", detect),)
+
+
+def register_default_paramsets() -> dict[str, dict[str, int]]:
+    """Every default paramset a `dj.Computed` stage's own `key_source`
+    requires to already exist, registered before that stage is populated.
+    Returns `{schema module name: that module's own return value}`.
+
+    **This is its own step in `run_once`, deliberately not folded into
+    `activate_all`.** Activation binds table declarations to a database and
+    nothing else; this WRITES ROWS. Several callers activate a schema with
+    no intention of populating anything -- `cli/report.py::_detection_rows`,
+    `cli/main.py`'s `archive` dispatch, `ingest/watcher.py` -- and
+    `count_stale_jobs`'s own docstring already records what that conflation
+    costs when it goes the other way ("a diagnostic must not mutate the
+    thing it inspects": `wlpp doctor` silently deleted and re-pended job
+    rows). Registration behind the activation guard would make `wlpp report`
+    write paramset rows as a side effect of reading, which is the same
+    mistake pointed the other direction. So `activate_all` keeps its name
+    honest and `run_once` calls this second.
+
+    **Nothing in production called `detect.register_default_paramsets` at
+    all until this function existed, and the whole detection subsystem was
+    silently inert as a result** (whole-branch review, finding H1).
+    `EyeValidity.key_source` and `EyeDetection.key_source` each join against
+    `paramset.ParamSet & {"paramset_type": ...}`, so with no row registered
+    both name ZERO candidate keys: `run_once` reports no error, writes no
+    row, and the daily report's `## Detection` section renders `- none` and
+    `blink: 0.0% / invalid: 0.0%` forever -- presented as measurements
+    rather than as "not configured". Its only callers were two test
+    fixtures, which is precisely why the gap was invisible; the end-to-end
+    proof that production now closes it is
+    `tests/schema/test_daemon.py::
+    test_a_real_wlpp_daemon_invocation_registers_the_detection_paramsets`,
+    which runs the real CLI against a virgin prefix in a subprocess rather
+    than registering anything itself.
+
+    **`ephys`'s precedent does not cover this.** Its three ParamSet-keyed
+    tables are all `dj.Manual`, so "no rows" there honestly means "nothing
+    declared yet" and a human declares it. `detect` is this project's first
+    `dj.Computed` in `_computed_tables()` gated on a `ParamSet` row
+    existing, so it is the first stage that can be gated shut by an absent
+    row without anyone being told.
+
+    **Idempotent, and that is a property of `paramset.register` rather than
+    a claim made here**: it is keyed by content hash and returns the
+    existing index for identical params (`paramset.py::register`'s own
+    "reusing an identical one"), so the obvious deployment -- a cron every
+    30 minutes -- re-registers nothing. It must also run OUTSIDE any
+    transaction, which `run_once` satisfies: see `paramset.register`'s own
+    STANDING CONSTRAINT comment for why the dedupe re-read cannot see a
+    rival's commit from inside one.
+
+    **The written list is the audit, and a discovering test is the
+    completeness claim** -- the same shape `_computed_tables()` and
+    `_PROJECT_SCHEMA_MODULES` already use. See `_PARAMSET_MODULES` above.
+
+    Must run AFTER `activate_all`: `paramset.register` writes to
+    `paramset.ParamSet`, which is not bound to a database until then.
+    """
+    return {name: module.register_default_paramsets() for name, module in _PARAMSET_MODULES}
 
 
 def job_tables() -> list:
@@ -709,6 +836,14 @@ def run_once(
     The sessions it builds are counted into `populated` for the same reason
     every other key computed is.
 
+    **`register_default_paramsets()` runs between `activate_all()` and the
+    stages, and it is not optional.** `detect.EyeValidity`/
+    `detect.EyeDetection` are the first stages in this list whose
+    `key_source` requires a `paramset.ParamSet` row to exist before it names
+    any candidate at all, so until this call existed the whole detection
+    subsystem populated nothing, reported no error, and rendered zeros in
+    the daily report as if they were measurements. See that function.
+
     **Archival is OPT IN, and skipped -- visibly -- when it is not
     configured.** Controller ruling F: `archive_session` needs `nas_root`,
     `host` and `share` to publish anywhere, and the NAS this pipeline would
@@ -729,6 +864,12 @@ def run_once(
     function that still does.)
     """
     activate_all(prefix=prefix)
+    # SECOND, and before the `_computed_tables()` loop below: two of its
+    # stages have a `key_source` that names no candidate at all until these
+    # rows exist. See `register_default_paramsets` for what was silently
+    # inert until this line was here, and for why it is not folded into
+    # `activate_all`.
+    register_default_paramsets()
 
     reaped = reap_stale_jobs(prefix=prefix)
     populated, errors = 0, []

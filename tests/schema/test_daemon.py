@@ -691,6 +691,160 @@ def test_every_schema_module_is_swept_for_job_tables():
     assert {name for name, _schema in daemon._project_schemas()} == expected
 
 
+def test_every_schema_module_that_declares_default_paramsets_is_registered():
+    """A schema module that declares `register_default_paramsets` and is not
+    named in `daemon._PARAMSET_MODULES` never registers anything in
+    production -- and a `dj.Computed` whose `key_source` joins against
+    `paramset.ParamSet` then names zero candidate keys, populates nothing,
+    and raises nothing.
+
+    That is finding H1 exactly. `detect.register_default_paramsets` existed,
+    was correct, and was idempotent; its only callers were two test
+    fixtures. `EyeValidity`/`EyeDetection` therefore populated nothing in
+    production for the whole of this branch while this suite stayed green,
+    because every test that reached those tables registered the paramsets
+    itself first.
+
+    **It discovers rather than lists**, exactly like
+    `test_every_computed_table_is_a_daemon_stage` above: it walks
+    `daemon._project_schema_modules()` looking for a module-level
+    `register_default_paramsets` callable, rather than restating the tuple
+    it is checking. It never CALLS what it discovers, so it writes no row
+    and needs no database.
+    """
+    from wl_preproc import daemon
+
+    discovered = {
+        name
+        for name, module in daemon._project_schema_modules()
+        if callable(getattr(module, "register_default_paramsets", None))
+    }
+    registered = {name for name, _module in daemon._PARAMSET_MODULES}
+
+    assert registered == discovered, (
+        "every schema module declaring register_default_paramsets must be named in "
+        "daemon._PARAMSET_MODULES, which daemon.run_once calls before its populate "
+        f"loop. Declares one but never registers: {sorted(discovered - registered)}. "
+        f"Registered but declares none: {sorted(registered - discovered)}."
+    )
+    # Not vacuous: `detect` is the module the finding was about, and an empty
+    # set on both sides would satisfy the equality above.
+    assert "detect" in registered
+
+
+# The child process of the test below. A separate `sys.executable` run, not a
+# call into `daemon.run_once` here, for one reason that cannot be worked
+# around in-process: every schema module owns exactly ONE module-level
+# `dj.Schema` singleton and each `activate()` is guarded by
+# `if not schema.is_activated()` (see `tests/conftest.py::prefix`'s own "one
+# schema prefix per process is a standing constraint"). So a second prefix
+# asked for inside this process is silently a NO-OP against the already-bound
+# `t_` tables, and this suite's shared `t_` database already has the detection
+# paramsets registered by two other files' own fixtures -- which is precisely
+# the condition that made finding H1 invisible. A virgin prefix in a virgin
+# process is the only place "did PRODUCTION register these" can be asked
+# honestly.
+_PARAMSET_PROBE = """
+import json
+import os
+
+import datajoint as dj
+
+from wl_preproc.schema._compat import apply_datajoint_compat
+
+apply_datajoint_compat()
+dj.config["database.host"] = os.environ["WLPP_PROBE_HOST"]
+dj.config["database.port"] = int(os.environ["WLPP_PROBE_PORT"])
+dj.config["database.user"] = os.environ["WLPP_PROBE_USER"]
+dj.config["database.password"] = os.environ["WLPP_PROBE_PASSWORD"]
+dj.logger.setLevel("ERROR")
+
+from wl_preproc.cli.main import main
+from wl_preproc.schema import paramset
+
+prefix = os.environ["WLPP_PROBE_PREFIX"]
+counts = []
+for _attempt in range(2):
+    assert main(["daemon", "--prefix", prefix]) == 0
+    counts.append({
+        paramset_type: len(paramset.ParamSet & {"paramset_type": paramset_type})
+        for paramset_type in ("eye_validity", "eye_detection")
+    })
+print("PROBE " + json.dumps(counts))
+"""
+
+
+def test_a_real_wlpp_daemon_invocation_registers_the_detection_paramsets(dj_conn):
+    """Finding H1's own acceptance test: `wlpp daemon`, the real CLI entry
+    point, against a database where nothing has ever registered a paramset.
+
+    **This test registers nothing itself, which is the whole point.** Every
+    existing test that reaches `EyeValidity`/`EyeDetection` calls
+    `detect.register_default_paramsets()` in its own fixture
+    (`tests/schema/test_detect_populate.py::daemon_module`,
+    `tests/cli/test_detect_report.py::detect_schema`) -- so all of them pass
+    identically whether or not production registers anything, and that is
+    exactly why a whole subsystem shipped inert. This one fails if the
+    `register_default_paramsets()` call is removed from `daemon.run_once`.
+
+    Runs `python -c` rather than `python -m wl_preproc.cli.main` so the child
+    can report what the database holds AFTER the CLI returns; it still calls
+    `wl_preproc.cli.main.main(["daemon", ...])`, the same function the
+    console script dispatches to, so nothing about the production path is
+    simulated. See `_PARAMSET_PROBE` above for why a subprocess is
+    unavoidable here.
+
+    **Idempotence is checked through the same path**, not asserted from
+    `paramset.register`'s docstring: the child runs the daemon TWICE and
+    reports the counts after each, so a registration that accumulated a
+    second row per pass -- a cron every 30 minutes is the obvious
+    deployment -- fails on the second dict rather than growing quietly.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from wl_preproc.eye.detect.registry import DETECTORS
+
+    result = subprocess.run(
+        [sys.executable, "-c", _PARAMSET_PROBE],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "WLPP_PROBE_HOST": str(dj.config["database.host"]),
+            "WLPP_PROBE_PORT": str(dj.config["database.port"]),
+            "WLPP_PROBE_USER": str(dj.config["database.user"]),
+            "WLPP_PROBE_PASSWORD": str(dj.config["database.password"]),
+            # Its own prefix, never the suite's `t_`: this must start from a
+            # database in which nothing has registered anything.
+            "WLPP_PROBE_PREFIX": "h1_",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    marker = next(
+        (line for line in result.stdout.splitlines() if line.startswith("PROBE ")), None
+    )
+    assert marker is not None, f"probe printed no result:\n{result.stdout}\n{result.stderr}"
+    first_pass, second_pass = json.loads(marker[len("PROBE ") :])
+
+    # One shared validity mask paramset, and one detection paramset per
+    # registered detector -- `detect.register_default_paramsets`'s own
+    # completeness claim, here observed through `wlpp daemon` instead of
+    # through a direct call.
+    assert first_pass == {"eye_validity": 1, "eye_detection": len(DETECTORS)}, (
+        "wlpp daemon left the detection paramsets unregistered, so "
+        "EyeValidity.key_source and EyeDetection.key_source name zero "
+        "candidates and the whole subsystem is inert in production"
+    )
+    assert second_pass == first_pass, (
+        "a second wlpp daemon pass registered more rows; registration must be "
+        "idempotent by content hash (paramset.register)"
+    )
+
+
 def test_count_stale_jobs_sees_the_jobs_tables_it_reads(dj_conn, prefix, tmp_path):
     """This is the FIRST Computed table this project has ever declared, which
     makes live a path that was inert: `count_stale_jobs` reads DataJoint's

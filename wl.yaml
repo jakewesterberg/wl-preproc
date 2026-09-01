@@ -13,22 +13,33 @@ summary: >-
 status:
   phase: >-
     Phase 1c complete; archival/compression, the eye subsystem and
-    second-order calibration all merged. Phase 2b's back half remains
-    hardware-blocked.
+    second-order calibration all merged. The saccade-detection SUBSTRATE
+    (stage 1) is built on spec/saccade-detection and not yet merged. Phase
+    2b's back half remains hardware-blocked.
   next: >-
-    Saccade detection — Engbert–Kliegl, Otero-Millan and U'n'Eye, and their
-    three-way agreement as a data-quality metric
-    (docs/handoffs/2026-08-31-second-order-calibration-built-detection-is-next.md).
-    Ruled 2026-08-31: all three, with PyTorch declared properly rather than
-    worked around. It needs no container and no GPU on a rig, which is why it
-    runs before 2b-2's back half: the reader seam, the reordered preprocessing
-    chain, the Kilosort seam and the paramset work
+    Saccade detection stage 2 — the other six detectors (Otero-Millan,
+    Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade detection,
+    U'n'Eye), the consensus suite and vocabulary-coarsening lattice, saccade
+    vigor and the main-sequence fits, `pso`/`pursuit`/`drift` as PRODUCED
+    rather than merely declared labels, the PyTorch declaration and U'n'Eye
+    vendoring, and wl-expcontroller's online detector as an eighth registry
+    entry
+    (docs/handoffs/2026-09-01-detection-substrate-built.md).
+    Stage 1 shipped ONE detector, Engbert–Kliegl — the zero-dependency
+    baseline — plus the validity mask, the eight-label taxonomy with five
+    labels produced, runs-as-rows storage, per-eye and conjunction traces,
+    and the report line. The earlier "all three, with PyTorch declared"
+    ruling described the whole of detection, not stage 1; no `torch`
+    dependency is declared yet, and `third_party` is deliberately unchanged.
+    Stage 2 still needs no container and no GPU on a rig, which is why it
+    runs before 2b-2's back half: the reader seam, the reordered
+    preprocessing chain, the Kilosort seam and the paramset work
     (docs/superpowers/specs/2026-08-26-phase-2b2-reader-and-chain-design.md
     §4, §5, §6, §8) are all gated on 2b-1, the container seam, which is still
     hardware-blocked. Rehydration — decompress-to-scratch, which turns
     `wlpp reclaim` from a preview into real disk-freeing — is the other
     hardware-free piece outstanding.
-  describes: ac7ead2
+  describes: 06d1101
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
