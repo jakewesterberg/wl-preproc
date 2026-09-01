@@ -232,7 +232,10 @@ def register(paramset_type: str, params: dict) -> int:
     # onto it. `request.submit_derivative` hit exactly this and had to take an
     # explicit locking read instead.
     #
-    # The only caller today, `wl_preproc/ingest/params.py`, does not wrap this.
+    # Two production callers today -- `wl_preproc/ingest/params.py` and
+    # `wl_preproc/schema/detect.py::register_default_paramsets`, the latter
+    # reached from `daemon.run_once` -- and neither wraps this. (`detect`'s
+    # was added 2026-09-01; this comment said "the only caller" until then.)
     # Nothing enforces that, so it is written down rather than assumed.
     for _ in range(_MAX_REGISTER_ATTEMPTS):
         # to_arrays, not fetch: DataJoint 2.3.2 deprecates bare fetch() (it

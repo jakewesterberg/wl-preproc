@@ -25,6 +25,42 @@ Stage 1 therefore produces **no agreement metric** — that arrives in stage 2
 with the second detector, which is when the vocabulary-coarsening lattice
 (spec §6.1) is first exercised and therefore first worth building.
 
+## Superseded by the whole-branch review, 2026-09-01
+
+**Read this before implementing anything below.** The branch this plan
+produced was reviewed as a whole and three parts of the plan's design did not
+survive. The plan is kept as the record of what was built and why; where it
+and the shipped code disagree, **the code and the design spec win.**
+
+1. **`PRECEDENCE` no longer exists.** This plan declares an eight-label
+   precedence tuple (Task 1) and a later round used it to combine the two
+   eyes' labels in the conjunction. That was my ruling and it was wrong: spec
+   §1 calls `saccade`/`microsaccade` "a split, not a ranking", and spec §2.5
+   forbids defaulting the glissade assignment, which `saccade` outranking
+   `pso` silently did. What ships is `MASK_PRECEDENCE = (BLINK, INVALID)`,
+   used by `validity_labels`, where ranking is genuine.
+
+2. **The conjunction's label comes from its own measurement.**
+   `classify()` of that run's own stored `amplitude_deg`, over its own
+   interval, so label and amplitude agree by construction — 0 contradictions
+   in 4,550 rows, from 558. A non-amplitude vocabulary raises
+   `UndecidedConjunctionLabel` rather than defaulting. `_overlapping` takes
+   four arguments now, applies the detector's `min_duration_samples` as a
+   floor, and coalesces touching intersections.
+
+3. **Detectors return labelled intervals**, per spec §3, not bare
+   `(start, stop)` tuples, and `Detector.vocabulary` is enforced rather than
+   merely declared.
+
+Also fixed after this plan: production never registered the detection
+paramsets, so the whole subsystem was inert and silent; `EyeValidity` did not
+gate on `EyeCalibration` and could write a permanent false refusal; four of
+five per-criterion fractions shipped `NULL`; the report showed a lifetime
+total where spec §9 asks per session per eye, over a full-table scan the
+storage design existed to avoid.
+
+---
+
 ## Global Constraints
 
 - **The label enum ships COMPLETE — all eight values — even though stage 1

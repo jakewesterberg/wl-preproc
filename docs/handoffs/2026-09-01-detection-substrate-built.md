@@ -54,12 +54,13 @@ One detector (Engbert–Kliegl), three traces: **12,767 runs (left), 12,631
 > **12,767 (left), 12,631 (right), 10,703 (conjunction) — 36,101 rows**, so
 > ~14% below the estimate's implied 42,000 rather than ~12%, and ~252,700
 > rows/session scaled by seven rather than ~257,900. The left and right
-> figures are unchanged, then and now. Design spec §5 still states 11,444
-> and 36,842 (§5 twice, and §11's own open-questions recap once); correcting a measured figure in the binding
-> spec was left to the repository owner rather than done in a fix round.
-> Finishing the detector contract did NOT move these numbers — only the
-> conjunction's saccade/microsaccade split moved, from 1,731/2,819 to
-> 2,209/2,341 (see Concerns).
+>
+> **Superseded 2026-09-01.** §5 and §11 were corrected in `ba31f62` and no
+> longer state 11,444 / 36,842. And the split this paragraph reports moving
+> to 2,209/2,341 moved BACK to **1,731/2,819** in `e66caf8`, when the
+> `PRECEDENCE` rule that caused it was withdrawn. The figures at HEAD are
+> 12,767 left / 12,631 right / **10,703 conjunction = 36,101**, split
+> 1,731/2,819.
 
 That is ~12% below the estimate's own implied single-detector figure
 (3 × 14,000 = 42,000); scaling linearly by seven detectors lands ~257,900
@@ -128,8 +129,17 @@ What changed:
   every detector that splits by amplitude splits at the same place — and a
   detector with no amplitude-derived labels (Otero-Millan emits
   `microsaccade` alone) declares no such field and is handed no such value.
-- **`_insert_trace` assigns no labels**, and **`_overlapping` combines the
-  two eyes' labels by `labels.py::PRECEDENCE`** — until now dead code whose
+- **`_insert_trace` assigns no labels.** ~~`_overlapping` combines the two
+  eyes' labels by `labels.py::PRECEDENCE`~~ — **withdrawn in `e66caf8`, and
+  `labels.PRECEDENCE` no longer exists.** It ranked a pair spec §1 calls "a
+  split, not a ranking" and silently defaulted the glissade assignment §2.5
+  says must never be defaulted. The conjunction's label now comes from
+  `classify()` of its OWN measured amplitude over its own interval, so label
+  and amplitude agree by construction; a non-amplitude vocabulary raises
+  `UndecidedConjunctionLabel`. What survives is `MASK_PRECEDENCE =
+  (BLINK, INVALID)`, wired into `validity_labels`, where ranking is genuine.
+  The paragraph below describes the withdrawn rule and is kept as the record
+  of why it was tried — until now dead code whose
   only test asserted the constant against itself, while the precedence that
   actually held lived in `validity.py`'s two ordered assignments.
 - **`Detector.detect` enforces the declared vocabulary**, naming the
@@ -362,6 +372,14 @@ exists to name.
 - **No agreement metric exists yet, by design** (see "What Task 9 built"
   above) — not a gap in this task, but worth restating so stage 2's own
   planning does not rediscover it as a surprise.
+> **The three `PRECEDENCE` concerns below were ALL CLOSED on 2026-09-01, in
+> `e66caf8`.** They are kept, unedited, as the record of how the rule was
+> caught: the round that implemented it flagged all three rather than
+> shipping quietly, and the third — the glissade default — would otherwise
+> have reached stage 2 as a landmine. The rule was the controller's, not the
+> implementer's. Read them as history, not as open questions; the
+> replacement is described under `_overlapping` above.
+
 - **`PRECEDENCE` ranks a pair the design spec says is not ranked, and the
   two eyes disagree about it often.** §1: `saccade` and `microsaccade`
   "share one precedence level deliberately: they are a split, not a
