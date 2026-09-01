@@ -8,7 +8,9 @@ hold constant.
 
 Returns `None` for a sample a detector may label, and a `Label` for one it may
 not. Precedence is enforced HERE, by not offering the sample at all, rather
-than by asking every detector to respect an ordering.
+than by asking every detector to respect an ordering -- and the one ordering
+that is genuinely a ranking, `blink` over `invalid`, is `MASK_PRECEDENCE`
+below.
 """
 
 from __future__ import annotations
@@ -30,6 +32,26 @@ from wl_preproc.eye.ohdpi import FrameGap
 # processing algorithm has failed", so a frame at 100 is one the tracker did
 # not declare a failure on, which is not the same as one it tracked correctly.
 _FULL_TRACKING_QUALITY = 100.0
+
+# **The one ranking this subsystem actually applies**, most specific first.
+# Design spec section 1 gives all eight labels a precedence order, but only
+# this pair is ever a contest between two candidates for one sample: a blink
+# IS a validity failure, so generic-first would mean no sample is ever
+# labelled `blink` and the label would be dead code that looks alive (section
+# 1's own words: "the order is load-bearing"). Everything below comes from a
+# detector, and a detector returns disjoint intervals, so no sample is ever
+# offered two detected labels to choose between.
+#
+# It lives here, beside the criteria it ranks, and it is READ by
+# `validity_labels` below rather than restated by it. The order used to live
+# implicitly in two assignments whose sequence was the whole rule ("assigned
+# LAST so it wins"), which is a fact stated by statement order and by a
+# comment, checkable only by reading both. A general eight-label version of
+# this tuple lived in `labels.py` instead and was consumed by the
+# conjunction, where it ranked a pair section 1 says is a split -- see
+# `schema/detect.py::_conjunction_label`. Trimmed to the pair that is
+# genuinely ranked, and moved to where the ranking is genuinely applied.
+MASK_PRECEDENCE: tuple[Label, ...] = (Label.BLINK, Label.INVALID)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,11 +123,18 @@ def validity_labels(
     unusable = _dilate(unusable, params.dilate_samples)
     unusable |= _short_valid_epochs(unusable, params.min_epoch_samples)
 
+    # Walked in REVERSE precedence order, so the most specific label is
+    # assigned last and wins. `MASK_PRECEDENCE` is what decides that, not the
+    # order these two lines happen to be written in: reverse the tuple and
+    # every doubly-claimed sample comes back `invalid` instead of `blink`
+    # (`tests/eye/detect/test_validity.py::
+    # test_mask_precedence_is_what_decides_which_criterion_wins` reverses it
+    # and checks exactly that). A label added to the tuple with no criterion
+    # beside it raises `KeyError` here rather than being silently skipped.
+    claimed = {Label.BLINK: blink, Label.INVALID: unusable}
     out = np.full(n, None, dtype=object)
-    out[unusable] = Label.INVALID
-    # Assigned LAST so it wins: a blink is a specific reason and `invalid` the
-    # generic one, and generic-first would mean no sample is ever a blink.
-    out[blink] = Label.BLINK
+    for label in reversed(MASK_PRECEDENCE):
+        out[claimed[label]] = label
     return out
 
 

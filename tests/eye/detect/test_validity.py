@@ -80,6 +80,37 @@ def test_blink_wins_over_invalid_when_a_sample_qualifies_for_both():
     assert validity_labels(gaze, vel, quality, gaps, _QUIET)[2] is Label.BLINK
 
 
+def test_mask_precedence_is_what_decides_which_criterion_wins(monkeypatch):
+    """`MASK_PRECEDENCE` is operative, not decorative -- reversing it reverses
+    the answer above.
+
+    A constant asserted against itself (`MASK_PRECEDENCE.index(BLINK) <
+    MASK_PRECEDENCE.index(INVALID)`) is what let its eight-label predecessor
+    in `labels.py` sit unread while looking alive. This runs the real
+    `validity_labels` with the tuple reversed and checks the OUTPUT flips, so
+    an implementation that ignored the constant and hard-coded the order
+    would fail here rather than pass everything.
+
+    The trace below is claimed by two criteria at once -- below full tracking
+    quality AND outside the plausible region -- which is the only situation
+    in which any ordering is consulted at all.
+    """
+    from wl_preproc.eye.detect import validity as validity_module
+
+    gaze, vel, quality, gaps = _clean(6)
+    quality[2] = 0.0
+    gaze[2] = [99.0, 99.0]
+
+    monkeypatch.setattr(
+        validity_module, "MASK_PRECEDENCE", tuple(reversed(validity_module.MASK_PRECEDENCE))
+    )
+
+    assert validity_labels(gaze, vel, quality, gaps, _QUIET)[2] is Label.INVALID
+    # Samples claimed by only one criterion are unaffected either way: the
+    # ordering decides a contest, and there is no contest here.
+    assert validity_labels(gaze, vel, quality, gaps, _QUIET)[0] is None
+
+
 def test_invalid_regions_are_dilated_by_the_stated_number_of_samples():
     """The notebook's fifth criterion. A tracking failure does not begin and
     end cleanly on the sample the tracker admits it. A blink is a specific
