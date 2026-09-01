@@ -8,6 +8,15 @@
 **It is not merged** — that decision is left to the human partner, same as
 every other subsystem branch this repository hands off.
 
+> **Updated 2026-09-01, at `1edfc07`, after the whole-branch review's final
+> fix round finished the detector contract (M4).** Detectors now return
+> LABELLED intervals and their declared vocabularies are enforced, which
+> changes what stage 2 inherits — see "The detector contract, finished"
+> below, and the two new Concerns. The commit range above and the review
+> rounds' own fixes since (`b66e675..1edfc07`) are both this branch's
+> history; the totals in "Test totals and what was actually run" are Task
+> 9's own and are superseded by the ones in that new section.
+
 ## The one-paragraph version
 
 The pipeline can now mask which ohDPI samples are usable (`EyeValidity`),
@@ -35,6 +44,23 @@ test_the_run_count_measured_against_the_reference_recording`, gated on
 
 One detector (Engbert–Kliegl), three traces: **12,767 runs (left), 12,631
 (right), 11,444 (conjunction) — 36,842 rows, one session, one detector.**
+
+> **Those conjunction figures went stale two commits after they were
+> written, and the design spec still carries them.** `909b7d2` ("the
+> conjunction manufactured zero-amplitude microsaccades", whole-branch
+> review finding H3) put a `min_duration_samples` floor on the binocular
+> intersection, which drops 402 of 4,952 raw intersections — and with them
+> 741 stored runs. Re-measured against the same recording at `1edfc07`:
+> **12,767 (left), 12,631 (right), 10,703 (conjunction) — 36,101 rows**, so
+> ~14% below the estimate's implied 42,000 rather than ~12%, and ~252,700
+> rows/session scaled by seven rather than ~257,900. The left and right
+> figures are unchanged, then and now. Design spec §5 still states 11,444
+> and 36,842 (§5 twice, and §11's own open-questions recap once); correcting a measured figure in the binding
+> spec was left to the repository owner rather than done in a fix round.
+> Finishing the detector contract did NOT move these numbers — only the
+> conjunction's saccade/microsaccade split moved, from 1,731/2,819 to
+> 2,209/2,341 (see Concerns).
+
 That is ~12% below the estimate's own implied single-detector figure
 (3 × 14,000 = 42,000); scaling linearly by seven detectors lands ~257,900
 rows/session, ~12% below the original ~294,000 by the same ratio. The spec
@@ -60,7 +86,7 @@ incrementally. This plan **produces five**:
 |---|---|
 | `blink` | `EyeValidity.make()`, from OpenIrisDPI's own `DataQuality` |
 | `invalid` | `EyeValidity.make()`, the region/speed/frame-gap/short-epoch criteria collapsed into one |
-| `saccade` | `EyeDetection.make()`, via Engbert–Kliegl + `classify()`'s amplitude threshold |
+| `saccade` | `detect_engbert_kliegl` itself, via the shared `classify()`'s amplitude threshold — its OWN declared vocabulary, not a shared relabelling step (updated 2026-09-01; `EyeDetection.make()` assigned this until `4d53f28`) |
 | `microsaccade` | same, the amplitude split's other side |
 | `fixation` | both tables — the `None`/"nothing else applies" placeholder, which in `EyeDetection.Run` is also a genuine "no event here" verdict, not only an encoding trick |
 
@@ -70,10 +96,61 @@ PSO at minimum; the others need eye-movement classifiers this plan never
 builds) — stage 2's territory, named explicitly in the design spec's own
 "not in this plan" list and unchanged since.
 
+## The detector contract, finished (added 2026-09-01, `4d53f28..1edfc07`)
+
+Design spec §3 states it in one sentence — *"Detectors return labelled
+intervals. Shared code measures them."* — and the substrate as first built
+did not. `detect_engbert_kliegl` returned `list[tuple[int, int]]`, and
+`EyeDetection._insert_trace` assigned **every** span's label itself, from
+amplitude, via `classify()`, which can only answer `saccade` or
+`microsaccade`. `registry.Detector.vocabulary` was therefore unenforceable
+and read by nothing outside its own test.
+
+That is a stage-2 blocker rather than a tidiness point: §3.1 gives four of
+the seven planned detectors vocabularies including `pso`, `pursuit` or
+`fixation`, and every span any of them detected would have been relabelled
+by amplitude regardless of what it found. **The repository owner ruled it be
+finished before a second detector is written against the narrower shape.**
+What changed:
+
+- **`detect_engbert_kliegl` returns `list[Run]`**, doing its own
+  saccade/microsaccade split — Engbert–Kliegl's OWN declared vocabulary
+  (§3.1), not shared post-processing. `LabelledInterval` is an alias for
+  `labels.py::Run`, never a second near-identical type.
+- **Measurement stays shared.** `measure.amplitude` is split out of
+  `measure()` so the detector uses one formula rather than a private copy —
+  the detector signature §3 fixes carries no `fs_hz`, `measure()` needs one
+  for `duration_s`, and inventing a sampling rate to reach one of three
+  fields would have been worse than separating the field that needs none.
+- **`microsaccade_max_deg` reaches a detector by being DECLARED** on its own
+  params dataclass, which is how `_params_for` decides what to hand over.
+  The value still lives once, in the shared `eye_detection` paramset, so
+  every detector that splits by amplitude splits at the same place — and a
+  detector with no amplitude-derived labels (Otero-Millan emits
+  `microsaccade` alone) declares no such field and is handed no such value.
+- **`_insert_trace` assigns no labels**, and **`_overlapping` combines the
+  two eyes' labels by `labels.py::PRECEDENCE`** — until now dead code whose
+  only test asserted the constant against itself, while the precedence that
+  actually held lived in `validity.py`'s two ordered assignments.
+- **`Detector.detect` enforces the declared vocabulary**, naming the
+  detector, the offending labels and what it promised. `Detector.run` stays
+  the raw callable because `_params_for` introspects its annotation, and is
+  now typed as a `DetectFn` Protocol rather than a bare `Callable`.
+
+**What a stage-2 detector author now has to do, and no longer has to do.**
+Return `Run`s carrying labels from your own declared vocabulary, in sample
+indices with an exclusive stop; declare on your params dataclass exactly the
+shared paramset keys you consume and no others. You do not have to compute
+amplitude, peak velocity or duration — `_insert_trace` measures every stored
+run — and you do not have to leave a gap between adjacent intervals, since
+`runs_from_labels` re-tiles and the stored measurement is taken from the
+final run.
+
 ## What stage 2 inherits
 
 Verbatim from the plan's own closing "Not in this plan" section, unchanged
-by anything Task 9 did:
+by anything Task 9 did (the detector contract above changes the SHAPE each
+of these arrives in, not the list):
 
 - **The other six detectors** — Otero-Millan, Nyström–Holmqvist, NSLR,
   REMoDNaV, Bayesian microsaccade detection, U'n'Eye.
@@ -276,6 +353,67 @@ exists to name.
 - **No agreement metric exists yet, by design** (see "What Task 9 built"
   above) — not a gap in this task, but worth restating so stage 2's own
   planning does not rediscover it as a surprise.
+- **`PRECEDENCE` ranks a pair the design spec says is not ranked, and the
+  two eyes disagree about it often.** §1: `saccade` and `microsaccade`
+  "share one precedence level deliberately: they are a split, not a
+  ranking". A tuple has a total order, so `_overlapping` does rank them, and
+  `saccade` wins. Defensible on its own terms — an event is a microsaccade
+  only if it is small in **both** eyes, and microsaccades are conventionally
+  required to be binocular — but it is a rule §1 does not state, applied to
+  **593 of 4,550 binocular intersections (13.0%)** measured on the reference
+  recording at default parameters. It moved the conjunction's split from
+  1,731/2,819 saccade/microsaccade to 2,209/2,341 without changing a single
+  run boundary. Wired as ruled; flagged because the ruling and §1 do not
+  obviously agree, and the honest fix is a sentence in §1 either way.
+- **A conjunction run's stored `label` and its stored `amplitude_deg` can
+  now contradict each other.** The label is the binocular consensus of two
+  full-event amplitudes; the amplitude is the LEFT eye's, measured over the
+  intersection — which is shorter than either eye's detected event, so it
+  systematically understates it. Measured: **518 of 2,209 stored `saccade`
+  rows carry an amplitude below `microsaccade_max_deg`, and 40 of 2,341
+  `microsaccade` rows carry one at or above it — 12.3% of conjunction event
+  rows, against 0 of 5,972 on either eye's own trace.** §6.5 fits the main
+  sequence from exactly those two columns, selecting rows by label, so a
+  `SaccadeMainSequence` over the conjunction trace would take 518
+  sub-degree points into a saccade fit. The residual defect is the
+  conjunction's stored MEASUREMENT, not the precedence rule: it was
+  internally consistent before only because the label was derived from the
+  same understated amplitude. Left alone here — the fix is a design
+  decision about what a conjunction's amplitude should be (no cyclopean
+  trace has ever been calibrated in this codebase, which is why
+  `EyeDetection.make()` names the left eye), not a fix round's call.
+- **Stage 2 will meet a third case this rule decides silently.** With no
+  detector emitting `pso` yet, nothing exercises `saccade` outranking it —
+  but on a dual-Purkinje tracker PSO follows every saccade (§2.5), the two
+  eyes will straddle that boundary routinely, and `PRECEDENCE` assigns the
+  glissade to the saccade without being asked. §2.5 requires that
+  assignment to be "an explicit parameter, never a default". Recorded in
+  `_overlapping`'s own docstring as well as here.
+
+## Test totals at `1edfc07`
+
+- **Full suite, `.venv` (Python 3.11.15):** `1130 passed, 2 skipped, 1
+  deselected` — and `1131 passed, 1 skipped, 1 deselected` with
+  `WLPP_OHDPI_REFERENCE` set. Both were run. The baseline at `4c7fae5`,
+  where this fix round started, was `1114/2/1` and `1115/1/1` in the same
+  two configurations. The two skips are this branch's expected env-gated
+  real-file tests (`WLPP_BHV2_SAMPLE`, `WLPP_OHDPI_REFERENCE`); neither is
+  a dodged schema test, and the schema tests ran for real against MySQL 8
+  in `testcontainers`.
+- **`wl-check`:** `wl.yaml: no findings`. No dependency, `runs_on` or
+  `builds_on` target changed.
+- **Mutation testing, `PYTHONDONTWRITEBYTECODE=1` on every run, each file
+  restored and byte-compared against `git show HEAD:` before the next:**
+  six mutations, all six caught — `PRECEDENCE` reversed (3 tests fail);
+  `detect_engbert_kliegl` labelling everything `SACCADE` (5); the
+  vocabulary check removed from `Detector.detect` (1); `_insert_trace`
+  re-classifying by amplitude instead of writing the carried label (2);
+  `register_default_paramsets`' merge order reversed so a detector default
+  shadows the shared threshold (1); `_params_for` stripping
+  `microsaccade_max_deg` again (1). The last three were caught only after
+  the tests that catch them were rewritten — see `1edfc07`, which records
+  that two of the first-draft checks asserted the code against a copy of
+  itself.
 
 ## Explicitly out of scope (unchanged from the design spec)
 
