@@ -113,6 +113,80 @@ _PHANTOM_ONSET_S = 3 * TRIAL_DURATION_S + 2.0
 _PHANTOM_STEP_PX = 500.0
 _PHANTOM_N_SUBSTEPS = 16
 
+# A LEFT-eye ramp and a RIGHT-eye ramp, each in that eye's raw trace ALONE
+# (the same editing technique as the phantom above, applied twice) and
+# planted `_NEAR_MISS_SHIFT_SAMPLES` frames apart. Both eyes therefore detect
+# a real event here, and their two detected spans OVERLAP BY FEWER SAMPLES
+# THAN EITHER EYE'S OWN DETECTOR WOULD HAVE ACCEPTED -- the one geometry that
+# tells `EyeDetection.make()`'s own conjunction duration floor apart from no
+# floor at all. Nothing else in this file has it: every planted transition is
+# synchronised in both eyes by construction, so every other intersection is
+# nearly a whole span, and the phantom above has no left-eye counterpart at
+# all, so its intersection is empty at any floor.
+#
+# Same magnitude, duration and placement rules as the phantom -- trial 3, at
+# `+2.0 s`, clear of that trial's calibration window (`[10.2, 10.8)`) and of
+# trial 4's planted sequence from 12.0 s.
+_NEAR_MISS_ONSET_S = 3 * TRIAL_DURATION_S + 2.0
+_NEAR_MISS_STEP_PX = 500.0
+_NEAR_MISS_N_SUBSTEPS = 16
+# 14, measured on the stored rows rather than chosen: at these ramp
+# parameters the detector returns a span of about 17 samples in each eye, so
+# a shift of `k` frames leaves an overlap of about `17 - k`. 14 puts the
+# measured overlap at 3 -- the middle of the sub-floor range
+# `[1, min_duration_samples)`, so a two-sample drift in either direction
+# still leaves the fixture saying what it claims.
+# `test_a_sub_floor_binocular_overlap_is_no_conjunction_event` ASSERTS that
+# range on the stored rows rather than trusting this number, and fails
+# naming it if a detector change ever moves the overlap out of it.
+_NEAR_MISS_SHIFT_SAMPLES = 14
+
+
+def _first_row_at(onset_s: float) -> int:
+    """The file row an injection at session time `onset_s` starts on.
+
+    `OHDPI_PRE_ROLL_S`/`OHDPI_FPS` read off `wl_preproc.synth.ohdpi` rather
+    than written out as 0.6 and 500.0, so the row an injector writes and the
+    row a test looks for it at cannot drift apart from the writer that
+    produced the file.
+    """
+    from wl_preproc.synth.ohdpi import OHDPI_FPS, OHDPI_PRE_ROLL_S
+
+    return round((onset_s + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
+
+
+def _inject_single_eye_ramps(session_dir, ramps) -> None:
+    """Overwrite one Purkinje column per `(column, row_start, step_px,
+    n_substeps)` entry of `ramps`, directly in the generated ohDPI `.txt`.
+
+    `test_eye_populate.py::lossy_quality_session`'s own technique -- split
+    each affected line by column, replace one field, rewrite. Nothing built
+    from `recipe.eye_fixations` can produce a SINGLE-eye event: `write_ohdpi`
+    derives the right eye's rotation term from the left's, offset by a
+    constant (`RIGHT_EYE_ROTATION_OFFSET_PX`), so a held or ramped position
+    in `EyeFixationSpec` always moves both eyes together.
+
+    Every ramp is applied in ONE pass over the file, rather than one pass
+    each: `_inject_near_miss_pair` below plants two, and re-reading and
+    re-writing a whole recording per ramp would double a fixture's own cost
+    for nothing.
+    """
+    from wl_preproc.synth.ohdpi import HEADER
+
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    header_line, data_lines = lines[0], lines[1:]
+
+    for column_name, row_start, step_px, n_substeps in ramps:
+        column = HEADER.index(column_name)
+        for offset in range(n_substeps):
+            frac = (offset + 0.5) / n_substeps
+            fields = data_lines[row_start + offset].split(" ")
+            fields[column] = f"{step_px * frac:.4f}"
+            data_lines[row_start + offset] = " ".join(fields)
+
+    ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
+
 
 def _inject_right_eye_only_step(session_dir) -> None:
     """See `_PHANTOM_ONSET_S`'s own comment: a step in `RightCR4X` alone,
@@ -124,21 +198,30 @@ def _inject_right_eye_only_step(session_dir) -> None:
     mutation cannot pass with this phantom event present, since every OTHER
     planted transition is synchronised in both eyes by construction and
     cannot, on its own, tell a union from an intersection."""
-    from wl_preproc.synth.ohdpi import HEADER, OHDPI_FPS, OHDPI_PRE_ROLL_S
+    _inject_single_eye_ramps(
+        session_dir,
+        [("RightCR4X", _first_row_at(_PHANTOM_ONSET_S), _PHANTOM_STEP_PX,
+          _PHANTOM_N_SUBSTEPS)],
+    )
 
-    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
-    column = HEADER.index("RightCR4X")
-    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
-    header_line, data_lines = lines[0], lines[1:]
 
-    row_start = round((_PHANTOM_ONSET_S + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
-    for offset in range(_PHANTOM_N_SUBSTEPS):
-        frac = (offset + 0.5) / _PHANTOM_N_SUBSTEPS
-        fields = data_lines[row_start + offset].split(" ")
-        fields[column] = f"{_PHANTOM_STEP_PX * frac:.4f}"
-        data_lines[row_start + offset] = " ".join(fields)
+def _inject_near_miss_pair(session_dir) -> None:
+    """See `_NEAR_MISS_ONSET_S`'s own comment: one ramp in `LeftCR4X` and one
+    in `RightCR4X`, the second starting `_NEAR_MISS_SHIFT_SAMPLES` frames
+    later, so each eye detects a real event and the two overlap by only a
+    few samples.
 
-    ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
+    Two SEPARATE single-eye injections rather than one shifted pair of held
+    positions, for the reason `_inject_single_eye_ramps` states: anything
+    built from `recipe.eye_fixations` moves both eyes together, so a
+    recipe cannot express two eyes doing different things at the same
+    instant at all."""
+    left_row = _first_row_at(_NEAR_MISS_ONSET_S)
+    _inject_single_eye_ramps(session_dir, [
+        ("LeftCR4X", left_row, _NEAR_MISS_STEP_PX, _NEAR_MISS_N_SUBSTEPS),
+        ("RightCR4X", left_row + _NEAR_MISS_SHIFT_SAMPLES, _NEAR_MISS_STEP_PX,
+         _NEAR_MISS_N_SUBSTEPS),
+    ])
 
 
 def _ramp_fixations(start_s, from_xy, to_xy, dur_s, n_substeps):
@@ -339,6 +422,37 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
 
     planted_onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
     return session_key, report, planted_onsets
+
+
+@pytest.fixture(scope="module")
+def near_miss_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_stepped_session`'s own construction with the near-miss pair
+    planted instead of the phantom (`_inject_near_miss_pair`), and the daemon
+    run immediately after -- the same shape as `stepped_session`, differing
+    only in what is injected.
+
+    **A separate session rather than a fourth injection into
+    `stepped_session`.** The left-eye half of the pair is a FOURTH event in
+    that session's left trace, and two of its tests assert exactly three by
+    count (`test_a_planted_step_is_detected_at_its_planted_time`,
+    `test_the_middle_planted_step_is_classified_as_a_microsaccade`) --
+    deliberately, since a count is what pins the planted onsets to the
+    detected ones. Weakening those to accommodate a fixture whose whole
+    subject is a different table's floor would trade a strong assertion for
+    a weaker one; a second session costs one more `run_once()` and keeps
+    both.
+    """
+    session_key, _segment, _onset_times = _build_stepped_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` (element-animal's own limit, restated at
+        # `wl_preproc/schema/ingest.py`) -- "detnear1" is exactly 8.
+        dirname="detectnear", session_id="2027-06-06_01", subject="detnear1",
+        session_datetime=datetime.datetime(2027, 6, 6, 9, 0), seed=606,
+        after_generate=_inject_near_miss_pair,
+    )
+
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
 
 
 def _build_mixed_eye_session(
@@ -689,18 +803,37 @@ def test_the_middle_planted_step_is_classified_as_a_microsaccade(stepped_session
     `stepped_session`'s own middle transition (`_STEPS_PX[1]`, ~0.7 deg) is
     planted specifically to be classified `microsaccade`, and the two either
     side `saccade`, so this is the assertion that mutation actually breaks.
+
+    **`conjunction` as well as `left`, and that trace is what watches the
+    CALL SITE** (fix round, reviewer finding 1). `_conjunction_label` itself
+    is thoroughly covered -- `test_the_conjunction_labels_each_span_from_its
+    _own_amplitude` and `test_the_conjunction_label_matches_the_amplitude_
+    that_gets_stored` both fail if the rule inside it changes -- but each of
+    them BUILDS the callable itself and hands it to `_overlapping`, and so
+    does the gated `test_the_run_count_measured_against_the_reference_
+    recording`. None of them can see `EyeDetection.make()` handing
+    `_overlapping` a DIFFERENT one, and replacing that argument with a
+    constant `lambda _s, _e: Label.MICROSACCADE` passed the whole suite,
+    reference recording included. Reading the conjunction's own stored
+    labels here is what closes that: its three events are the same three
+    planted transitions (synchronised in both eyes by construction, so each
+    intersection is very nearly the whole of each eye's own span), measured
+    on the LEFT eye's gaze as `make()` chooses, at 2.5 / 0.7 / 3.3 deg --
+    so they carry the same three labels, and a constant label rule stores
+    three `microsaccade`s instead.
     """
     from wl_preproc.schema import detect
 
     session_key, _report, planted_onsets = stepped_session
-    runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
-        order_by="run_index"
-    )
-    events = [r for r in runs if r["label"] in ("saccade", "microsaccade")]
+    for trace in ("left", "conjunction"):
+        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
+            order_by="run_index"
+        )
+        events = [r for r in runs if r["label"] in ("saccade", "microsaccade")]
 
-    assert len(events) == len(planted_onsets) == 3
-    assert [e["label"] for e in events] == ["saccade", "microsaccade", "saccade"]
-    assert events[1]["amplitude_deg"] < 1.0
+        assert len(events) == len(planted_onsets) == 3, trace
+        assert [e["label"] for e in events] == ["saccade", "microsaccade", "saccade"], trace
+        assert events[1]["amplitude_deg"] < 1.0, trace
 
 
 def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session):
@@ -736,15 +869,87 @@ def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session)
     for start, stop in both:
         assert any(ls < stop and start < lstop for ls, lstop in left)
 
-    # The phantom event: present in `right` alone.
-    phantom_row = round(
-        (_PHANTOM_ONSET_S + 0.6) * 500.0
-    )  # OHDPI_PRE_ROLL_S, OHDPI_FPS -- see `_inject_right_eye_only_step`.
+    # The phantom event: present in `right` alone. `_first_row_at` rather
+    # than `(onset + 0.6) * 500.0` spelled out, so this row and the row
+    # `_inject_right_eye_only_step` actually wrote come from one place.
+    phantom_row = _first_row_at(_PHANTOM_ONSET_S)
     assert any(rs < phantom_row + _PHANTOM_N_SUBSTEPS and phantom_row < rstop for rs, rstop in right)
     assert not any(ls < phantom_row + _PHANTOM_N_SUBSTEPS and phantom_row < lstop for ls, lstop in left)
     assert not any(
         cs < phantom_row + _PHANTOM_N_SUBSTEPS and phantom_row < cstop for cs, cstop in both
     )
+
+
+def test_a_sub_floor_binocular_overlap_is_no_conjunction_event(near_miss_session):
+    """Finding H3's floor, asserted where `EyeDetection.make()` actually
+    applies it -- on a stored row, through `daemon.run_once()`.
+
+    **The rule was covered; `make()`'s USE of it was not** (fix round,
+    reviewer finding 1). `test_the_conjunction_inherits_the_detectors_own_
+    minimum_duration` pins `_overlapping`'s floor and `test_a_detector_
+    declaring_no_minimum_duration_gets_the_weakest_honest_floor` pins
+    `_min_duration_samples`, but both HAND `_overlapping` a floor
+    themselves, and so does the gated `test_the_run_count_measured_against_
+    the_reference_recording`. None of them can see `make()` passing the
+    wrong one: replacing `_min_duration_samples(detector_params)` with a
+    literal `1` at that call site passed the entire suite, reference
+    recording included.
+
+    `near_miss_session` plants the one geometry that separates the two
+    floors: a real event in each eye, overlapping by fewer samples than
+    either eye's own detector would have accepted. At the detector's real
+    floor that intersection is not an event; at a floor of 1 it is stored as
+    one -- carrying, per `_overlapping`'s own docstring, an amplitude near
+    zero beside a peak velocity of hundreds of degrees per second, which is
+    the pair design spec section 6.5 fits a main sequence from.
+    """
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    from wl_preproc.schema import detect
+
+    session_key, _report = near_miss_session
+    floor = DEFAULT_EK_PARAMS.min_duration_samples
+
+    def event_spans(trace):
+        return [
+            (r["run_start"], r["run_stop"])
+            for r in (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
+                order_by="run_index"
+            )
+            if r["label"] in ("saccade", "microsaccade")
+        ]
+
+    def touching(spans, start, stop):
+        return [(s, t) for s, t in spans if s < stop and start < t]
+
+    left_row = _first_row_at(_NEAR_MISS_ONSET_S)
+    right_row = left_row + _NEAR_MISS_SHIFT_SAMPLES
+    (left_event,) = touching(event_spans("left"), left_row, left_row + _NEAR_MISS_N_SUBSTEPS)
+    (right_event,) = touching(event_spans("right"), right_row, right_row + _NEAR_MISS_N_SUBSTEPS)
+
+    # The fixture saying what it claims, and the assertion below not being
+    # vacuous: both eyes really do detect an event here, and the two really
+    # do overlap -- by fewer samples than the floor. A detector change that
+    # moved this out of range must retune `_NEAR_MISS_SHIFT_SAMPLES` (see
+    # its own comment for the arithmetic), never widen this range: an
+    # overlap of 0 would make the conjunction empty here for the wrong
+    # reason, and one at or above the floor for no reason at all.
+    overlap = min(left_event[1], right_event[1]) - max(left_event[0], right_event[0])
+    assert 1 <= overlap < floor, (
+        f"the near-miss pair overlaps by {overlap} samples, outside the [1, {floor}) "
+        f"range this fixture exists to plant -- left {left_event}, right {right_event}"
+    )
+
+    intruders = touching(
+        event_spans("conjunction"), left_row, right_row + _NEAR_MISS_N_SUBSTEPS
+    )
+    assert not intruders, (
+        f"a {overlap}-sample binocular overlap was stored as conjunction event(s) "
+        f"{intruders}, though the detector's own floor is {floor} samples"
+    )
+
+    # And the three planted transitions are still there, so the assertion
+    # above is not passing because this session's conjunction is empty.
+    assert len(event_spans("conjunction")) == 3
 
 
 def _assert_reason_echoes_validity(session_key, trace, eye):
