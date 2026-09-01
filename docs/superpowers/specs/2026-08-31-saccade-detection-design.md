@@ -333,7 +333,10 @@ therefore strictly more informative than the per-sample trace it encodes, not
 a lossy substitute for it.
 
 **Size, and a number that was an estimate and is now measured too.** The
-reference recording is 1,177,799 rows, 39.3 minutes at 500 Hz. As a uint8
+reference recording is 1,177,799 rows — 39.4 minutes at the **498.55 Hz**
+`read_ohdpi` derives from its own frame span, not the nominal 500 Hz quoted
+elsewhere in this repository; the measurement below reports both, and the
+row count that drives the size math is the same either way. As a uint8
 per-sample array that is 1.18 MB per eye per detector — for contrast, the
 gaze array the eye spec refused to store is ~38 MB, so the label trace is
 ~32× smaller and the objection does not transfer at the same magnitude.
@@ -379,9 +382,21 @@ only argued**: the same fixed validity mask, with velocity built from the
 same raw geometry at two scales three-fold apart, produces byte-identical
 detected spans (same test, above). So a `CalibrationMap` with a plausible,
 stated, but unvalidated scale — chosen so the recording's own 99th-percentile
-gaze excursion lands at 15°, comfortably inside the mask's own ±20°/±15°
-region — is enough to measure the COUNT honestly, even though it is not
-enough to trust any one event's exact amplitude.
+gaze excursion lands at 15°, inside the mask's own ±20°/±15° region — is
+enough to measure the COUNT honestly, even though it is not enough to trust
+any one event's exact amplitude.
+
+**That margin is thinner than it looks, on the axis that binds.** The
+heuristic pins whichever raw axis is LARGER to 15°. Here that is x, landing
+at 15.0° against a 20° width limit — a 25% margin. But y lands at 14.3°
+against the tighter 15° HEIGHT limit, a margin of 4.4%. Comfortable on the
+axis that was pinned; thin on the axis that actually constrains. That ordering
+is a property of this recording's aspect ratio rather than of the heuristic: a
+recording whose y excursion exceeded its x would pin the tighter limit at zero
+margin, and the heuristic would need replacing with one that scales against
+both limits rather than one. The count is stable across the sweep below, so
+the thin margin does not move this measurement — but it is not a margin the
+code guarantees for the next recording.
 
 **What the scale is not free of.** `validity_labels`' region and speed
 criteria are absolute-degree thresholds, not scale-invariant, so a
@@ -391,7 +406,8 @@ chosen scale, mask recomputed at each point, left eye): the run count moved
 between 8,804 and 13,746 against 12,767 at the chosen scale — bounded, not a
 cliff, as long as the scale stays within roughly a factor of two of a value
 that puts the bulk of the trace inside the plausible region. Push it further
-(4× the chosen scale puts 97% of the trace outside the region) and the count
+(4× the chosen scale puts 96% of the trace outside the REGION specifically,
+and 97% outside by all five validity criteria together, leaving 843 runs) and the count
 collapses — the mask doing its job on a scale that is no longer plausible,
 not a flaw in the count.
 
