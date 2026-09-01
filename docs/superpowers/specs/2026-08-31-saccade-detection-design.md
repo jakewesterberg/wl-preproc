@@ -237,12 +237,36 @@ seven, so a disagreement is never a disagreement about measurement.
 | Detector | Vocabulary it can emit | Source |
 |---|---|---|
 | Engbert–Kliegl | saccade / microsaccade | reimplemented |
-| Otero-Millan | microsaccade | ported from a BSD-3 reference |
+| Otero-Millan | saccade / microsaccade | reimplemented (see below) |
 | Nyström–Holmqvist | saccade / pso / fixation | reimplemented |
 | NSLR | saccade / pso / pursuit / fixation | reimplemented |
 | REMoDNaV | saccade / pso / pursuit / fixation | reimplemented |
 | Bayesian microsaccade detection | microsaccade / drift | reimplemented |
 | U'n'Eye | saccade | **vendored** (§8) |
+
+> **Corrected 2026-09-01, by reading the reference implementation.** This
+> table gave Otero-Millan `microsaccade` alone and called its source "ported
+> from a BSD-3 reference". Both were wrong, and the download settles it.
+>
+> The package (`otero-millan_et_al_microsaccade_detection.1.1.zip`, from the
+> Martinez-Conde lab) exposes `recording.FindSaccades()` on classes named
+> `SaccadeDetector` / `SaccadeDetectorCluster` — *"Implementation of the
+> saccade detection method"*. **The only amplitude threshold in the algorithm
+> is a lower noise floor**: a candidate cluster is accepted as saccadic when
+> its mean displacement exceeds 0.2°. There is no upper bound and no 1° cut
+> anywhere in the package. The "microsaccade" framing comes from the bundled
+> `Example.m`, whose main-sequence plot sets `xlim [0 1]` and whose legend
+> reads "Microsaccades" — the use case, not the detector.
+>
+> So its vocabulary matches Engbert–Kliegl's exactly, which makes that pair
+> the cleanest possible first exercise of §6: two independent methods with the
+> same expressive power, comparable with no coarsening and no exclusion.
+>
+> The reliability claim below survives. `silhouette()` is inherently
+> per-observation; the reference computes it per peak and keeps only
+> `mean(...)` as a session statistic, so a per-detection value is available in
+> the method and this project's reimplementation retains it — which is what
+> `EyeDetection.Run.reliability` was reserved for.
 
 **Vocabularies differ, and that is a first-class fact.** A detector that
 cannot emit `pso` is not disagreeing with one that can; it has nothing to say.
@@ -299,9 +323,18 @@ surface. Mitigation is not optional:
   whether it runs.
 - **Permissively licensed implementations are test-time oracles**, the pattern
   this repository already uses when SpikeInterface validates the synthetic
-  generator's output. REMoDNaV is MIT and on PyPI; Otero-Millan's reference is
-  BSD-3-Clause. Both are development dependencies used to check our output,
-  never runtime dependencies and never shipped.
+  generator's output. REMoDNaV is MIT and on PyPI: a development dependency
+  used to check our output, never a runtime dependency and never shipped.
+
+  > **Corrected 2026-09-01.** This bullet also named Otero-Millan's reference
+  > as BSD-3-Clause and therefore a usable oracle. It is neither. The archive
+  > is **MATLAB**, so it cannot be a dependency of a Python suite at all; and
+  > it contains **no licence file**, with the download page stating no terms —
+  > absent a grant, all rights are reserved, so it is not permissively
+  > licensed either. Otero-Millan therefore falls into the same bucket as BMD
+  > below: validated against the paper's own reported statistics. The MATLAB
+  > remains readable as a specification of the algorithm, which is how the
+  > vocabulary error above was found; reading it is not redistributing it.
 - **BMD has no usable oracle** — its reference is C++ and unlicensed — so it
   is validated against the paper's own simulated-data claims instead, and its
   rows are marked provisional until it is.
@@ -527,8 +560,10 @@ rather than choosing one: that choice belongs in §6.1's `pso_as` parameter,
 stated per comparison.
 
 **Where a detector declares HALF the split, the cut is not made at all and
-the conjunction takes that half.** §3.1 gives Otero-Millan `microsaccade`
-alone and U'n'Eye `saccade` alone. `classify` answers both sides of the cut
+the conjunction takes that half.** §3.1 gives U'n'Eye `saccade` alone, and
+Bayesian microsaccade detection `microsaccade / drift`. (It gave Otero-Millan
+`microsaccade` alone until 2026-09-01; see §3.1's correction — that detector
+declares the whole split and is not an example of this rule.) `classify` answers both sides of the cut
 for any detector, so applying it to their conjunctions stores a label the
 detector declares it cannot emit — and a conjunction interval is the
 intersection, systematically shorter and smaller in amplitude than either
@@ -622,6 +657,50 @@ the row and any report that aggregates across pairs must group by it. And
 since those come from the shared mask (§2) and are identical by construction —
 counting them would inflate every score toward agreement for reasons no
 detector is responsible for.
+
+**Coarsening is not enough on its own, because two different things look
+alike.** Added 2026-09-01, while designing the first pair.
+
+A detector can be *coarser* than another — U'n'Eye calls a microsaccade a
+`saccade` because it does not split — or it can be *narrower in scope*, having
+no word for a whole class of event because it never looks for one. Coarsening
+handles the first and mishandles the second, because its edges run
+`microsaccade → saccade`: applied to a detector that only ever emits
+`microsaccade`, it does not narrow the comparison, it **widens that detector's
+apparent claim** to cover saccades it never sought. Every large saccade the
+other detector found then scores as disagreement.
+
+That is the mirror of the case this section opens with, and the same answer
+applies: *it has nothing to say*. So the lattice does double duty, and the
+direction of its edges is what separates the two cases.
+
+**The rule.** A stored label is COMPARABLE against another detector when it
+already sits in that detector's declaration, or can reach a member of it by
+following coarsening edges. Otherwise that sample is EXCLUDED from
+`n_samples_compared`, exactly as `blink` and `invalid` are, and for the same
+reason: the other side is not responsible for it.
+
+Worked, on the two pairs that show the difference:
+
+| Pair | a `saccade` stored by Engbert–Kliegl | a `microsaccade` stored by Engbert–Kliegl |
+|---|---|---|
+| ↔ U'n'Eye `{saccade}` | in its declaration | `microsaccade → saccade` ✓ | 
+| ↔ BMD `{microsaccade, drift}` | **no edge reaches either** → excluded | in its declaration |
+
+U'n'Eye expresses a microsaccade more coarsely; BMD cannot express a large
+saccade at all. The EK↔BMD row is therefore a microsaccade-scale score and
+records its vocabulary as such — a fact any reader comparing it against an
+EK↔U'n'Eye row needs, and the reason vocabulary is already in the key.
+
+`fixation` is implicitly a member of every vocabulary — it is what a sample is
+when no detector claims it — so it is never what makes a sample incomparable.
+
+**A pair whose vocabularies are equal needs neither mechanism**, which is
+where §6's first implementation starts: Engbert–Kliegl and Otero-Millan both
+declare `saccade / microsaccade` (§3.1, corrected 2026-09-01), so their rows
+are compared directly, and any disagreement is about method rather than about
+coverage or convention. That is the comparison §0 says this suite exists for,
+available from the second detector onward.
 
 Two arities, kept in two places rather than in one table with nullable halves:
 
@@ -921,12 +1000,16 @@ else supplies.
 5. **Six reimplementations are six opportunities to disagree with the
    literature rather than with each other** (§3.2). Each needs validating
    against published statistics or a permissively-licensed oracle before its
-   rows are trusted, and BMD has no oracle at all.
+   rows are trusted. **Two have no usable oracle, not one** (corrected
+   2026-09-01): BMD's reference is C++ and unlicensed, and Otero-Millan's is
+   MATLAB and carries no licence at all — see §3.2. Both are validated against
+   their papers' own reported statistics instead. REMoDNaV (MIT, on PyPI)
+   remains a genuine runnable oracle.
 6. **Whether seven detectors is too many to run nightly.** Seven per eye plus
    three conjunctions, over a 1.18M-sample recording, on every session. The
    plan must measure total runtime before this is a nightly stage rather than
    an on-demand one.
-5. **Fine-tuning U'n'Eye** on hand-labelled lab data is post-January, per
+7. **Fine-tuning U'n'Eye** on hand-labelled lab data is post-January, per
    parent §7.2. Until then its rows are provisional and the pairwise design
    is what keeps that from contaminating the readable metrics.
 
