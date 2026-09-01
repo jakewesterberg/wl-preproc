@@ -330,6 +330,21 @@ class EyeDetection(dj.Computed):
     ---
     status : enum('computed','refused')
     n_samples=null       : int unsigned
+    # **On a `conjunction` row these two count a DIFFERENT POPULATION from
+    # the same session's per-eye rows, and `cli/report.py::build_report`'s
+    # "Events per session per trace" list renders all three side by side.**
+    # A per-eye row counts full detected events; a conjunction row counts
+    # the INTERSECTIONS `_overlapping` kept, and design spec section 5.1
+    # records that an intersection is a strictly shorter interval whose
+    # amplitude -- hence its saccade/microsaccade class -- is measured over
+    # that shorter span: "it makes it a different population from either
+    # eye's". So summing `n_microsaccades` across one session's three
+    # traces aggregates two populations, and reading a conjunction count
+    # beside that session's left count compares two different things that
+    # share a column name. Section 5.1 names the same hazard for
+    # `SaccadeMainSequence`, where that table's own `trace` key prevents an
+    # accidental pooling; nothing prevents it here, which is why it is
+    # stated where the columns are declared.
     n_saccades=null      : int unsigned
     n_microsaccades=null : int unsigned
     reason=''            : varchar(255)
@@ -521,8 +536,13 @@ class EyeDetection(dj.Computed):
             # this codebase ever validated, so averaging the two eyes would
             # measure a position nothing here calibrated against. The LEFT
             # eye is named here rather than averaged for exactly that
-            # reason: a real, stated choice, not one the design spec makes
-            # for us.
+            # reason. This comment used to add "not one the design spec
+            # makes for us"; that is no longer true, and the spec agrees
+            # rather than being silent -- design spec section 5.1 measures
+            # the conjunction "on the left eye's gaze", on this same
+            # reasoning ("One eye is named rather than the two averaged
+            # because no cyclopean trace has ever been calibrated in this
+            # repository").
             #
             # Read BEFORE `_overlapping` rather than after it, because this
             # same trace is now what the conjunction's LABEL comes from as
@@ -530,6 +550,21 @@ class EyeDetection(dj.Computed):
             # answering for both is the whole fix: label and amplitude
             # derived from two different things is what made them contradict
             # each other on 12.3% of conjunction event rows.
+            #
+            # **Which means naming `"left"` here now decides conjunction
+            # LABELS and not only amplitudes, and the two eyes do not always
+            # agree about them.** Measured, not supposed: the whole-branch
+            # review's finding M4 labelled from the RIGHT eye's gaze while
+            # measuring on the left, against the reference recording, and
+            # got a contradicting class on 242 of 4,550 conjunction event
+            # rows -- roughly 5% would carry a different saccade/
+            # microsaccade verdict had this line named the other eye.
+            # Nothing is wrong today; label and amplitude still come from
+            # one trace, which is the point. But "the conjunction is the
+            # LEFT eye's opinion of a binocular event" is a larger claim
+            # than the amplitude-only one this comment used to justify, and
+            # it is recorded here rather than resolved -- section 5.1 states
+            # the same asymmetry without resolving it either.
             gaze, v, offered = per_eye["left"]
             # The floor is the DETECTOR's own, inherited from the params it
             # just ran with -- the binocular criterion filters what both eyes
