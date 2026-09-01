@@ -76,6 +76,23 @@ def validity_labels(
     # `[row-1, row, row+1, row+2]`. Their gaze samples are unavailable for
     # detection. The coupling to `_HALF_WINDOW` is deliberate: if the
     # estimator's window changes, the mask's excluded range changes with it.
+    #
+    # **This loop is unreachable in production today, and the reason is one
+    # layer out** (whole-branch review, finding H2 -- recorded, deliberately
+    # not fixed here). `timebase/extract.py::extract_ohdpi` raises on any
+    # non-empty `frame_gaps`; `timebase/segments.py::scan_system` does not
+    # catch it and `SystemTimebase.make()` wraps only `fit_rate`, so such a
+    # session gets no `SystemTimebase` row for ohDPI, no `core.Segment`
+    # follows, and `EyeValidity.key_source` -- which requires one -- never
+    # names it. `EyeValidity.make()` can therefore only ever pass
+    # `frame_gaps=()`, and this loop runs for real in
+    # `tests/eye/detect/test_validity.py` alone. Kept rather than deleted:
+    # the criterion is one of OpenIrisDPI's own five (design spec section 2),
+    # its input genuinely exists at the `read_ohdpi` layer, and whether a
+    # dropped frame should reject a whole recording is a timebase decision
+    # being taken separately -- see design spec section 2 for that dependency
+    # stated in full. The reference recording has zero gaps across 1,177,799
+    # rows, so real data has not exercised it either.
     across_gap = np.zeros(n, dtype=bool)
     for gap in frame_gaps:
         across_gap[max(gap.row + 1 - _HALF_WINDOW, 0) : min(gap.row + _HALF_WINDOW + 1, n)] = True

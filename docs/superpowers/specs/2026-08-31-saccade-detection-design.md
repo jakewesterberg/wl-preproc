@@ -109,11 +109,40 @@ cost, stated: detection's primary key carries two paramset columns, and
 detection rows multiply with validity paramsets. With one mask, seven
 detectors and three traces that is 21 rows per session.
 
-**Criterion 4 already has its input.** `read_ohdpi` reports `frame_gaps` as
-`(row, n_missing)` pairs rather than refusing a recording over a dropped
-frame — built 2026-08-31 for exactly this consumer. A velocity computed
-across a gap is a spurious saccade, which is why detection must run per valid
-epoch rather than over a trace with the gaps papered over.
+**Criterion 4 is implemented and unit-tested, and it cannot fire end to end
+today.** `read_ohdpi` reports `frame_gaps` as `(row, n_missing)` pairs rather
+than refusing a recording over a dropped frame — built 2026-08-31 for exactly
+this consumer — and `eye/detect/validity.py` consumes them, widening the
+excluded window to the velocity estimator's own `_HALF_WINDOW`
+(`tests/eye/detect/test_validity.py` covers it). A velocity computed across a
+gap is a spurious saccade, which is why detection must run per valid epoch
+rather than over a trace with the gaps papered over.
+
+*This paragraph claimed the opposite until 2026-09-01 — "criterion 4 already
+has its input", full stop — and the whole-branch review is what caught it.*
+The refusal `read_ohdpi` gave up did not disappear; it moved one layer out.
+`timebase/extract.py::extract_ohdpi` raises `ValueError` on any non-empty
+`frame_gaps`, `timebase/segments.py::scan_system` does not catch it, and
+`schema/timebase.py::SystemTimebase.make()` wraps only `fit_rate` in its own
+`try`. So a recording with one dropped frame gets no `SystemTimebase` row for
+`ohdpi`, therefore no `core.Segment` — and `EyeValidity.key_source` requires
+one. The only value `EyeValidity.make()` can ever hand `validity_labels` is
+`frame_gaps=()`.
+
+**That is a dependency on the timebase subsystem, not a gap in this one.**
+`extract_ohdpi`'s own comment argues the refusal is correct *there*: a frame
+index IS a time on that line, so every barcode edge after a gap would name a
+sync time that never happened, and the alignment would be silently wrong for
+the whole session rather than visibly absent. Whether a dropped frame should
+therefore reject the whole recording — rather than the gap-aware segmentation
+that same comment names as "a real option and a `core.Segment` decision" — is
+being put to the repository owner separately. Criterion 4 becomes reachable
+when that is answered, and not before.
+
+**Real data has not exercised it either.** The reference recording
+(`OpenIris-2024Jul31-114628.txt`) has **zero** frame gaps across its 1,177,799
+rows, measured 2026-09-01. So even a pipeline that admitted such recordings
+would have nothing on file to test this criterion against.
 
 Criterion 2's "plausible region" and criterion 3's speed ceiling are rig
 parameters with no measured value yet; §11 records that.
