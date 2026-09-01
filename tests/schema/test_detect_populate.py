@@ -771,6 +771,76 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     assert Label.INVALID in present
 
 
+def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
+    """Finding H3: `_overlapping` intersected the two eyes' spans with no
+    duration floor of any kind, so the intersection of two 6-sample
+    Engbert-Kliegl events overlapping by ONE sample was stored as a 1-sample
+    event. `measure`'s `gaze_deg[stop - 1] - gaze_deg[start]` is identically
+    zero for such a span, so `classify` labelled it a 0.0-degree
+    `microsaccade` carrying a peak velocity of up to 864 deg/s -- and design
+    spec section 6.5 fits the main sequence from exactly those two columns.
+
+    Measured on the reference recording through the real `_overlapping`
+    before the fix: 4,952 conjunction spans, 402 of them (8.1%) below the
+    6-sample floor, 44 exactly one sample. The boundary cases below are the
+    two the ruling names -- fewer than the floor yields nothing, exactly the
+    floor yields the intersection -- so the 2-to-5-sample spans a
+    `stop - start == 1` special case in `measure` would have missed are
+    covered too, not only the most visible ones.
+    """
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    from wl_preproc.schema.detect import _min_duration_samples, _overlapping
+
+    floor = DEFAULT_EK_PARAMS.min_duration_samples
+    # Read off the detector's own defaults, then pinned: the arithmetic below
+    # is written against a floor of 6 and would be silently vacuous at 1.
+    assert floor == 6
+    assert _min_duration_samples(DEFAULT_EK_PARAMS) == floor
+
+    # Both eyes' own events comfortably clear the floor (10 and 21 samples);
+    # only their OVERLAP is short. This is the shape that manufactured the 44.
+    assert _overlapping([(100, 110)], [(109, 130)], floor) == []
+    # One sample short of the floor: still nothing. This is the shape a
+    # `stop - start == 1` guard inside `measure` would have let through.
+    assert _overlapping([(100, 110)], [(110 - (floor - 1), 130)], floor) == []
+    # Exactly the floor: a real event, and it is the intersection itself.
+    assert _overlapping([(100, 110)], [(110 - floor, 130)], floor) == [(110 - floor, 110)]
+    # Comfortably over it, unchanged by the filter.
+    assert _overlapping([(100, 130)], [(105, 140)], floor) == [(105, 130)]
+
+
+def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor():
+    """Stage 2's six other detectors (design spec section 3.1) each bring
+    their own params dataclass, and `min_duration_samples` is a field of
+    `EngbertKlieglParams` rather than part of `registry.Detector.run`'s
+    contract -- so `_min_duration_samples` must answer for a params object
+    that has no such field.
+
+    1, not 0 and not 6: such a detector would itself have accepted a
+    one-sample run, so the rule the fix enforces ("never shorter than either
+    eye's own detector would have accepted") admits one here too. It is also
+    the weakest value that keeps `measure`'s own `stop > start` precondition
+    true, which is why `_overlapping` floors at 1 rather than trusting the
+    number it is handed.
+    """
+    from dataclasses import dataclass
+
+    from wl_preproc.schema.detect import _min_duration_samples, _overlapping
+
+    @dataclass(frozen=True, slots=True)
+    class _NoFloorParams:
+        threshold_deg_s: float
+
+    assert _min_duration_samples(_NoFloorParams(threshold_deg_s=30.0)) == 1
+
+    # A floor of 1 is not "no filter": it is exactly the `stop > start` test
+    # this fix replaced, so abutting spans still yield nothing.
+    assert _overlapping([(0, 10)], [(10, 20)], 1) == []
+    assert _overlapping([(0, 10)], [(9, 20)], 1) == [(9, 10)]
+    # And a paramset naming 0 cannot weaken it into a span `measure` refuses.
+    assert _overlapping([(0, 10)], [(10, 20)], 0) == []
+
+
 def test_params_for_builds_the_detectors_own_dataclass_and_drops_extra_keys():
     """Ruling 1 (`_params_for` is undefined in the brief) and Ruling 3
     (`microsaccade_max_deg` lives in the SAME `eye_detection` paramset dict
@@ -971,6 +1041,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
         )
 
     from wl_preproc.eye.calibration import apply_map
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.labels import Label
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
@@ -1002,7 +1073,16 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     )
     left_spans = _detect(left_gaze, left_v, left_mask)
     right_spans = _detect(right_gaze, right_v, right_mask)
-    conjunction_spans = _overlapping(left_spans, right_spans)
+    # Both the filtered conjunction and the raw intersection, so the finding
+    # this floor closes stays MEASURED on real data rather than remembered
+    # from a fix report: `floor=1` is exactly the `stop > start` test
+    # `_overlapping` applied before finding H3, so their difference IS the
+    # set of spans that used to be stored as events neither eye's own
+    # detector would have accepted. Printed and asserted below.
+    conjunction_spans = _overlapping(
+        left_spans, right_spans, DEFAULT_EK_PARAMS.min_duration_samples
+    )
+    unfloored_spans = _overlapping(left_spans, right_spans, 1)
 
     left_runs, left_n_sacc, left_n_micro = _encode(
         left_gaze, left_v, left_mask, left_spans, recording.fs_hz
@@ -1051,6 +1131,14 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
             f"saccade/microsaccade split at x1 = {left_n_sacc}/{left_n_micro}, at x3 = "
             f"{n_sacc_b}/{n_micro_b} (same events, different degrees, different split)"
         )
+        floor = DEFAULT_EK_PARAMS.min_duration_samples
+        print(
+            f"  conjunction duration floor (finding H3): {len(unfloored_spans)} raw "
+            f"intersections, {len(unfloored_spans) - len(conjunction_spans)} dropped "
+            f"below the {floor}-sample floor "
+            f"({sum(1 for s, e in unfloored_spans if e - s == 1)} exactly one sample, "
+            f"{sum(1 for s, e in unfloored_spans if 1 < e - s < floor)} of 2-{floor - 1})"
+        )
         print("  runs measured at the reference scale, engbert_kliegl, default params:")
         for trace_name, runs, n_sacc, n_micro in (
             ("left", left_runs, left_n_sacc, left_n_micro),
@@ -1088,6 +1176,20 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # explained; it would mean the scale-invariance argument in this test's
     # own docstring is wrong.
     assert spans_b_fixed_mask == left_spans
+
+    # Finding H3, on REAL data rather than on the two synthetic boundary
+    # cases `test_the_conjunction_inherits_the_detectors_own_minimum_
+    # duration` covers: no stored conjunction event may be shorter than the
+    # detector's own floor, and the raw intersection genuinely contains such
+    # spans (402 of 4,952 when this was measured), so this is not vacuous.
+    assert all(
+        stop - start >= DEFAULT_EK_PARAMS.min_duration_samples
+        for start, stop in conjunction_spans
+    )
+    assert any(
+        stop - start < DEFAULT_EK_PARAMS.min_duration_samples
+        for start, stop in unfloored_spans
+    ), "the raw intersection has no sub-floor span, so the floor above proves nothing here"
 
     # A generous ceiling, not a pin (the measured total is printed above, and
     # is far below this): the point of this test is to SURFACE the number,

@@ -25,8 +25,10 @@ writes a refused row with a stated reason rather than raising when a
 session's calibration is unusable. `EyeDetection.make()` reads that mask
 back, runs the registered detector over each eye independently, takes the
 INTERSECTION of the two eyes' detected spans as the conjunction (Engbert &
-Kliegl's own binocular noise-suppression criterion), and measures every
-detected event once via `wl_preproc.eye.detect.measure`.
+Kliegl's own binocular noise-suppression criterion) subject to the detector's
+own minimum event duration, and measures every detected event once via
+`wl_preproc.eye.detect.measure`. That duration floor is what keeps the
+criterion a FILTER rather than a generator -- see `_overlapping`.
 
 **`EyeDetection.key_source` is not `EyeValidity * (paramset.ParamSet & ...)`,**
 despite that being the natural-looking join. Two reasons, both confirmed
@@ -337,6 +339,12 @@ class EyeDetection(dj.Computed):
             "paramset_idx": key["paramset_idx"],
         }).fetch1("params")
         detector = get_detector(params["detector"])
+        # Built ONCE, above the per-eye loop rather than inside it, because
+        # the conjunction's own duration floor is read off this same object
+        # (`_min_duration_samples`, below): both eyes and the intersection of
+        # their spans are then demonstrably talking about one set of detector
+        # parameters rather than about two separate constructions of it.
+        detector_params = _params_for(detector, params)
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
@@ -379,7 +387,7 @@ class EyeDetection(dj.Computed):
             )
             # The mask stored `fixation` where a sample is available.
             offered = np.where(available == Label.FIXATION, None, available)
-            spans[eye_value] = detector.run(gaze, v, offered, _params_for(detector, params))
+            spans[eye_value] = detector.run(gaze, v, offered, detector_params)
             per_eye[eye_value] = (gaze, v, offered)
 
         for eye_value in ("left", "right"):
@@ -419,7 +427,13 @@ class EyeDetection(dj.Computed):
                 )
             self.insert1({**key, "trace": "conjunction", "status": "refused", "reason": reason})
         else:
-            conjunction_spans = _overlapping(spans["left"], spans["right"])
+            # The floor is the DETECTOR's own, inherited from the params it
+            # just ran with -- the binocular criterion filters what both eyes
+            # already found, and must never manufacture an event shorter than
+            # either eye's detector would have accepted. See `_overlapping`.
+            conjunction_spans = _overlapping(
+                spans["left"], spans["right"], _min_duration_samples(detector_params)
+            )
             # The conjunction's TIMING is binocular (`_overlapping`'s own
             # intersection, just above), but a measurement still needs ONE
             # eye's actual gaze -- there is no cyclopean trace any
@@ -487,17 +501,72 @@ class EyeDetection(dj.Computed):
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
 
 
-def _overlapping(left, right):
-    """Spans present in BOTH eyes with temporal overlap -- Engbert & Kliegl's
-    own binocular criterion, applied uniformly to every detector. The
-    intersection, never the union: an event in one eye alone is noise, which is
-    the whole point of the criterion."""
-    return [
-        (max(ls, rs), min(lstop, rstop))
-        for ls, lstop in left
-        for rs, rstop in right
-        if ls < rstop and rs < lstop
-    ]
+def _overlapping(left, right, min_duration_samples: int):
+    """Spans present in BOTH eyes with temporal overlap, no shorter than the
+    detector's own minimum event duration -- Engbert & Kliegl's own binocular
+    criterion, applied uniformly to every detector. The intersection, never
+    the union: an event in one eye alone is noise, which is the whole point of
+    the criterion.
+
+    **The floor is here because the binocular criterion is a FILTER, not a
+    generator** (whole-branch review, finding H3). It must never produce an
+    event shorter than either eye's own detector would have accepted. Without
+    it, the intersection of two 6-sample Engbert-Kliegl events overlapping by
+    ONE sample is a one-sample event -- and `measure`'s own
+    `gaze_deg[stop - 1] - gaze_deg[start]` is then identically zero, so
+    `classify` stores it as a 0.0-degree `microsaccade` carrying a peak
+    velocity of up to 864 deg/s. `measure`'s `stop > start` precondition
+    catches `stop <= start`, not `stop - start == 1`. Measured through this
+    function on the reference recording at default parameters: 4,952
+    conjunction spans, of which 402 (8.1%) fell below the 6-sample floor and
+    44 were exactly one sample long.
+
+    **Not in `measure`, and not in `classify`.** Special-casing
+    `stop - start == 1` inside `measure` would fix the 44 most visible cases
+    and leave the other 358 -- 2 to 5 samples each -- still stored as events
+    neither eye's own detector considered real. `classify` is handed an
+    amplitude and a threshold and has no duration to reject. And the damage
+    is downstream of both: design spec section 6.5 fits the main sequence
+    from exactly the `amplitude_deg`/`peak_velocity_deg_s` pair these rows
+    carry, where a zero-amplitude, high-velocity point is maximally damaging
+    to a saturating fit -- section 6.5.3 already argues that saccade-boundary
+    contamination "shifts the whole main sequence".
+
+    `min_duration_samples` is a REQUIRED argument rather than a defaulted
+    one: a default is exactly what would let a future caller silently
+    reintroduce the unfiltered intersection this fix exists to remove. See
+    `_min_duration_samples` for where the value comes from and why it is
+    floored at 1 below -- the condition this replaces was
+    `ls < rstop and rs < lstop`, which is precisely `stop > start`, and a
+    paramset naming 0 must not weaken it into spans `measure` refuses.
+    """
+    floor = max(int(min_duration_samples), 1)
+    spans = []
+    for left_start, left_stop in left:
+        for right_start, right_stop in right:
+            start, stop = max(left_start, right_start), min(left_stop, right_stop)
+            if stop - start >= floor:
+                spans.append((start, stop))
+    return spans
+
+
+def _min_duration_samples(detector_params) -> int:
+    """The floor `_overlapping` inherits from the detector that produced both
+    eyes' spans -- the SAME params object the detector actually ran with, not
+    a second reading of the paramset dict.
+
+    `getattr` with a default of 1, rather than a bare attribute access,
+    because `min_duration_samples` is a field of `EngbertKlieglParams` and
+    not part of `registry.Detector.run`'s own contract: stage 2's six other
+    detectors (design spec section 3.1) each bring their own params
+    dataclass, and some of them have no minimum duration to declare. 1 is
+    the honest floor for such a detector -- it would itself have accepted a
+    one-sample run, so the rule "never shorter than either eye's own
+    detector would have accepted" is satisfied by admitting one here too --
+    and it is also the weakest value that keeps `measure`'s `stop > start`
+    precondition true.
+    """
+    return int(getattr(detector_params, "min_duration_samples", 1))
 
 
 def _params_for(detector, params: dict):
