@@ -614,9 +614,10 @@ def _overlapping(left: list[Run], right: list[Run], min_duration_samples: int) -
        one eye's, over the intersection. Measured the same way: 518 of 2,209
        stored `saccade` rows carry an amplitude below `microsaccade_max_deg`
        and 40 of 2,341 `microsaccade` rows carry one at or above it -- 12.3%
-       of conjunction event rows, against 0 of 5,972 on either eye's own
-       trace. Design spec section 6.5 fits the main sequence from exactly
-       those two columns, selecting rows by label.
+       of conjunction event rows, against 0 of 5,972 on the left eye's own
+       trace and 0 of 5,592 on the right's. Design spec section 6.5 fits the
+       main sequence from exactly those two columns, selecting rows by
+       label.
 
     A third lands in stage 2 rather than now: with no detector yet emitting
     `pso`, nothing exercises `saccade` outranking it -- but on this

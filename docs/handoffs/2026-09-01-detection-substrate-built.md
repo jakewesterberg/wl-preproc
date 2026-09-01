@@ -372,7 +372,8 @@ exists to name.
   systematically understates it. Measured: **518 of 2,209 stored `saccade`
   rows carry an amplitude below `microsaccade_max_deg`, and 40 of 2,341
   `microsaccade` rows carry one at or above it — 12.3% of conjunction event
-  rows, against 0 of 5,972 on either eye's own trace.** §6.5 fits the main
+  rows, against 0 of 5,972 on the left eye's own trace and 0 of 5,592 on the
+  right's.** §6.5 fits the main
   sequence from exactly those two columns, selecting rows by label, so a
   `SaccadeMainSequence` over the conjunction trace would take 518
   sub-degree points into a saccade fit. The residual defect is the
