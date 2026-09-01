@@ -1,8 +1,9 @@
 # Where this build actually is
 
-**Last updated 2026-08-31**, on `main` at `2b75720` (the second-order calibration
-merge). Check `git log --oneline -1` against that; if it has moved, this file is stale
-and the spec wins.
+**Last updated 2026-09-01**, on `main` at `bfdfd7f` (the event-vocabulary ownership
+docstring, just after the saccade-detection and wl-expcontroller merges). Check
+`git log --oneline -1` against that; if it has moved, this file is stale and the spec
+wins.
 
 This file went **nine days and three merged subsystems stale** before this update — it still
 claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
@@ -15,6 +16,16 @@ numbers before you distrust the reasoning.
 > table below was false for that whole period. A green local run is evidence about 3.11 on
 > macOS arm64 and nothing else — **push and check `gh run list` before believing the
 > table.**
+>
+> The table below was verified this way on 2026-09-01: `gh run list --branch main`
+> shows CI and Manifest both `success` on `99ac078` (the wl-expcontroller merge) and on
+> `d224632` (the saccade-detection merge). Not asserted — read off the runs.
+>
+> It caught a real one the same day. Merging `main` into `spec/expcontroller-asks` put
+> that branch's tests beside a 3.13 interpreter for the first time: **seven failed on
+> 3.13 while all 1175 passed on 3.11**, the same `CalibrationMap.conditioning` nan
+> defect as `27917b4`, in tests written in parallel with that fix and so never exposed
+> to it. Fixed in `ea9b94b` before the merge, not after.
 
 **The lab starts January 2027.** Everything here is being built before any real data exists,
 so that January validates rather than discovers.
@@ -26,7 +37,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green, **1016 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression and the eye reader/calibration/gaze are all merged.** Phase 1c is done. |
+| **wl-preproc** | private, CI green on 3.11 and 3.13 (verified 2026-09-01, see above), **1176 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression, the eye reader/calibration/gaze, second-order calibration, the saccade-detection substrate (stage 1) and wl-expcontroller's five asks are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -170,17 +181,47 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    second-order term accounts for much of it. **Sequenced before detection deliberately** —
    detection thresholds are tuned against the gaze signal, so tuning against affine gaze
    and then changing the model means validating twice. That ordering held.
-2. **Saccade detection** — the second half of parent §7, split from the eye spec deliberately.
-   Three detectors, each its own paramset: Engbert–Kliegl (baseline, no dependencies),
-   Otero-Millan (threshold-free, per-detection reliability, no PyTorch), and U'n'Eye (a CNN,
-   vendored at a pinned commit). **Ruled 2026-08-31: all three, with PyTorch declared
-   properly** rather than worked around — `where: serv`, following `kilosort`'s precedent,
+2. **Saccade detection stage 1 — MERGED 2026-09-01** (`d224632`), all nine tasks.
+   `specs/2026-08-31-saccade-detection-design.md` and
+   `handoffs/2026-09-01-detection-substrate-built.md`. Stage 1 shipped the substrate plus
+   **ONE** detector — Engbert–Kliegl, the zero-dependency baseline — the five-criterion
+   validity mask, the eight-label taxonomy with five labels produced, runs-as-rows storage,
+   per-eye and conjunction traces, and the report section. **No `torch` is declared**; the
+   earlier "all three, with PyTorch" ruling described the whole of detection, not stage 1.
+
+   **Measured, not estimated:** 12,767 left / 12,631 right / 10,703 conjunction = **36,101
+   rows** for one session and one detector, against the reference recording itself — about
+   14% under §5's extrapolation, so the runs-as-rows storage argument holds.
+
+   **A whole-branch review found ten defects the nine per-task reviews could not see.** The
+   worst was silent: nothing in production ever registered the detection paramsets, so both
+   `key_source`s named zero candidates, the subsystem wrote no rows, and `run_once` reported
+   no error while the report rendered an empty pipeline identically to a clean one. Every
+   test registered the paramsets itself, which is exactly why it stayed invisible. Read the
+   handoff's own account before trusting a per-task green in future work.
+
+3. **Saccade detection stage 2** — the other six detectors (Otero-Millan, Nyström–Holmqvist,
+   NSLR, REMoDNaV, Bayesian microsaccade detection, U'n'Eye), the consensus suite and
+   vocabulary-coarsening lattice, saccade vigor and the main-sequence fits,
+   `pso`/`pursuit`/`drift` as PRODUCED rather than merely declared labels, and
+   wl-expcontroller's online detector as an eighth registry entry. This is where **PyTorch
+   is declared properly** rather than worked around — `where: serv`, following `kilosort`'s precedent,
    since a CNN detector belongs on the preprocessing server and not a rig. Their agreement
    becomes a three-way data-quality metric.
-3. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
+4. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
+   written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
+   no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
+   leaves no `RejectedSegment` row either, existing only as a line in `run_once`'s error
+   list. The refusal is CORRECT where it stands: a frame index IS a time on that line, so
+   every barcode edge after a gap would be early by the dropped frames' duration. The fix
+   is to decode each contiguous run as its own segment. **Validity criterion 4 — the
+   frame-gap window — cannot fire in production until this lands**, and the reference
+   recording has zero gaps across 1,177,799 rows, so real data has never exercised it
+   either. Detection spec §2 carries the full chain.
+5. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
    Worth doing before the hardware lands.
-4. **The eye subsystem's two open decisions are both settled.** The calibration-block
+6. **The eye subsystem's two open decisions are both settled.** The calibration-block
    marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits
    (2026-08-31, `ac7ead2`): `<session>/expcontroller/`, named for the ROLE so MonkeyLogic's
@@ -190,8 +231,9 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    eye spec specifies exactly.
 
 **Everything in Phase 2b proper still needs the compute machine.** The subsystems merged
-this week were chosen precisely because they needed no GPU and no container. Saccade
-detection is the next of that kind, and rehydration the one after.
+this week were chosen precisely because they needed no GPU and no container. Detection
+stage 2 is the next of that kind — though U'n'Eye is the first piece of this project that
+genuinely wants the GPU — with gap-aware segmentation and rehydration both hardware-free.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
@@ -506,6 +548,34 @@ defensible call, but it is a reversal rather than a gap.
 
 Spec §13 carries the full list. None now gate other work — these are named because each
 leaves something behind that does:
+
+- **AWAITING OUR ANSWER, and it is the only item here another repository is blocked on
+  deciding.** wl-expcontroller's `ADR-0007-event-vocabulary-ownership.md` is *"Accepted
+  2026-08-31, with one clause pending wl-preproc"*. The rule — ownership splits on
+  **decodability versus meaning**, so framing/escapes/checksum/payload-counts/DVA and
+  `Marker` 1–255 are ours while `TaskEvent`, `TaskTypeCode` and the task-specific range are
+  wl-mllib's — is accepted and is now recorded in `contracts/events.py`'s own docstring
+  (`bfdfd7f`). **The unsettled clause: moving `TaskEvent` 256–4095 to wl-mllib needs our
+  agreement, because we allocated 256–259 into it and ownership moving is explicitly not
+  permission to renumber.** Until we answer, wl-expcontroller allocates only in
+  4096–32767, whose ownership is undisputed, so a decline costs them no rework.
+
+  That ADR exists because two manifests contradicted each other: `wl-mllib/wl.yaml`
+  published `task-event-vocabulary` claiming *"wl-preproc reads event handling from here
+  rather than defining it"*, while `contracts/events.py` was already the frozen interface
+  defining it. **`wlo validate` cannot catch that** — it checks that a published name
+  resolves to exactly one publisher, not that a description is true. It was found by
+  reading both repositories.
+
+  Its "Alternatives considered" also **rejects relocating the vocabulary** to a neutral
+  home, on the grounds that moving a frozen interface out of a repository with ~1,000
+  tests under active development is high cost and real risk for a tidier manifest line,
+  and rejects outright anything that makes a third definition. A `wl-codes` repository was
+  discussed here on 2026-08-31 before that ADR was read; **it is that rejected
+  alternative** and should not be created without reopening the ADR first. Note that
+  wl-expcontroller's `encode.py` mirrors `PAYLOAD_WORD_COUNTS` **deliberately** — "so the
+  rig carries no pipeline dependency" — writes no decoder, and tests conformance by
+  round-tripping through our `decode_stream`. That is a designed arrangement, not drift.
 
 - **Item 4 is closed (2026-08-13).** MonkeyLogic declares behavioral-code lines multiline
   with no cap, so **the 16-bit protocol was never at risk** and no frozen contract moved.
