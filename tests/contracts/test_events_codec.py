@@ -59,6 +59,18 @@ def test_decode_continues_after_an_error():
     assert events[1] == SimpleEvent(time_s=5.0, code=Marker.TRIAL_START.value)
 
 
+def test_param_change_round_trips_with_a_valid_checksum():
+    """PARAM_CHANGE (HANDOVER-wl-expcontroller.md Ask 2): two payload words
+    reconstruct the uint32 sequence number, the same shape
+    `test_trial_number_reconstructs_uint32` proves for TRIAL_NUMBER --
+    `encode_payload` computes the checksum itself, so a valid decode here
+    also proves `PAYLOAD_WORD_COUNTS[Escape.PARAM_CHANGE]` and the checksum
+    both agree on two words."""
+    (event,) = decode_stream(stream(encode_payload(Escape.PARAM_CHANGE, [0x0002, 0x002C]), 7.0))
+    assert event == PayloadEvent(time_s=7.0, escape=Escape.PARAM_CHANGE, words=(0x0002, 0x002C))
+    assert (event.words[0] << 16) | event.words[1] == 131116
+
+
 def test_block_start_carries_task_type():
     (event,) = decode_stream(
         stream(encode_payload(Escape.BLOCK_START, [3, TaskTypeCode.RF_MAP.value]), 6.0)

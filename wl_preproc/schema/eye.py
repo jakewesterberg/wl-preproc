@@ -294,6 +294,18 @@ class EyeCalibration(dj.Computed):
         # correcting it: over a ~40 minute session, drift appears as a residual
         # that grows, at no additional cost and without pre-empting the
         # decision to correct it.
+        #
+        # MUST be measured on the RAW channel, never a corrected one --
+        # load-bearing now that wl-expcontroller corrects drift ONLINE, during
+        # the session (design spec section 3.6's 2026-08-31 addition,
+        # HANDOVER-wl-expcontroller.md): a residual computed on their
+        # corrected trace would measure the correction rather than the
+        # animal's own drift, understating it down to zero -- "would look
+        # like unusually good tracking" in their own words. True here only
+        # because `eye.gaze.purkinje_vector` reads CR1/CR4 straight off the
+        # ohDPI recording, columns wl-expcontroller's own controller does not
+        # write -- not because this table checks for a corrected trace and
+        # refuses it.
         # Key: (subject, session_datetime, eye, block_id).
         -> master
         -> pipeline.trial.Block
@@ -391,8 +403,10 @@ class EyeCalibration(dj.Computed):
 
     def make(self, key: dict) -> None:
         """Both eyes' calibration for one session, through design spec
-        section 3.5's fallback chain in full: fit our own, try MonkeyLogic's,
-        try the best same-day carried-forward map, or refuse and say why.
+        section 3.5's fallback chain in full: fit our own, try the online
+        candidate (MonkeyLogic's `.bhv2` or wl-expcontroller's own format,
+        `eye/calibration.py::read_online_map`'s own two branches), try the
+        best same-day carried-forward map, or refuse and say why.
 
         **Ruling A: `eye` is native to this table's own primary key, not
         inherited through a foreign key.** `key_source` yields one key per
@@ -611,8 +625,16 @@ class EyeCalibration(dj.Computed):
             )
             return
 
-        # -- The online candidate: one map for the whole session (Task 6's
-        # reader has no per-eye split), tried identically for both eyes below.
+        # -- The online candidate. `.bhv2` genuinely has no per-eye split
+        # (MonkeyLogic's own Origin & Gain calibration is one map, read_
+        # online_map's own bhv2 branch wraps it into the same OnlineCalibration
+        # for both eyes); wl-expcontroller's own format is genuinely per eye
+        # (eye/expcontroller.py's own module docstring), so this ONE call
+        # resolves the file once and `.for_eye(eye_value)` picks the right
+        # side inside the loop below -- review round 1's correction to an
+        # earlier version of this line, which passed one shared candidate to
+        # `resolve_calibration` for both eyes regardless of which reader
+        # produced it.
         online = read_online_map(_find_expcontroller_log(session_dir))
 
         rows = []
@@ -649,7 +671,8 @@ class EyeCalibration(dj.Computed):
                 carry_datetime, candidate_map = candidate
                 carried = (candidate_map, carry_datetime.isoformat())
 
-            result = resolve_calibration(raw_xy, target_xy_arr, online, carried)
+            online_for_eye = online.for_eye(eye_value) if online is not None else None
+            result = resolve_calibration(raw_xy, target_xy_arr, online_for_eye, carried)
 
             # **The AFFINE basis, for every row, whatever model was used.**
             # One definition of one column: how well this session's own target
@@ -817,11 +840,29 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
     indistinguishable from "log in the wrong place". A log the transfer put
     elsewhere is now a visibly absent one.
 
-    Still `*.bhv2` specifically, because that is the only format
-    `eye/bhv2.py` can read. The DIRECTORY is role-named so a second controller
-    needs no path change; the glob is format-named because a reader for that
-    controller's own format does not exist yet. When it does, this is where
-    the second glob goes, and nothing above it changes.
+    Two globs now, both format-named, because two readers exist:
+    `*.bhv2` for `eye/bhv2.py` (MonkeyLogic), and `*.yaml` for
+    `eye/expcontroller.py` (wl-expcontroller, added when ADR-0005 made
+    MonkeyLogic permanently undeployed and `.bhv2` therefore permanently
+    absent -- HANDOVER-wl-expcontroller.md Ask 1). This is the second glob
+    this function's own prior docstring reserved a place for: "the glob is
+    format-named because a reader for that controller's own format does not
+    exist yet. When it does, this is where the second glob goes, and nothing
+    above it changes" -- true on both counts. The DIRECTORY stays role-named
+    (`EXPCONTROLLER_DIRNAME`), so neither glob nor either reader needed a
+    path change; `read_online_map` itself picks the reader by extension, so
+    this function still returns a bare `Path | None` and nothing above it
+    (`EyeCalibration.make()`, `resolve_calibration`, the schema, the report)
+    changed to add the second format.
+
+    Both globs are sorted together, not tried one after the other, matching
+    this function's own prior behaviour for several `.bhv2` files (still
+    proven by `test_the_first_log_by_name_is_taken_when_a_session_has_several`):
+    the choice among matches is by name, not by format. In practice a given
+    session has files from exactly one controller, so this ordering is never
+    exercised by two DIFFERENT formats at once -- but it is the same rule
+    applied uniformly rather than a second, format-aware rule invented for a
+    case that is not expected to occur.
 
     A session with no such directory -- every session this project's synthetic
     generator produces, since `synth/peripherals.py::write_task_file` "stands
@@ -833,7 +874,7 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
     directory = session_dir / EXPCONTROLLER_DIRNAME
     if not directory.is_dir():
         return None
-    matches = sorted(directory.glob("*.bhv2"))
+    matches = sorted((*directory.glob("*.bhv2"), *directory.glob("*.yaml")))
     return matches[0] if matches else None
 
 

@@ -220,6 +220,19 @@ publishes:
       and the log format. Kept identical by the CI step that re-runs
       `wlpp schemas export` and diffs docs/schemas.
 
+  - name: event-code-protocol
+    kind: python-model
+    at: wl_preproc/contracts/events.py
+    stability: stable
+    what: >-
+      The 16-bit strobed event code protocol: framing, escapes, checksum,
+      payload word counts and DVA (degrees-of-visual-angle) encoding.
+      wl-expcontroller emits against this protocol; this repository only
+      decodes it. Previously the most load-bearing cross-repo contract in
+      the recording path with no entry here at all — unaskable through
+      `wlo`, absent from `wlo dependents`, and a change to it would notify
+      nobody.
+
   - name: nwb-session
     kind: nwb
     stability: planned

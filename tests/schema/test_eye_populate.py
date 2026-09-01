@@ -1568,6 +1568,198 @@ def test_the_first_log_by_name_is_taken_when_a_session_has_several(tmp_path):
     assert found is not None and found.name == "a.bhv2"
 
 
+def _write_expcontroller_yaml(path) -> None:
+    """A minimal, syntactically-valid YAML file at `path`.
+
+    Deliberately not a full `read_expcontroller_map` contract (no
+    `mapping_version`/`model`/... ) -- these tests are about WHICH FILE
+    `_find_expcontroller_log` finds, never about what is inside one, exactly
+    the same restriction `_write_walkable_bhv2`'s own docstring states for
+    its `.bhv2` counterpart. `tests/eye/test_expcontroller.py` covers the
+    contract itself.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("placeholder: true\n")
+
+
+def test_the_expcontroller_log_is_found_when_it_is_the_new_format(tmp_path):
+    """The second glob `_find_expcontroller_log`'s own docstring reserved a
+    place for (HANDOVER-wl-expcontroller.md Ask 1): `*.yaml`, alongside the
+    pre-existing `*.bhv2`, in the same role-named directory."""
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    log = tmp_path / EXPCONTROLLER_DIRNAME / "session.yaml"
+    _write_expcontroller_yaml(log)
+
+    assert eye._find_expcontroller_log(tmp_path) == log
+
+
+def test_a_yaml_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
+    """The convention `test_a_log_outside_the_expcontroller_directory_is_not_
+    found` proves for `.bhv2` applies identically to the new format: reading
+    ONLY `EXPCONTROLLER_DIRNAME`, with no whole-tree fallback, is the point,
+    regardless of which controller wrote the stray file."""
+    from wl_preproc.schema import eye
+
+    _write_expcontroller_yaml(tmp_path / "stray.yaml")
+    _write_expcontroller_yaml(tmp_path / "ohdpi" / "misfiled.yaml")
+
+    assert eye._find_expcontroller_log(tmp_path) is None
+
+
+def test_matches_across_both_formats_are_sorted_together(tmp_path):
+    """`_find_expcontroller_log`'s own docstring states the two globs are
+    sorted TOGETHER, not tried one format after the other: the choice among
+    matches is by name, never by format. Proven here with one file of each
+    format, named so the alphabetically-first one is the `.yaml`, the
+    opposite of the two globs' own textual order (`*.bhv2` before `*.yaml`)
+    -- a test that would still pass if the implementation silently preferred
+    `.bhv2` regardless of name would prove nothing.
+    """
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.schema import eye
+
+    _write_walkable_bhv2(tmp_path / EXPCONTROLLER_DIRNAME / "z_session.bhv2")
+    _write_expcontroller_yaml(tmp_path / EXPCONTROLLER_DIRNAME / "a_session.yaml")
+
+    found = eye._find_expcontroller_log(tmp_path)
+    assert found is not None and found.name == "a_session.yaml"
+
+
+# --- The online candidate applied per eye (review round 1) ------------------
+#
+# `degenerate_session`'s own geometry (every trial fixates the same central
+# (0, 0)) makes `resolve_calibration`'s step 1 (FITTED) refuse outright --
+# section 3.5's conditioning guard -- which is exactly what is wanted here:
+# it forces the chain down to step 2 (ONLINE) without needing a second
+# fixture. The two online maps below are constant-only (AFFINE `[1, dx, dy]`
+# with the `dx`/`dy` coefficients zeroed), so `apply_map` predicts the SAME
+# point -- the constant term alone -- for every raw input regardless of what
+# the real synthetic ohDPI trace actually contains, and that point is chosen
+# close enough to (0, 0) to clear `MAX_VALIDATION_ERROR_DEG` for certain.
+# This sidesteps needing to know the synthetic generator's exact raw output
+# to build a map that provably validates -- the same trick `tests/eye/
+# test_calibration_chain.py`'s own `_ZERO_MAP` uses, extended so LEFT and
+# RIGHT are distinguishable from each other rather than both all-zero.
+
+_ONLINE_LEFT_CONST = (0.001, -0.001)
+_ONLINE_RIGHT_CONST = (0.002, -0.002)
+
+
+def _write_per_eye_expcontroller_log(session_dir, *, left: bool, right: bool) -> None:
+    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+
+    def _eye_block(const: tuple[float, float]) -> str:
+        gx0, gy0 = const
+        return (
+            "  model: affine\n"
+            f"  coefficients:\n    x: [{gx0}, 0.0, 0.0]\n    y: [{gy0}, 0.0, 0.0]\n"
+            "  conditioning: 0.9\n  rms_residual_deg: 0.1\n"
+        )
+
+    text = 'mapping_version: 1\nraw_definition: "CR1 - CR4"\ntargets:\n  - [0.0, 0.0]\n'
+    if left:
+        text += "left:\n" + _eye_block(_ONLINE_LEFT_CONST)
+    if right:
+        text += "right:\n" + _eye_block(_ONLINE_RIGHT_CONST)
+
+    directory = session_dir / EXPCONTROLLER_DIRNAME
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "calibration.yaml").write_text(text)
+
+
+@pytest.fixture(scope="module")
+def online_per_eye_session(daemon_module, prefix, tmp_path_factory):
+    """`degenerate_session`'s own geometry, plus a two-eye expcontroller log
+    written into `expcontroller/` BEFORE `daemon_module.run_once()` runs --
+    the only difference from `degenerate_session` itself. FITTED still
+    refuses (same central-only targets); with a `.bhv2`-shaped one-map-both-
+    eyes candidate this would fall through to it identically for both rows,
+    which is exactly the bug review round 1 found. A genuinely per-eye
+    candidate is the only way to prove `EyeCalibration.make()` now selects
+    the right one per eye rather than the same one for both.
+    """
+    root = tmp_path_factory.mktemp("eyeonline")
+    recipe = _recipe("2027-04-08_01", "eyeonln1", seed=408, include_ohdpi=True)
+    truth = generate_session(root, recipe)
+    targets = [(0.0, 0.0)] * N_TRIALS
+    _inject_fixations(root / recipe.session_id, recipe, truth, targets)
+    _write_per_eye_expcontroller_log(root / recipe.session_id, left=True, right=True)
+    session_key = _land(
+        root, recipe, datetime.datetime(2027, 4, 8, 9, 0),
+        acquisition_systems=("syncbox", "ohdpi"),
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
+
+
+def test_online_source_is_used_with_a_different_map_per_eye(online_per_eye_session):
+    """The end-to-end proof review round 1 asked for: "a session gets the
+    right one applied to each eye." Both rows must come from the ONLINE
+    source (FITTED refused by construction, above) and must carry the
+    coefficients FOR THAT EYE, not the other eye's, and not each other's --
+    the exact bug a single shared candidate produced silently before this
+    fix: whichever eye happened to validate first, or both eyes getting one
+    map neither was really fit to.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, _report = online_per_eye_session
+    rows = (eye.EyeCalibration & session_key).to_dicts()
+    by_eye = {row["eye"]: row for row in rows}
+
+    assert by_eye["left"]["calibration_source"] == "online"
+    assert by_eye["right"]["calibration_source"] == "online"
+
+    left_const = (by_eye["left"]["gx_const"], by_eye["left"]["gy_const"])
+    right_const = (by_eye["right"]["gx_const"], by_eye["right"]["gy_const"])
+    assert left_const == pytest.approx(_ONLINE_LEFT_CONST)
+    assert right_const == pytest.approx(_ONLINE_RIGHT_CONST)
+    assert left_const != right_const
+
+
+@pytest.fixture(scope="module")
+def online_left_only_session(daemon_module, prefix, tmp_path_factory):
+    """The other half of review round 1's test list: "a single-eye file
+    leaves the other eye without an online candidate rather than borrowing
+    its sibling's." Identical to `online_per_eye_session` except the log
+    offers `left` only."""
+    root = tmp_path_factory.mktemp("eyeonlineleft")
+    recipe = _recipe("2027-04-09_01", "eyeonln2", seed=409, include_ohdpi=True)
+    truth = generate_session(root, recipe)
+    targets = [(0.0, 0.0)] * N_TRIALS
+    _inject_fixations(root / recipe.session_id, recipe, truth, targets)
+    _write_per_eye_expcontroller_log(root / recipe.session_id, left=True, right=False)
+    session_key = _land(
+        root, recipe, datetime.datetime(2027, 4, 9, 9, 0),
+        acquisition_systems=("syncbox", "ohdpi"),
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
+
+
+def test_a_single_eye_online_log_does_not_lend_its_map_to_the_other_eye(online_left_only_session):
+    """`left` gets its own online map (proving the log was read and used at
+    all -- a session where NEITHER eye used it would pass a weaker version
+    of this test for the wrong reason). `right` has no candidate of its own
+    and no earlier same-day session to carry forward from either (same
+    absence `degenerate_session` itself relies on), so REFUSED is the only
+    reachable outcome for it -- never `left`'s map borrowed across."""
+    from wl_preproc.schema import eye
+
+    session_key, _report = online_left_only_session
+    rows = (eye.EyeCalibration & session_key).to_dicts()
+    by_eye = {row["eye"]: row for row in rows}
+
+    assert by_eye["left"]["calibration_source"] == "online"
+    left_const = (by_eye["left"]["gx_const"], by_eye["left"]["gy_const"])
+    assert left_const == pytest.approx(_ONLINE_LEFT_CONST)
+
+    assert by_eye["right"]["calibration_source"] == "refused"
+    assert by_eye["right"]["gx_const"] is None
+
+
 # --- The second-order conditioning margin -----------------------------------
 
 

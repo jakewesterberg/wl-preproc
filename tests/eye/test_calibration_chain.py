@@ -9,6 +9,7 @@ from wl_preproc.eye.calibration import (
     CalibrationModel,
     CalibrationSource,
     MAX_VALIDATION_ERROR_DEG,
+    OnlineCalibration,
     apply_map,
     read_online_map,
     resolve_calibration,
@@ -387,6 +388,83 @@ def test_a_corrupt_bhv2_still_lets_the_chain_reach_carried_forward(tmp_path):
 
     assert result.source == CalibrationSource.CARRIED_FORWARD
     assert result.carried_from == "2026-08-20_subjA"
+
+
+def test_read_online_map_dispatches_a_yaml_path_to_the_expcontroller_reader(tmp_path):
+    """`read_online_map` gains a branch, not a second entry point
+    (HANDOVER-wl-expcontroller.md Ask 1): `.bhv2` still reaches `bhv2.py`
+    (every test above this one proves that path untouched), and `.yaml` now
+    reaches `wl_preproc.eye.expcontroller.read_expcontroller_map` --
+    `tests/eye/test_expcontroller.py` covers that reader's own contract in
+    full, per-eye reading included; this only proves the dispatch itself
+    picks it for a `.yaml` path and returns the `OnlineCalibration` that
+    reader produces, unwrapped further.
+    """
+    path = tmp_path / "session.yaml"
+    path.write_text(
+        "mapping_version: 1\n"
+        'raw_definition: "CR1 - CR4"\n'
+        "targets:\n"
+        "  - [0.0, 0.0]\n"
+        "left:\n"
+        "  model: affine\n"
+        "  coefficients:\n"
+        "    x: [0.0, 0.05, 0.0]\n"
+        "    y: [0.0, 0.0, 0.05]\n"
+        "  conditioning: 0.9\n"
+        "  rms_residual_deg: 0.1\n"
+    )
+
+    # Field by field, never `==` on the whole dataclass: `conditioning`
+    # defaults to nan, and `27917b4` records what that does across
+    # interpreters -- equal on 3.11 via `tuple.__eq__`'s identity check, unequal
+    # on 3.13 where `float.__eq__` is reached directly.
+    result = read_online_map(path)
+    assert result.left.model is _AFFINE
+    assert result.left.x == (0.0, 0.05, 0.0)
+    assert result.left.y == (0.0, 0.0, 0.05)
+    assert result.right is None
+
+
+def test_a_valid_bhv2_wraps_into_the_same_map_for_both_eyes(tmp_path):
+    """`.bhv2` genuinely has no per-eye split (`OnlineCalibration`'s own
+    docstring; `schema/eye.py::EyeCalibration.make()`'s comment above its
+    `read_online_map` call): the single map `as_calibration_map` converts
+    goes into BOTH `OnlineCalibration.left` and `.right`, so a MonkeyLogic
+    session behaves exactly as it did before this class existed -- one
+    candidate, tried identically for either eye by the caller.
+
+    `_write_minimal_bhv2` is `tests/eye/test_bhv2.py`'s own round-trip
+    fixture (its own docstring covers why a synthetic writer stands in for
+    a real file here); imported rather than duplicated, the same
+    cross-file-helper pattern `pyproject.toml`'s own pytest comment already
+    documents for `tests.schema.test_guardrails`.
+    """
+    from tests.eye.test_bhv2 import _write_minimal_bhv2
+
+    path = tmp_path / "session.bhv2"
+    _write_minimal_bhv2(path)
+
+    # Same reason as above: compared field by field because `conditioning`
+    # defaults to nan. The point of this test is that BOTH eyes get the map,
+    # so it asserts each eye's fields rather than one shared object.
+    result = read_online_map(path)
+    for eye_map in (result.left, result.right):
+        assert eye_map.model is _AFFINE
+        assert eye_map.x == (0.5, 10.0, 20.0)
+        assert eye_map.y == (3.0, 1.0, 2.0)
+
+
+def test_read_online_map_declines_a_malformed_yaml_file_without_raising(tmp_path):
+    """The `.yaml` branch's own failure mode reaches the fallback chain the
+    same way the `.bhv2` branch's does
+    (`test_read_online_map_catches_an_unreadable_file_rather_than_raising`,
+    above): declined, not raised, so one bad expcontroller log cannot cost a
+    session its whole calibration chain."""
+    path = tmp_path / "session.yaml"
+    path.write_text("{not: valid: yaml: [")
+
+    assert read_online_map(path) is None
 
 
 # --- The model ladder -------------------------------------------------------
