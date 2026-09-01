@@ -1,9 +1,13 @@
 # Where this build actually is
 
-**Last updated 2026-09-01**, on `main` at `bfdfd7f` (the event-vocabulary ownership
-docstring, just after the saccade-detection and wl-expcontroller merges). Check
+**Last updated 2026-09-01**, on `main` at `7e100ab` (agreeing the `TaskEvent` range
+moves to wl-mllib, just after the saccade-detection and wl-expcontroller merges). Check
 `git log --oneline -1` against that; if it has moved, this file is stale and the spec
 wins.
+
+*This header named `bfdfd7f` for two commits after the body had moved past it — the
+file's own test catching its own author. If you update this file, the header is part of
+the update.*
 
 This file went **nine days and three merged subsystems stale** before this update — it still
 claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
