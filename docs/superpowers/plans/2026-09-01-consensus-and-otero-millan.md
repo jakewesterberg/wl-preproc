@@ -33,6 +33,16 @@ Read §6.1 in full before Task 1; it is the argument this plan implements.
 - `wl-check` clean before every commit.
 - A detector's `vocabulary` is DECLARED and enforced at
   `registry.Detector.detect`. Never widen it to make a test pass.
+- **Back up before every mutation check; do not restore with `git checkout --`
+  unless the file is already committed.** `cp <file> <file>.bak`, mutate, run,
+  then `cp <file>.bak <file>` and delete the backup. Two failure modes this
+  avoids, both hit in this repository: `git checkout --` errors on an untracked
+  file (a new module is untracked until its own task commits), and on a TRACKED
+  file it discards every uncommitted change in that file, not only the
+  mutation — which silently reverted a real fix earlier in this project's
+  history. Always `PYTHONDONTWRITEBYTECODE=1` on the mutated run: a same-length
+  edit restored inside one mtime second leaves a stale `.pyc` that keeps
+  running, which has already defeated one mutation check here.
 - `blink` and `invalid` are never in any detector's vocabulary: they come from
   the validity mask, and two sources must not write one fact.
 
@@ -363,7 +373,7 @@ def comparison_mask(
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/eye/detect/test_consensus.py -v`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Mutation-check the rule that matters**
 
@@ -379,8 +389,10 @@ Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/eye/detect/test
 Expected: FAIL on `test_a_saccade_cannot_reach_a_microsaccade_only_vocabulary`
 and `test_the_comparison_mask_excludes_what_either_side_cannot_claim`.
 
-Restore with `git checkout -- wl_preproc/eye/detect/consensus.py`, and confirm
-`git status --porcelain` shows only the new files before continuing.
+Restore from the backup, NOT with `git checkout --`: at this point the file
+is still untracked, and `git checkout -- <path>` fails with "pathspec did not
+match any file(s) known to git". Then confirm `git status --porcelain` shows
+only the two new files before continuing.
 
 - [ ] **Step 6: Commit**
 
@@ -1200,8 +1212,9 @@ Run: `.venv/bin/python -m pytest tests/schema/test_consensus_schema.py tests/sch
 
 With `PYTHONDONTWRITEBYTECODE=1`: drop `vocabulary` from the key and confirm a
 test fails; make `comparison_mask` return all-ones and confirm
-`n_samples_compared` is wrong. Restore each with `git checkout --` and confirm
-`git status` is clean between them.
+`n_samples_compared` is wrong. Restore each from its backup and confirm
+`git status` is clean between them — `schema/consensus.py` is untracked until
+this task's own commit, so `git checkout --` cannot restore it.
 
 - [ ] **Step 6: Commit**
 
