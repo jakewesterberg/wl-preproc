@@ -48,6 +48,8 @@ to double as calibration targets.
 from __future__ import annotations
 
 import datetime
+import os
+import time
 
 import numpy as np
 import pytest
@@ -828,3 +830,297 @@ def test_the_detection_key_source_has_no_stray_eye_attribute(daemon_module):
     # `key_source`'s own primary key is the table's own MINUS `trace`, not
     # equal to it outright.
     assert key_source_pk == set(detect.EyeDetection.primary_key) - {"trace"}
+
+
+# ---------------------------------------------------------------------------
+# Task 8: the run count design spec section 5 only estimated -- "roughly
+# 14,000 runs per eye per detector ... extrapolated from typical saccade
+# rates, not measured." Measured here, once, against the one real recording
+# every "1,177,799" reference in this repository points at
+# (`~/Downloads/Tutorial/OpenIris-2024Jul31-114628/OpenIris-2024Jul31-114628.txt`,
+# 633 MB -- never committed, never copied into this tree).
+#
+# **Drives the library functions directly, not `EyeValidity`/`EyeDetection`.**
+# Both tables need a landed session and a validated `EyeCalibration` row, and
+# nothing validates a calibration for this recording: it has no `.bhv2` and no
+# known fixation-target positions, so there is nothing for `fit_map` to fit
+# against. Landing a session just to reach `make()` would be strictly more
+# machinery for a LESS honest number -- the schema path would still need a
+# scale from somewhere, and would hide where it came from behind a database
+# round trip. Calling `validity_labels`/`velocity`/the registered detector's
+# own `run`/`runs_from_labels` directly is simpler and says plainly, in one
+# place, exactly what is and is not known about the scale (see the test's own
+# docstring, below).
+# ---------------------------------------------------------------------------
+
+
+def _scaled_affine_map(scale: float):
+    """`degrees = scale * raw_px` on both axes, no cross terms, no offset --
+    the same shape `CAL_SCALE` uses above (module docstring), for the same
+    reason: a diagonal scale is the simplest map that lets a plausible degree
+    range be CHOSEN when nothing has fit a real one. `CalibrationMap` (not a
+    bare tuple), so `apply_map`/`basis` are exercised exactly as every real
+    caller exercises them."""
+    from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel
+
+    return CalibrationMap(model=CalibrationModel.AFFINE, x=(0.0, scale, 0.0), y=(0.0, 0.0, scale))
+
+
+def _mask_and_velocity(raw_xy, quality, fs_hz, frame_gaps, scale):
+    """One eye's gaze at `scale`, its velocity, and its validity mask -- the
+    three real functions `EyeValidity.make()` itself calls (`apply_map`,
+    `velocity`, `validity_labels`), run here without a database."""
+    from wl_preproc.eye.calibration import apply_map
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze = apply_map(_scaled_affine_map(scale), raw_xy)
+    v = velocity(gaze, fs_hz)
+    mask = validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS)
+    return gaze, v, mask
+
+
+def _detect(gaze, v, mask):
+    """The registered Engbert-Kliegl detector (`registry.get_detector`, the
+    same lookup `EyeDetection.make()` uses), at its default parameters."""
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    from wl_preproc.eye.detect.registry import get_detector
+
+    return get_detector("engbert_kliegl").run(gaze, v, mask, DEFAULT_EK_PARAMS)
+
+
+def _encode(gaze, v, mask, spans, fs_hz):
+    """Classify each detected span and encode the result to runs --
+    `EyeDetection._insert_trace`'s own label-then-encode step (`measure`,
+    `classify`, `runs_from_labels`), minus the two inserts. Returns the runs
+    and the saccade/microsaccade split."""
+    from wl_preproc.eye.detect.labels import Label, runs_from_labels
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, classify, measure
+
+    labels = mask.copy()
+    n_saccade = n_microsaccade = 0
+    for start, stop in spans:
+        amplitude_deg = measure(gaze, v, start, stop, fs_hz).amplitude_deg
+        label = classify(amplitude_deg, MICROSACCADE_MAX_DEG)
+        labels[start:stop] = label
+        if label is Label.SACCADE:
+            n_saccade += 1
+        else:
+            n_microsaccade += 1
+    labels = np.where(labels == None, Label.FIXATION, labels)  # noqa: E711
+    return runs_from_labels(labels), n_saccade, n_microsaccade
+
+
+def test_the_run_count_measured_against_the_reference_recording(capsys):
+    """Design spec section 5, verbatim: "That figure is extrapolated from
+    typical saccade rates, not measured -- nothing has run a detector on a
+    real recording yet." This runs one, following `tests/eye/test_bhv2.py::
+    test_a_real_monkeylogic_file_parses_to_the_observed_values`'s own idiom:
+    an env-var-gated real-file test, skipped everywhere the file is not
+    present, and never committed regardless.
+
+    **Timing, measured directly, so nobody mistakes this for a hang.** The
+    file is 633 MB, 1,177,799 rows. Reading it takes four column-selective
+    passes -- `read_ohdpi` once (frame numbers, seconds, the sync word),
+    `purkinje_vector` once per eye, `read_columns` once for both eyes'
+    `DataQuality` -- and this test times and prints that total. Measured on
+    this machine: ~8 s for all four passes combined. Everything downstream
+    (masking, detecting, encoding, at every scale this test uses) runs in
+    well under a second per pass, because it is pure in-memory numpy once the
+    columns are in hand -- which is also why the sweep below re-reads
+    nothing: `raw["left"]`/`raw["right"]`/`quality` are read ONCE and every
+    scale after that is `apply_map` on the same arrays.
+
+    **Why a scale can be chosen at all without a validated calibration for
+    this recording.** `detect_engbert_kliegl` thresholds
+    `(v_x/eta_x)**2 + (v_y/eta_y)**2` against 1, where
+    `eta_x = lambda_ * _median_scale(v_x)` (and likewise for y).
+    `velocity()` is linear in gaze and `_median_scale` is homogeneous of
+    degree 1 (`sqrt(median(v**2) - median(v)**2)` scales exactly with `|v|`),
+    so scaling gaze by any positive constant scales `v` and both `eta`s by
+    that same constant and the ratio -- hence the detected span set -- is
+    unchanged, GIVEN A FIXED validity mask. That is verified directly below,
+    not assumed. `validity_labels` is a different story: its region and
+    speed criteria (`ValidityParams.region_half_width_deg`/
+    `region_half_height_deg`/`max_speed_deg_s`) are ABSOLUTE degrees, so a
+    different scale changes which samples the mask claims, which can change
+    what the detector ever sees. Part 1 below demonstrates the invariant
+    that IS true (fixed mask, two scales, byte-identical spans); Part 2
+    measures the sensitivity that remains once the mask is allowed to
+    respond to scale, which is the real uncertainty on the number this test
+    surfaces, honestly, alongside it.
+
+    **What is not measured here.** One detector of seven (Engbert-Kliegl,
+    this subsystem's zero-dependency baseline); the other six may disagree
+    substantially, in either direction, on run count as well as on
+    agreement. And the saccade/microsaccade SPLIT -- unlike the run count --
+    is not scale-invariant: `classify` thresholds absolute degrees, so it
+    depends on exactly the calibration scale this recording does not have.
+    Part 1 measures that dependence directly too.
+    """
+    sample = os.environ.get("WLPP_OHDPI_REFERENCE")
+    if not sample:
+        pytest.skip(
+            "WLPP_OHDPI_REFERENCE is not set. Point it at a real OpenIrisDPI "
+            "recording's raw .txt file to run this test -- the reference "
+            "recording this repository's design spec measures against is "
+            "OpenIris-2024Jul31-114628.txt (633 MB, 1,177,799 rows, ~39.3 "
+            "minutes at ~500 Hz), from this lab's own "
+            "~/Downloads/Tutorial/OpenIris-2024Jul31-114628/ tutorial "
+            "materials -- see design spec section 5. Never commit that file."
+        )
+
+    from wl_preproc.eye.calibration import apply_map
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.gaze import purkinje_vector
+    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.schema.detect import _overlapping
+
+    t0 = time.monotonic()
+    recording = read_ohdpi(sample)
+    raw = {"left": purkinje_vector(sample, "Left"), "right": purkinje_vector(sample, "Right")}
+    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    read_s = time.monotonic() - t0
+
+    # The scale heuristic (this test's own honesty requirement: STATE it,
+    # rather than just using it). Chosen, not fit: the pooled 99th percentile
+    # of |raw Purkinje difference|, over both eyes, is placed at 15 degrees --
+    # inside both `region_half_width_deg=20.0` and the tighter
+    # `region_half_height_deg=15.0`, with margin, so "the bulk of the trace"
+    # sits inside the plausible region rather than at its very edge.
+    pooled_abs_x = np.concatenate([np.abs(raw["left"][:, 0]), np.abs(raw["right"][:, 0])])
+    pooled_abs_y = np.concatenate([np.abs(raw["left"][:, 1]), np.abs(raw["right"][:, 1])])
+    p99_x, p99_y = float(np.percentile(pooled_abs_x, 99)), float(np.percentile(pooled_abs_y, 99))
+    scale_ref = 15.0 / max(p99_x, p99_y)
+
+    left_gaze, left_v, left_mask = _mask_and_velocity(
+        raw["left"], quality["LeftDataQuality"], recording.fs_hz, recording.frame_gaps, scale_ref
+    )
+    right_gaze, right_v, right_mask = _mask_and_velocity(
+        raw["right"], quality["RightDataQuality"], recording.fs_hz, recording.frame_gaps, scale_ref
+    )
+    left_spans = _detect(left_gaze, left_v, left_mask)
+    right_spans = _detect(right_gaze, right_v, right_mask)
+    conjunction_spans = _overlapping(left_spans, right_spans)
+
+    left_runs, left_n_sacc, left_n_micro = _encode(
+        left_gaze, left_v, left_mask, left_spans, recording.fs_hz
+    )
+    right_runs, right_n_sacc, right_n_micro = _encode(
+        right_gaze, right_v, right_mask, right_spans, recording.fs_hz
+    )
+    # Conjunction measurement borrows the LEFT eye's own gaze/velocity, exactly
+    # as `EyeDetection.make()`'s own comment states: "there is no cyclopean
+    # trace any calibration in this codebase ever validated."
+    conj_runs, conj_n_sacc, conj_n_micro = _encode(
+        left_gaze, left_v, left_mask, conjunction_spans, recording.fs_hz
+    )
+    total_runs = len(left_runs) + len(right_runs) + len(conj_runs)
+
+    # --- Part 1: fixed-mask scale invariance (left eye), and what it costs to
+    # give the fixed mask up. `scale_b` is `3 * scale_ref` -- an arbitrary but
+    # clearly different positive constant; the argument in this test's own
+    # docstring holds for ANY positive constant, so nothing here is tuned to
+    # make it come out identical.
+    scale_b = 3.0 * scale_ref
+    gaze_b = apply_map(_scaled_affine_map(scale_b), raw["left"])
+    v_b = velocity(gaze_b, recording.fs_hz)
+    spans_b_fixed_mask = _detect(gaze_b, v_b, left_mask)  # `left_mask` REUSED, not recomputed.
+
+    # The saccade/microsaccade split at the two scales, over the SAME fixed
+    # spans -- the concrete demonstration that the split (unlike the count)
+    # depends on scale: `classify` sees 3x the amplitude at `scale_b`.
+    _, n_sacc_b, n_micro_b = _encode(gaze_b, v_b, left_mask, spans_b_fixed_mask, recording.fs_hz)
+
+    with capsys.disabled():
+        print(f"\n  reference recording: {sample}")
+        print(
+            f"  {recording.n_frames} frames, {recording.fs_hz:.2f} Hz, "
+            f"{recording.n_frames / recording.fs_hz / 60:.1f} min, "
+            f"{len(recording.frame_gaps)} frame gap(s)"
+        )
+        print(f"  file read: {read_s:.1f}s over 4 column-selective passes")
+        print(
+            f"  scale heuristic: {scale_ref:.6g} deg/px ({1 / scale_ref:.2f} px/deg) -- "
+            f"pooled p99 |raw| is ({p99_x:.1f}, {p99_y:.1f}) px, placed at 15 deg"
+        )
+        print(
+            f"  Part 1 -- fixed mask, scale x1 vs x3: spans identical = "
+            f"{spans_b_fixed_mask == left_spans} ({len(left_spans)} spans each); "
+            f"saccade/microsaccade split at x1 = {left_n_sacc}/{left_n_micro}, at x3 = "
+            f"{n_sacc_b}/{n_micro_b} (same events, different degrees, different split)"
+        )
+        print("  runs measured at the reference scale, engbert_kliegl, default params:")
+        for trace_name, runs, n_sacc, n_micro in (
+            ("left", left_runs, left_n_sacc, left_n_micro),
+            ("right", right_runs, right_n_sacc, right_n_micro),
+            ("conjunction", conj_runs, conj_n_sacc, conj_n_micro),
+        ):
+            other = len(runs) - n_sacc - n_micro
+            print(
+                f"    {trace_name:11s} {len(runs):6d} runs "
+                f"({n_sacc} saccade, {n_micro} microsaccade, {other} fixation)"
+            )
+        print(f"    TOTAL (1 detector x 3 traces): {total_runs}")
+
+        # --- Part 2: scale-sensitivity sweep, mask RECOMPUTED per scale
+        # (left eye only -- right/conjunction agree with it within a few
+        # percent at the reference scale printed above, and are not re-swept
+        # here to keep this test's own runtime small).
+        print("  Part 2 -- scale-sensitivity sweep, left eye, mask recomputed per scale:")
+        for mult in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0):
+            scale = scale_ref * mult
+            gaze, v, mask = _mask_and_velocity(
+                raw["left"], quality["LeftDataQuality"], recording.fs_hz, recording.frame_gaps, scale
+            )
+            spans = _detect(gaze, v, mask)
+            runs, _, _ = _encode(gaze, v, mask, spans, recording.fs_hz)
+            frac_invalid = float(np.mean(mask == Label.INVALID))
+            print(
+                f"    x{mult:<4.2f} scale={scale:.6g}  frac_invalid={frac_invalid:.4f}  "
+                f"runs={len(runs)}"
+            )
+
+    # The claim this whole test exists to check: identical spans under a
+    # fixed mask, regardless of scale. If this ever fails, STOP -- per this
+    # task's own brief -- and do not trust any number here until it is
+    # explained; it would mean the scale-invariance argument in this test's
+    # own docstring is wrong.
+    assert spans_b_fixed_mask == left_spans
+
+    # A generous ceiling, not a pin (the measured total is printed above, and
+    # is far below this): the point of this test is to SURFACE the number,
+    # and asserting a tight figure nobody has measured before would invent a
+    # precision this measurement does not have. 100,000 is roughly 2.7x the
+    # measured total -- enough headroom for the sweep's own plausible range,
+    # nowhere near the ~3.5M a truly broken encoder (one run per sample, on
+    # every trace) would produce.
+    assert total_runs < 100_000
+
+
+def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
+    """A guard on the ENCODING alone, not on biological event rates: CI never
+    has the real recording (`WLPP_OHDPI_REFERENCE`, above, is unset there), so
+    without this the run/sample ratio is unguarded in CI specifically. This
+    says nothing about how many runs a real session should have, and nothing
+    about the figure `test_the_run_count_measured_against_the_reference_
+    recording` measures above -- only that `runs_from_labels`' own
+    maximal-run guarantee holds on a real populated table, so a regression
+    that stopped merging adjacent same-label samples (e.g. one run per
+    sample) would fail here, loudly, long before anyone reached for the
+    design spec's own number.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    for trace in ("left", "right", "conjunction"):
+        row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
+        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts()
+        # "Far below" deliberately loose: `stepped_session` plants exactly 3
+        # (left/conjunction) or 4 (right, via `_inject_right_eye_only_step`)
+        # events in an otherwise-still trace, so a healthy encoding merges
+        # long fixation stretches into single runs and lands near a dozen
+        # runs total, not thousands -- only a broken encoder, or a detector
+        # firing on nearly every sample, would come anywhere near this bound.
+        assert len(runs) < row["n_samples"] / 10

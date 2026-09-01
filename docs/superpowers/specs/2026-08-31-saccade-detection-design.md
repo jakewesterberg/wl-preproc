@@ -332,18 +332,80 @@ row carries `amplitude_deg`, `peak_velocity_deg_s` and a nullable
 therefore strictly more informative than the per-sample trace it encodes, not
 a lossy substitute for it.
 
-**Size, and one number that is an estimate rather than a measurement.** The
+**Size, and a number that was an estimate and is now measured too.** The
 reference recording is 1,177,799 rows, 39.3 minutes at 500 Hz. As a uint8
 per-sample array that is 1.18 MB per eye per detector — for contrast, the
 gaze array the eye spec refused to store is ~38 MB, so the label trace is
-~32× smaller and the objection does not transfer at the same magnitude. As
-runs, at a typical 3 detected events per second — saccades and microsaccades
-together, each contributing its own run plus the fixation run that follows it
-— roughly **14,000 runs per eye per detector**, so ~294,000 rows per session
-across three traces and seven detectors. **That
-figure is extrapolated from typical saccade rates, not measured** — nothing
-has run a detector on a real recording yet, and the implementation plan must
-measure it against one before this design is trusted on storage grounds.
+~32× smaller and the objection does not transfer at the same magnitude.
+
+This section's first draft reasoned from a typical rate — 3 detected events
+per second, saccades and microsaccades together, each contributing its own
+run plus the fixation run that follows it — to roughly **14,000 runs per eye
+per detector, so ~294,000 rows per session across three traces and seven
+detectors**, and called that figure extrapolated rather than measured, since
+nothing had run a detector on a real recording yet.
+
+**Measured 2026-09-01, against the reference recording itself** — the same
+`OpenIris-2024Jul31-114628.txt` every other "1,177,799" in this spec already
+names — through the real `validity_labels`/`velocity`/registered-detector
+code, not a reimplementation
+(`tests/schema/test_detect_populate.py::test_the_run_count_measured_against_the_reference_recording`).
+One detector (Engbert–Kliegl, this subsystem's zero-dependency baseline),
+three traces: **12,767 runs (left), 12,631 (right), 11,444 (conjunction) —
+36,842 rows, one session, one detector.** That is about 12% below the
+estimate's own implied single-detector figure (3 × 14,000 = 42,000), and
+scaling the measured total up by seven detectors — 7 × 36,842 ≈ 257,900 rows
+per session — lands about 12% below the original ~294,000 by that same
+ratio. **The two "12% below" figures are not independent confirmations**;
+scaling by seven is a linear rescaling of the one number actually measured,
+not a second measurement. What they show is narrower but still real: the
+original 3-events/second guess was the right order of magnitude for the one
+detector now measured, and the runs-as-rows decision does not need
+revisiting on the strength of this number — a few hundred thousand rows per
+session is unremarkable for a relational table, which was the entire
+argument for rows over a blob in the first place.
+
+**Why a number could be measured at all without a validated calibration for
+this recording.** No `.bhv2` file and no known fixation-target positions
+exist for it, so nothing has fit or validated a real `CalibrationMap` here.
+What makes the run count measurable anyway:
+`engbert_kliegl.py::detect_engbert_kliegl` thresholds
+`(v_x/eta_x)**2 + (v_y/eta_y)**2` against 1, where each `eta` is
+`lambda_ * _median_scale(v)`. `velocity()` is linear in gaze and
+`_median_scale` is homogeneous of degree 1, so scaling gaze by any positive
+constant scales `v` and both `eta`s by that same constant — the ratio, and
+therefore the detected event set, is unchanged. **Verified directly, not
+only argued**: the same fixed validity mask, with velocity built from the
+same raw geometry at two scales three-fold apart, produces byte-identical
+detected spans (same test, above). So a `CalibrationMap` with a plausible,
+stated, but unvalidated scale — chosen so the recording's own 99th-percentile
+gaze excursion lands at 15°, comfortably inside the mask's own ±20°/±15°
+region — is enough to measure the COUNT honestly, even though it is not
+enough to trust any one event's exact amplitude.
+
+**What the scale is not free of.** `validity_labels`' region and speed
+criteria are absolute-degree thresholds, not scale-invariant, so a
+sufficiently wrong scale changes which samples the mask claims and therefore
+what the detector ever sees. Swept across a plausible range (0.25×–2× the
+chosen scale, mask recomputed at each point, left eye): the run count moved
+between 8,804 and 13,746 against 12,767 at the chosen scale — bounded, not a
+cliff, as long as the scale stays within roughly a factor of two of a value
+that puts the bulk of the trace inside the plausible region. Push it further
+(4× the chosen scale puts 97% of the trace outside the region) and the count
+collapses — the mask doing its job on a scale that is no longer plausible,
+not a flaw in the count.
+
+**What remains uncertain, now that the count itself is not.** This measured
+one detector of seven — the other six may move the per-detector average, in
+either direction, by more than the ~12% the one measured detector agrees
+with the original estimate by, and nothing here should be read as evidence
+about them. And the saccade/microsaccade SPLIT, unlike the run count, is
+*not* scale-invariant: `classify` thresholds an absolute degree amplitude,
+so which runs are `saccade` versus `microsaccade` depends on exactly the
+calibration scale this recording does not have — measured directly, the same
+5,972 left-eye events split 2,499/3,473 at the chosen scale and 3,981/1,991
+at three times it. The run COUNT does not move with that choice; the LABEL
+on any one run can.
 
 ---
 
@@ -670,8 +732,13 @@ else supplies.
    and this machine has no CUDA. If it is minutes rather than seconds, the
    detector belongs behind the same "slow" marker `test_kilosort_defaults_
    split_units.py` already uses.
-3. **The run-count estimate in §5 is not a measurement.** ~126,000 rows per
-   session is extrapolated. Measure it before trusting the storage argument.
+3. ~~The run-count estimate in §5 is not a measurement.~~ **Measured
+   2026-09-01** (§5): 36,842 rows for one session, one detector, three
+   traces — about 12% below the ~294,000 §5 itself reasoned to (this item's
+   own "~126,000" never matched §5's "~294,000" in the first place; that was
+   drift within this document rather than a second estimate, and §5's figure
+   is the one the measurement was checked against). Still open: six of the
+   seven detectors, unmeasured.
 4. **~~Post-saccadic oscillation.~~ Addressed 2026-08-31**, in §2.5 and as
    the `pso` label — after Deubel & Bridgeman's ≤0.5° lens displacement
    measured on a DPI turned it from a refinement into the artifact most likely
