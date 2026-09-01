@@ -452,6 +452,56 @@ calibration scale this recording does not have — measured directly, the same
 at three times it. The run COUNT does not move with that choice; the LABEL
 on any one run can.
 
+### 5.1 The conjunction trace measures a shorter interval, and is not poolable
+
+**A conjunction event's amplitude is smaller than the same event's amplitude
+on either eye — systematically, by construction — and that is a property of
+the trace rather than a caveat.** A conjunction event is the *intersection* of
+the two eyes' events (§4), so its `[run_start, run_stop)` is contained in the
+left eye's own event for that saccade, and its `amplitude_deg`,
+`peak_velocity_deg_s` and duration are all measured over that shorter
+interval, on the left eye's gaze. One eye is named rather than the two
+averaged because no cyclopean trace has ever been calibrated in this
+repository; an average would measure a position nothing here validated.
+
+Measured on the reference recording, Engbert–Kliegl at default parameters:
+the conjunction's **median event amplitude is 0.584° over 11 samples, against
+0.607° over 14 samples on the left-eye trace it is measured from** (same test
+as §5's run counts, Part 3).
+
+That makes the conjunction *coherent* — its boundaries, its measurement and
+its label all describe one interval — and it makes it a **different
+population** from either eye's. **Conjunction rows must not be pooled with
+per-eye rows when §6.5 fits a main sequence**: mixing two amplitude scales
+biases the fit toward the shorter one, and a saturating fit is where that bias
+is least visible in the residuals. `SaccadeMainSequence` is keyed per `trace`
+(§6.5.2), so the shipped tables cannot make this mistake by themselves; an
+ad-hoc query that groups across traces is where it bites.
+
+**The label follows the same interval.** A conjunction run's `label` is
+`classify` applied to that run's own stored `amplitude_deg` — derived once,
+from the number that is stored, so a stored label cannot contradict the
+amplitude stored beside it. Not the two eyes' labels combined: that ranks the
+`saccade`/`microsaccade` pair §1 calls a split rather than a ranking, and
+defaults the `pso` assignment §2.5 says must never be defaulted. Where a
+detector's declared vocabulary is **not** a split by amplitude — any
+vocabulary containing `pso`, `pursuit`, `drift` or `fixation` — the
+conjunction's label is **not decided**, and `EyeDetection.make()` raises
+rather than choosing one: that choice belongs in §6.1's `pso_as` parameter,
+stated per comparison.
+
+> **Recorded 2026-09-01, after a rule that shipped briefly and was wrong.**
+> `_overlapping` first combined the two eyes' labels through a precedence
+> tuple, which fired on 593 of 4,550 binocular intersections (13.0%). Because
+> the label then came from the two eyes' *full-event* amplitudes while the
+> amplitude came from the intersection, **518 of 2,209 stored `saccade` rows
+> carried an amplitude below the cut and 40 of 2,341 `microsaccade` rows
+> carried one at or above it — 12.3% of conjunction event rows, against 0 of
+> 5,972 on the left trace and 0 of 5,592 on the right.** Under the rule above,
+> the same measurement reports 0 of 4,550. Kept on record rather than quietly
+> replaced: both halves of the old rule were individually defensible, only the
+> pair was wrong, and that is not obvious in hindsight.
+
 ---
 
 > **Column names corrected 2026-09-01, during implementation.** This spec's
@@ -613,6 +663,11 @@ exponential by default) and whether **microsaccades join the fit**. Including
 them extends the amplitude range downward and stabilises the saturation
 constant; excluding them matches the classical saccade literature. It is a
 paramset choice because it changes what the number means.
+
+**`trace` is in the key for a reason that is not only symmetry** — §5.1: the
+conjunction's amplitudes are measured over the intersection and are
+systematically smaller than the same events' amplitudes on either eye, so a
+fit pooled across traces mixes two amplitude scales.
 
 ### 6.5.3 Two consequences worth naming
 
