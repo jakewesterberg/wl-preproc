@@ -1064,29 +1064,139 @@ def test_a_detector_with_no_amplitude_labels_is_not_handed_the_threshold():
     assert not hasattr(built, "microsaccade_max_deg")
 
 
-def test_the_shared_threshold_is_registered_once_and_no_detector_shadows_it():
+def test_the_shared_threshold_is_registered_once_and_no_detector_shadows_it(monkeypatch):
     """`register_default_paramsets` merges each detector's own defaults and
     the shared `microsaccade_max_deg` into one dict. Because a detector that
-    consumes the shared key declares a field of that name, `asdict` of its
-    defaults carries a value of its own -- and merged in the wrong order that
-    value would win, letting each detector quietly pick the amplitude cut its
-    rows are split at. Pinned on the dict that is actually registered."""
-    from dataclasses import asdict
+    consumes the shared key declares a field of that name (`_params_for`
+    explains why that is how a shared key reaches a detector at all), `asdict`
+    of its defaults carries a value of its own -- and merged in the wrong
+    order that value would win, letting each detector quietly pick the
+    amplitude cut its own rows are split at.
 
-    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    Run through the REAL `register_default_paramsets`, with `paramset.
+    register` captured rather than reaching a database and with this
+    detector's own default moved off the shared value. Rebuilding the same
+    merge here and asserting on it would be a copy of the code under test:
+    the merge order is the whole subject, so a test that performs it itself
+    cannot fail when production's order changes -- and the two values are
+    equal in reality, so the ordering is load-bearing without being visible
+    in any stored row.
+    """
+    from dataclasses import replace
+
+    from wl_preproc.eye.detect import engbert_kliegl
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.schema import detect as detect_schema, paramset
 
-    # The same merge `register_default_paramsets` performs, with a detector
-    # default deliberately moved off the shared value.
-    detector_defaults = asdict(DEFAULT_EK_PARAMS)
-    detector_defaults["microsaccade_max_deg"] = 99.0
-    registered = {
-        "detector": "engbert_kliegl",
-        **detector_defaults,
-        "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
-    }
+    captured: dict[str, list[dict]] = {}
 
+    def _capture(paramset_type, params):
+        captured.setdefault(paramset_type, []).append(params)
+        return 0
+
+    monkeypatch.setattr(paramset, "register", _capture)
+    monkeypatch.setattr(
+        engbert_kliegl,
+        "DEFAULT_EK_PARAMS",
+        replace(engbert_kliegl.DEFAULT_EK_PARAMS, microsaccade_max_deg=99.0),
+    )
+
+    detect_schema.register_default_paramsets()
+
+    (registered,) = captured["eye_detection"]
     assert registered["microsaccade_max_deg"] == MICROSACCADE_MAX_DEG
+    # Not vacuous: the detector's own default really is the other value, so
+    # the assertion above is deciding between two live candidates.
+    assert engbert_kliegl.DEFAULT_EK_PARAMS.microsaccade_max_deg == 99.0
+    # The detector's OWN parameters still arrive -- the ordering must not
+    # drop them on its way to protecting the shared key.
+    assert registered["lambda_"] == engbert_kliegl.DEFAULT_EK_PARAMS.lambda_
+
+
+class _CapturedInserts:
+    """Enough of an `EyeDetection` for `_insert_trace` to run against without
+    a database: it touches `self.insert1` and `self.Run.insert` and nothing
+    else. Borrowing the real unbound method (rather than reimplementing it)
+    is what makes the test below a test of production code."""
+
+    def __init__(self):
+        self.master: list[dict] = []
+        self.rows: list[dict] = []
+        outer = self
+
+        class _Part:
+            @staticmethod
+            def insert(rows):
+                outer.rows.extend(rows)
+
+        self.Run = _Part
+
+    def insert1(self, row):
+        self.master.append(row)
+
+
+def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0):
+    """`EyeDetection._insert_trace` over a flat trace and a fully-available
+    mask, returning `(master_row, run_rows)`."""
+    from wl_preproc.schema import detect as detect_schema
+
+    gaze = np.zeros((n_samples, 2))
+    gaze[:, 0] = np.linspace(0.0, 4.0, n_samples)  # a real, measurable ramp
+    v = np.zeros((n_samples, 2))
+    v[:, 0] = 100.0
+    offered = np.full(n_samples, None, dtype=object)
+
+    sink = _CapturedInserts()
+    detect_schema.EyeDetection._insert_trace(
+        sink, {"subject": "s"}, "left", gaze, v, offered, intervals, fs_hz
+    )
+    (master,) = sink.master
+    return master, sink.rows
+
+
+def test_insert_trace_stores_the_label_each_interval_carries():
+    """The stage-2 blocker this whole contract exists to remove, asserted
+    directly: `_insert_trace` used to call `classify` on every span, which can
+    only answer `saccade` or `microsaccade`, so a detector declaring
+    `{saccade, pso, fixation}` would have had everything it found relabelled
+    by amplitude.
+
+    A `pso` interval is what makes this test fail against the old code and
+    impossible to satisfy by re-classifying: no amplitude threshold produces
+    `pso`, and design spec section 3.1 gives four of the seven planned
+    detectors vocabularies that include it. Without an interval carrying a
+    label outside the amplitude split, reverting `_insert_trace` to
+    `classify` is an EQUIVALENT mutation for the one detector shipped today,
+    since `classify` over the detector's own span reproduces exactly the
+    label the detector already assigned.
+    """
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    master, rows = _run_insert_trace(
+        [Run(20, 40, Label.PSO), Run(60, 80, Label.MICROSACCADE), Run(100, 140, Label.SACCADE)]
+    )
+
+    stored = [row["label"] for row in rows if row["label"] != "fixation"]
+    assert stored == ["pso", "microsaccade", "saccade"]
+    # The counts are of the labels actually stored, not of intervals seen.
+    assert master["n_saccades"] == 1
+    assert master["n_microsaccades"] == 1
+
+
+def test_insert_trace_measures_only_the_event_labels():
+    """A `pso` run is not an event row: design spec section 5 gives
+    `amplitude_deg`/`peak_velocity_deg_s` to "a run of a `saccade` or
+    `microsaccade` label", and section 6.5 fits the main sequence from
+    exactly those two columns. A `pso` carrying them would put lens ringing
+    into that fit."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    _master, rows = _run_insert_trace([Run(20, 40, Label.PSO), Run(60, 80, Label.SACCADE)])
+
+    by_label = {row["label"]: row for row in rows}
+    assert by_label["pso"]["amplitude_deg"] is None
+    assert by_label["saccade"]["amplitude_deg"] is not None
+    assert by_label["fixation"]["amplitude_deg"] is None
 
 
 def test_the_conjunction_takes_the_higher_precedence_label_of_the_two_eyes():
