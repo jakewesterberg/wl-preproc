@@ -208,9 +208,14 @@ def _land_session(
 
 def _validity_row(subject, dt, eye_value, validity_idx, *, n_samples, frac_blink) -> dict:
     """Every `EyeValidity` column, defaulted the same way a genuinely
-    `computed` row would be -- the four bookkeeping fractions
-    `EyeValidity.make()` itself never fills in stay `None` here too (see
-    `_detection_rows`' own docstring for why)."""
+    `computed` row would be -- all five per-criterion fractions populated,
+    since finding M6 (`eye/detect/validity.py::ValidityMask`) made them so.
+
+    The four beside `frac_blink` are `0.0` rather than a made-up spread: no
+    test in this file reads them (the report's own numbers come from the
+    stored RUNS -- `_detection_rows`' own docstring says why no arithmetic
+    on these five columns could produce them), and a planted number nothing
+    asserts on is a number a later reader has to work out the meaning of."""
     return {
         "subject": subject,
         "session_datetime": dt,
@@ -220,10 +225,10 @@ def _validity_row(subject, dt, eye_value, validity_idx, *, n_samples, frac_blink
         "status": "computed",
         "n_samples": n_samples,
         "frac_blink": frac_blink,
-        "frac_out_of_region": None,
-        "frac_too_fast": None,
-        "frac_frame_gap": None,
-        "frac_short_epoch": None,
+        "frac_out_of_region": 0.0,
+        "frac_too_fast": 0.0,
+        "frac_frame_gap": 0.0,
+        "frac_short_epoch": 0.0,
         "reason": "",
     }
 

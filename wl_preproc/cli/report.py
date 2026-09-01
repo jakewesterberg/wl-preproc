@@ -652,16 +652,18 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     mistake `_eye_rows`' own docstring records being made and fixed once
     already, for `_unreclaimed_sessions`/`_verified_archives`.
 
-    **`EyeValidity.Run` rows, not `EyeValidity`'s own master rows.** The
-    master row's bookkeeping columns beside `frac_blink` (`frac_out_of_
-    region`, `frac_too_fast`, `frac_frame_gap`, `frac_short_epoch`) are
-    permanently `NULL` -- `EyeValidity.make()`'s own comment states why:
-    `validity_labels` folds those three criteria into one combined mask
-    before ever returning, so they are "not separately recoverable" from its
-    result. The "invalid" fraction `_unusable_fractions` below reports has no
-    honest source except the stored RUNS themselves -- the exact per-sample
-    verdicts `EyeValidity.make()` wrote, decoded back rather than
-    approximated from a column that was never populated.
+    **`EyeValidity.Run` rows, not `EyeValidity`'s own master rows -- and
+    that stays true now that all five master fractions are populated.** The
+    five `frac_*` columns are RAW PER-CRITERION counts (`eye/detect/
+    validity.py::ValidityMask`): they overlap, and the first four are taken
+    before dilation grows each rejected region, so they sum to the fraction
+    of samples the mask rejected from neither direction. What
+    `_unusable_fractions` below reports is a different quantity entirely --
+    the fraction of samples carrying each STORED LABEL, where `invalid` is
+    every criterion, plus the dilation halo, plus the dropped short epochs,
+    collapsed into one verdict. No arithmetic on the five columns produces
+    it. The stored runs are the exact per-sample verdicts `EyeValidity.
+    make()` wrote, and they remain its only honest source.
     """
     from wl_preproc.schema import detect as detect_schema
 

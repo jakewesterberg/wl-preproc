@@ -15,7 +15,7 @@ below.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -76,15 +76,64 @@ DEFAULT_VALIDITY_PARAMS = ValidityParams(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ValidityMask:
+    """One eye's mask, plus the per-criterion bookkeeping that says WHICH
+    criterion rejected what -- design spec section 7's "the mask, as runs;
+    per-criterion rejected fractions".
+
+    **A record rather than a bare array, because the return shape was the
+    only obstacle there ever was.** All five criteria are already named
+    locals inside `validity_labels`; four of them were simply never
+    returned, so `schema/detect.py::EyeValidity.make()` wrote `NULL` into
+    four columns section 7 asks it to fill, under a comment calling them
+    "not separately recoverable". They were always recoverable. Nothing
+    about the data was missing, and a mask that rejects most of a session
+    said only that something did.
+
+    `fractions` is keyed by CRITERION name (`blink`, `out_of_region`,
+    `too_fast`, `frame_gap`, `short_epoch`), never by `EyeValidity` column
+    name: this module states criteria, the schema states columns. Those keys
+    are exactly the column suffixes, which is what lets `EyeValidity.make()`
+    spread all five in ONE line instead of writing out five. Five columns
+    fed by hand from one place is precisely the shape a copy-paste error
+    survives in -- every column still looks populated, so nothing downstream
+    reads wrong, and no test that only checks for a number notices.
+
+    **Every fraction is a RAW per-criterion count over all `n` samples,
+    never an apportioned share of the rejection**, because "which criterion
+    did it" is a question only raw counts answer. Two consequences a reader
+    is owed, and neither is a defect:
+
+    - They OVERLAP. One sample can be both `out_of_region` and `too_fast`,
+      and the mask keeps no record of which criterion "got there first"
+      because no such record would mean anything. Summing all five can
+      therefore exceed 1.0, and can exceed the fraction of samples the mask
+      actually rejects.
+    - They are counted at two DIFFERENT stages, deliberately. `blink`,
+      `out_of_region`, `too_fast` and `frame_gap` are counted BEFORE
+      `_dilate` grows every rejected region: the halo dilation adds belongs
+      to no one criterion, and attributing it to whichever criterion it
+      happens to surround would be an invention. `short_epoch` can only be
+      counted after, because dilation is what creates most of the short
+      epochs it drops. So the five can sum BELOW the rejected fraction too.
+    """
+
+    labels: np.ndarray
+    fractions: Mapping[str, float]
+
+
 def validity_labels(
     gaze_deg: np.ndarray,
     velocity_deg_s: np.ndarray,
     data_quality: np.ndarray,
     frame_gaps: Sequence[FrameGap],
     params: ValidityParams,
-) -> np.ndarray:
+) -> ValidityMask:
     """One entry per sample: a `Label` where the sample is unusable, `None`
-    where a detector may label it."""
+    where a detector may label it -- and beside it each criterion's own
+    rejected fraction. See `ValidityMask` for what the five fractions are,
+    and for what they deliberately do not sum to."""
     n = gaze_deg.shape[0]
     blink = data_quality < _FULL_TRACKING_QUALITY
 
@@ -121,7 +170,14 @@ def validity_labels(
 
     unusable = blink | outside | too_fast | across_gap
     unusable = _dilate(unusable, params.dilate_samples)
-    unusable |= _short_valid_epochs(unusable, params.min_epoch_samples)
+    # Bound to a name rather than folded straight into `unusable`, because
+    # `_short_valid_epochs`' own docstring says it is returned as its own
+    # mask "so the caller can see that these samples were dropped for being
+    # SHORT rather than for a tracking failure". `fractions["short_epoch"]`
+    # below is the caller finally doing that; until it existed, that
+    # distinction was computed on every session and immediately discarded.
+    short_epoch = _short_valid_epochs(unusable, params.min_epoch_samples)
+    unusable = unusable | short_epoch
 
     # Walked in REVERSE precedence order, so the most specific label is
     # assigned last and wins. `MASK_PRECEDENCE` is what decides that, not the
@@ -135,7 +191,39 @@ def validity_labels(
     out = np.full(n, None, dtype=object)
     for label in reversed(MASK_PRECEDENCE):
         out[claimed[label]] = label
-    return out
+    return ValidityMask(
+        labels=out,
+        # ONE mapping, built here beside the criteria it names rather than
+        # reassembled at the call site -- see `ValidityMask` for why five
+        # hand-written lines somewhere else is the shape that hides a
+        # copy-paste error.
+        #
+        # `blink` is the raw criterion, not `out == Label.BLINK`. The two
+        # are the same set by construction (BLINK is assigned last, so every
+        # raw-blink sample carries it), and naming the criterion is what
+        # makes this line say the same kind of thing the four beside it say
+        # -- a fraction OF A CRITERION, not of a rendered verdict.
+        fractions={
+            "blink": _fraction(blink),
+            "out_of_region": _fraction(outside),
+            "too_fast": _fraction(too_fast),
+            "frame_gap": _fraction(across_gap),
+            "short_epoch": _fraction(short_epoch),
+        },
+    )
+
+
+def _fraction(mask: np.ndarray) -> float:
+    """The share of all samples one criterion rejected; `0.0` for a
+    zero-length recording.
+
+    `mask.mean()` of an empty array is NaN and a NumPy "mean of empty slice"
+    warning. A recording with no samples has nothing to attribute to any
+    criterion, and a stated zero in a `double` column is honest where a NaN
+    nobody declared -- which compares false against itself, and which the
+    daily report would render as `nan%` -- is not.
+    """
+    return float(mask.mean()) if mask.size else 0.0
 
 
 def _dilate(mask: np.ndarray, samples: int) -> np.ndarray:
@@ -155,7 +243,15 @@ def _short_valid_epochs(unusable: np.ndarray, minimum: int) -> np.ndarray:
     """Valid stretches too short to hand a detector. Returned as their own
     mask rather than folded into `unusable` in place, so the caller can see
     that these samples were dropped for being SHORT rather than for a tracking
-    failure -- two different facts that must not render identically."""
+    failure -- two different facts that must not render identically.
+
+    **That sentence is now true of a real caller, and for a while it was
+    not.** `validity_labels` above keeps this mask as `ValidityMask.
+    fractions["short_epoch"]`, which `EyeValidity.make()` stores as
+    `frac_short_epoch`; before that column was populated, every caller
+    discarded the distinction on the next line and this docstring described
+    an intent nothing downstream realised.
+    """
     out = np.zeros_like(unusable)
     if minimum <= 1:
         return out

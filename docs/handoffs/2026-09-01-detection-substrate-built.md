@@ -190,14 +190,15 @@ brief pointed at it as the model to follow, and it is).
   `EyeDetection` row landed in the last 24 h, saccade/microsaccade counts
   per trace.
 - **`### Unusable samples (lower bound, running total)`** — `blink` and
-  `invalid` fractions, computed from `EyeValidity.Run` rows directly (not
-  the master row's own bookkeeping columns, which are permanently `NULL`
-  beside `frac_blink` — `EyeValidity.make()`'s own comment explains why:
-  `validity_labels` folds three criteria into one combined mask before
-  returning, so they are not separately recoverable from the master row).
-  Stated explicitly as a lower bound: OpenIrisDPI's five criteria ask
-  whether the tracker itself reported trouble, never whether a surviving
-  sample is actually correct.
+  `invalid` fractions, computed from `EyeValidity.Run` rows directly rather
+  than from the master row's own `frac_*` bookkeeping columns. As built,
+  four of those five columns were permanently `NULL`; finding M6 populated
+  all five, and the report still reads the runs, because the five are RAW
+  per-criterion counts that overlap and no arithmetic on them yields the
+  fraction of samples carrying a stored label (`cli/report.py::
+  _detection_rows`). Stated explicitly as a lower bound: OpenIrisDPI's five
+  criteria ask whether the tracker itself reported trouble, never whether a
+  surviving sample is actually correct.
 - **`### Detection refused (7 d)`** — distinct causes, distinct lines, never
   a collapsed `refused: N` (Controller ruling B's shape, carried over from
   the Eye section's "No canonical gaze" verbatim, including its own 7-day

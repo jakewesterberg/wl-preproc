@@ -614,6 +614,62 @@ def test_the_runs_tile_the_whole_trace(stepped_session):
             assert earlier["label"] != later["label"]
 
 
+_VALIDITY_FRACTION_COLUMNS = (
+    "frac_blink", "frac_out_of_region", "frac_too_fast",
+    "frac_frame_gap", "frac_short_epoch",
+)
+
+
+def test_every_per_criterion_fraction_reaches_the_master_row(stepped_session):
+    """Finding M6. Design spec section 7 asks `EyeValidity` for
+    "per-criterion rejected fractions", plural; four of the five shipped as
+    hardcoded `None` under a comment calling them "not separately
+    recoverable", though `validity_labels` computed all five as named locals
+    and simply did not return them.
+
+    `tests/eye/detect/test_validity.py` is where each fraction is pinned to
+    its own criterion, one planted criterion at a time. What this test adds
+    is the half that runs through a real database: five populated columns on
+    a really-populated row, for both eyes, with `frac_blink` checked against
+    the stored RUNS rather than against itself. That cross-check is exact
+    and not approximate-by-luck: `Label.BLINK` is assigned last
+    (`MASK_PRECEDENCE`), so the stored `blink` runs cover exactly the raw
+    blink criterion's samples and nothing else.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    for eye_value in ("left", "right"):
+        row = (detect.EyeValidity & {**session_key, "eye": eye_value}).fetch1()
+        assert row["status"] == "computed"
+
+        for column in _VALIDITY_FRACTION_COLUMNS:
+            assert row[column] is not None, f"{eye_value}: {column} still NULL"
+            assert 0.0 <= row[column] <= 1.0, f"{eye_value}: {column} = {row[column]}"
+
+        blink_samples = sum(
+            run["run_stop"] - run["run_start"]
+            for run in (detect.EyeValidity.Run & {**session_key, "eye": eye_value}).to_dicts()
+            if run["label"] == "blink"
+        )
+        assert row["frac_blink"] == pytest.approx(blink_samples / row["n_samples"])
+
+
+def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
+    """The other half of the column comment: `NULL` on a refused row, and
+    only there. A refused row has no mask at all, so there is no criterion
+    to attribute anything to -- and `0.0` would read as "this criterion
+    rejected nothing", which is a measurement this row never made."""
+    from wl_preproc.schema import detect
+
+    session_key, _report = uncalibrated_session
+    for eye_value in ("left", "right"):
+        row = (detect.EyeValidity & {**session_key, "eye": eye_value}).fetch1()
+        assert row["status"] == "refused"
+        for column in _VALIDITY_FRACTION_COLUMNS:
+            assert row[column] is None, f"{eye_value}: refused row has {column} populated"
+
+
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
     from wl_preproc.schema import detect
 
@@ -868,7 +924,7 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     quality[10:15] = 0.0  # a blink
     gaze[30:35, 0] = 100.0  # outside the region -> invalid
 
-    labels = validity_labels(gaze, velocity_deg_s, quality, (), DEFAULT_VALIDITY_PARAMS)
+    labels = validity_labels(gaze, velocity_deg_s, quality, (), DEFAULT_VALIDITY_PARAMS).labels
 
     present = {label for label in labels if label is not None}
     assert Label.FIXATION not in present
@@ -1499,7 +1555,13 @@ def _scaled_affine_map(scale: float):
 def _mask_and_velocity(raw_xy, quality, fs_hz, frame_gaps, scale):
     """One eye's gaze at `scale`, its velocity, and its validity mask -- the
     three real functions `EyeValidity.make()` itself calls (`apply_map`,
-    `velocity`, `validity_labels`), run here without a database."""
+    `velocity`, `validity_labels`), run here without a database.
+
+    The MASK, meaning `ValidityMask.labels` alone: this test measures run
+    counts and detected spans, and `ValidityMask`'s per-criterion fractions
+    are `EyeValidity.make()`'s own bookkeeping, not an input to anything
+    below. Returning the labels array keeps every helper downstream
+    (`_detect`, `_encode`) taking the per-sample mask they always took."""
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
     from wl_preproc.eye.detect.velocity import velocity
@@ -1507,7 +1569,7 @@ def _mask_and_velocity(raw_xy, quality, fs_hz, frame_gaps, scale):
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
     mask = validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS)
-    return gaze, v, mask
+    return gaze, v, mask.labels
 
 
 def _bounds(intervals):

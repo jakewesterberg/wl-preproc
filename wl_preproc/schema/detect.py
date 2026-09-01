@@ -113,6 +113,14 @@ class EyeValidity(dj.Computed):
     # match OpenIrisDPI's own five (design spec section 2): eye open, gaze
     # within a plausible region, plausible speed, no frame discontinuity, and
     # short surviving epochs dropped.
+    #
+    # RAW per-criterion counts over all `n_samples`, never apportioned
+    # shares: one sample can be rejected by two criteria at once, so these
+    # five can sum ABOVE the fraction of samples the mask actually rejects
+    # -- and the first four are counted before dilation grows each rejected
+    # region, so they can sum BELOW it too. `eye/detect/validity.py::
+    # ValidityMask` states both in full. `NULL` on a refused row, which has
+    # no mask at all, and only there.
     frac_blink=null         : double
     frac_out_of_region=null : double
     frac_too_fast=null      : double
@@ -238,10 +246,11 @@ class EyeValidity(dj.Computed):
 
             gaze = gaze_trace(path, file_eye, map_)
             quality = read_columns(path, [f"{file_eye}DataQuality"])[f"{file_eye}DataQuality"]
-            labels = validity_labels(
+            mask = validity_labels(
                 gaze, velocity(gaze, recording.fs_hz), quality,
                 recording.frame_gaps, params,
             )
+            labels = mask.labels
             # `validity_labels` returns `None` for a usable sample; encoded
             # here as `FIXATION` ONLY for storage, because the mask's own
             # runs must still tile `[0, n_samples)` -- `runs_from_labels`
@@ -256,17 +265,31 @@ class EyeValidity(dj.Computed):
             runs = runs_from_labels(np.where(labels == None, Label.FIXATION, labels))  # noqa: E711
             self.insert1({
                 **row, "status": "computed", "n_samples": len(labels),
-                "frac_blink": float(np.mean(labels == Label.BLINK)),
-                # The other four criteria are not separately recoverable:
-                # `validity_labels` folds `outside`/`too_fast`/`across_gap`
-                # into one combined `unusable` mask before returning, so
-                # their individual fractions are not something this method
-                # can honestly compute from its return value alone --
-                # `None` here is the same "not yet knowable" this codebase
-                # uses elsewhere (e.g. `EyeCalibration.conditioning_second_
-                # order`) rather than a fabricated number.
-                "frac_out_of_region": None, "frac_too_fast": None,
-                "frac_frame_gap": None, "frac_short_epoch": None,
+                # All five of design spec section 7's "per-criterion
+                # rejected fractions". Four of them were `None` here, under
+                # a comment claiming `validity_labels` folded them into one
+                # combined mask before returning and so made them "not
+                # separately recoverable" -- true of the RETURN SHAPE, never
+                # of the data: all five were already named locals in that
+                # function. It now returns a `ValidityMask` carrying them.
+                #
+                # ONE spread, not five hand-written lines. `ValidityMask.
+                # fractions` is keyed by criterion name and this table's
+                # columns are `frac_` + that name, so the pairing happens
+                # once, in the function that owns the criteria. Five columns
+                # written out by hand from a single source is the shape a
+                # copy-paste error survives in: every column still looks
+                # populated. A key naming no column raises on insert here
+                # rather than disappearing.
+                #
+                # These are RAW per-criterion counts. They overlap, and they
+                # are taken at two different stages of the mask's own
+                # construction, so they do not sum to the rejected fraction
+                # from either side -- `ValidityMask`'s docstring states both,
+                # and this table's own column comment above carries the
+                # short version for a reader looking only at the schema.
+                **{f"frac_{criterion}": value
+                   for criterion, value in mask.fractions.items()},
                 "reason": "",
             })
             self.Run.insert(
