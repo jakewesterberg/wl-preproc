@@ -200,8 +200,9 @@ trusting any result a second time; the corrected mutation is caught. Worth
 naming because it is exactly the failure mode "mutate, don't read" exists
 to catch, applied to the mutation tool itself.
 
-**12 of 14 caught.** Two survived, both examined and neither is a gap in
-what the report needs to guarantee:
+**12 of 14 caught, and one of the two survivors has since been closed.**
+Both were examined; one is genuinely equivalent, the other was a real gap
+whose write-up argued wrongly that it could not be closed:
 
 - **`m1` (the validity-run-label guard `if row["label"] in counts:` widened
   to always-true, with unmatched labels added to the dict under their own
@@ -213,20 +214,25 @@ what the report needs to guarantee:
   actually stops blink/invalid from being counted — and that one is caught
   hard (5 of 7 tests fail).
 - **`m4` (the `total == 0` fallback value, `0.0` changed to `0.25`).**
-  Survived, and is a real, narrow, and — on reflection — defensible gap.
-  The fallback only fires when the running total across every
-  `EyeValidity.Run` row this whole shared test suite has ever written is
-  genuinely zero, and `test_the_invalid_and_blink_fractions_are_shown` (the
-  one test that checks these numbers) always inserts real data of its own
-  before asserting, so the branch it exercises never has the exercised
-  before-state be visibly zero. Pinning "reads exactly 0.0% before any data
-  exists" in an order-independent way would need either a fragile
-  assumption about collection order across the whole shared-database suite,
-  or a fresh, isolated database per test — the exact fragility this file's
-  own delta-based tests (mirroring `test_eye_report.py`'s) are built to
-  avoid. Named here rather than silently accepted: the fallback's *value*
-  is unverified, though its *existence* (guarding a real division by zero)
-  is exercised on every run via this file's own first test.
+  Survived task-9's own round, and was written up here as a defensible gap
+  needing "either a fragile assumption about collection order across the
+  whole shared-database suite, or a fresh, isolated database per test".
+  **That reasoning was wrong, and the review round said so.** It treated a
+  pure function as though it were a database query. `_unusable_fractions`
+  takes a plain `list[dict]`, touches no schema, and reaches the fallback on
+  `_unusable_fractions([])` — one call, no fixture, no ordering assumption,
+  no container. `tests/cli/test_archive_cli.py` already imports a private
+  helper (`_expected_digests`) the same way, so it is not even a departure
+  from convention.
+  **Closed**, by `test_an_empty_pipeline_reports_zero_unusable_rather_than_
+  a_wrong_number`; the `0.0`→`0.25` mutation now fails that test and only
+  that test. The gap was real rather than equivalent — a freshly initialised
+  deployment with no `EyeValidity.Run` row yet would have rendered a
+  confident 25% unusable out of no data at all, at exactly the moment
+  someone reads this section to check the pipeline works.
+  Recorded rather than quietly amended, because the mistake is the
+  instructive part: an argument for why a gap could not be closed went
+  unchallenged for as long as nobody tried to close it.
 
 The other twelve — counting run-lengths vs. runs, summing samples vs. rows,
 swapping the blink/invalid keys, swapping `_detection_rows`' own tuple
@@ -246,8 +252,14 @@ exists to name.
 
 ## Concerns
 
-- **`wl.yaml`'s `status.next` field overstates this plan's actual scope.**
-  It currently reads "Saccade detection — Engbert–Kliegl, Otero-Millan and
+- **~~`wl.yaml`'s `status.next` field overstates this plan's actual
+  scope.~~ Corrected 2026-09-01 in `17d1dbd`**, by the controller, after
+  this handoff flagged it. `status.phase` now says the substrate is built on
+  its branch and not yet merged; `status.next` describes stage 2 and states
+  explicitly that stage 1 shipped one detector and declares no `torch`.
+  `third_party` was correct throughout and is unchanged; `wl-check` reports
+  no findings. The original text, for the record:
+  It read "Saccade detection — Engbert–Kliegl, Otero-Millan and
   U'n'Eye, and their three-way agreement as a data-quality metric... Ruled
   2026-08-31: all three, with PyTorch declared properly". Only
   Engbert–Kliegl shipped; the other two detectors, the agreement metric,

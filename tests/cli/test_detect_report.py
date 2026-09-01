@@ -550,3 +550,26 @@ def test_the_refused_list_windows_to_7_days_independently_of_the_24h_events_wind
         "own 24h boundary"
     )
     assert subject_old not in refused, "a session ingested 9 days ago still appears in the 7d list"
+
+
+def test_an_empty_pipeline_reports_zero_unusable_rather_than_a_wrong_number():
+    """`_unusable_fractions` is a PURE function over a list of rows, so the
+    `total == 0` branch is reachable without a database at all.
+
+    Task 9's mutation testing left this branch uncovered and its report
+    argued the gap needed "either a fragile assumption about collection
+    order... or a fully isolated database per test". That is not so, and the
+    review round found it: the helper takes a plain `list[dict]`, touches no
+    schema, and the empty case is one call. `tests/cli/test_archive_cli.py`
+    already imports `_expected_digests` from `wl_preproc.archive.verify` the
+    same way, so reaching for a private helper here follows the file's own
+    neighbours rather than departing from them.
+
+    The branch matters on a freshly initialised deployment, which is exactly
+    when someone reads this section to check the pipeline is working: with no
+    `EyeValidity.Run` row written yet, a wrong fallback would render a
+    confident unusable percentage out of no data whatsoever.
+    """
+    from wl_preproc.cli.report import _unusable_fractions
+
+    assert _unusable_fractions([]) == {"blink": 0.0, "invalid": 0.0}
