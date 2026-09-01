@@ -176,6 +176,15 @@ def daemon_module(dj_conn, prefix):
     key_source ever names a candidate session at all -- a silent, empty
     no-op rather than an error, and the trap `test_eye_populate.py`'s own
     module docstring names for an empty `key_source`.
+
+    **Still needed even though `daemon.run_once()` now registers these
+    itself** (whole-branch review, finding H1 -- production had no such call
+    at all, and this fixture is why nothing here noticed). Do not delete it:
+    `out_of_order_session` below reaches `EyeValidity.populate()` WITHOUT a
+    preceding `run_once()`, deliberately, and would silently find no
+    candidate at all if this were the only place registration happened.
+    `daemon.register_default_paramsets` is where production's own claim is
+    tested, by a subprocess that registers nothing itself.
     """
     from wl_preproc import daemon
     from wl_preproc.schema import detect

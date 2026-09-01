@@ -8,9 +8,14 @@ module-scoped `schemas` fixture that activates exactly the module this file
 needs, and `enum_values` taken as the `tests/schema/conftest.py` fixture
 (never imported -- no such importable module exists).
 
-Both tables ship with an empty `key_source` in this task; `make()` is
-Task 7. See `EyeValidity.key_source`'s own docstring for why an empty
-`key_source` is deliberate here rather than a placeholder to fix later.
+This file tests the DECLARATION alone -- column types, key composition, the
+label enum -- and never populates. Both tables shipped with an empty
+`key_source` in Task 6 and this docstring said so; commit `314d82b` gave
+both a real `key_source` and a real `make()`, and that sentence stayed
+behind. Corrected 2026-09-01, alongside the same claim in
+`daemon._computed_tables()` (whole-branch review, finding M9).
+`tests/schema/test_detect_populate.py` is where both tables are actually
+run, through `daemon.run_once()`.
 """
 
 from __future__ import annotations
@@ -145,8 +150,10 @@ def test_the_two_paramset_references_can_name_different_paramset_types(
     `IntegrityError`, because the shared `paramset_type` column cannot equal
     two different strings at once.
 
-    `EyeDetection` is `dj.Computed` with no `make()` yet (Task 7), so
-    `insert1` is refused outside a `make()` call -- see
+    `EyeDetection` is `dj.Computed`, so `insert1` is refused outside a
+    `make()` call -- a property of the TABLE TYPE, not of whether a `make()`
+    is defined. This used to say "with no `make()` yet (Task 7)", which
+    stopped being true at `314d82b` and never named the real reason -- see
     `tests/schema/test_guardrails.py`'s own `_build_parents` comment. A
     `dj.FreeTable` carries no such restriction (a generic wrapper around a
     connection and a table name, with no `_allow_insert` attribute of its

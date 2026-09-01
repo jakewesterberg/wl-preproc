@@ -114,21 +114,35 @@ def _computed_tables() -> list:
     reason it always should have been rather than merely because nothing yet
     depended on it.
 
-    **`detect.EyeValidity`/`detect.EyeDetection` are registered inert, the
-    identical shape `eye.EyeCalibration`/`eye.EyeQuality` were under Task 9.**
-    The 2026-08-31 saccade-detection design's own Task 6 ships both as schema
-    only -- `make()` is Task 7, and each overrides `key_source` to stay
-    permanently empty for the exact reason recorded above and in
-    `wl_preproc/schema/eye.py`'s own git history (commit 3a8a121): a
-    `dj.Computed` with a real `key_source` and no `make()` raises
-    `NotImplementedError` on every session already landed the moment it
-    joins this list. Placed after the eye tables and before
-    `TimingProvenance` for the same reason `eye.EyeCalibration`/
-    `eye.EyeQuality` were: an empty `key_source` means position is not yet
-    load-bearing, so it is chosen for where it will belong once Task 7 gives
-    both a real one (validity and detection both need this session's own
-    calibration and gaze, which is downstream of everything already placed
-    above this point), not because anything below reads their output today.
+    **`detect.EyeValidity`/`detect.EyeDetection` were registered inert and
+    are not any more, and unlike the eye tables above their POSITION here IS
+    load-bearing.** The 2026-08-31 saccade-detection design's own Task 6
+    shipped both as schema only -- `make()` was Task 7, and each overrode
+    `key_source` to stay permanently empty for the exact reason recorded
+    above and in `wl_preproc/schema/eye.py`'s own git history (commit
+    3a8a121): a `dj.Computed` with a real `key_source` and no `make()`
+    raises `NotImplementedError` on every session already landed the moment
+    it joins this list. Commit `314d82b` gave both a real `key_source` and a
+    real `make()`. This paragraph, the comment beside the two entries below,
+    and `_PROJECT_SCHEMA_MODULES`' own comment all went on saying the
+    opposite until 2026-09-01 (whole-branch review, finding M9); the `eye`
+    paragraph above WAS updated when its own tables landed, so the pattern
+    was known and this one was simply missed.
+
+    **What their position now buys, precisely.**
+    `detect.EyeValidity.key_source` requires `eye.EyeCalibration` to have RUN
+    (whole-branch review, finding M5 -- see that property's own docstring),
+    and `detect.EyeDetection.key_source` is built from `EyeValidity`'s own
+    rows. So both must stay BELOW `eye.EyeCalibration`, and in this order.
+    The M5 restriction is what decides how badly a reordering hurts, and it
+    is worth naming both states: WITHOUT it, `EyeValidity` placed above
+    `eye.EyeCalibration` refused both eyes on the first pass with "no usable
+    calibration, so gaze is undefined" and never recomputed -- a PERMANENT
+    row that the very next pass makes false, with no error reported. WITH
+    it, the same reordering instead costs one whole `run_once` pass per
+    session, silently, because the `key_source` names no candidate until
+    calibration has landed. The restriction is the guard against the first;
+    this ordering is what avoids the second.
     """
     return [
         timebase.SystemTimebase,
@@ -145,8 +159,12 @@ def _computed_tables() -> list:
         # why their position here still is not what makes them correct.
         eye.EyeCalibration,
         eye.EyeQuality,
-        # Registered inert as of Task 6 -- see this function's own docstring
-        # above for why an empty key_source keeps this harmless until Task 7.
+        # Real as of `314d82b`, and BELOW `eye.EyeCalibration` on purpose:
+        # `EyeValidity.key_source` requires that table to have run, and
+        # `EyeDetection.key_source` is built from `EyeValidity`'s own rows.
+        # See this function's own docstring for what moving either of these
+        # two up actually costs -- it is not the same before and after the
+        # M5 restriction, and both answers are recorded there.
         detect.EyeValidity,
         detect.EyeDetection,
         # Last: it counts segments and rejections, so it must run after
@@ -233,9 +251,13 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # module. A fourth case shaped like `eye`, not like `ephys`/`archive`/
 # `events`: `detect` declares two real `@schema`-decorated `dj.Computed`
 # tables (`EyeValidity`, `EyeDetection`), so it owns real `~jobs` tables too.
-# Task 6 ships both schema-only, with a permanently empty `key_source` for
-# the identical reason recorded above for Task 9's `eye` tables; a later
-# task gives both a real `key_source` and `make()`.
+# Task 6 shipped both schema-only, with a permanently empty `key_source`, for
+# the identical reason recorded above for Task 9's `eye` tables; commit
+# `314d82b` gave both a real `key_source` and `make()`, and they populate for
+# real now. `detect` is also the one module named in `_PARAMSET_MODULES`
+# below -- its two tables are the first `dj.Computed` in this project whose
+# `key_source` needs a `paramset.ParamSet` row to exist before it names any
+# candidate at all.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
     ("core", core),
