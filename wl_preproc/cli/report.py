@@ -148,6 +148,17 @@ _EYE_ONLINE_GAP_NOTE = (
     "session actually resolved to"
 )
 
+# Task-9 brief: `_unusable_fractions`' own docstring has the full reasoning;
+# this is the sentence rendered beside the numbers themselves, the same
+# "name the gap rather than let a heading alone imply it is closed" move
+# `_EYE_ONLINE_GAP_NOTE` above makes for a different one.
+_DETECTION_LOWER_BOUND_NOTE = (
+    "these are OpenIrisDPI's own signal-quality checks, not a correctness "
+    "check on what the tracker reported -- a sample the tracker mis-measured "
+    "but did not itself flag stays eligible for detection, so the true "
+    "unusable fraction can only be higher than what is shown here"
+)
+
 
 def _compact(value) -> str:
     """One `detail` value as a single line, bounded, never raising.
@@ -623,6 +634,70 @@ def _eye_row_line(
             calibration_bit += f" (note: {calibration['reason']})"
 
     return f"- {who} — {quality_bit} — {calibration_bit}"
+
+
+def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict]]:
+    """Every `EyeDetection` row on record, and every `EyeValidity.Run` row on
+    record: `(detection_rows, validity_run_rows)`. Query only, no rendering --
+    `build_report` below does that, the same split `_eye_rows` above uses.
+
+    **Not part of `Readings`/`gather_readings` (task-9 brief, following the
+    Eye section's own Controller ruling A above).** The responder reads none
+    of these values -- `EyeValidity`/`EyeDetection` name nothing `contracts/
+    protocol.py` defines a wire shape for -- and `gather_readings` runs on
+    every wl.works poll under the single global lock that also serialises
+    job accepts (`responder/server.py`'s own docstring). Putting either
+    query there would add its cost to that hot, lock-held path for nothing,
+    forever, growing as this pipeline's session count grows -- the exact
+    mistake `_eye_rows`' own docstring records being made and fixed once
+    already, for `_unreclaimed_sessions`/`_verified_archives`.
+
+    **`EyeValidity.Run` rows, not `EyeValidity`'s own master rows.** The
+    master row's bookkeeping columns beside `frac_blink` (`frac_out_of_
+    region`, `frac_too_fast`, `frac_frame_gap`, `frac_short_epoch`) are
+    permanently `NULL` -- `EyeValidity.make()`'s own comment states why:
+    `validity_labels` folds those three criteria into one combined mask
+    before ever returning, so they are "not separately recoverable" from its
+    result. The "invalid" fraction `_unusable_fractions` below reports has no
+    honest source except the stored RUNS themselves -- the exact per-sample
+    verdicts `EyeValidity.make()` wrote, decoded back rather than
+    approximated from a column that was never populated.
+    """
+    from wl_preproc.schema import detect as detect_schema
+
+    detect_schema.activate(prefix=prefix)
+    return detect_schema.EyeDetection.to_dicts(), detect_schema.EyeValidity.Run.to_dicts()
+
+
+def _unusable_fractions(validity_run_rows: list[dict]) -> dict[str, float]:
+    """`{"blink": fraction, "invalid": fraction}` -- the RUNNING TOTAL, across
+    every `EyeValidity.Run` row this pipeline has ever written (every eye of
+    every session masked so far), of samples carrying that label. Pre-seeded
+    at `0.0` rather than built from whatever labels happen to appear, the
+    same reason `source_counts`/`model_counts` above pre-seed every key:
+    zero real unusable samples so far must read `0.0%`, not vanish from the
+    section entirely.
+
+    **A LOWER bound, stated as one wherever this is rendered
+    (`_DETECTION_LOWER_BOUND_NOTE`), never the whole truth.** `validity_
+    labels`' five criteria (design spec section 2) are OpenIrisDPI's own
+    signal-quality checks -- did the tracker itself report trouble, did gaze
+    leave a plausible screen region, and so on. None of them asks whether a
+    SURVIVING sample is actually correct, so a sample the tracker
+    mis-measured but never flagged reads as usable here exactly as a
+    genuinely good one does.
+
+    Unwindowed, exactly like the Eye section's own `calibration_source`/
+    `calibration_model` breakdowns above: two numbers that cannot grow
+    without bound, not a per-session listing, so a running total is the
+    right shape rather than a 24 h or 7 d slice of it.
+    """
+    total = sum(row["run_stop"] - row["run_start"] for row in validity_run_rows)
+    counts = {"blink": 0, "invalid": 0}
+    for row in validity_run_rows:
+        if row["label"] in counts:
+            counts[row["label"]] += row["run_stop"] - row["run_start"]
+    return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid")}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1184,6 +1259,83 @@ def build_report(
             f"above for the all-time total), so this section shows the last "
             f"{_QUARANTINE_WINDOW_DAYS} days only._"
         ]
+
+    # Detection. Computed HERE and not in `gather_readings` -- see
+    # `_detection_rows`'s own docstring for why, the identical reasoning
+    # `_eye_rows` above already gives for the Eye section.
+    detection_rows, validity_run_rows = _detection_rows(prefix=prefix)
+    unusable = _unusable_fractions(validity_run_rows)
+
+    lines += ["", "## Detection", ""]
+
+    # Windowed to the same 24 h `ingested_keys` the Eye section's own
+    # per-session-per-eye list uses (computed above): the question is "what
+    # did last night's sessions detect", not "everything this pipeline has
+    # ever detected" -- an `EyeDetection` row is PERMANENT once written
+    # (inherited `dj.Computed` contract; see `EyeCalibration.key_source`'s
+    # own docstring, quoted in full by `_eye_rows` above, for the identical
+    # reasoning applied to a sibling table), so an unwindowed list here
+    # would only ever grow.
+    events = sorted(
+        (
+            row for row in detection_rows
+            if row["status"] == "computed"
+            and (row["subject"], row["session_datetime"]) in ingested_keys
+        ),
+        key=lambda row: (row["subject"], row["session_datetime"], row["trace"]),
+    )
+    lines += [f"### Events per session per trace (24 h) — {len(events)}", ""]
+    lines += [
+        f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"{row['trace']}: {row['n_saccades']} saccades, "
+        f"{row['n_microsaccades']} microsaccades"
+        for row in events
+    ] or ["- none"]
+
+    # A LOWER bound, and it says so (`_unusable_fractions`'/`_DETECTION_
+    # LOWER_BOUND_NOTE`'s own docstrings). Unwindowed running total, exactly
+    # like the Eye section's own "Calibration source"/"Calibration model"
+    # breakdowns: two numbers that cannot grow without bound, not a
+    # per-session listing.
+    lines += ["", "### Unusable samples (lower bound, running total)", ""]
+    lines += [f"- {label}: {unusable[label]:.1%}" for label in ("blink", "invalid")]
+    lines += [f"- _{_DETECTION_LOWER_BOUND_NOTE}._"]
+
+    # Distinct causes, distinct lines -- never a collapsed "refused: N"
+    # (Controller ruling B's own shape, carried over unchanged from the Eye
+    # section's "No canonical gaze" a few lines above -- see its own
+    # comment). Windowed to the identical 7 days `no_gaze_ingested_keys`
+    # already computed above, for the identical reason: an `EyeDetection`
+    # refusal is a PERMANENT row, `Quarantine`-shaped rather than
+    # re-evaluated-live-shaped.
+    refused_all = sorted(
+        (row for row in detection_rows if row["status"] == "refused"),
+        key=lambda row: (row["subject"], row["session_datetime"], row["trace"]),
+    )
+    refused = [
+        row for row in refused_all
+        if (row["subject"], row["session_datetime"]) in no_gaze_ingested_keys
+    ]
+    older_refused = len(refused_all) - len(refused)
+
+    lines += ["", f"### Detection refused ({_QUARANTINE_WINDOW_DAYS} d) — {len(refused)}", ""]
+    lines += [
+        f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"{row['trace']}: {row['reason']}"
+        for row in refused
+    ] or ["- none"]
+    if older_refused:
+        lines += [
+            f"- _{older_refused} older row(s) not shown — a refused detection "
+            f"is a permanent row, so this section shows the last "
+            f"{_QUARANTINE_WINDOW_DAYS} days only._"
+        ]
+
+    # No agreement line in this stage: one detector (Engbert-Kliegl) is all
+    # that is registered, and one detector cannot disagree with anything.
+    # A line that would always read `1.00` is worse than an absent one --
+    # it looks like a measurement. Stage 2 adds a second detector, and that
+    # is where its agreement metric belongs.
 
     lines += ["", "## Not yet reported", ""]
     lines += [f"- **{name}** — {why}" for name, why in _NOT_YET_REPORTED]
