@@ -12,6 +12,37 @@ wrong or late.
 
 Full width goes to the sync box and NI; Intan RHS receives the strobe only,
 because its 16 digital inputs cannot fit 16 data lines plus strobe plus barcode.
+
+**Ownership splits on decodability versus meaning**, per wl-expcontroller's
+ADR-0007 (`docs/design/decisions/ADR-0007-event-vocabulary-ownership.md`,
+accepted 2026-08-31). If getting it wrong makes a recording UNDECODABLE it is
+this module's; if it makes the recording UNINTERPRETABLE it is `wl-mllib`'s:
+
+    framing, escapes, checksum, payload word counts, DVA encoding   here
+    Marker 1-255, session/block/trial structure                     here
+    TaskEvent 256-4095, lab-wide task-event semantics               wl-mllib
+    TaskTypeCode 100+, lab-defined task identities                  wl-mllib
+    task-specific / condition 4096-32767                            wl-mllib
+
+That ADR was written because two manifests contradicted each other:
+`wl-mllib/wl.yaml` published `task-event-vocabulary` claiming "wl-preproc reads
+event handling from here rather than defining it", while this file was already
+a frozen interface defining it. `wlo validate` cannot catch that -- it checks
+that a published name resolves to exactly one publisher, not that a description
+is true -- so it was found by reading both repositories.
+
+**One clause is not settled.** Moving `TaskEvent` 256-4095 to `wl-mllib` needs
+this repository's agreement, because `TaskEvent` 256-259 are allocated HERE
+(below) and ownership moving is explicitly not permission to renumber. Until
+that is answered, wl-expcontroller allocates only in 4096-32767, whose
+ownership is undisputed, so a decline costs no rework there.
+
+Consequences of the rule that bind this module either way: no value is ever
+renumbered; a NEW ESCAPE is an amendment to a frozen layer, while a new task
+event is not; and nobody writes a second decoder -- wl-expcontroller tests
+conformance by round-tripping its emitted streams through `decode_stream`
+below, which is why its `wl_expcontroller/encode.py` may mirror
+`PAYLOAD_WORD_COUNTS` without becoming a second source of truth.
 """
 
 from __future__ import annotations
