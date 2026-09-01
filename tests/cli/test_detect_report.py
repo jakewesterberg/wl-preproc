@@ -295,6 +295,50 @@ def _insert_detection(schema, row: dict) -> None:
     schema.EyeDetection.insert1(row, allow_direct_insert=True)
 
 
+def _raw_totals(schema=None, run_rows: list[dict] | None = None):
+    """`({"blink": n, "invalid": n}, total)` counted row by row off
+    `EyeValidity.Run`, INDEPENDENTLY of `_unusable_fractions` and of the
+    database aggregation that feeds it.
+
+    This is the arithmetic the report used to do in Python on every call
+    (finding M8). It is kept here, on purpose, as the reference the report's
+    own numbers are checked against: an aggregation that quietly computed
+    something slightly different from the scan it replaced would be worse
+    than the scan, and only a comparison against the old arithmetic can
+    catch that. `run_rows` restricts the reference to a subset (one trace's
+    rows, say); omitted, it reads the whole part table off `schema`.
+    """
+    if run_rows is None:
+        run_rows = schema.EyeValidity.Run.to_dicts()
+    total = sum(row["run_stop"] - row["run_start"] for row in run_rows)
+    counts = {"blink": 0, "invalid": 0}
+    for row in run_rows:
+        if row["label"] in counts:
+            counts[row["label"]] += row["run_stop"] - row["run_start"]
+    return counts, total
+
+
+def _plant_mask(schema, subject, dt, eye_value, validity_idx, planted_runs) -> None:
+    """One `EyeValidity` master row plus the runs that tile it, from a list
+    of `(start, stop, label)` triples. The master's `n_samples` is the last
+    run's `run_stop`, so the row and its parts cannot disagree."""
+    _insert_validity(
+        schema,
+        _validity_row(
+            subject, dt, eye_value, validity_idx,
+            n_samples=planted_runs[-1][1],
+            frac_blink=sum(
+                stop - start for start, stop, label in planted_runs if label == "blink"
+            ) / planted_runs[-1][1],
+        ),
+    )
+    for index, (start, stop, label) in enumerate(planted_runs):
+        _insert_validity_run(
+            schema,
+            _validity_run_row(subject, dt, eye_value, validity_idx, index, start, stop, label),
+        )
+
+
 def test_the_detection_section_reports_counts_per_session(detect_schema, tmp_path, prefix):
     subject = "detr0001"
     dt = datetime.datetime(2027, 6, 10, 9, 0)
@@ -379,29 +423,26 @@ def test_the_invalid_and_blink_fractions_are_shown(detect_schema, tmp_path, pref
     reports that detection succeeded, never that it was correct -- and the
     report says so rather than presenting them as the whole truth.
 
+    Asserted against the RUNNING-TOTAL subsection specifically, which
+    finding M7 moved out from under a bare "Unusable samples" heading and
+    put beside a per-session list -- see `test_a_mostly_blink_session_is_
+    visible_per_session_rather_than_only_in_the_total` below for the
+    per-session half.
+
     Delta-based, for the identical shared-database pollution reason
-    `test_eye_report.py`'s own breakdown tests give: `_unusable_fractions` is
-    a RUNNING TOTAL over every `EyeValidity.Run` row this suite's shared
-    database has ever written, so an absolute assertion would be
-    order-dependent on whichever other test file happened to run first.
-    `counts_before`/`total_before` are read directly off `EyeValidity.Run`
-    here -- independently of `_unusable_fractions`, the function under test
-    -- so the predicted value below is a genuine recomputation from first
-    principles, not a second call to the same code being checked.
+    `test_eye_report.py`'s own breakdown tests give: the running total spans
+    every `EyeValidity.Run` row this suite's shared database has ever
+    written, so an absolute assertion would be order-dependent on whichever
+    other test file happened to run first. `counts_before`/`total_before`
+    come from `_raw_totals` above, which counts rows itself rather than
+    calling `_unusable_fractions` -- so the predicted value below is a
+    genuine recomputation from first principles, not a second call to the
+    code being checked.
     """
     root = tmp_path / "scratch"
     root.mkdir()
 
-    def _raw_totals():
-        run_rows = detect_schema.module.EyeValidity.Run.to_dicts()
-        total = sum(row["run_stop"] - row["run_start"] for row in run_rows)
-        counts = {"blink": 0, "invalid": 0}
-        for row in run_rows:
-            if row["label"] in counts:
-                counts[row["label"]] += row["run_stop"] - row["run_start"]
-        return counts, total
-
-    counts_before, total_before = _raw_totals()
+    counts_before, total_before = _raw_totals(detect_schema.module)
 
     subject = "detr0003"
     dt = datetime.datetime(2027, 6, 10, 11, 0)
@@ -422,7 +463,7 @@ def test_the_invalid_and_blink_fractions_are_shown(detect_schema, tmp_path, pref
                     "invalid": counts_before["invalid"] + 230}
 
     section = _section(build_report(root, prefix=prefix), "Detection")
-    unusable = _subsection(section, "Unusable samples")
+    unusable = _subsection(section, "Unusable samples, running total")
 
     assert "invalid" in unusable and "blink" in unusable
     assert "lower bound" in section
@@ -462,19 +503,27 @@ def test_no_agreement_line_exists_in_this_stage(detect_schema, tmp_path, prefix)
     assert "agreement" not in section.lower()
 
 
-def test_the_three_detection_subsections_state_their_own_scope(detect_schema, tmp_path, prefix):
+def test_the_four_detection_subsections_state_their_own_scope(detect_schema, tmp_path, prefix):
     """Fix-round shape carried over from the Eye section's own
-    `test_each_eye_subsection_states_its_own_scope`: three subsections under
-    one heading are three different scopes, and a reader must not have to
+    `test_each_eye_subsection_states_its_own_scope`: four subsections under
+    one heading are four different scopes, and a reader must not have to
     infer which is which. Pins the exact labels so a future edit cannot
-    quietly drop one."""
+    quietly drop one.
+
+    Three became four with finding M7. The two "Unusable samples" headings
+    are a per-session 24 h list and an all-time running total over the same
+    rows -- the pair most able to be misread as each other, which is why
+    each states its own scope in its own heading rather than relying on
+    order on the page.
+    """
     root = tmp_path / "scratch"
     root.mkdir()
 
     section = _section(build_report(root, prefix=prefix), "Detection")
 
     assert "\n### Events per session per trace (24 h)" in section
-    assert "\n### Unusable samples (lower bound, running total)" in section
+    assert "\n### Unusable samples per session per eye (lower bound, 24 h)" in section
+    assert "\n### Unusable samples, running total across every session (lower bound)" in section
     assert "\n### Detection refused (7 d)" in section
 
 
@@ -578,3 +627,232 @@ def test_an_empty_pipeline_reports_zero_unusable_rather_than_a_wrong_number():
     from wl_preproc.cli.report import _unusable_fractions
 
     assert _unusable_fractions([]) == {"blink": 0.0, "invalid": 0.0}
+
+
+def test_a_mostly_blink_session_is_visible_per_session_rather_than_only_in_the_total(
+    detect_schema, tmp_path, prefix
+):
+    """Finding M7, and the case the number exists for.
+
+    Design spec section 9 asks for "the fraction of **each session's**
+    samples labelled `invalid` or `blink`". What shipped was a single
+    lifetime running total across every eye of every session ever masked,
+    unwindowed -- and a 90%-blink session is invisible inside a year of
+    that, which is precisely the session a reader needs to be shown.
+
+    Both halves are asserted: the offending session's own line reads its own
+    90%, and the running total beside it reads the DILUTED figure --
+    recomputed here off `EyeValidity.Run` directly (`_raw_totals`), so the
+    two are shown to be genuinely different measurements rather than the
+    same one printed twice. The dilution is guaranteed by this test's own
+    second, clean session rather than left to whatever else the shared
+    database happens to hold.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    bad, clean = "detr0020", "detr0021"
+    bad_dt = datetime.datetime(2027, 6, 10, 20, 0)
+    clean_dt = datetime.datetime(2027, 6, 10, 21, 0)
+    _land_session(bad, bad_dt)
+    _land_session(clean, clean_dt)
+    _plant_mask(
+        detect_schema.module, bad, bad_dt, "left", detect_schema.validity_idx,
+        [(0, 900, "blink"), (900, 1000, "fixation")],
+    )
+    _plant_mask(
+        detect_schema.module, clean, clean_dt, "left", detect_schema.validity_idx,
+        [(0, 9000, "fixation")],
+    )
+
+    section = _section(build_report(root, prefix=prefix), "Detection")
+
+    per_session = _subsection(section, "Unusable samples per session per eye")
+    assert "blink 90.0%" in _line_for(per_session, bad)
+    assert "blink 0.0%" in _line_for(per_session, clean)
+
+    counts, total = _raw_totals(detect_schema.module)
+    diluted = counts["blink"] / total
+    assert diluted < 0.9, (
+        "the fixture failed to dilute -- with the running total equal to the "
+        "bad session's own fraction this test would pass on the pre-M7 code"
+    )
+    running = _subsection(section, "Unusable samples, running total")
+    assert _fraction_for(running, "blink") == pytest.approx(diluted, abs=1e-3)
+
+
+def test_the_per_session_unusable_list_windows_to_24_hours(detect_schema, tmp_path, prefix):
+    """The per-session list finding M7 added is windowed to the same 24 h
+    `ingested_keys` the events list above it uses, and for the same reason
+    that list gives: an `EyeValidity` row is permanent once written, so an
+    unwindowed per-session listing only ever grows. Without this, M7's fix
+    would have traded a number that hides one bad session for a list that
+    eventually hides every one of them."""
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    fresh, old = "detr0030", "detr0031"
+    fresh_dt = datetime.datetime(2027, 6, 11, 9, 0)
+    old_dt = datetime.datetime(2027, 6, 11, 10, 0)
+    _land_session(fresh, fresh_dt)
+    _land_session(old, old_dt, ingested_at=now - datetime.timedelta(days=3))
+    for subject, dt in ((fresh, fresh_dt), (old, old_dt)):
+        _plant_mask(
+            detect_schema.module, subject, dt, "right", detect_schema.validity_idx,
+            [(0, 200, "invalid"), (200, 1000, "fixation")],
+        )
+
+    section = _section(build_report(root, prefix=prefix), "Detection")
+    per_session = _subsection(section, "Unusable samples per session per eye")
+
+    assert fresh in per_session, "a session ingested moments ago is missing from the 24 h list"
+    assert old not in per_session, "a session ingested 3 days ago still appears in the 24 h list"
+    # The running total is the unwindowed one, and still sees both.
+    running = _subsection(section, "Unusable samples, running total")
+    assert _fraction_for(running, "invalid") > 0.0
+
+
+def _pre_m8_fractions(run_rows: list[dict]) -> dict[str, float]:
+    """`_unusable_fractions` exactly as it stood BEFORE finding M8, so the
+    equivalence assertions below compare against the code that actually
+    shipped rather than a fresh guess at what it did.
+
+    Transcribed from `wl_preproc/cli/report.py` at `ba31f62`, the return
+    statement wrapped here to fit and otherwise character for character:
+
+        total = sum(row["run_stop"] - row["run_start"] for row in validity_run_rows)
+        counts = {"blink": 0, "invalid": 0}
+        for row in validity_run_rows:
+            if row["label"] in counts:
+                counts[row["label"]] += row["run_stop"] - row["run_start"]
+        return {label: (counts[label] / total if total else 0.0)
+                for label in ("blink", "invalid")}
+    """
+    counts, total = _raw_totals(run_rows=run_rows)
+    return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid")}
+
+
+def test_the_database_aggregation_matches_the_full_table_scan_it_replaced(
+    detect_schema, tmp_path, prefix
+):
+    """Finding M8, and the assertion that matters more than any speed one.
+
+    `_detection_rows` used to fetch the whole of `EyeValidity.Run` and
+    `_unusable_fractions` summed it in a Python loop on every report -- the
+    full-table scan design spec section 5 chose runs-as-rows specifically to
+    replace. It now aggregates in the database, grouped by key and by label.
+
+    An optimisation that quietly computes something slightly different is
+    worse than the scan it replaced, so this checks EQUIVALENCE, not merely
+    that the new path returns numbers: `_pre_m8_fractions` above is the
+    replaced arithmetic, run here over rows fetched the old way, and the
+    aggregated answer must match it -- both for the running total over the
+    whole part table and, key by key, for every trace the per-session list
+    renders.
+
+    Runs on several sessions with a mix of labels, planted below and added
+    to whatever this module's earlier tests already left in the shared
+    database, since a single-session single-label fixture would agree under
+    almost any grouping mistake.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    plantings = [
+        ("detr0040", datetime.datetime(2027, 6, 12, 9, 0), "left",
+         [(0, 100, "blink"), (100, 300, "invalid"), (300, 1000, "fixation")]),
+        ("detr0040", datetime.datetime(2027, 6, 12, 9, 0), "right",
+         [(0, 500, "fixation"), (500, 600, "blink"), (600, 1000, "invalid")]),
+        ("detr0041", datetime.datetime(2027, 6, 12, 10, 0), "left",
+         [(0, 900, "invalid"), (900, 1000, "blink")]),
+        ("detr0041", datetime.datetime(2027, 6, 12, 10, 0), "right",
+         [(0, 1000, "fixation")]),
+        ("detr0042", datetime.datetime(2027, 6, 12, 11, 0), "left",
+         [(0, 2000, "fixation")]),
+        ("detr0042", datetime.datetime(2027, 6, 12, 11, 0), "right",
+         [(0, 1800, "blink"), (1800, 2000, "fixation")]),
+    ]
+    for subject, dt, _eye, _runs in plantings:
+        _land_session(subject, dt)
+    for subject, dt, eye_value, planted_runs in plantings:
+        _plant_mask(
+            detect_schema.module, subject, dt, eye_value,
+            detect_schema.validity_idx, planted_runs,
+        )
+
+    from wl_preproc.cli.report import (
+        _detection_rows, _unusable_fractions, _unusable_per_eye,
+    )
+
+    run_rows = detect_schema.module.EyeValidity.Run.to_dicts()
+    _detections, label_totals = _detection_rows(prefix=prefix)
+
+    # The fixture is genuinely several sessions and genuinely a mix.
+    by_key: dict[tuple, list[dict]] = {}
+    for row in run_rows:
+        by_key.setdefault(
+            (row["subject"], row["session_datetime"], row["eye"],
+             row["paramset_type"], row["validity_paramset_idx"]),
+            [],
+        ).append(row)
+    assert len({key[:2] for key in by_key}) >= 3
+    assert {row["label"] for row in run_rows} >= {"blink", "invalid", "fixation"}
+
+    # Whole-table equivalence.
+    assert _unusable_fractions(label_totals) == pytest.approx(_pre_m8_fractions(run_rows))
+
+    # Per-key equivalence. The pre-M8 code never grouped, but its arithmetic
+    # determines the answer exactly: hand it one trace's rows and it gives
+    # that trace's fractions.
+    entries = {
+        (entry["subject"], entry["session_datetime"], entry["eye"],
+         entry["paramset_type"], entry["validity_paramset_idx"]): entry
+        for entry in _unusable_per_eye(label_totals)
+    }
+    assert set(entries) == set(by_key), "the aggregation lost or invented a trace"
+    for key, rows in by_key.items():
+        expected = _pre_m8_fractions(rows)
+        assert entries[key]["blink"] == pytest.approx(expected["blink"]), key
+        assert entries[key]["invalid"] == pytest.approx(expected["invalid"]), key
+        assert entries[key]["n_samples"] == sum(
+            row["run_stop"] - row["run_start"] for row in rows
+        ), key
+
+
+def test_the_aggregation_returns_one_row_per_label_not_one_per_run(
+    detect_schema, tmp_path, prefix
+):
+    """The other half of finding M8: the numbers being right is necessary,
+    and doing the work in the database is the point.
+
+    Asserted structurally rather than by timing -- a wall-clock assertion
+    would be flaky on a shared container and would not say what it meant.
+    A mask planted as many runs comes back as at most one row per distinct
+    label, so what `build_report` fetches is bounded by traces times labels
+    and not by the number of runs a real mask holds -- which the
+    whole-branch review measured at 1,941 for one eye of the reference
+    recording. (That figure is the review's own; design spec section 5
+    measures `EyeDetection.Run` counts, not these.)
+    """
+    from wl_preproc.cli.report import _detection_rows
+
+    subject = "detr0050"
+    dt = datetime.datetime(2027, 6, 13, 9, 0)
+    _land_session(subject, dt)
+    # 40 runs alternating blink/fixation: two labels, twenty runs each.
+    planted_runs = [
+        (index * 10, (index + 1) * 10, "blink" if index % 2 == 0 else "fixation")
+        for index in range(40)
+    ]
+    _plant_mask(
+        detect_schema.module, subject, dt, "left",
+        detect_schema.validity_idx, planted_runs,
+    )
+
+    _detections, label_totals = _detection_rows(prefix=prefix)
+    mine = [row for row in label_totals if row["subject"] == subject]
+
+    assert len(mine) == 2, f"expected one row per label, got {len(mine)} for 40 runs"
+    assert {row["label"] for row in mine} == {"blink", "fixation"}
+    assert {row["samples"] for row in mine} == {200}

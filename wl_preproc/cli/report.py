@@ -637,9 +637,11 @@ def _eye_row_line(
 
 
 def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict]]:
-    """Every `EyeDetection` row on record, and every `EyeValidity.Run` row on
-    record: `(detection_rows, validity_run_rows)`. Query only, no rendering --
-    `build_report` below does that, the same split `_eye_rows` above uses.
+    """Every `EyeDetection` row on record, and one row per `(subject,
+    session_datetime, eye, validity paramset, label)` carrying how many
+    samples `EyeValidity.Run` holds under that label: `(detection_rows,
+    validity_label_totals)`. Query only, no rendering -- `build_report` below
+    does that, the same split `_eye_rows` above uses.
 
     **Not part of `Readings`/`gather_readings` (task-9 brief, following the
     Eye section's own Controller ruling A above).** The responder reads none
@@ -664,21 +666,69 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     collapsed into one verdict. No arithmetic on the five columns produces
     it. The stored runs are the exact per-sample verdicts `EyeValidity.
     make()` wrote, and they remain its only honest source.
+
+    **Aggregated by the database, not scanned in Python (finding M8).** This
+    used to fetch the WHOLE of `EyeValidity.Run` and sum it in a Python loop
+    on every `build_report`. Design spec section 5's second argument for
+    rows over a blob is that queries like this become "`WHERE` clauses
+    instead of a full-table scan and a decode" -- and the first consumer of
+    that storage shape did the scan anyway. The whole-branch review's own
+    finding M8 measured one eye's mask at 1,941 `EyeValidity.Run` rows
+    against the reference recording -- a figure from that review, not from
+    the spec, whose section 5 counts `EyeDetection.Run` rows and not these
+    -- so a year of daily sessions is on the order of 1.4M rows fetched to
+    produce two numbers.
+
+    `SUM(run_stop - run_start)` grouped by key AND by `label` is the query
+    the runs-as-rows decision was taken to make possible. Grouping by label
+    rather than folding the labels into conditional sums keeps the SQL to
+    one plain aggregate and leaves the arithmetic where it already lived, in
+    `_unusable_fractions` below; it also answers at most one row per label
+    per trace -- a handful, against the same year's 1.4M.
+
+    `dj.U(...).aggr(...)` is DataJoint's own aggregation idiom and this
+    codebase had no prior use of it to follow: `dj.U(...)` appears here once
+    before, in `schema/detect.py::EyeDetection.key_source`, but as a
+    projection that drops `eye`, never as a grouping. `label` is a SECONDARY
+    attribute of `EyeValidity.Run`, which `dj.U` groups by exactly as it
+    groups by a primary one.
     """
+    import datajoint as dj
+
     from wl_preproc.schema import detect as detect_schema
 
     detect_schema.activate(prefix=prefix)
-    return detect_schema.EyeDetection.to_dicts(), detect_schema.EyeValidity.Run.to_dicts()
+    label_totals = dj.U(
+        "subject", "session_datetime", "eye", "paramset_type",
+        "validity_paramset_idx", "label",
+    ).aggr(
+        detect_schema.EyeValidity.Run, samples="SUM(run_stop - run_start)"
+    ).to_dicts()
+    return detect_schema.EyeDetection.to_dicts(), [
+        # MySQL answers `SUM()` over an integer expression with a DECIMAL,
+        # which the connector hands back as `decimal.Decimal`. Normalised to
+        # `int` once, here, so `_unusable_fractions` below stays the plain
+        # arithmetic it was over a type the row-by-row version never
+        # produced -- and so the equivalence test that compares the two can
+        # compare values rather than types.
+        {**row, "samples": int(row["samples"])}
+        for row in label_totals
+    ]
 
 
-def _unusable_fractions(validity_run_rows: list[dict]) -> dict[str, float]:
-    """`{"blink": fraction, "invalid": fraction}` -- the RUNNING TOTAL, across
-    every `EyeValidity.Run` row this pipeline has ever written (every eye of
-    every session masked so far), of samples carrying that label. Pre-seeded
+def _unusable_fractions(label_totals: list[dict]) -> dict[str, float]:
+    """`{"blink": fraction, "invalid": fraction}` of the samples covered by
+    whatever `_detection_rows` rows it is handed -- every one of them for
+    the running total, or one trace's own handful for that trace. Pre-seeded
     at `0.0` rather than built from whatever labels happen to appear, the
     same reason `source_counts`/`model_counts` above pre-seed every key:
     zero real unusable samples so far must read `0.0%`, not vanish from the
     section entirely.
+
+    **Scope is the caller's, deliberately.** `build_report` calls this twice
+    -- once per trace via `_unusable_per_eye` below, once over everything --
+    rather than there being two functions computing the same ratio at two
+    grains, free to drift from one another.
 
     **A LOWER bound, stated as one wherever this is rendered
     (`_DETECTION_LOWER_BOUND_NOTE`), never the whole truth.** `validity_
@@ -689,17 +739,64 @@ def _unusable_fractions(validity_run_rows: list[dict]) -> dict[str, float]:
     mis-measured but never flagged reads as usable here exactly as a
     genuinely good one does.
 
-    Unwindowed, exactly like the Eye section's own `calibration_source`/
-    `calibration_model` breakdowns above: two numbers that cannot grow
-    without bound, not a per-session listing, so a running total is the
-    right shape rather than a 24 h or 7 d slice of it.
+    **The running total this used to be, ALONE, is not what design spec
+    section 9 asks for (finding M7).** That section wants "the fraction of
+    each session's samples labelled `invalid` or `blink`", and a lifetime
+    total across every eye of every session ever masked hides exactly the
+    session it exists to surface: a single 90%-blink night is invisible
+    inside a year. `build_report` renders `_unusable_per_eye` below first
+    and this total second, each under a heading stating its own scope. The
+    total is kept because it answers a question no 24 h slice can -- is this
+    rig's tracking degrading across months -- not because it answers
+    section 9's.
     """
-    total = sum(row["run_stop"] - row["run_start"] for row in validity_run_rows)
+    total = sum(row["samples"] for row in label_totals)
     counts = {"blink": 0, "invalid": 0}
-    for row in validity_run_rows:
+    for row in label_totals:
         if row["label"] in counts:
-            counts[row["label"]] += row["run_stop"] - row["run_start"]
+            counts[row["label"]] += row["samples"]
     return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid")}
+
+
+def _unusable_per_eye(label_totals: list[dict]) -> list[dict]:
+    """One entry per `(subject, session_datetime, eye, validity paramset)`:
+    that trace's own `blink`/`invalid` fractions and the sample count they
+    are fractions of, sorted the way `build_report` renders them.
+
+    **Per EYE, never pooled into one number per session.** Design spec
+    section 9 asks for each session's fraction, and `EyeValidity`'s own
+    grain is per eye; pooling the two eyes would let a blown eye hide behind
+    a good one, which is finding M7's own dilution one level down.
+
+    **The validity paramset is part of the key, and the caller renders it.**
+    Two registered `eye_validity` paramsets are two genuinely different
+    masks over the same samples, so two entries differing only in a number
+    that never reached the page would read as a duplicated line.
+
+    Grouping happens here rather than in SQL because `_detection_rows`
+    already returns one row per key per label -- a handful per trace, not a
+    table scan -- and the ratio is `_unusable_fractions`' above either way.
+    """
+    by_key: dict[tuple, list[dict]] = {}
+    for row in label_totals:
+        by_key.setdefault(
+            (row["subject"], row["session_datetime"], row["eye"],
+             row["paramset_type"], row["validity_paramset_idx"]),
+            [],
+        ).append(row)
+    return [
+        {
+            "subject": subject,
+            "session_datetime": session_datetime,
+            "eye": eye_value,
+            "paramset_type": paramset_type,
+            "validity_paramset_idx": paramset_idx,
+            "n_samples": sum(row["samples"] for row in rows),
+            **_unusable_fractions(rows),
+        }
+        for (subject, session_datetime, eye_value, paramset_type, paramset_idx), rows
+        in sorted(by_key.items())
+    ]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1265,8 +1362,7 @@ def build_report(
     # Detection. Computed HERE and not in `gather_readings` -- see
     # `_detection_rows`'s own docstring for why, the identical reasoning
     # `_eye_rows` above already gives for the Eye section.
-    detection_rows, validity_run_rows = _detection_rows(prefix=prefix)
-    unusable = _unusable_fractions(validity_run_rows)
+    detection_rows, validity_label_totals = _detection_rows(prefix=prefix)
 
     lines += ["", "## Detection", ""]
 
@@ -1294,13 +1390,45 @@ def build_report(
         for row in events
     ] or ["- none"]
 
-    # A LOWER bound, and it says so (`_unusable_fractions`'/`_DETECTION_
-    # LOWER_BOUND_NOTE`'s own docstrings). Unwindowed running total, exactly
-    # like the Eye section's own "Calibration source"/"Calibration model"
-    # breakdowns: two numbers that cannot grow without bound, not a
-    # per-session listing.
-    lines += ["", "### Unusable samples (lower bound, running total)", ""]
+    # Design spec section 9, verbatim: "the fraction of EACH SESSION's
+    # samples labelled `invalid` or `blink`". What shipped was one lifetime
+    # running total across every eye of every session ever masked (finding
+    # M7) -- a 90%-blink session is invisible inside a year of that, and a
+    # session that bad is the one thing this number exists to surface.
+    #
+    # Per session per eye, following the shape of "Events per session per
+    # trace" directly above, and windowed to the same 24 h `ingested_keys`
+    # that subsection uses for the same reason: an `EyeValidity` row is
+    # PERMANENT once written (inherited `dj.Computed` contract), so an
+    # unwindowed per-session list only ever grows.
+    per_eye = [
+        entry for entry in _unusable_per_eye(validity_label_totals)
+        if (entry["subject"], entry["session_datetime"]) in ingested_keys
+    ]
+    lines += [
+        "", f"### Unusable samples per session per eye (lower bound, 24 h) — {len(per_eye)}", "",
+    ]
+    lines += [
+        f"- `{entry['subject']}` @ {entry['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"{entry['eye']} (validity paramset {entry['validity_paramset_idx']}): "
+        f"blink {entry['blink']:.1%}, invalid {entry['invalid']:.1%} "
+        f"of {entry['n_samples']} samples"
+        for entry in per_eye
+    ] or ["- none"]
+
+    # The running total is KEPT, beside the per-session lines and never
+    # instead of them. It answers the one question a 24 h slice cannot --
+    # is this rig's tracking degrading over months -- and it is unwindowed
+    # for the same reason the Eye section's own "Calibration source"/
+    # "Calibration model" breakdowns are: two numbers that cannot grow
+    # without bound. Both headings state their own scope, so neither can be
+    # read as the other.
+    unusable = _unusable_fractions(validity_label_totals)
+    lines += ["", "### Unusable samples, running total across every session (lower bound)", ""]
     lines += [f"- {label}: {unusable[label]:.1%}" for label in ("blink", "invalid")]
+    # One note for the pair, placed after both: it opens on "these", and
+    # both headings above it already carry the "lower bound" qualifier it
+    # explains.
     lines += [f"- _{_DETECTION_LOWER_BOUND_NOTE}._"]
 
     # Distinct causes, distinct lines -- never a collapsed "refused: N"

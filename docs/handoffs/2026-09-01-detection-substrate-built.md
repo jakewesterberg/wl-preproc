@@ -189,16 +189,24 @@ brief pointed at it as the model to follow, and it is).
 - **`### Events per session per trace (24 h)`** — every `computed`
   `EyeDetection` row landed in the last 24 h, saccade/microsaccade counts
   per trace.
-- **`### Unusable samples (lower bound, running total)`** — `blink` and
-  `invalid` fractions, computed from `EyeValidity.Run` rows directly rather
-  than from the master row's own `frac_*` bookkeeping columns. As built,
-  four of those five columns were permanently `NULL`; finding M6 populated
-  all five, and the report still reads the runs, because the five are RAW
-  per-criterion counts that overlap and no arithmetic on them yields the
-  fraction of samples carrying a stored label (`cli/report.py::
-  _detection_rows`). Stated explicitly as a lower bound: OpenIrisDPI's five
-  criteria ask whether the tracker itself reported trouble, never whether a
-  surviving sample is actually correct.
+- **`### Unusable samples per session per eye (lower bound, 24 h)`** and
+  **`### Unusable samples, running total across every session (lower
+  bound)`** — `blink` and `invalid` fractions. As built this was ONE
+  subsection, the running total alone; finding M7 added the per-session list
+  design spec §9 actually asks for ("the fraction of each session's samples
+  labelled `invalid` or `blink`") and kept the total beside it, since a
+  90%-blink session is invisible inside a lifetime figure. Both are computed
+  from `EyeValidity.Run` rather than from the master row's own `frac_*`
+  bookkeeping columns: as built four of those five were permanently `NULL`,
+  and though finding M6 populated all five, the report still reads the runs,
+  because the five are RAW per-criterion counts that overlap and no
+  arithmetic on them yields the fraction of samples carrying a stored label
+  (`cli/report.py::_detection_rows`). Both stated explicitly as lower
+  bounds: OpenIrisDPI's five criteria ask whether the tracker itself
+  reported trouble, never whether a surviving sample is actually correct.
+  Finding M8 later moved the summation itself into the database
+  (`SUM(run_stop - run_start)` grouped by key and label) — as built, every
+  report fetched the whole `EyeValidity.Run` part table into Python.
 - **`### Detection refused (7 d)`** — distinct causes, distinct lines, never
   a collapsed `refused: N` (Controller ruling B's shape, carried over from
   the Eye section's "No canonical gaze" verbatim, including its own 7-day
