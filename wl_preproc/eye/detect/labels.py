@@ -25,39 +25,22 @@ class Label(StrEnum):
     FIXATION = "fixation"
 
 
-# Most specific first, `fixation` last as the default. **`BLINK` outranks
-# `INVALID` and the order is load-bearing**: a blink IS a validity failure, so
-# generic-first would mean no sample is ever labelled `blink`.
+# **There is no whole-vocabulary precedence tuple here, and design spec
+# section 1's eight-level table is not one.** Only ONE of its levels is ever a
+# contest between two candidates for one sample, and it is settled where the
+# candidates arise: `blink` over `invalid`, in `validity.py::validity_labels`.
+# Below that, a detector returns disjoint intervals, so no sample is ever
+# offered two detected labels at once -- and `saccade`/`microsaccade` share a
+# level deliberately, being "a split, not a ranking" (section 1).
 #
-# `SACCADE` and `MICROSACCADE` are adjacent rather than ranked -- they are a
-# split by amplitude, never in contention for the same sample (design spec
-# section 1).
-PRECEDENCE: tuple[Label, ...] = (
-    Label.BLINK,
-    Label.INVALID,
-    Label.SACCADE,
-    Label.MICROSACCADE,
-    Label.PSO,
-    Label.PURSUIT,
-    Label.DRIFT,
-    Label.FIXATION,
-)
-
-
-def higher_precedence(first: Label, second: Label) -> Label:
-    """Whichever of two labels `PRECEDENCE` ranks higher.
-
-    **This is what makes `PRECEDENCE` operative rather than declarative.** Its
-    live consumer is `schema/detect.py::_overlapping`, which needs a rule for
-    combining the two eyes' labels wherever they disagree over one binocular
-    event -- a rule that must generalise to all seven detectors (design spec
-    section 3.1), not only to the amplitude-derived vocabularies where
-    re-classifying the conjunction's own amplitude would happen to work.
-
-    Order, not distance: the tuple's positions are a ranking, so nothing here
-    reads `PRECEDENCE.index` as a magnitude.
-    """
-    return min(first, second, key=PRECEDENCE.index)
+# A general `PRECEDENCE` tuple did live here, and `schema/detect.py::
+# _overlapping` used it to arbitrate between the two eyes' labels over one
+# binocular event. That was wrong: a tuple has a total order, so it ranked the
+# split section 1 says is never in contention, and it defaulted the `pso`
+# assignment section 2.5 says must never be defaulted. The conjunction now
+# takes its label from its own measurement instead -- see
+# `schema/detect.py::_conjunction_label` -- which left this constant with no
+# consumer and no defensible general meaning.
 
 
 class TilingError(ValueError):

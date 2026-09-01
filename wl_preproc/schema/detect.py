@@ -30,15 +30,20 @@ detector's own minimum event duration, and measures every detected event
 once via `wl_preproc.eye.detect.measure`. That duration floor is what keeps
 the criterion a FILTER rather than a generator -- see `_overlapping`.
 
-**Labels come from the detector, never from this module.** Design spec
-section 3: "Detectors return labelled intervals. Shared code measures them."
+**Labels come from the detector, never from this module -- and the
+conjunction's comes from its own measurement.** Design spec section 3:
+"Detectors return labelled intervals. Shared code measures them."
 `_insert_trace` writes the label each interval already carries and measures
-the final run for storage; `_overlapping` combines the two eyes' labels by
-`labels.py::PRECEDENCE` where they disagree. `_insert_trace` used to assign
-every span's label itself, from amplitude, via `classify` -- which can only
-answer `saccade` or `microsaccade`, so a stage-2 detector declaring
-`{saccade, pso, fixation}` would have had everything it found relabelled by
-amplitude and its declared vocabulary would have been unenforceable.
+the final run for storage. The conjunction has no detector to speak for it,
+so `_overlapping` labels each intersection by `classify`ing THAT
+intersection's own amplitude -- the same `[start, stop)` on the same gaze
+that `_insert_trace` then stores -- rather than by arbitrating between the
+two eyes' labels. See `_conjunction_label` for the three defects that
+arbitration caused. `_insert_trace` used to assign every span's label
+itself, from amplitude, via `classify` -- which can only answer `saccade` or
+`microsaccade`, so a stage-2 detector declaring `{saccade, pso, fixation}`
+would have had everything it found relabelled by amplitude and its declared
+vocabulary would have been unenforceable.
 
 **`EyeDetection.key_source` is not `EyeValidity * (paramset.ParamSet & ...)`,**
 despite that being the natural-looking join. Two reasons, both confirmed
@@ -70,19 +75,24 @@ See `EyeDetection.key_source`'s own docstring.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import datajoint as dj
 import numpy as np
 
-from wl_preproc.eye.detect.labels import (
-    Label, Run, higher_precedence, labels_from_runs, runs_from_labels,
-)
+from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs, runs_from_labels
 from wl_preproc.schema import DEFAULT_PREFIX, core, paramset, pipeline
 
 schema = dj.Schema()
 
 _LABEL_ENUM = ",".join(f"'{label.value}'" for label in Label)
+
+
+class UndecidedConjunctionLabel(ValueError):
+    """Nothing states what a conjunction run's label should be for this
+    detector's declared vocabulary, and design spec section 2.5 forbids
+    inventing an answer by default. See `_conjunction_label`."""
 
 
 @schema
@@ -482,22 +492,32 @@ class EyeDetection(dj.Computed):
                 )
             self.insert1({**key, "trace": "conjunction", "status": "refused", "reason": reason})
         else:
+            # The conjunction's TIMING is binocular (`_overlapping`'s own
+            # intersection, below), but a measurement still needs ONE eye's
+            # actual gaze -- there is no cyclopean trace any calibration in
+            # this codebase ever validated, so averaging the two eyes would
+            # measure a position nothing here calibrated against. The LEFT
+            # eye is named here rather than averaged for exactly that
+            # reason: a real, stated choice, not one the design spec makes
+            # for us.
+            #
+            # Read BEFORE `_overlapping` rather than after it, because this
+            # same trace is now what the conjunction's LABEL comes from as
+            # well as its measurement (`_conjunction_label`). One trace
+            # answering for both is the whole fix: label and amplitude
+            # derived from two different things is what made them contradict
+            # each other on 12.3% of conjunction event rows.
+            gaze, v, offered = per_eye["left"]
             # The floor is the DETECTOR's own, inherited from the params it
             # just ran with -- the binocular criterion filters what both eyes
             # already found, and must never manufacture an event shorter than
             # either eye's detector would have accepted. See `_overlapping`.
             conjunction_spans = _overlapping(
-                spans["left"], spans["right"], _min_duration_samples(detector_params)
+                spans["left"],
+                spans["right"],
+                _min_duration_samples(detector_params),
+                _conjunction_label(detector, params, gaze),
             )
-            # The conjunction's TIMING is binocular (`_overlapping`'s own
-            # intersection, just above), but a measurement still needs ONE
-            # eye's actual gaze -- there is no cyclopean trace any
-            # calibration in this codebase ever validated, so averaging the
-            # two eyes would measure a position nothing here calibrated
-            # against. The LEFT eye is named here rather than averaged for
-            # exactly that reason: a real, stated choice, not one the design
-            # spec makes for us.
-            gaze, v, offered = per_eye["left"]
             self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz)
 
     def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz) -> None:
@@ -506,11 +526,12 @@ class EyeDetection(dj.Computed):
         **This method assigns no labels of its own.** Each interval arrives
         already labelled -- by the detector for `left` and `right` (design
         spec section 3: "Detectors return labelled intervals. Shared code
-        measures them."), by `_overlapping`'s own precedence rule for
-        `conjunction`. It used to call `classify` on every span itself,
-        which could only ever return `saccade` or `microsaccade`: a stage-2
-        detector declaring `{saccade, pso, fixation}` would have had every
-        span it detected relabelled by amplitude regardless of what it
+        measures them."), by `_overlapping`'s `label_for` for `conjunction`,
+        which is `classify` over that same intersection's own amplitude
+        (`_conjunction_label`). It used to call `classify` on every span
+        itself, which could only ever return `saccade` or `microsaccade`: a
+        stage-2 detector declaring `{saccade, pso, fixation}` would have had
+        every span it detected relabelled by amplitude regardless of what it
         actually found, and four of design spec section 3.1's seven declare
         exactly such vocabularies.
 
@@ -522,9 +543,8 @@ class EyeDetection(dj.Computed):
         Today's one registered detector cannot make that second measurement
         redundant: `engbert_kliegl.py::_true_runs` only ever returns MAXIMAL
         runs, so two of `intervals` are always separated by at least one
-        sample neither claims, `_overlapping` inherits that same separation
-        from both eyes, and `runs_from_labels` can therefore never merge two
-        of this call's own intervals into one run. But nothing in
+        sample neither claims, and `runs_from_labels` can therefore never
+        merge two of this call's own intervals into one run. But nothing in
         `registry.py::DetectFn`'s own contract requires a future detector
         (`wl.yaml`'s own "Otero-Millan and U'n'Eye" -- neither written yet)
         to leave such a gap, and if two adjacent intervals ever DID carry
@@ -532,10 +552,15 @@ class EyeDetection(dj.Computed):
         whose real `[start, stop)` matches neither original interval.
         Measuring the FINAL run rather than trusting either input interval
         is what keeps the stored measurement correct regardless of whether
-        that gap holds -- and it now matters for a second reason as well:
-        the conjunction's own intervals come from `_overlapping`, whose
-        `[start, stop)` is an intersection that belongs to neither eye's
-        detected event.
+        that gap holds.
+
+        **For `conjunction` that gap is guaranteed rather than inherited**,
+        and it has to be: the conjunction's label is `classify` over the
+        amplitude of the interval it was assigned to, so a merge that moved
+        the boundaries would store a label and an amplitude that disagree --
+        the exact defect this round exists to close. `_overlapping`
+        coalesces touching intersections before labelling them for that
+        reason, so the run measured here is always the span labelled there.
         """
         from wl_preproc.eye.detect.measure import measure
 
@@ -568,63 +593,42 @@ class EyeDetection(dj.Computed):
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
 
 
-def _overlapping(left: list[Run], right: list[Run], min_duration_samples: int) -> list[Run]:
+def _overlapping(
+    left: list[Run],
+    right: list[Run],
+    min_duration_samples: int,
+    label_for: Callable[[int, int], Label],
+) -> list[Run]:
     """Labelled intervals present in BOTH eyes with temporal overlap, no
     shorter than the detector's own minimum event duration -- Engbert &
     Kliegl's own binocular criterion, applied uniformly to every detector.
     The intersection, never the union: an event in one eye alone is noise,
     which is the whole point of the criterion.
 
-    **Where the two eyes disagree about the LABEL, `labels.py::PRECEDENCE`
-    decides, and this is that constant's live consumer.** Until detectors
-    returned labelled intervals there was nothing to combine, so `PRECEDENCE`
-    was declared and read by nothing -- while the precedence that actually
-    held lived in `validity.py`'s two ordered assignments (`out[unusable] =
-    INVALID` then `out[blink] = BLINK`). It is operative here.
+    **The label is `label_for` applied to the intersection's own
+    `[start, stop)`, and the two eyes' own labels are never consulted here.**
+    `_conjunction_label` builds that callable and carries the whole of the
+    reasoning; this function only applies it. It is a REQUIRED argument for
+    the same reason `min_duration_samples` is: the rule is not this
+    function's to default, and a default is what would let a caller quietly
+    reintroduce an arbitration the design spec forbids.
 
-    A precedence rule rather than re-classifying the intersection's own
-    amplitude, because it has to generalise to all seven detectors (design
-    spec section 3.1): re-classifying works only for the amplitude-derived
-    vocabularies, and says nothing about a left-eye `pso` meeting a
-    right-eye `saccade`. Both eyes' labels are drawn from the same
-    detector's declared vocabulary -- one detector runs on both -- so the
-    two are always comparable. It is also the only rule available to a
-    conjunction that has no gaze of its own: the intersection is measured
-    from the LEFT eye's trace alone (`make()`'s own comment says why), and
-    is shorter than either eye's detected event, so an amplitude taken there
-    systematically understates the event it came from -- the same failure
-    family finding H3 closed one step further along.
-
-    **Two consequences of this ordering are recorded rather than fixed here,
-    because both are the repository owner's calls, not this function's.**
-
-    1. Design spec section 1 says `saccade` and `microsaccade` "share one
-       precedence level deliberately: they are a split, not a ranking", and
-       `PRECEDENCE`'s own comment repeats it -- yet a tuple has a total
-       order, so this function does rank them, and `saccade` wins. That is
-       defensible on its own terms (an event is a microsaccade only if it is
-       small in BOTH eyes, and microsaccades are conventionally required to
-       be binocular), but it is not what section 1 says about that pair, and
-       the two eyes disagree about it often enough to matter: 593 of 4,550
-       binocular intersections, 13.0%, measured on the reference recording
-       at default parameters.
-    2. It also means a conjunction run's stored `label` and its stored
-       `amplitude_deg` can contradict each other, since the label is the
-       binocular consensus of two full-event amplitudes and the amplitude is
-       one eye's, over the intersection. Measured the same way: 518 of 2,209
-       stored `saccade` rows carry an amplitude below `microsaccade_max_deg`
-       and 40 of 2,341 `microsaccade` rows carry one at or above it -- 12.3%
-       of conjunction event rows, against 0 of 5,972 on the left eye's own
-       trace and 0 of 5,592 on the right's. Design spec section 6.5 fits the
-       main sequence from exactly those two columns, selecting rows by
-       label.
-
-    A third lands in stage 2 rather than now: with no detector yet emitting
-    `pso`, nothing exercises `saccade` outranking it -- but on this
-    instrument PSO follows every saccade (design spec section 2.5), the two
-    eyes will straddle that boundary routinely, and taking `saccade` would
-    assign the glissade silently. Section 2.5 requires that assignment to be
-    "an explicit parameter, never a default".
+    **Touching or overlapping intersections are coalesced BEFORE they are
+    labelled**, and that is what makes the label agree with the amplitude
+    `_insert_trace` stores. That method writes each interval's label onto the
+    mask and re-derives runs from it, so two intervals that touch and carry
+    the same label would come back as ONE run whose `[start, stop)` -- and
+    therefore whose measured amplitude -- matches neither input. Coalescing
+    first leaves every returned span separated from the next by at least one
+    sample, so `runs_from_labels` cannot merge any of them and the span
+    labelled here is exactly the run measured there. Today's one detector
+    already supplies that separation (`engbert_kliegl.py::_true_runs`
+    returns maximal runs, and intersecting two separated families keeps them
+    separated), but `registry.py::DetectFn`'s contract does not require it,
+    and agreement between a stored label and a stored amplitude must not
+    rest on a property only one detector happens to have. The sort is for
+    the same reason: `left` and `right` arrive sorted from today's detector,
+    and nothing in that contract says they must.
 
     **The floor is here because the binocular criterion is a FILTER, not a
     generator** (whole-branch review, finding H3). It must never produce an
@@ -659,20 +663,113 @@ def _overlapping(left: list[Run], right: list[Run], min_duration_samples: int) -
     paramset naming 0 must not weaken it into spans `measure` refuses.
     """
     floor = max(int(min_duration_samples), 1)
-    spans = []
+    intersections = []
     for left_run in left:
         for right_run in right:
             start = max(left_run.start, right_run.start)
             stop = min(left_run.stop, right_run.stop)
             if stop - start >= floor:
-                spans.append(
-                    Run(
-                        start=start,
-                        stop=stop,
-                        label=higher_precedence(left_run.label, right_run.label),
-                    )
-                )
-    return spans
+                intersections.append((start, stop))
+
+    spans: list[list[int]] = []
+    for start, stop in sorted(intersections):
+        # `<=`, not `<`: a span STARTING where the previous one stops touches
+        # it, and two touching runs of one label are one run to
+        # `runs_from_labels`. Merging them here is what keeps the interval
+        # labelled below identical to the interval `_insert_trace` measures.
+        if spans and start <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], stop)
+        else:
+            spans.append([start, stop])
+
+    return [Run(start=start, stop=stop, label=label_for(start, stop)) for start, stop in spans]
+
+
+# The vocabularies whose labels ARE a split by amplitude, so a conjunction run
+# can be labelled from its own measurement. Design spec section 3.1 gives this
+# to Engbert-Kliegl (`{saccade, microsaccade}`) and, in stage 2, to
+# Otero-Millan (`{microsaccade}`) -- a SUBSET test rather than equality, so
+# the second qualifies as well as the first.
+_AMPLITUDE_DERIVED_VOCABULARY = frozenset({Label.SACCADE, Label.MICROSACCADE})
+
+
+def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[int, int], Label]:
+    """How a conjunction run gets its label: `classify` over that run's OWN
+    amplitude, on the gaze the conjunction is measured from. Returned as a
+    callable for `_overlapping` to apply to each span it keeps.
+
+    **The conjunction's label comes from its own measurement, over its own
+    interval -- never from arbitrating between the two eyes.** The rule this
+    replaces ranked the two eyes' labels through `labels.py::PRECEDENCE`,
+    and was wrong three ways at once, all from one cause: the label was
+    derived from the two eyes' full-event amplitudes and the amplitude from
+    the left eye's, over the shorter intersection.
+
+    1. Design spec section 1 says `saccade` and `microsaccade` are "a split,
+       not a ranking" -- and a tuple has a total order, so ranking them
+       decided a pair the spec says is never in contention. Measured on the
+       reference recording at default parameters: it fired on 593 of 4,550
+       intersections, 13.0%.
+    2. `saccade` outranking `pso` assigns the glissade silently, on an
+       instrument where section 2.5 argues PSO follows EVERY saccade and
+       requires that assignment to be "an explicit parameter, never a
+       default".
+    3. The stored `label` contradicted the stored `amplitude_deg` on 12.3%
+       of conjunction event rows -- 518 of 2,209 `saccade` rows below the
+       threshold, 40 of 2,341 `microsaccade` rows at or above it, against 0
+       of 5,972 on the left trace and 0 of 5,592 on the right. Section 6.5
+       fits the main sequence from exactly those two columns, selecting rows
+       by label, so those 518 sub-degree points were headed into a saccade
+       fit.
+
+    Deriving the label ONCE, from the amplitude that is actually stored,
+    ends all three: `_overlapping` labels each span with this callable and
+    `_insert_trace` measures that same `[start, stop)` on this same `gaze`,
+    so the two agree by construction on every row rather than by luck.
+    Deriving it twice -- once from the eyes, once from the measurement -- is
+    what let them diverge in the first place, so the eyes' own labels are
+    not consulted here at all.
+
+    **`microsaccade_max_deg` comes from the PARAMSET dict, not from the
+    detector's own params dataclass.** It is the shared key
+    `register_default_paramsets` writes once beside `detector`, and
+    `_params_for` hands it to a detector only if that detector declares a
+    field of the name -- which a detector whose vocabulary is
+    `{microsaccade}` alone has no reason to do while still needing this
+    rule. A paramset that names no threshold raises `KeyError` here rather
+    than falling back to `measure.MICROSACCADE_MAX_DEG`: a silent module
+    default is exactly what would let two `eye_detection` paramsets split
+    their conjunctions at different amplitudes with nothing on record.
+
+    **Any other vocabulary raises.** One containing `pso`, `pursuit`,
+    `drift` or `fixation` is one no amplitude cut can answer for, and
+    section 2.5 forbids answering it by default -- the choice belongs where
+    section 6.1 already puts it, in a stated `pso_as` comparison parameter.
+    No such detector is registered in stage 1, so this is a loud unreachable
+    failure rather than a silent default, which is the whole of the ruling
+    it enforces. Raised HERE, where the undecided question is actually
+    asked, rather than at `get_detector`: such a detector's own per-eye
+    traces are perfectly well defined, and it is only the conjunction that
+    has no rule.
+    """
+    from wl_preproc.eye.detect.measure import amplitude, classify
+
+    if not detector.vocabulary <= _AMPLITUDE_DERIVED_VOCABULARY:
+        raise UndecidedConjunctionLabel(
+            f"detector {detector.name!r} declares vocabulary "
+            f"{sorted(label.value for label in detector.vocabulary)}, which is not a "
+            "split by amplitude, so a conjunction run cannot take its label from its "
+            "own amplitude -- and design spec section 2.5 requires that assignment to "
+            "be 'an explicit parameter, never a default'. State it where section 6.1 "
+            "puts the choice, in a `pso_as`-style comparison parameter, rather than "
+            "letting this function invent one"
+        )
+    microsaccade_max_deg = params["microsaccade_max_deg"]
+
+    def label_for(start: int, stop: int) -> Label:
+        return classify(amplitude(gaze, start, stop), microsaccade_max_deg)
+
+    return label_for
 
 
 def _min_duration_samples(detector_params) -> int:

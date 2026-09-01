@@ -878,6 +878,14 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     assert Label.INVALID in present
 
 
+def _always(label):
+    """A `label_for` for `_overlapping` that answers one label whatever the
+    span. For the tests below, where the FLOOR is what is under test and
+    which label a surviving span carries is not -- `_conjunction_label` is
+    the real rule, and it has its own tests."""
+    return lambda start, stop: label
+
+
 def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
     """Finding H3: `_overlapping` intersected the two eyes' spans with no
     duration floor of any kind, so the intersection of two 6-sample
@@ -908,18 +916,19 @@ def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
     def sacc(start, stop):
         return Run(start, stop, Label.SACCADE)
 
+    saccade = _always(Label.SACCADE)
     # Both eyes' own events comfortably clear the floor (10 and 21 samples);
     # only their OVERLAP is short. This is the shape that manufactured the 44.
-    assert _overlapping([sacc(100, 110)], [sacc(109, 130)], floor) == []
+    assert _overlapping([sacc(100, 110)], [sacc(109, 130)], floor, saccade) == []
     # One sample short of the floor: still nothing. This is the shape a
     # `stop - start == 1` guard inside `measure` would have let through.
-    assert _overlapping([sacc(100, 110)], [sacc(110 - (floor - 1), 130)], floor) == []
+    assert _overlapping([sacc(100, 110)], [sacc(110 - (floor - 1), 130)], floor, saccade) == []
     # Exactly the floor: a real event, and it is the intersection itself.
-    assert _overlapping([sacc(100, 110)], [sacc(110 - floor, 130)], floor) == [
+    assert _overlapping([sacc(100, 110)], [sacc(110 - floor, 130)], floor, saccade) == [
         sacc(110 - floor, 110)
     ]
     # Comfortably over it, unchanged by the filter.
-    assert _overlapping([sacc(100, 130)], [sacc(105, 140)], floor) == [sacc(105, 130)]
+    assert _overlapping([sacc(100, 130)], [sacc(105, 140)], floor, saccade) == [sacc(105, 130)]
 
 
 def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor():
@@ -950,12 +959,13 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     def sacc(start, stop):
         return Run(start, stop, Label.SACCADE)
 
+    saccade = _always(Label.SACCADE)
     # A floor of 1 is not "no filter": it is exactly the `stop > start` test
     # this fix replaced, so abutting spans still yield nothing.
-    assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 1) == []
-    assert _overlapping([sacc(0, 10)], [sacc(9, 20)], 1) == [sacc(9, 10)]
+    assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 1, saccade) == []
+    assert _overlapping([sacc(0, 10)], [sacc(9, 20)], 1, saccade) == [sacc(9, 10)]
     # And a paramset naming 0 cannot weaken it into a span `measure` refuses.
-    assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 0) == []
+    assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 0, saccade) == []
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1199,43 +1209,216 @@ def test_insert_trace_measures_only_the_event_labels():
     assert by_label["fixation"]["amplitude_deg"] is None
 
 
-def test_the_conjunction_takes_the_higher_precedence_label_of_the_two_eyes():
-    """`labels.py::PRECEDENCE`'s live consumer. Until detectors returned
-    labelled intervals there was nothing to combine, so the constant was
-    declared and read by nothing -- and its only test asserted it against
-    itself.
+def _ramp_gaze(n_samples, deg_per_sample):
+    """A gaze trace moving `deg_per_sample` along x each sample, so any span's
+    `amplitude` is exactly `(stop - 1 - start) * deg_per_sample` -- an
+    interval's amplitude is arithmetic here rather than something a test has
+    to measure to know."""
+    gaze = np.zeros((n_samples, 2))
+    gaze[:, 0] = np.arange(n_samples) * deg_per_sample
+    return gaze
 
-    A precedence rule rather than re-measuring the intersection's own
-    amplitude, because it has to generalise to all seven detectors: four of
-    design spec section 3.1's seven declare vocabularies including `pso`,
-    `pursuit` or `fixation`, and no amplitude threshold decides between a
-    left-eye `pso` and a right-eye `saccade`.
+
+def test_the_conjunction_labels_each_span_from_its_own_amplitude():
+    """The rule that replaced `labels.py::PRECEDENCE`. The conjunction has no
+    detector to speak for it, so its label comes from `classify` over the
+    intersection's OWN amplitude -- the same `[start, stop)`, on the same
+    gaze, that `_insert_trace` measures and stores.
+
+    **The two eyes' own labels are not consulted, and this test is built so
+    that a precedence rule gives a different answer.** Each case below pairs
+    a left-eye `saccade` with a right-eye `microsaccade` -- the pair
+    `PRECEDENCE` used to resolve to `saccade` every time -- while the
+    intersection's own amplitude decides one way in the first case and the
+    other in the second. A reversion to ranking the eyes' labels fails the
+    second assertion; a reversion that ranked the other way fails the first.
     """
     from wl_preproc.eye.detect.labels import Label, Run
-    from wl_preproc.schema.detect import _overlapping
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _conjunction_label, _overlapping
 
-    # The pair the one shipped detector can actually produce.
-    (both,) = _overlapping(
-        [Run(100, 130, Label.SACCADE)], [Run(105, 140, Label.MICROSACCADE)], 6
+    detector = get_detector("engbert_kliegl")
+    params = {"detector": "engbert_kliegl", "microsaccade_max_deg": 1.0}
+
+    # 0.1 deg per sample: a 30-sample intersection spans 2.9 deg, a 6-sample
+    # one spans 0.5 deg -- either side of the 1.0 deg cut, from one trace.
+    gaze = _ramp_gaze(200, 0.1)
+    label_for = _conjunction_label(detector, params, gaze)
+
+    (big,) = _overlapping(
+        [Run(100, 130, Label.SACCADE)], [Run(100, 130, Label.MICROSACCADE)], 6, label_for
     )
-    assert both == Run(105, 130, Label.SACCADE)
+    assert big == Run(100, 130, Label.SACCADE)
 
-    # Symmetric: which eye is named first must not decide the label.
+    (small,) = _overlapping(
+        [Run(100, 106, Label.SACCADE)], [Run(100, 106, Label.MICROSACCADE)], 6, label_for
+    )
+    assert small == Run(100, 106, Label.MICROSACCADE)
+
+    # It is the INTERSECTION that is classified, not either eye's own span:
+    # both eyes' events are long enough to clear the cut on their own, and
+    # only their overlap is small.
+    (overlap,) = _overlapping(
+        [Run(100, 130, Label.SACCADE)], [Run(124, 160, Label.SACCADE)], 6, label_for
+    )
+    assert overlap == Run(124, 130, Label.MICROSACCADE)
+
+    # Symmetric: which eye is named first cannot change an answer that never
+    # reads either eye's label.
     (swapped,) = _overlapping(
-        [Run(105, 140, Label.MICROSACCADE)], [Run(100, 130, Label.SACCADE)], 6
+        [Run(124, 160, Label.SACCADE)], [Run(100, 130, Label.SACCADE)], 6, label_for
     )
-    assert swapped.label is Label.SACCADE
+    assert swapped == overlap
 
-    # A stage-2 pair, so the rule is exercised beyond the amplitude split
-    # that a re-classification would also have handled.
-    (mixed,) = _overlapping([Run(0, 20, Label.PSO)], [Run(5, 25, Label.FIXATION)], 6)
-    assert mixed == Run(5, 20, Label.PSO)
 
-    # Agreement is unchanged, not merely resolved.
-    (agreed,) = _overlapping(
-        [Run(0, 20, Label.MICROSACCADE)], [Run(5, 25, Label.MICROSACCADE)], 6
+def test_the_conjunction_label_matches_the_amplitude_that_gets_stored():
+    """The defect this rule closes, asserted through the real
+    `_insert_trace`: a conjunction run whose stored `label` says `saccade`
+    and whose stored `amplitude_deg` is 0.8 deg is not a measurement design
+    spec section 6.5 can fit a main sequence from, and 12.3% of conjunction
+    event rows were exactly that.
+
+    Label and amplitude now come from one interval on one trace, so the
+    agreement is structural. Checked on the STORED row rather than on
+    `_overlapping`'s output, because it is the stored pair section 6.5
+    reads.
+    """
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.measure import classify
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema import detect as detect_schema
+    from wl_preproc.schema.detect import _conjunction_label, _overlapping
+
+    n_samples = 400
+    gaze = _ramp_gaze(n_samples, 0.1)
+    v = np.zeros((n_samples, 2))
+    v[:, 0] = 100.0
+    offered = np.full(n_samples, None, dtype=object)
+    params = {"detector": "engbert_kliegl", "microsaccade_max_deg": 1.0}
+    label_for = _conjunction_label(get_detector("engbert_kliegl"), params, gaze)
+
+    spans = _overlapping(
+        [Run(20, 60, Label.SACCADE), Run(100, 108, Label.MICROSACCADE),
+         Run(200, 260, Label.MICROSACCADE)],
+        [Run(30, 80, Label.MICROSACCADE), Run(100, 110, Label.SACCADE),
+         Run(190, 240, Label.SACCADE)],
+        6,
+        label_for,
     )
-    assert agreed == Run(5, 20, Label.MICROSACCADE)
+
+    sink = _CapturedInserts()
+    detect_schema.EyeDetection._insert_trace(
+        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0
+    )
+    events = [row for row in sink.rows if row["label"] in ("saccade", "microsaccade")]
+
+    # Not vacuous: both labels are actually produced, so the assertion below
+    # is deciding between two live answers on every row.
+    assert {row["label"] for row in events} == {"saccade", "microsaccade"}
+    for row in events:
+        assert row["label"] == classify(row["amplitude_deg"], 1.0).value
+
+
+def test_two_touching_intersections_become_one_conjunction_event():
+    """`_overlapping` coalesces touching intersections BEFORE labelling them,
+    and this is why. `_insert_trace` writes each interval's label onto the
+    mask and re-derives runs from it, so two touching intervals carrying the
+    same label come back as ONE run -- whose amplitude is measured over the
+    whole of it, not over either half.
+
+    The gaze below is built so those are different answers: each half spans
+    0.95 deg and the whole spans 1.95 deg, either side of the 1.0 deg cut.
+    Without the coalescing, `_overlapping` labels each half `microsaccade`
+    from its own 0.95 deg, `runs_from_labels` merges them, and one row is
+    stored saying `microsaccade` beside an `amplitude_deg` of 1.95 -- the
+    exact label/amplitude contradiction this round exists to make
+    impossible, reachable through a detector that returns abutting
+    intervals. `registry.py::DetectFn` permits one; today's does not, which
+    is why this is asserted rather than left to the reference recording.
+    """
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema import detect as detect_schema
+    from wl_preproc.schema.detect import _conjunction_label, _overlapping
+
+    n_samples = 200
+    gaze = _ramp_gaze(n_samples, 0.05)
+    v = np.zeros((n_samples, 2))
+    v[:, 0] = 100.0
+    offered = np.full(n_samples, None, dtype=object)
+    label_for = _conjunction_label(
+        get_detector("engbert_kliegl"), {"microsaccade_max_deg": 1.0}, gaze
+    )
+
+    # One left-eye event meeting two abutting right-eye events, so the two
+    # intersections touch at sample 120.
+    spans = _overlapping(
+        [Run(100, 140, Label.SACCADE)],
+        [Run(100, 120, Label.SACCADE), Run(120, 140, Label.SACCADE)],
+        6,
+        label_for,
+    )
+    assert spans == [Run(100, 140, Label.SACCADE)]
+
+    sink = _CapturedInserts()
+    detect_schema.EyeDetection._insert_trace(
+        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0
+    )
+    (event,) = [row for row in sink.rows if row["label"] != "fixation"]
+    assert (event["run_start"], event["run_stop"]) == (100, 140)
+    assert event["label"] == "saccade"
+    assert event["amplitude_deg"] == pytest.approx(1.95)
+
+
+def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunction():
+    """Design spec section 2.5: whether a `pso` run counts as saccade or as
+    fixation is "an explicit parameter, never a default". `PRECEDENCE` made
+    that choice silently -- `saccade` outranked `pso`, so a left-eye saccade
+    meeting a right-eye glissade became a saccade with nothing asked and
+    nothing recorded -- on an instrument where section 2.5 argues PSO
+    follows every saccade.
+
+    No detector emitting `pso` is registered in stage 1, so this raise is
+    unreachable today. That is the point: a loud unreachable failure is what
+    the ruling requires, and the alternative is the silent default it
+    forbids. The message must name where the choice belongs (section 6.1's
+    `pso_as`), because an error that only says "unsupported" sends the next
+    reader to invent a rule here.
+    """
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import Detector
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    glissade_aware = Detector(
+        name="nystrom_holmqvist",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=_amplitude_blind_detect,
+    )
+
+    with pytest.raises(UndecidedConjunctionLabel) as excinfo:
+        _conjunction_label(glissade_aware, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
+
+    message = str(excinfo.value)
+    assert "2.5" in message and "6.1" in message and "pso_as" in message
+    assert "nystrom_holmqvist" in message
+
+    # Otero-Millan's `{microsaccade}` is a SUBSET of the amplitude split, not
+    # equal to it, and must still be labelled rather than refused -- design
+    # spec section 3.1 gives it that vocabulary, and it is stage 2's second
+    # amplitude-derived detector.
+    subset = Detector(
+        name="otero_millan",
+        vocabulary=frozenset({Label.MICROSACCADE}),
+        run=_amplitude_blind_detect,
+    )
+    subset_label = _conjunction_label(subset, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
+    assert subset_label(0, 6) is Label.MICROSACCADE
+
+    # And the threshold is never defaulted from `measure.MICROSACCADE_MAX_DEG`:
+    # a paramset that names none is a paramset nothing can honestly classify
+    # against, so it raises rather than picking a module constant.
+    with pytest.raises(KeyError, match="microsaccade_max_deg"):
+        _conjunction_label(subset, {"detector": "otero_millan"}, _ramp_gaze(50, 0.1))
 
 
 def test_the_detection_key_source_has_no_stray_eye_attribute(daemon_module):
@@ -1357,9 +1540,9 @@ def _encode(mask, intervals):
     Returns the runs and the saccade/microsaccade split.
 
     **No `classify` call, deliberately.** The labels come from the detector
-    (or, for the conjunction, from `_overlapping`'s precedence rule): this
-    helper mirrors `_insert_trace`, and `_insert_trace` assigns no labels of
-    its own."""
+    (or, for the conjunction, from the `label_for` `_overlapping` was handed):
+    this helper mirrors `_insert_trace`, and `_insert_trace` assigns no
+    labels of its own."""
     from wl_preproc.eye.detect.labels import Label, runs_from_labels
 
     labels = mask.copy()
@@ -1372,6 +1555,22 @@ def _encode(mask, intervals):
             n_microsaccade += 1
     labels = np.where(labels == None, Label.FIXATION, labels)  # noqa: E711
     return runs_from_labels(labels), n_saccade, n_microsaccade
+
+
+def _event_amplitudes(runs, gaze, v, fs_hz):
+    """`(run, amplitude_deg)` for every event run, measured exactly as
+    `EyeDetection._insert_trace::_run_row` measures it -- `measure` over the
+    FINAL run, on the trace's own gaze. The STORED amplitude, in other words,
+    which is the only one that can contradict a stored label and the one
+    design spec section 6.5 fits a main sequence from."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.measure import measure
+
+    return [
+        (run, measure(gaze, v, run.start, run.stop, fs_hz).amplitude_deg)
+        for run in runs
+        if run.label in (Label.SACCADE, Label.MICROSACCADE)
+    ]
 
 
 def test_the_run_count_measured_against_the_reference_recording(capsys):
@@ -1413,6 +1612,19 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     respond to scale, which is the real uncertainty on the number this test
     surfaces, honestly, alongside it.
 
+    **Part 3 checks every stored event row's label against its own stored
+    amplitude**, which is the defect the conjunction's old precedence rule
+    left behind: the label was the two eyes' consensus of two full-event
+    amplitudes and the amplitude was the left eye's over the shorter
+    intersection, so 12.3% of conjunction event rows stored a pair that
+    contradicted itself while both eyes' own traces stored 0. A sample
+    would have missed it -- seven rows in eight agreed -- so this asserts
+    over every row of all three traces. It also prints each trace's median
+    event amplitude and duration, which is where the conjunction's
+    systematically SMALLER amplitudes (its interval is the intersection, and
+    so shorter than either eye's own event) stop being an argument and
+    become a measurement.
+
     **What is not measured here.** One detector of seven (Engbert-Kliegl,
     this subsystem's zero-dependency baseline); the other six may disagree
     substantially, in either direction, on run count as well as on
@@ -1436,10 +1648,12 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.measure import classify
+    from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
     from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
-    from wl_preproc.schema.detect import _overlapping
+    from wl_preproc.schema.detect import _conjunction_label, _overlapping
 
     t0 = time.monotonic()
     recording = read_ohdpi(sample)
@@ -1472,10 +1686,21 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # `_overlapping` applied before finding H3, so their difference IS the
     # set of spans that used to be stored as events neither eye's own
     # detector would have accepted. Printed and asserted below.
-    conjunction_spans = _overlapping(
-        left_spans, right_spans, DEFAULT_EK_PARAMS.min_duration_samples
+    #
+    # The conjunction's LABEL rule is the real one, built the way
+    # `EyeDetection.make()` builds it -- `_conjunction_label` over the LEFT
+    # eye's gaze, since that is the trace the conjunction is measured from --
+    # so the agreement asserted at the end of this test is asserted against
+    # production's own rule and not a restatement of it here.
+    conjunction_label = _conjunction_label(
+        get_detector("engbert_kliegl"),
+        {"microsaccade_max_deg": DEFAULT_EK_PARAMS.microsaccade_max_deg},
+        left_gaze,
     )
-    unfloored_spans = _overlapping(left_spans, right_spans, 1)
+    conjunction_spans = _overlapping(
+        left_spans, right_spans, DEFAULT_EK_PARAMS.min_duration_samples, conjunction_label
+    )
+    unfloored_spans = _overlapping(left_spans, right_spans, 1, conjunction_label)
 
     left_runs, left_n_sacc, left_n_micro = _encode(left_mask, left_spans)
     right_runs, right_n_sacc, right_n_micro = _encode(right_mask, right_spans)
@@ -1499,6 +1724,25 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # spans -- the concrete demonstration that the split (unlike the count)
     # depends on scale: `classify` sees 3x the amplitude at `scale_b`.
     _, n_sacc_b, n_micro_b = _encode(left_mask, spans_b_fixed_mask)
+
+    # --- Part 3: the label/amplitude agreement this round exists to close,
+    # and the amplitude shift it makes visible. Every event run's STORED
+    # amplitude, measured the way `_run_row` measures it, against the label
+    # stored beside it.
+    threshold = DEFAULT_EK_PARAMS.microsaccade_max_deg
+    measured = {
+        "left": _event_amplitudes(left_runs, left_gaze, left_v, recording.fs_hz),
+        "right": _event_amplitudes(right_runs, right_gaze, right_v, recording.fs_hz),
+        "conjunction": _event_amplitudes(conj_runs, left_gaze, left_v, recording.fs_hz),
+    }
+    contradictions = {
+        trace_name: [
+            (run, amplitude_deg)
+            for run, amplitude_deg in events
+            if classify(amplitude_deg, threshold) is not run.label
+        ]
+        for trace_name, events in measured.items()
+    }
 
     with capsys.disabled():
         print(f"\n  reference recording: {sample}")
@@ -1541,6 +1785,21 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
                 f"({n_sacc} saccade, {n_micro} microsaccade, {other} fixation)"
             )
         print(f"    TOTAL (1 detector x 3 traces): {total_runs}")
+
+        print(
+            "  Part 3 -- stored label vs stored amplitude, and the "
+            f"conjunction's amplitude shift (cut at {threshold} deg):"
+        )
+        for trace_name in ("left", "right", "conjunction"):
+            events = measured[trace_name]
+            amplitudes = np.array([amplitude_deg for _run, amplitude_deg in events])
+            durations = np.array([run.stop - run.start for run, _a in events])
+            print(
+                f"    {trace_name:11s} {len(contradictions[trace_name])}/{len(events)} event "
+                f"rows whose label contradicts their own amplitude; "
+                f"median amplitude {np.median(amplitudes):.3f} deg over "
+                f"{np.median(durations):.0f} samples"
+            )
 
         # --- Part 2: scale-sensitivity sweep, mask RECOMPUTED per scale
         # (left eye only -- right/conjunction agree with it within a few
@@ -1586,6 +1845,32 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
         stop - start < DEFAULT_EK_PARAMS.min_duration_samples
         for start, stop in _bounds(unfloored_spans)
     ), "the raw intersection has no sub-floor span, so the floor above proves nothing here"
+
+    # THE assertion this fix round exists for, and it is over EVERY event row
+    # of every trace rather than a sample of them: the previous rule's
+    # contradiction rate was 12.3% on the conjunction and 0% on both eyes, so
+    # a spot check would have found agreement on 7 rows out of 8 and reported
+    # the trace healthy.
+    #
+    # `classify` over the STORED amplitude, not over a re-derivation of it:
+    # design spec section 6.5 fits the main sequence from the stored
+    # `amplitude_deg`/`peak_velocity_deg_s` pair while selecting rows by the
+    # stored `label`, so a row saying `saccade` and storing 0.8 deg is what
+    # actually poisons the fit, whatever any intermediate value said.
+    for trace_name in ("left", "right", "conjunction"):
+        offenders = contradictions[trace_name]
+        assert not offenders, (
+            f"{len(offenders)} of {len(measured[trace_name])} {trace_name} event rows store a "
+            f"label their own amplitude contradicts, e.g. {offenders[0][0].label.value} at "
+            f"{offenders[0][1]:.3f} deg against a {threshold} deg cut"
+        )
+    # Not vacuous: both labels really are produced on every trace, so the
+    # loop above is deciding between two live answers on every row rather
+    # than confirming a trace that only ever says one thing.
+    for n_sacc, n_micro in (
+        (left_n_sacc, left_n_micro), (right_n_sacc, right_n_micro), (conj_n_sacc, conj_n_micro)
+    ):
+        assert n_sacc and n_micro
 
     # A generous ceiling, not a pin (the measured total is printed above, and
     # is far below this): the point of this test is to SURFACE the number,
