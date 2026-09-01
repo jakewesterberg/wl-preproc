@@ -286,6 +286,81 @@ def activate_all(prefix: str = DEFAULT_PREFIX) -> None:
         module.activate(prefix=prefix)
 
 
+# Every schema module that declares a `register_default_paramsets` of its
+# own, as `(name, module)` -- the same written-list-plus-discovering-test
+# shape `_PROJECT_SCHEMA_MODULES` above uses, and for the same reason: a
+# `pkgutil`/`getattr` sweep inside `wl_preproc/` would be the dynamic import
+# the outbound guardrail bans, and a written list is what makes this
+# auditable by reading. One entry today.
+#
+# `test_every_schema_module_that_declares_default_paramsets_is_registered`
+# is the completeness claim: it DISCOVERS which modules declare such a
+# function and fails if one is missing here. `detect`'s own omission -- from
+# production entirely, not merely from a list -- is finding H1, and this
+# tuple exists so the second such module cannot repeat it silently.
+_PARAMSET_MODULES: tuple[tuple[str, object], ...] = (("detect", detect),)
+
+
+def register_default_paramsets() -> dict[str, dict[str, int]]:
+    """Every default paramset a `dj.Computed` stage's own `key_source`
+    requires to already exist, registered before that stage is populated.
+    Returns `{schema module name: that module's own return value}`.
+
+    **This is its own step in `run_once`, deliberately not folded into
+    `activate_all`.** Activation binds table declarations to a database and
+    nothing else; this WRITES ROWS. Several callers activate a schema with
+    no intention of populating anything -- `cli/report.py::_detection_rows`,
+    `cli/main.py`'s `archive` dispatch, `ingest/watcher.py` -- and
+    `count_stale_jobs`'s own docstring already records what that conflation
+    costs when it goes the other way ("a diagnostic must not mutate the
+    thing it inspects": `wlpp doctor` silently deleted and re-pended job
+    rows). Registration behind the activation guard would make `wlpp report`
+    write paramset rows as a side effect of reading, which is the same
+    mistake pointed the other direction. So `activate_all` keeps its name
+    honest and `run_once` calls this second.
+
+    **Nothing in production called `detect.register_default_paramsets` at
+    all until this function existed, and the whole detection subsystem was
+    silently inert as a result** (whole-branch review, finding H1).
+    `EyeValidity.key_source` and `EyeDetection.key_source` each join against
+    `paramset.ParamSet & {"paramset_type": ...}`, so with no row registered
+    both name ZERO candidate keys: `run_once` reports no error, writes no
+    row, and the daily report's `## Detection` section renders `- none` and
+    `blink: 0.0% / invalid: 0.0%` forever -- presented as measurements
+    rather than as "not configured". Its only callers were two test
+    fixtures, which is precisely why the gap was invisible; the end-to-end
+    proof that production now closes it is
+    `tests/schema/test_daemon.py::
+    test_a_real_wlpp_daemon_invocation_registers_the_detection_paramsets`,
+    which runs the real CLI against a virgin prefix in a subprocess rather
+    than registering anything itself.
+
+    **`ephys`'s precedent does not cover this.** Its three ParamSet-keyed
+    tables are all `dj.Manual`, so "no rows" there honestly means "nothing
+    declared yet" and a human declares it. `detect` is this project's first
+    `dj.Computed` in `_computed_tables()` gated on a `ParamSet` row
+    existing, so it is the first stage that can be gated shut by an absent
+    row without anyone being told.
+
+    **Idempotent, and that is a property of `paramset.register` rather than
+    a claim made here**: it is keyed by content hash and returns the
+    existing index for identical params (`paramset.py::register`'s own
+    "reusing an identical one"), so the obvious deployment -- a cron every
+    30 minutes -- re-registers nothing. It must also run OUTSIDE any
+    transaction, which `run_once` satisfies: see `paramset.register`'s own
+    STANDING CONSTRAINT comment for why the dedupe re-read cannot see a
+    rival's commit from inside one.
+
+    **The written list is the audit, and a discovering test is the
+    completeness claim** -- the same shape `_computed_tables()` and
+    `_PROJECT_SCHEMA_MODULES` already use. See `_PARAMSET_MODULES` above.
+
+    Must run AFTER `activate_all`: `paramset.register` writes to
+    `paramset.ParamSet`, which is not bound to a database until then.
+    """
+    return {name: module.register_default_paramsets() for name, module in _PARAMSET_MODULES}
+
+
 def job_tables() -> list:
     """Every ``~jobs`` table this project can currently see, as query objects.
 
@@ -739,6 +814,14 @@ def run_once(
     The sessions it builds are counted into `populated` for the same reason
     every other key computed is.
 
+    **`register_default_paramsets()` runs between `activate_all()` and the
+    stages, and it is not optional.** `detect.EyeValidity`/
+    `detect.EyeDetection` are the first stages in this list whose
+    `key_source` requires a `paramset.ParamSet` row to exist before it names
+    any candidate at all, so until this call existed the whole detection
+    subsystem populated nothing, reported no error, and rendered zeros in
+    the daily report as if they were measurements. See that function.
+
     **Archival is OPT IN, and skipped -- visibly -- when it is not
     configured.** Controller ruling F: `archive_session` needs `nas_root`,
     `host` and `share` to publish anywhere, and the NAS this pipeline would
@@ -759,6 +842,12 @@ def run_once(
     function that still does.)
     """
     activate_all(prefix=prefix)
+    # SECOND, and before the `_computed_tables()` loop below: two of its
+    # stages have a `key_source` that names no candidate at all until these
+    # rows exist. See `register_default_paramsets` for what was silently
+    # inert until this line was here, and for why it is not folded into
+    # `activate_all`.
+    register_default_paramsets()
 
     reaped = reap_stale_jobs(prefix=prefix)
     populated, errors = 0, []
