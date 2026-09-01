@@ -442,6 +442,103 @@ def right_refused_session(daemon_module, prefix, tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def out_of_order_session(daemon_module, prefix, tmp_path_factory):
+    """Finding M5's own reproduction: `EyeValidity` reached BEFORE the event
+    stage has run, which is the state of any session whose event decode
+    failed while its barcode alignment succeeded.
+
+    `_build_stepped_session` stops exactly there -- it populates
+    `SystemTimebase` and `core.Segment` and nothing else -- so the broken
+    order needs only one extra `EyeValidity.populate()` call, with no
+    `daemon.run_once()` in between to assemble events. `EyeCalibration.
+    key_source` requires `pipeline.event.BehaviorRecording`, so at this
+    point that table cannot name this session at all while `EyeValidity`'s
+    own `pipeline.Session & Ingestion & Segment(ohdpi)` restriction is
+    already satisfied.
+
+    Returns `(session_key, rows written out of order, report from the full
+    pass that follows, planted onsets)`.
+    """
+    from tests.schema.test_eye_populate import _row_for_time
+    from wl_preproc.schema import detect
+
+    session_key, segment, onset_times = _build_stepped_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` -- "detordr1" is exactly 8 characters.
+        dirname="detectorder", session_id="2027-06-05_01", subject="detordr1",
+        session_datetime=datetime.datetime(2027, 6, 5, 9, 0), seed=605,
+    )
+
+    detect.EyeValidity.populate()
+    out_of_order_rows = (detect.EyeValidity & session_key).to_dicts()
+
+    report = daemon_module.run_once(prefix=prefix)
+    onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
+    return session_key, out_of_order_rows, report, onsets
+
+
+def test_populating_out_of_order_writes_nothing_rather_than_a_false_refusal(
+    out_of_order_session,
+):
+    """Finding M5. Before the fix, `EyeValidity.key_source` was satisfied by
+    `Session & Ingestion & Segment(ohdpi)` alone, so reaching it before the
+    event stage found no `EyeCalibration` row, took `make()`'s
+    `_map_from_row(...) is None` branch, and wrote BOTH eyes refused with
+    "no usable calibration, so gaze is undefined". That row is permanent --
+    DataJoint never recomputes a populated key -- so on the next pass both
+    eyes calibrated successfully and three `EyeDetection` traces stayed
+    refused forever with a reason that had become false, while `run_once`
+    reported no error at all.
+
+    Requiring `eye.EyeCalibration` to have RUN (not to have succeeded) makes
+    that state unreachable: the session simply stays outstanding until the
+    stage it depends on has produced its rows.
+    """
+    _session_key, out_of_order_rows, _report, _onsets = out_of_order_session
+
+    assert out_of_order_rows == [], (
+        "EyeValidity populated before EyeCalibration could run, and wrote a "
+        "PERMANENT refusal that the very next pass makes false: "
+        f"{[(row['eye'], row['status'], row['reason']) for row in out_of_order_rows]}"
+    )
+
+
+def test_the_next_full_pass_then_computes_both_eyes(out_of_order_session):
+    """The other half of M5: staying outstanding must not mean staying
+    outstanding forever. One ordinary `run_once()` -- which assembles
+    events, calibrates, and only then reaches this table -- computes both
+    eyes and all three traces, with the planted onsets intact.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, _out_of_order_rows, report, onsets = out_of_order_session
+    assert not any(
+        "EyeValidity" in message or "EyeDetection" in message for message in report["errors"]
+    )
+
+    for eye_value in ("left", "right"):
+        assert (detect.EyeValidity & {**session_key, "eye": eye_value}).fetch1(
+            "status"
+        ) == "computed"
+    for trace in ("left", "right", "conjunction"):
+        assert (detect.EyeDetection & {**session_key, "trace": trace}).fetch1(
+            "status"
+        ) == "computed"
+
+    # Not merely "a row exists": the same planted-onset round trip
+    # `stepped_session` asserts, so a session that recovered from the
+    # out-of-order state is proven to have detected the real events rather
+    # than to have written an empty success.
+    runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
+        order_by="run_index"
+    )
+    detected = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+    assert len(detected) == len(onsets) == 3
+    for got, want in zip(detected, onsets, strict=True):
+        assert abs(got - want) <= 5
+
+
+@pytest.fixture(scope="module")
 def uncalibrated_session(daemon_module, prefix, tmp_path_factory):
     """Both eyes' calibration REFUSED -- `degenerate_session`'s own shape
     (four coincident targets, conditioning exactly 0.0, no `.bhv2` and no

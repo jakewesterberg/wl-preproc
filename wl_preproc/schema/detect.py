@@ -122,13 +122,53 @@ class EyeValidity(dj.Computed):
         could honestly write. A session whose CALIBRATION is unusable still
         reaches `make()` and gets a refused row -- that is a different fact,
         and it is the one `EyeDetection` needs to be able to report.
+
+        **`eye.EyeCalibration` is required to have RUN, not to have
+        succeeded** (whole-branch review, finding M5). `EyeCalibration.
+        key_source` additionally requires `pipeline.event.BehaviorRecording`,
+        which `daemon._populate_event_stage()` writes -- so a session whose
+        event decode failed while its barcode alignment succeeded satisfies
+        THIS table's restriction and not that one. Reached in that state
+        (`SystemTimebase` -> `Segment` -> `EyeValidity`, no event stage),
+        `make()`'s own `_map_from_row(...) is None` branch refused both eyes
+        with "no usable calibration, so gaze is undefined" -- and that row is
+        PERMANENT. On the next pass both eyes calibrate perfectly, but
+        DataJoint never recomputes a populated key, so three traces stay
+        refused forever with a reason that is now false, and `run_once`
+        reports no error. Nothing but the in-pass ordering of
+        `daemon._computed_tables()` kept the two tables in step; this
+        restriction is what makes that state unreachable rather than merely
+        unlikely.
+
+        **Presence, not success, and that is the whole point.** A session
+        whose calibration was GENUINELY refused still has rows here, so it
+        still reaches `make()` and still gets the refused mask row design
+        spec section 2 wants -- the refused path is preserved exactly.
+
+        **Presence is a sound gate because `EyeCalibration.make()` writes
+        BOTH eyes' rows in every terminal case, verified by reading it
+        rather than assumed**: its `if not segments` branch inserts two
+        refused rows and returns, its `if windows and not row_ranges` branch
+        does the same, and its main path appends one row per eye inside a
+        loop over a fixed `("left", "right")` pair before a single
+        `self.insert(rows)`. There is no path that returns having written
+        nothing. If `make()` RAISES, no row is written and this key simply
+        stays outstanding until a later pass -- which is the correct
+        outcome, not a false refusal.
+
+        A RESTRICTION (`&`), never a join: `EyeCalibration`'s own primary
+        key carries `eye`, and joining it in would propagate that attribute
+        into this key_source exactly as `EyeDetection.key_source`'s own
+        docstring records happening one table later. A restriction keeps
+        this operand's heading and asks only whether a matching row exists.
         """
-        from wl_preproc.schema import ingest
+        from wl_preproc.schema import eye as eye_schema, ingest
 
         return (
             pipeline.Session
             & ingest.Ingestion
             & (core.Segment & '`system` = "ohdpi"')
+            & eye_schema.EyeCalibration
         ) * (paramset.ParamSet & {"paramset_type": "eye_validity"}).proj(
             validity_paramset_idx="paramset_idx"
         )
