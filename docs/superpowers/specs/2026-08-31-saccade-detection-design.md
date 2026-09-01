@@ -135,9 +135,23 @@ index IS a time on that line, so every barcode edge after a gap would name a
 sync time that never happened, and the alignment would be silently wrong for
 the whole session rather than visibly absent. Whether a dropped frame should
 therefore reject the whole recording — rather than the gap-aware segmentation
-that same comment names as "a real option and a `core.Segment` decision" — is
-being put to the repository owner separately. Criterion 4 becomes reachable
-when that is answered, and not before.
+that same comment names as "a real option and a `core.Segment` decision" — was
+put to the repository owner.
+
+**Answered 2026-09-01: gap-aware segmentation.** Each contiguous run of frames
+is decoded and fitted as its own segment, so a dropped frame costs the frames
+around it rather than the session, and no edge is ever dated from an index
+that crossed a gap. That is a timebase-subsystem change with its own design
+questions — how a multi-segment recording presents to everything downstream
+that assumes one segment per system, and what happens to a barcode straddling
+a gap — so it gets its own spec and plan rather than being improvised into
+this one. `extract_ohdpi`'s own comment asked for exactly that restraint.
+**Criterion 4 becomes reachable when that work lands, and not before.**
+
+The intermediate state is worth naming: until then a recording with one
+dropped frame is refused by `extract_ohdpi` and leaves no `RejectedSegment`
+row, so it exists only as a line in `run_once`'s error list. That is a second,
+smaller defect in the same area, and it belongs to the same piece of work.
 
 **Real data has not exercised it either.** The reference recording
 (`OpenIris-2024Jul31-114628.txt`) has **zero** frame gaps across its 1,177,799
@@ -781,6 +795,13 @@ A detection section beside the existing eye section, showing the **pairwise**
 agreement rows per detector pair, the sessions whose detection was refused
 with their stated reasons, and the fraction of each session's samples labelled
 `invalid` or `blink`.
+
+**Per session and per EYE**, not pooled across the two. `EyeValidity` is keyed
+per eye and the pooled figure hides the case the number exists to surface: one
+eye at 90% blink beside a clean one averages to a mild-looking 45%. This
+sentence read "each session's" until 2026-09-01 and the implementation chose
+the finer grain deliberately; the spec is corrected to match rather than the
+code coarsened to obey a wording that loses information.
 
 **Vigor appears here as a session-versus-history line**, not as a bare number:
 this session's fitted main sequence against the median of that subject's prior
