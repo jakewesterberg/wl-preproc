@@ -223,8 +223,24 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    five remaining detectors (Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade
    detection) trip `_conjunction_label`'s raise, and because DataJoint rolls the whole
    `make()` back they write **no rows at all** — not partial per-eye data. That guard
-   is deliberate: spec §2.5 forbids defaulting the glissade assignment. Deciding it
-   unblocks four detectors at once and is the cheapest item on this list.
+   is deliberate. Deciding what it guards unblocks four detectors at once and is the
+   cheapest item on this list.
+
+   **What a glissade is, since this file used the word a dozen times without saying.**
+   After a saccade the eye's lens keeps moving relative to the optical axis, so the
+   tracker sees a small wobble immediately after every large movement. Deubel &
+   Bridgeman measured it on a dual-Purkinje tracker — this rig's instrument — at up to
+   **0.5° of retinal image displacement from lens movement alone**, which is *half* the
+   default 1° microsaccade threshold. So a detector that does not model it reports a
+   microsaccade after every saccade, systematically. Nyström & Holmqvist call the same
+   thing a **glissade**, find it in about half of all saccades at ~24 ms, and say
+   researchers "must actively choose whether to assign the glissades to saccades or
+   fixations", because current algorithms assign them "largely arbitrarily" and the
+   choice moves saccade and fixation durations significantly. `pso` — post-saccadic
+   oscillation — is this pipeline's label for it (spec §2.5).
+
+   **The open decision is narrower than "the glissade assignment" sounds**, and
+   `docs/handoffs/2026-09-02-the-conjunction-label-decision.md` sets it out.
 
    **U'n'Eye is the exception and is independently schedulable**: it declares
    `{saccade}`, a subset of the amplitude-derived vocabulary, so it never reaches that
