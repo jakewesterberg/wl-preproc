@@ -118,10 +118,22 @@ def detect_schema(dj_conn, prefix):
     detector_paramsets = detect.register_default_paramsets()
     validity_idx = paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
 
+    # `pair` is every registered detector's paramset index in ascending order
+    # -- `DetectorAgreement` stores `paramset_a < paramset_b` and this fixture
+    # is where that ordering is decided, rather than in the one test below
+    # that needs it. Sorted rather than taken in `register_default_paramsets`'
+    # own return order: indices come from `paramset.register` in whatever
+    # order this shared database first saw them, which is not this file's to
+    # predict. Every OTHER test here uses `detection_idx` alone, and that is
+    # load-bearing -- a single detection row names no pair, so those tests
+    # add no `DetectorAgreement` candidate to the shared database.
+    by_index = {index: name for name, index in detector_paramsets.items()}
     return SimpleNamespace(
         module=detect,
         validity_idx=validity_idx,
         detection_idx=detector_paramsets["engbert_kliegl"],
+        pair=sorted(by_index),
+        detector_names=by_index,
     )
 
 
@@ -482,31 +494,100 @@ def test_the_invalid_and_blink_fractions_are_shown(detect_schema, tmp_path, pref
         )
 
 
-def test_no_agreement_line_exists_in_this_stage(detect_schema, tmp_path, prefix):
-    """One detector cannot disagree with anything. A line that always read
-    1.00 would look like a measurement, which is worse than an absent one."""
+def test_the_agreement_line_appears_once_a_second_detector_exists(
+    detect_schema, tmp_path, prefix
+):
+    """**This test was `test_no_agreement_line_exists_in_this_stage`, and it
+    asserted the opposite of what it asserts now.** Its reasoning, kept
+    verbatim because it was right: "One detector cannot disagree with
+    anything. A line that always read 1.00 would look like a measurement,
+    which is worse than an absent one."
+
+    What changed is the premise, not the argument. Through stage 1
+    Engbert-Kliegl was the only entry in `eye/detect/registry.py::DETECTORS`,
+    so no pair existed, `DetectorAgreement.key_source` could name no
+    candidate, and any line would have been the constant that reasoning
+    rejects. Stage 2A registers Otero-Millan, so `1.00` is now one possible
+    outcome of a comparison rather than the only one arithmetic allows -- and
+    on the reference recording it is not the outcome (`docs/handoffs/
+    2026-09-02-consensus-and-otero-millan-built.md`). Design spec section 9
+    asks for these rows by name, and the absence the old test pinned would
+    now be the report withholding a measurement it has.
+
+    Rewritten rather than deleted: a deleted test leaves the suite asserting
+    nothing about a line it once asserted the absence of, and leaving both
+    standing would have had it assert that the line exists and that it does
+    not.
+
+    `tests/cli/test_consensus_report.py` owns the subsection's own rendering
+    -- what each line names, how the grouping treats the vocabulary and the
+    `pso` convention, what an undefined score renders as. This test owns only
+    the transition: the subsection is there, and a real pair reaches it.
+    """
+    from wl_preproc.schema import consensus
+
+    consensus.activate(prefix=prefix)
+
     subject = "detr0004"
     dt = datetime.datetime(2027, 6, 10, 12, 0)
     _land_session(subject, dt)
-    _insert_detection(
-        detect_schema.module,
-        _detection_row(
-            subject, dt, "conjunction", detect_schema.validity_idx, detect_schema.detection_idx,
-            status="computed", n_samples=500, n_saccades=1, n_microsaccades=0,
-        ),
+    paramset_a, paramset_b = detect_schema.pair
+    for index in (paramset_a, paramset_b):
+        _insert_detection(
+            detect_schema.module,
+            _detection_row(
+                subject, dt, "conjunction", detect_schema.validity_idx, index,
+                status="computed", n_samples=500, n_saccades=1, n_microsaccades=0,
+            ),
+        )
+    # A vocabulary no registered pair can produce and no other test in this
+    # suite plants, so this row's group is this test's alone -- the section is
+    # aggregated across every session in a database every module shares. See
+    # `tests/cli/test_consensus_report.py`'s module docstring for the full
+    # reasoning; the anchored `vocabulary \`...\`` needle below is from the
+    # same place, and for the same reason (`microsaccade` contains `saccade`,
+    # so bare vocabulary strings nest inside one another).
+    #
+    # Planting an agreement row is not optional once two `computed` detections
+    # of one trace exist: that pair is a `DetectorAgreement.key_source`
+    # candidate, and a later module's `daemon.run_once()` would otherwise find
+    # it outstanding and call `make()` on `EyeDetection.Run` parts this file
+    # never writes.
+    vocabulary = "pursuit,drift,fixation"
+    consensus.DetectorAgreement.insert1(
+        {
+            "subject": subject,
+            "session_datetime": dt,
+            "trace": "conjunction",
+            "validity_paramset_type": "eye_validity",
+            "validity_paramset_idx": detect_schema.validity_idx,
+            "paramset_type": "eye_detection",
+            "paramset_a": paramset_a,
+            "paramset_b": paramset_b,
+            "metric": "event_f1",
+            "vocabulary": vocabulary,
+            "pso_as": "saccade",
+            "value": 0.625,
+            "n_samples_compared": 500,
+        },
+        allow_direct_insert=True,
     )
     root = tmp_path / "scratch"
     root.mkdir()
 
     section = _section(build_report(root, prefix=prefix), "Detection")
 
-    assert "agreement" not in section.lower()
+    assert "\n### Detector agreement" in section
+    line = _line_for(section, f"vocabulary `{vocabulary}`")
+    assert f"paramset {paramset_a}" in line, line
+    assert f"paramset {paramset_b}" in line, line
+    assert "0.625" in line, line
 
 
-def test_the_four_detection_subsections_state_their_own_scope(detect_schema, tmp_path, prefix):
+def test_the_five_detection_subsections_state_their_own_scope(detect_schema, tmp_path, prefix):
     """Fix-round shape carried over from the Eye section's own
-    `test_each_eye_subsection_states_its_own_scope`: four subsections under
-    one heading are four different scopes, and a reader must not have to
+    `test_each_eye_subsection_states_its_own_scope`: five subsections under
+    one heading are five different scopes, and a reader must not have to
     infer which is which. Pins the exact labels so a future edit cannot
     quietly drop one.
 
@@ -515,6 +596,15 @@ def test_the_four_detection_subsections_state_their_own_scope(detect_schema, tmp
     rows -- the pair most able to be misread as each other, which is why
     each states its own scope in its own heading rather than relying on
     order on the page.
+
+    Four became five in stage 2A, and the fifth is the one this test most
+    needs to pin: three of the four above it are windowed (24 h, 24 h, 7 d)
+    and "Detector agreement" is not, so a reader taking its scope from its
+    neighbours' would read a figure spanning every session ever compared as
+    last night's. It says "across every session" for the same reason the
+    running total does, and `cli/report.py::_agreement_rows`' docstring
+    records why it can afford to: its grouping key is bounded by the detector
+    and metric registries rather than by session count.
     """
     root = tmp_path / "scratch"
     root.mkdir()
@@ -525,6 +615,7 @@ def test_the_four_detection_subsections_state_their_own_scope(detect_schema, tmp
     assert "\n### Unusable samples per session per eye (lower bound, 24 h)" in section
     assert "\n### Unusable samples, running total across every session (lower bound)" in section
     assert "\n### Detection refused (7 d)" in section
+    assert "\n### Detector agreement per detector pair, across every session" in section
 
 
 def test_the_events_list_windows_to_24_hours(detect_schema, tmp_path, prefix):
