@@ -268,6 +268,33 @@ seven, so a disagreement is never a disagreement about measurement.
 > the method and this project's reimplementation retains it — which is what
 > `EyeDetection.Run.reliability` was reserved for.
 
+> **Added 2026-09-02, from implementing it: this method's cluster count is
+> DECIDED by its stopping rule, not converged to.** Otero-Millan runs k-means
+> for 2, 3, ... clusters and stops as soon as the mean silhouette fails to
+> improve by more than 1%, with that silhouette computed on the BINARISED
+> partition `min(index, 2)` — saccades against everything else. Splitting the
+> slow mass finer leaves the binarised partition unchanged, so the count grows
+> only while the FAST cluster's membership is still moving.
+>
+> Measured on the reimplementation, over 200 (fixture, seed) pairs: **167 have
+> a cluster count that changes if the 1% margin is moved to 0% or 20%.** An
+> independent measurement over a different fixture mix put it at 173 of 200;
+> the exact count depends on the fixtures, the ~85% does not. The margin is not
+> a rounding guard — it picks the answer on most traces.
+>
+> Two consequences this spec has to carry. **A real but small population is
+> lost rather than partially kept**: it never gets its own cluster, and is then
+> judged by the mean displacement of whichever cluster absorbs it. That floor
+> is a cluster MEAN, so a cluster's sub-floor members ride in on its average —
+> measured, 17 of 180 synthetic traces store an event below the 0.2° floor, the
+> smallest 0.027°, and `reliability` does not reliably flag them. And **this is
+> faithful**: it is the reference's own rule, reimplemented, not a defect
+> introduced here. That is exactly the situation §3.2 warns about, one level
+> deeper than it anticipated — the method itself, not only a reimplementation
+> of it, can produce a disagreement that looks like a finding. Any validation
+> of this detector against the paper's reported statistics has to be read with
+> the margin's sensitivity in hand.
+
 **Vocabularies differ, and that is a first-class fact.** A detector that
 cannot emit `pso` is not disagreeing with one that can; it has nothing to say.
 Each registry entry therefore declares the labels it produces, and §6.1 makes

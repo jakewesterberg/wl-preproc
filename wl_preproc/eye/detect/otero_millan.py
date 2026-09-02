@@ -57,6 +57,32 @@ because of a decision made upstream of it:**
    until a chunk holds enough events. This pipeline's detector contract has no
    trial structure, so chunks are formed from the candidate events themselves
    in temporal order -- see `_CLUSTER_CHUNK_EVENTS`.
+
+**What is NOT pinned by a test, as of 2026-09-02.** A 53-mutation sweep over
+this module left 25 survivors, 5 of them behaviour-changing. Chasing that to
+zero is not convergent, so the survivors are recorded here rather than papered
+over with tests that would only appear to check them:
+
+- **The candidate budget's `ceil`, and `_CLUSTER_CHUNK_EVENTS`.** Both change
+  the event set on real input. The chunk size is the reference's own 500 and
+  the budget's rounding is a one-line arithmetic choice; neither has a fixture
+  that would fail informatively rather than just differently.
+- **Two tests are canaries, not pins.** `test_whitening_is_what_makes_a_small_
+  event_findable_at_all` and the drift test fire broadly, with messages like
+  `assert 0 == 3` that say a step broke without saying which. They are worth
+  having and they are not diagnostics.
+- **Two survivors are genuinely equivalent, and one is dead code in a live
+  function.** Mean-centring inside `_whiten` is a no-op on the real call path,
+  because features arrive already z-scored and so already have zero column
+  means -- it is kept because `_whiten` is written to be correct for any input,
+  not only for its one caller. And `_silhouette`'s "minimum over the OTHER
+  clusters" is **unreachable from `_cluster_peaks`**: the labels it is handed
+  are `np.minimum(assignment, 2)`, so there are at most two classes and the
+  minimum is always over exactly one candidate. The general form is retained
+  because the function states a general definition, but no call in this module
+  exercises it.
+- **The eigenvector sign canonicalisation** cannot be asserted on one machine
+  at all -- see `_whiten`.
 """
 
 from __future__ import annotations
@@ -336,14 +362,33 @@ def _candidate_spans(
     if n < 3:
         return []
 
-    # A local maximum, by the reference's own definition: not below its left
-    # neighbour and not below its right.
-    interior = np.arange(1, n - 1)
-    is_peak = np.zeros(n, dtype=bool)
-    is_peak[interior] = (speed[1:-1] >= speed[:-2]) & (speed[2:] <= speed[1:-1])
-    # ...and the largest sample in its own neighbourhood, which is what the
-    # reference checks before it accepts one.
-    is_peak &= speed >= _sliding_max(speed, min_isi)
+    # The largest sample in its own +/- `min_isi` neighbourhood, which is the
+    # test the reference applies before it accepts a peak.
+    #
+    # **This subsumes the local-maximum test and replaces it.** The reference
+    # first collects local maxima and then checks each against its
+    # neighbourhood, and this module transcribed both -- but the second implies
+    # the first: a sample that is at least as large as everything within
+    # `min_isi` is in particular at least as large as its two neighbours. The
+    # separate predicate contributed exactly one thing, excluding the first and
+    # last samples of the trace, so that is kept explicitly below. Verified
+    # over 12,000 random arrays (3,000 arrays x 4 neighbourhood widths): the
+    # conjunction and this pair never disagree.
+    is_peak = speed >= _sliding_max(speed, min_isi)
+    # The first and last samples have no two-sided neighbourhood, so neither
+    # can be a local maximum in the reference's sense.
+    #
+    # **Both lines are unreachable given this subsystem's own velocity, and
+    # they are kept anyway.** `velocity.py` states ZERO for the two samples at
+    # each edge rather than extrapolating, so `speed[0]` and `speed[-1]` are
+    # zero and can never be the largest sample in a neighbourhood that contains
+    # anything else -- removing either line changes no output and no test, which
+    # a mutation sweep confirms. They are what makes this function correct for
+    # an arbitrary speed array rather than only for the one array it is called
+    # with, and dropping them would move that guarantee into an invariant of a
+    # different module.
+    is_peak[0] = False
+    is_peak[-1] = False
     is_peak &= usable
 
     # Boundary walking needs, for every sample, the nearest sub-threshold
@@ -485,14 +530,25 @@ def _features(
         # both phases because the peak itself is the boundary: an event whose
         # braking is one sample long would otherwise have an empty window.
         # This module used disjoint windows for one round and described the
-        # disjointness as a design property; it was a departure, and it moved
-        # the event set on 11 of 120 traces and `reliability` on 89 of 120.
+        # disjointness as a design property; it was a departure. Re-measured
+        # with the onset window as the ONLY difference, over the large and
+        # small fixtures at seeds 0-59 (120 traces): it moves the event set on
+        # **22** of 120 and `reliability` on **117** of 120. An earlier version
+        # of this comment said 11 and 89, which were neither of those figures.
         #
         # The upper clamp to `stop` is this module's own and is a real
-        # departure: the reference does not clamp here, so a peak at an event's
-        # last sample makes it read one sample BEYOND the event -- a sample
-        # belonging to no event, and past the array end for an event at the end
-        # of a recording.
+        # departure: the reference does not clamp, so a velocity peak on an
+        # event's last sample makes it read one sample BEYOND the event -- a
+        # sample belonging to no event. **That is the whole of the reason.**
+        # This comment used to add "and past the array end for an event at the
+        # end of a recording", which is a MATLAB hazard, not a Python one:
+        # numpy truncates an over-long slice silently.
+        #
+        # `min(..., len(accel))` would be the other defensible choice -- it
+        # would match the reference on every span except a recording's last,
+        # where clamping to `stop` differs on every span whose peak lands last.
+        # Clamping to the event is a choice between two defensible rules, not
+        # the only safe one.
         onset_stop = min(start + at + 2, stop)
         accel_onset[i] = float(accel[start:onset_stop].max())
         brake_start = min(start + at + 1, stop - 1)
@@ -674,9 +730,16 @@ def _silhouette(whitened: np.ndarray, labels: np.ndarray) -> np.ndarray:
     exists in the method and is what `EyeDetection.Run.reliability` was reserved
     for (design spec section 5).
 
-    A lone member of its own cluster scores 0, which is the convention: it has
-    no within-cluster distance, and any other answer would rank a singleton
-    against a real cluster on no evidence.
+    **A lone member of its own cluster scores 1, not 0.** It has no
+    within-cluster distance, so `a = 0` and `s = (b - 0) / b = 1` -- maximum
+    confidence, which is what the reference's `max(count - 1, 1)` divisor
+    produces and what the loop below implements.
+
+    This paragraph said the opposite for one round ("scores 0, which is the
+    convention"), with a justification attached, twelve lines above the code
+    that already disagreed with it. Recorded rather than quietly rewritten: a
+    comment that argues for a defect is worse than no comment, because a
+    maintainer reading top-down meets the wrong rule with a reason to keep it.
     """
     n = whitened.shape[0]
     out = np.zeros(n)

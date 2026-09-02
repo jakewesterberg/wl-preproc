@@ -529,32 +529,54 @@ def test_the_acceleration_features_do_not_depend_on_the_missing_sampling_rate():
 # rather than pinning one number per mutation.
 
 
+def _correlated_features():
+    """Three CORRELATED columns, which is what the detector actually whitens.
+
+    **The previous fixture here was three mutually orthogonal sinusoids, and
+    that made the decorrelation assertion vacuous**: `cov` of orthogonal
+    columns is already diagonal, so the identity transform passed it and only
+    the second assertion did any work -- as a numpy shape crash, not as a
+    statement about whitening. Log peak velocity and the two log accelerations
+    are strongly correlated on real input, which is the module's own argument
+    for the ridge, so a fixture without correlation tests a case the detector
+    never sees.
+
+    Pairwise correlations here are 0.93 / 0.53 / 0.40, and the covariance
+    eigenvalues 0.056 / 0.595 / 2.082 give ratios 0.027 / 0.286 / 1.0 -- placed
+    to straddle the 5% component cut on BOTH sides.
+    """
+    rng = np.random.default_rng(5)
+    base = rng.normal(size=60)
+    return np.column_stack([
+        base,
+        0.9 * base + 0.44 * rng.normal(size=60),
+        0.6 * base + 0.8 * rng.normal(size=60),
+    ])
+
+
 def test_whitening_decorrelates_and_the_ridge_sets_how_far():
     """What whitening is for, stated as a property of its output.
 
     `W = (X - mean) @ V @ diag(sqrt(1 / (d + ridge)))` where `V, d` diagonalise
     `cov(X)`. So `cov(W) = diag(d / (d + ridge))` **exactly**: off-diagonals
     vanish (that is the decorrelation) and each diagonal entry is set by the
-    ridge (that is how far the rescaling goes). Asserting both makes the whole
-    step observable in one place -- deleting it leaves `cov` non-diagonal, and
-    moving the ridge to 1.0 turns 0.714/0.836 into 0.199/0.337.
+    ridge (that is how far the rescaling goes).
 
-    Columns here are mutually orthogonal, so `cov(X)` is diagonal and its
-    eigenvalues ARE the column variances -- 0.508, 0.249, 0.00127. That makes
-    the expected answer readable rather than something only numpy knows.
+    On a correlated fixture both assertions do real work. The input's largest
+    off-diagonal covariance is 0.86, so an identity transform fails the first
+    outright; and moving the ridge to 1.0 turns the diagonal 0.856/0.954 into
+    0.373/0.676, which fails the second.
     """
     from wl_preproc.eye.detect.otero_millan import _whiten
 
-    t = np.arange(60)
-    features = np.column_stack([
-        np.cos(2 * np.pi * t / 60), 0.7 * np.sin(2 * np.pi * t / 60),
-        0.05 * np.cos(4 * np.pi * t / 60),
-    ])
-    eigenvalues = np.linalg.eigvalsh(np.cov(features, rowvar=False))
+    features = _correlated_features()
+    covariance_in = np.cov(features, rowvar=False)
+    assert np.abs(covariance_in - np.diag(np.diag(covariance_in))).max() > 0.5
+
+    eigenvalues = np.linalg.eigvalsh(covariance_in)
     kept = eigenvalues[(eigenvalues / eigenvalues[-1]) > 0.05]
 
-    whitened = _whiten(features)
-    covariance = np.cov(whitened, rowvar=False)
+    covariance = np.cov(_whiten(features), rowvar=False)
 
     assert np.allclose(covariance - np.diag(np.diag(covariance)), 0.0, atol=1e-12)
     assert np.allclose(np.diag(covariance), kept / (kept + 0.1))
@@ -563,8 +585,8 @@ def test_whitening_decorrelates_and_the_ridge_sets_how_far():
 def test_the_component_cut_drops_a_degenerate_direction():
     """The cut keeps components whose eigenvalue exceeds 5% of the largest.
 
-    The fixture's three orthogonal columns have variance ratios 1 : 0.49 :
-    0.0025, chosen to straddle the cut on both sides: at 0.05 exactly two
+    `_correlated_features`' covariance eigenvalues have ratios 1 : 0.286 :
+    0.027, placed to straddle the cut on both sides: at 0.05 exactly two
     survive, at 0.0 all three would, at 0.5 only one would. One assertion
     therefore pins the cut from above and below rather than merely recording
     that some cut exists.
@@ -575,13 +597,7 @@ def test_the_component_cut_drops_a_degenerate_direction():
     """
     from wl_preproc.eye.detect.otero_millan import _whiten
 
-    t = np.arange(60)
-    features = np.column_stack([
-        np.cos(2 * np.pi * t / 60), 0.7 * np.sin(2 * np.pi * t / 60),
-        0.05 * np.cos(4 * np.pi * t / 60),
-    ])
-
-    assert _whiten(features).shape[1] == 2
+    assert _whiten(_correlated_features()).shape[1] == 2
 
 
 def test_whitening_is_what_makes_a_small_event_findable_at_all():
@@ -591,8 +607,11 @@ def test_whitening_is_what_makes_a_small_event_findable_at_all():
 
     Seed 1 rather than 0 because at seed 0 both happen to succeed -- which is
     exactly how deleting `_whiten` passed a suite whose fixtures all used seed
-    0. Measured over 200 (config, seed) pairs, whitening changes the accepted
-    set on 18 of them; this is one.
+    0. **Seed 1 is not a lucky draw**: over seeds 0-199 of this same small
+    fixture, whitening changes the accepted set on 104 of 200, and this test's
+    exact 3-versus-0 outcome holds on 36 of 200. An earlier version of this
+    docstring said "18 of 200", which was measured over a different mix of
+    fixtures and was wrong for this one.
     """
     from wl_preproc.eye.detect.otero_millan import (
         _accept, _acceleration, _candidate_spans, _cluster_peaks, _features,
@@ -626,9 +645,15 @@ def test_the_silhouette_margin_is_what_chooses_the_cluster_count():
     On this trace the mean binarised silhouette improves from two clusters to
     three by more than 1%, and from three to four by less. So the margin picks
     THREE: a 0% margin would take any improvement and run to four, and a 20%
-    margin would refuse the first improvement and stop at two. Measured across
-    200 (config, seed) pairs, 173 have a margin-sensitive count and 35 separate
-    all three values; seed 26 of the large fixture is one of the 35.
+    margin would refuse the first improvement and stop at two -- 4 / 3 / 2, all
+    three distinct, which is why one fixture pins both mutations.
+
+    Traces that separate all three values are rare, and an earlier version of
+    this docstring badly overstated how rare they are not: it said 35 of 200,
+    measured 7 (large/small/matched/noise fixtures, seeds 0-49 each). What IS
+    common is a count that moves at all -- 167 of those same 200. The stopping
+    rule decides the cluster count far more often than it converges to one; see
+    the design spec section 3.1 note this round added.
 
     Asserted through `_cluster_peaks`' returned assignment, whose maximum IS
     the count it settled on, rather than by reaching into the loop.
@@ -763,6 +788,79 @@ def test_the_fixture_really_does_span_more_than_one_chunk():
     spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
 
     assert len(_chunks(len(spans))) >= 2
+
+
+def test_merge_coalesces_touching_spans_not_only_overlapping_ones():
+    """`_merge`'s `start <= out[-1][1]` is a `<=`, and the difference matters.
+
+    Two spans that merely TOUCH -- one ending where the next begins -- must
+    become one. `runs_from_labels` downstream produces maximal runs, so two
+    touching intervals carrying the same label would be merged into one run
+    there anyway, matching neither span; `_insert_trace`'s exact-span
+    `reliability` lookup would then miss and store `None` for a real detection.
+
+    **Nothing pinned this.** Weakening the comparison to `<` survived the whole
+    suite, including `test_neither_registered_detector_can_produce_a_merged_run`
+    -- that test inspects only ACCEPTED runs, and the touching spans this rule
+    coalesces land in the noise cluster and are never returned. `_merge` was
+    called by no test at all. Asserted here, at the invariant's source.
+    """
+    from wl_preproc.eye.detect.otero_millan import _merge
+
+    assert _merge([(0, 10), (10, 20)]) == [(0, 20)]      # touching
+    assert _merge([(0, 10), (5, 20)]) == [(0, 20)]       # overlapping
+    assert _merge([(0, 10), (11, 20)]) == [(0, 10), (11, 20)]   # a real gap
+    assert _merge([(10, 20), (0, 10)]) == [(0, 20)]      # and it sorts first
+
+
+def test_a_velocity_peak_on_an_events_last_sample_is_handled_at_both_ends():
+    """The precondition both clamps in `_features` exist for, and neither was
+    reachable from any other test in this file.
+
+    When the velocity peak lands on an event's LAST sample, the reference's
+    unclamped windows do two different wrong things. The brake window becomes
+    `accel[stop:stop]` -- empty -- and `.max()` on it raises `ValueError:
+    zero-size array to reduction operation maximum which has no identity`. The
+    onset window runs to `stop + 1`, which numpy silently truncates to one
+    sample PAST the event: a sample belonging to no event.
+
+    Here `accel[5] = 999.0` sits just outside the span, so a missing onset
+    clamp is visible as a value rather than only as a crash.
+
+    **This is reachable from real input, not a defensive hypothetical.** A
+    validity mask ending a usable segment just after a velocity peak produces
+    it: with a blink planted at sample 1005 of this file's own large fixture,
+    `_candidate_spans` returns the span [997, 1005) whose peak is its last
+    sample. The end-to-end test below runs exactly that.
+    """
+    from wl_preproc.eye.detect.otero_millan import _features
+
+    speed = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 1.0])   # span max at index 4
+    accel = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 999.0])     # 999 is OUTSIDE [0, 5)
+    gaze = np.column_stack([np.arange(6) * 0.5, np.zeros(6)])
+
+    peak_velocity, onset, brake, _displacement = _features(gaze, speed, accel, [(0, 5)])
+
+    assert peak_velocity[0] == 40.0
+    assert onset[0] == 5.0    # unclamped this reads accel[5] and returns 999.0
+    assert brake[0] == 5.0    # unclamped this is accel[5:5] and raises
+
+
+def test_a_blink_ending_a_segment_on_a_velocity_peak_does_not_crash():
+    """The same geometry, reached the way a recording reaches it.
+
+    `_limits` clamps an event to its usable segment, so a mask that ends the
+    segment at `peak + 1` yields a span whose velocity peak is its last sample.
+    Without the `brake_start` clamp this raises rather than returning; the
+    suite otherwise never builds a trace that gets there.
+    """
+    gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
+    available[1005:1085] = Label.BLINK
+
+    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+
+    assert intervals
+    assert all(interval.stop <= 1005 or interval.start >= 1085 for interval in intervals)
 
 
 def test_neither_registered_detector_can_produce_a_merged_run():
