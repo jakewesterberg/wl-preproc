@@ -695,6 +695,41 @@ EK↔U'n'Eye row needs, and the reason vocabulary is already in the key.
 `fixation` is implicitly a member of every vocabulary — it is what a sample is
 when no detector claims it — so it is never what makes a sample incomparable.
 
+**Known gap, recorded 2026-09-01: the rule above is wrong for a pair whose
+declarations are DISJOINT.** "The coarsest vocabulary both declare" reads
+plainly as the intersection of the two declarations, and that is what the
+implementation computes — correctly for both worked examples above. It fails
+for U'n'Eye `{saccade}` against BMD `{microsaccade, drift}`, and both are
+entries in §3.1's own table.
+
+U'n'Eye declares `{saccade}` because it does not SPLIT, so it labels a
+microsaccade `saccade`. Their declarations share nothing, so the intersection
+is empty and the pair is scored in `{fixation}` alone. Yet
+`coarsen(microsaccade, {saccade})` is `saccade`: BMD's label travels UP the
+lattice into U'n'Eye's vocabulary without difficulty. **The two detectors,
+having found the same small event, meet perfectly at `{saccade, fixation}` —
+and the rule excludes every such sample**, because U'n'Eye's `saccade` cannot
+travel DOWN an edge into BMD's declaration.
+
+The error is in requiring each side's label to reach the OTHER's declaration,
+when what a comparison needs is one common vocabulary both sides' labels map
+INTO. Those coincide whenever the declarations overlap, which is why the
+worked examples above do not expose it. A correct rule chooses the finest
+vocabulary reachable from both — `{microsaccade, fixation}` for
+Engbert–Kliegl against BMD, where the finer choice is what lets the exclusion
+do its work; `{saccade, fixation}` for U'n'Eye against BMD, where no finer
+common ground exists.
+
+Deliberately not fixed here. Stage 2A registers Engbert–Kliegl and
+Otero-Millan, which declare the same vocabulary and exercise neither
+coarsening nor exclusion, so a fix now would be designed against detectors
+that do not exist and could not be validated by anything that runs. It belongs
+with whichever detector first makes such a pair reachable. It is recorded
+executably as well as here —
+`tests/eye/detect/test_consensus.py::test_disjoint_vocabularies_should_meet_at_their_common_coarsening`
+is a STRICT `xfail`, so the suite fails the moment the rule is fixed and this
+paragraph goes stale.
+
 **A pair whose vocabularies are equal needs neither mechanism**, which is
 where §6's first implementation starts: Engbert–Kliegl and Otero-Millan both
 declare `saccade / microsaccade` (§3.1, corrected 2026-09-01), so their rows

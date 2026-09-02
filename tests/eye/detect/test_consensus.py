@@ -141,3 +141,40 @@ def test_pso_as_changes_which_samples_are_comparable():
     assert coarsen(Label.PSO, _EK, PSO_AS_SACCADE) is not coarsen(
         Label.PSO, _EK, PSO_AS_FIXATION
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Known defect in the rule, not in this implementation of it. Design "
+        "spec section 6.1 says a pair is scored in 'the coarsest vocabulary "
+        "both declare', and read plainly that is the INTERSECTION of the two "
+        "declarations -- which is what this module computes and what the "
+        "spec's own two worked examples require. It is wrong for a pair whose "
+        "declarations are DISJOINT. Strict, so that whoever fixes the rule is "
+        "told by a failing test rather than leaving this passing quietly."
+    ),
+)
+def test_disjoint_vocabularies_should_meet_at_their_common_coarsening():
+    """U'n'Eye and BMD agree about a microsaccade and are scored as if silent.
+
+    U'n'Eye declares `{saccade}` because it does not SPLIT (design spec section
+    3.1), so it labels a microsaccade `saccade`. BMD declares
+    `{microsaccade, drift}`. The two share no declared label, so the
+    intersection is empty and the pair is scored in `{fixation}` alone.
+
+    But `coarsen(MICROSACCADE, {SACCADE}) is SACCADE`: BMD's microsaccade CAN
+    be expressed in U'n'Eye's vocabulary. The two detectors, having found the
+    same small event, meet perfectly at `{saccade, fixation}` -- and the rule
+    drops every such sample instead, because U'n'Eye's `saccade` cannot travel
+    DOWN an edge into BMD's declaration.
+
+    The fix is a change to section 6.1's rule and belongs with the detector
+    that first makes the pair reachable, not here: stage 2A registers only
+    Engbert-Kliegl and Otero-Millan, which declare the same vocabulary and
+    need neither coarsening nor exclusion. Recorded executably rather than in
+    prose so it cannot be lost between stages.
+    """
+    assert shared_vocabulary(_UNEYE, _BMD, PSO_AS_SACCADE) == frozenset(
+        {Label.SACCADE, Label.FIXATION}
+    )
