@@ -99,10 +99,15 @@ def daemon_module(dj_conn, prefix):
     `test_detect_populate.py`'s fixture of the same name registers them
     because one of its own fixtures reaches `EyeValidity.populate()` without a
     preceding `run_once()`. Nothing here does, so `daemon.run_once()` is left
-    to register them, which is the production path. That is not a PROOF -- the
-    suite's shared `t_` database already has those rows from two other
-    modules' fixtures, which is exactly the condition that made finding H1
-    invisible -- so the proof is
+    to register them, which is the production path.
+
+    **The FIXTURE registers nothing; the file does.** `_detector`, imported
+    from `test_detect_populate.py` and used at five call sites below, is
+    `detect.register_default_paramsets()[name]` -- so most tests here do
+    register, indirectly, and this fixture's restraint buys nothing on its
+    own. It would buy nothing even if they did not: the suite's shared `t_`
+    database already has those rows from two other modules' fixtures, which
+    is exactly the condition that made finding H1 invisible. The proof is
     `test_a_real_wlpp_daemon_pass_writes_agreement_rows_registering_nothing_itself`
     below, in a virgin prefix in a virgin process.
     """
@@ -693,10 +698,23 @@ def test_a_real_wlpp_daemon_pass_writes_agreement_rows_registering_nothing_itsel
        session. A test that runs the daemon twice cannot see this; this one
        runs it once, which is what a real session gets.
 
-    Everything else in this file registers nothing itself either, but the
-    suite's shared `t_` database has those rows from two other modules'
-    fixtures, so none of them could tell any of the three apart. A virgin
-    prefix in a virgin process can.
+    **This test is the only thing in this file that registers nothing.** An
+    earlier version of this docstring said "everything else in this file
+    registers nothing itself either", and that was simply false: five call
+    sites here go through `test_detect_populate.py::_detector`, which is
+    `detect.register_default_paramsets()[name]` -- a real registration on
+    every call, needed because the index a detector owns is whatever that
+    function allocated and hardcoding 0 or 1 would depend on `DETECTORS`'
+    insertion order. Harmless in practice and wrong in the safe direction
+    (those tests prove LESS than the sentence credited them with, not more),
+    but it is exactly the kind of stated fact a reader takes instead of
+    re-deriving.
+
+    The point that survives is this test's, not theirs: even a file that
+    registered nothing could not ask this question, because the suite's
+    shared `t_` database already has those rows from two other modules'
+    fixtures -- which is the condition that made finding H1 invisible. A
+    virgin prefix in a virgin process is the only place it can be asked.
     """
     import json
     import os

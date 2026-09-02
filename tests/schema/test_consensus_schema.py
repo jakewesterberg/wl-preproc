@@ -219,22 +219,39 @@ def test_the_key_source_heading_is_exactly_this_table_s_own_key(schemas):
     }
 
 
-def test_a_self_join_that_keeps_the_secondary_attributes_is_refused(schemas):
-    """The version-dependent half of `key_source`'s own docstring, held to the
-    version rather than to a paragraph.
+def test_a_self_join_on_the_secondaries_is_refused_where_lineage_exists(schemas):
+    """The CONDITIONAL half of `key_source`'s own docstring, held to the
+    condition rather than to a paragraph.
 
-    The obvious hazard in a self-join is that DataJoint matches same-named
-    SECONDARY attributes for equality too, so a projection keeping `status`,
+    The hazard in a self-join is that DataJoint matches same-named SECONDARY
+    attributes for equality too, so a projection keeping `status`,
     `n_saccades` and the rest would silently require two detectors to have
     found the same number of events -- returning nothing on exactly the
-    sessions this table exists to surface. **That is not what this project's
-    pinned DataJoint 2.3.2 does**: it refuses the join outright, because its
-    semantic-lineage check will not join on a secondary namesake whose
-    `~lineage` does not match on both sides.
+    sessions this table exists to surface. On this project's pinned DataJoint
+    2.3.2 that expression RAISES instead... but only where the schema's
+    `~lineage` table exists. `condition.py::assert_join_compatibility` returns
+    early with a warning when lineage is unavailable, and the join itself
+    "always join[s] on all non-hidden namesakes" regardless, so the silent
+    row-drop is live on a database whose lineage is missing.
 
-    Pinned here so that a DataJoint upgrade which drops or relaxes that check
-    fails this test, rather than quietly making the silent-emptiness reading
-    true and leaving `key_source`'s docstring asserting otherwise.
+    **This test is deliberately stronger than the docstring it defends.** On
+    such a database it fails with DID NOT RAISE -- catching exactly the case
+    the prose would otherwise have to be trusted about. It also fails if a
+    DataJoint upgrade drops or relaxes the check. Either way the docstring
+    cannot go quietly stale.
+
+    The silent case is not hypothetical: dropping `` `t_detect`.`~lineage` ``
+    on a populated fixture and rebuilding the heading, the secondaries-kept
+    join answered `left` and `conjunction` only -- it dropped `right`, the one
+    trace where the two detectors disagreed about a count (1 microsaccade
+    against 28), while `key_source`'s own projected form still answered all
+    three.
+
+    It asserts the exception TYPE and the "Cannot join on attribute" prefix,
+    never which attribute is named: `assert_join_compatibility` iterates
+    `namesakes` as a `set`, so which namesake trips first is hash order --
+    observed as `status`, `n_samples`, `n_saccades` and `n_microsaccades`
+    across four runs of the same probe.
     """
     import datajoint as dj
     import pytest as _pytest
@@ -250,10 +267,15 @@ def test_a_self_join_that_keeps_the_secondary_attributes_is_refused(schemas):
 
 
 def test_the_key_source_admits_only_the_canonical_ordering(schemas):
-    """`paramset_a < paramset_b` is enforced where the candidate keys are
-    made, not checked after the fact. Both shipped metrics are symmetric
+    """`paramset_a < paramset_b` is applied where the candidate keys are made,
+    not checked after the fact. Both shipped metrics are symmetric
     (`eye/detect/consensus.py` proves each), so `(a, b)` and `(b, a)` are one
     measurement and storing both would be storing it twice under two keys.
+
+    A restriction on the only WRITER, never a database constraint -- see the
+    table's own `# Key:` comment. This test therefore says what is true of
+    every row `populate()` can produce, and nothing about what the column
+    would accept from a direct insert.
 
     Read off the restriction the property actually applies, so a `key_source`
     that dropped it fails here without needing two detections to exist.

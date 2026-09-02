@@ -192,10 +192,18 @@ class DetectorAgreement(dj.Computed):
     # validity_paramset_idx, paramset_type, paramset_a, paramset_b, metric,
     # vocabulary, pso_as).
     #
-    # `paramset_a < paramset_b` on every stored row, enforced by `key_source`
-    # rather than checked afterwards: both shipped metrics are symmetric
-    # (`eye/detect/consensus.py` proves it for each), so the unordered pair is
-    # the real key and storing both orderings would be one measurement twice.
+    # `paramset_a < paramset_b` on every stored row: both shipped metrics are
+    # symmetric (`eye/detect/consensus.py` proves it for each), so the
+    # unordered pair is the real key and storing both orderings would be one
+    # measurement twice.
+    #
+    # **The restriction is on the only WRITER, not on the column.** It lives
+    # in `key_source`, and `make()` -- reached only through `populate()` -- is
+    # the only thing that inserts here, so no row production can write has the
+    # pair reversed. The DATABASE does not guard it: DataJoint's declaration
+    # syntax emits no `CHECK` constraint, and a hand-swapped row inserted with
+    # `allow_direct_insert=True` is accepted. "Enforced" was the word here
+    # first and it invites the stronger reading.
     #
     # BOTH references are to `EyeDetection`, not to `ParamSet`, so `trace` and
     # the validity paramset arrive already agreeing on both sides -- two
@@ -258,24 +266,48 @@ class DetectorAgreement(dj.Computed):
         would leave the key outstanding in `key_source - self` and retried on
         every `daemon.run_once()` pass, forever.
 
-        **`.proj(paramset_a=...)` on BOTH sides, and what actually goes
-        wrong without it is not what this docstring first claimed.** DataJoint
-        joins on every same-named attribute, and two detections of one trace
-        share `status`, `n_samples`, `n_saccades`, `n_microsaccades` and
-        `reason` by NAME while disagreeing about the counts -- which is the
-        entire point of comparing them. The obvious conclusion is that a bare
-        self-join silently matches on those and returns nothing, which is
+        **`.proj(paramset_a=...)` on BOTH sides, and the reason is
+        CONDITIONAL -- which is not how this docstring first stated it,
+        twice.** DataJoint joins on every same-named attribute, and two
+        detections of one trace share `status`, `n_samples`, `n_saccades`,
+        `n_microsaccades` and `reason` by NAME while disagreeing about the
+        counts, which is the entire point of comparing them. Joined on those,
+        a session where the detectors disagree drops out silently --
         `EyeDetection.key_source`'s own bare-`paramset_type` defect one table
-        later. **Measured directly against this project's pinned DataJoint
-        2.3.2 on a live MySQL 8 rather than reasoned about, and it is not what
-        happens** -- both alternatives fail LOUDLY, for two different reasons:
+        later. Two alternatives to the form below, measured against this
+        project's pinned DataJoint 2.3.2 on a live MySQL 8:
 
-        - Two projections that KEEP the secondary attributes raise
-          `DataJointError: Cannot join on attribute 'n_microsaccades':
-          lineage missing on one side` when the expression is built. 2.3.2
-          refuses to join on a secondary namesake whose `~lineage` does not
-          match, so the silent-equality outcome is not reachable on this
-          version at all.
+        - **Two projections that KEEP the secondary attributes: raises where
+          `~lineage` is available, drops rows silently where it is not.**
+          `condition.py::assert_join_compatibility` is ADVISORY and its
+          namesake check is gated: `if not expr1.heading.lineage_available or
+          not expr2.heading.lineage_available:` logs "Semantic check disabled:
+          ~lineage table not found" and RETURNS. The join itself never
+          consults it -- `expression.py`'s own comment is "Always join on all
+          non-hidden namesakes". So with `~lineage` present it raises
+          `DataJointError: Cannot join on attribute ...: lineage missing on
+          one side (None vs None)`; with `~lineage` absent the same expression
+          builds and silently drops rows.
+
+          **Reproduced both ways on a real fixture, by dropping
+          `` `t_detect`.`~lineage` `` between the two runs.** With lineage,
+          it raised. Without it, the projected form below still answered all
+          three traces while the secondaries-kept form answered `left` and
+          `conjunction` only -- it dropped `right`, which on that fixture is
+          the single trace where the two detectors disagree about a count
+          (1 microsaccade against 28). That is "returns nothing on exactly
+          the sessions this table exists to surface", live, on this version.
+
+          `None vs None` is MISSING lineage, not different lineage:
+          `table.py::_populate_lineage` records entries only for foreign-key
+          attributes and native primary-key attributes, so every secondary is
+          `None` on both sides. And the attribute the error NAMES is
+          arbitrary -- `for name in namesakes` iterates a `set`, so which
+          namesake trips first is hash order. Observed as `status`,
+          `n_samples`, `n_saccades` and `n_microsaccades` across four runs of
+          the same probe, which is why the test below matches the message
+          prefix and never an attribute name.
+
         - `EyeDetection * EyeDetection.proj(paramset_b="paramset_idx")` --
           only one side projected -- builds fine and returns the right 12
           candidate rows, but its primary key carries `paramset_idx`, which
@@ -284,15 +316,18 @@ class DetectorAgreement(dj.Computed):
           key_source`, exactly as `EyeDetection.key_source`'s own docstring
           records happening for `eye` one table earlier.
 
-        So `proj()` on both sides is what makes the key_source's heading
-        EQUAL this table's own key columns, which is what `populate()`
-        requires -- not a defence against a silent emptiness this version
-        cannot produce. Kept as a stated reason rather than left implicit
-        because the wrong reason was written here first and is the one a
-        reader would supply for themselves.
+        So `proj()` on both sides does two things: it makes the key_source's
+        heading EQUAL this table's own key columns, which is what
+        `populate()` requires, and it removes the secondaries so that no
+        database's lineage state can decide whether this join is a refusal or
+        a silent row-drop. Recorded at this length because the reason was
+        written here wrongly twice -- first as an unconditional silent
+        emptiness, then as an unconditional refusal.
         `tests/schema/test_consensus_schema.py::
-        test_a_self_join_that_keeps_the_secondary_attributes_is_refused`
-        holds the first bullet to the version rather than to this paragraph.
+        test_a_self_join_on_the_secondaries_is_refused_where_lineage_exists`
+        pins the first bullet's raising half, and is deliberately STRONGER
+        than this paragraph: on a database whose `~lineage` went missing it
+        fails with DID NOT RAISE, which is exactly the silent case.
 
         `paramset_type` is left bare on both sides on purpose, unlike
         `EyeDetection`'s two `ParamSet` references: both operands here are
