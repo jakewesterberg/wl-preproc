@@ -1067,6 +1067,141 @@ else supplies.
    MATLAB and carries no licence at all — see §3.2. Both are validated against
    their papers' own reported statistics instead. REMoDNaV (MIT, on PyPI)
    remains a genuine runnable oracle.
+
+   > **Otero-Millan measured against its paper, 2026-09-02.**
+   > `tests/eye/detect/test_otero_millan_validation.py`, against the reference
+   > recording (1,177,799 rows, 498.55 Hz, 39.4 min), both eyes, detectors at
+   > their defaults, gaze at the *chosen* p99→15° scale heuristic. **One of
+   > three checks passes on its own terms, one passes, and one fails — and the
+   > failing one turns out not to be a paper statistic.** The configuration is
+   > stated with every figure because this document has twice carried a number
+   > that was measured correctly and written down wrongly.
+   >
+   > **The paper first, read on 2026-09-02 rather than recalled**
+   > ([10.1167/14.2.18](https://doi.org/10.1167/14.2.18), PMID 24569984;
+   > abstract from PubMed, body from the ARVO version of record). Its data are
+   > 20 human subjects, 24 recordings, EyeLink II/1000 at 500 Hz, fixating a
+   > target at 57 cm — a calibrated video tracker on a fixation task, against
+   > this repository's uncalibrated DPI over 39 unconstrained minutes. Three
+   > things it does *not* contain, each of which changes what this task could
+   > check:
+   >
+   > - **No measured microsaccade rate.** The abstract's "once or twice per
+   >   second during attempted visual fixation" and the Methods' "typically
+   >   between one and four per second" are both the literature's range as
+   >   this paper states it, not this paper's own measurement.
+   > - **No main sequence at all.** The phrase does not occur; no
+   >   amplitude/peak-velocity correlation is reported in any space, and the
+   >   paper's own validation displays are the *bimodality* of the amplitude
+   >   and peak-velocity distributions and cluster scatterplots of peak
+   >   velocity against initial acceleration peak.
+   > - **The five-per-second in the paper is the candidate budget**, not a
+   >   detected rate — independent confirmation of `otero_millan.py`'s
+   >   `_PEAK_BUDGET_PER_MIN_ISI`, which Task 3 derived from the MATLAB.
+   >
+   > | check | left | right | verdict |
+   > |---|---|---|---|
+   > | microsaccade rate /s | **1.181** | **1.204** | inside the paper's own 1–2/s |
+   > | main sequence log-log *r* | **0.8213** | **0.7750** | **below the 0.9 bound** |
+   > | `event_f1` vs Engbert–Kliegl | **0.8012** | **0.7834** | inside (0.5, 1.0) |
+   >
+   > **The rate is the one real pass, and it is robust to the free
+   > parameter.** Across a scale sweep of ×0.5/×1/×2 (mask and both detectors
+   > recomputed per scale) the microsaccade rate moves only 1.310 → 1.181 →
+   > 1.072 /s. Since the saccade/microsaccade split is `classify` cutting at an
+   > absolute 1.0°, and this recording's degrees-per-pixel is chosen rather
+   > than fitted, a rate that held only at the chosen scale would be a fact
+   > about the heuristic. This one is not. What it establishes: the detector
+   > emits events at a physiologically possible density over 39 real minutes.
+   > What it does not: that they are the right events — a detector finding the
+   > right *number* of wrong spans passes identically.
+   >
+   > **The main-sequence bound fails, and three measurements say the bound is
+   > the wrong instrument rather than the detector being wrong.** Recorded
+   > without adjusting it, per the plan's own rule that a failed check is the
+   > finding:
+   >
+   > 1. **Engbert–Kliegl scores lower on the identical trace** — 0.7536 /
+   >    0.7415, same mask, same `measure` call. A bound the always-on baseline
+   >    fails harder is not evidence about the reimplementation under test.
+   > 2. **A duration-matched random-span control scores *higher*** — 0.8719 /
+   >    0.8537. The bound's stated justification is that the main sequence is
+   >    "a property of real saccades that no clustering artefact reproduces";
+   >    measured, arbitrary spans of the same trace reproduce it. Over a fixed
+   >    duration a span's peak velocity is bounded below by its displacement,
+   >    so the correlation is substantially arithmetic. (The control is drawn
+   >    from this recording, so above ~0.2° it is not a clean null — nothing
+   >    but a saccade moves the eye that far in the median event's 34 ms. It is
+   >    a clean null *below* the floor, and there detected events are ~4×
+   >    faster than controls at matched amplitude: median peak velocity 52.4
+   >    against 12.8 °/s in the 0.05–0.1° bin. That last figure is from a
+   >    10×-resampled control on the left eye, measured while writing this
+   >    test and **not** reproduced by it — the shipped control is 1×, which is
+   >    enough for the correlation it is there to compute.)
+   > 3. ***r* is itself scale-dependent** on an uncalibrated recording —
+   >    0.574 at ×0.25 to 0.881 at ×1.5, left eye, a wider sweep than the
+   >    shipped test's ×0.5/×1/×2 and so likewise not reproduced by it —
+   >    because the scale decides which events the 0.2° floor and the validity
+   >    mask admit.
+   >
+   > 4. **And a mutation settles it: on this recording the bound runs
+   >    backwards.** Removing *both* of `_accept`'s gates together — accepting
+   >    the noise cluster and dropping the 0.2° floor, which is the genuinely
+   >    broken detector — gives 11,590 left-eye events where the correct one
+   >    gives 4,700, a microsaccade rate of 4.208/s, and ***r* = 0.9491 /
+   >    0.9398** against the correct detector's 0.8213 / 0.7750. **The broken
+   >    detector passes this bound and the correct one fails it.** Same
+   >    mechanism as the control: admitting events down to the noise floor
+   >    extends the amplitude range downward, and extending a predictor's
+   >    range raises a correlation whether or not the added points are real.
+   >
+   >    What *r* does establish: detected events span a wide amplitude range
+   >    with a monotone velocity relation, left-eye log-log slope 0.586 (0.716
+   >    above the 0.2° floor). What it does not: that the count, the
+   >    boundaries, or the event identities are right — and, measured, not
+   >    even that the detector is unbroken.
+   >
+   > **What the mutation says about the other two checks.** The rate check
+   > kills that combination cleanly (4.208/s against its 3.0/s ceiling);
+   > `event_f1` kills it on the right eye (0.4592) and lets the left through
+   > (0.5028). Each gate removed *alone* is a no-op on this recording —
+   > numbers identical to the correct detector's — because whichever gate
+   > remains does the other's job. That is the "one rule silently covering for
+   > another" pattern Task 3 found on synthetic fixtures, now confirmed on
+   > real data.
+   >
+   > **The paper's one reported output statistic is measured but not
+   > asserted.** It reports that ">90%" of the microsaccades in its recordings
+   > "were larger than 0.2°"; here the fraction at or above 0.2° is **0.818 /
+   > 0.796**, against Engbert–Kliegl's **0.818 / 0.800** — the two detectors
+   > track each other to within half a point — and it runs 0.73 at half the
+   > reference scale to 0.92 at double it. A bound on it would be a bound on
+   > the chosen scale, passing or failing for both detectors together. The
+   > shortfall is nonetheless the predicted one: §3.1's cluster-mean finding,
+   > on real data. 855 of 4,700 left-eye events (18.2%) and 884 of 4,334
+   > right-eye events (20.4%) sit below the 0.2° floor they were accepted by,
+   > 17 of them at exactly 0.0° — events whose endpoints coincide.
+   >
+   > **The overlap check passes and bounds the relationship, not the
+   > accuracy.** Below 1.0, so the reimplementation has not collapsed into the
+   > baseline and §6's rows comparing the pair are not vacuous; above 0.5, so
+   > two methods sharing one velocity estimator, one mask and one measurement
+   > are finding the same recording's events. Two detectors wrong in the same
+   > way would also agree.
+   >
+   > **Still owed, and the bar this clears is lower than it looks.** The rate
+   > band has demonstrated power — it kills a detector with both acceptance
+   > gates removed — but it is a *band*, and a detector that found the right
+   > number of wrong spans clears it identically. The main-sequence bound
+   > should be **replaced, not widened**: it is measurably anti-correlated
+   > with correctness here, so moving it to fit the observed 0.82 would ship a
+   > check that passes hardest on the most broken detector. The two statistics
+   > with real discriminating potential — the amplitude distribution's
+   > bimodality, which is the paper's *own* validation display, and the
+   > 62%/78% error reductions — need respectively a calibration this recording
+   > does not have and labelled ground truth nobody has produced.
+   > **Otero-Millan's rows should carry the same provisional marking §3.2
+   > gives BMD's until one of those exists.**
 6. **Whether seven detectors is too many to run nightly.** Seven per eye plus
    three conjunctions, over a 1.18M-sample recording, on every session. The
    plan must measure total runtime before this is a nightly stage rather than
