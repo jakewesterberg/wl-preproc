@@ -48,9 +48,16 @@ and it is real there. On the reference recording they land close together, and
 the sign of the gap depends on how the compared trace is built: through the
 `DetectorAgreement` path kappa is within 0.007 of `event_f1` on both eyes; over
 an unmasked trace it is about 0.09 HIGHER. No single delta is quoted because
-two defensible constructions disagree about it. **What holds either way: on real
-data these two metrics do not diverge, which is a more interesting result than
-the one this paragraph used to claim.**
+two defensible constructions disagree about it — measured, with the
+construction named rather than averaged into one figure:
+
+| construction | left | right |
+|---|---|---|
+| through `DetectorAgreement` (masked) | kappa − f1 = **−0.0037** | **+0.0071** |
+| over an unmasked trace | **+0.0594** | **+0.0855** |
+
+**What holds either way: on real data these two metrics do not diverge, which is
+a more interesting result than the one this paragraph used to claim.**
 
 **Runtime is ~2.6 min per session at seven detectors, not the 1.2 min an earlier
 draft said.** `comparison_mask` is 0.55–0.63 s per call over 1,177,799 samples,
@@ -109,11 +116,22 @@ the next case.
   `drift`** — `detect.py` says so itself: "four of design spec section 3.1's
   seven declare exactly such vocabularies."
 
-  Be precise about what fails, because an earlier draft of this line was not:
-  `_conjunction_label` has exactly one call site, the conjunction branch of
-  `EyeDetection.make()`. **Registration succeeds and the `left` and `right`
-  traces compute correctly**; only the conjunction raises. Resolving it is a
-  design conversation, not an implementation detail.
+  Be precise about what fails, because two earlier drafts of this line were
+  not. `_conjunction_label` has exactly one call site, the conjunction branch
+  of `EyeDetection.make()`, and registration itself succeeds. But **the session
+  gets NO rows at all — not `left` and `right` minus the conjunction.**
+  `make()` inserts `left` and `right` before reaching that branch, so the
+  Python control flow does what the previous sentence claimed; DataJoint's
+  `AutoPopulate._populate1` then wraps the whole `make()` in
+  `start_transaction()` and calls `cancel_transaction()` on any exception, so
+  those inserts roll back. Verified empirically with a throwaway
+  `pso`-declaring detector: zero rows persisted, and under
+  `daemon.run_once`'s `suppress_errors=True` the failure appears only in the
+  error list.
+
+  So registering one of the four today does not buy partial per-eye data. It
+  buys nothing, silently, on every pass. Resolving it is a design
+  conversation, not an implementation detail.
 - **§6.1's comparability rule is WRONG for a disjoint-vocabulary pair.**
   U'n'Eye `{saccade}` against BMD `{microsaccade, drift}`: the declarations
   share nothing, so the pair scores in `{fixation}` alone — yet
@@ -133,7 +151,7 @@ the next case.
   702 ms — because that floor is a
   cluster MEAN and sub-floor members ride in on the average. `reliability` does
   NOT reliably flag them; filtering by it makes things worse rather than
-  better — the left eye's main-sequence log-log **r** falls 0.8174 → 0.7958 at
+  better — the left eye's main-sequence log-log **r** falls 0.8213 → 0.7958 at
   `reliability ≥ 0.5` → 0.7314 at ≥ 0.8. (Those are correlations. Do not confuse
   them with the *fractions* of events at or above the 0.2° floor, which are
   0.818 and 0.796 — similar numbers, different quantities, and §11 carries
