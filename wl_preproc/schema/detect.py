@@ -623,8 +623,25 @@ class EyeDetection(dj.Computed):
         the exact defect this round exists to close. `_overlapping`
         coalesces touching intersections before labelling them for that
         reason, so the run measured here is always the span labelled there.
+
+        **`reliability` is mapped back onto the final runs by EXACT
+        `(start, stop)` match, and is `None` for anything else.** It is a
+        per-DETECTION value (Otero-Millan's own silhouette, design spec
+        section 5), and the re-derivation above is precisely what can leave a
+        final run corresponding to no single detector interval: two adjacent
+        intervals carrying the same label merge into one run whose span
+        matches neither. Attributing either half's reliability to that run
+        would put a fabricated number in the one column a reader consults to
+        decide how much to trust a detection -- so the map simply misses and
+        `None` is stored, which is the honest answer. The conjunction trace
+        gets `None` throughout for the same reason it gets its label derived
+        rather than checked: no detector produced it.
         """
         from wl_preproc.eye.detect.measure import measure
+
+        reliability_by_span = {
+            (interval.start, interval.stop): interval.reliability for interval in intervals
+        }
 
         labels = offered.copy()
         for interval in intervals:
@@ -649,7 +666,8 @@ class EyeDetection(dj.Computed):
             return {
                 **row, "run_index": index, "run_start": run.start, "run_stop": run.stop,
                 "label": run.label.value, "amplitude_deg": amplitude_deg,
-                "peak_velocity_deg_s": peak_velocity_deg_s, "reliability": None,
+                "peak_velocity_deg_s": peak_velocity_deg_s,
+                "reliability": reliability_by_span.get((run.start, run.stop)),
             }
 
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
@@ -959,8 +977,11 @@ def _params_for(detector, params: dict):
     top of the paramset. `EngbertKlieglParams` declares a field of that name
     because Engbert-Kliegl's own declared vocabulary is the amplitude split
     (design spec section 3.1) and it cannot label its intervals without the
-    threshold. Otero-Millan, whose vocabulary is `microsaccade` alone,
-    declares no such field and is handed no such value -- a detector with no
+    threshold. `OteroMillanParams` declares it for the same reason: reading
+    that detector's reference on 2026-09-01 corrected its vocabulary from
+    `microsaccade` alone to the same split, so it too consumes the shared
+    cut. U'n'Eye, whose declared vocabulary is `saccade` alone, will declare
+    no such field and be handed no such value -- a detector with no
     amplitude-derived labels is never forced to accept a parameter it has no
     use for. Declaring the field is the detector's statement that it
     consumes a shared key, not a claim to own one.
@@ -1014,11 +1035,15 @@ def register_default_paramsets() -> dict[str, int]:
 
     from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
     paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
-    defaults = {"engbert_kliegl": asdict(DEFAULT_EK_PARAMS)}
+    defaults = {
+        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
+        "otero_millan": asdict(DEFAULT_OM_PARAMS),
+    }
     return {
         name: paramset.register(
             "eye_detection",

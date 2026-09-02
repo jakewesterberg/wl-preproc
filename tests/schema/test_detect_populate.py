@@ -644,22 +644,24 @@ def test_the_next_full_pass_then_computes_both_eyes(out_of_order_session):
         assert (detect.EyeValidity & {**session_key, "eye": eye_value}).fetch1(
             "status"
         ) == "computed"
-    for trace in ("left", "right", "conjunction"):
-        assert (detect.EyeDetection & {**session_key, "trace": trace}).fetch1(
-            "status"
-        ) == "computed"
+    for name in _detector_names():
+        for trace in ("left", "right", "conjunction"):
+            assert (
+                detect.EyeDetection & {**session_key, "trace": trace, **_detector(name)}
+            ).fetch1("status") == "computed", (name, trace)
 
     # Not merely "a row exists": the same planted-onset round trip
     # `stepped_session` asserts, so a session that recovered from the
     # out-of-order state is proven to have detected the real events rather
     # than to have written an empty success.
-    runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
-        order_by="run_index"
-    )
-    detected = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
-    assert len(detected) == len(onsets) == 3
-    for got, want in zip(detected, onsets, strict=True):
-        assert abs(got - want) <= 5
+    for name in _detector_names():
+        runs = (
+            detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
+        ).to_dicts(order_by="run_index")
+        detected = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+        assert len(detected) == len(onsets) == 3, name
+        for got, want in zip(detected, onsets, strict=True):
+            assert abs(got - want) <= 5, name
 
 
 @pytest.fixture(scope="module")
@@ -686,17 +688,76 @@ def uncalibrated_session(daemon_module, prefix, tmp_path_factory):
     return session_key, report
 
 
+def _detector(name):
+    """The restriction that selects ONE detector's rows.
+
+    **Every query below needed this the moment a second detector was
+    registered** (Otero-Millan, 2026-09-02). `EyeDetection`'s `key_source`
+    crosses each validity row with every `eye_detection` paramset, so one
+    session now populates three traces per DETECTOR: `fetch1()` on a
+    `{session, trace}` restriction stopped finding exactly one row, and a
+    count of detected events over such a restriction doubled. Neither is a
+    defect -- it is the completeness claim working -- but a test that means
+    "what Engbert-Kliegl found here" has to say so.
+
+    Reached through `register_default_paramsets`, which is idempotent by
+    content hash, rather than by assuming an index: the paramset a detector
+    owns is whatever that function registered for it, and hardcoding 0 or 1
+    would make these tests depend on `DETECTORS`' insertion order.
+    """
+    from wl_preproc.schema import detect
+
+    return {"paramset_idx": detect.register_default_paramsets()[name]}
+
+
+def _detector_names():
+    """Every registered detector, for the invariants that hold across all of
+    them. Reading `DETECTORS` rather than naming two keeps these tests
+    covering detector seven on the day it lands."""
+    from wl_preproc.eye.detect.registry import DETECTORS
+
+    return sorted(DETECTORS)
+
+
 def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
     """The round-trip that matters. `SessionRecipe.eye_fixations` holds gaze
     at stated raw positions, so a hold-step-hold session has ground-truth
     onsets, and a detector that found events at the wrong times passes every
-    count-based test and fails this one."""
+    count-based test and fails this one.
+
+    **Asserted for EVERY registered detector, not just the baseline.** The
+    fixture's ground truth is a property of the session, not of a method, so
+    a detector that cannot find three planted steps in an otherwise-still
+    trace is broken whichever one it is -- and this is the cheapest place a
+    new detector's reimplementation defect surfaces as a defect rather than
+    as design spec section 3.2's "genuine detector disagreement".
+    """
     from wl_preproc.schema import detect
 
     session_key, _report, planted_onsets = stepped_session
-    runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
-        order_by="run_index"
-    )
+    for name in _detector_names():
+        runs = (
+            detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
+        ).to_dicts(order_by="run_index")
+        onsets = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+
+        assert len(onsets) == len(planted_onsets), name
+        for got, want in zip(onsets, planted_onsets, strict=True):
+            assert abs(got - want) <= 5, name
+
+
+def test_the_baseline_detector_finds_the_planted_steps(stepped_session):
+    """`test_a_planted_step_is_detected_at_its_planted_time`, pinned to the
+    one detector whose numbers design spec section 5 actually measured. Kept
+    separate so a failure names which claim broke: the shared ground truth, or
+    Engbert-Kliegl specifically."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, planted_onsets = stepped_session
+    runs = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "left", **_detector("engbert_kliegl")}
+    ).to_dicts(order_by="run_index")
     onsets = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
 
     assert len(onsets) == len(planted_onsets)
@@ -711,21 +772,27 @@ def test_the_runs_tile_the_whole_trace(stepped_session):
     `conjunction` is the trace that most needs this checked: its run
     boundaries come from `_overlapping`'s intersection of the two eyes'
     spans, not straight from a detector, so it is the one trace where
-    `runs_from_labels` re-tiling the result correctly is least obvious."""
+    `runs_from_labels` re-tiling the result correctly is least obvious.
+
+    **Every trace of every DETECTOR.** The tiling invariant is a property of
+    the storage encoding, not of any one method, so a second detector whose
+    intervals overlapped -- which `runs_from_labels` cannot express and
+    `_insert_trace` would silently resolve by last-write-wins -- has to break
+    this here rather than three tables downstream."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
-    for trace in ("left", "right", "conjunction"):
-        row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
-        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
-            order_by="run_index"
-        )
+    for name in _detector_names():
+        for trace in ("left", "right", "conjunction"):
+            where = {**session_key, "trace": trace, **_detector(name)}
+            row = (detect.EyeDetection & where).fetch1()
+            runs = (detect.EyeDetection.Run & where).to_dicts(order_by="run_index")
 
-        assert runs[0]["run_start"] == 0
-        assert runs[-1]["run_stop"] == row["n_samples"]
-        for earlier, later in zip(runs, runs[1:], strict=False):
-            assert earlier["run_stop"] == later["run_start"]
-            assert earlier["label"] != later["label"]
+            assert runs[0]["run_start"] == 0, (name, trace)
+            assert runs[-1]["run_stop"] == row["n_samples"], (name, trace)
+            for earlier, later in zip(runs, runs[1:], strict=False):
+                assert earlier["run_stop"] == later["run_start"], (name, trace)
+                assert earlier["label"] != later["label"], (name, trace)
 
 
 _VALIDITY_FRACTION_COLUMNS = (
@@ -785,15 +852,80 @@ def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
+    """A saccade or microsaccade run IS an event and carries its own
+    measurements; every other label leaves them NULL (design spec section 5).
+    Asserted per detector so a failure names which one wrote the odd row."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
-    for run in (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts():
-        if run["label"] in ("saccade", "microsaccade"):
-            assert run["amplitude_deg"] is not None
-            assert run["peak_velocity_deg_s"] is not None
-        else:
-            assert run["amplitude_deg"] is None
+    for name in _detector_names():
+        where = {**session_key, "trace": "left", **_detector(name)}
+        for run in (detect.EyeDetection.Run & where).to_dicts():
+            if run["label"] in ("saccade", "microsaccade"):
+                assert run["amplitude_deg"] is not None, name
+                assert run["peak_velocity_deg_s"] is not None, name
+            else:
+                assert run["amplitude_deg"] is None, name
+
+
+def test_reliability_survives_the_run_re_derivation(stepped_session):
+    """`_insert_trace` re-derives runs with `runs_from_labels` rather than
+    trusting detector spans, so a per-detection value attached upstream is easy
+    to lose silently -- the stored column would simply stay null, which looks
+    exactly like a detector having nothing to say.
+
+    Otero-Millan is the one detector that has something to say here (design
+    spec section 5 reserved the column for it), so this reads ITS rows. The
+    companion assertion below -- that Engbert-Kliegl's stay null -- is what
+    makes a non-null value evidence of the carry rather than of a default
+    someone changed.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    rows = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "left", **_detector("otero_millan")}
+    ).to_dicts()
+    events = [r for r in rows if r["label"] in ("saccade", "microsaccade")]
+
+    assert events
+    assert any(r["reliability"] is not None for r in events)
+    assert all(-1.0 <= r["reliability"] <= 1.0 for r in events if r["reliability"] is not None)
+
+
+def test_a_detector_with_no_reliability_stores_none_rather_than_a_number(stepped_session):
+    """The other half of the column's meaning. `reliability` is nullable
+    because six of the seven planned detectors have no such index -- a stored
+    number there for Engbert-Kliegl would be invented, and would make the
+    column unreadable for the one detector that does compute one."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    rows = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "left", **_detector("engbert_kliegl")}
+    ).to_dicts()
+
+    assert rows
+    assert all(r["reliability"] is None for r in rows)
+
+
+def test_the_conjunction_trace_never_carries_a_borrowed_reliability(stepped_session):
+    """No detector produced the conjunction trace -- `_overlapping` intersects
+    two eyes' spans and `_conjunction_label` derives its label -- so there is
+    no per-detection index for it, on any detector. Attributing either eye's
+    would be a fabricated number in the one column a reader consults to decide
+    what to believe."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    for name in _detector_names():
+        where = {**session_key, "trace": "conjunction", **_detector(name)}
+        rows = (detect.EyeDetection.Run & where).to_dicts()
+
+        assert rows, name
+        assert all(r["reliability"] is None for r in rows), name
 
 
 def test_the_middle_planted_step_is_classified_as_a_microsaccade(stepped_session):
@@ -826,9 +958,10 @@ def test_the_middle_planted_step_is_classified_as_a_microsaccade(stepped_session
 
     session_key, _report, planted_onsets = stepped_session
     for trace in ("left", "conjunction"):
-        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
-            order_by="run_index"
-        )
+        runs = (
+            detect.EyeDetection.Run
+            & {**session_key, "trace": trace, **_detector("engbert_kliegl")}
+        ).to_dicts(order_by="run_index")
         events = [r for r in runs if r["label"] in ("saccade", "microsaccade")]
 
         assert len(events) == len(planted_onsets) == 3, trace
@@ -858,7 +991,10 @@ def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session)
     def saccade_spans(trace):
         return [
             (r["run_start"], r["run_stop"])
-            for r in (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts()
+            for r in (
+                detect.EyeDetection.Run
+                & {**session_key, "trace": trace, **_detector("engbert_kliegl")}
+            ).to_dicts()
             if r["label"] in ("saccade", "microsaccade")
         ]
 
@@ -912,9 +1048,10 @@ def test_a_sub_floor_binocular_overlap_is_no_conjunction_event(near_miss_session
     def event_spans(trace):
         return [
             (r["run_start"], r["run_stop"])
-            for r in (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts(
-                order_by="run_index"
-            )
+            for r in (
+                detect.EyeDetection.Run
+                & {**session_key, "trace": trace, **_detector("engbert_kliegl")}
+            ).to_dicts(order_by="run_index")
             if r["label"] in ("saccade", "microsaccade")
         ]
 
@@ -960,11 +1097,18 @@ def _assert_reason_echoes_validity(session_key, trace, eye):
     from wl_preproc.schema import detect
 
     validity_reason = (detect.EyeValidity & {**session_key, "eye": eye}).fetch1("reason")
-    row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
-    assert row["status"] == "refused"
-    assert row["reason"] == validity_reason
-    assert row["n_samples"] is None
-    return row
+    # A refusal comes from the CALIBRATION, not from any detector, so every
+    # registered detector's row for this trace must carry it -- a refusal that
+    # reached only one detector's rows would leave the others claiming a
+    # computed result for a session that has no gaze.
+    rows = []
+    for name in _detector_names():
+        row = (detect.EyeDetection & {**session_key, "trace": trace, **_detector(name)}).fetch1()
+        assert row["status"] == "refused", name
+        assert row["reason"] == validity_reason, name
+        assert row["n_samples"] is None, name
+        rows.append(row)
+    return rows[0]
 
 
 def test_a_refused_left_eye_leaves_the_right_eye_computed(left_refused_session):
@@ -991,17 +1135,23 @@ def test_a_refused_left_eye_leaves_the_right_eye_computed(left_refused_session):
 
     right_status = (detect.EyeValidity & {**session_key, "eye": "right"}).fetch1("status")
     assert right_status == "computed"
-    right_row = (detect.EyeDetection & {**session_key, "trace": "right"}).fetch1()
+    right_row = (
+        detect.EyeDetection & {**session_key, "trace": "right", **_detector("engbert_kliegl")}
+    ).fetch1()
     assert right_row["status"] == "computed"
-    right_runs = (detect.EyeDetection.Run & {**session_key, "trace": "right"}).to_dicts(
-        order_by="run_index"
-    )
+    right_runs = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "right", **_detector("engbert_kliegl")}
+    ).to_dicts(order_by="run_index")
     right_onsets = [r["run_start"] for r in right_runs if r["label"] in ("saccade", "microsaccade")]
     assert len(right_onsets) == len(onsets) == 3
     for got, want in zip(right_onsets, onsets, strict=True):
         assert abs(got - want) <= 5
 
-    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    conjunction_row = (
+        detect.EyeDetection
+        & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
+    ).fetch1()
     assert conjunction_row["status"] == "refused"
     assert conjunction_row["reason"]
     assert conjunction_row["reason"] != left_row["reason"]
@@ -1024,17 +1174,23 @@ def test_a_refused_right_eye_leaves_the_left_eye_computed(right_refused_session)
 
     left_status = (detect.EyeValidity & {**session_key, "eye": "left"}).fetch1("status")
     assert left_status == "computed"
-    left_row = (detect.EyeDetection & {**session_key, "trace": "left"}).fetch1()
+    left_row = (
+        detect.EyeDetection & {**session_key, "trace": "left", **_detector("engbert_kliegl")}
+    ).fetch1()
     assert left_row["status"] == "computed"
-    left_runs = (detect.EyeDetection.Run & {**session_key, "trace": "left"}).to_dicts(
-        order_by="run_index"
-    )
+    left_runs = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "left", **_detector("engbert_kliegl")}
+    ).to_dicts(order_by="run_index")
     left_onsets = [r["run_start"] for r in left_runs if r["label"] in ("saccade", "microsaccade")]
     assert len(left_onsets) == len(onsets) == 3
     for got, want in zip(left_onsets, onsets, strict=True):
         assert abs(got - want) <= 5
 
-    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    conjunction_row = (
+        detect.EyeDetection
+        & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
+    ).fetch1()
     assert conjunction_row["status"] == "refused"
     assert conjunction_row["reason"]
     assert conjunction_row["reason"] != right_row["reason"]
@@ -1085,7 +1241,10 @@ def test_both_eyes_refused_each_trace_carries_its_own_eyes_reason(uncalibrated_s
     _assert_reason_echoes_validity(session_key, "left", "left")
     _assert_reason_echoes_validity(session_key, "right", "right")
 
-    conjunction_row = (detect.EyeDetection & {**session_key, "trace": "conjunction"}).fetch1()
+    conjunction_row = (
+        detect.EyeDetection
+        & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
+    ).fetch1()
     assert conjunction_row["status"] == "refused"
     assert conjunction_row["reason"]
 
@@ -1231,9 +1390,15 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _AmplitudeBlindParams:
-    """Stand-in for a detector with no amplitude-derived labels -- Otero-Millan
-    emits `microsaccade` alone (design spec section 3.1), so no amplitude cut
-    tells it anything and it declares no `microsaccade_max_deg` field.
+    """Stand-in for a detector with no amplitude-derived labels -- U'n'Eye
+    emits `saccade` alone (design spec section 3.1), so no amplitude cut tells
+    it anything and it declares no `microsaccade_max_deg` field.
+
+    **Otero-Millan was this example until 2026-09-01.** Reading its reference
+    corrected its vocabulary to the full `saccade / microsaccade` split, so it
+    DOES declare that field -- see `otero_millan.OteroMillanParams`. A stand-in
+    is still the right shape here: the detector this describes is not written
+    yet, and the point is the filtering rule, not any one detector.
 
     Module level, not inside the test that uses it: this file starts
     `from __future__ import annotations`, so `_params_for`'s own
@@ -1249,6 +1414,37 @@ def _amplitude_blind_detect(
     gaze_deg, velocity_deg_s, available, params: _AmplitudeBlindParams
 ) -> list:
     return []
+
+
+def test_the_shared_amplitude_cut_reaches_otero_millan_through_the_paramset():
+    """`_params_for` hands a detector exactly the paramset keys its own
+    dataclass names. Otero-Millan declares `microsaccade_max_deg` because its
+    vocabulary IS the amplitude split (design spec section 3.1 as corrected
+    2026-09-01), so the shared cut must actually arrive there -- and a paramset
+    that moved it must move that detector's labels with it.
+
+    Lives here rather than in `tests/eye/detect/test_otero_millan.py` because
+    `_params_for` is schema-layer code: no other test under `tests/eye/`
+    imports `wl_preproc.schema`, and one that did would make that tier require
+    DataJoint, which the 3.13 cross-check environment does not install.
+    """
+    from wl_preproc.eye.detect.otero_millan import OteroMillanParams
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _params_for
+
+    raw = {
+        "detector": "otero_millan",
+        "min_cluster_displacement_deg": 0.2,
+        "max_clusters": 4,
+        "min_isi_samples": 15,
+        "microsaccade_max_deg": 3.0,
+    }
+
+    built = _params_for(get_detector("otero_millan"), raw)
+
+    assert isinstance(built, OteroMillanParams)
+    assert built.microsaccade_max_deg == 3.0
+    assert not hasattr(built, "detector")
 
 
 def test_params_for_drops_keys_the_detector_does_not_declare():
@@ -1355,7 +1551,7 @@ def test_the_shared_threshold_is_registered_once_and_no_detector_shadows_it(monk
     """
     from dataclasses import replace
 
-    from wl_preproc.eye.detect import engbert_kliegl
+    from wl_preproc.eye.detect import engbert_kliegl, otero_millan
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
     from wl_preproc.schema import detect as detect_schema, paramset
 
@@ -1371,17 +1567,35 @@ def test_the_shared_threshold_is_registered_once_and_no_detector_shadows_it(monk
         "DEFAULT_EK_PARAMS",
         replace(engbert_kliegl.DEFAULT_EK_PARAMS, microsaccade_max_deg=99.0),
     )
+    # **Both detectors moved off the shared value, because there are now two
+    # that declare it.** Moving one alone would leave the other's own default
+    # equal to the shared one, and its paramset would satisfy the assertion
+    # below no matter which order the merge ran in.
+    monkeypatch.setattr(
+        otero_millan,
+        "DEFAULT_OM_PARAMS",
+        replace(otero_millan.DEFAULT_OM_PARAMS, microsaccade_max_deg=98.0),
+    )
 
     detect_schema.register_default_paramsets()
 
-    (registered,) = captured["eye_detection"]
-    assert registered["microsaccade_max_deg"] == MICROSACCADE_MAX_DEG
-    # Not vacuous: the detector's own default really is the other value, so
-    # the assertion above is deciding between two live candidates.
+    registered = {row["detector"]: row for row in captured["eye_detection"]}
+    assert set(registered) == set(_detector_names())
+    for name, row in registered.items():
+        assert row["microsaccade_max_deg"] == MICROSACCADE_MAX_DEG, name
+    # Not vacuous: each detector's own default really is another value, so the
+    # assertions above decide between live candidates rather than comparing
+    # the shared value with itself.
     assert engbert_kliegl.DEFAULT_EK_PARAMS.microsaccade_max_deg == 99.0
-    # The detector's OWN parameters still arrive -- the ordering must not
+    assert otero_millan.DEFAULT_OM_PARAMS.microsaccade_max_deg == 98.0
+    # Each detector's OWN parameters still arrive -- the ordering must not
     # drop them on its way to protecting the shared key.
-    assert registered["lambda_"] == engbert_kliegl.DEFAULT_EK_PARAMS.lambda_
+    assert registered["engbert_kliegl"]["lambda_"] == (
+        engbert_kliegl.DEFAULT_EK_PARAMS.lambda_
+    )
+    assert registered["otero_millan"]["min_cluster_displacement_deg"] == (
+        otero_millan.DEFAULT_OM_PARAMS.min_cluster_displacement_deg
+    )
 
 
 class _CapturedInserts:
@@ -2262,13 +2476,18 @@ def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
-    for trace in ("left", "right", "conjunction"):
-        row = (detect.EyeDetection & {**session_key, "trace": trace}).fetch1()
-        runs = (detect.EyeDetection.Run & {**session_key, "trace": trace}).to_dicts()
+    # Every detector: the run/sample ratio is a claim about the ENCODING, and
+    # a detector that fired on nearly every sample would blow past this bound
+    # whichever one it is.
+    for name, trace in [(n, t) for n in _detector_names()
+                        for t in ("left", "right", "conjunction")]:
+        where = {**session_key, "trace": trace, **_detector(name)}
+        row = (detect.EyeDetection & where).fetch1()
+        runs = (detect.EyeDetection.Run & where).to_dicts()
         # "Far below" deliberately loose: `stepped_session` plants exactly 3
         # (left/conjunction) or 4 (right, via `_inject_right_eye_only_step`)
         # events in an otherwise-still trace, so a healthy encoding merges
         # long fixation stretches into single runs and lands near a dozen
         # runs total, not thousands -- only a broken encoder, or a detector
         # firing on nearly every sample, would come anywhere near this bound.
-        assert len(runs) < row["n_samples"] / 10
+        assert len(runs) < row["n_samples"] / 10, (name, trace)

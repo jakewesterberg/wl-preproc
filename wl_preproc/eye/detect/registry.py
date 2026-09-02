@@ -32,6 +32,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.engbert_kliegl import detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, LabelledInterval
+from wl_preproc.eye.detect.otero_millan import detect_otero_millan
 
 
 class DetectorNotRegistered(KeyError):
@@ -118,6 +119,20 @@ DETECTORS: dict[str, Detector] = {
         name="engbert_kliegl",
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
         run=detect_engbert_kliegl,
+    ),
+    # **`saccade` AND `microsaccade`, per design spec section 3.1 as corrected
+    # 2026-09-01.** That table gave this detector `microsaccade` alone, from
+    # its reference's bundled example script rather than from its code; the
+    # method's only amplitude rule is a LOWER noise floor on a cluster's mean
+    # displacement, with no upper bound anywhere in it. Declaring `microsaccade`
+    # alone here would make `Detector.detect` above refuse every large saccade
+    # this detector legitimately finds -- and it would make design spec section
+    # 6.1's lattice coarsen a pair that needs no coarsening at all, since this
+    # vocabulary and Engbert-Kliegl's are now identical.
+    "otero_millan": Detector(
+        name="otero_millan",
+        vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
+        run=detect_otero_millan,
     ),
 }
 
