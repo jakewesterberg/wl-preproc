@@ -491,3 +491,66 @@ def test_the_metric_registry_names_exactly_what_ships():
     assert set(CONSENSUS_METRICS) == {"event_f1", "cohen_kappa"}
     for name, metric in CONSENSUS_METRICS.items():
         assert metric.name == name
+
+
+def test_a_multi_sample_run_counts_as_one_event_not_one_per_sample():
+    """`_event_starts` collapses a run to its onset, and nothing in this file
+    pinned that directly until now.
+
+    Task 2's review mutated the collapsing away -- every event SAMPLE becoming
+    its own event -- and only one test in the file failed, incidentally: a
+    zero-match tolerance case. Every other multi-event fixture is structurally
+    blind to it. Most plant single-sample events, where a length-1 run is
+    identical collapsed or not. The one that does use length-5 runs survives by
+    arithmetic accident: 5 matched of 5 and of 10 gives exactly the ratio 1 of
+    1 and of 2 does, so its F1 is unchanged either way.
+
+    That is the same shape as the symmetry tests that could not see a
+    non-maximum matching, one level further down -- a property everything
+    depends on, asserted by nothing. `event_f1` counts EVENTS; if a run stopped
+    collapsing, a single long saccade would count as dozens and every score
+    built on it would be wrong while the suite stayed green.
+    """
+    from wl_preproc.eye.detect.consensus import _event_starts
+
+    labels = np.array([Label.FIXATION] * 10 + [Label.SACCADE] * 5 + [Label.FIXATION] * 10)
+    mask = np.ones(len(labels), dtype=bool)
+
+    assert _event_starts(labels, mask) == [10]
+
+
+def test_two_runs_separated_by_one_fixation_sample_are_two_events():
+    """The other side of the same boundary: collapsing must not swallow a real
+    gap. One `fixation` sample is the least separation that can exist, so it is
+    the case worth pinning -- a fixture author who plants two events one sample
+    apart gets two, and one who plants them adjacent gets one."""
+    from wl_preproc.eye.detect.consensus import _event_starts
+
+    labels = np.array(
+        [Label.FIXATION] * 5
+        + [Label.SACCADE] * 3
+        + [Label.FIXATION]
+        + [Label.SACCADE] * 3
+        + [Label.FIXATION] * 5
+    )
+    mask = np.ones(len(labels), dtype=bool)
+
+    assert _event_starts(labels, mask) == [5, 9]
+
+
+def test_adjacent_runs_of_different_event_labels_are_one_event():
+    """A `saccade` immediately followed by a `microsaccade` is ONE event here,
+    because `event_f1` asks when the eye moved, not what the movement was
+    called. Recorded as a test because it is a real semantic choice rather than
+    an accident of the loop: `cohen_kappa` is the metric that scores the label,
+    and design spec section 6.1 ships both precisely so each answers the
+    question the other cannot.
+    """
+    from wl_preproc.eye.detect.consensus import _event_starts
+
+    labels = np.array(
+        [Label.FIXATION] * 5 + [Label.SACCADE] * 3 + [Label.MICROSACCADE] * 3 + [Label.FIXATION] * 5
+    )
+    mask = np.ones(len(labels), dtype=bool)
+
+    assert _event_starts(labels, mask) == [5]
