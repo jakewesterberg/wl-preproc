@@ -32,6 +32,23 @@ deliberate:
   recording (a percentile placed at a stated degree value) rather than as a
   literal, and the comment says where the other copy is.
 
+**The rule this file exists to establish, which outlives it: an oracle-free
+statistic is worthless until a null has been run against it.** This file
+shipped a `r > 0.9` main-sequence bound for one commit. Measured, arbitrary
+random spans of this same recording score *higher* than the detector on it,
+and a detector with both of its acceptance gates removed scores higher still
+-- so the bound rejected the working detector and would have licensed a broken
+one. It was withdrawn, not widened, and the measurement it made is still
+printed (`test_the_main_sequence_statistic_is_measured_and_not_asserted`).
+
+The general lesson is not about the main sequence. It is that a statistic
+adopted because it "is a property of real X that no artefact reproduces" is a
+claim about a NULL, and the null is cheap to build and must be built first:
+draw spans the detector did not choose, measure the same statistic on them,
+and check the detector actually beats them. Design spec section 3.2 puts BMD
+in this same no-oracle bucket; whoever validates it should build the null
+before the check, not after.
+
 **What the scale is, and why every number here has to be read with it in
 hand.** This recording has no `.bhv2` and no known fixation-target positions,
 so nothing has fit a calibration for it and there is no measured degrees-per-
@@ -125,19 +142,28 @@ PAPER_MICROSACCADE_RATE_MAX_PER_S = 3.0
 #: states, and a reader comparing the two deserves the number.
 PAPER_FRACTION_ABOVE_FLOOR = 0.90
 
-#: The main-sequence bound this task was set. **Not the paper's number, and
-#: not the paper's statistic**: the phrase "main sequence" does not appear in
-#: the 2014 paper, which reports no amplitude/peak-velocity correlation in any
-#: space and does not use one as a validation display. (Its own validation
-#: displays are the bimodality of the amplitude and peak-velocity
+#: **A bound this file used to assert, removed 2026-09-02 as invalid.** Kept
+#: as a named constant for one reason: the correlation is still measured and
+#: printed, and a reader seeing the number needs to know which line it was
+#: once held to and that the line was withdrawn rather than relaxed.
+#:
+#: It was never the paper's statistic. The phrase "main sequence" does not
+#: appear in Otero-Millan et al. 2014, which reports no amplitude/peak-velocity
+#: correlation in any space and does not use one as a validation display. (Its
+#: own displays are the bimodality of the amplitude and peak-velocity
 #: distributions, and cluster scatterplots of peak velocity against initial
 #: acceleration peak -- a different pair of axes, and there peak velocity is a
-#: clustering INPUT rather than a regressor.) This is the implementation
-#: plan's own bound, on its own reasoning that a log-log velocity/amplitude
+#: clustering INPUT rather than a regressor.) It was the implementation plan's
+#: own bound, on its own reasoning that a log-log velocity/amplitude
 #: correlation is "a property of real saccades that no clustering artefact
-#: reproduces". The test below measures the correlation and, separately,
-#: whether that reasoning survives contact with this recording.
-MAIN_SEQUENCE_MIN_R = 0.9
+#: reproduces".
+#:
+#: **It is not merely imprecise. It is anti-correlated with correctness** --
+#: it rejects the working detector and licenses a broken one. See
+#: `test_the_main_sequence_statistic_is_measured_and_not_asserted` for the
+#: three measurements that establish that, and the module docstring for the
+#: general rule they imply.
+_WITHDRAWN_MAIN_SEQUENCE_BOUND = 0.9
 
 #: `event_f1` between the two detectors. Both bounds matter and they say
 #: different things -- see that test's own docstring.
@@ -551,75 +577,72 @@ def test_the_microsaccade_rate_is_the_rate_the_paper_reports(reference, capsys):
         )
 
 
-def test_the_main_sequence_correlation_reaches_the_bound_this_task_was_set(reference, capsys):
-    """`log(peak velocity)` against `log(amplitude)`, over every detected
-    event, at `r > 0.9`.
+def test_the_main_sequence_statistic_is_measured_and_not_asserted(reference, capsys):
+    """`log(peak velocity)` against `log(amplitude)`, measured and printed --
+    and **deliberately not asserted on**.
 
-    **This is the implementation plan's bound, and the main sequence is not
-    in the paper at all.** Read on 2026-09-02: the phrase does not occur in
-    Otero-Millan et al. 2014, which reports no amplitude/peak-velocity
-    correlation in any space and validates its detector by other means
-    entirely. The plan's reasoning for the bound is its own -- that the main
-    sequence is "a property of real saccades that no clustering artefact
-    reproduces" -- and it is a good reason; it is just not a paper statistic,
-    so a failure here is not by itself "the reimplementation cannot reproduce
-    the paper's numbers".
+    **This file asserted `r > 0.9` here for one commit, and the bound was
+    withdrawn as invalid rather than relaxed.** The distinction is the whole
+    point: a widened bound, or an `xfail`, leaves a threshold in the tree for
+    a future reader to nudge until it passes. A withdrawn one with its
+    refutation beside it cannot be misread.
 
-    **Three diagnostics are measured alongside it, and they are what make the
-    result readable rather than merely red or green.** Each answers a
-    different way the bare correlation could mislead:
+    **The refutation, in three measurements.** Each was taken at the reference
+    scale on this recording; where a figure comes from a configuration this
+    test does not itself reproduce, that is said.
 
-    1. **Engbert-Kliegl on the identical trace.** The always-on baseline, the
-       detector nobody is validating, measured through the same `measure`
-       call over the same mask. If the baseline scores the same or worse, the
-       number is a property of the recording rather than of the
-       reimplementation under test.
-    2. **A duration-matched random-span control** (`_random_span_control`,
-       which states its own limits). The plan's justification names a null
-       -- "no clustering artefact reproduces it" -- and this is that null.
-    3. **The sub-floor fraction, which is also the paper's own one reported
-       output statistic.** Otero-Millan et al. report that ">90%" of the
-       microsaccades in their recordings "were larger than 0.2 degrees"; and
-       design spec section 3.1, added 2026-09-02, records that the 0.2 degree
-       rule here is a cluster MEAN, so a cluster's sub-floor members ride in
-       on its average. Those events have amplitudes near zero and whatever
-       peak velocity got them selected, which is exactly what pulls a log-log
-       correlation down. Both numbers are printed together, with
-       Engbert-Kliegl's beside them, because the comparison is only readable
-       as a triple -- see `PAPER_FRACTION_ABOVE_FLOOR` for why it is measured
-       rather than asserted.
+    1. **Engbert-Kliegl, the always-on baseline nobody is validating, scores
+       LOWER on the identical trace** -- 0.7536 / 0.7415 against
+       otero_millan's 0.8213 / 0.7750, same mask, same `measure` call. A bound
+       the baseline fails harder is not evidence about the detector under
+       test.
+    2. **A random-span null out-correlates the detector.** Duration-matched:
+       0.8719 / 0.8537. Drawn with durations spread uniformly over the
+       detector's own range instead of matched to it: **0.9004** -- arbitrary
+       spans of this recording *clear the withdrawn bound* while the working
+       detector does not. (The wide-duration variant is measured in this
+       task's report, not by this test, which ships the duration-matched
+       control.) An independent measurement by the plan's author, at a
+       configuration not recorded here, put the same pair at 0.657 for the
+       detector and 0.905 for random spans -- the values move with
+       configuration, the ordering does not.
+    3. **A broken detector scores higher than a working one.** Removing both
+       of `_accept`'s gates -- accepting the noise cluster and dropping the
+       0.2 degree floor -- yields 11,590 left-eye events where the correct
+       detector yields 4,700, and r = 0.9491 / 0.9398. **It passes the bound
+       the correct detector fails.**
 
-    **What a passing correlation would establish**: that detected events span
-    a wide amplitude range with a monotone, low-scatter velocity relation --
-    that they are saccade-*shaped*. **What it would not**: that the count is
-    right, that the boundaries are right, or that the events are the ones the
-    reference implementation would have found. Only an oracle establishes
-    those, and section 3.2 (corrected) records that this detector has none.
+    **The mechanism, measured rather than assumed, because a wrong mechanism
+    recorded confidently is worse than none.** Two channels, and only the
+    first is the one the plan's author identified:
 
-    **Measured 2026-09-02, and it settles the question this docstring would
-    otherwise only argue: on this recording the bound runs BACKWARDS.**
-    Mutating `_accept` to accept every cluster including the noise one *and*
-    to drop its 0.2 degree floor -- both gates removed together, which is the
-    genuinely broken detector -- gives 11,590 left-eye events where the
-    correct one gives 4,700, a microsaccade rate of 4.208/s, and
+    - **Span-length spread inflates r.** Widening the control's duration
+      range (sd of log duration 0.502 -> 0.910) lifts it 0.8719 -> 0.9004. A
+      longer span has both a larger endpoint displacement and a higher
+      maximum velocity, mechanically. A real detector's events are
+      duration-selected, which compresses that spread and lowers r -- so on
+      this axis the statistic rewards *unselective* detection, which is
+      exactly why 11,590 spans of every length beat 4,700 chosen ones.
+    - **But duration is not the whole story, and the data say so.**
+      Partialling log duration out of the duration-matched control barely
+      moves it (0.8719 -> 0.8670), and within narrow duration strata the
+      control still beats the detector at every stratum -- 0.816 vs 0.747,
+      0.865 vs 0.832, 0.880 vs 0.842, 0.898 vs 0.581 over spans of 10-14,
+      14-18, 18-24 and 24-32 samples. Holding duration fixed does not rescue
+      the statistic. The residue is the direct coupling: over any span,
+      endpoint displacement and peak speed are both monotone in how far the
+      eye moved, whether or not anything saccade-shaped happened.
 
-        r = 0.9491 (left), 0.9398 (right)
+    So the honest general form is the weaker and more useful one, and it is
+    in the module docstring: **an oracle-free statistic is worthless until a
+    null has been run against it.**
 
-    against the correct detector's 0.8213 / 0.7750. **The broken detector
-    passes this bound and the correct one fails it.** The mechanism is the
-    same arithmetic the random-span control exposes: admitting events down to
-    the noise floor extends the amplitude range downward, and extending a
-    predictor's range raises a correlation whether or not the added points are
-    real. So a green result here would have been evidence of nothing, and the
-    red one is evidence about the bound rather than about the detector.
-
-    (Each gate alone is a no-op on this recording -- removing only the
-    last-cluster rule, or only the floor, reproduces the correct detector's
-    numbers exactly, because whichever gate remains is doing the other's job.
-    That is the "one rule silently covering for another" pattern Task 3 found
-    on synthetic fixtures, confirmed here on real data. The rate test kills
-    the combination cleanly at 4.208/s against its 3.0/s ceiling; `event_f1`
-    kills it on the right eye at 0.4592 and lets the left through at 0.5028.)
+    **What is still asserted here.** Only that the measurement is not vacuous
+    -- that both detectors and the control produced populations large enough
+    for the printed correlations to mean anything. Without that, this test
+    could silently print `nan` forever and look like it was watching
+    something. It is not a bound on r, and nothing here should become one
+    without a calibrated recording to define it against.
     """
     traces = reference["traces"]
     fitted = {}
@@ -634,8 +657,9 @@ def test_the_main_sequence_correlation_reaches_the_bound_this_task_was_set(refer
 
     with capsys.disabled():
         print(
-            f"\n  main sequence: log(peak velocity) on log(amplitude), "
-            f"bound r > {MAIN_SEQUENCE_MIN_R}"
+            "\n  main sequence: log(peak velocity) on log(amplitude) -- MEASURED, "
+            f"NOT ASSERTED (the withdrawn bound was r > {_WITHDRAWN_MAIN_SEQUENCE_BOUND}; "
+            "see this test's docstring for why it was withdrawn rather than widened)"
         )
         for trace in traces:
             om, ek, control = fitted[trace.name]
@@ -658,7 +682,7 @@ def test_the_main_sequence_correlation_reaches_the_bound_this_task_was_set(refer
             print(
                 f"      random spans   r={control[0]:.4f}  n={control[1]}  "
                 f"slope={control[2]:.3f}  log-residual sd={control[3]:.4f}   "
-                f"<- the null the bound's own reasoning names"
+                f"<- the null; it out-correlates the detector"
             )
             print(
                 f"      otero_millan above the {floor} deg floor: r={om_above[0]:.4f}  "
@@ -680,18 +704,27 @@ def test_the_main_sequence_correlation_reaches_the_bound_this_task_was_set(refer
                 f"longest {trace.om_duration.max() / trace.fs_hz * 1000:.0f} ms"
             )
 
+    # Non-vacuity only. Every population above has to be large enough that the
+    # printed correlations describe something -- `_log_log_fit` returns `nan`
+    # below three usable points, and a test that printed `nan` forever would
+    # look like a measurement while being none. 1000 is far below the ~4,300
+    # measured and far above the 3 the fit needs, so it fails on a collapse
+    # rather than on ordinary variation.
     for trace in traces:
         om, ek, control = fitted[trace.name]
-        assert om[0] > MAIN_SEQUENCE_MIN_R, (
-            f"{trace.name}: otero_millan log-log r = {om[0]:.4f} over {om[1]} events, "
-            f"below the {MAIN_SEQUENCE_MIN_R} bound this task was set. Read it with the "
-            f"three diagnostics printed above before concluding anything about the "
-            f"reimplementation: engbert_kliegl -- the baseline, on the identical trace, "
-            f"through the identical `measure` call -- scores {ek[0]:.4f}, and a "
-            f"duration-matched random-span control scores {control[0]:.4f}. A bound the "
-            f"baseline fails harder, and that arbitrary spans of the same trace satisfy, "
-            f"is not measuring what it was set to measure."
-        )
+        for label, (r_value, n, _slope, _sd) in (
+            ("otero_millan", om), ("engbert_kliegl", ek), ("random-span control", control)
+        ):
+            assert n > 1000, (
+                f"{trace.name}: the {label} population is {n} events, too few for the "
+                f"correlation printed above to describe anything -- this test measures a "
+                f"statistic it does not assert, so an empty measurement is its only "
+                f"real failure mode"
+            )
+            assert not np.isnan(r_value), (
+                f"{trace.name}: the {label} correlation is nan over {n} events"
+            )
+
 
 
 def test_otero_millan_and_engbert_kliegl_agree_substantially_without_collapsing(

@@ -366,6 +366,30 @@ surface. Mitigation is not optional:
   is validated against the paper's own simulated-data claims instead, and its
   rows are marked provisional until it is.
 
+  > **Added 2026-09-02: Otero-Millan's rows are provisional on the same
+  > terms, and this is not a suspicion about the reimplementation.** It was
+  > measured against its paper (§11 item 5) and the result is that **no
+  > oracle-free statistic yet found discriminates it on an uncalibrated
+  > recording.** The microsaccade rate passes and is worth keeping, but it is
+  > a *band*: a detector finding the right number of wrong spans clears it
+  > identically. The main-sequence check that was supposed to do the
+  > discriminating was withdrawn as invalid — a random-span null scores higher
+  > than the detector on it, and a detector with both acceptance gates removed
+  > higher still.
+  >
+  > **The rule that episode establishes, which applies to BMD next: an
+  > oracle-free statistic is worthless until a null has been run against it.**
+  > A statistic adopted because it "is a property of real X that no artefact
+  > reproduces" is a claim about a null, and building the null is cheap.
+  > Build it before the check, not after.
+  >
+  > **What would lift the marking**, in order of value: a **calibrated
+  > session**, which is what the paper's own strongest validation display —
+  > the bimodality of the amplitude distribution — needs in order to place its
+  > modes; or hand-labelled ground truth, which the paper's 62%/78% error
+  > reductions need. Both detectors named here are blocked on the same missing
+  > thing, so one calibrated recording unblocks both.
+
 Each detector is one `ParamSet` row of type `eye_detection`, using the
 existing `(paramset_type, paramset_idx)` table. Parent §7.2 puts revisability
 here deliberately: *"Detection lives in its own Computed table keyed by
@@ -868,6 +892,33 @@ them extends the amplitude range downward and stabilises the saturation
 constant; excluding them matches the classical saccade literature. It is a
 paramset choice because it changes what the number means.
 
+> **A third parameter is now needed, and it is a floor rather than a switch
+> (added 2026-09-02).** This fit runs over *stored rows*, and measurement
+> against the reference recording found that a fifth of the rows Otero-Millan
+> stores are below the 0.2° floor they were accepted by — **18.2% of left-eye
+> and 20.4% of right-eye events, 17 of them at exactly 0.0°**, and one
+> accepted event running **702 ms**. That is faithful to the reference (the
+> floor is a cluster *mean*, so sub-floor members ride in on the average —
+> §3.1), which means it is not a bug to be fixed upstream; it is a population
+> this fit will be dragged through unless it excludes them.
+>
+> A 0.0° event is the sharpest case: it contributes `log(0)` to a log-log fit
+> and a divide-by-zero to a ratio. But the 702 ms event matters as much and
+> is easier to miss — it is not a saccade at any amplitude, and a **duration
+> ceiling** is a second guard the amplitude floor does not provide.
+>
+> **The "include microsaccades" switch does not cover this.** That switch is
+> about whether a genuine sub-1° *event class* joins the fit; this is about
+> rows whose own detector's acceptance rule they do not satisfy. Both guards
+> belong in the paramset, stored with the fit, so a reader can tell which
+> rows a `v_max` was fitted through — the same discipline
+> `amplitude_min_deg`/`amplitude_max_deg` already serve.
+>
+> **And this is measured on one detector of seven.** Whoever builds
+> `SaccadeMainSequence` should measure the sub-floor and long-duration
+> fractions for each detector before choosing defaults, rather than inheriting
+> Otero-Millan's numbers.
+
 **`trace` is in the key for a reason that is not only symmetry** — §5.1: the
 conjunction's amplitudes are measured over the intersection and are
 systematically smaller than the same events' amplitudes on either eye, so a
@@ -1071,15 +1122,27 @@ else supplies.
    > **Otero-Millan measured against its paper, 2026-09-02.**
    > `tests/eye/detect/test_otero_millan_validation.py`, against the reference
    > recording (1,177,799 rows, 498.55 Hz, 39.4 min), both eyes, detectors at
-   > their defaults, gaze at the *chosen* p99→15° scale heuristic. **One of
-   > three checks passes on its own terms, one passes, and one fails — and the
-   > failing one turns out not to be a paper statistic.** The configuration is
+   > their defaults, gaze at the *chosen* p99→15° scale heuristic. **Two of
+   > the three checks planned pass. The third was WITHDRAWN as invalid** —
+   > not relaxed, not marked expected-to-fail — because measurement showed it
+   > rejects working detectors and licenses broken ones. It was also, on
+   > reading the paper, not a paper statistic at all. The configuration is
    > stated with every figure because this document has twice carried a number
    > that was measured correctly and written down wrongly.
    >
    > **The paper first, read on 2026-09-02 rather than recalled**
    > ([10.1167/14.2.18](https://doi.org/10.1167/14.2.18), PMID 24569984;
-   > abstract from PubMed, body from the ARVO version of record). Its data are
+   > abstract from PubMed, body from the ARVO version of record — ARVO's site
+   > refuses automated fetches, and the paper is **not in PMC**, so the body
+   > was reached through a repository copy).
+   >
+   > **Read that PDF rendered, not extracted.** Its font encoding maps `°` to
+   > `8` and silently drops minus signs, so text extraction alone yields
+   > numbers that are wrong without looking wrong — "0.28" for "0.2°". Every
+   > figure below was confirmed against the rendered page. A future task
+   > reading this paper will hit the same trap.
+   >
+   > Its data are
    > 20 human subjects, 24 recordings, EyeLink II/1000 at 500 Hz, fixating a
    > target at 57 cm — a calibrated video tracker on a fixation task, against
    > this repository's uncalibrated DPI over 39 unconstrained minutes. Three
@@ -1102,7 +1165,7 @@ else supplies.
    > | check | left | right | verdict |
    > |---|---|---|---|
    > | microsaccade rate /s | **1.181** | **1.204** | inside the paper's own 1–2/s |
-   > | main sequence log-log *r* | **0.8213** | **0.7750** | **below the 0.9 bound** |
+   > | main sequence log-log *r* | **0.8213** | **0.7750** | measured; **bound withdrawn** |
    > | `event_f1` vs Engbert–Kliegl | **0.8012** | **0.7834** | inside (0.5, 1.0) |
    >
    > **The rate is the one real pass, and it is robust to the free
@@ -1116,28 +1179,35 @@ else supplies.
    > What it does not: that they are the right events — a detector finding the
    > right *number* of wrong spans passes identically.
    >
-   > **The main-sequence bound fails, and three measurements say the bound is
-   > the wrong instrument rather than the detector being wrong.** Recorded
-   > without adjusting it, per the plan's own rule that a failed check is the
-   > finding:
+   > **The main-sequence bound is withdrawn, and four measurements say why.**
+   > It was asserted for one commit (`d608f1e`) and removed in the next. The
+   > correlation is still measured and printed, so a calibrated session can
+   > watch it move; nothing asserts on it. Widening it, or marking it
+   > `xfail`, would have left a threshold in the tree for a future reader to
+   > nudge until it passed — which is the failure the finding is about:
    >
    > 1. **Engbert–Kliegl scores lower on the identical trace** — 0.7536 /
    >    0.7415, same mask, same `measure` call. A bound the always-on baseline
    >    fails harder is not evidence about the reimplementation under test.
-   > 2. **A duration-matched random-span control scores *higher*** — 0.8719 /
-   >    0.8537. The bound's stated justification is that the main sequence is
-   >    "a property of real saccades that no clustering artefact reproduces";
-   >    measured, arbitrary spans of the same trace reproduce it. Over a fixed
-   >    duration a span's peak velocity is bounded below by its displacement,
-   >    so the correlation is substantially arithmetic. (The control is drawn
-   >    from this recording, so above ~0.2° it is not a clean null — nothing
-   >    but a saccade moves the eye that far in the median event's 34 ms. It is
-   >    a clean null *below* the floor, and there detected events are ~4×
-   >    faster than controls at matched amplitude: median peak velocity 52.4
-   >    against 12.8 °/s in the 0.05–0.1° bin. That last figure is from a
-   >    10×-resampled control on the left eye, measured while writing this
-   >    test and **not** reproduced by it — the shipped control is 1×, which is
-   >    enough for the correlation it is there to compute.)
+   > 2. **A random-span null out-correlates the detector, and one variant of
+   >    it clears the withdrawn bound outright.** Duration-matched to the
+   >    detector's own events: 0.8719 / 0.8537. Drawn instead with durations
+   >    spread uniformly over the detector's range: **0.9004** — arbitrary
+   >    spans of this recording pass a bound the working detector fails. An
+   >    independent measurement by this plan's author, at a configuration not
+   >    recorded here, put the same pair at **0.657 detector / 0.905 random
+   >    spans**. The values move with configuration; the ordering does not.
+   >    The bound's stated justification was that the main sequence is "a
+   >    property of real saccades that no clustering artefact reproduces" —
+   >    and the null reproduces it.
+   >
+   >    (The control is drawn from this recording, so above ~0.2° it is not a
+   >    clean null: nothing but a saccade moves the eye that far in the median
+   >    event's 34 ms. It is a clean null *below* the floor, and there detected
+   >    events are ~4× faster than controls at matched amplitude — median peak
+   >    velocity 52.4 against 12.8 °/s in the 0.05–0.1° bin, from a
+   >    10×-resampled left-eye control measured alongside the test rather than
+   >    by it.)
    > 3. ***r* is itself scale-dependent** on an uncalibrated recording —
    >    0.574 at ×0.25 to 0.881 at ×1.5, left eye, a wider sweep than the
    >    shipped test's ×0.5/×1/×2 and so likewise not reproduced by it —
@@ -1160,6 +1230,35 @@ else supplies.
    >    above the 0.2° floor). What it does not: that the count, the
    >    boundaries, or the event identities are right — and, measured, not
    >    even that the detector is unbroken.
+   >
+   > **The mechanism, measured rather than assumed — and it is two channels,
+   > not one.** Worth stating precisely, because a mechanism recorded
+   > confidently and wrongly is worse than none:
+   >
+   > - **Span-length spread inflates *r*.** Widening the control's duration
+   >   range (sd of log duration 0.502 → 0.910) lifts it 0.8719 → 0.9004. A
+   >   longer span has both a larger endpoint displacement and a higher
+   >   maximum velocity, mechanically, whether or not anything saccade-shaped
+   >   happened inside it. A real detector's events are duration-*selected*,
+   >   which compresses that spread and lowers *r* — so on this axis the
+   >   statistic rewards unselective detection. That is why 11,590 spans of
+   >   every length beat 4,700 chosen ones.
+   > - **But duration is not the whole story.** Partialling log duration out
+   >   of the duration-matched control barely moves it (0.8719 → 0.8670), and
+   >   within narrow duration strata the control still beats the detector at
+   >   *every* stratum: 0.816 vs 0.747, 0.865 vs 0.832, 0.880 vs 0.842, 0.898
+   >   vs 0.581 over spans of 10–14, 14–18, 18–24 and 24–32 samples. Holding
+   >   duration fixed does not rescue the statistic. The residue is the direct
+   >   coupling — over any span, endpoint displacement and peak speed are both
+   >   monotone in how far the eye moved.
+   >
+   > **So the rule to carry is the weaker, more useful one: an oracle-free
+   > statistic is worthless until a null has been run against it.** A
+   > statistic adopted because it "is a property of real X that no artefact
+   > reproduces" is a claim *about a null*, and the null is cheap: draw spans
+   > the detector did not choose, measure the same statistic, check the
+   > detector actually beats them. **BMD is in this same no-oracle bucket
+   > (§3.2) — build its null before its check, not after.**
    >
    > **What the mutation says about the other two checks.** The rate check
    > kills that combination cleanly (4.208/s against its 3.0/s ceiling);
@@ -1189,19 +1288,22 @@ else supplies.
    > are finding the same recording's events. Two detectors wrong in the same
    > way would also agree.
    >
-   > **Still owed, and the bar this clears is lower than it looks.** The rate
-   > band has demonstrated power — it kills a detector with both acceptance
-   > gates removed — but it is a *band*, and a detector that found the right
-   > number of wrong spans clears it identically. The main-sequence bound
-   > should be **replaced, not widened**: it is measurably anti-correlated
-   > with correctness here, so moving it to fit the observed 0.82 would ship a
-   > check that passes hardest on the most broken detector. The two statistics
-   > with real discriminating potential — the amplitude distribution's
-   > bimodality, which is the paper's *own* validation display, and the
-   > 62%/78% error reductions — need respectively a calibration this recording
-   > does not have and labelled ground truth nobody has produced.
-   > **Otero-Millan's rows should carry the same provisional marking §3.2
-   > gives BMD's until one of those exists.**
+   > **Still owed, and the bar the passing checks clear is lower than it
+   > looks.** The rate band has demonstrated power — it kills a detector with
+   > both acceptance gates removed — but it is a *band*, and a detector that
+   > found the right number of wrong spans clears it identically. `event_f1`
+   > bounds the pair's *relationship*, not its accuracy, and killed that same
+   > mutation on one eye of two (0.4592 right, 0.5028 left). The two
+   > statistics with real discriminating potential — the amplitude
+   > distribution's bimodality, which is the paper's *own* validation display,
+   > and the 62%/78% error reductions — need respectively a calibration this
+   > recording does not have and labelled ground truth nobody has produced.
+   >
+   > **So Otero-Millan's rows now carry the same provisional marking §3.2
+   > gives BMD's, and §3.2 records it** — not because the reimplementation is
+   > suspect, but because nothing yet found discriminates it on an
+   > uncalibrated recording. **A calibrated session is the single
+   > highest-value unblock**, and it unblocks BMD at the same time.
 6. **Whether seven detectors is too many to run nightly.** Seven per eye plus
    three conjunctions, over a 1.18M-sample recording, on every session. The
    plan must measure total runtime before this is a nightly stage rather than
