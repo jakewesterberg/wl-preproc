@@ -20,6 +20,9 @@ one graph does both jobs.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Label
@@ -117,3 +120,113 @@ def comparison_mask(
             Label(right), a_vocabulary, pso_as
         )
     return keep
+
+
+#: `event_f1`'s matching window, in samples. **The metric's own parameter, not
+#: a detection paramset's** (design spec section 6.1): it describes how a
+#: comparison is made, not how either trace was produced, and putting it in a
+#: detection paramset would make every detector's rows depend on a number no
+#: detector uses. 10 samples is 20 ms at 500 Hz -- the same order as the ~24 ms
+#: mean glissade duration section 2.5 quotes, so a boundary disagreement of
+#: roughly one glissade is forgiven and a whole missed event is not.
+DEFAULT_EVENT_F1_TOLERANCE_SAMPLES = 10
+
+_EVENT_LABELS = frozenset(
+    {Label.SACCADE, Label.MICROSACCADE, Label.PSO, Label.PURSUIT, Label.DRIFT}
+)
+
+
+def _event_starts(labels: np.ndarray, mask: np.ndarray) -> list[int]:
+    """Onset index of each event run, over masked-in samples only."""
+    starts: list[int] = []
+    previous_was_event = False
+    for index, label in enumerate(labels):
+        is_event = bool(mask[index]) and Label(label) in _EVENT_LABELS
+        if is_event and not previous_was_event:
+            starts.append(index)
+        previous_was_event = is_event
+    return starts
+
+
+def event_f1(
+    a: np.ndarray, b: np.ndarray, mask: np.ndarray, tolerance_samples: int
+) -> float:
+    """Events matched within a tolerance window, as F1.
+
+    What the U'n'Eye paper itself reports, so these numbers are comparable to
+    published benchmarks rather than only to each other (design spec section
+    6.1). Greedy nearest-first matching, each event used at most once.
+
+    Returns `nan` when nothing is comparable: a pair with no shared samples has
+    no score, and both `0.0` and `1.0` would be claims the data cannot support.
+    """
+    if not mask.any():
+        return float("nan")
+    a_starts, b_starts = _event_starts(a, mask), _event_starts(b, mask)
+    if not a_starts and not b_starts:
+        return 1.0
+    if not a_starts or not b_starts:
+        return 0.0
+
+    unmatched_b = set(range(len(b_starts)))
+    matched = 0
+    for start in a_starts:
+        best, best_distance = None, tolerance_samples + 1
+        for candidate in unmatched_b:
+            distance = abs(b_starts[candidate] - start)
+            if distance < best_distance:
+                best, best_distance = candidate, distance
+        if best is not None:
+            unmatched_b.discard(best)
+            matched += 1
+
+    precision = matched / len(a_starts)
+    recall = matched / len(b_starts)
+    if precision + recall == 0:
+        return 0.0
+    return float(2 * precision * recall / (precision + recall))
+
+
+def cohen_kappa(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
+    """Per-sample agreement, chance-corrected.
+
+    Catches boundary disagreement that `event_f1`'s tolerance window hides,
+    which is why both ship rather than one (design spec section 6.1). Computed
+    on the stored labels directly, over masked-in samples only.
+    """
+    if not mask.any():
+        return float("nan")
+    left, right = np.asarray(a)[mask], np.asarray(b)[mask]
+    n = len(left)
+    observed = float(np.sum(left == right)) / n
+
+    expected = 0.0
+    for label in set(left.tolist()) | set(right.tolist()):
+        expected += (np.sum(left == label) / n) * (np.sum(right == label) / n)
+    if expected == 1.0:
+        # Both traces are one constant label. They agree perfectly and chance
+        # explains all of it; kappa is undefined (0/0) rather than 1.0.
+        return float("nan")
+    return float((observed - expected) / (1.0 - expected))
+
+
+@dataclass(frozen=True, slots=True)
+class Metric:
+    name: str
+    #: `(a, b, mask, tolerance_samples) -> float`. Every metric takes the
+    #: tolerance even where it ignores it, so `DetectorAgreement.make` needs no
+    #: per-metric branch -- the same reason `_params_for` filters by declared
+    #: field rather than by a list of keys to drop.
+    compute: Callable[[np.ndarray, np.ndarray, np.ndarray, int], float]
+
+
+CONSENSUS_METRICS: dict[str, Metric] = {
+    "event_f1": Metric(
+        name="event_f1",
+        compute=lambda a, b, mask, tol: event_f1(a, b, mask, tol),
+    ),
+    "cohen_kappa": Metric(
+        name="cohen_kappa",
+        compute=lambda a, b, mask, _tol: cohen_kappa(a, b, mask),
+    ),
+}

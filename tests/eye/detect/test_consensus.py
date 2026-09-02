@@ -178,3 +178,133 @@ def test_disjoint_vocabularies_should_meet_at_their_common_coarsening():
     assert shared_vocabulary(_UNEYE, _BMD, PSO_AS_SACCADE) == frozenset(
         {Label.SACCADE, Label.FIXATION}
     )
+
+
+def test_identical_traces_score_one_on_both_metrics():
+    """The trivial anchor. Without it a metric that always returned 0.0 would
+    pass every disagreement test below."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
+
+    labels = np.array(
+        [Label.FIXATION] * 20 + [Label.SACCADE] * 10 + [Label.FIXATION] * 20
+    )
+    mask = np.ones(len(labels), dtype=bool)
+
+    assert event_f1(labels, labels, mask, tolerance_samples=5) == 1.0
+    assert cohen_kappa(labels, labels, mask) == 1.0
+
+
+def test_cohen_kappa_is_zero_for_chance_agreement_not_for_disagreement():
+    """**Why both metrics ship rather than one.** Kappa is chance-corrected, so
+    two traces that agree only as often as their base rates predict score ~0
+    even though raw agreement is high. A raw-agreement metric would read that
+    as success."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa
+
+    rng = np.random.default_rng(0)
+    a = np.where(rng.random(4000) < 0.1, Label.SACCADE, Label.FIXATION)
+    b = np.where(rng.random(4000) < 0.1, Label.SACCADE, Label.FIXATION)
+    mask = np.ones(len(a), dtype=bool)
+
+    assert abs(cohen_kappa(a, b, mask)) < 0.1
+
+
+def test_event_f1_forgives_a_boundary_shift_that_kappa_punishes():
+    """The other half of the same argument, in the other direction: an event
+    both detectors found but bounded slightly differently is one event, and
+    `event_f1`'s tolerance window says so. Per-sample kappa cannot -- which is
+    why a pair scoring high on one and low on the other is informative rather
+    than contradictory."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
+
+    a = np.array([Label.FIXATION] * 20 + [Label.SACCADE] * 10 + [Label.FIXATION] * 20)
+    b = np.array([Label.FIXATION] * 23 + [Label.SACCADE] * 10 + [Label.FIXATION] * 17)
+    mask = np.ones(len(a), dtype=bool)
+
+    assert event_f1(a, b, mask, tolerance_samples=5) == 1.0
+    assert cohen_kappa(a, b, mask) < 0.8
+
+
+def test_event_f1_does_not_match_beyond_its_tolerance():
+    """The tolerance is a real window, not a licence to match anything. Same
+    two traces as above, scored with a tolerance narrower than the shift."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    a = np.array([Label.FIXATION] * 20 + [Label.SACCADE] * 10 + [Label.FIXATION] * 20)
+    b = np.array([Label.FIXATION] * 23 + [Label.SACCADE] * 10 + [Label.FIXATION] * 17)
+    mask = np.ones(len(a), dtype=bool)
+
+    assert event_f1(a, b, mask, tolerance_samples=1) == 0.0
+
+
+def test_an_event_only_one_detector_found_lowers_event_f1():
+    """A false positive and a false negative are both real disagreement, and
+    F1 counts both -- which precision or recall alone would not."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    a = np.array([Label.FIXATION] * 10 + [Label.SACCADE] * 5 + [Label.FIXATION] * 35)
+    b = np.array(
+        [Label.FIXATION] * 10
+        + [Label.SACCADE] * 5
+        + [Label.FIXATION] * 10
+        + [Label.SACCADE] * 5
+        + [Label.FIXATION] * 20
+    )
+    mask = np.ones(len(a), dtype=bool)
+
+    score = event_f1(a, b, mask, tolerance_samples=3)
+    assert 0.6 < score < 0.7  # 1 matched, 1 unmatched in b: F1 = 2/3
+
+
+def test_masked_out_samples_change_neither_metric():
+    """`n_samples_compared` is what the row reports, and the metrics must be
+    computed over exactly those samples. If an excluded sample could move a
+    score, the stored `n_samples_compared` would describe a different
+    computation from the one that produced the number beside it."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
+
+    a = np.array([Label.SACCADE] * 5 + [Label.FIXATION] * 20)
+    b = np.array([Label.SACCADE] * 5 + [Label.FIXATION] * 20)
+    poisoned_a = np.concatenate([a, np.array([Label.SACCADE] * 10)])
+    poisoned_b = np.concatenate([b, np.array([Label.FIXATION] * 10)])
+    mask = np.concatenate([np.ones(25, dtype=bool), np.zeros(10, dtype=bool)])
+
+    assert event_f1(poisoned_a, poisoned_b, mask, tolerance_samples=3) == 1.0
+    assert cohen_kappa(poisoned_a, poisoned_b, mask) == 1.0
+
+
+def test_both_metrics_are_symmetric():
+    """The table's key orders the pair canonically `a < b`, so an asymmetric
+    metric would store one number for what are really two measurements."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
+
+    a = np.array([Label.FIXATION] * 10 + [Label.SACCADE] * 5 + [Label.FIXATION] * 35)
+    b = np.array([Label.FIXATION] * 12 + [Label.SACCADE] * 6 + [Label.FIXATION] * 32)
+    mask = np.ones(len(a), dtype=bool)
+
+    assert event_f1(a, b, mask, 5) == event_f1(b, a, mask, 5)
+    assert cohen_kappa(a, b, mask) == cohen_kappa(b, a, mask)
+
+
+def test_an_empty_comparison_returns_nan_rather_than_a_confident_number():
+    """A pair with nothing comparable has no score, and `0.0` would read as
+    total disagreement while `1.0` would read as perfect agreement. Both are
+    claims the data cannot support."""
+    from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
+
+    a = np.array([Label.SACCADE, Label.SACCADE])
+    b = np.array([Label.FIXATION, Label.FIXATION])
+    mask = np.zeros(2, dtype=bool)
+
+    assert np.isnan(event_f1(a, b, mask, tolerance_samples=3))
+    assert np.isnan(cohen_kappa(a, b, mask))
+
+
+def test_the_metric_registry_names_exactly_what_ships():
+    """The same completeness shape `DETECTORS` uses. A metric with no registry
+    entry never runs; an entry naming no function fails on the first pair."""
+    from wl_preproc.eye.detect.consensus import CONSENSUS_METRICS
+
+    assert set(CONSENSUS_METRICS) == {"event_f1", "cohen_kappa"}
+    for name, metric in CONSENSUS_METRICS.items():
+        assert metric.name == name
