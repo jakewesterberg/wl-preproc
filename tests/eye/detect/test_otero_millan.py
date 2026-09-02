@@ -10,6 +10,7 @@ against that correction, not against the pre-correction spec.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.otero_millan import (
@@ -51,15 +52,22 @@ def test_a_planted_large_saccade_is_detected_and_labelled_saccade():
     times` states the reason and this file inherits it: a detector suite that
     only counts events has the same hole the eye plan's did.
 
-    **The +/-10 sample tolerance is measured, not guessed, and it is not
-    slack.** Two things move a detected edge off a planted one. The shared
-    5-point velocity estimator is CENTRED -- velocity at sample `n` reads
-    `gaze[n + 2]` -- so velocity rises two samples before the position ramp
-    does; and this detector then walks the event's boundary out to the last
-    sample below `_SACCADE_LIMIT_DEG_S`, which lands wherever noise happens to
-    drop back under 5 deg/s. Over 200 seeds, all 200 return exactly three
-    saccades and the boundary deviation is median 1, 99th percentile 5, **max
-    7**. Ten covers that with margin while staying 100x tighter than the
+    **The bounds are SIGNED, because the deviation has a direction and an
+    unsigned bound would accept things that never happen.** Both effects that
+    move an edge move it outward: the shared 5-point velocity estimator is
+    CENTRED -- velocity at sample `n` reads `gaze[n + 2]` -- so velocity rises
+    before the position ramp does; and this detector then walks the boundary
+    out to the last sample below `_SACCADE_LIMIT_DEG_S`, which lands wherever
+    noise drops back under 5 deg/s. The span is therefore always a DILATION of
+    the planted event, never a shift. Measured over 300 seeds, all 300 giving
+    exactly three saccades: `start - planted_start` lies in [-8, -1] and
+    `stop - planted_stop` in [+1, +9] -- every one of 900 edges, no exceptions.
+
+    So the assertion is `-10 <= start - planted <= 0` and
+    `0 <= stop - planted <= 10`. An `abs(...) <= 10` would additionally accept
+    a start ten samples LATE, which no run of this detector has ever produced
+    and which would mean it had missed the event's onset entirely. Ten covers
+    the measured extremes with margin while staying 100x tighter than the
     1000-sample spacing between planted events, so it cannot silently accept a
     detection of the wrong event.
 
@@ -82,8 +90,8 @@ def test_a_planted_large_saccade_is_detected_and_labelled_saccade():
 
     assert len(intervals) == len(planted)
     for interval, (want_start, want_stop) in zip(intervals, planted, strict=True):
-        assert abs(interval.start - want_start) <= 10
-        assert abs(interval.stop - want_stop) <= 10
+        assert -10 <= interval.start - want_start <= 0
+        assert 0 <= interval.stop - want_stop <= 10
     assert all(interval.label is Label.SACCADE for interval in intervals)
 
 
@@ -198,6 +206,50 @@ def test_reliability_is_populated_per_detection():
     assert intervals
     assert all(interval.reliability is not None for interval in intervals)
     assert all(-1.0 <= interval.reliability <= 1.0 for interval in intervals)
+
+
+def test_a_lone_accepted_detection_is_maximally_confident_not_minimally():
+    """**The wrong end of the scale, and nothing caught it.** `reliability` is
+    a silhouette, and a point alone in its cluster has no within-cluster
+    distance -- so `a = 0` and `s = (b - 0) / b = 1`. Maximum confidence. This
+    module skipped `count <= 1` and left the array's zero for one round, which
+    stored the value meaning "no confidence" for exactly the detections the
+    clustering was most certain about.
+
+    It was invisible because the only assertions anywhere were `is not None`
+    and `-1 <= r <= 1`, both of which 0.0 satisfies. Measured on this fixture,
+    36 of 40 seeds yield a single accepted detection and all 36 stored 0.0.
+
+    This is the column design spec section 3.2's paper-statistic validation
+    will run on, so an inverted value here is not a cosmetic defect -- it is a
+    validation that would be wrong in precisely the confident cases.
+    """
+    gaze, v, available = _trace([(2000, 2020, 4.0)])
+
+    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+
+    assert len(intervals) == 1
+    assert intervals[0].reliability == 1.0
+
+
+def test_the_singleton_convention_is_the_divisor_not_a_special_case():
+    """The value above comes from the reference's `max(count - 1, 1)` divisor,
+    which is one expression covering both cases -- not a branch that a later
+    edit could drop while leaving the ordinary path working. Asserted directly
+    on `_silhouette` so the convention is pinned where it lives.
+
+    A cluster of one against a cluster of many: the singleton scores 1, and the
+    members of the larger cluster score by the ordinary formula.
+    """
+    from wl_preproc.eye.detect.otero_millan import _silhouette
+
+    whitened = np.array([[10.0], [0.0], [0.1], [-0.1]])
+    labels = np.array([1, 2, 2, 2])
+
+    scores = _silhouette(whitened, labels)
+
+    assert scores[0] == 1.0
+    assert all(0.0 < value < 1.0 for value in scores[1:])
 
 
 def test_the_noise_floor_is_a_lower_bound_and_is_the_only_amplitude_rule():
@@ -467,18 +519,293 @@ def test_the_acceleration_features_do_not_depend_on_the_missing_sampling_rate():
     assert np.allclose(per_sample, per_second)
 
 
-def test_a_merged_run_reports_no_reliability_rather_than_a_borrowed_one():
-    """Design spec section 5's column says how much to trust a detection. A run
-    corresponding to no single detector interval has no such number, and
-    borrowing one from either half would be a fabrication in the one column a
-    reader consults to decide what to believe.
+# --- Below: the steps the module argues hardest for, made observable.
+#
+# A whole-suite mutation sweep found eight behaviour-changing mutations that no
+# test noticed -- whitening deleted outright, the component cut moved to 0.0 or
+# 0.5, the silhouette margin to 0% or 20%, the ridge to 1.0, `_zscore`'s ddof to
+# 0, and the onset window shortened. Every one changes the event set or the
+# stored reliability on real input. The tests below pin what each step is FOR,
+# rather than pinning one number per mutation.
+
+
+def test_whitening_decorrelates_and_the_ridge_sets_how_far():
+    """What whitening is for, stated as a property of its output.
+
+    `W = (X - mean) @ V @ diag(sqrt(1 / (d + ridge)))` where `V, d` diagonalise
+    `cov(X)`. So `cov(W) = diag(d / (d + ridge))` **exactly**: off-diagonals
+    vanish (that is the decorrelation) and each diagonal entry is set by the
+    ridge (that is how far the rescaling goes). Asserting both makes the whole
+    step observable in one place -- deleting it leaves `cov` non-diagonal, and
+    moving the ridge to 1.0 turns 0.714/0.836 into 0.199/0.337.
+
+    Columns here are mutually orthogonal, so `cov(X)` is diagonal and its
+    eigenvalues ARE the column variances -- 0.508, 0.249, 0.00127. That makes
+    the expected answer readable rather than something only numpy knows.
     """
-    from wl_preproc.eye.detect.labels import Run
+    from wl_preproc.eye.detect.otero_millan import _whiten
 
-    reliability_by_span = {(10, 20): 0.8, (20, 30): 0.9}
-    merged = Run(10, 30, Label.SACCADE)
+    t = np.arange(60)
+    features = np.column_stack([
+        np.cos(2 * np.pi * t / 60), 0.7 * np.sin(2 * np.pi * t / 60),
+        0.05 * np.cos(4 * np.pi * t / 60),
+    ])
+    eigenvalues = np.linalg.eigvalsh(np.cov(features, rowvar=False))
+    kept = eigenvalues[(eigenvalues / eigenvalues[-1]) > 0.05]
 
-    assert reliability_by_span.get((merged.start, merged.stop)) is None
+    whitened = _whiten(features)
+    covariance = np.cov(whitened, rowvar=False)
+
+    assert np.allclose(covariance - np.diag(np.diag(covariance)), 0.0, atol=1e-12)
+    assert np.allclose(np.diag(covariance), kept / (kept + 0.1))
+
+
+def test_the_component_cut_drops_a_degenerate_direction():
+    """The cut keeps components whose eigenvalue exceeds 5% of the largest.
+
+    The fixture's three orthogonal columns have variance ratios 1 : 0.49 :
+    0.0025, chosen to straddle the cut on both sides: at 0.05 exactly two
+    survive, at 0.0 all three would, at 0.5 only one would. One assertion
+    therefore pins the cut from above and below rather than merely recording
+    that some cut exists.
+
+    Dropping the third is the point -- it is a direction the data has almost no
+    extent in, and dividing it by its own near-zero eigenvalue is what would
+    blow it up to dominate every distance the clustering computes.
+    """
+    from wl_preproc.eye.detect.otero_millan import _whiten
+
+    t = np.arange(60)
+    features = np.column_stack([
+        np.cos(2 * np.pi * t / 60), 0.7 * np.sin(2 * np.pi * t / 60),
+        0.05 * np.cos(4 * np.pi * t / 60),
+    ])
+
+    assert _whiten(features).shape[1] == 2
+
+
+def test_whitening_is_what_makes_a_small_event_findable_at_all():
+    """The consequence the property test above cannot show: on this trace,
+    clustering the RAW z-scored features accepts nothing, and clustering the
+    whitened ones finds all three planted microsaccades.
+
+    Seed 1 rather than 0 because at seed 0 both happen to succeed -- which is
+    exactly how deleting `_whiten` passed a suite whose fixtures all used seed
+    0. Measured over 200 (config, seed) pairs, whitening changes the accepted
+    set on 18 of them; this is one.
+    """
+    from wl_preproc.eye.detect.otero_millan import (
+        _accept, _acceleration, _candidate_spans, _cluster_peaks, _features,
+        _log_finite, _whiten, _zscore,
+    )
+
+    gaze, v, available = _trace(
+        [(1000, 1015, 0.4), (2000, 2015, 0.4), (3000, 3015, 0.4)], seed=1
+    )
+    speed = np.hypot(v[:, 0], v[:, 1])
+    spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
+    peak_velocity, onset, brake, displacement = _features(
+        gaze, speed, _acceleration(v), spans
+    )
+    raw = np.column_stack([
+        _zscore(_log_finite(peak_velocity)), _zscore(_log_finite(onset)),
+        _zscore(_log_finite(brake)),
+    ])
+
+    def accepted(matrix):
+        cluster, _ = _cluster_peaks(matrix, peak_velocity, 4)
+        return int(_accept(cluster, displacement, 0.2).sum())
+
+    assert accepted(_whiten(raw)) == 3
+    assert accepted(raw) == 0
+
+
+def test_the_silhouette_margin_is_what_chooses_the_cluster_count():
+    """The 1% margin is a real decision, not a rounding guard.
+
+    On this trace the mean binarised silhouette improves from two clusters to
+    three by more than 1%, and from three to four by less. So the margin picks
+    THREE: a 0% margin would take any improvement and run to four, and a 20%
+    margin would refuse the first improvement and stop at two. Measured across
+    200 (config, seed) pairs, 173 have a margin-sensitive count and 35 separate
+    all three values; seed 26 of the large fixture is one of the 35.
+
+    Asserted through `_cluster_peaks`' returned assignment, whose maximum IS
+    the count it settled on, rather than by reaching into the loop.
+    """
+    from wl_preproc.eye.detect.otero_millan import (
+        _acceleration, _candidate_spans, _cluster_peaks, _features, _log_finite,
+        _whiten, _zscore,
+    )
+
+    gaze, v, _available = _trace(
+        [(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)], seed=26
+    )
+    speed = np.hypot(v[:, 0], v[:, 1])
+    spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
+    peak_velocity, onset, brake, _displacement = _features(
+        gaze, speed, _acceleration(v), spans
+    )
+    whitened = _whiten(np.column_stack([
+        _zscore(_log_finite(peak_velocity)), _zscore(_log_finite(onset)),
+        _zscore(_log_finite(brake)),
+    ]))
+
+    cluster, _silhouette = _cluster_peaks(whitened, peak_velocity, 4)
+
+    assert int(cluster.max()) == 3
+
+
+def test_zscore_uses_the_sample_standard_deviation_like_the_reference():
+    """MATLAB's `zscore` normalises by `N - 1`, and this must match.
+
+    It is not a cosmetic difference. Every feature is scaled by
+    `sqrt(N / (N - 1))` under the wrong divisor, which scales the covariance
+    eigenvalues -- but NOT the `+ 0.1` ridge they are added to. The whitening
+    therefore changes by a different factor in each component, and the
+    clustering with it.
+    """
+    from wl_preproc.eye.detect.otero_millan import _zscore
+
+    values = np.array([1.0, 2.0, 4.0, 8.0, 16.0])
+
+    assert _zscore(values).std(ddof=1) == pytest.approx(1.0)
+    assert _zscore(values).std(ddof=0) == pytest.approx(np.sqrt(4 / 5))
+
+
+def test_the_onset_window_reaches_one_sample_past_the_velocity_peak():
+    """The reference's own arithmetic, and the two windows really do overlap.
+
+    `GetPeakAccelerationStart` takes `sac(i,1):(sac(i,1)+idxmax)` and
+    `GetPeakAccelerationBrake` takes `min(sac(i,1)+idxmax, sac(i,2)):sac(i,2)`,
+    with `idxmax` the 1-based offset of the velocity peak -- so both include
+    absolute sample `start + at + 1`. Here the largest acceleration sits
+    exactly on that shared sample, so BOTH features must report it. A window
+    stopping at the velocity peak (which this module used for one round, while
+    describing the disjointness as a design property) reports 3.0 for the
+    onset instead of 99.0.
+    """
+    from wl_preproc.eye.detect.otero_millan import _features
+
+    speed = np.array([0.0, 10.0, 50.0, 20.0, 5.0])       # velocity peak at index 2
+    accel = np.array([1.0, 2.0, 3.0, 99.0, 4.0])         # max at index 3 == peak + 1
+    gaze = np.column_stack([np.arange(5) * 0.5, np.zeros(5)])
+
+    _pv, onset, brake, _disp = _features(gaze, speed, accel, [(0, 5)])
+
+    assert onset[0] == 99.0
+    assert brake[0] == 99.0
+
+
+def _drifting_half_trace(n=90_000, seed=0, quiet=0.004, loud=0.12, every=500, size=4.0):
+    """Events in the FIRST half only, with the noise scale ramping up across
+    the whole recording -- so the second half is loud and genuinely eventless.
+
+    Long enough to span more than one clustering chunk, which is the entire
+    point: every other fixture in this file is a single chunk, and a single
+    chunk cannot tell global normalisation from per-chunk normalisation.
+    """
+    from wl_preproc.eye.detect.velocity import velocity
+
+    rng = np.random.default_rng(seed)
+    sigma = np.linspace(quiet, loud, n)[:, None]
+    gaze = rng.normal(0.0, 1.0, size=(n, 2)) * sigma
+    onsets = list(range(1000, n // 2, every))
+    for start in onsets:
+        stop = start + 15
+        gaze[start:, 0] += size
+        gaze[start:stop, 0] += np.linspace(0.0, size, stop - start) - size
+    return gaze, velocity(gaze, fs_hz=500.0), np.full(n, None, dtype=object), onsets
+
+
+def test_normalisation_is_global_so_a_late_noisy_chunk_is_not_flattered():
+    """**Z-scoring and whitening happen once over the whole recording; only the
+    clustering is chunked**, which is what the reference does -- `GetFeatures`
+    is called once over every peak and only `ClusterPeaks` is chunked.
+
+    Normalising per chunk instead defeats the reason chunks exist. Chunks are
+    there because a recording's properties DRIFT; rescaling each chunk against
+    its own mean and covariance erases exactly the drift they were meant to
+    accommodate, and every chunk then looks equally eventful. Measured on this
+    fixture: 88 events are planted, all in the first half, and the second half
+    is pure noise that has grown 30x louder. Global normalisation accepts **88
+    detections, none of them after the events stop**. Per-chunk normalisation
+    accepts **98, ten of them hallucinated out of the eventless second half**
+    -- a chunk of loud noise, renormalised against itself, looks like a chunk
+    full of saccades.
+
+    The +/-30 sample match tolerance is wider than the quiet fixtures' +/-10
+    because the noise here reaches 0.12 degrees, so the 5 deg/s boundary walk
+    wanders further before it finds a quiet sample. At that tolerance the
+    correspondence is exactly one-to-one in both directions.
+    """
+    gaze, v, available, onsets = _drifting_half_trace()
+
+    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    half = len(gaze) // 2
+
+    assert len(intervals) == len(onsets)
+    assert not [i for i in intervals if i.start > half]
+    assert all(any(abs(i.start - onset) <= 30 for onset in onsets) for i in intervals)
+    assert all(any(abs(i.start - onset) <= 30 for i in intervals) for onset in onsets)
+
+
+def test_the_fixture_really_does_span_more_than_one_chunk():
+    """Guards the test above from passing for the wrong reason. If the drifting
+    fixture ever produced a single chunk, global and per-chunk normalisation
+    would be the same computation and the assertion would hold no matter which
+    one the module used."""
+    from wl_preproc.eye.detect.otero_millan import _candidate_spans, _chunks
+
+    gaze, v, _available, _onsets = _drifting_half_trace()
+    speed = np.hypot(v[:, 0], v[:, 1])
+
+    spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
+
+    assert len(_chunks(len(spans))) >= 2
+
+
+def test_neither_registered_detector_can_produce_a_merged_run():
+    """**The honest version of a test that used to assert `dict.get` misses.**
+
+    `_insert_trace` maps `reliability` onto its re-derived runs by exact
+    `(start, stop)` match, so a run that merged two detector intervals gets
+    `None` rather than a borrowed number -- design spec section 5's column says
+    how much to trust a detection, and a value belonging to neither half would
+    be a fabrication in the one column a reader consults to decide what to
+    believe.
+
+    That path **cannot be reached by either registered detector today**, which
+    is what this asserts instead of pretending otherwise. A merge needs two
+    adjacent intervals carrying the same label with no sample between them, and
+    both detectors guarantee a gap: `otero_millan._merge` coalesces touching
+    spans before returning, and `engbert_kliegl._true_runs` returns maximal
+    True runs, which are separated by at least one False sample by
+    construction. The previous version of this test built a literal dict and
+    asserted a miss on it -- it exercised `dict.get`, not `_insert_trace`, while
+    its name and docstring claimed production coverage.
+
+    So the guarantee is asserted at its source, on real detector output. If a
+    future detector drops the gap, this fails and the `None` branch becomes
+    reachable -- which is the moment someone should write the test the old one
+    pretended to be.
+    """
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
+
+    gaze, v, available = _trace(
+        [(700, 708, 0.7), (1300, 1316, 1.5), (1900, 1908, 0.7), (2500, 2516, 1.5)]
+    )
+
+    for intervals in (
+        detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS),
+        detect_engbert_kliegl(gaze, v, available, DEFAULT_EK_PARAMS),
+    ):
+        assert intervals
+        for earlier, later in zip(intervals, intervals[1:], strict=False):
+            assert earlier.stop < later.start, (
+                "adjacent intervals touch, so runs_from_labels could merge them "
+                "and _insert_trace's exact-span reliability map would miss"
+            )
 
 
 def test_run_defaults_reliability_to_none_and_stays_equal_to_itself():

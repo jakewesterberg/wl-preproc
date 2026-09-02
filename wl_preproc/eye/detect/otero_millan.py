@@ -73,6 +73,13 @@ from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, class
 # velocity peak's event begins and ends, by walking out to the last sample
 # below it on each side. Velocity reaches this module in deg/s, so the constant
 # transfers directly with no rescaling.
+#
+# The reference pairs it with a second boundary test, `SACCADELIMITTHACC`, and
+# that one is dead: the condition is `acc < SACCADELIMITTHACC` with the
+# constant set to 0, while `acc` is a magnitude (`CartToPolar` of the two
+# acceleration components) and so never negative. The clause can never fire.
+# Not reimplemented, because implementing an always-false disjunct would put a
+# line here that no input can reach.
 _SACCADE_LIMIT_DEG_S = 5.0
 
 # The reference's candidate budget, re-expressed without a sampling rate.
@@ -210,19 +217,26 @@ def detect_otero_millan(
     peak_velocity, accel_onset, accel_brake, displacement = _features(
         gaze_deg, speed, accel, spans
     )
+    # **Z-scoring and whitening are GLOBAL; only the clustering is chunked.**
+    # The reference calls `GetFeatures` once over every peak in the recording
+    # and chunks `ClusterPeaks` alone. Doing them per chunk instead -- which
+    # this module did for one round -- rescales each chunk against its own
+    # mean and covariance, which is precisely what defeats the chunking's
+    # stated purpose: chunks exist because a recording's properties DRIFT, and
+    # renormalising each one hides the drift it was supposed to accommodate.
+    whitened = _whiten(
+        np.column_stack([
+            _zscore(_log_finite(peak_velocity)),
+            _zscore(_log_finite(accel_onset)),
+            _zscore(_log_finite(accel_brake)),
+        ])
+    )
     reliability = np.zeros(len(spans))
     accepted = np.zeros(len(spans), dtype=bool)
 
     for lo, hi in _chunks(len(spans)):
-        whitened = _whiten(
-            np.column_stack([
-                _zscore(_log_finite(peak_velocity[lo:hi])),
-                _zscore(_log_finite(accel_onset[lo:hi])),
-                _zscore(_log_finite(accel_brake[lo:hi])),
-            ])
-        )
         cluster, silhouette = _cluster_peaks(
-            whitened, peak_velocity[lo:hi], max(2, int(params.max_clusters))
+            whitened[lo:hi], peak_velocity[lo:hi], max(2, int(params.max_clusters))
         )
         reliability[lo:hi] = silhouette
         accepted[lo:hi] = _accept(
@@ -459,11 +473,28 @@ def _features(
         window = speed[start:stop]
         at = int(np.argmax(window))
         peak_velocity[i] = float(window[at])
-        # Onset: from the event's start through the velocity peak. Braking:
-        # from just past the velocity peak to the end. The two windows are
-        # disjoint, which is what makes them two features rather than one
-        # measured twice.
-        accel_onset[i] = float(accel[start : start + at + 1].max())
+        # Onset runs from the event's start to ONE SAMPLE PAST the velocity
+        # peak; braking runs from that same sample to the end. **They overlap
+        # by exactly one sample, and that is the reference's own arithmetic**
+        # -- `GetPeakAccelerationStart` takes `sac(i,1):(sac(i,1)+idxmax)` and
+        # `GetPeakAccelerationBrake` takes `min(sac(i,1)+idxmax, sac(i,2)):
+        # sac(i,2)`, with `idxmax` the 1-based offset of the velocity peak, so
+        # both windows include absolute sample `start + at + 1`.
+        #
+        # The shared sample is the first of the deceleration, and it belongs to
+        # both phases because the peak itself is the boundary: an event whose
+        # braking is one sample long would otherwise have an empty window.
+        # This module used disjoint windows for one round and described the
+        # disjointness as a design property; it was a departure, and it moved
+        # the event set on 11 of 120 traces and `reliability` on 89 of 120.
+        #
+        # The upper clamp to `stop` is this module's own and is a real
+        # departure: the reference does not clamp here, so a peak at an event's
+        # last sample makes it read one sample BEYOND the event -- a sample
+        # belonging to no event, and past the array end for an event at the end
+        # of a recording.
+        onset_stop = min(start + at + 2, stop)
+        accel_onset[i] = float(accel[start:onset_stop].max())
         brake_start = min(start + at + 1, stop - 1)
         accel_brake[i] = float(accel[brake_start:stop].max())
         displacement[i] = amplitude(gaze_deg, start, stop)
@@ -517,6 +548,13 @@ def _whiten(features: np.ndarray) -> np.ndarray:
     another machine cannot audit it. Pinning the sign so each eigenvector's
     largest-magnitude component is positive costs nothing and removes the
     question.
+
+    **No test asserts this, and none can.** Removing the canonicalisation is
+    an equivalent mutation on any single machine: one LAPACK build returns one
+    set of signs, so both versions agree with themselves everywhere the suite
+    can look. The claim is about agreement BETWEEN builds, and a second build
+    is what it would take to observe it. Recorded here rather than pinned by a
+    test that would only appear to check it.
     """
     covariance = np.atleast_2d(np.cov(features, rowvar=False))
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
@@ -578,6 +616,17 @@ def _kmeans(whitened: np.ndarray, n_clusters: int, seeds: np.ndarray) -> np.ndar
     reseeding is where every library implementation reaches for a random state,
     and holding the centroid still is both deterministic and stable -- the
     cluster is simply unused, which the silhouette then scores accordingly.
+
+    **A stated deviation: MATLAB's `kmeans` runs a batch phase AND an online
+    phase**, the latter moving single points between clusters when that lowers
+    the total within-cluster sum of squares. This is batch only. Tested rather
+    than assumed: the online phase was implemented and run against both
+    populated fixtures, and the total SSE was identical with and without it
+    (97.044 at two clusters on the one that motivated the check), so the batch
+    result was already a fixed point of the online criterion there. That is
+    evidence on two recordings, not a proof -- a partition this reaches and the
+    online phase would improve is possible, and would show up as a different
+    cluster assignment rather than as any error.
     """
     centroids = seeds.copy()
     assignment = np.full(whitened.shape[0], -1)
@@ -638,9 +687,14 @@ def _silhouette(whitened: np.ndarray, labels: np.ndarray) -> np.ndarray:
     for i in range(n):
         own = labels == labels[i]
         count = int(own.sum())
-        if count <= 1:
-            continue
-        within = float(distance[i][own].sum()) / (count - 1)
+        # `max(count - 1, 1)`, the reference's own divisor, and it is what
+        # gives a SINGLETON the right answer. A point alone in its cluster has
+        # no within-cluster distance: the sum is zero, so `within` is zero and
+        # the silhouette is `(between - 0) / between == 1`. Skipping the point
+        # and leaving zero -- which this did for one round -- stores the value
+        # meaning "no confidence" for the detection the clustering was most
+        # certain about, and 0.0 passes a `-1 <= r <= 1` range check happily.
+        within = float(distance[i][own].sum()) / max(count - 1, 1)
         between = min(
             float(distance[i][labels == other].mean())
             for other in present
