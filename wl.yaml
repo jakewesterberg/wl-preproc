@@ -14,7 +14,7 @@ status:
   phase: >-
     Phase 1c complete; archival/compression, the eye subsystem and
     second-order calibration all merged. The saccade-detection SUBSTRATE
-    (stage 1) is merged; stage 2A is built and not yet merged. Phase
+    (stage 1) and stage 2A are both merged. Phase
     2b's back half remains hardware-blocked.
   next: >-
     Saccade detection stage 2B — the five detectors still unwritten
@@ -25,11 +25,16 @@ status:
     wl-expcontroller's online detector as an eighth registry entry
     (docs/handoffs/2026-09-01-consensus-and-otero-millan-built.md).
 
-    Stage 2A is built on spec/consensus-and-otero-millan and NOT yet merged: a
-    second detector (Otero-Millan, reimplemented), the coarsening lattice and
-    comparability rule, `event_f1` and `cohen_kappa` with their registry, the
-    `DetectorAgreement` table, and the report's agreement line. Still no
-    `torch`; `third_party` is deliberately unchanged.
+    Stage 2A is MERGED (a8fd3cb): a second detector (Otero-Millan,
+    reimplemented), the coarsening lattice and comparability rule, `event_f1`
+    and `cohen_kappa` with their registry, the `DetectorAgreement` table, and
+    the report's agreement line. Still no `torch`; `third_party` is
+    deliberately unchanged.
+
+    U'n'Eye is the one remaining detector NOT blocked by the glissade
+    decision -- it declares `{saccade}`, a subset of the amplitude-derived
+    vocabulary, so it never reaches `_conjunction_label`'s raise. Its
+    obstacles are `torch`, vendoring and a GPU instead.
 
     Four of the five remaining detectors can be registered but cannot produce a
     CONJUNCTION trace until the glissade assignment is decided — design spec
@@ -42,7 +47,7 @@ status:
     2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
     (which validity criterion 4 is blocked on) and rehydration are the other
     hardware-free pieces outstanding.
-  describes: eac08e7
+  describes: a8fd3cb
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
