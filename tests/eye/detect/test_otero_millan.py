@@ -51,13 +51,27 @@ def test_a_planted_large_saccade_is_detected_and_labelled_saccade():
     times` states the reason and this file inherits it: a detector suite that
     only counts events has the same hole the eye plan's did.
 
-    The +/-3 sample tolerance is that test's own, and it is not slack. The
-    shared 5-point velocity estimator is CENTRED -- velocity at sample `n`
-    reads `gaze[n + 2]` -- so velocity rises two samples before the position
-    ramp does, and this detector then walks the event's boundary out to the
-    last sub-threshold sample beyond that. A detected onset a few samples
-    ahead of the planted one is the estimator's geometry, not an error. The
-    brief for this task asserted `1000 <= start <= 1030` instead, which no
+    **The +/-10 sample tolerance is measured, not guessed, and it is not
+    slack.** Two things move a detected edge off a planted one. The shared
+    5-point velocity estimator is CENTRED -- velocity at sample `n` reads
+    `gaze[n + 2]` -- so velocity rises two samples before the position ramp
+    does; and this detector then walks the event's boundary out to the last
+    sample below `_SACCADE_LIMIT_DEG_S`, which lands wherever noise happens to
+    drop back under 5 deg/s. Over 200 seeds, all 200 return exactly three
+    saccades and the boundary deviation is median 1, 99th percentile 5, **max
+    7**. Ten covers that with margin while staying 100x tighter than the
+    1000-sample spacing between planted events, so it cannot silently accept a
+    detection of the wrong event.
+
+    This tolerance was +/-3 for one round, borrowed from
+    `test_engbert_kliegl.py`. It does not transfer: that detector delimits an
+    event by a STATISTICAL threshold (`lambda_` times a median scale), and
+    this one by a fixed 5 deg/s walk-out, which is the noisier of the two
+    boundaries. At +/-3 only 151 of 200 seeds pass -- and on every one of the
+    49 that fail, the detector found exactly three 4-degree saccades in the
+    right places. That was a wrong number in the test, not a wrong detection.
+
+    The brief for this task asserted `1000 <= start <= 1030` instead, which no
     correct implementation of this detector can satisfy: measured, the spans
     begin at 997, 1999 and 2999.
     """
@@ -68,8 +82,8 @@ def test_a_planted_large_saccade_is_detected_and_labelled_saccade():
 
     assert len(intervals) == len(planted)
     for interval, (want_start, want_stop) in zip(intervals, planted, strict=True):
-        assert abs(interval.start - want_start) <= 3
-        assert abs(interval.stop - want_stop) <= 3
+        assert abs(interval.start - want_start) <= 10
+        assert abs(interval.stop - want_stop) <= 10
     assert all(interval.label is Label.SACCADE for interval in intervals)
 
 
@@ -367,20 +381,64 @@ def test_moving_the_shared_cut_moves_this_detector_s_labels():
     assert all(i.label is Label.MICROSACCADE for i in raised)
 
 
-def test_acceleration_is_the_shared_estimator_applied_twice():
-    """**Not a style preference; a defect this caught.** Design spec section 3
-    fixes one differentiator for the whole subsystem, and this detector's
-    acceleration features are the second application of it.
+def test_the_default_peak_separation_is_the_references_live_twenty_milliseconds():
+    """**A mutation check found this untested, and it is how the wrong value
+    shipped.** Reverting `min_isi_samples` to 15 passed every other test in
+    this file -- which is exactly the hole the first round fell into: 15 came
+    from `SaccadeDetector.MIN_ISI = 30` read as milliseconds, and that
+    constant is declared and read by nothing in the reference (`grep -c
+    MIN_ISI` returns 1, its own declaration). The live separation is
+    `SaccadeDetectorCluster.MINIPI = round(20 * samplerate / 1000)`.
 
-    Substituting a sharper differentiator (`np.gradient`) is a one-line change
-    that passes every test in this file, and it silently cost real detections
-    on a populated session: measured on
-    `tests/schema/test_detect_populate.py::out_of_order_session`, the noisier
-    acceleration made the mean silhouette at three clusters WORSE than at two,
-    which stops `_cluster_peaks`' search one step before the count that
-    isolates the saccades -- 29 accepted events on a trace with three planted.
-    That failure is only visible through a container, so the choice is pinned
-    here where it costs a millisecond to check.
+    Asserted against that DERIVATION rather than against the literal 10,
+    following `test_engbert_kliegl.py::test_the_default_threshold_is_the_
+    shared_constant_not_a_second_copy`: a bare `== 10` would have been just as
+    green at 15 before anyone read the source, and pins nothing about why.
+    Written this way, changing the default means confronting the claim that it
+    is no longer 20 ms.
+
+    The 500 Hz here is the rig's nominal rate, used ONLY to turn the
+    reference's millisecond constant into samples for this assertion. The
+    detector itself never sees a sampling rate -- design spec section 3's
+    signature carries none -- which is precisely why the parameter has to be
+    stated in samples and why this derivation is worth writing down.
+    """
+    reference_min_ipi_s = 0.020
+    rig_fs_hz = 500.0
+
+    assert DEFAULT_OM_PARAMS.min_isi_samples == round(reference_min_ipi_s * rig_fs_hz)
+
+
+def test_acceleration_is_the_shared_estimator_applied_twice():
+    """Design spec section 3 fixes ONE differentiator for the whole subsystem,
+    and this detector's acceleration features are the second application of
+    it. Pinned because substituting a sharper one (`np.gradient`) is a
+    one-line change that alters what this detector stores.
+
+    **What it alters is `reliability`, and that is the whole of the case.**
+    Measured against a re-derivation of the reference's own differentiator (a
+    6-tap Bartlett FIR, then a difference), the shared 5-point estimator
+    reproduces it EXACTLY -- identical spans, identical labels, and identical
+    `reliability` floats -- on both populated fixtures and on 30 of 30
+    synthetic seeds. `np.gradient` finds the same spans and stores different
+    numbers: 0.707 against 0.834, and 0.134 against 0.377, on
+    `stepped_session`'s three events. `reliability` is a stored, auditable
+    column, and design spec section 3.2's plan for validating this detector is
+    to check it against the paper's own reported statistics -- which cannot
+    mean anything if the number depends on a differentiator the reference does
+    not use.
+
+    **What it no longer justifies is the event set, and that is worth saying
+    plainly.** For one round this docstring cited a measured failure --
+    `np.gradient` returning 29 events on `out_of_order_session` where three
+    were planted, by making the silhouette at three clusters worse than at two
+    and stopping `_cluster_peaks` a step early. That measurement was taken at
+    `min_isi_samples=15`, which was itself wrong (it came from a constant the
+    reference declares and never reads). At the corrected value of 10 the
+    failure does not reproduce: `np.gradient` returns the correct three. So
+    the estimator change was, on that one case, covering for a parameter
+    error. It keeps its place on fidelity and on design spec section 3, not on
+    that failure.
     """
     from wl_preproc.eye.detect.otero_millan import _acceleration
     from wl_preproc.eye.detect.velocity import velocity

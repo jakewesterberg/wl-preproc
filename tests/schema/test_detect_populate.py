@@ -1436,7 +1436,7 @@ def test_the_shared_amplitude_cut_reaches_otero_millan_through_the_paramset():
         "detector": "otero_millan",
         "min_cluster_displacement_deg": 0.2,
         "max_clusters": 4,
-        "min_isi_samples": 15,
+        "min_isi_samples": 10,
         "microsaccade_max_deg": 3.0,
     }
 

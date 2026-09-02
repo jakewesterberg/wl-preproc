@@ -84,11 +84,13 @@ _SACCADE_LIMIT_DEG_S = 5.0
 # carries no `fs_hz` to turn "per second" into "per sample" with.
 #
 # **The budget is not a tuning knob; the method does not work without it.**
-# Measured on this module's own test fixtures: with the budget the detector
-# finds every planted event and nothing on a noise trace; taking every local
-# maximum instead (an unbounded candidate set) buries the real events among
-# ~126 noise candidates and returns NOTHING for a 0.4 degree event. Enriching
-# the candidate set is what makes a fast cluster exist to be found.
+# Measured on this module's own test fixtures, at the shipped `min_isi_samples`
+# of 10: with the budget the detector sees 40 candidates, finds every planted
+# event, and returns nothing on a noise trace. Taking every local maximum
+# instead (an unbounded candidate set) gives 186 candidates and returns
+# NOTHING for a 0.4 degree event -- the real events are still in there, but
+# they no longer form a cluster against that much noise. Enriching the
+# candidate set is what makes a fast cluster exist to be found.
 _PEAK_BUDGET_PER_MIN_ISI = 10
 
 # The reference clusters in chunks -- it accumulates trials until a chunk holds
@@ -98,8 +100,8 @@ _PEAK_BUDGET_PER_MIN_ISI = 10
 #
 # There is a second reason to keep it here. Silhouette is O(n^2) in the events
 # it scores: the reference recording is 1,177,799 samples, which at this
-# module's own candidate density is ~7,900 events, and one un-chunked pairwise
-# distance matrix over those is ~500 MB. Chunked, it is ~2 MB, and the whole
+# module's own candidate density is 11,778 events, and one un-chunked pairwise
+# distance matrix over those is ~1.1 GB. Chunked, it is ~2 MB, and the whole
 # detector is linear in the recording's length.
 #
 # Chunks here are formed from the candidate events in temporal order, since
@@ -137,14 +139,18 @@ class OteroMillanParams:
     #: `_PEAK_BUDGET_PER_MIN_ISI`, which is why the two cannot be tuned
     #: independently.
     #:
-    #: **The reference has two constants here and only one of them runs.**
-    #: `SaccadeDetector.MIN_ISI = 30` (ms) is declared and never read by
-    #: anything in the package; the separation actually applied is
-    #: `SaccadeDetectorCluster.MINIPI = round(20 * samplerate / 1000)`, i.e.
-    #: 20 ms, which is 10 samples at 500 Hz. The default below is 15 samples
-    #: -- 30 ms at 500 Hz, the declared constant -- which is the more
-    #: conservative of the two, and it is a paramset key, so a project that
-    #: wants the reference's live 20 ms can register 10.
+    #: **The live constant is `MINIPI`, and it is 20 ms.** In the reference,
+    #: `SaccadeDetectorCluster.FindPeaks` sets `this.MINIPI = round(20 *
+    #: eyeRecording.samplerate / 1000)` and passes it to `myfindpeaks` as the
+    #: neighbourhood width. Twenty milliseconds is **10 samples at 500 Hz**,
+    #: which is the default below.
+    #:
+    #: **`SaccadeDetector.MIN_ISI = 30` is declared and read by nothing** --
+    #: `grep -c MIN_ISI` over the whole package returns 1, its own
+    #: declaration. (`MINPEAKVEL = 1` is dead in the same way.) It is written
+    #: down here because this default was 15 for one round, derived from that
+    #: dead constant read as 30 ms; both halves of that derivation were wrong,
+    #: and without this note the next reader has every reason to redo it.
     min_isi_samples: int
     #: Declared for the same reason `EngbertKlieglParams` declares it -- this
     #: detector's vocabulary splits by amplitude, so it consumes the SHARED
@@ -155,7 +161,7 @@ class OteroMillanParams:
 DEFAULT_OM_PARAMS = OteroMillanParams(
     min_cluster_displacement_deg=0.2,
     max_clusters=4,
-    min_isi_samples=15,
+    min_isi_samples=10,  # the reference's live MINIPI: 20 ms at 500 Hz
 )
 
 
