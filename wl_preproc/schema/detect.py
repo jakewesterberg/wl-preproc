@@ -602,14 +602,16 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        Today's one registered detector cannot make that second measurement
+        Neither registered detector can make that second measurement
         redundant: `engbert_kliegl.py::_true_runs` only ever returns MAXIMAL
-        runs, so two of `intervals` are always separated by at least one
-        sample neither claims, and `runs_from_labels` can therefore never
-        merge two of this call's own intervals into one run. But nothing in
+        runs and `otero_millan.py::_merge` guarantees a gap, so two of
+        `intervals` are always separated by at least one sample neither
+        claims, and `runs_from_labels` can therefore never merge two of this
+        call's own intervals into one run. But nothing in
         `registry.py::DetectFn`'s own contract requires a future detector
-        (`wl.yaml`'s own "Otero-Millan and U'n'Eye" -- neither written yet)
-        to leave such a gap, and if two adjacent intervals ever DID carry
+        (the five still unwritten -- Nystrom-Holmqvist, NSLR, REMoDNaV, BMD,
+        U'n'Eye) to leave such a gap, and if two adjacent intervals ever DID
+        carry
         the same label, `runs_from_labels` would merge them into one run
         whose real `[start, stop)` matches neither original interval.
         Measuring the FINAL run rather than trusting either input interval
@@ -767,9 +769,15 @@ def _overlapping(
 
 # The vocabularies whose labels ARE a split by amplitude, so a conjunction run
 # can be labelled from its own measurement. Design spec section 3.1 gives this
-# to Engbert-Kliegl (`{saccade, microsaccade}`) and, in stage 2, to
-# Otero-Millan (`{microsaccade}`) and U'n'Eye (`{saccade}`) -- a SUBSET test
-# rather than equality, so all three qualify.
+# to Engbert-Kliegl and Otero-Millan (both `{saccade, microsaccade}`) and, in
+# stage 2, to U'n'Eye (`{saccade}`) -- a SUBSET test rather than equality, so a
+# detector declaring HALF the split qualifies too.
+#
+# **Otero-Millan was named here as the `{microsaccade}` half-split case until
+# 2026-09-01.** It is not one: reading the reference implementation showed it
+# detects saccades of ANY amplitude and its only amplitude rule is a 0.2 degree
+# LOWER noise floor (design spec section 3.1's correction). U'n'Eye is the
+# surviving half-split example.
 #
 # **A PROPER subset is a DEGENERATE split, and that is what decides the label
 # there** (fix round, reviewer finding 2). Otero-Millan and U'n'Eye each
@@ -832,14 +840,20 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     **A vocabulary that is HALF the split gets that half, and never
     `classify`'s other answer** (fix round, reviewer finding 2).
     `_AMPLITUDE_DERIVED_VOCABULARY` is a subset test, deliberately, so
-    design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
-    (`{saccade}`) qualify along with Engbert-Kliegl. But `classify` answers
-    both sides of the cut for any detector, and a conjunction interval is
-    the INTERSECTION of the two eyes' events -- shorter than either, and
-    systematically smaller in amplitude (section 5.1) -- so short
-    intersections fall below the cut routinely. Left as it was, U'n'Eye
-    would have stored `microsaccade` rows and Otero-Millan `saccade` rows,
-    each a label its own detector declares it cannot emit:
+    design spec section 3.1's U'n'Eye (`{saccade}`) qualifies along with
+    Engbert-Kliegl and Otero-Millan (both `{saccade, microsaccade}`). But
+    `classify` answers both sides of the cut for any detector, and a
+    conjunction interval is the INTERSECTION of the two eyes' events --
+    shorter than either, and systematically smaller in amplitude (section
+    5.1) -- so short intersections fall below the cut routinely. Left as it
+    was, U'n'Eye would have stored `microsaccade` rows: a label its own
+    detector declares it cannot emit.
+
+    **This paragraph named Otero-Millan as the second half-split case until
+    2026-09-01.** It is not one -- it declares the whole split, so `classify`
+    is called for its conjunctions and both answers are in vocabulary. The
+    guard still matters for U'n'Eye, and for BMD's `{microsaccade, drift}`,
+    which reaches the raise below rather than this branch:
 
     - `registry.Detector.detect` refuses exactly that label from the
       detector itself, and its own docstring is why -- the declaration is

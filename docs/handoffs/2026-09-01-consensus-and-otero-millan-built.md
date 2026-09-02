@@ -1,12 +1,15 @@
 # A second detector exists, so agreement is measurable
 
-**Built 2026-09-01** on `spec/consensus-and-otero-millan`, sixteen commits from
-`fea978b`. Stage 2A of the saccade-detection design
+**Built 2026-09-01** on `spec/consensus-and-otero-millan`, eighteen commits
+from `fea978b`. Stage 2A of the saccade-detection design
 (`docs/superpowers/specs/2026-08-31-saccade-detection-design.md`).
 
 Suite **1284 passed, 5 skipped, 1 deselected, 1 xfailed**. Python 3.13 subset
 (`--noconftest tests/eye tests/contracts`): 313 passed, 4 skipped, 1 xfailed.
-`wl-check`: no findings. **Never pushed; CI has not seen any of it.**
+`wl-check`: no findings. **Pushed to origin, but CI has not seen any of it** —
+`.github/workflows/ci.yml` triggers on `push: branches: [main]` and
+`pull_request` only, so a feature-branch push runs nothing. Only a PR gets this
+in front of CI before it reaches `main`.
 
 ---
 
@@ -31,11 +34,33 @@ Engbert–Kliegl and Otero-Millan declare the same vocabulary, so this first pai
 exercises neither coarsening nor exclusion — §6.1's simplest case, and the
 cleanest possible first comparison.
 
-**Measured, on the reference recording:** Otero-Millan 4,724 events on the left
-eye in 0.28 s against Engbert–Kliegl's 5,972 in 0.08 s; `event_f1` 0.801 (left)
-and 0.783 (right); `cohen_kappa` well below both, which is the difference the
-two metrics exist to expose. `comparison_mask` costs 0.55 s per call over
-1,177,799 samples — about 1.2 min per session at seven detectors.
+**Measured, on the reference recording** (p99→15° scale; every figure here is
+what `test_otero_millan_validation.py` prints): Otero-Millan **4,700** events on
+the left eye in 0.29 s against Engbert–Kliegl's 5,972 in 0.08 s, and 4,334
+against 5,592 on the right. `event_f1` 0.8012 (left), 0.7834 (right).
+
+**`cohen_kappa` does NOT sit well below `event_f1` here, and the earlier claim
+that it did was a synthetic-fixture result transplanted onto real data.** On the
+synthetic fixture the two detectors find the same three planted events, so
+`event_f1` is exactly 1.0 while per-sample boundaries differ and kappa falls
+well below — that is the difference §6.1 says the two metrics exist to expose,
+and it is real there. On the reference recording they land close together, and
+the sign of the gap depends on how the compared trace is built: through the
+`DetectorAgreement` path kappa is within 0.007 of `event_f1` on both eyes; over
+an unmasked trace it is about 0.09 HIGHER. No single delta is quoted because
+two defensible constructions disagree about it. **What holds either way: on real
+data these two metrics do not diverge, which is a more interesting result than
+the one this paragraph used to claim.**
+
+**Runtime is ~2.6 min per session at seven detectors, not the 1.2 min an earlier
+draft said.** `comparison_mask` is 0.55–0.63 s per call over 1,177,799 samples,
+but it is one of four contributors: per (pair, trace, `pso_as`), `comparison_mask`
+0.63 s + two `_scored_in` 0.11 s + `event_f1` 0.44 s + `cohen_kappa` 0.07 s ≈
+1.25 s, over 21 pairs × 3 traces × 2 conventions. `event_f1` costs nearly as much
+as the mask because `_event_starts` is also a per-sample Python loop. That is the
+number §11 item 6 — "whether seven detectors is too many to run nightly" — is
+actually asking for, and it excludes the DB fetch of ~12k run rows per trace per
+detector.
 
 ---
 
@@ -76,11 +101,19 @@ the next case.
 
 - **The other five detectors** — Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian
   microsaccade detection, U'n'Eye.
-- **Three of them cannot be registered today.** `schema/detect.py::
-  _conjunction_label` raises `UndecidedConjunctionLabel` for any vocabulary not
-  a subset of `{saccade, microsaccade}`, deliberately, because §2.5 forbids
-  defaulting the glissade assignment. NH, NSLR and REMoDNaV all emit `pso`.
-  Resolving that is a design conversation, not an implementation detail.
+- **Four of them can be registered but cannot produce a CONJUNCTION trace.**
+  `schema/detect.py::_conjunction_label` raises `UndecidedConjunctionLabel` for
+  any vocabulary not a subset of `{saccade, microsaccade}`, deliberately,
+  because §2.5 forbids defaulting the glissade assignment. NH, NSLR and
+  REMoDNaV emit `pso`; **BMD's `{microsaccade, drift}` trips the same guard on
+  `drift`** — `detect.py` says so itself: "four of design spec section 3.1's
+  seven declare exactly such vocabularies."
+
+  Be precise about what fails, because an earlier draft of this line was not:
+  `_conjunction_label` has exactly one call site, the conjunction branch of
+  `EyeDetection.make()`. **Registration succeeds and the `left` and `right`
+  traces compute correctly**; only the conjunction raises. Resolving it is a
+  design conversation, not an implementation detail.
 - **§6.1's comparability rule is WRONG for a disjoint-vocabulary pair.**
   U'n'Eye `{saccade}` against BMD `{microsaccade, drift}`: the declarations
   share nothing, so the pair scores in `{fixation}` alone — yet
@@ -96,10 +129,15 @@ the next case.
   should treat a `nan` pairwise row: `np.mean` propagates, `np.nanmean` swallows.
 - **§6.5 needs an amplitude floor AND a duration ceiling** in its paramset.
   18.2% and 20.4% of accepted events sit below the 0.2° floor they were
-  accepted by — 17 at exactly 0.0°, longest 702 ms — because that floor is a
+  accepted by — 17 at exactly 0.0° on the LEFT eye and 2 on the right, longest
+  702 ms — because that floor is a
   cluster MEAN and sub-floor members ride in on the average. `reliability` does
-  NOT reliably flag them; filtering by it makes the amplitude distribution
-  worse (0.817 → 0.796 at ≥0.5 → 0.731 at ≥0.8). The existing "include
+  NOT reliably flag them; filtering by it makes things worse rather than
+  better — the left eye's main-sequence log-log **r** falls 0.8174 → 0.7958 at
+  `reliability ≥ 0.5` → 0.7314 at ≥ 0.8. (Those are correlations. Do not confuse
+  them with the *fractions* of events at or above the 0.2° floor, which are
+  0.818 and 0.796 — similar numbers, different quantities, and §11 carries
+  both.) The existing "include
   microsaccades" switch does not cover this: that is about an event CLASS, this
   is about rows failing their own detector's acceptance rule.
 - **The greedy silhouette stop DECIDES Otero-Millan's cluster count** on ~85%
