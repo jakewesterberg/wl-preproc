@@ -1,8 +1,8 @@
 # Where this build actually is
 
-**Last updated 2026-09-01**, on `main` at `7e100ab` (agreeing the `TaskEvent` range
-moves to wl-mllib, just after the saccade-detection and wl-expcontroller merges). Check
-`git log --oneline -1` against that; if it has moved, this file is stale and the spec
+**Last updated 2026-09-02**, describing `main` at `a8fd3cb` (the saccade-detection
+stage 2A merge), with the manifest update and this file's own commit on top. Check
+`git log --oneline -1`; if it has moved past those, this file is stale and the spec
 wins.
 
 *This header named `bfdfd7f` for two commits after the body had moved past it — the
@@ -41,7 +41,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green on 3.11 and 3.13 (verified 2026-09-01, see above), **1176 tests, 1 skipped, 1 deselected** | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression, the eye reader/calibration/gaze, second-order calibration, the saccade-detection substrate (stage 1) and wl-expcontroller's five asks are all merged.** Phase 1c is done. |
+| **wl-preproc** | private, CI green on 3.11 and 3.13 (verified 2026-09-02 off `gh run list`, see above), **1284 tests, 5 skipped, 1 deselected, 1 xfailed** — 1288 passed with `WLPP_OHDPI_REFERENCE` set, which flips four gated real-recording tests | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression, the eye reader/calibration/gaze, second-order calibration, the saccade-detection substrate (stage 1), **saccade detection stage 2A** and wl-expcontroller's five asks are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -204,15 +204,39 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    test registered the paramsets itself, which is exactly why it stayed invisible. Read the
    handoff's own account before trusting a per-task green in future work.
 
-3. **Saccade detection stage 2** — the other six detectors (Otero-Millan, Nyström–Holmqvist,
-   NSLR, REMoDNaV, Bayesian microsaccade detection, U'n'Eye), the consensus suite and
-   vocabulary-coarsening lattice, saccade vigor and the main-sequence fits,
-   `pso`/`pursuit`/`drift` as PRODUCED rather than merely declared labels, and
-   wl-expcontroller's online detector as an eighth registry entry. This is where **PyTorch
-   is declared properly** rather than worked around — `where: serv`, following `kilosort`'s precedent,
-   since a CNN detector belongs on the preprocessing server and not a rig. Their agreement
-   becomes a three-way data-quality metric.
-4. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
+3. **Saccade detection stage 2A — MERGED 2026-09-02** (`a8fd3cb`), CI green on both
+   interpreters. `handoffs/2026-09-01-consensus-and-otero-millan-built.md`. A second
+   detector (Otero-Millan, reimplemented), the coarsening lattice and comparability
+   rule, `event_f1` and `cohen_kappa` with their registry, the `DetectorAgreement`
+   table, and the report's agreement line. Measured on the reference recording: 4,700
+   events against Engbert–Kliegl's 5,972, `event_f1` 0.8012 (left) / 0.7834 (right).
+
+   **Read the handoff before building on it.** Otero-Millan's rows are PROVISIONAL —
+   no oracle-free statistic on an uncalibrated recording discriminates it, so **a
+   calibrated session is the highest-value unblock for this subsystem.** And a
+   validation check was WITHDRAWN rather than relaxed, because a duration-matched
+   random-span control and a deliberately broken detector both scored higher than the
+   correct one. The rule that follows binds the next no-oracle validation: **an
+   oracle-free statistic is worthless until a null has been run against it.**
+
+4. **Saccade detection stage 2B — blocked on a DECISION, not on code.** Four of the
+   five remaining detectors (Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade
+   detection) trip `_conjunction_label`'s raise, and because DataJoint rolls the whole
+   `make()` back they write **no rows at all** — not partial per-eye data. That guard
+   is deliberate: spec §2.5 forbids defaulting the glissade assignment. Deciding it
+   unblocks four detectors at once and is the cheapest item on this list.
+
+   **U'n'Eye is the exception and is independently schedulable**: it declares
+   `{saccade}`, a subset of the amplitude-derived vocabulary, so it never reaches that
+   raise. Its obstacles are **PyTorch declared properly** — `where: serv`, following
+   `kilosort`'s precedent, since a CNN detector belongs on the preprocessing server and
+   not a rig — plus vendoring and a GPU.
+
+   Also stage 2B: the N-way `blended_agreement`, saccade vigor and the main-sequence
+   fits (which need an amplitude floor AND a duration ceiling — 18–20% of accepted
+   events sit below the floor they were accepted by), `pso`/`pursuit`/`drift` as
+   PRODUCED labels, and wl-expcontroller's online detector as an eighth registry entry.
+5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
    written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
    no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
    leaves no `RejectedSegment` row either, existing only as a line in `run_once`'s error
@@ -222,10 +246,10 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    frame-gap window — cannot fire in production until this lands**, and the reference
    recording has zero gaps across 1,177,799 rows, so real data has never exercised it
    either. Detection spec §2 carries the full chain.
-5. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
+6. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
    Worth doing before the hardware lands.
-6. **The eye subsystem's two open decisions are both settled.** The calibration-block
+7. **The eye subsystem's two open decisions are both settled.** The calibration-block
    marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits
    (2026-08-31, `ac7ead2`): `<session>/expcontroller/`, named for the ROLE so MonkeyLogic's
@@ -235,9 +259,10 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    eye spec specifies exactly.
 
 **Everything in Phase 2b proper still needs the compute machine.** The subsystems merged
-this week were chosen precisely because they needed no GPU and no container. Detection
-stage 2 is the next of that kind — though U'n'Eye is the first piece of this project that
-genuinely wants the GPU — with gap-aware segmentation and rehydration both hardware-free.
+this week were chosen precisely because they needed no GPU and no container. Stage 2B's
+four blocked detectors are the next of that kind once the glissade assignment is decided;
+U'n'Eye is the first piece of this project that genuinely wants the GPU. Gap-aware
+segmentation and rehydration are both hardware-free.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
