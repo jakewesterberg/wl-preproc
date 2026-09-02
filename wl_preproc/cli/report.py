@@ -799,6 +799,200 @@ def _unusable_per_eye(label_totals: list[dict]) -> list[dict]:
     ]
 
 
+def _agreement_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], dict[int, str]]:
+    """`DetectorAgreement` collapsed to one row per `(paramset_a, paramset_b,
+    metric, vocabulary, pso_as)`, plus `{paramset_idx: detector name}` for the
+    `eye_detection` paramsets those indices name: `(agreement_rows,
+    detector_names)`. Query only, no rendering -- `build_report` below does
+    that, the same split `_eye_rows`/`_detection_rows` above use.
+
+    **Not part of `Readings`/`gather_readings`, for `_detection_rows`' own
+    reason** -- design spec section 9 states it directly for this section too
+    ("Computed in `build_report`, never `gather_readings` -- that runs on
+    every wl.works poll under the lock that also serialises job accepts, and
+    the responder reads none of these"). Nothing here has a `contracts/
+    protocol.py` wire shape, and this query would otherwise be paid on every
+    `GET /health` poll forever.
+
+    **Grouped by the vocabulary, never across it.** Design spec section 6.1:
+    "a pair scored in a coarse vocabulary is not comparable to a pair scored
+    in a fine one, so the vocabulary is in the row and any report that
+    aggregates across pairs must group by it". This is that report and this
+    is that grouping -- the `GROUP BY` is what makes the sentence true rather
+    than a comment claiming it. `pso_as` is in the grouping for the same
+    reason one level down: section 2.5 forbids defaulting the glissade
+    assignment, and averaging the two conventions together would default it
+    silently, to their mean.
+
+    **Aggregated by the database, not scanned in Python (finding M8's own
+    lesson, one table over).** `DetectorAgreement` holds
+    `metrics x conventions` rows per pair per trace per session -- four today,
+    growing with `CONSENSUS_METRICS` and with every detector registered (seven
+    detectors is 21 pairs) -- so `to_dicts()` here would fetch a table that
+    grows with session count to render a handful of lines. The grouping key
+    is bounded by the registries instead: pairs x metrics x reachable
+    vocabularies x two conventions, none of which grows with how long this
+    pipeline runs. That boundedness is also why this section is UNWINDOWED,
+    the same argument the Eye section's own "Calibration source" breakdown
+    makes: it cannot grow without bound, so there is nothing for a window to
+    protect against, and one night of sessions is too few comparisons to read
+    an agreement figure off.
+
+    **Five aggregates, not one, and `AVG` alone would have been wrong twice
+    over.**
+
+    - `n_defined` beside `n_comparisons`, because SQL's `AVG` and `MIN` SKIP
+      NULLs while `count(*)` does not. `value` is NULL exactly where a metric
+      is undefined over a comparison (`schema/consensus.py`'s own column
+      comment: nothing comparable at all, or every kept sample carrying one
+      constant label on both sides), so "mean 0.94 over 12 comparisons" would
+      be a false sentence the moment any of the twelve were NULL -- the mean
+      is over the ones that were defined, and the renderer says which.
+    - `lowest_value` beside `mean_value`, because a mean across every session
+      ever compared is finding M7's dilution in a new place: the one session
+      where two detectors wildly disagreed is exactly what this section exists
+      to surface, and it is invisible inside the average of twenty that
+      agreed. `MIN`, not "worst": `Metric` (`eye/detect/consensus.py`)
+      declares no direction, and both shipped metrics happen to run
+      higher-is-better, so calling the minimum the worst would be a claim
+      about metrics the registry has not been asked to accept yet.
+
+    The mean is UNWEIGHTED across comparisons, and `samples_compared` is
+    rendered beside it rather than folded into it. Weighting by
+    `n_samples_compared` would be defensible for `cohen_kappa`, which is
+    per-sample; it is not for `event_f1`, which counts EVENTS matched within
+    a tolerance window and whose denominator has nothing to do with how many
+    samples the trace held. One weighting cannot be right for both, and the
+    registry exists to grow past both, so neither is applied and the count
+    the reader would need to apply their own is shown.
+
+    **Sorted here, not left to the database.** Two consecutive days' reports
+    are read by diffing them, and a section whose line order is unspecified
+    diffs as changed every day. The two orders genuinely differ, measured
+    against this project's MySQL 8: the grouped query answers `pso_as` in the
+    ENUM's DECLARATION order (`saccade` then `fixation` --
+    `schema/consensus.py::PSO_AS_VALUES`), while sorting the strings puts
+    `fixation` first. `tests/cli/test_consensus_report.py::
+    test_the_two_conventions_are_shown_side_by_side_rather_than_averaged`
+    pins that, and is what fails if this `sorted` is ever dropped.
+
+    `detector_names` is a second query over `ParamSet` and not a join,
+    because `params` is a `<blob>`: the detector's name lives INSIDE it
+    (`schema/detect.py::register_default_paramsets` writes `{"detector":
+    name, ...}`), so no SQL can reach it. The table is bounded by the number
+    of registered paramsets -- two today -- and every `eye_detection` row has
+    that key by construction, so this is a `[...]` lookup with no fallback
+    rather than a `.get`: an unexercised fallback is this project's own
+    recorded defect three times over, and a paramset index reaching here
+    comes through two foreign keys to `EyeDetection`, which has one to
+    `ParamSet`.
+    """
+    import datajoint as dj
+
+    from wl_preproc.schema import consensus as consensus_schema
+    from wl_preproc.schema import paramset as paramset_schema
+
+    consensus_schema.activate(prefix=prefix)
+    grouped = dj.U(
+        "paramset_a", "paramset_b", "metric", "vocabulary", "pso_as",
+    ).aggr(
+        consensus_schema.DetectorAgreement,
+        # Aliases deliberately unequal to any column of the table being
+        # grouped: `dj.U(...).aggr` ends in `result.proj(**named_attributes)`
+        # (datajoint 2.3.2, `expression.py`), and a projection whose alias
+        # collides with a real attribute of its own operand is a rename
+        # rather than a calculation.
+        mean_value="AVG(value)",
+        lowest_value="MIN(value)",
+        samples_compared="SUM(n_samples_compared)",
+        n_comparisons="count(*)",
+        n_defined="count(value)",
+    ).to_dicts()
+    detector_names = {
+        # No `int()` here: `paramset_idx` is a plain `int` column and the
+        # connector answers it as a Python `int`, so a cast would be a no-op
+        # no mutation could kill -- the unexercised-defence shape this
+        # project's checkpoint records three times over. See the return
+        # below for which value does need one, and the measurement that
+        # settled which.
+        row["paramset_idx"]: row["params"]["detector"]
+        for row in (
+            paramset_schema.ParamSet & {"paramset_type": "eye_detection"}
+        ).to_dicts()
+    }
+    return (
+        sorted(
+            (
+                {
+                    **row,
+                    # ONE cast, and which one is measured rather than
+                    # assumed. MySQL answers `SUM()` over an integer
+                    # expression with a DECIMAL, which the connector hands
+                    # back as `decimal.Decimal` -- normalised once, here,
+                    # exactly as `_detection_rows` above normalises its own
+                    # `SUM`. `count(*)` and `count(value)` are BIGINT and
+                    # arrive as Python `int` already, so casting them would
+                    # be two more no-ops; the first draft of this line cast
+                    # all three and said `count()` "likewise" returned a
+                    # DECIMAL, which is simply not true of MySQL 8.
+                    # `mean_value`/`lowest_value` stay whatever the driver
+                    # returned, including `None`: they are NULL wherever
+                    # every value in the group was.
+                    # `tests/cli/test_consensus_report.py::
+                    # test_the_counts_come_back_as_ints_rather_than_as_decimals`
+                    # pins all four types, so this comment is checkable.
+                    "samples_compared": int(row["samples_compared"]),
+                }
+                for row in grouped
+            ),
+            key=lambda row: (
+                row["paramset_a"], row["paramset_b"], row["metric"],
+                row["vocabulary"], row["pso_as"],
+            ),
+        ),
+        detector_names,
+    )
+
+
+def _agreement_line(row: dict, detector_names: dict[int, str]) -> str:
+    """One `### Detector agreement` line, from one `_agreement_rows` row.
+
+    Split out for `_eye_row_line`'s reason: the branch below (every
+    comparison undefined, some undefined, none undefined) is the part worth
+    reading on its own, and it was the part that could quietly print a mean
+    over a set it was not the mean of.
+
+    The vocabulary is on EVERY line, never hoisted into the heading or
+    implied by position, because two lines of this section can legitimately
+    differ in nothing else -- design spec section 6.1's own consequence, and
+    the reason `vocabulary` is a key column rather than a secondary one.
+    """
+    who = (
+        f"`{detector_names[row['paramset_a']]}` (paramset {row['paramset_a']})"
+        f" vs `{detector_names[row['paramset_b']]}` (paramset {row['paramset_b']})"
+    )
+    n_comparisons = row["n_comparisons"]
+    undefined = n_comparisons - row["n_defined"]
+    if row["n_defined"] == 0:
+        # Never `0.00`. `schema/consensus.py` stores NULL rather than a
+        # number exactly so that "the metric is undefined here" and "the
+        # detectors agreed about nothing" cannot render identically, and
+        # formatting `None` as a float here would throw that away at the
+        # last step.
+        score = f"{row['metric']}: undefined in all {n_comparisons} comparison(s)"
+    else:
+        score = (
+            f"{row['metric']}: mean {row['mean_value']:.3f}, "
+            f"lowest {row['lowest_value']:.3f} over {row['n_defined']} comparison(s)"
+        )
+        if undefined:
+            score += f" ({undefined} undefined, excluded from both)"
+    return (
+        f"- {who} — {score} — vocabulary `{row['vocabulary']}`, "
+        f"pso as `{row['pso_as']}` — {row['samples_compared']} samples compared"
+    )
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:
     """Everything both renderings need, computed once.
@@ -1461,11 +1655,42 @@ def build_report(
             f"{_QUARANTINE_WINDOW_DAYS} days only._"
         ]
 
-    # No agreement line in this stage: one detector (Engbert-Kliegl) is all
-    # that is registered, and one detector cannot disagree with anything.
-    # A line that would always read `1.00` is worse than an absent one --
-    # it looks like a measurement. Stage 2 adds a second detector, and that
-    # is where its agreement metric belongs.
+    # Design spec section 9's own first clause: "showing the PAIRWISE
+    # agreement rows per detector pair".
+    #
+    # There was no such subsection through stage 1, deliberately: Engbert-
+    # Kliegl was the only registered detector, one detector cannot disagree
+    # with anything, and a line that always read `1.00` would have looked
+    # like a measurement. Stage 2A registers Otero-Millan, so the pair is
+    # real and the line measures something. `n_samples_compared` is on it
+    # because section 6.1 asks for it by name -- "a pair computed over a
+    # heavily-invalid session is not read as though it were computed over a
+    # whole one" -- and the vocabulary is on it because section 6.1 requires
+    # any aggregation across pairs to group by it, which this one does.
+    #
+    # Unwindowed, unlike the three subsections above and like the running
+    # total between them: `_agreement_rows`' grouping key is bounded by the
+    # detector and metric registries rather than by session count, so this
+    # list cannot grow without bound and there is nothing for a window to
+    # protect against. Its heading says so, since the pair of subsections
+    # above it are windowed and a reader must not have to infer which is
+    # which.
+    agreement, detector_names = _agreement_rows(prefix=prefix)
+    lines += [
+        "",
+        "### Detector agreement per detector pair, across every session"
+        f" — {len(agreement)}",
+        "",
+    ]
+    lines += [
+        _agreement_line(row, detector_names) for row in agreement
+    ] or [
+        # `- none` rather than an absent subsection, the reason
+        # `_NOT_YET_REPORTED` exists: a database with one registered detector,
+        # or one whose second detector has not reached a session yet, must not
+        # render identically to a report that stopped computing agreement.
+        "- none"
+    ]
 
     lines += ["", "## Not yet reported", ""]
     lines += [f"- **{name}** — {why}" for name, why in _NOT_YET_REPORTED]

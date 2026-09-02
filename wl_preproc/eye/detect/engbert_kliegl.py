@@ -40,9 +40,13 @@ class EngbertKlieglParams:
     # Declaring the field is how this detector STATES that it consumes that
     # shared key: `schema/detect.py::_params_for` hands over exactly the
     # paramset keys a detector's own dataclass names, so a detector with no
-    # amplitude-derived labels (Otero-Millan emits `microsaccade` alone,
-    # design spec section 3.1) simply does not declare it and never receives
-    # it -- rather than being handed a threshold it has no use for.
+    # amplitude-derived labels (U'n'Eye emits `saccade` alone, design spec
+    # section 3.1) simply does not declare it and never receives it -- rather
+    # than being handed a threshold it has no use for.
+    #
+    # Otero-Millan was this example until 2026-09-01, on the strength of a
+    # `microsaccade`-only vocabulary that reading its reference disproved. It
+    # declares this field, for exactly the reason given above.
     #
     # The default is `measure.MICROSACCADE_MAX_DEG` itself, by reference and
     # never a copied literal, so this is not a second place the conventional

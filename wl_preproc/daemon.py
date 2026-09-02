@@ -31,6 +31,7 @@ from wl_preproc.archive.stage import archive_session, nas_root_for_subject, reco
 from wl_preproc.schema import (
     DEFAULT_PREFIX,
     archive,
+    consensus,
     core,
     coverage,
     detect,
@@ -129,6 +130,17 @@ def _computed_tables() -> list:
     paragraph above WAS updated when its own tables landed, so the pattern
     was known and this one was simply missed.
 
+    **`consensus.DetectorAgreement` did not land inert**, unlike the `eye`
+    and `detect` tables above: it has a real `key_source` and a real `make()`
+    from its first commit, so none of that two-step reasoning applies to it.
+    (Whether it is the FIRST table here to do so is not claimed -- this
+    docstring records only which tables are known to have landed inert.) Its
+    position -- directly
+    below `detect.EyeDetection` -- is load-bearing for the same reason
+    `EyeValidity`'s is: its `key_source` is a self-join of `EyeDetection`'s
+    own computed rows, so placed above it, it names no candidate on a
+    session's first pass. See the comment beside its entry below.
+
     **What their position now buys, precisely.**
     `detect.EyeValidity.key_source` requires `eye.EyeCalibration` to have RUN
     (whole-branch review, finding M5 -- see that property's own docstring),
@@ -167,6 +179,17 @@ def _computed_tables() -> list:
         # M5 restriction, and both answers are recorded there.
         detect.EyeValidity,
         detect.EyeDetection,
+        # BELOW `detect.EyeDetection`, and that position IS load-bearing:
+        # `DetectorAgreement.key_source` is a self-join of that table's own
+        # COMPUTED rows, so above it this stage names no candidate on a
+        # session's first pass and every session's agreement rows lag one
+        # whole `run_once` by one pass, silently -- the second of the two
+        # states this function's own docstring names for the `detect` pair,
+        # and the one that costs a pass rather than writing a false row.
+        # Nothing recomputes here on a later pass either way: a key already
+        # populated is never revisited, so the lag would be permanent per
+        # session rather than self-correcting within a pass.
+        consensus.DetectorAgreement,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
@@ -258,8 +281,24 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # below -- its two tables are the first `dj.Computed` in this project whose
 # `key_source` needs a `paramset.ParamSet` row to exist before it names any
 # candidate at all.
+#
+# It became TWELVE with the same design's `consensus` module (stage 2A), the
+# first module whose one table -- `DetectorAgreement` -- could not exist
+# before now: a pairwise comparison needs a PAIR, and Otero-Millan is the
+# second detector this repository has ever registered. Shaped like `eye` and
+# `detect`: a real `@schema`-decorated `dj.Computed`, so a real `~jobs` table,
+# and it is in `_computed_tables()` below from its first commit rather than
+# landing inert -- it has a real `key_source` and a real `make()` together, so
+# the Task-6/Task-9 two-step (`key_source` deliberately empty until `make()`
+# exists) has nothing to protect against here. It is NOT in `_PARAMSET_MODULES`
+# below and declares no `register_default_paramsets`: its only tunable, the
+# `event_f1` tolerance, is the metric's own parameter rather than a paramset's
+# (design spec section 6.1), and its key has no consensus-paramset column to
+# record one under. It does depend on `detect`'s registration for a second
+# detector to compare -- see `wl_preproc/schema/consensus.py`'s own docstring.
 _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("archive", archive),
+    ("consensus", consensus),
     ("core", core),
     ("coverage", coverage),
     ("detect", detect),

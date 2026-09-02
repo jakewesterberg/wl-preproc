@@ -56,6 +56,19 @@ class Run:
     start: int
     stop: int
     label: Label
+    #: Otero-Millan's per-detection silhouette (design spec section 5); `None`
+    #: for every other detector and for every run this subsystem reconstructs
+    #: rather than detects. Defaulted so `Run(start, stop, label)` keeps
+    #: working everywhere -- `runs_from_labels` builds runs from a label array
+    #: and has no reliability to give them.
+    #:
+    #: **`None` rather than `float("nan")`, and that is load-bearing.** This
+    #: repository has twice had CI go red on 3.13 alone because a dataclass
+    #: field defaulting to `nan` compared unequal to itself once `__eq__`
+    #: stopped going through `tuple.__eq__`'s identity check (`27917b4`, and
+    #: again in `ea9b94b`). `None is None` is true on every interpreter, and
+    #: every comparison this subsystem makes between runs depends on it.
+    reliability: float | None = None
 
 
 # Design spec section 3 names a detector's return type `LabelledInterval`. It

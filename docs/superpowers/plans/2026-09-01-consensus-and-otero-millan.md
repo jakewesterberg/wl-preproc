@@ -33,6 +33,16 @@ Read §6.1 in full before Task 1; it is the argument this plan implements.
 - `wl-check` clean before every commit.
 - A detector's `vocabulary` is DECLARED and enforced at
   `registry.Detector.detect`. Never widen it to make a test pass.
+- **Back up before every mutation check; do not restore with `git checkout --`
+  unless the file is already committed.** `cp <file> <file>.bak`, mutate, run,
+  then `cp <file>.bak <file>` and delete the backup. Two failure modes this
+  avoids, both hit in this repository: `git checkout --` errors on an untracked
+  file (a new module is untracked until its own task commits), and on a TRACKED
+  file it discards every uncommitted change in that file, not only the
+  mutation — which silently reverted a real fix earlier in this project's
+  history. Always `PYTHONDONTWRITEBYTECODE=1` on the mutated run: a same-length
+  edit restored inside one mtime second leaves a stale `.pyc` that keeps
+  running, which has already defeated one mutation check here.
 - `blink` and `invalid` are never in any detector's vocabulary: they come from
   the validity mask, and two sources must not write one fact.
 
@@ -363,7 +373,7 @@ def comparison_mask(
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/eye/detect/test_consensus.py -v`
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Mutation-check the rule that matters**
 
@@ -379,8 +389,10 @@ Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/eye/detect/test
 Expected: FAIL on `test_a_saccade_cannot_reach_a_microsaccade_only_vocabulary`
 and `test_the_comparison_mask_excludes_what_either_side_cannot_claim`.
 
-Restore with `git checkout -- wl_preproc/eye/detect/consensus.py`, and confirm
-`git status --porcelain` shows only the new files before continuing.
+Restore from the backup, NOT with `git checkout --`: at this point the file
+is still untracked, and `git checkout -- <path>` fails with "pathspec did not
+match any file(s) known to git". Then confirm `git status --porcelain` shows
+only the two new files before continuing.
 
 - [ ] **Step 6: Commit**
 
@@ -897,51 +909,17 @@ def test_the_registry_and_the_paramsets_still_agree():
 
 - [ ] **Step 2: Run to verify they fail**
 
+Two of these fail for a reason worth predicting so it does not read as a
+surprise: `test_reliability_is_populated_per_detection` and
+`test_a_merged_run_reports_no_reliability_rather_than_a_borrowed_one` cannot
+pass until the step below adds `reliability` to `labels.Run`. That is
+ordinary TDD, not a defect in the plan.
+
 Run: `.venv/bin/python -m pytest tests/eye/detect/test_otero_millan.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named
 'wl_preproc.eye.detect.otero_millan'`
 
-- [ ] **Step 3: Implement the detector**
-
-Create `wl_preproc/eye/detect/otero_millan.py` implementing steps 1-7 above.
-`OteroMillanParams` carries exactly these fields:
-
-```python
-@dataclass(frozen=True, slots=True)
-class OteroMillanParams:
-    #: The reference's only amplitude rule, and it is a LOWER bound: a
-    #: candidate cluster is accepted when its mean displacement exceeds this.
-    #: There is no upper bound in the method -- the "microsaccade" framing in
-    #: the reference's own Example.m comes from its plot limits, not from the
-    #: detector (design spec section 3.1, corrected 2026-09-01).
-    min_cluster_displacement_deg: float
-    #: The reference's `NumMaxClusters`. k-means is run for 2..this many and
-    #: the count is chosen by silhouette.
-    max_clusters: int
-    #: The reference's `MIN_ISI`, in samples rather than milliseconds: this
-    #: detector's contract (design spec section 3) carries no sampling rate,
-    #: and converting here would require inventing one.
-    min_isi_samples: int
-    #: Declared for the same reason `EngbertKlieglParams` declares it -- this
-    #: detector's vocabulary splits by amplitude, so it consumes the SHARED
-    #: cut rather than owning one. See `schema/detect.py::_params_for`.
-    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
-
-
-DEFAULT_OM_PARAMS = OteroMillanParams(
-    min_cluster_displacement_deg=0.2,
-    max_clusters=4,
-    min_isi_samples=15,  # 30 ms at 500 Hz, the reference's own MIN_ISI
-)
-```
-
-Label each accepted interval with `classify(amplitude(gaze_deg, start, stop),
-params.microsaccade_max_deg)` — the shared functions, never a private formula,
-so design spec §3's guarantee that a disagreement is "never a disagreement
-about measurement" holds literally. Set each interval's `reliability` to that
-peak's own silhouette value.
-
-- [ ] **Step 4: Carry `reliability` from the detector to the stored row**
+- [ ] **Step 3: Add `reliability` to `Run`, and carry it to the stored row**
 
 `labels.Run` is `(start, stop, label)` and carries no reliability, while
 `EyeDetection.Run.reliability` is a stored column that has been null on every
@@ -991,6 +969,46 @@ attributing one of their reliabilities to it would be a fabricated number in a
 column whose whole purpose is to say how much to trust a detection. `None` is
 the honest answer there. The conjunction trace gets `None` for the same reason
 it gets its label derived rather than checked: no detector produced it.
+
+- [ ] **Step 4: Implement the detector**
+
+Create `wl_preproc/eye/detect/otero_millan.py` implementing steps 1-7 above.
+`OteroMillanParams` carries exactly these fields:
+
+```python
+@dataclass(frozen=True, slots=True)
+class OteroMillanParams:
+    #: The reference's only amplitude rule, and it is a LOWER bound: a
+    #: candidate cluster is accepted when its mean displacement exceeds this.
+    #: There is no upper bound in the method -- the "microsaccade" framing in
+    #: the reference's own Example.m comes from its plot limits, not from the
+    #: detector (design spec section 3.1, corrected 2026-09-01).
+    min_cluster_displacement_deg: float
+    #: The reference's `NumMaxClusters`. k-means is run for 2..this many and
+    #: the count is chosen by silhouette.
+    max_clusters: int
+    #: The reference's `MIN_ISI`, in samples rather than milliseconds: this
+    #: detector's contract (design spec section 3) carries no sampling rate,
+    #: and converting here would require inventing one.
+    min_isi_samples: int
+    #: Declared for the same reason `EngbertKlieglParams` declares it -- this
+    #: detector's vocabulary splits by amplitude, so it consumes the SHARED
+    #: cut rather than owning one. See `schema/detect.py::_params_for`.
+    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+
+
+DEFAULT_OM_PARAMS = OteroMillanParams(
+    min_cluster_displacement_deg=0.2,
+    max_clusters=4,
+    min_isi_samples=15,  # 30 ms at 500 Hz, the reference's own MIN_ISI
+)
+```
+
+Label each accepted interval with `classify(amplitude(gaze_deg, start, stop),
+params.microsaccade_max_deg)` — the shared functions, never a private formula,
+so design spec §3's guarantee that a disagreement is "never a disagreement
+about measurement" holds literally. Set each interval's `reliability` to that
+peak's own silhouette value.
 
 - [ ] **Step 5: Test that the carry works, and that the honest gap stays honest**
 
@@ -1194,8 +1212,9 @@ Run: `.venv/bin/python -m pytest tests/schema/test_consensus_schema.py tests/sch
 
 With `PYTHONDONTWRITEBYTECODE=1`: drop `vocabulary` from the key and confirm a
 test fails; make `comparison_mask` return all-ones and confirm
-`n_samples_compared` is wrong. Restore each with `git checkout --` and confirm
-`git status` is clean between them.
+`n_samples_compared` is wrong. Restore each from its backup and confirm
+`git status` is clean between them — `schema/consensus.py` is untracked until
+this task's own commit, so `git checkout --` cannot restore it.
 
 - [ ] **Step 6: Commit**
 
@@ -1210,6 +1229,9 @@ git commit -m "schema: pairwise detector agreement, keyed by the vocabulary it w
 
 **Files:**
 - Modify: `wl_preproc/cli/report.py`
+- Modify: `tests/cli/test_detect_report.py` (Step 2 rewrites the stage-1
+  absence test that lives there; leaving it standing would make the suite
+  assert both that the agreement line exists and that it does not)
 - Test: `tests/cli/test_consensus_report.py`
 - Create: `docs/handoffs/YYYY-MM-DD-consensus-and-otero-millan-built.md`
 

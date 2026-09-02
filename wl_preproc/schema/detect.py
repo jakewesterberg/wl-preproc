@@ -602,14 +602,16 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        Today's one registered detector cannot make that second measurement
+        Neither registered detector can make that second measurement
         redundant: `engbert_kliegl.py::_true_runs` only ever returns MAXIMAL
-        runs, so two of `intervals` are always separated by at least one
-        sample neither claims, and `runs_from_labels` can therefore never
-        merge two of this call's own intervals into one run. But nothing in
+        runs and `otero_millan.py::_merge` guarantees a gap, so two of
+        `intervals` are always separated by at least one sample neither
+        claims, and `runs_from_labels` can therefore never merge two of this
+        call's own intervals into one run. But nothing in
         `registry.py::DetectFn`'s own contract requires a future detector
-        (`wl.yaml`'s own "Otero-Millan and U'n'Eye" -- neither written yet)
-        to leave such a gap, and if two adjacent intervals ever DID carry
+        (the five still unwritten -- Nystrom-Holmqvist, NSLR, REMoDNaV, BMD,
+        U'n'Eye) to leave such a gap, and if two adjacent intervals ever DID
+        carry
         the same label, `runs_from_labels` would merge them into one run
         whose real `[start, stop)` matches neither original interval.
         Measuring the FINAL run rather than trusting either input interval
@@ -623,8 +625,25 @@ class EyeDetection(dj.Computed):
         the exact defect this round exists to close. `_overlapping`
         coalesces touching intersections before labelling them for that
         reason, so the run measured here is always the span labelled there.
+
+        **`reliability` is mapped back onto the final runs by EXACT
+        `(start, stop)` match, and is `None` for anything else.** It is a
+        per-DETECTION value (Otero-Millan's own silhouette, design spec
+        section 5), and the re-derivation above is precisely what can leave a
+        final run corresponding to no single detector interval: two adjacent
+        intervals carrying the same label merge into one run whose span
+        matches neither. Attributing either half's reliability to that run
+        would put a fabricated number in the one column a reader consults to
+        decide how much to trust a detection -- so the map simply misses and
+        `None` is stored, which is the honest answer. The conjunction trace
+        gets `None` throughout for the same reason it gets its label derived
+        rather than checked: no detector produced it.
         """
         from wl_preproc.eye.detect.measure import measure
+
+        reliability_by_span = {
+            (interval.start, interval.stop): interval.reliability for interval in intervals
+        }
 
         labels = offered.copy()
         for interval in intervals:
@@ -649,7 +668,8 @@ class EyeDetection(dj.Computed):
             return {
                 **row, "run_index": index, "run_start": run.start, "run_stop": run.stop,
                 "label": run.label.value, "amplitude_deg": amplitude_deg,
-                "peak_velocity_deg_s": peak_velocity_deg_s, "reliability": None,
+                "peak_velocity_deg_s": peak_velocity_deg_s,
+                "reliability": reliability_by_span.get((run.start, run.stop)),
             }
 
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
@@ -749,9 +769,15 @@ def _overlapping(
 
 # The vocabularies whose labels ARE a split by amplitude, so a conjunction run
 # can be labelled from its own measurement. Design spec section 3.1 gives this
-# to Engbert-Kliegl (`{saccade, microsaccade}`) and, in stage 2, to
-# Otero-Millan (`{microsaccade}`) and U'n'Eye (`{saccade}`) -- a SUBSET test
-# rather than equality, so all three qualify.
+# to Engbert-Kliegl and Otero-Millan (both `{saccade, microsaccade}`) and, in
+# stage 2, to U'n'Eye (`{saccade}`) -- a SUBSET test rather than equality, so a
+# detector declaring HALF the split qualifies too.
+#
+# **Otero-Millan was named here as the `{microsaccade}` half-split case until
+# 2026-09-01.** It is not one: reading the reference implementation showed it
+# detects saccades of ANY amplitude and its only amplitude rule is a 0.2 degree
+# LOWER noise floor (design spec section 3.1's correction). U'n'Eye is the
+# surviving half-split example.
 #
 # **A PROPER subset is a DEGENERATE split, and that is what decides the label
 # there** (fix round, reviewer finding 2). Otero-Millan and U'n'Eye each
@@ -814,14 +840,20 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     **A vocabulary that is HALF the split gets that half, and never
     `classify`'s other answer** (fix round, reviewer finding 2).
     `_AMPLITUDE_DERIVED_VOCABULARY` is a subset test, deliberately, so
-    design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
-    (`{saccade}`) qualify along with Engbert-Kliegl. But `classify` answers
-    both sides of the cut for any detector, and a conjunction interval is
-    the INTERSECTION of the two eyes' events -- shorter than either, and
-    systematically smaller in amplitude (section 5.1) -- so short
-    intersections fall below the cut routinely. Left as it was, U'n'Eye
-    would have stored `microsaccade` rows and Otero-Millan `saccade` rows,
-    each a label its own detector declares it cannot emit:
+    design spec section 3.1's U'n'Eye (`{saccade}`) qualifies along with
+    Engbert-Kliegl and Otero-Millan (both `{saccade, microsaccade}`). But
+    `classify` answers both sides of the cut for any detector, and a
+    conjunction interval is the INTERSECTION of the two eyes' events --
+    shorter than either, and systematically smaller in amplitude (section
+    5.1) -- so short intersections fall below the cut routinely. Left as it
+    was, U'n'Eye would have stored `microsaccade` rows: a label its own
+    detector declares it cannot emit.
+
+    **This paragraph named Otero-Millan as the second half-split case until
+    2026-09-01.** It is not one -- it declares the whole split, so `classify`
+    is called for its conjunctions and both answers are in vocabulary. The
+    guard still matters for U'n'Eye, and for BMD's `{microsaccade, drift}`,
+    which reaches the raise below rather than this branch:
 
     - `registry.Detector.detect` refuses exactly that label from the
       detector itself, and its own docstring is why -- the declaration is
@@ -959,8 +991,11 @@ def _params_for(detector, params: dict):
     top of the paramset. `EngbertKlieglParams` declares a field of that name
     because Engbert-Kliegl's own declared vocabulary is the amplitude split
     (design spec section 3.1) and it cannot label its intervals without the
-    threshold. Otero-Millan, whose vocabulary is `microsaccade` alone,
-    declares no such field and is handed no such value -- a detector with no
+    threshold. `OteroMillanParams` declares it for the same reason: reading
+    that detector's reference on 2026-09-01 corrected its vocabulary from
+    `microsaccade` alone to the same split, so it too consumes the shared
+    cut. U'n'Eye, whose declared vocabulary is `saccade` alone, will declare
+    no such field and be handed no such value -- a detector with no
     amplitude-derived labels is never forced to accept a parameter it has no
     use for. Declaring the field is the detector's statement that it
     consumes a shared key, not a claim to own one.
@@ -1014,11 +1049,15 @@ def register_default_paramsets() -> dict[str, int]:
 
     from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
     paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
-    defaults = {"engbert_kliegl": asdict(DEFAULT_EK_PARAMS)}
+    defaults = {
+        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
+        "otero_millan": asdict(DEFAULT_OM_PARAMS),
+    }
     return {
         name: paramset.register(
             "eye_detection",
