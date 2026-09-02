@@ -367,6 +367,108 @@ def test_event_f1_symmetry_holds_across_randomized_multi_event_traces():
         assert forward == backward, (a.tolist(), b.tolist(), tolerance_samples)
 
 
+def test_event_f1_finds_a_match_the_distance_sorted_matching_missed():
+    """Regression for a second, more serious defect than the symmetry bug
+    above: the distance-sorted matching that fixed it was itself symmetric
+    and still wrong. Confirmed against the module as it stood at commit
+    `af29479` (the symmetry fix, before this test's fix): it scored this
+    exact pair `0.5` (2 matched), not `0.75` (3 matched), in both
+    directions -- symmetric is not the same claim as correct.
+
+    `a`'s events at samples 1, 3, 19, 22 against `b`'s at 6, 8, 11, 28,
+    tolerance 6. Sorted by distance, `1`-`6` and `3`-`8` (each distance 5,
+    each side's nearest reachable partner) both get taken, leaving `19`
+    stranded (11 and 28 are both out of tolerance) even though a matching of
+    3 exists: `1`-`6`, `3`-`8`, `22`-`28`. Nothing about maximizing each
+    event's own closeness finds that `22` needed `28` and `19` needed
+    nothing else available -- distance-sorted greedy has no way to know that
+    ahead of committing `3` to `8`. This under-counts agreement, which is
+    the wrong failure direction for a suite meant to flag degraded tracking
+    rather than manufacture disagreement no detector is responsible for."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    a = np.array(
+        [Label.FIXATION] * 1 + [Label.SACCADE] * 1 + [Label.FIXATION] * 1
+        + [Label.SACCADE] * 1 + [Label.FIXATION] * 15 + [Label.SACCADE] * 1
+        + [Label.FIXATION] * 2 + [Label.SACCADE] * 1 + [Label.FIXATION] * 6
+    )
+    b = np.array(
+        [Label.FIXATION] * 6 + [Label.SACCADE] * 1 + [Label.FIXATION] * 1
+        + [Label.SACCADE] * 1 + [Label.FIXATION] * 2 + [Label.SACCADE] * 1
+        + [Label.FIXATION] * 16 + [Label.SACCADE] * 1
+    )
+    mask = np.ones(len(a), dtype=bool)
+
+    assert event_f1(a, b, mask, tolerance_samples=6) == 0.75
+    assert event_f1(b, a, mask, tolerance_samples=6) == 0.75
+
+
+def test_event_f1_matched_count_equals_a_maximum_bipartite_matching():
+    """The assertion that would have caught the distance-sorted defect from
+    the start: not that the matching is symmetric (it was, and was still
+    wrong), but that it finds as many matches as are achievable AT ALL.
+    Checked against an independent maximum-matching oracle -- Kuhn's
+    augmenting-path algorithm, written out here rather than imported, since
+    this project takes no `scipy`/`networkx` dependency for it -- rather
+    than against `event_f1`'s own logic restated in different words.
+
+    Event starts are spaced at least 2 samples apart so two adjacent chosen
+    samples never merge into one run and silently change the event count
+    the oracle is told about."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    def max_matching_size(a_starts, b_starts, tolerance_samples):
+        adjacency = [
+            [
+                j
+                for j, b_start in enumerate(b_starts)
+                if abs(a_start - b_start) <= tolerance_samples
+            ]
+            for a_start in a_starts
+        ]
+        match_of_b = [-1] * len(b_starts)
+
+        def augment(i, visited):
+            for j in adjacency[i]:
+                if j in visited:
+                    continue
+                visited.add(j)
+                if match_of_b[j] == -1 or augment(match_of_b[j], visited):
+                    match_of_b[j] = i
+                    return True
+            return False
+
+        return sum(augment(i, set()) for i in range(len(a_starts)))
+
+    rng = np.random.default_rng(2)
+    for _ in range(4000):
+        n = int(rng.integers(20, 80))
+        n_a_events = int(rng.integers(0, 6))
+        n_b_events = int(rng.integers(0, 6))
+        a_starts = sorted(2 * x for x in rng.choice(n // 2, size=n_a_events, replace=False))
+        b_starts = sorted(2 * x for x in rng.choice(n // 2, size=n_b_events, replace=False))
+        tolerance_samples = int(rng.integers(0, 10))
+
+        a = np.full(n, Label.FIXATION, dtype=object)
+        a[a_starts] = Label.SACCADE
+        b = np.full(n, Label.FIXATION, dtype=object)
+        b[b_starts] = Label.SACCADE
+        mask = np.ones(n, dtype=bool)
+
+        score = event_f1(a, b, mask, tolerance_samples)
+
+        if not a_starts and not b_starts:
+            expected = 1.0
+        elif not a_starts or not b_starts:
+            expected = 0.0
+        else:
+            matched = max_matching_size(a_starts, b_starts, tolerance_samples)
+            precision, recall = matched / len(a_starts), matched / len(b_starts)
+            expected = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+
+        assert score == expected, (a_starts, b_starts, tolerance_samples, score, expected)
+
+
 def test_an_empty_comparison_returns_nan_rather_than_a_confident_number():
     """A pair with nothing comparable has no score, and `0.0` would read as
     total disagreement while `1.0` would read as perfect agreement. Both are
