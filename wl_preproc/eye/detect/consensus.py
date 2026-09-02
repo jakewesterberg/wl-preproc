@@ -155,7 +155,26 @@ def event_f1(
 
     What the U'n'Eye paper itself reports, so these numbers are comparable to
     published benchmarks rather than only to each other (design spec section
-    6.1). Greedy nearest-first matching, each event used at most once.
+    6.1). Each event is used at most once.
+
+    **Matching is global, not per-event-greedy, because per-event-greedy is
+    not symmetric.** An earlier version had `a`'s events each grab their own
+    nearest still-free `b` event, processed in `a`-list order; that lets an
+    early event take a candidate a *later* event needed as its only option,
+    and which event goes first depends on which trace is named `a`. Found by
+    a 20000-trial randomized check after this module shipped: `a` at samples
+    `[18, 24]` against `b` at `[22, 25]`, tolerance 4, scored 1.0 one way and
+    0.5 the other, on the same two traces. Fixed here by scoring every
+    candidate pair up front rather than deciding one event's match before the
+    next event's alternatives are even known.
+
+    So instead: every `(a_start, b_start)` pair within tolerance is a
+    candidate, sorted by distance, and the walk takes a candidate only when
+    both its events are still free. This is symmetric because the candidate
+    *set* and every candidate's distance are properties of the pair, not of
+    which trace is named `a` -- swapping `a` and `b` only relabels which end
+    of each pair is which, it cannot change the set of pairs, their
+    distances, or the order the walk considers them in.
 
     Returns `nan` when nothing is comparable: a pair with no shared samples has
     no score, and both `0.0` and `1.0` would be claims the data cannot support.
@@ -168,17 +187,39 @@ def event_f1(
     if not a_starts or not b_starts:
         return 0.0
 
-    unmatched_b = set(range(len(b_starts)))
+    candidates = [
+        (abs(a_start - b_start), a_start, b_start)
+        for a_start in a_starts
+        for b_start in b_starts
+        if abs(a_start - b_start) <= tolerance_samples
+    ]
+    # Tiebreak by the pair's two sample indices, smaller-first -- NOT by
+    # `(a_start, b_start)` in that argument order. `a_start`/`b_start` are
+    # labels this function's CALLER chose, not a property of the pair: they
+    # swap whenever the caller swaps which trace is `a`, so `(a_start,
+    # b_start)` is a different tuple for the same pair depending on argument
+    # order, and CAN reorder two candidates that tie on distance. `(min,
+    # max)` is a property of the pair itself and is identical under that
+    # relabelling -- correct by construction, not by an empirical property of
+    # today's inputs. This looks like it could be simplified back to
+    # `(distance, a_start, b_start)`; tried, and found no input, including an
+    # exhaustive search over small instances and >10^6 random and targeted
+    # trials, where that reordering changes which SAMPLES end up matched
+    # (this graph -- points on a line, compatible within a fixed distance --
+    # is more constrained than a general bipartite graph, which is likely why
+    # not). Kept `(min, max)` anyway: it is provably order-independent rather
+    # than order-independent-so-far, and costs nothing.
+    candidates.sort(key=lambda pair: (pair[0], min(pair[1], pair[2]), max(pair[1], pair[2])))
+
+    used_a: set[int] = set()
+    used_b: set[int] = set()
     matched = 0
-    for start in a_starts:
-        best, best_distance = None, tolerance_samples + 1
-        for candidate in unmatched_b:
-            distance = abs(b_starts[candidate] - start)
-            if distance < best_distance:
-                best, best_distance = candidate, distance
-        if best is not None:
-            unmatched_b.discard(best)
-            matched += 1
+    for _distance, a_start, b_start in candidates:
+        if a_start in used_a or b_start in used_b:
+            continue
+        used_a.add(a_start)
+        used_b.add(b_start)
+        matched += 1
 
     precision = matched / len(a_starts)
     recall = matched / len(b_starts)

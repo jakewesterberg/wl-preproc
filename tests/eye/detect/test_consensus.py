@@ -275,15 +275,96 @@ def test_masked_out_samples_change_neither_metric():
 
 def test_both_metrics_are_symmetric():
     """The table's key orders the pair canonically `a < b`, so an asymmetric
-    metric would store one number for what are really two measurements."""
+    metric would store one number for what are really two measurements.
+
+    Three events a side, not one. With a single event each, `event_f1`
+    reduces to `2*matched/(len(a_starts)+len(b_starts))`, which is symmetric
+    by arithmetic alone whatever the matching does -- that shape is exactly
+    what let a real matching-order asymmetry ship undetected (see
+    `test_event_f1_does_not_depend_on_which_trace_is_named_a`), so a fixture
+    that cannot exercise contention between events cannot stand as this
+    property's test. This fixture can: under the matching algorithm this
+    module shipped with first, it scored 1.0 one way and 0.667 the other."""
     from wl_preproc.eye.detect.consensus import cohen_kappa, event_f1
 
-    a = np.array([Label.FIXATION] * 10 + [Label.SACCADE] * 5 + [Label.FIXATION] * 35)
-    b = np.array([Label.FIXATION] * 12 + [Label.SACCADE] * 6 + [Label.FIXATION] * 32)
+    a = np.array(
+        [Label.FIXATION] * 5 + [Label.SACCADE] * 1 + [Label.FIXATION] * 12
+        + [Label.SACCADE] * 1 + [Label.FIXATION] * 5 + [Label.SACCADE] * 1
+        + [Label.FIXATION] * 1
+    )
+    b = np.array(
+        [Label.FIXATION] * 9 + [Label.SACCADE] * 1 + [Label.FIXATION] * 12
+        + [Label.SACCADE] * 1 + [Label.FIXATION] * 2 + [Label.SACCADE] * 1
+    )
     mask = np.ones(len(a), dtype=bool)
 
-    assert event_f1(a, b, mask, 5) == event_f1(b, a, mask, 5)
+    assert event_f1(a, b, mask, 4) == event_f1(b, a, mask, 4)
     assert cohen_kappa(a, b, mask) == cohen_kappa(b, a, mask)
+
+
+def test_event_f1_does_not_depend_on_which_trace_is_named_a():
+    """Regression for a real asymmetry, found by a 20000-trial randomized
+    check after this module first shipped (~0.1% of random multi-event
+    pairs) and independently reproduced (~0.6% of 4000 pairs) rather than
+    theorised: `a`'s events at samples 18 and 24 against `b`'s at 22 and 25,
+    tolerance 4, scored 1.0 as `event_f1(a, b, ...)` and 0.5 as
+    `event_f1(b, a, ...)` -- same two traces, same tolerance, different
+    answer depending only on which was passed first.
+
+    Design spec section 6.1 justifies `DetectorAgreement`'s canonical
+    `a < b` pairwise key by this metric's symmetry, so this was not merely a
+    failed test -- it was a stored score that would have depended on which
+    paramset happened to sort first.
+
+    Root cause: the old matching let each of `a`'s events greedily grab its
+    own nearest still-free `b` event, processed in `a`-list order. Event 22
+    (in `b`) is 4 away from 18 and 2 away from 24; taking the nearer (24)
+    looks locally right but strands 25, whose only reachable partner
+    (distance 1) was 24 -- and swapping which trace drives the loop changes
+    who grabs 24 first. The fix scores every `(a_start, b_start)` pair up
+    front instead of deciding one event's match before its alternatives are
+    known, which is what makes the outcome independent of argument order."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    a = np.array(
+        [Label.FIXATION] * 18 + [Label.SACCADE] * 1 + [Label.FIXATION] * 5
+        + [Label.SACCADE] * 1 + [Label.FIXATION] * 1
+    )
+    b = np.array(
+        [Label.FIXATION] * 22 + [Label.SACCADE] * 1 + [Label.FIXATION] * 2
+        + [Label.SACCADE] * 1
+    )
+    mask = np.ones(len(a), dtype=bool)
+
+    assert event_f1(a, b, mask, tolerance_samples=4) == 1.0
+    assert event_f1(b, a, mask, tolerance_samples=4) == 1.0
+
+
+def test_event_f1_symmetry_holds_across_randomized_multi_event_traces():
+    """The property-level version of the same regression, fixed-seed so it
+    keeps checking rather than having only been checked once by hand. A
+    single adversarial fixture pins the mechanism that was found; this pins
+    the property itself over traces neither the author nor the reviewer
+    hand-picked, which is exactly the kind of case a hand-picked fixture
+    cannot be trusted to represent."""
+    from wl_preproc.eye.detect.consensus import event_f1
+
+    rng = np.random.default_rng(1)
+    for _ in range(4000):
+        n = int(rng.integers(20, 80))
+        a = np.full(n, Label.FIXATION, dtype=object)
+        b = np.full(n, Label.FIXATION, dtype=object)
+        for arr in (a, b):
+            for _ in range(int(rng.integers(0, 5))):
+                start = int(rng.integers(0, n))
+                length = int(rng.integers(1, 6))
+                arr[start : start + length] = Label.SACCADE
+        mask = np.ones(n, dtype=bool)
+        tolerance_samples = int(rng.integers(0, 6))
+
+        forward = event_f1(a, b, mask, tolerance_samples)
+        backward = event_f1(b, a, mask, tolerance_samples)
+        assert forward == backward, (a.tolist(), b.tolist(), tolerance_samples)
 
 
 def test_an_empty_comparison_returns_nan_rather_than_a_confident_number():
