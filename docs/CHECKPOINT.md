@@ -1,17 +1,25 @@
 # Where this build actually is
 
-**Last updated 2026-09-02**, describing `main` at `a8fd3cb` (the saccade-detection
-stage 2A merge), with the manifest update and this file's own commit on top. Check
-`git log --oneline -1`; if it has moved past those, this file is stale and the spec
-wins.
+**Last updated 2026-09-05**, describing `main` at `c3f6c5e` (unchanged by this
+update) plus branch `spec/conjunction-shape` at `d396d85` — ten commits,
+`c0838b8..d396d85`, implementing per-kind conjunction intersection — with the
+`wl.yaml` update and this file's own commit on top of *that branch*. **Not yet
+merged to `main`**: `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md`
+is built and tested (1301 passed locally on Python 3.11; CI on 3.11/3.13 has not
+been run for this branch) but has not gone through the whole-branch review or the
+PR this file's own "Before opening a PR" checklist requires. Check
+`git branch --show-current` and `git log --oneline -1`; if the branch has merged
+or moved past `d396d85`, or `main` has moved past `c3f6c5e`, this file is stale
+and the spec wins.
 
 *This header named `bfdfd7f` for two commits after the body had moved past it — the
 file's own test catching its own author. If you update this file, the header is part of
 the update.*
 
-This file went **nine days and three merged subsystems stale** before this update — it still
-claimed 688 tests and an unmerged 1c-4. If you are reading it after a gap, distrust the
-numbers before you distrust the reasoning.
+This file went **nine days and three merged subsystems stale** before its
+2026-09-02 update — it then still claimed 688 tests and an unmerged 1c-4. If you
+are reading it after a gap, distrust the numbers before you distrust the
+reasoning.
 
 > **The local suite cannot see everything CI sees, and this has already cost a day.** The
 > venv is Python 3.11; CI runs **3.11 and 3.13**, because 3.11 is wl-sync's floor and 3.13
@@ -219,39 +227,95 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    correct one. The rule that follows binds the next no-oracle validation: **an
    oracle-free statistic is worthless until a null has been run against it.**
 
-4. **Saccade detection stage 2B — blocked on a DECISION, not on code.** Four of the
-   five remaining detectors (Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade
-   detection) trip `_conjunction_label`'s raise, and because DataJoint rolls the whole
-   `make()` back they write **no rows at all** — not partial per-eye data. That guard
-   is deliberate. Deciding what it guards unblocks four detectors at once and is the
-   cheapest item on this list.
+4. **Saccade detection stage 2B — the glissade decision is WITHDRAWN, not
+   answered.** This item used to read "blocked on a DECISION, not on code,"
+   naming four detectors that "trip `_conjunction_label`'s raise" and calling
+   the decision "the cheapest item on this list." **That is now false, and
+   the reversal is recorded rather than quietly edited.**
+   `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md` (branch
+   `spec/conjunction-shape`, ten commits `c0838b8..d396d85`, built and tested
+   — 1301 passed locally on 3.11 — but **not yet merged to `main`**) ruled
+   that the premise was wrong: a conjunction's label does not have to come
+   from a detector, because when both eyes independently call a stretch the
+   same KIND, their agreement on kind supplies the label. A binocular
+   glissade now stores as `pso`, not as an assignment to a saccade or a
+   fixation.
 
-   **What a glissade is, since this file used the word a dozen times without saying.**
-   After a saccade the eye's lens keeps moving relative to the optical axis, so the
-   tracker sees a small wobble immediately after every large movement. Deubel &
-   Bridgeman measured it on a dual-Purkinje tracker — this rig's instrument — at up to
-   **0.5° of retinal image displacement from lens movement alone**, which is *half* the
-   default 1° microsaccade threshold. So a detector that does not model it reports a
-   microsaccade after every saccade, systematically. Nyström & Holmqvist call the same
-   thing a **glissade**, find it in about half of all saccades at ~24 ms, and say
-   researchers "must actively choose whether to assign the glissades to saccades or
-   fixations", because current algorithms assign them "largely arbitrarily" and the
-   choice moves saccade and fixation durations significantly. `pso` — post-saccadic
-   oscillation — is this pipeline's label for it (spec §2.5).
+   **What actually blocked the four was a defect, not an open question.**
+   `schema/detect.py::_overlapping` intersected every left run against every
+   right run on time alone and never read a label — correct only while every
+   detector emits one kind (true of Engbert–Kliegl and Otero-Millan, false
+   for all four blocked detectors, which all emit `fixation` alongside a
+   non-saccadic label, so a left `fixation` crossed with a right `saccade`
+   would have survived as a binocular event). No stage-1 or stage-2A test
+   could have caught it — catching it needs a detector emitting more than
+   one kind, and neither stage registers one. Fixed by grouping both eyes'
+   runs by kind before intersecting (`_conjunction_runs`): `saccade` and
+   `microsaccade` stay one kind, labelled by `classify` exactly as before;
+   every other emitted label is its own kind and labels itself; `fixation`
+   is not intersected at all, being the synthesized background rather than a
+   detector's finding. **Byte-identical rows for Engbert–Kliegl, Otero-Millan
+   and U'n'Eye**, because each emits one kind and grouping by kind is then a
+   partition into one group — today's loop, unchanged. Verified by an
+   exact-tuple pin for Engbert–Kliegl alone
+   (`test_engbert_kliegl_conjunction_rows_are_unchanged`), against the
+   suite's SYNTHETIC stepped-session fixture, not the reference recording.
+   Otero-Millan is not separately pinned; U'n'Eye is unwritten and
+   unregistered, so there is nothing of its own to pin yet — the one test
+   that touches the real reference recording
+   (`test_the_run_count_measured_against_the_reference_recording`) is
+   env-gated and skipped by default.
 
-   **The open decision is narrower than "the glissade assignment" sounds**, and
-   `docs/handoffs/2026-09-02-the-conjunction-label-decision.md` sets it out.
+   **What a glissade is, since this file used the word a dozen times before
+   `c3f6c5e` finally said so — still accurate and still worth reading.**
+   After a saccade the eye's lens keeps moving relative to the optical axis,
+   so the tracker sees a small wobble immediately after every large
+   movement. Deubel & Bridgeman measured it on a dual-Purkinje tracker —
+   this rig's instrument — at up to **0.5° of retinal image displacement
+   from lens movement alone**, which is *half* the default 1° microsaccade
+   threshold. So a detector that does not model it reports a microsaccade
+   after every saccade, systematically. Nyström & Holmqvist call the same
+   thing a **glissade**, find it in about half of all saccades at ~24 ms,
+   and say researchers "must actively choose whether to assign the
+   glissades to saccades or fixations", because current algorithms assign
+   them "largely arbitrarily" and the choice moves saccade and fixation
+   durations significantly. `pso` — post-saccadic oscillation — is this
+   pipeline's label for it (spec §2.5).
 
-   **U'n'Eye is the exception and is independently schedulable**: it declares
-   `{saccade}`, a subset of the amplitude-derived vocabulary, so it never reaches that
-   raise. Its obstacles are **PyTorch declared properly** — `where: serv`, following
-   `kilosort`'s precedent, since a CNN detector belongs on the preprocessing server and
-   not a rig — plus vendoring and a GPU.
+   `docs/handoffs/2026-09-02-the-conjunction-label-decision.md` is
+   **SUPERSEDED**, marked as such at its own top — none of its four candidate
+   conventions was adopted. `docs/handoffs/2026-09-05-conjunction-shape-built.md`
+   has the full account, including two things worth knowing before writing
+   the next detector: a **pre-existing production defect found on this
+   branch and deliberately NOT fixed** — `register_default_paramsets`
+   hardcodes a two-entry `defaults` dict and raises `KeyError` inside a dict
+   comprehension over `DETECTORS`, uncaught, in `daemon.run_once()`, the
+   moment a third detector is registered without also extending that dict,
+   aborting the ENTIRE daemon pass rather than just that registration — and
+   the **open question that matters most**: how often the two eyes disagree
+   on KIND (one calls a stretch `saccade`, the other `pso`) is unmeasured
+   and unmeasurable until a pso-capable detector exists, so §1's agreement
+   requirement rests on reasoning rather than a number. Nyström–Holmqvist —
+   the simplest of the four — is what measures it, and that measurement
+   should be the first thing stage 2B does.
 
-   Also stage 2B: the N-way `blended_agreement`, saccade vigor and the main-sequence
-   fits (which need an amplitude floor AND a duration ceiling — 18–20% of accepted
-   events sit below the floor they were accepted by), `pso`/`pursuit`/`drift` as
-   PRODUCED labels, and wl-expcontroller's online detector as an eighth registry entry.
+   **U'n'Eye's obstacles are unchanged by any of this** — it declares
+   `{saccade}`, a subset of the amplitude-derived vocabulary, so it never
+   depended on the glissade question either way. Its obstacles remain
+   **PyTorch declared properly** — `where: serv`, following `kilosort`'s
+   precedent, since a CNN detector belongs on the preprocessing server and
+   not a rig — plus vendoring and a GPU. **`registry.py::DETECTORS` still
+   registers only Engbert-Kliegl and Otero-Millan**; the other five,
+   including U'n'Eye, are specified (design spec §3.1) but unwritten, and
+   five of those seven declared vocabularies take the degenerate
+   saccadic-slice branch — only Engbert-Kliegl and Otero-Millan declare both
+   sides of the amplitude cut and reach `classify`.
+
+   Also stage 2B, unchanged by any of the above: the N-way `blended_agreement`,
+   saccade vigor and the main-sequence fits (which need an amplitude floor
+   AND a duration ceiling — 18–20% of accepted events sit below the floor
+   they were accepted by), `pso`/`pursuit`/`drift` as PRODUCED labels, and
+   wl-expcontroller's online detector as an eighth registry entry.
 5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
    written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
    no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
@@ -276,9 +340,11 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 
 **Everything in Phase 2b proper still needs the compute machine.** The subsystems merged
 this week were chosen precisely because they needed no GPU and no container. Stage 2B's
-four blocked detectors are the next of that kind once the glissade assignment is decided;
-U'n'Eye is the first piece of this project that genuinely wants the GPU. Gap-aware
-segmentation and rehydration are both hardware-free.
+four glissade-freed detectors — Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade
+detection (item 4 above) — are the next of that kind, each simply unwritten now that the
+glissade question is withdrawn rather than gating them; U'n'Eye is the first piece of this
+project that genuinely wants the GPU. Gap-aware segmentation and rehydration are both
+hardware-free.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief

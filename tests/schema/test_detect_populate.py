@@ -55,6 +55,29 @@ import time
 import numpy as np
 import pytest
 
+# Module-level, like `_always`'s import far below (`from wl_preproc.schema.
+# detect import _always`, ahead of `test_the_conjunction_inherits_the_
+# detectors_own_minimum_duration`) -- though for an unrelated reason, not
+# "unlike every other import in this file": most test functions here do
+# still import what they need locally. This one cannot, because of this
+# file's own `from __future__ import annotations` (above), which makes every
+# annotation a STRING (PEP 563). `typing.get_type_hints` -- which
+# `schema/detect.py::_params_for` calls on a detector's `run` to find its
+# params dataclass -- resolves such a string against the function's OWN
+# `__globals__`, which for any function defined in this file is THIS
+# module's globals, regardless of how deeply the function is nested inside
+# a test body. A fixture detector's `run` needs a `params: EngbertKlieglParams`
+# annotation for `_params_for` to build one (test_a_multi_kind_detector_
+# populates_and_keeps_its_vocabulary/test_a_multi_kind_detector_writes_all_
+# three_traces, below) -- confirmed directly: a local import of the same
+# name, inside the test function that defines the annotated callable, left
+# it unresolvable (`NameError: name 'EngbertKlieglParams' is not defined`,
+# raised from inside `_params_for` and caught as a per-key `EyeDetection`
+# error rather than failing the import itself) because a NESTED function's
+# `__globals__` is still the ENCLOSING MODULE's namespace, never the
+# enclosing function's own locals.
+from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
+
 TRIAL_DURATION_S = 3.0
 
 # The affine's own slope, `degrees = CAL_SCALE * raw_px` (no cross terms, no
@@ -1016,6 +1039,77 @@ def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session)
     )
 
 
+def test_engbert_kliegl_conjunction_rows_are_unchanged(stepped_session):
+    """Design spec section 4's bar ("Engbert-Kliegl, Otero-Millan and U'n'Eye
+    produce byte-identical conjunction rows... This is a test, not an
+    expectation"). Engbert-Kliegl emits ONE kind (saccadic), so
+    `_conjunction_runs`' grouping partitions it into a single group and the
+    loop that group runs through is `_overlapping`'s own loop -- wiring
+    `make()` to the grouped entry point must not move the three events this
+    fixture plants.
+
+    **Pinned against a capture taken at the pre-wiring commit (`6bc3704`,
+    the parent this task's wiring change landed on), not recomputed from the
+    code under test.** A recomputation would move right along with a
+    regression it exists to catch. The three tuples below were produced by
+    running the identical query below, unmodified, against a `git worktree`
+    checked out at `6bc3704`, and cross-checked against an identical capture
+    at this task's own commit before it was ever compared to these literals
+    -- both are recorded in the Task 4 fix-round report rather than trusted
+    from a single run. Re-derive them the same way against any future commit
+    under suspicion rather than trusting these forever.
+
+    **Exact boundaries and labels, not only a count.** A prior version of
+    this test asserted `len(events) == 3` plus a label superset that
+    Engbert-Kliegl's own declared vocabulary (`{saccade, microsaccade}`)
+    already guarantees on its own -- `registry.Detector.detect` refuses
+    `pso`/`pursuit`/`drift` from this detector before a row is ever stored,
+    so that check could barely fail. A boundary shift of a few samples, or a
+    swapped saccade/microsaccade verdict, would have left the count at three
+    and passed unnoticed (fix-round review finding, Task 4). This version
+    pins `run_start`, `run_stop` and `label` for all three events instead.
+
+    **Still not the fully exhaustive check.** `amplitude_deg`,
+    `peak_velocity_deg_s`, `reliability`, the master row's own
+    `n_saccades`/`n_microsaccades`, and every OTHER detector, are not pinned
+    here -- that exhaustive byte-identical comparison is what
+    `test_the_run_count_measured_against_the_reference_recording` is for,
+    and it is skipped by default (it requires `WLPP_OHDPI_REFERENCE` to
+    point at a real recording -- see that test's own skip message). What
+    this test proves, every default run, is exact timing and labelling for
+    the one fixture in this suite built to plant known transitions."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+
+    rows = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
+    ).to_dicts(order_by="run_index")
+    events = [
+        (r["run_start"], r["run_stop"], r["label"])
+        for r in rows
+        if r["label"] in ("saccade", "microsaccade")
+    ]
+
+    # Captured 2026-09-05 at 6bc3704 (immediately before `make()` was wired
+    # to `_conjunction_runs`) via this identical query run against a
+    # throwaway `git worktree` checkout, then confirmed identical against
+    # the same query at this task's own commit -- see the Task 4 fix-round
+    # report for both captures and the exact commands.
+    assert events == [
+        (6800, 6816, "saccade"),
+        (7250, 7258, "microsaccade"),
+        (7749, 7767, "saccade"),
+    ]
+    # No `pso`, `pursuit` or `drift` run can exist for a detector that emits
+    # none of the three -- the shape rule cuts both ways. Weaker than the
+    # pin above (see the docstring), kept as a cheap second signal.
+    assert {r["label"] for r in rows} <= {
+        "saccade", "microsaccade", "fixation", "blink", "invalid"
+    }
+
+
 def test_a_sub_floor_binocular_overlap_is_no_conjunction_event(near_miss_session):
     """Finding H3's floor, asserted where `EyeDetection.make()` actually
     applies it -- on a stored row, through `daemon.run_once()`.
@@ -1298,12 +1392,59 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     assert Label.INVALID in present
 
 
-def _always(label):
-    """A `label_for` for `_overlapping` that answers one label whatever the
-    span. For the tests below, where the FLOOR is what is under test and
-    which label a surviving span carries is not -- `_conjunction_label` is
-    the real rule, and it has its own tests."""
-    return lambda start, stop: label
+def test_every_label_has_a_kind_or_is_deliberately_excluded():
+    """Design spec section 3.1's exhaustiveness guard. The label enum is
+    closed because the migration window shuts January 2027, so a ninth label
+    added without updating the kind map must fail loudly rather than be
+    silently dropped from every conjunction."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema.detect import _KIND_OF, _NOT_INTERSECTED, _kind_of
+
+    assert set(_KIND_OF) | _NOT_INTERSECTED == set(Label)
+    assert not (set(_KIND_OF) & _NOT_INTERSECTED)
+
+    # saccade and microsaccade are ONE kind: design spec section 1 calls them
+    # "a split, not a ranking" -- the same event distinguished only by size.
+    assert _kind_of(Label.SACCADE) == _kind_of(Label.MICROSACCADE)
+    # Every other emitted label is its own kind.
+    assert len({_kind_of(Label.PSO), _kind_of(Label.PURSUIT),
+                _kind_of(Label.DRIFT), _kind_of(Label.SACCADE)}) == 4
+    # fixation is the synthesized background (spec section 1.2); blink and
+    # invalid come from the validity mask and are in no vocabulary.
+    for label in (Label.FIXATION, Label.BLINK, Label.INVALID):
+        assert _kind_of(label) is None
+
+
+def test_a_single_label_kind_is_keyed_by_its_own_label_value():
+    """`_conjunction_runs` labels a non-saccadic kind with `Label(kind)`, so
+    the kind key and the label value must agree. A kind named anything else
+    would raise `ValueError` deep inside the grouping loop, for one detector,
+    only once a real recording produced that label."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema.detect import _KIND_OF
+
+    for label, kind in _KIND_OF.items():
+        if kind != "saccadic":
+            assert Label(kind) is label, f"kind {kind!r} does not name {label!r}"
+
+
+def test_a_label_with_no_kind_raises():
+    """The guard has teeth: it is reachable if the enum grows and the map
+    does not."""
+    import pytest
+    from wl_preproc.schema.detect import UnknownLabelKind, _kind_of
+
+    with pytest.raises(UnknownLabelKind, match="no conjunction kind"):
+        _kind_of("nystagmus")
+
+
+# Moved to `wl_preproc.schema.detect` alongside `_conjunction_runs`, its new
+# production caller -- a second definition here would be exactly the "two
+# definitions of one fact" `labels.py::LabelledInterval`'s own comment warns
+# against. Still used bare below: the H3 duration-floor tests (unchanged) and
+# the `_conjunction_runs` tests both call it without a local import, exactly
+# as they did when it was defined in this module.
+from wl_preproc.schema.detect import _always
 
 
 def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
@@ -1386,6 +1527,116 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     assert _overlapping([sacc(0, 10)], [sacc(9, 20)], 1, saccade) == [sacc(9, 10)]
     # And a paramset naming 0 cannot weaken it into a span `measure` refuses.
     assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 0, saccade) == []
+
+
+def test_a_left_fixation_never_crosses_a_right_saccade():
+    """THE defect this change exists to fix. `_overlapping` intersects on
+    time alone and never reads a label -- correct only while every emitted
+    label is the same kind of thing, which is true of the two registered
+    detectors and false for all four blocked ones.
+
+    Three of the four emit `fixation`, which TILES the recording, so a left
+    fixation would have crossed a right saccade and been kept as a binocular
+    event. No stage-1 or stage-2A test could reach this: finding it needs a
+    detector that emits more than one kind, and neither stage has one."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(0, 1000, Label.FIXATION)]
+    right = [Run(400, 460, Label.SACCADE)]
+    assert _conjunction_runs(left, right, 6, _always(Label.SACCADE)) == []
+
+
+def test_a_binocular_glissade_survives_as_pso():
+    """The shape rule. Both eyes called it `pso`; the conjunction says `pso`,
+    not `saccade` and not nothing."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 130, Label.SACCADE), Run(130, 160, Label.PSO)]
+    right = [Run(105, 135, Label.SACCADE), Run(135, 165, Label.PSO)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.SACCADE))
+
+    assert runs == [Run(105, 130, Label.SACCADE), Run(135, 160, Label.PSO)]
+
+
+def test_kinds_that_disagree_produce_no_conjunction_run_of_either():
+    """Agreement on kind is what supplies the label, so disagreement supplies
+    nothing. This is NOT the arbitration stage 1 removed: that rule RANKED
+    the two eyes' labels through `PRECEDENCE`; this requires agreement and
+    ranks nothing."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 160, Label.SACCADE)]
+    right = [Run(100, 160, Label.PSO)]
+    assert _conjunction_runs(left, right, 6, _always(Label.SACCADE)) == []
+
+
+def test_the_amplitude_split_is_one_kind_not_two():
+    """Design spec section 1: `saccade` and `microsaccade` are "a split, not a
+    ranking". A left saccade meeting a right microsaccade is two eyes
+    agreeing that an event happened and differing only about its size -- which
+    the conjunction settles by measuring its OWN amplitude, exactly as stage 1
+    did. Dropping this pair would be a behaviour change for the two shipped
+    detectors."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 160, Label.SACCADE)]
+    right = [Run(100, 160, Label.MICROSACCADE)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.MICROSACCADE))
+
+    assert runs == [Run(100, 160, Label.MICROSACCADE)]
+
+
+def test_spans_of_different_kinds_never_overlap():
+    """Load-bearing for `_insert_trace`, which paints intervals onto one
+    array and lets a later interval overwrite an earlier one. Two kinds'
+    spans cannot overlap because each is a subset of a left run of its own
+    kind, and one eye's runs are disjoint by construction -- but that is an
+    argument, and the equality below is what makes it a fact.
+
+    **The equality is what carries this test, not the loop.** Grouped, this
+    fixture's three kinds intersect to exactly the three runs asserted
+    below. Skip the grouping -- call `_overlapping` directly over all three
+    kinds at once, the regression this test exists to catch -- and its own
+    touching-span coalescing, which never reads a label, merges every
+    overlap into ONE run, `Run(10, 140, ...)`. A single run makes
+    `zip(runs, runs[1:])` iterate zero times, so the loop below would have
+    passed on that broken result without ever executing. It stays anyway,
+    now that the equality above it has already proved there are three runs
+    to check."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(0, 50, Label.SACCADE), Run(50, 100, Label.PSO),
+            Run(100, 150, Label.PURSUIT)]
+    right = [Run(10, 60, Label.SACCADE), Run(45, 110, Label.PSO),
+             Run(90, 140, Label.PURSUIT)]
+    runs = sorted(_conjunction_runs(left, right, 1, _always(Label.SACCADE)),
+                  key=lambda run: run.start)
+
+    assert runs == [
+        Run(10, 50, Label.SACCADE),
+        Run(50, 100, Label.PSO),
+        Run(100, 140, Label.PURSUIT),
+    ]
+    for earlier, later in zip(runs, runs[1:]):
+        assert earlier.stop <= later.start, f"{earlier} overlaps {later}"
+
+
+def test_conjunction_runs_come_back_sorted_by_start():
+    """Concatenating per-kind results would otherwise return them grouped by
+    kind, which makes every assertion about them depend on dict ordering."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(200, 260, Label.PSO), Run(0, 60, Label.SACCADE)]
+    right = [Run(200, 260, Label.PSO), Run(0, 60, Label.SACCADE)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.SACCADE))
+
+    assert [run.start for run in runs] == [0, 200]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1503,11 +1754,14 @@ def test_a_shared_paramset_key_reaches_the_detector_that_declares_it():
 
 
 def test_a_detector_with_no_amplitude_labels_is_not_handed_the_threshold():
-    """Design spec section 3.1: Otero-Millan emits `microsaccade` alone, so
-    there is no amplitude split for a threshold to place and no field for it
-    to arrive in. The same filter that DELIVERS the shared key to a detector
-    that declares it must withhold it from one that does not -- otherwise
-    every future detector is forced to accept a parameter it cannot use, and
+    """Design spec section 3.1: U'n'Eye emits `saccade` alone, so there is no
+    amplitude split for a threshold to place and no field for it to arrive
+    in. (Otero-Millan is not this example -- corrected 2026-09-01, it
+    declares the full `saccade / microsaccade` split and DOES declare the
+    field, matching `registry.DETECTORS["otero_millan"]`.) The same filter
+    that DELIVERS the shared key to a detector that declares it must
+    withhold it from one that does not -- otherwise every future detector is
+    forced to accept a parameter it cannot use, and
     `TypeError: unexpected keyword argument` is what a real paramset would
     hand the first session that reached it."""
     from wl_preproc.eye.detect.labels import Label
@@ -1845,24 +2099,171 @@ def test_two_touching_intersections_become_one_conjunction_event():
     assert event["amplitude_deg"] == pytest.approx(1.95)
 
 
-def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunction():
-    """Design spec section 2.5: whether a `pso` run counts as saccade or as
-    fixation is "an explicit parameter, never a default". `PRECEDENCE` made
-    that choice silently -- `saccade` outranked `pso`, so a left-eye saccade
-    meeting a right-eye glissade became a saccade with nothing asked and
-    nothing recorded -- on an instrument where section 2.5 argues PSO
-    follows every saccade.
+def test_a_pso_capable_detector_no_longer_raises():
+    """The raise that blocked four detectors. It fired on any vocabulary that
+    was not a subset of the amplitude split -- because ONE label had to cover
+    a mixed vocabulary. Under per-kind intersection each kind labels itself,
+    so the mixed case does not arise."""
+    import numpy as np
+    from dataclasses import replace
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
 
-    No detector emitting `pso` is registered in stage 1, so this raise is
-    unreachable today. That is the point: a loud unreachable failure is what
-    the ruling requires, and the alternative is the silent default it
-    forbids. The message must name where the choice belongs (section 6.1's
-    `pso_as`), because an error that only says "unsupported" sends the next
-    reader to invent a rule here.
+    nystrom = replace(
+        DETECTORS["engbert_kliegl"],
+        name="nystrom_holmqvist",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+    )
+    # 1-D, deliberately: `measure.amplitude` reads `gaze_deg[stop - 1] -
+    # gaze_deg[start]` as an (x, y) pair (`test_the_full_split_still_
+    # classifies_by_amplitude` documents this) and raises `IndexError` on a
+    # 1-D difference before `classify` ever runs. So a degenerate branch that
+    # mistakenly asked `classify` anyway would crash here rather than
+    # quietly answer -- this shape is a poison pill, not an oversight.
+    gaze = np.zeros(1000)
+    label_for = _conjunction_label(nystrom, {"microsaccade_max_deg": 1.0}, gaze)
+
+    # `{saccade, pso, fixation}` has a saccadic slice of `{saccade}` alone --
+    # a DEGENERATE split, so the constant, never a call to `classify` at all.
+    assert label_for(0, 10) is Label.SACCADE
+
+
+def test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary():
+    """Five of the seven detectors take the degenerate branch, and only
+    Engbert-Kliegl and Otero-Millan declare BOTH sides of the amplitude cut.
+    Testing `len(vocabulary) == 1` -- what stage 1 did -- would send
+    Nystrom-Holmqvist's three-label vocabulary to `classify`, which would put
+    `microsaccade` in the mouth of a detector that cannot emit it."""
+    import numpy as np
+    from dataclasses import replace
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
+
+    # 1-D, like the sibling test above -- deliberately, not an oversight.
+    # `measure.amplitude` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an
+    # (x, y) pair (`test_the_full_split_still_classifies_by_amplitude`
+    # documents this exact hazard) and raises `IndexError` on a 1-D
+    # difference before `classify` ever runs. So this is not "the degenerate
+    # branch overrides an answer `classify` would otherwise have given" --
+    # reaching `classify` here would crash, not answer `saccade`. The
+    # degenerate branch must not ask at all.
+    gaze = np.linspace(0.0, 9.0, 1000)  # a large amplitude on any interval
+    bmd = replace(
+        DETECTORS["engbert_kliegl"],
+        name="bayesian_microsaccade",
+        vocabulary=frozenset({Label.MICROSACCADE, Label.DRIFT}),
+    )
+    label_for = _conjunction_label(bmd, {"microsaccade_max_deg": 1.0}, gaze)
+
+    assert label_for(0, 999) is Label.MICROSACCADE
+
+
+def test_the_full_split_still_classifies_by_amplitude():
+    """Engbert-Kliegl and Otero-Millan are unchanged, and this is the
+    assertion that says so at the unit level."""
+    import numpy as np
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
+
+    # `amplitude()` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an (x, y)
+    # pair -- `measure.py::amplitude`'s own `displacement[0], displacement[1]`
+    # -- matching every real gaze array in this codebase (`eye/calibration.py
+    # ::apply_map`, which is what `eye/gaze.py::gaze_trace` returns, ends in
+    # `np.column_stack([x, y])`) and this file's own `_ramp_gaze` helper. A
+    # bare 1-D array is not a shape `amplitude` ever receives outside a test,
+    # and indexing `displacement[1]` on a 1-D difference raises `IndexError`
+    # before `classify` is ever reached. The y column is all zero, so the x
+    # column alone -- unchanged from a plain `linspace` -- still carries the
+    # ~9 deg and ~0.08 deg amplitudes asserted below.
+    gaze = np.column_stack([np.linspace(0.0, 9.0, 1000), np.zeros(1000)])
+    label_for = _conjunction_label(
+        DETECTORS["engbert_kliegl"], {"microsaccade_max_deg": 1.0}, gaze
+    )
+
+    assert label_for(0, 999) is Label.SACCADE       # ~9 deg
+    assert label_for(0, 10) is Label.MICROSACCADE   # ~0.08 deg
+
+
+def test_an_empty_vocabulary_still_raises():
+    """Unchanged, and for its own reason: `frozenset() <= anything` is True,
+    so a detector declaring nothing passes any subset test while
+    `registry.Detector.detect` refuses every label it emits."""
+    import numpy as np, pytest
+    from dataclasses import replace
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    empty = replace(DETECTORS["engbert_kliegl"], vocabulary=frozenset())
+    with pytest.raises(UndecidedConjunctionLabel, match="empty vocabulary"):
+        _conjunction_label(empty, {"microsaccade_max_deg": 1.0}, np.zeros(10))
+
+
+def test_a_detector_declaring_no_saccadic_label_raises_only_if_invoked():
+    """`_no_saccadic_label`, added alongside the SACCADIC SLICE
+    generalization and, until this test, verified only by reading the code.
+
+    Unreachable in production for both registered detectors
+    (`engbert_kliegl`, `otero_millan` -- both declare the full split, so
+    `saccadic` is never empty for either) and, by the argument
+    `_conjunction_label`'s own comment above this branch makes, for ANY
+    detector reached through `EyeDetection.make()`'s real wiring:
+    `_conjunction_runs` groups runs by each run's OWN label
+    (`_kind_of`), never by `detector.vocabulary`, and
+    `registry.Detector.detect` refuses a run outside its detector's declared
+    vocabulary -- so a detector with no saccadic label in its vocabulary can
+    never produce a run for `_conjunction_runs` to route to this callable.
+
+    None of that is enforced by a type, only by two things agreeing
+    (`EyeDetection.make()` sourcing both eyes' spans from the SAME
+    detector's `.detect()`, and passing that same detector here) that a
+    future change could break quietly -- calling `.run()` instead of
+    `.detect()`, or wiring `_conjunction_runs` to a different detector than
+    the one passed to `_conjunction_label`. This test does not exercise
+    that real wiring (Task 4's); it pins the one thing `_conjunction_label`
+    itself is responsible for regardless: that the callable it hands back
+    for an all-non-saccadic vocabulary is silent until asked, and correct
+    -- `UndecidedConjunctionLabel`, naming the detector -- once it is.
+    """
+    from dataclasses import replace
+    import numpy as np
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    pso_only = replace(
+        DETECTORS["engbert_kliegl"],
+        name="pso_only_hypothetical",
+        vocabulary=frozenset({Label.PSO}),
+    )
+
+    # Returned, not raised: a detector's non-saccadic kinds are none of this
+    # function's business (`_conjunction_label`'s own comment, above), so
+    # getting the callable back must not itself fail.
+    label_for = _conjunction_label(pso_only, {"microsaccade_max_deg": 1.0}, np.zeros((10, 2)))
+
+    with pytest.raises(UndecidedConjunctionLabel, match="declares no saccadic label"):
+        label_for(0, 5)
+
+
+def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_conjunction():
+    """Until 2026-09-05 this test asserted that `_conjunction_label` RAISED
+    `UndecidedConjunctionLabel` for `{saccade, pso, fixation}` -- the guard
+    fired on any vocabulary that was not a SUBSET of `{saccade, microsaccade}`,
+    because ONE label had to cover a mixed vocabulary. Per-kind intersection
+    (`_conjunction_runs`, Task 2) means each kind labels itself, so the mixed
+    case that guard was refusing does not arise any more, and the guard is
+    gone. `test_a_pso_capable_detector_no_longer_raises` and
+    `test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary`
+    assert the replacement rule directly; this test keeps its other two
+    assertions below, which that change did not touch and which are not
+    duplicated there.
     """
     from wl_preproc.eye.detect.labels import Label
     from wl_preproc.eye.detect.registry import Detector
-    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+    from wl_preproc.schema.detect import _conjunction_label
 
     glissade_aware = Detector(
         name="nystrom_holmqvist",
@@ -1870,17 +2271,23 @@ def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunctio
         run=_amplitude_blind_detect,
     )
 
-    with pytest.raises(UndecidedConjunctionLabel) as excinfo:
-        _conjunction_label(glissade_aware, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
+    # The saccadic slice of `{saccade, pso, fixation}` is `{saccade}` alone --
+    # a degenerate split -- so this no longer raises and never reaches
+    # `classify`.
+    label_for = _conjunction_label(
+        glissade_aware, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1)
+    )
+    assert label_for(0, 6) is Label.SACCADE
 
-    message = str(excinfo.value)
-    assert "2.5" in message and "6.1" in message and "pso_as" in message
-    assert "nystrom_holmqvist" in message
-
-    # Otero-Millan's `{microsaccade}` is a SUBSET of the amplitude split, not
-    # equal to it, and must still be labelled rather than refused -- design
-    # spec section 3.1 gives it that vocabulary, and it is stage 2's second
-    # amplitude-derived detector.
+    # A detector declaring `{microsaccade}` ALONE is a SUBSET of the
+    # amplitude split, not equal to it, and must still be labelled rather
+    # than refused. Named "otero_millan" here as a hypothetical rather than
+    # as the real detector: design spec section 3.1, corrected 2026-09-01,
+    # gives the real Otero-Millan the FULL split (`{saccade, microsaccade}`,
+    # matching `registry.DETECTORS["otero_millan"]`) -- U'n'Eye (`{saccade}`)
+    # is the only half-split case among the seven, on the amplitude cut's
+    # other side. This name predates that correction and stands in for "some
+    # detector declaring microsaccade alone", not for the real one.
     subset = Detector(
         name="otero_millan",
         vocabulary=frozenset({Label.MICROSACCADE}),
@@ -1905,20 +2312,37 @@ def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunctio
 
 def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabulary():
     """Reviewer finding 2. `_AMPLITUDE_DERIVED_VOCABULARY` is a SUBSET test,
-    so design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
-    (`{saccade}`) both reach the conjunction rule -- and `classify` answers
-    both sides of the cut for any detector. Before the fix a
-    `{microsaccade}`-only detector's 2.9 deg intersection came back
-    `Run(100, 130, Label.SACCADE)`, a label `registry.Detector.detect`
-    refuses from that same detector's own intervals one function earlier.
+    so a detector declaring `{microsaccade}` alone or `{saccade}` alone both
+    reach the conjunction rule -- and `classify` answers both sides of the
+    cut for any detector. Before the fix a `{microsaccade}`-only detector's
+    2.9 deg intersection came back `Run(100, 130, Label.SACCADE)`, a label
+    `registry.Detector.detect` refuses from that same detector's own
+    intervals one function earlier.
+
+    **The loop below names its two cases "otero_millan" and "uneye"; only
+    the second name matches its real detector's real vocabulary.** This test
+    was added `4d66502`, 2026-09-01 13:52, when Otero-Millan was still
+    believed to be the `{microsaccade}`-only case -- corrected the same day
+    at 16:06 (`3e857e1`; design spec section 3.1's own correction) once
+    reading the reference implementation showed it declares the FULL split
+    instead, `{saccade, microsaccade}`, matching
+    `registry.DETECTORS["otero_millan"]`. "otero_millan" survives here as a
+    name for that now-superseded belief, not as a claim about the real
+    detector; U'n'Eye (`{saccade}`) is unaffected by the correction and is
+    the one real detector this test's other case models.
 
     Unreachable in stage 1 -- the one registered detector declares the whole
-    split -- and reachable for two of section 3.1's seven the moment either
-    lands. It matters because section 6.1's coarsening lattice reads the
-    DECLARATION and coarsens the STORED labels into it, with
-    `microsaccade -> saccade` its only amplitude-split rule: a stored
-    `saccade` on a trace declared `{microsaccade}` has no rule to place it,
-    and the pair gets scored in a vocabulary that trace does not speak.
+    split -- and reachable today for U'n'Eye's real `{saccade}` the moment
+    it lands. The `{microsaccade}`-only case no longer matches any of
+    section 3.1's seven now that Otero-Millan's vocabulary is corrected, but
+    is kept as a hypothetical: the guard it tests -- a size-one vocabulary
+    getting its one label degenerately, never `classify`'s other answer --
+    is the same guard a real `{microsaccade}`-only detector would need. It
+    matters because section 6.1's coarsening lattice reads the DECLARATION
+    and coarsens the STORED labels into it, with `microsaccade -> saccade`
+    its only amplitude-split rule: a stored `saccade` on a trace declared
+    `{microsaccade}` has no rule to place it, and the pair gets scored in a
+    vocabulary that trace does not speak.
 
     **Both directions, and on both sides of the cut**, because a fix that
     pinned one class rather than reading the declaration would pass half of
@@ -1973,14 +2397,21 @@ def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabula
 
 
 def test_a_detector_declaring_nothing_cannot_label_a_conjunction():
-    """`frozenset() <= anything` is True, so an empty vocabulary passes the
-    subset test that guards `_conjunction_label` -- and then EVERY label is
-    outside it, which is reviewer finding 2 in its most extreme form.
+    """`frozenset() & _AMPLITUDE_DERIVED_VOCABULARY` is `frozenset()`, exactly
+    as it would be for a detector that declares only non-saccadic labels --
+    so without its own guard, a detector declaring NOTHING would fall into
+    the same lazy-raising path `test_a_detector_declaring_no_saccadic_label_
+    raises_only_if_invoked` exercises for a genuine `{pso}`-only detector,
+    and would look fine until its callable was actually asked for a saccadic
+    label.
 
-    Refused with its own reason rather than folded into the `pso` ruling
-    beside it: nothing is undecided here. A detector that declares nothing
-    is one `registry.Detector.detect` refuses every interval from, so it can
-    have no per-eye spans for a conjunction to intersect either.
+    Raised eagerly instead, with its own reason, rather than folded into
+    that lazy path: nothing is undecided here for ANY kind, saccadic or not.
+    A detector that declares nothing is one `registry.Detector.detect`
+    refuses every interval from, so it can have no per-eye spans for a
+    conjunction of any kind to intersect -- unlike a genuine `{pso}`-only
+    detector, whose non-saccadic kinds are real and simply none of this
+    function's business.
     """
     from wl_preproc.eye.detect.registry import Detector
     from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
@@ -2232,7 +2663,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
     from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
-    from wl_preproc.schema.detect import _conjunction_label, _overlapping
+    from wl_preproc.schema.detect import _conjunction_label, _conjunction_runs, _overlapping
 
     t0 = time.monotonic()
     recording = read_ohdpi(sample)
@@ -2265,18 +2696,28 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # `_overlapping` applied before finding H3, so their difference IS the
     # set of spans that used to be stored as events neither eye's own
     # detector would have accepted. Printed and asserted below.
+    # `unfloored_spans` stays on `_overlapping` directly, deliberately: it
+    # exists to isolate the H3 floor's own effect, and Engbert-Kliegl's
+    # single kind makes `_overlapping` and `_conjunction_runs` produce the
+    # same spans at any floor (`_conjunction_runs`'s own docstring), so
+    # nothing about the kind-grouping question below is exercised either way
+    # here.
     #
     # The conjunction's LABEL rule is the real one, built the way
     # `EyeDetection.make()` builds it -- `_conjunction_label` over the LEFT
-    # eye's gaze, since that is the trace the conjunction is measured from --
-    # so the agreement asserted at the end of this test is asserted against
-    # production's own rule and not a restatement of it here.
+    # eye's gaze, since that is the trace the conjunction is measured from.
+    # `conjunction_spans` itself now goes through `_conjunction_runs`, not
+    # `_overlapping` directly (conjunction-shape fix round, finding 6): that
+    # is the function `EyeDetection.make()` actually calls, so the agreement
+    # asserted at the end of this test is asserted against production's own
+    # path end to end, not a pre-branch stand-in that happens to agree with
+    # it only because this detector emits one kind.
     conjunction_label = _conjunction_label(
         get_detector("engbert_kliegl"),
         {"microsaccade_max_deg": DEFAULT_EK_PARAMS.microsaccade_max_deg},
         left_gaze,
     )
-    conjunction_spans = _overlapping(
+    conjunction_spans = _conjunction_runs(
         left_spans, right_spans, DEFAULT_EK_PARAMS.min_duration_samples, conjunction_label
     )
     unfloored_spans = _overlapping(left_spans, right_spans, 1, conjunction_label)
@@ -2491,3 +2932,408 @@ def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
         # runs total, not thousands -- only a broken encoder, or a detector
         # firing on nearly every sample, would come anywhere near this bound.
         assert len(runs) < row["n_samples"] / 10, (name, trace)
+
+
+def _register_default_paramsets_including(name: str, real: dict[str, int]) -> dict[str, int]:
+    """`schema/detect.py::register_default_paramsets`'s own body, plus one
+    more entry in its `defaults` dict -- substituted for the real function,
+    via `unittest.mock.patch.object`, for exactly the span of the two tests
+    below that register a fixture detector into `DETECTORS`.
+
+    **Needed because the real function cannot know a fixture's name.** Its
+    own `defaults` dict is a literal, keyed by string for `engbert_kliegl`
+    and `otero_millan` alone -- correct today, when those are the only two
+    detectors that exist -- and the comprehension below it reads
+    `defaults[name]` for `name in DETECTORS` UNCONDITIONALLY. Registering a
+    third name into `DETECTORS` therefore makes that lookup raise `KeyError`,
+    confirmed directly (this task's own investigation, before this helper
+    existed): adding `"two_kinds"` to `DETECTORS` and calling the real,
+    unpatched `daemon.run_once()` raised `KeyError: 'two_kinds'` from inside
+    `register_default_paramsets`'s own dict comprehension, and it is not a
+    per-key error `populate()`'s `suppress_errors=True` can catch --
+    `daemon.run_once()` calls `register_default_paramsets()` directly, so the
+    exception aborts the WHOLE call before any table's `key_source` is asked
+    a single question, taking the two REAL detectors' registration down with
+    it too. **Not a defect this branch introduced or could fix here**: `git
+    blame` puts every line of that `defaults` dict at 2026-09-01/2026-09-02
+    (stage 1 / stage 2A), and this task adds no production code regardless.
+
+    A real stage 2B detector module would add its own `DEFAULT_*_PARAMS`
+    dataclass and its own line in that dict. The fixture built by the two
+    tests below has no such module, and its `run` (`detect_two_kinds`)
+    ignores `params` entirely, so reusing Engbert-Kliegl's own defaults is a
+    harmless stand-in: `schema/detect.py::_params_for` only needs SOME
+    dataclass instance whose declared fields the paramset dict can fill, and
+    never a value the fixture actually consults.
+
+    **`real` pins this hand copy to the function it stands in for, and this
+    is load-bearing, not a nicety** (fix round: a review correctly pointed
+    out nothing previously tied the two together). This copy substitutes for
+    `register_default_paramsets` entirely -- so a docstring claiming the
+    tests below "drive the production registration path" would overclaim
+    the one part of that path (registering a NEW name) this copy exists
+    specifically to avoid calling for real. What it does NOT need to avoid
+    is drifting from the real function's `engbert_kliegl`/`otero_millan`
+    handling, which is unrelated to the `KeyError` and exercised identically
+    either way. `real` is `register_default_paramsets()`'s own return value,
+    captured by each caller BEFORE the fixture name is added to `DETECTORS`
+    (calling it after would hit the exact `KeyError` this copy exists to
+    work around, on the real function this time). `paramset.register` is
+    idempotent by content hash, so if this copy's `engbert_kliegl`/
+    `otero_millan` entries are built the same way the real function builds
+    them, both resolve to the SAME already-registered index -- asserted
+    below rather than trusted, so a future change to the real function's
+    shape (a new shared key, a reordered merge) makes this copy's answer for
+    those two names disagree with the real one, and fails here, loudly,
+    instead of this copy quietly going stale while every test that uses it
+    keeps passing.
+    """
+    from dataclasses import asdict
+
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
+    from wl_preproc.schema import paramset
+
+    paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
+    defaults = {
+        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
+        "otero_millan": asdict(DEFAULT_OM_PARAMS),
+        name: asdict(DEFAULT_EK_PARAMS),
+    }
+    registered = {
+        detector_name: paramset.register(
+            "eye_detection",
+            {
+                "detector": detector_name,
+                **defaults[detector_name],
+                "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
+            },
+        )
+        for detector_name in DETECTORS
+    }
+    for real_name in ("engbert_kliegl", "otero_millan"):
+        assert registered[real_name] == real[real_name], (
+            f"this test's hand copy of register_default_paramsets now disagrees "
+            f"with the real one about {real_name!r}'s own registered paramset "
+            f"index ({registered[real_name]!r} != {real[real_name]!r}) -- the "
+            f"real function's shape changed and this copy did not follow"
+        )
+    return registered
+
+
+def _delete_fixture_paramset(name: str) -> None:
+    """Both multi-kind tests' own cleanup, keyed by the fixture's NAME rather
+    than a paramset index the caller captured earlier -- and that difference
+    is the fix, not a stylistic choice (fix round 2, on top of fix round 1's
+    own pin).
+
+    **Round 1 captured `idx` by calling the patched `register_default_
+    paramsets()` as the first statement inside the `with` block, BEFORE
+    `try`.** That call is exactly what INSERTS this fixture's `ParamSet` row
+    (`_register_default_paramsets_including`'s own dict comprehension), and
+    it runs the round-1 pin assertion LAST, after the insert. So the one
+    scenario the pin exists to catch -- the real `register_default_
+    paramsets` diverging from this hand copy -- raised from BEFORE `try`,
+    `finally` never ran, and the just-inserted row leaked. Confirmed
+    directly (review's own reproduction, and re-confirmed here before this
+    fix was written): mutate the copy's `engbert_kliegl` defaults, force the
+    pin to fire, and the fixture's `ParamSet` row survives the test.
+
+    **The fix moves `idx`'s own capture to the FIRST statement INSIDE
+    `try`** (see both tests below), so a pin failure there -- which happens
+    strictly after the insert, since the insert is what the very call
+    computing `idx` performs -- now unwinds through `finally`. But `finally`
+    itself must not need to already know `idx`: if the pin failed while
+    computing it, the LOCAL VARIABLE `idx` in the test's own frame was never
+    assigned (the assignment's right-hand side raised before binding), so a
+    `finally` that referenced it would raise a SECOND, masking exception
+    (`UnboundLocalError`) instead of running the delete at all -- exactly
+    the "early failure must not raise a second exception out of `finally`"
+    hazard this round's own instructions warn about.
+
+    **So this cleanup does not take `idx` as an argument, and does not
+    write anything before it deletes.** It reads `paramset.ParamSet`
+    (`eye_detection` rows only), filters in Python for whichever one (if
+    any) has THIS fixture's own name in its stored `params['detector']`, and
+    deletes that row if one exists. A pure SELECT plus a conditional
+    DELETE-of-what-was-found: nothing here can insert, so nothing here can
+    leave a partial write for a later step to depend on (fix round 1's own
+    concern, about `_detector`/`register_default_paramsets` as `finally`'s
+    first statement, stays fixed rather than reappearing in a new shape) --
+    and if the fixture's row was never inserted at all, the filter simply
+    finds nothing and this returns having done nothing, rather than raising.
+    """
+    from wl_preproc.schema import paramset
+
+    rows = (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+    stale = [row for row in rows if row["params"].get("detector") == name]
+    for row in stale:
+        (paramset.ParamSet
+         & {"paramset_type": "eye_detection", "paramset_idx": row["paramset_idx"]}).delete()
+
+
+def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_session, prefix):
+    """The four blocked detectors, in the only form that exists today.
+
+    Registered through `DETECTORS` and driven by `daemon.run_once()`, never
+    by `make()` -- stage 1's worst defect was that nothing in production
+    registered the detection paramsets, so both `key_source`s named zero
+    candidates and the subsystem wrote no rows while every test that
+    registered its own paramsets passed.
+
+    The fixture's vocabulary below, `{saccade, pso, fixation}`, is not an
+    arbitrary shape: it is exactly Nystrom-Holmqvist's own declared
+    vocabulary (design spec `2026-09-05-conjunction-shape-design.md` section
+    3, "What each detector produces") -- one of the four detectors this task
+    exists to prove are unblocked.
+
+    **`register_default_paramsets` is patched for the span of this test, and
+    that means this test does NOT drive the real function's own handling of
+    a newly registered name -- only Tasks 1-4's own conjunction-shape code
+    does, through the real, unpatched `daemon.run_once()`.** The real
+    function's `defaults` dict cannot know this fixture's name (see
+    `_register_default_paramsets_including`'s own docstring for why, and for
+    the `KeyError` that is out of this task's scope to fix); the patch exists
+    only so a fixture detector CAN be registered at all. What is not skipped:
+    the patch's own `engbert_kliegl`/`otero_millan` handling is asserted
+    equal to the real function's, every time it runs, so a future change to
+    the real function that this hand copy fails to follow is caught here
+    rather than silently trusted.
+
+    **`DETECTORS` and `register_default_paramsets` are both restored via
+    `unittest.mock.patch` context managers, not a bare try/finally.**
+    `DETECTORS` is process-wide module state shared across the whole test
+    session -- `test_the_registered_paramsets_match_the_detector_registry`
+    and every `_detector_names()`-driven test in this file read it live -- so
+    a leaked entry here would corrupt the registry's own completeness claim
+    in unrelated tests, and could make test order significant. A correctly
+    written `try/finally` around the body below would restore just as
+    reliably on any exception raised inside it; `patch.dict`/`patch.object`
+    are used instead because they give that identical guarantee while
+    matching a precedent this codebase already has for the exact same
+    dict (`tests/schema/test_consensus_populate.py:466`'s
+    `patch.dict(DETECTORS, {"otero_millan": narrowed})`), rather than
+    hand-rolling a second mechanism, with a second chance to misname the key
+    in a `del`, for the same job.
+
+    **The fixture's OWN `EyeDetection` rows are deleted before this test
+    ends, GLOBALLY rather than scoped to `stepped_session` alone, and that
+    is load-bearing rather than tidiness.** `EyeDetection.key_source` crosses
+    every `eye_validity` row EVER computed in this shared `t_` schema against
+    every `eye_detection` paramset -- not only `stepped_session`'s own -- so
+    registering `"two_kinds"` and calling `daemon.run_once()` computes it for
+    every OTHER module-scoped session this file's own earlier tests already
+    realized too (confirmed directly: `populated` on this call is not
+    explained by `stepped_session`'s three traces alone). `DETECTORS` itself
+    unwinds cleanly on its own, but the ROWS those other sessions' detections
+    wrote do not, and `consensus.DetectorAgreement.key_source` crosses every
+    PAIR of `EyeDetection` rows regardless of which session they came from --
+    so a later test in THIS file registering a different fixture name found
+    `DetectorNotRegistered` on `"two_kinds"` (this task's own investigation,
+    before this cleanup existed): a stale `EyeDetection` row this fixture
+    left behind was still `status='computed'`, `DetectorAgreement`'s
+    key_source paired it against the newer fixture, and `get_detector
+    ("two_kinds")` failed because `DETECTORS` -- correctly -- no longer had
+    it. Deleting by this fixture's own registered `paramset_idx` alone, with
+    no session restriction, removes every `EyeDetection` row this fixture
+    ever wrote and cascades (a real DataJoint dependency, not an ad hoc
+    join: `consensus.py::DetectorAgreement` declares `-> detect.EyeDetection
+    .proj(paramset_a='paramset_idx')` and `-> ...proj(paramset_b=...)`
+    twice) to every `DetectorAgreement` row that named it, in either
+    position, for any session -- which is what makes this fixture leave no
+    candidate for a later `key_source` to ever cross again.
+    """
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from wl_preproc import daemon
+    from wl_preproc.eye.detect.labels import Label, LabelledInterval
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect
+
+    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+        """A saccade with a glissade on its tail, in both eyes, at the same
+        samples -- the lens ringing this instrument's own design spec says
+        this rig records after every real saccade (`2026-08-31-saccade-
+        detection-design.md` section 2.5)."""
+        return [
+            LabelledInterval(1000, 1060, Label.SACCADE),
+            LabelledInterval(1060, 1090, Label.PSO),
+        ]
+
+    fake = replace(
+        DETECTORS["engbert_kliegl"],
+        name="two_kinds",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=detect_two_kinds,
+    )
+    session_key, _report, _ = stepped_session
+
+    # Captured BEFORE `"two_kinds"` is added to `DETECTORS`, while it still
+    # holds only the two real detectors -- calling the real, unpatched
+    # `register_default_paramsets()` after that point is exactly the
+    # `KeyError` this whole workaround exists to avoid. This is what
+    # `_register_default_paramsets_including` pins its own `engbert_kliegl`/
+    # `otero_millan` handling against.
+    real_registered = detect.register_default_paramsets()
+
+    with (
+        patch.dict(DETECTORS, {"two_kinds": fake}),
+        patch.object(
+            detect, "register_default_paramsets",
+            lambda: _register_default_paramsets_including("two_kinds", real_registered),
+        ),
+    ):
+        try:
+            # First statement INSIDE `try`, not before it (fix round 2):
+            # this call is what INSERTS `"two_kinds"`'s own `ParamSet` row
+            # (`_register_default_paramsets_including`'s dict comprehension)
+            # and then runs fix round 1's own pin assertion, LAST, against
+            # the already-inserted row. Capturing `idx` before `try` (fix
+            # round 1's own choice) put that insert-then-maybe-raise
+            # sequence entirely OUTSIDE the region `finally` protects, so a
+            # genuine pin failure -- the exact scenario the pin exists to
+            # catch -- leaked the row it had just written. See
+            # `_delete_fixture_paramset`'s own docstring for the rest of
+            # this reasoning and for why `finally` below does not need
+            # `idx` to already be bound.
+            idx = detect.register_default_paramsets()["two_kinds"]
+
+            daemon.run_once(prefix=prefix)
+
+            rows = (
+                detect.EyeDetection.Run
+                & {**session_key, "trace": "conjunction", "paramset_idx": idx}
+            ).to_dicts(order_by="run_index")
+
+            labels = {r["label"] for r in rows}
+            # THE shape rule: the conjunction's vocabulary is the detector's.
+            assert "pso" in labels, "the binocular glissade was dropped or renamed"
+            assert "saccade" in labels
+
+            pso_rows = [r for r in rows if r["label"] == "pso"]
+            assert len(pso_rows) == 1
+            assert (pso_rows[0]["run_start"], pso_rows[0]["run_stop"]) == (1060, 1090)
+
+            # A `pso` run stores NULL amplitude -- `_run_row` measures only
+            # `saccade`/`microsaccade` (design spec section 4) -- so the
+            # 12.3% label/amplitude contradiction stage 1 found (section 1.1)
+            # is unreachable for it. There is no amplitude to contradict.
+            assert pso_rows[0]["amplitude_deg"] is None
+            assert pso_rows[0]["peak_velocity_deg_s"] is None
+
+            saccade_rows = [r for r in rows if r["label"] == "saccade"]
+            assert saccade_rows[0]["amplitude_deg"] is not None
+        finally:
+            # By NAME, not by the `idx` above -- which this block must not
+            # depend on, since a pin failure while computing it means `idx`
+            # was never bound in this frame at all. Deleting `EyeDetection`
+            # alone (this task's own first attempt, before either fix round)
+            # leaves the paramset registered with no detection to show for
+            # it, so `EyeDetection.key_source` reads it as PENDING again on
+            # every later `daemon.run_once()` in the suite -- and forever
+            # failing, since `DETECTORS["two_kinds"]` is gone by then.
+            # Deleting the `ParamSet` row instead cascades (a real
+            # dependency: `EyeDetection` declares a bare `-> paramset.
+            # ParamSet` for its detector reference) through `EyeDetection`,
+            # `EyeDetection.Run` and any `DetectorAgreement` row that named
+            # it, in one call, and removes it from `key_source` entirely
+            # rather than merely un-computing it.
+            _delete_fixture_paramset("two_kinds")
+
+
+def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
+    """`EyeDetection.make()` inserts `left` and `right` BEFORE the conjunction
+    branch, and DataJoint's `AutoPopulate._populate1` wraps the whole call in
+    a transaction and cancels it on any exception. So the old raise did not
+    yield per-eye data awaiting a conjunction -- it yielded NO rows at all,
+    silently, with the failure visible only in `run_once`'s error list.
+
+    This asserts the outcome that failure mode denied. See
+    `test_a_multi_kind_detector_populates_and_keeps_its_vocabulary` above for
+    why the fixture's vocabulary is shaped the way it is, why
+    `register_default_paramsets` and `DETECTORS` are both patched here rather
+    than mutated with a bare try/finally, and why this fixture's own
+    `EyeDetection` rows are deleted globally (not scoped to `stepped_session`)
+    before the test ends -- a distinct name from that test's own `"two_kinds"`
+    (`"two_kinds_traces"`) so the two never collide mid-suite, but the exact
+    same GLOBAL cleanup either one skipping would leave for the other to find
+    as a stale, no-longer-registered `DetectorAgreement` pairing.
+    """
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from wl_preproc import daemon
+    from wl_preproc.eye.detect.labels import Label, LabelledInterval
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect
+
+    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+        return [
+            LabelledInterval(1000, 1060, Label.SACCADE),
+            LabelledInterval(1060, 1090, Label.PSO),
+        ]
+
+    fake = replace(
+        DETECTORS["engbert_kliegl"],
+        name="two_kinds_traces",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=detect_two_kinds,
+    )
+    session_key, _report, _ = stepped_session
+
+    # See the sibling test's own comment above its identical line for why
+    # this is captured before `"two_kinds_traces"` is added to `DETECTORS`.
+    real_registered = detect.register_default_paramsets()
+
+    with (
+        patch.dict(DETECTORS, {"two_kinds_traces": fake}),
+        patch.object(
+            detect, "register_default_paramsets",
+            lambda: _register_default_paramsets_including("two_kinds_traces", real_registered),
+        ),
+    ):
+        try:
+            # See the sibling test's own comment above its identical line
+            # (fix round 2) for why this is the first statement INSIDE
+            # `try` rather than before it.
+            idx = detect.register_default_paramsets()["two_kinds_traces"]
+
+            report = daemon.run_once(prefix=prefix)
+            errors = report["errors"]
+
+            traces = set(
+                (detect.EyeDetection & {**session_key, "paramset_idx": idx})
+                .to_arrays("trace")
+            )
+            assert traces == {"left", "right", "conjunction"}
+            # `daemon.py::run_once` formats each error as
+            # `f"{table.__name__} {key}: {err}"` (confirmed by reading it),
+            # and `key` carries `paramset_idx` (on an `EyeDetection` error) or
+            # `paramset_a`/`paramset_b` (on a `DetectorAgreement` one) -- an
+            # INT, never this fixture's NAME. Matching on `"two_kinds_traces"`
+            # itself (this task's first draft) happens to catch the exact
+            # regression this test is named for -- `DetectorNotRegistered`
+            # spells out every currently-registered name, including this
+            # one, in its own message -- but would silently let through any
+            # OTHER error this fixture caused, `UnknownLabelKind` among them,
+            # since nothing about that exception mentions this fixture by
+            # name. Matching on `idx` the way the daemon actually renders it
+            # is what makes this assertion mean what it appears to mean; the
+            # `traces` assertion above remains the one that actually pins
+            # ALL THREE traces got written, which no error-string match can
+            # substitute for.
+            assert not [
+                e for e in errors
+                if f"'paramset_idx': {idx}" in e
+                or f"'paramset_a': {idx}" in e
+                or f"'paramset_b': {idx}" in e
+            ]
+        finally:
+            # See the sibling test's own `finally`, and `_delete_fixture_
+            # paramset`'s own docstring, for why this is by NAME rather
+            # than by the `idx` above, which this block must not depend on.
+            _delete_fixture_paramset("two_kinds_traces")

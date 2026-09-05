@@ -14,8 +14,13 @@ status:
   phase: >-
     Phase 1c complete; archival/compression, the eye subsystem and
     second-order calibration all merged. The saccade-detection SUBSTRATE
-    (stage 1) and stage 2A are both merged. Phase
-    2b's back half remains hardware-blocked.
+    (stage 1) and stage 2A are both merged. The conjunction-shape fix --
+    the binocular intersection now groups both eyes' runs by kind instead
+    of intersecting on time alone, so a non-saccadic label (`pso`,
+    `pursuit`, `drift`) survives a conjunction instead of being crossed
+    with an unrelated label -- is built and tested on branch
+    `spec/conjunction-shape` (ten commits, tip `d396d85`), NOT YET MERGED
+    to `main`. Phase 2b's back half remains hardware-blocked.
   next: >-
     Saccade detection stage 2B — the five detectors still unwritten
     (Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade detection,
@@ -31,15 +36,54 @@ status:
     the report's agreement line. Still no `torch`; `third_party` is
     deliberately unchanged.
 
-    U'n'Eye is the one remaining detector NOT blocked by the glissade
-    decision -- it declares `{saccade}`, a subset of the amplitude-derived
-    vocabulary, so it never reaches `_conjunction_label`'s raise. Its
-    obstacles are `torch`, vendoring and a GPU instead.
+    The glissade-label decision that used to gate four of the five is
+    WITHDRAWN, not answered
+    (docs/superpowers/specs/2026-09-05-conjunction-shape-design.md, branch
+    `spec/conjunction-shape`, ten commits `c0838b8..d396d85` -- 1301 passed
+    locally on Python 3.11, CI on 3.11/3.13 not yet run for this branch,
+    NOT YET MERGED to `main`). The premise was wrong: a conjunction's
+    label does not need to come from a detector, because when both eyes
+    independently call a stretch the same KIND, their agreement on kind
+    supplies the label, and a binocular glissade now stores as `pso`. What
+    actually blocked the four was a defect in `_overlapping`, which
+    intersected every left run against every right run on time alone and
+    never read a label -- fixed by grouping both eyes' runs by kind before
+    intersecting (`_conjunction_runs`). Engbert-Kliegl, Otero-Millan and
+    U'n'Eye each emit one kind, so their conjunction rows are BYTE-IDENTICAL
+    by the same one-kind-partition argument -- verified by an exact-tuple
+    pin for engbert_kliegl alone
+    (`test_engbert_kliegl_conjunction_rows_are_unchanged` in
+    `tests/schema/test_detect_populate.py`), against the suite's SYNTHETIC
+    stepped-session fixture, NOT the reference recording. Otero-Millan is
+    registered but not separately pinned; U'n'Eye is unwritten and
+    unregistered, so there is nothing of its own to pin yet. The one test
+    that touches the real reference recording
+    (`test_the_run_count_measured_against_the_reference_recording`) is
+    env-gated and skipped by default.
 
-    Four of the five remaining detectors can be registered but cannot produce a
-    CONJUNCTION trace until the glissade assignment is decided — design spec
-    §2.5 forbids defaulting it, so `_conjunction_label` raises rather than
-    guessing. And Otero-Millan's rows are PROVISIONAL: no oracle-free statistic
+    So Nyström–Holmqvist, NSLR, REMoDNaV and Bayesian microsaccade detection
+    are unblocked on this question and simply unwritten, same as U'n'Eye,
+    whose own obstacles remain `torch`, vendoring and a GPU instead.
+    `registry.py::DETECTORS` registers only Engbert-Kliegl and Otero-Millan
+    today. Five of the seven detectors specified in design spec §3.1 take
+    the degenerate saccadic-slice branch and never reach `classify` -- only
+    those two declare both sides of the amplitude cut.
+
+    Two things for whoever writes the next detector
+    (docs/handoffs/2026-09-05-conjunction-shape-built.md has the full
+    account): a PRE-EXISTING production defect found on this branch and
+    deliberately not fixed -- `schema/detect.py::register_default_paramsets`
+    hardcodes a two-entry `defaults` dict and indexes it by detector name
+    inside a dict comprehension over `DETECTORS`; registering a third
+    detector without also extending `defaults` raises `KeyError` there,
+    uncaught, in `daemon.run_once()`, aborting the ENTIRE daemon pass, not
+    only that detector's registration. And the open question that matters:
+    how often the two eyes disagree on KIND is unmeasured and unmeasurable
+    until a pso-capable detector exists -- Nyström–Holmqvist, the simplest
+    of the four, is what measures it, and that measurement should be the
+    first thing stage 2B does.
+
+    And Otero-Millan's rows are PROVISIONAL: no oracle-free statistic
     on an uncalibrated recording has been found that discriminates it, so a
     CALIBRATED SESSION is the highest-value unblock for this subsystem.
 
@@ -47,7 +91,12 @@ status:
     2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
     (which validity criterion 4 is blocked on) and rehydration are the other
     hardware-free pieces outstanding.
-  describes: a8fd3cb
+  # d396d85 is the tip of the ten conjunction-shape commits on branch
+  # `spec/conjunction-shape` (c0838b8..d396d85), NOT a commit on `main` --
+  # `main` is at c3f6c5e as of this update. Named the same way `phase`/`next`
+  # above name it: the substantive anchor commit the status text describes,
+  # with this file's own edit landing one commit on top of it, on that branch.
+  describes: d396d85
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
