@@ -162,3 +162,16 @@ def test_a_detector_receives_the_sampling_rate():
     detector.detect(gaze, gaze, available, 500.0, _NoParams())
 
     assert seen["fs_hz"] == 500.0
+
+
+def test_nystrom_holmqvist_is_registered_with_its_vocabulary_and_defaults():
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import NystromHolmqvistParams
+    from wl_preproc.eye.detect.registry import get_detector
+
+    detector = get_detector("nystrom_holmqvist")
+
+    assert detector.vocabulary == frozenset(
+        {Label.SACCADE, Label.PSO, Label.FIXATION}
+    )
+    assert isinstance(detector.defaults, NystromHolmqvistParams)

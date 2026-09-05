@@ -568,3 +568,119 @@ def test_the_high_velocity_criterion_survives_an_inflated_low_velocity_threshold
     # bounds`, not only the union-drops-the-peak-threshold bug it was
     # written for.
     assert stop == 331, stop
+
+
+def test_the_detector_emits_saccade_pso_and_fixation():
+    """The first registered detector to emit anything beyond the amplitude
+    split. Its declared vocabulary is parent design spec §3.1's own:
+    `{saccade, pso, fixation}`.
+
+    **This fixture is not the task brief's original one, and the reason is
+    load-bearing.** The brief's first draft started the "glissade" bump
+    (`onset + 12`) immediately where the saccade's own ramp ends, with no gap
+    at all. Run against the shipped implementation (verified directly), that
+    fixture detects `saccade` and `fixation` but never `pso` -- not because
+    glissade detection is broken, but because the fixture never gives it
+    anything separate to find. `_peak_threshold` converges to ~3.6 deg/s on
+    this trace's own quiet Brownian background, and `np.gradient`'s CENTRAL
+    difference at the ramp-to-bump boundary averages the ramp's last sample
+    with the bump's first rise, landing that one boundary sample at ~15
+    deg/s -- above the 3.6 deg/s peak threshold, so `_true_runs` never sees a
+    dip and treats the whole ramp-plus-bump stretch as ONE peak-run. Given
+    that single peak-run, `_saccade_bounds`' own forward offset search starts
+    searching from the far side of the bump and walks past its actual decay,
+    so the returned saccade already spans the bump and there is nothing left
+    for `_glissade_bounds` to find afterward.
+
+    The fixture below leaves a 5-sample flat gap between the ramp's end
+    (`onset + 12`) and the bump's start (`onset + 17`) -- long enough that
+    `np.gradient`'s central difference has interior samples on both sides
+    with nothing but quiet background to average, landing genuinely near
+    baseline (verified directly: under 2 deg/s, comfortably below the
+    ~3.6 deg/s adaptive threshold this trace produces) rather than blended
+    into the bump's rise. That gap is what lets `_true_runs` split the ramp
+    and the bump into two peak-runs, so the saccade's own offset search stops
+    at the ramp's true end and `_glissade_bounds` gets a genuine excursion
+    to find afterward. Confirmed directly against the shipped implementation
+    before this assertion was written: all three onsets now produce a
+    `saccade` immediately followed by a `pso`."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 3000
+    rng = np.random.default_rng(3)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    for onset in (600, 1400, 2200):
+        gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+        gaze[onset + 12:, 0] += 3.0
+        bump_start = onset + 17          # a genuine 5-sample quiet gap first
+        gaze[bump_start:bump_start + 10, 0] += np.concatenate(
+            [np.linspace(0.0, 0.25, 5), np.linspace(0.25, 0.0, 5)]
+        )
+    velocity = np.gradient(gaze, axis=0) * fs
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    labels = {run.label for run in runs}
+    assert Label.SACCADE in labels
+    assert Label.PSO in labels, "no glissade found on a trace built to contain three"
+    assert labels <= {Label.SACCADE, Label.PSO, Label.FIXATION}
+
+
+def test_no_run_overlaps_another():
+    """`_insert_trace` paints intervals onto one array and lets a later
+    interval overwrite an earlier one, so overlapping runs would silently
+    lose whichever was painted first.
+
+    **This fixture is not the task brief's original one, and the reason is
+    load-bearing.** The brief's first draft planted three saccades far apart
+    (600, 1400, 2200) and nothing else. Run with the `claimed` mask removed
+    entirely (verified directly, both the per-saccade and per-glissade
+    checks deleted), that fixture still produces the same four
+    non-overlapping runs -- three well-separated saccades never give
+    `_saccade_bounds` or `_glissade_bounds` two candidates that could
+    collide in the first place, so the mask this test exists to guard was
+    never exercised and the assertion passed for free.
+
+    The fixture below adds a SECOND saccade starting only one sample after
+    the first one's ramp ends (`600 + 12 + 1`). Verified directly: this
+    produces two `_true_runs` peak segments, and the second's own onset
+    search walks backward through the one-sample gap (too brief to read as
+    a local minimum below the onset threshold) all the way to the SAME true
+    onset the first saccade already found -- `_saccade_bounds` returns
+    `(595, 612, ...)` for the first candidate and `(595, 626, ...)` for the
+    second, which overlap almost entirely. With the mask in place only the
+    first survives; with it removed (checked directly against a mutated
+    copy of `detect_nystrom_holmqvist`) both are stored and the pair at
+    `(595, 612)` and `(595, 626)` fails this test's own `earlier.stop <=
+    later.start` assertion, confirming the fixture discriminates."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 3000
+    rng = np.random.default_rng(4)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    for onset in (600, 1400, 2200):
+        gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+        gaze[onset + 12:, 0] += 3.0
+    close_onset = 600 + 12 + 1          # one sample after the first ends
+    gaze[close_onset:close_onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[close_onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+    available = np.array([None] * n, dtype=object)
+
+    runs = sorted(
+        detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS),
+        key=lambda run: run.start,
+    )
+
+    for earlier, later in zip(runs, runs[1:]):
+        assert earlier.stop <= later.start, (earlier, later)

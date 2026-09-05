@@ -18,16 +18,15 @@ paper's own, from its Table 2, with the one exception its own field comment
 names; nothing here is tuned (design spec
 `2026-09-05-nystrom-holmqvist-design.md`, section 7).
 
-**This module is one step of several, by design -- not the whole detector.**
-It carries the twelve published parameters, the paper's first step (the
-adaptive peak-velocity threshold, p. 193, Figure 4, that converges to the
-data's own noise floor rather than asking an experimenter to choose one,
-which is what makes the algorithm "settings-free for the user"), its second
-(onset/offset search around a detected peak, p. 194, Figure 5), and its
-third (glissade detection, p. 195). Fixation detection and registration with
-`registry.py` are separate tasks in the same implementation plan and are not
-yet in this file -- `nystrom_holmqvist` does not yet appear in
-`registry.DETECTORS`.
+**This module carries the whole detector.** It has the twelve published
+parameters, the paper's first step (the adaptive peak-velocity threshold,
+p. 193, Figure 4, that converges to the data's own noise floor rather than
+asking an experimenter to choose one, which is what makes the algorithm
+"settings-free for the user"), its second (onset/offset search around a
+detected peak, p. 194, Figure 5), its third (glissade detection, p. 195),
+and its fourth (fixation detection, p. 196) -- assembled by
+`detect_nystrom_holmqvist` and registered as
+`registry.DETECTORS["nystrom_holmqvist"]`.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from wl_preproc.eye.detect.labels import Label, Run
 from wl_preproc.eye.detect.measure import amplitude
 
 
@@ -434,3 +434,125 @@ def _glissade_bounds(
     if amplitude(gaze_deg, saccade_offset, stop) > saccade_amp:
         return None
     return saccade_offset, stop
+
+
+def detect_nystrom_holmqvist(
+    gaze_deg: np.ndarray,
+    velocity_deg_s: np.ndarray,
+    available: np.ndarray,
+    fs_hz: float,
+    params: NystromHolmqvistParams,
+) -> list[Run]:
+    """Labelled half-open `[start, stop)` intervals, in sample indices.
+
+    The first registered detector to emit anything beyond the amplitude
+    split. Its saccadic slice is `{saccade}` alone, so its conjunction runs
+    take `_conjunction_label`'s DEGENERATE branch and `classify` is never
+    asked -- which is why this params dataclass declares no
+    `microsaccade_max_deg` and never receives one.
+
+    **Assembles the three pure steps above, in the paper's own order**: the
+    adaptive peak threshold, then -- for each velocity peak -- saccade
+    bounds and the glissade that may follow it, then fixation over whatever
+    is left. `usable` is `available`'s own definition (`entry is None`),
+    additionally narrowed by Table 2's two rejections (max velocity, max
+    acceleration) before either threshold estimation or peak-finding ever
+    sees a sample -- the same reasoning `_peak_threshold`'s own docstring
+    gives for excluding unusable samples from the noise estimate, applied
+    here to the physiologically-impossible samples Task 2-4's pure functions
+    do not themselves see.
+    """
+    speed = np.hypot(velocity_deg_s[:, 0], velocity_deg_s[:, 1])
+    # A LOCAL first difference of the shared estimator's own output, used
+    # only for Table 2's acceleration rejection. Not a second shared
+    # estimator: design spec section 3.2's "one shared velocity estimator
+    # across all seven" is about the velocity every detector reads, and this
+    # derives from that one rather than replacing it.
+    acceleration = np.abs(np.gradient(speed)) * fs_hz
+
+    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable &= speed <= params.max_velocity_deg_s
+    usable &= acceleration <= params.max_acceleration_deg_s2
+    if not usable.any():
+        return []
+
+    thresholds = _peak_threshold(speed, usable, params)
+    if thresholds.peak_deg_s <= 0:
+        return []
+
+    # **Non-overlap is enforced here, not inherited.** `_saccade_bounds` and
+    # `_glissade_bounds` each reason about ONE candidate event in isolation
+    # and have no notion of what an earlier candidate already claimed --
+    # nothing stops two candidates built from two different peak-runs (a
+    # single saccade's velocity dipping and re-crossing `theta_PT`, or two
+    # genuinely close saccades whose independent backward/forward searches
+    # reach into each other) from returning overlapping `[onset, offset)`
+    # spans. `_insert_trace` (schema/detect.py) paints each returned
+    # interval's label onto one shared per-sample array in list order and
+    # never checks for a collision, so an overlap would silently let
+    # whichever interval is painted later erase part of an earlier one --
+    # this mask is what keeps that from being possible, by construction,
+    # rather than by trusting the two search functions to agree.
+    #
+    # **The rule is: the first (leftmost) candidate to reach a span of
+    # samples keeps it, and a later candidate that would touch any already-
+    # claimed sample is dropped whole, never merged or trimmed.** This is
+    # this implementation's own rule -- the paper never adjudicates
+    # overlapping events, because its own peak threshold and search windows
+    # never produce one on its data. Its known cost: on a close pair of
+    # genuinely distinct saccades (or a saccade's own glissade search window
+    # reaching into the NEXT saccade's own onset), the later event is
+    # dropped entirely rather than clipped to what is still free, which
+    # could under-count on very noisy data or on rapid, closely-spaced
+    # saccades. Dropping rather than trimming is deliberate:
+    # a trimmed span is not one either search function actually computed,
+    # so storing it would attribute a boundary to the algorithm that the
+    # algorithm never found, and `_glissade_bounds`' own amplitude-vs-
+    # saccade check would need to be re-run against whatever the trim left
+    # -- a second decision the paper gives no rule for either.
+    runs: list[Run] = []
+    claimed = np.zeros(speed.size, dtype=bool)
+    for peak_start, peak_stop in _true_runs((speed > thresholds.peak_deg_s) & usable):
+        bounds = _saccade_bounds(speed, peak_start, peak_stop, thresholds, fs_hz, params)
+        if bounds is None:
+            continue
+        onset, offset, offset_threshold = bounds
+        if claimed[onset:offset].any():
+            continue          # an earlier saccade already owns these samples
+        runs.append(Run(start=onset, stop=offset, label=Label.SACCADE))
+        claimed[onset:offset] = True
+
+        glissade = _glissade_bounds(
+            speed, gaze_deg, onset, offset, offset_threshold, thresholds, fs_hz, params
+        )
+        if glissade is not None and not claimed[glissade[0]:glissade[1]].any():
+            runs.append(Run(start=glissade[0], stop=glissade[1], label=Label.PSO))
+            claimed[glissade[0]:glissade[1]] = True
+
+    # Fixations are "everything that is not noise, saccades, or glissades"
+    # (paper p. 196), subject to tau_min. The `min_fixation` floor applied
+    # here is invisible once a trace reaches storage -- `_insert_trace`
+    # (schema/detect.py) fills every sample no returned interval claims with
+    # `fixation` regardless, so a too-short leftover stretch is labelled
+    # `fixation` there either way. It is not invisible to a caller that
+    # reads this function's OWN return value directly, which is how design
+    # spec section 5's validation (a later task) measures "fixation
+    # duration" against the paper's reported statistic -- an unfiltered
+    # return would count every sub-tau_min leftover as its own fixation and
+    # bias that measurement low.
+    min_fixation = max(int(round(params.min_fixation_duration_ms * fs_hz / 1000.0)), 1)
+    for start, stop in _true_runs(~claimed & usable):
+        if stop - start >= min_fixation:
+            runs.append(Run(start=start, stop=stop, label=Label.FIXATION))
+
+    return sorted(runs, key=lambda run: run.start)
+
+
+def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Maximal `True` stretches as half-open intervals. Same shape as
+    `engbert_kliegl.py`'s own private helper; duplicated rather than shared
+    because that one is private to its module and this detector's is the
+    second use, not yet a third."""
+    padded = np.concatenate(([False], mask, [False]))
+    edges = np.diff(padded.astype(np.int8))
+    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
