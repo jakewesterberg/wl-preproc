@@ -1754,11 +1754,14 @@ def test_a_shared_paramset_key_reaches_the_detector_that_declares_it():
 
 
 def test_a_detector_with_no_amplitude_labels_is_not_handed_the_threshold():
-    """Design spec section 3.1: Otero-Millan emits `microsaccade` alone, so
-    there is no amplitude split for a threshold to place and no field for it
-    to arrive in. The same filter that DELIVERS the shared key to a detector
-    that declares it must withhold it from one that does not -- otherwise
-    every future detector is forced to accept a parameter it cannot use, and
+    """Design spec section 3.1: U'n'Eye emits `saccade` alone, so there is no
+    amplitude split for a threshold to place and no field for it to arrive
+    in. (Otero-Millan is not this example -- corrected 2026-09-01, it
+    declares the full `saccade / microsaccade` split and DOES declare the
+    field, matching `registry.DETECTORS["otero_millan"]`.) The same filter
+    that DELIVERS the shared key to a detector that declares it must
+    withhold it from one that does not -- otherwise every future detector is
+    forced to accept a parameter it cannot use, and
     `TypeError: unexpected keyword argument` is what a real paramset would
     hand the first session that reached it."""
     from wl_preproc.eye.detect.labels import Label
@@ -2112,11 +2115,17 @@ def test_a_pso_capable_detector_no_longer_raises():
         name="nystrom_holmqvist",
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
     )
+    # 1-D, deliberately: `measure.amplitude` reads `gaze_deg[stop - 1] -
+    # gaze_deg[start]` as an (x, y) pair (`test_the_full_split_still_
+    # classifies_by_amplitude` documents this) and raises `IndexError` on a
+    # 1-D difference before `classify` ever runs. So a degenerate branch that
+    # mistakenly asked `classify` anyway would crash here rather than
+    # quietly answer -- this shape is a poison pill, not an oversight.
     gaze = np.zeros(1000)
     label_for = _conjunction_label(nystrom, {"microsaccade_max_deg": 1.0}, gaze)
 
     # `{saccade, pso, fixation}` has a saccadic slice of `{saccade}` alone --
-    # a DEGENERATE split, so the constant, never `classify`'s other answer.
+    # a DEGENERATE split, so the constant, never a call to `classify` at all.
     assert label_for(0, 10) is Label.SACCADE
 
 
@@ -2132,6 +2141,14 @@ def test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary():
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.schema.detect import _conjunction_label
 
+    # 1-D, like the sibling test above -- deliberately, not an oversight.
+    # `measure.amplitude` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an
+    # (x, y) pair (`test_the_full_split_still_classifies_by_amplitude`
+    # documents this exact hazard) and raises `IndexError` on a 1-D
+    # difference before `classify` ever runs. So this is not "the degenerate
+    # branch overrides an answer `classify` would otherwise have given" --
+    # reaching `classify` here would crash, not answer `saccade`. The
+    # degenerate branch must not ask at all.
     gaze = np.linspace(0.0, 9.0, 1000)  # a large amplitude on any interval
     bmd = replace(
         DETECTORS["engbert_kliegl"],
@@ -2140,8 +2157,6 @@ def test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary():
     )
     label_for = _conjunction_label(bmd, {"microsaccade_max_deg": 1.0}, gaze)
 
-    # Amplitude across this interval is far above the 1.0 deg cut, so
-    # `classify` would answer `saccade`. The degenerate branch must not ask.
     assert label_for(0, 999) is Label.MICROSACCADE
 
 
@@ -2382,14 +2397,21 @@ def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabula
 
 
 def test_a_detector_declaring_nothing_cannot_label_a_conjunction():
-    """`frozenset() <= anything` is True, so an empty vocabulary passes the
-    subset test that guards `_conjunction_label` -- and then EVERY label is
-    outside it, which is reviewer finding 2 in its most extreme form.
+    """`frozenset() & _AMPLITUDE_DERIVED_VOCABULARY` is `frozenset()`, exactly
+    as it would be for a detector that declares only non-saccadic labels --
+    so without its own guard, a detector declaring NOTHING would fall into
+    the same lazy-raising path `test_a_detector_declaring_no_saccadic_label_
+    raises_only_if_invoked` exercises for a genuine `{pso}`-only detector,
+    and would look fine until its callable was actually asked for a saccadic
+    label.
 
-    Refused with its own reason rather than folded into the `pso` ruling
-    beside it: nothing is undecided here. A detector that declares nothing
-    is one `registry.Detector.detect` refuses every interval from, so it can
-    have no per-eye spans for a conjunction to intersect either.
+    Raised eagerly instead, with its own reason, rather than folded into
+    that lazy path: nothing is undecided here for ANY kind, saccadic or not.
+    A detector that declares nothing is one `registry.Detector.detect`
+    refuses every interval from, so it can have no per-eye spans for a
+    conjunction of any kind to intersect -- unlike a genuine `{pso}`-only
+    detector, whose non-saccadic kinds are real and simply none of this
+    function's business.
     """
     from wl_preproc.eye.detect.registry import Detector
     from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
@@ -2641,7 +2663,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
     from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
-    from wl_preproc.schema.detect import _conjunction_label, _overlapping
+    from wl_preproc.schema.detect import _conjunction_label, _conjunction_runs, _overlapping
 
     t0 = time.monotonic()
     recording = read_ohdpi(sample)
@@ -2674,18 +2696,28 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # `_overlapping` applied before finding H3, so their difference IS the
     # set of spans that used to be stored as events neither eye's own
     # detector would have accepted. Printed and asserted below.
+    # `unfloored_spans` stays on `_overlapping` directly, deliberately: it
+    # exists to isolate the H3 floor's own effect, and Engbert-Kliegl's
+    # single kind makes `_overlapping` and `_conjunction_runs` produce the
+    # same spans at any floor (`_conjunction_runs`'s own docstring), so
+    # nothing about the kind-grouping question below is exercised either way
+    # here.
     #
     # The conjunction's LABEL rule is the real one, built the way
     # `EyeDetection.make()` builds it -- `_conjunction_label` over the LEFT
-    # eye's gaze, since that is the trace the conjunction is measured from --
-    # so the agreement asserted at the end of this test is asserted against
-    # production's own rule and not a restatement of it here.
+    # eye's gaze, since that is the trace the conjunction is measured from.
+    # `conjunction_spans` itself now goes through `_conjunction_runs`, not
+    # `_overlapping` directly (conjunction-shape fix round, finding 6): that
+    # is the function `EyeDetection.make()` actually calls, so the agreement
+    # asserted at the end of this test is asserted against production's own
+    # path end to end, not a pre-branch stand-in that happens to agree with
+    # it only because this detector emits one kind.
     conjunction_label = _conjunction_label(
         get_detector("engbert_kliegl"),
         {"microsaccade_max_deg": DEFAULT_EK_PARAMS.microsaccade_max_deg},
         left_gaze,
     )
-    conjunction_spans = _overlapping(
+    conjunction_spans = _conjunction_runs(
         left_spans, right_spans, DEFAULT_EK_PARAMS.min_duration_samples, conjunction_label
     )
     unfloored_spans = _overlapping(left_spans, right_spans, 1, conjunction_label)

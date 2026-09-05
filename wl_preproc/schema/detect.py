@@ -23,26 +23,42 @@ ohDPI file once per session (not once per eye -- `read_ohdpi`'s `fs_hz`/
 eye's validity mask via `wl_preproc.eye.detect.validity.validity_labels`, and
 writes a refused row with a stated reason rather than raising when a
 session's calibration is unusable. `EyeDetection.make()` reads that mask
-back, runs the registered detector over each eye independently, takes the
-INTERSECTION of the two eyes' detected intervals as the conjunction (Engbert
-& Kliegl's own binocular noise-suppression criterion) subject to the
-detector's own minimum event duration, and measures every detected event
-once via `wl_preproc.eye.detect.measure`. That duration floor is what keeps
-the criterion a FILTER rather than a generator -- see `_overlapping`.
+back, runs the registered detector over each eye independently, and builds
+the conjunction via `_conjunction_runs`, which groups both eyes' runs by
+KIND before intersecting -- `saccade` and `microsaccade` share one kind,
+every other emitted label is its own kind, and `fixation`/`blink`/`invalid`
+are never intersected at all -- then calls `_overlapping`, the single-kind
+intersection primitive, once per kind and concatenates the result, subject
+throughout to the detector's own minimum event duration. Every detected
+event is then measured once via `wl_preproc.eye.detect.measure`. That
+duration floor is what keeps the criterion a FILTER rather than a generator
+-- see `_overlapping`. Design spec `2026-09-05-conjunction-shape-design.md`
+section 1 states the per-kind rule this replaces a blind time-only
+intersection with, and section 2 states the defect that made the
+replacement necessary: an ungrouped intersection would cross a left
+`fixation` with a right `saccade` and keep the result, which no stage-1 or
+stage-2A test could reach because neither stage registers a detector
+emitting more than one kind.
 
 **Labels come from the detector, never from this module -- and the
-conjunction's comes from its own measurement.** Design spec section 3:
-"Detectors return labelled intervals. Shared code measures them."
-`_insert_trace` writes the label each interval already carries and measures
-the final run for storage. The conjunction has no detector interval to carry
-one, so `_overlapping` labels each intersection by the detector's OWN
+conjunction's comes from its own measurement, or from the two eyes' own
+agreement on kind.** Design spec section 3: "Detectors return labelled
+intervals. Shared code measures them." `_insert_trace` writes the label
+each interval already carries and measures the final run for storage. The
+conjunction has no detector interval to carry one, so within the SACCADIC
+kind `_overlapping` labels each intersection by the detector's OWN
 labelling rule applied to THAT intersection -- `classify` over its own
 amplitude, the same `[start, stop)` on the same gaze that `_insert_trace`
 then stores, where the detector declares the whole amplitude split; the
-detector's single declared class where it declares half of one. Never by
-arbitrating between the two eyes' labels. See `_conjunction_label` for the
-three defects that arbitration caused, and for why half a split is not
-`classify`'s question to answer. `_insert_trace` used to assign every span's label
+detector's single declared class where it declares half of one
+(`_conjunction_label`). **Every other kind labels itself**: when both eyes
+independently call a stretch `pso`, or `pursuit`, or `drift`, that agreement
+on kind IS the label, with no detector rule to apply and nothing to
+arbitrate (`_conjunction_runs`' own `_always(Label(kind))`). Never, in any
+kind, by arbitrating between the two eyes' own labels -- see
+`_conjunction_label` for the three defects that arbitration caused when it
+applied to the saccadic split, and for why half a split is not `classify`'s
+question to answer. `_insert_trace` used to assign every span's label
 itself, from amplitude, via `classify` -- which can only answer `saccade` or
 `microsaccade`, so a stage-2 detector declaring `{saccade, pso, fixation}`
 would have had everything it found relabelled by amplitude and its declared
@@ -93,9 +109,19 @@ _LABEL_ENUM = ",".join(f"'{label.value}'" for label in Label)
 
 
 class UndecidedConjunctionLabel(ValueError):
-    """Nothing states what a conjunction run's label should be for this
-    detector's declared vocabulary, and design spec section 2.5 forbids
-    inventing an answer by default. See `_conjunction_label`."""
+    """`_conjunction_label` raises this for the two cases left where a
+    conjunction genuinely cannot say what a run's label is: a detector
+    declaring an EMPTY vocabulary (no kind at all, saccadic or otherwise, so
+    there is nothing to produce a conjunction for), and -- only if actually
+    asked, never eagerly -- a detector whose vocabulary has no saccadic label
+    when a saccadic conjunction is requested of it.
+
+    **Until 2026-09-05 this was also raised for any vocabulary mixing a
+    saccadic and a non-saccadic label**, because one label had to cover the
+    whole mixed vocabulary. Per-kind intersection (`_conjunction_runs`,
+    design spec `2026-09-05-conjunction-shape-design.md` section 1) means
+    each kind labels itself, so that mixed case no longer reaches here at
+    all. See `_conjunction_label`."""
 
 
 @schema
@@ -622,13 +648,25 @@ class EyeDetection(dj.Computed):
         is what keeps the stored measurement correct regardless of whether
         that gap holds.
 
-        **For `conjunction` that gap is guaranteed rather than inherited**,
-        and it has to be: the conjunction's label is `classify` over the
-        amplitude of the interval it was assigned to, so a merge that moved
-        the boundaries would store a label and an amplitude that disagree --
-        the exact defect this round exists to close. `_overlapping`
-        coalesces touching intersections before labelling them for that
-        reason, so the run measured here is always the span labelled there.
+        **For `conjunction` that gap is guaranteed rather than inherited, and
+        it now holds WITHIN a kind by construction and ACROSS kinds by a fact
+        stated nowhere else: no two different kinds ever share a label.**
+        `_KIND_OF` maps `saccade`/`microsaccade` to `"saccadic"` and every
+        other kind to its own single label (`pso` -> `pso`, `pursuit` ->
+        `pursuit`, `drift` -> `drift`), so the label sets the five kinds can
+        produce -- `{saccade, microsaccade}`, `{pso}`, `{pursuit}`,
+        `{drift}` -- are pairwise disjoint. Two runs from DIFFERENT
+        kind-groups can therefore sit adjacent in `_conjunction_runs`'s
+        concatenated, re-sorted output without ever sharing a label, so
+        `runs_from_labels` can never merge across a kind boundary. WITHIN one
+        kind the guarantee is `_overlapping`'s own: it coalesces touching
+        intersections before labelling them, so no two of its returned spans
+        ever touch. Either way it has to hold: the conjunction's label is
+        `classify` over the amplitude of the interval it was assigned to
+        (or, for a non-saccadic kind, that kind's own label), so a merge that
+        moved the boundaries would store a label and an amplitude that
+        disagree -- the exact defect this round exists to close. The run
+        measured here is always the span labelled there.
 
         **`reliability` is mapped back onto the final runs by EXACT
         `(start, stop)` match, and is `None` for anything else.** It is a

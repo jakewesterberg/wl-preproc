@@ -157,8 +157,12 @@ The saccadic kind keeps the labelling rule `_conjunction_label` already has,
 including its **degenerate-split** branch: a detector declaring one side of
 the amplitude cut gets that side constantly, never `classify`'s other answer,
 because `registry.Detector.detect` would refuse that answer from the detector
-itself. U'n'Eye (`{saccade}`) and BMD (`{microsaccade}`) are the two
-degenerate cases and the existing reasoning covers both unchanged.
+itself. U'n'Eye (`{saccade}`), Nyström–Holmqvist, NSLR and REMoDNaV (each
+declaring `saccade` without `microsaccade`), and BMD (declaring
+`microsaccade` without `saccade`, alongside `drift` — its vocabulary is
+`{microsaccade, drift}`, not `{microsaccade}` alone) are the five degenerate
+cases the table above counts, and the existing reasoning covers all of them
+unchanged.
 
 Every non-saccadic kind labels itself. There is no rule to write.
 
@@ -251,6 +255,20 @@ left CI red on 3.13 alone for a day while every local run was green.
    that is conservative or costly, and Nyström–Holmqvist — the simplest of
    the four — is what measures it. **This is the largest piece of
    unquantified reasoning in this spec.**
+
+   **And it is not merely unmeasured — it is unrecoverable from the
+   conjunction trace itself, which is worth stating rather than
+   discovering.** `_insert_trace` paints `fixation` over every sample no
+   surviving interval claims. A stretch where the left eye says `saccade`
+   and the right says `pso` produces no conjunction interval of either
+   kind — the two runs are different kinds, so neither eye's group in
+   `_conjunction_runs` intersects the other's — and that stretch is
+   therefore stored as `fixation`, indistinguishable in the conjunction
+   trace from a stretch where both eyes genuinely found nothing. A query
+   against the conjunction trace alone would report this rate as exactly
+   zero, silently, rather than as unmeasured. The rate can only be
+   recovered by comparing the two PER-EYE traces directly — which is
+   exactly what Nyström–Holmqvist's own measurement, above, has to do.
 2. **The row-count effect is unmeasured.** §5's measured 36,101 rows covers
    one session, one detector, three traces, one kind. A multi-kind detector's
    conjunction carries runs this figure does not describe.

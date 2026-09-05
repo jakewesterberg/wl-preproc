@@ -230,6 +230,23 @@ events (Engbert–Kliegl and Otero-Millan, both `{saccade, microsaccade}`), so
 there is no session anywhere in this pipeline where one eye could even call
 something `pso` for the other to disagree with.
 
+**And the conjunction trace cannot answer this later, either, once a
+pso-capable detector is written — read the storage path before reaching for
+it.** `EyeDetection._insert_trace` paints `fixation` over every sample no
+surviving conjunction interval claims, and a kind disagreement produces no
+interval to claim it: `_conjunction_runs` groups runs by kind, so a left
+`saccade` run and a right `pso` run over the same samples land in different
+kind-groups and neither intersects the other's. The stretch is therefore
+stored as `fixation` in the conjunction trace — identical, byte for byte, to
+a stretch where both eyes genuinely agreed there was nothing there. A query
+against the conjunction trace's own `pso` (or `saccade`) fraction would
+report this rate as exactly zero, not as unmeasured, and would look like a
+real finding rather than an artifact of storage. The rate can only be
+recovered by comparing the two PER-EYE traces directly — which is why the
+paragraph below says "take its per-eye `pso` and `saccade` runs" rather than
+"query the conjunction trace": that phrasing is deliberate, not incidental,
+and whoever implements the measurement should not shortcut it.
+
 This is the **largest piece of unquantified reasoning in the design spec**
 (its own §6, open question 1): the agreement requirement is argued from
 first principles — two eyes calling the same stretch different kinds is a

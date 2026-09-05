@@ -255,9 +255,16 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    every other emitted label is its own kind and labels itself; `fixation`
    is not intersected at all, being the synthesized background rather than a
    detector's finding. **Byte-identical rows for Engbert–Kliegl, Otero-Millan
-   and U'n'Eye**, pinned by exact tuples against the reference recording,
-   because each emits one kind and grouping by kind is then a partition into
-   one group — today's loop, unchanged.
+   and U'n'Eye**, because each emits one kind and grouping by kind is then a
+   partition into one group — today's loop, unchanged. Verified by an
+   exact-tuple pin for Engbert–Kliegl alone
+   (`test_engbert_kliegl_conjunction_rows_are_unchanged`), against the
+   suite's SYNTHETIC stepped-session fixture, not the reference recording.
+   Otero-Millan is not separately pinned; U'n'Eye is unwritten and
+   unregistered, so there is nothing of its own to pin yet — the one test
+   that touches the real reference recording
+   (`test_the_run_count_measured_against_the_reference_recording`) is
+   env-gated and skipped by default.
 
    **What a glissade is, since this file used the word a dozen times before
    `c3f6c5e` finally said so — still accurate and still worth reading.**

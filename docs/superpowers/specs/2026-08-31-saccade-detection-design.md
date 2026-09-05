@@ -427,6 +427,16 @@ one usable eye yields `left` or `right` and a **refused** `conjunction` row,
 with the reason recorded — never a silent monocular fallback wearing a
 binocular name.
 
+> **Amended 2026-09-05 by the conjunction-shape design.** "An event survives
+> when the two eyes' events of the same detector overlap in time" understates
+> the criterion: it is not enough that the detector be the same, because
+> stage 2's detectors can emit more than one kind of label apiece. The
+> binocular criterion intersects runs **of the same kind**, where `saccade`
+> and `microsaccade` are one kind and every other emitted label is its own.
+> `fixation` is not intersected at all — `_insert_trace`'s fill paints it
+> regardless of whether an intersection claimed the sample
+> (2026-09-05 conjunction-shape design, §1, §1.2).
+
 ---
 
 ## 5. Storage: runs as rows
@@ -609,6 +619,21 @@ vocabulary containing `pso`, `pursuit`, `drift` or `fixation` — the
 conjunction's label is **not decided**, and `EyeDetection.make()` raises
 rather than choosing one: that choice belongs in §6.1's `pso_as` parameter,
 stated per comparison.
+
+> **Amended 2026-09-05 by the conjunction-shape design.** The paragraph
+> above is superseded: a conjunction's label is now decided for every kind,
+> not only for the saccadic amplitude split, and `EyeDetection.make()` no
+> longer raises on a vocabulary containing `pso`, `pursuit`, `drift` or
+> `fixation`. Each non-saccadic kind labels itself — when both eyes
+> independently call a stretch the same kind, that agreement supplies the
+> label, with no detector rule and no arbitration to apply. A binocular
+> glissade is stored as `pso`, exactly as a binocular saccade is stored as
+> `saccade`, and `pso_as` is not consulted at storage time at all: it
+> remains a comparison-only parameter (§6.1, unchanged). The conjunction
+> trace's vocabulary is therefore the detector's vocabulary, not a subset of
+> it. The degenerate-split reasoning immediately below is unchanged and
+> still applies to the saccadic kind specifically
+> (2026-09-05 conjunction-shape design, §1, §3, §7).
 
 **Where a detector declares HALF the split, the cut is not made at all and
 the conjunction takes that half.** §3.1 gives U'n'Eye `saccade` alone, and

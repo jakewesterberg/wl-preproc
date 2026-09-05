@@ -49,8 +49,17 @@ status:
     intersected every left run against every right run on time alone and
     never read a label -- fixed by grouping both eyes' runs by kind before
     intersecting (`_conjunction_runs`). Engbert-Kliegl, Otero-Millan and
-    U'n'Eye each emit one kind, so their conjunction rows are
-    BYTE-IDENTICAL, pinned by exact tuples against the reference recording.
+    U'n'Eye each emit one kind, so their conjunction rows are BYTE-IDENTICAL
+    by the same one-kind-partition argument -- verified by an exact-tuple
+    pin for engbert_kliegl alone
+    (`test_engbert_kliegl_conjunction_rows_are_unchanged` in
+    `tests/schema/test_detect_populate.py`), against the suite's SYNTHETIC
+    stepped-session fixture, NOT the reference recording. Otero-Millan is
+    registered but not separately pinned; U'n'Eye is unwritten and
+    unregistered, so there is nothing of its own to pin yet. The one test
+    that touches the real reference recording
+    (`test_the_run_count_measured_against_the_reference_recording`) is
+    env-gated and skipped by default.
 
     So Nyström–Holmqvist, NSLR, REMoDNaV and Bayesian microsaccade detection
     are unblocked on this question and simply unwritten, same as U'n'Eye,
