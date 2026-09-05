@@ -55,10 +55,13 @@ import time
 import numpy as np
 import pytest
 
-# Module-level, unlike every other import in this file (each test function
-# imports what it needs locally). Required here rather than optional: this
-# file's own `from __future__ import annotations` (above) makes every
-# annotation a STRING (PEP 563), and `typing.get_type_hints` -- which
+# Module-level, like `_always`'s import far below (`from wl_preproc.schema.
+# detect import _always`, ahead of `test_the_conjunction_inherits_the_
+# detectors_own_minimum_duration`) -- though for an unrelated reason, not
+# "unlike every other import in this file": most test functions here do
+# still import what they need locally. This one cannot, because of this
+# file's own `from __future__ import annotations` (above), which makes every
+# annotation a STRING (PEP 563). `typing.get_type_hints` -- which
 # `schema/detect.py::_params_for` calls on a detector's `run` to find its
 # params dataclass -- resolves such a string against the function's OWN
 # `__globals__`, which for any function defined in this file is THIS
@@ -2899,7 +2902,7 @@ def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
         assert len(runs) < row["n_samples"] / 10, (name, trace)
 
 
-def _register_default_paramsets_including(name: str) -> dict[str, int]:
+def _register_default_paramsets_including(name: str, real: dict[str, int]) -> dict[str, int]:
     """`schema/detect.py::register_default_paramsets`'s own body, plus one
     more entry in its `defaults` dict -- substituted for the real function,
     via `unittest.mock.patch.object`, for exactly the span of the two tests
@@ -2930,6 +2933,28 @@ def _register_default_paramsets_including(name: str) -> dict[str, int]:
     harmless stand-in: `schema/detect.py::_params_for` only needs SOME
     dataclass instance whose declared fields the paramset dict can fill, and
     never a value the fixture actually consults.
+
+    **`real` pins this hand copy to the function it stands in for, and this
+    is load-bearing, not a nicety** (fix round: a review correctly pointed
+    out nothing previously tied the two together). This copy substitutes for
+    `register_default_paramsets` entirely -- so a docstring claiming the
+    tests below "drive the production registration path" would overclaim
+    the one part of that path (registering a NEW name) this copy exists
+    specifically to avoid calling for real. What it does NOT need to avoid
+    is drifting from the real function's `engbert_kliegl`/`otero_millan`
+    handling, which is unrelated to the `KeyError` and exercised identically
+    either way. `real` is `register_default_paramsets()`'s own return value,
+    captured by each caller BEFORE the fixture name is added to `DETECTORS`
+    (calling it after would hit the exact `KeyError` this copy exists to
+    work around, on the real function this time). `paramset.register` is
+    idempotent by content hash, so if this copy's `engbert_kliegl`/
+    `otero_millan` entries are built the same way the real function builds
+    them, both resolve to the SAME already-registered index -- asserted
+    below rather than trusted, so a future change to the real function's
+    shape (a new shared key, a reordered merge) makes this copy's answer for
+    those two names disagree with the real one, and fails here, loudly,
+    instead of this copy quietly going stale while every test that uses it
+    keeps passing.
     """
     from dataclasses import asdict
 
@@ -2946,7 +2971,7 @@ def _register_default_paramsets_including(name: str) -> dict[str, int]:
         "otero_millan": asdict(DEFAULT_OM_PARAMS),
         name: asdict(DEFAULT_EK_PARAMS),
     }
-    return {
+    registered = {
         detector_name: paramset.register(
             "eye_detection",
             {
@@ -2957,6 +2982,14 @@ def _register_default_paramsets_including(name: str) -> dict[str, int]:
         )
         for detector_name in DETECTORS
     }
+    for real_name in ("engbert_kliegl", "otero_millan"):
+        assert registered[real_name] == real[real_name], (
+            f"this test's hand copy of register_default_paramsets now disagrees "
+            f"with the real one about {real_name!r}'s own registered paramset "
+            f"index ({registered[real_name]!r} != {real[real_name]!r}) -- the "
+            f"real function's shape changed and this copy did not follow"
+        )
+    return registered
 
 
 def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_session, prefix):
@@ -2974,9 +3007,18 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     3, "What each detector produces") -- one of the four detectors this task
     exists to prove are unblocked.
 
-    **`register_default_paramsets` is patched for the span of this test**;
-    see `_register_default_paramsets_including` for why the real one cannot
-    be called unpatched once a fixture detector is registered.
+    **`register_default_paramsets` is patched for the span of this test, and
+    that means this test does NOT drive the real function's own handling of
+    a newly registered name -- only Tasks 1-4's own conjunction-shape code
+    does, through the real, unpatched `daemon.run_once()`.** The real
+    function's `defaults` dict cannot know this fixture's name (see
+    `_register_default_paramsets_including`'s own docstring for why, and for
+    the `KeyError` that is out of this task's scope to fix); the patch exists
+    only so a fixture detector CAN be registered at all. What is not skipped:
+    the patch's own `engbert_kliegl`/`otero_millan` handling is asserted
+    equal to the real function's, every time it runs, so a future change to
+    the real function that this hand copy fails to follow is caught here
+    rather than silently trusted.
 
     **`DETECTORS` and `register_default_paramsets` are both restored via
     `unittest.mock.patch` context managers, not a bare try/finally.**
@@ -3012,14 +3054,14 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     left behind was still `status='computed'`, `DetectorAgreement`'s
     key_source paired it against the newer fixture, and `get_detector
     ("two_kinds")` failed because `DETECTORS` -- correctly -- no longer had
-    it. Deleting by `_detector("two_kinds")` alone, with no session
-    restriction, removes every `EyeDetection` row this fixture ever wrote and
-    cascades (a real DataJoint dependency, not an ad hoc join: `consensus.py::
-    DetectorAgreement` declares `-> detect.EyeDetection.proj(paramset_a=
-    'paramset_idx')` and `-> ...proj(paramset_b=...)` twice) to every
-    `DetectorAgreement` row that named it, in either position, for any
-    session -- which is what makes this fixture leave no candidate for a
-    later `key_source` to ever cross again.
+    it. Deleting by this fixture's own registered `paramset_idx` alone, with
+    no session restriction, removes every `EyeDetection` row this fixture
+    ever wrote and cascades (a real DataJoint dependency, not an ad hoc
+    join: `consensus.py::DetectorAgreement` declares `-> detect.EyeDetection
+    .proj(paramset_a='paramset_idx')` and `-> ...proj(paramset_b=...)`
+    twice) to every `DetectorAgreement` row that named it, in either
+    position, for any session -- which is what makes this fixture leave no
+    candidate for a later `key_source` to ever cross again.
     """
     from dataclasses import replace
     from unittest.mock import patch
@@ -3047,19 +3089,36 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     )
     session_key, _report, _ = stepped_session
 
+    # Captured BEFORE `"two_kinds"` is added to `DETECTORS`, while it still
+    # holds only the two real detectors -- calling the real, unpatched
+    # `register_default_paramsets()` after that point is exactly the
+    # `KeyError` this whole workaround exists to avoid. This is what
+    # `_register_default_paramsets_including` pins its own `engbert_kliegl`/
+    # `otero_millan` handling against.
+    real_registered = detect.register_default_paramsets()
+
     with (
         patch.dict(DETECTORS, {"two_kinds": fake}),
         patch.object(
             detect, "register_default_paramsets",
-            lambda: _register_default_paramsets_including("two_kinds"),
+            lambda: _register_default_paramsets_including("two_kinds", real_registered),
         ),
     ):
+        # Captured ONCE, as the first statement inside the `with` -- before
+        # `try` -- so `finally` below never has to call `_detector`/
+        # `register_default_paramsets` itself (fix round: that would be
+        # three more `paramset.register` writes made FROM `finally`, and if
+        # any of them raised, the delete they gate would never run, leaving
+        # exactly the residue this cleanup exists to prevent). If this one
+        # call raises, nothing has been registered yet beyond what the two
+        # `with` context managers already restore on their own.
+        idx = detect.register_default_paramsets()["two_kinds"]
         try:
             daemon.run_once(prefix=prefix)
 
             rows = (
                 detect.EyeDetection.Run
-                & {**session_key, "trace": "conjunction", **_detector("two_kinds")}
+                & {**session_key, "trace": "conjunction", "paramset_idx": idx}
             ).to_dicts(order_by="run_index")
 
             labels = {r["label"] for r in rows}
@@ -3093,7 +3152,7 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
             # and any `DetectorAgreement` row that named it, in one call, and
             # removes it from `key_source` entirely rather than merely
             # un-computing it.
-            (paramset.ParamSet & {"paramset_type": "eye_detection", **_detector("two_kinds")}).delete()
+            (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": idx}).delete()
 
 
 def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
@@ -3136,26 +3195,53 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
     )
     session_key, _report, _ = stepped_session
 
+    # See the sibling test's own comment above its identical line for why
+    # this is captured before `"two_kinds_traces"` is added to `DETECTORS`.
+    real_registered = detect.register_default_paramsets()
+
     with (
         patch.dict(DETECTORS, {"two_kinds_traces": fake}),
         patch.object(
             detect, "register_default_paramsets",
-            lambda: _register_default_paramsets_including("two_kinds_traces"),
+            lambda: _register_default_paramsets_including("two_kinds_traces", real_registered),
         ),
     ):
+        # See the sibling test's own comment above its identical line for why
+        # this is the first statement inside the `with`, ahead of `try`.
+        idx = detect.register_default_paramsets()["two_kinds_traces"]
         try:
             report = daemon.run_once(prefix=prefix)
             errors = report["errors"]
 
             traces = set(
-                (detect.EyeDetection & {**session_key, **_detector("two_kinds_traces")})
+                (detect.EyeDetection & {**session_key, "paramset_idx": idx})
                 .to_arrays("trace")
             )
             assert traces == {"left", "right", "conjunction"}
-            assert not [e for e in errors if "two_kinds_traces" in str(e)]
+            # `daemon.py::run_once` formats each error as
+            # `f"{table.__name__} {key}: {err}"` (confirmed by reading it),
+            # and `key` carries `paramset_idx` (on an `EyeDetection` error) or
+            # `paramset_a`/`paramset_b` (on a `DetectorAgreement` one) -- an
+            # INT, never this fixture's NAME. Matching on `"two_kinds_traces"`
+            # itself (this task's first draft) happens to catch the exact
+            # regression this test is named for -- `DetectorNotRegistered`
+            # spells out every currently-registered name, including this
+            # one, in its own message -- but would silently let through any
+            # OTHER error this fixture caused, `UnknownLabelKind` among them,
+            # since nothing about that exception mentions this fixture by
+            # name. Matching on `idx` the way the daemon actually renders it
+            # is what makes this assertion mean what it appears to mean; the
+            # `traces` assertion above remains the one that actually pins
+            # ALL THREE traces got written, which no error-string match can
+            # substitute for.
+            assert not [
+                e for e in errors
+                if f"'paramset_idx': {idx}" in e
+                or f"'paramset_a': {idx}" in e
+                or f"'paramset_b': {idx}" in e
+            ]
         finally:
             # See the sibling test's own `finally` for why this deletes the
             # `ParamSet` row itself and not only the `EyeDetection` rows it
             # produced.
-            (paramset.ParamSet
-             & {"paramset_type": "eye_detection", **_detector("two_kinds_traces")}).delete()
+            (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": idx}).delete()
