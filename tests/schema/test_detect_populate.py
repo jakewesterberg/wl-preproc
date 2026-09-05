@@ -1298,6 +1298,52 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     assert Label.INVALID in present
 
 
+def test_every_label_has_a_kind_or_is_deliberately_excluded():
+    """Design spec section 3.1's exhaustiveness guard. The label enum is
+    closed because the migration window shuts January 2027, so a ninth label
+    added without updating the kind map must fail loudly rather than be
+    silently dropped from every conjunction."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema.detect import _KIND_OF, _NOT_INTERSECTED, _kind_of
+
+    assert set(_KIND_OF) | _NOT_INTERSECTED == set(Label)
+    assert not (set(_KIND_OF) & _NOT_INTERSECTED)
+
+    # saccade and microsaccade are ONE kind: design spec section 1 calls them
+    # "a split, not a ranking" -- the same event distinguished only by size.
+    assert _kind_of(Label.SACCADE) == _kind_of(Label.MICROSACCADE)
+    # Every other emitted label is its own kind.
+    assert len({_kind_of(Label.PSO), _kind_of(Label.PURSUIT),
+                _kind_of(Label.DRIFT), _kind_of(Label.SACCADE)}) == 4
+    # fixation is the synthesized background (spec section 1.2); blink and
+    # invalid come from the validity mask and are in no vocabulary.
+    for label in (Label.FIXATION, Label.BLINK, Label.INVALID):
+        assert _kind_of(label) is None
+
+
+def test_a_single_label_kind_is_keyed_by_its_own_label_value():
+    """`_conjunction_runs` labels a non-saccadic kind with `Label(kind)`, so
+    the kind key and the label value must agree. A kind named anything else
+    would raise `ValueError` deep inside the grouping loop, for one detector,
+    only once a real recording produced that label."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema.detect import _KIND_OF
+
+    for label, kind in _KIND_OF.items():
+        if kind != "saccadic":
+            assert Label(kind) is label, f"kind {kind!r} does not name {label!r}"
+
+
+def test_a_label_with_no_kind_raises():
+    """The guard has teeth: it is reachable if the enum grows and the map
+    does not."""
+    import pytest
+    from wl_preproc.schema.detect import UnknownLabelKind, _kind_of
+
+    with pytest.raises(UnknownLabelKind, match="no conjunction kind"):
+        _kind_of("nystagmus")
+
+
 def _always(label):
     """A `label_for` for `_overlapping` that answers one label whatever the
     span. For the tests below, where the FLOOR is what is under test and
