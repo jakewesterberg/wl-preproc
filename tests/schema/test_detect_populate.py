@@ -1501,7 +1501,18 @@ def test_spans_of_different_kinds_never_overlap():
     array and lets a later interval overwrite an earlier one. Two kinds'
     spans cannot overlap because each is a subset of a left run of its own
     kind, and one eye's runs are disjoint by construction -- but that is an
-    argument, and this is the test that makes it a fact."""
+    argument, and the equality below is what makes it a fact.
+
+    **The equality is what carries this test, not the loop.** Grouped, this
+    fixture's three kinds intersect to exactly the three runs asserted
+    below. Skip the grouping -- call `_overlapping` directly over all three
+    kinds at once, the regression this test exists to catch -- and its own
+    touching-span coalescing, which never reads a label, merges every
+    overlap into ONE run, `Run(10, 140, ...)`. A single run makes
+    `zip(runs, runs[1:])` iterate zero times, so the loop below would have
+    passed on that broken result without ever executing. It stays anyway,
+    now that the equality above it has already proved there are three runs
+    to check."""
     from wl_preproc.eye.detect.labels import Label, Run
     from wl_preproc.schema.detect import _conjunction_runs
 
@@ -1512,6 +1523,11 @@ def test_spans_of_different_kinds_never_overlap():
     runs = sorted(_conjunction_runs(left, right, 1, _always(Label.SACCADE)),
                   key=lambda run: run.start)
 
+    assert runs == [
+        Run(10, 50, Label.SACCADE),
+        Run(50, 100, Label.PSO),
+        Run(100, 140, Label.PURSUIT),
+    ]
     for earlier, later in zip(runs, runs[1:]):
         assert earlier.stop <= later.start, f"{earlier} overlaps {later}"
 

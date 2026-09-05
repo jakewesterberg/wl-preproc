@@ -880,9 +880,11 @@ def _conjunction_runs(
     traces.** `_overlapping` intersects on time alone and never reads a
     label, which is correct only while every emitted label is the same kind
     of thing -- true of Engbert-Kliegl and Otero-Millan, and false for all
-    four detectors that emit `pso`. Three of them also emit `fixation`, which
-    tiles the recording, so an ungrouped intersection would have crossed a
-    left fixation with a right saccade and kept it.
+    four BLOCKED detectors. Three of them (Nystrom-Holmqvist, NSLR, REMoDNaV)
+    emit `pso` and `fixation`; the fourth (BMD) emits `drift` instead and
+    never `pso` at all. `fixation` TILES the recording, so an ungrouped
+    intersection would have crossed a left fixation with a right saccade and
+    kept it.
 
     **Grouping first also makes the loop cheaper.** `_overlapping` is
     `O(|left| x |right|)`; summing that over kinds is strictly less than the
