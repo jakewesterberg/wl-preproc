@@ -1022,14 +1022,39 @@ def test_engbert_kliegl_conjunction_rows_are_unchanged(stepped_session):
     expectation"). Engbert-Kliegl emits ONE kind (saccadic), so
     `_conjunction_runs`' grouping partitions it into a single group and the
     loop that group runs through is `_overlapping`'s own loop -- wiring
-    `make()` to the grouped entry point must not move this detector's stored
-    conjunction rows at all.
+    `make()` to the grouped entry point must not move the three events this
+    fixture plants.
 
-    Anchored on the THREE planted transitions this fixture exists to plant --
-    the same count `test_a_sub_floor_binocular_overlap_is_no_conjunction_
-    event` already pins for the sibling `near_miss_session` fixture -- rather
-    than on a recomputation, which would move right along with the code this
-    test exists to catch."""
+    **Pinned against a capture taken at the pre-wiring commit (`6bc3704`,
+    the parent this task's wiring change landed on), not recomputed from the
+    code under test.** A recomputation would move right along with a
+    regression it exists to catch. The three tuples below were produced by
+    running the identical query below, unmodified, against a `git worktree`
+    checked out at `6bc3704`, and cross-checked against an identical capture
+    at this task's own commit before it was ever compared to these literals
+    -- both are recorded in the Task 4 fix-round report rather than trusted
+    from a single run. Re-derive them the same way against any future commit
+    under suspicion rather than trusting these forever.
+
+    **Exact boundaries and labels, not only a count.** A prior version of
+    this test asserted `len(events) == 3` plus a label superset that
+    Engbert-Kliegl's own declared vocabulary (`{saccade, microsaccade}`)
+    already guarantees on its own -- `registry.Detector.detect` refuses
+    `pso`/`pursuit`/`drift` from this detector before a row is ever stored,
+    so that check could barely fail. A boundary shift of a few samples, or a
+    swapped saccade/microsaccade verdict, would have left the count at three
+    and passed unnoticed (fix-round review finding, Task 4). This version
+    pins `run_start`, `run_stop` and `label` for all three events instead.
+
+    **Still not the fully exhaustive check.** `amplitude_deg`,
+    `peak_velocity_deg_s`, `reliability`, the master row's own
+    `n_saccades`/`n_microsaccades`, and every OTHER detector, are not pinned
+    here -- that exhaustive byte-identical comparison is what
+    `test_the_run_count_measured_against_the_reference_recording` is for,
+    and it is skipped by default (it requires `WLPP_OHDPI_REFERENCE` to
+    point at a real recording -- see that test's own skip message). What
+    this test proves, every default run, is exact timing and labelling for
+    the one fixture in this suite built to plant known transitions."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
@@ -1038,11 +1063,25 @@ def test_engbert_kliegl_conjunction_rows_are_unchanged(stepped_session):
         detect.EyeDetection.Run
         & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
     ).to_dicts(order_by="run_index")
-    events = [r for r in rows if r["label"] in ("saccade", "microsaccade")]
+    events = [
+        (r["run_start"], r["run_stop"], r["label"])
+        for r in rows
+        if r["label"] in ("saccade", "microsaccade")
+    ]
 
-    assert len(events) == 3, "the three planted transitions must survive unchanged"
+    # Captured 2026-09-05 at 6bc3704 (immediately before `make()` was wired
+    # to `_conjunction_runs`) via this identical query run against a
+    # throwaway `git worktree` checkout, then confirmed identical against
+    # the same query at this task's own commit -- see the Task 4 fix-round
+    # report for both captures and the exact commands.
+    assert events == [
+        (6800, 6816, "saccade"),
+        (7250, 7258, "microsaccade"),
+        (7749, 7767, "saccade"),
+    ]
     # No `pso`, `pursuit` or `drift` run can exist for a detector that emits
-    # none of the three -- the shape rule cuts both ways.
+    # none of the three -- the shape rule cuts both ways. Weaker than the
+    # pin above (see the docstring), kept as a cheap second signal.
     assert {r["label"] for r in rows} <= {
         "saccade", "microsaccade", "fixation", "blink", "invalid"
     }
