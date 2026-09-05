@@ -653,7 +653,7 @@ class EyeDetection(dj.Computed):
         stated nowhere else: no two different kinds ever share a label.**
         `_KIND_OF` maps `saccade`/`microsaccade` to `"saccadic"` and every
         other kind to its own single label (`pso` -> `pso`, `pursuit` ->
-        `pursuit`, `drift` -> `drift`), so the label sets the five kinds can
+        `pursuit`, `drift` -> `drift`), so the label sets the four kinds can
         produce -- `{saccade, microsaccade}`, `{pso}`, `{pursuit}`,
         `{drift}` -- are pairwise disjoint. Two runs from DIFFERENT
         kind-groups can therefore sit adjacent in `_conjunction_runs`'s
