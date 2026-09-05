@@ -119,10 +119,11 @@ class NystromHolmqvistParams:
     #: `PeakThreshold.converged=False` is how a caller tells a genuine
     #: convergence apart from one that only hit this limit.
     #:
-    #: **Whether real data can actually reach this limit, rather than only a
-    #: constructed one, is an open question this implementation searched but
-    #: did not settle** -- see `_peak_threshold`'s own docstring and
-    #: task-2-report.md.
+    #: **Reachable, by construction, with these unmodified defaults**
+    #: (`test_a_monotone_crawl_exhausts_max_iterations`) -- see
+    #: `_peak_threshold`'s own docstring for the mechanism (a monotone crawl
+    #: through many tiers, not an oscillation) and why it needs velocities
+    #: no real recording produces.
     max_iterations: int
 
     #: Table 2: saccades shorter than this are discarded -- "large enough to
@@ -200,20 +201,36 @@ def _peak_threshold(
     Kliegl, 2003)" -- the same 6 `engbert_kliegl.py::DEFAULT_LAMBDA` already
     carries.
 
-    **Whether `params.max_iterations` is ever exhausted by real data, as
-    opposed to only by construction, was searched for and not found.** Every
-    fixture in this module's own tests converges or empties well within the
-    default 100. An adversarial search went further: tens of thousands of
-    random multi-cluster and heavy-tailed distributions, plus an exhaustive
-    sweep of the most direct way to engineer a sustained two-value
-    oscillation -- a population with real spread, and a point mass sitting
-    at the regime boundary its own update would cross, swept across six
-    orders of magnitude of relative population size -- and none exhausted
-    the cap; a closed-form argument covers why the extreme end of that sweep
-    (an overwhelming point mass) cannot work, by a wide margin. That falls
-    short of a proof over every conceivable finite array, so the guard
-    stays and `PeakThreshold.converged` stays meaningful. Full search and
-    argument in task-2-report.md.
+    **`params.max_iterations` IS reachable with the unmodified defaults, by
+    construction** (`test_a_monotone_crawl_exhausts_max_iterations`): seed
+    `[1.0, 3.0]`, then repeatedly append `nextafter(mean + 6*std, -inf)` of
+    the array built so far. Fed back through this function from
+    `initial_peak_threshold_deg_s=200.0`, the run retraces the same sequence
+    of thresholds used to build it, pulling in exactly one more element per
+    iteration -- `below.size` runs 6, 7, 8, ..., 105 across all 100
+    iterations, ending `converged=False` at `peak_deg_s` ~2.28e15 deg/sec.
+    This is a MONOTONE CRAWL through many tiers, not an oscillation, and it
+    needs no cycling to exhaust the cap.
+
+    A 2-value OSCILLATION specifically -- the threshold alternating between
+    two regimes forever -- is a narrower claim, and does not need the cap at
+    all: below-sets are nested by threshold, so reaching back down to a
+    smaller regime after advancing to a larger one requires the larger
+    regime's own `mu + 6*sigma` to fall strictly below a value the smaller
+    regime's `mu + 6*sigma` already exceeded. For the natural family for
+    engineering exactly that -- a population with real spread, plus
+    additional mass at the shared boundary -- this cannot happen, checked
+    in closed form and by an exhaustive sweep across the added mass's
+    relative size (task-2-report.md). That covers one family, not a proof
+    that no finite array anywhere can cycle.
+
+    **Practically: this guard protects against pathological input, not
+    against a real recording.** The crawl above needs velocities up to
+    roughly 2e15 deg/sec, far past anything an eye produces and far past
+    `max_velocity_deg_s` (1000 deg/sec, Table 2) -- a later task's rejection
+    step would remove every one of these samples before this function ever
+    saw them. `converged=False` from a real trace is expected to mean the
+    empty-population branch, not this one.
 
     **Unusable samples are excluded**, for `detect_engbert_kliegl`'s own
     stated reason: a blink's velocity spike would inflate the scale and

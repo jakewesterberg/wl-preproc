@@ -61,20 +61,21 @@ def test_a_constant_speed_terminates_by_emptying_not_by_converging():
     """Renamed at review from `test_an_oscillating_distribution_terminates`:
     the fixture below does not oscillate. Traced directly, it terminates
     after 2 iterations via the `below.size == 0` branch (`nystrom_holmqvist.
-    py`'s early return when nothing remains below the current threshold),
-    not via `max_iterations` exhaustion -- no test in this module reaches
-    that branch.
+    py`'s early return when nothing remains below the current threshold) --
+    a genuinely different branch from `max_iterations` exhaustion, which
+    `test_a_monotone_crawl_exhausts_max_iterations` covers separately.
 
-    Whether a genuinely oscillating or slow-converging distribution exists
-    at all was searched for directly, not assumed: tens of thousands of
+    An initial round of review asked whether any distribution exhausts
+    `max_iterations` at all; an adversarial search (tens of thousands of
     random multi-cluster and heavy-tailed constructions, plus an exhaustive
-    sweep of the most direct way to engineer a sustained two-value
-    oscillation (a spread population and a point mass at the regime
-    boundary, across six orders of magnitude of relative population size).
-    None exhausted `max_iterations`; task-2-report.md has the search and a
-    closed-form argument covering the extreme end of that swept family.
-    `_peak_threshold`'s own docstring carries the same finding, since it
-    bears on reading the code and not only on reading this test.
+    sweep of the most direct family for engineering a two-value oscillation)
+    found none, and that search is real and stands on its own -- but it was
+    a search for OSCILLATION, and the cap turned out to be reachable by a
+    different mechanism the search never constructed: a monotone crawl
+    through many tiers, no cycling required. See
+    `test_a_monotone_crawl_exhausts_max_iterations` and `_peak_threshold`'s
+    own docstring. Recorded here so a reader of this test's history does not
+    re-derive the same too-narrow conclusion the search first did.
 
     What this test still checks, and it is worth checking on its own:
     spec §9 item 2's point that the paper states no iteration cap, so
@@ -96,6 +97,56 @@ def test_a_constant_speed_terminates_by_emptying_not_by_converging():
 
     assert result.iterations <= DEFAULT_NH_PARAMS.max_iterations
     assert not result.converged
+
+
+def test_a_monotone_crawl_exhausts_max_iterations():
+    """Round-2 review finding: `max_iterations` IS reachable, using the
+    unmodified `DEFAULT_NH_PARAMS` -- the "unreachable in practice" framing
+    this test's docstring (and `_peak_threshold`'s) previously carried was
+    wrong, and this replaces it with a construction rather than a search.
+
+    The construction: seed `[1.0, 3.0]`, then repeatedly append
+    `nextafter(g, -inf)` where `g` is `mean + 6*sigma` of the array built so
+    far. Each new element is placed just BELOW where the next iteration's
+    own threshold update will land, so feeding the finished array back
+    through `_peak_threshold` from `initial_peak_threshold_deg_s=200.0`
+    retraces the exact sequence of thresholds used to build it -- pulling in
+    one new element per iteration, a monotone crawl through many tiers
+    rather than a cycle. `test_a_constant_speed_terminates_by_emptying_not_
+    by_converging`'s closed-form result (no 2-value OSCILLATION can do this,
+    for the natural family checked there) is unaffected: this is not an
+    oscillation, and does not need to be one.
+
+    Verified directly before writing this assertion, not assumed: with 142
+    elements, `below.size` runs 6, 7, 8, ..., 105 across all 100 iterations
+    (never empty, never converging), every value is non-negative, and the
+    run ends at `peak_deg_s` == 2279318364842877.0 deg/sec -- reproduced
+    exactly against the shipped code. That magnitude is the practical
+    point: it is far past `max_velocity_deg_s` (1000 deg/sec, Table 2), so a
+    later task's rejection step removes input like this before it ever
+    reaches this function. The guard is real; it is not expected to fire on
+    a real recording."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, _peak_threshold,
+    )
+
+    values = [1.0, 3.0]
+    for _ in range(140):
+        arr = np.array(values)
+        g = arr.mean() + DEFAULT_NH_PARAMS.peak_threshold_sigma * arr.std()
+        values.append(float(np.nextafter(g, -np.inf)))
+    speed = np.array(values)
+    usable = np.ones(speed.size, dtype=bool)
+
+    assert speed.size == 142
+    assert np.all(speed >= 0)
+
+    result = _peak_threshold(speed, usable, DEFAULT_NH_PARAMS)
+
+    assert result.iterations == DEFAULT_NH_PARAMS.max_iterations
+    assert result.converged is False
 
 
 def test_no_usable_samples_returns_the_stated_zero_default():
