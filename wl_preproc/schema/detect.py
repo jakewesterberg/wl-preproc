@@ -852,6 +852,69 @@ def _kind_of(label) -> str | None:
         ) from exc
 
 
+def _always(label: Label) -> Callable[[int, int], Label]:
+    """A `label_for` answering one label whatever the span.
+
+    Two callers. `_conjunction_runs` uses it for every kind that labels
+    itself -- one that is not the amplitude split has exactly one label, so
+    there is no rule to apply. The duration-floor tests use it where the
+    FLOOR is what is under test and which label a surviving span carries is
+    not."""
+    return lambda _start, _stop: label
+
+
+def _conjunction_runs(
+    left: list[Run],
+    right: list[Run],
+    min_duration_samples: int,
+    saccadic_label_for: Callable[[int, int], Label],
+) -> list[Run]:
+    """The binocular criterion, applied WITHIN each kind.
+
+    A conjunction run is the temporal intersection of two runs of the same
+    kind, and it carries that kind's label. `saccade` and `microsaccade` are
+    one kind, labelled by `saccadic_label_for` on the intersection's own
+    interval; every other emitted label is its own kind and labels itself.
+
+    **This is what makes the conjunction trace the same shape as the per-eye
+    traces.** `_overlapping` intersects on time alone and never reads a
+    label, which is correct only while every emitted label is the same kind
+    of thing -- true of Engbert-Kliegl and Otero-Millan, and false for all
+    four detectors that emit `pso`. Three of them also emit `fixation`, which
+    tiles the recording, so an ungrouped intersection would have crossed a
+    left fixation with a right saccade and kept it.
+
+    **Grouping first also makes the loop cheaper.** `_overlapping` is
+    `O(|left| x |right|)`; summing that over kinds is strictly less than the
+    product of the totals whenever more than one kind is present, and
+    identical when only one is -- which is the case for both registered
+    detectors, whose rows are therefore unchanged.
+
+    Not folded into `_overlapping`: that function is the single-kind
+    primitive and every one of its call sites, in production and in tests,
+    passes single-kind input. Keeping the two separate is what lets the H3
+    duration-floor tests keep testing the floor rather than the grouping."""
+    by_kind: dict[str, tuple[list[Run], list[Run]]] = {}
+    for side, runs in ((0, left), (1, right)):
+        for run in runs:
+            kind = _kind_of(run.label)
+            if kind is None:
+                continue
+            by_kind.setdefault(kind, ([], []))[side].append(run)
+
+    out: list[Run] = []
+    for kind, (left_runs, right_runs) in by_kind.items():
+        if kind == "saccadic":
+            label_for = saccadic_label_for
+        else:
+            # The kind labels itself. No rule to write, no arbitration, and
+            # no convention stated anywhere -- both eyes already agreed.
+            label_for = _always(Label(kind))
+        out.extend(_overlapping(left_runs, right_runs, min_duration_samples, label_for))
+
+    return sorted(out, key=lambda run: run.start)
+
+
 def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[int, int], Label]:
     """How a conjunction run gets its label: the DETECTOR's own labelling
     rule, applied to that run's own interval on the gaze the conjunction is

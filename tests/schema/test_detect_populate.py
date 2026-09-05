@@ -1344,12 +1344,13 @@ def test_a_label_with_no_kind_raises():
         _kind_of("nystagmus")
 
 
-def _always(label):
-    """A `label_for` for `_overlapping` that answers one label whatever the
-    span. For the tests below, where the FLOOR is what is under test and
-    which label a surviving span carries is not -- `_conjunction_label` is
-    the real rule, and it has its own tests."""
-    return lambda start, stop: label
+# Moved to `wl_preproc.schema.detect` alongside `_conjunction_runs`, its new
+# production caller -- a second definition here would be exactly the "two
+# definitions of one fact" `labels.py::LabelledInterval`'s own comment warns
+# against. Still used bare below: the H3 duration-floor tests (unchanged) and
+# the `_conjunction_runs` tests both call it without a local import, exactly
+# as they did when it was defined in this module.
+from wl_preproc.schema.detect import _always
 
 
 def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
@@ -1432,6 +1433,100 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     assert _overlapping([sacc(0, 10)], [sacc(9, 20)], 1, saccade) == [sacc(9, 10)]
     # And a paramset naming 0 cannot weaken it into a span `measure` refuses.
     assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 0, saccade) == []
+
+
+def test_a_left_fixation_never_crosses_a_right_saccade():
+    """THE defect this change exists to fix. `_overlapping` intersects on
+    time alone and never reads a label -- correct only while every emitted
+    label is the same kind of thing, which is true of the two registered
+    detectors and false for all four blocked ones.
+
+    Three of the four emit `fixation`, which TILES the recording, so a left
+    fixation would have crossed a right saccade and been kept as a binocular
+    event. No stage-1 or stage-2A test could reach this: finding it needs a
+    detector that emits more than one kind, and neither stage has one."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(0, 1000, Label.FIXATION)]
+    right = [Run(400, 460, Label.SACCADE)]
+    assert _conjunction_runs(left, right, 6, _always(Label.SACCADE)) == []
+
+
+def test_a_binocular_glissade_survives_as_pso():
+    """The shape rule. Both eyes called it `pso`; the conjunction says `pso`,
+    not `saccade` and not nothing."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 130, Label.SACCADE), Run(130, 160, Label.PSO)]
+    right = [Run(105, 135, Label.SACCADE), Run(135, 165, Label.PSO)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.SACCADE))
+
+    assert runs == [Run(105, 130, Label.SACCADE), Run(135, 160, Label.PSO)]
+
+
+def test_kinds_that_disagree_produce_no_conjunction_run_of_either():
+    """Agreement on kind is what supplies the label, so disagreement supplies
+    nothing. This is NOT the arbitration stage 1 removed: that rule RANKED
+    the two eyes' labels through `PRECEDENCE`; this requires agreement and
+    ranks nothing."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 160, Label.SACCADE)]
+    right = [Run(100, 160, Label.PSO)]
+    assert _conjunction_runs(left, right, 6, _always(Label.SACCADE)) == []
+
+
+def test_the_amplitude_split_is_one_kind_not_two():
+    """Design spec section 1: `saccade` and `microsaccade` are "a split, not a
+    ranking". A left saccade meeting a right microsaccade is two eyes
+    agreeing that an event happened and differing only about its size -- which
+    the conjunction settles by measuring its OWN amplitude, exactly as stage 1
+    did. Dropping this pair would be a behaviour change for the two shipped
+    detectors."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(100, 160, Label.SACCADE)]
+    right = [Run(100, 160, Label.MICROSACCADE)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.MICROSACCADE))
+
+    assert runs == [Run(100, 160, Label.MICROSACCADE)]
+
+
+def test_spans_of_different_kinds_never_overlap():
+    """Load-bearing for `_insert_trace`, which paints intervals onto one
+    array and lets a later interval overwrite an earlier one. Two kinds'
+    spans cannot overlap because each is a subset of a left run of its own
+    kind, and one eye's runs are disjoint by construction -- but that is an
+    argument, and this is the test that makes it a fact."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(0, 50, Label.SACCADE), Run(50, 100, Label.PSO),
+            Run(100, 150, Label.PURSUIT)]
+    right = [Run(10, 60, Label.SACCADE), Run(45, 110, Label.PSO),
+             Run(90, 140, Label.PURSUIT)]
+    runs = sorted(_conjunction_runs(left, right, 1, _always(Label.SACCADE)),
+                  key=lambda run: run.start)
+
+    for earlier, later in zip(runs, runs[1:]):
+        assert earlier.stop <= later.start, f"{earlier} overlaps {later}"
+
+
+def test_conjunction_runs_come_back_sorted_by_start():
+    """Concatenating per-kind results would otherwise return them grouped by
+    kind, which makes every assertion about them depend on dict ordering."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_runs
+
+    left = [Run(200, 260, Label.PSO), Run(0, 60, Label.SACCADE)]
+    right = [Run(200, 260, Label.PSO), Run(0, 60, Label.SACCADE)]
+    runs = _conjunction_runs(left, right, 6, _always(Label.SACCADE))
+
+    assert [run.start for run in runs] == [0, 200]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
