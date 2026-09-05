@@ -573,7 +573,11 @@ class EyeDetection(dj.Computed):
             # just ran with -- the binocular criterion filters what both eyes
             # already found, and must never manufacture an event shorter than
             # either eye's detector would have accepted. See `_overlapping`.
-            conjunction_spans = _overlapping(
+            # `_conjunction_runs`, not `_overlapping`: the binocular criterion
+            # applies WITHIN a kind, so the conjunction trace carries the same
+            # vocabulary as the two eyes it is built from. `_overlapping` is
+            # the single-kind primitive underneath it.
+            conjunction_spans = _conjunction_runs(
                 spans["left"],
                 spans["right"],
                 _min_duration_samples(detector_params),
@@ -743,6 +747,11 @@ def _overlapping(
     floored at 1 below -- the condition this replaces was
     `ls < rstop and rs < lstop`, which is precisely `stop > start`, and a
     paramset naming 0 must not weaken it into spans `measure` refuses.
+
+    **This function sees ONE kind.** `_conjunction_runs` groups both eyes'
+    runs by kind and calls this once per group, so the two eyes' labels ARE
+    consulted -- one level up, to decide what intersects with what. Within a
+    kind they are not, and `label_for` remains the only source of a label.
     """
     floor = max(int(min_duration_samples), 1)
     intersections = []

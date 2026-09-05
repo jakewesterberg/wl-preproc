@@ -1016,6 +1016,38 @@ def test_the_conjunction_requires_temporal_overlap_in_both_eyes(stepped_session)
     )
 
 
+def test_engbert_kliegl_conjunction_rows_are_unchanged(stepped_session):
+    """Design spec section 4's bar ("Engbert-Kliegl, Otero-Millan and U'n'Eye
+    produce byte-identical conjunction rows... This is a test, not an
+    expectation"). Engbert-Kliegl emits ONE kind (saccadic), so
+    `_conjunction_runs`' grouping partitions it into a single group and the
+    loop that group runs through is `_overlapping`'s own loop -- wiring
+    `make()` to the grouped entry point must not move this detector's stored
+    conjunction rows at all.
+
+    Anchored on the THREE planted transitions this fixture exists to plant --
+    the same count `test_a_sub_floor_binocular_overlap_is_no_conjunction_
+    event` already pins for the sibling `near_miss_session` fixture -- rather
+    than on a recomputation, which would move right along with the code this
+    test exists to catch."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+
+    rows = (
+        detect.EyeDetection.Run
+        & {**session_key, "trace": "conjunction", **_detector("engbert_kliegl")}
+    ).to_dicts(order_by="run_index")
+    events = [r for r in rows if r["label"] in ("saccade", "microsaccade")]
+
+    assert len(events) == 3, "the three planted transitions must survive unchanged"
+    # No `pso`, `pursuit` or `drift` run can exist for a detector that emits
+    # none of the three -- the shape rule cuts both ways.
+    assert {r["label"] for r in rows} <= {
+        "saccade", "microsaccade", "fixation", "blink", "invalid"
+    }
+
+
 def test_a_sub_floor_binocular_overlap_is_no_conjunction_event(near_miss_session):
     """Finding H3's floor, asserted where `EyeDetection.make()` actually
     applies it -- on a stored row, through `daemon.run_once()`.
