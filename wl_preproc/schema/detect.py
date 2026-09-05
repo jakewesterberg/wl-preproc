@@ -1111,9 +1111,24 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
 
     if not saccadic:
         # No saccadic label at all, so `_conjunction_runs` builds no saccadic
-        # group and never calls this. Returned rather than raised here so the
-        # detector's OTHER kinds still produce a conjunction: it is only the
-        # amplitude split that has nothing to say.
+        # group and never calls this IN PRODUCTION -- but that guarantee is
+        # not a property of this function or of `_conjunction_runs`'s
+        # grouping (`by_kind` keys off each RUN's own label via `_kind_of`,
+        # never off `detector.vocabulary`). It holds because
+        # `registry.Detector.detect` refuses any label outside
+        # `detector.vocabulary`, so a run this detector actually produces can
+        # never carry `saccade`/`microsaccade` when `saccadic` is empty, AND
+        # because `EyeDetection.make()` sources both eyes' spans from that
+        # SAME detector's `.detect()` before passing this same `detector` to
+        # `_conjunction_label`. Break either half -- call `.run()` instead of
+        # `.detect()`, or hand-build spans that disagree with the detector --
+        # and this callable is exactly what stands between that mistake and
+        # a silently wrong label, which is why it is tested directly
+        # (`test_a_detector_declaring_no_saccadic_label_raises_only_if_
+        # invoked`) rather than left to this reachability argument alone.
+        # Returned rather than raised here so the detector's OTHER kinds
+        # still produce a conjunction: it is only the amplitude split that
+        # has nothing to say.
         def _no_saccadic_label(_start: int, _stop: int) -> Label:
             raise UndecidedConjunctionLabel(
                 f"detector {detector.name!r} declares no saccadic label, so it "

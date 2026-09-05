@@ -2092,6 +2092,53 @@ def test_an_empty_vocabulary_still_raises():
         _conjunction_label(empty, {"microsaccade_max_deg": 1.0}, np.zeros(10))
 
 
+def test_a_detector_declaring_no_saccadic_label_raises_only_if_invoked():
+    """`_no_saccadic_label`, added alongside the SACCADIC SLICE
+    generalization and, until this test, verified only by reading the code.
+
+    Unreachable in production for both registered detectors
+    (`engbert_kliegl`, `otero_millan` -- both declare the full split, so
+    `saccadic` is never empty for either) and, by the argument
+    `_conjunction_label`'s own comment above this branch makes, for ANY
+    detector reached through `EyeDetection.make()`'s real wiring:
+    `_conjunction_runs` groups runs by each run's OWN label
+    (`_kind_of`), never by `detector.vocabulary`, and
+    `registry.Detector.detect` refuses a run outside its detector's declared
+    vocabulary -- so a detector with no saccadic label in its vocabulary can
+    never produce a run for `_conjunction_runs` to route to this callable.
+
+    None of that is enforced by a type, only by two things agreeing
+    (`EyeDetection.make()` sourcing both eyes' spans from the SAME
+    detector's `.detect()`, and passing that same detector here) that a
+    future change could break quietly -- calling `.run()` instead of
+    `.detect()`, or wiring `_conjunction_runs` to a different detector than
+    the one passed to `_conjunction_label`. This test does not exercise
+    that real wiring (Task 4's); it pins the one thing `_conjunction_label`
+    itself is responsible for regardless: that the callable it hands back
+    for an all-non-saccadic vocabulary is silent until asked, and correct
+    -- `UndecidedConjunctionLabel`, naming the detector -- once it is.
+    """
+    from dataclasses import replace
+    import numpy as np
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    pso_only = replace(
+        DETECTORS["engbert_kliegl"],
+        name="pso_only_hypothetical",
+        vocabulary=frozenset({Label.PSO}),
+    )
+
+    # Returned, not raised: a detector's non-saccadic kinds are none of this
+    # function's business (`_conjunction_label`'s own comment, above), so
+    # getting the callable back must not itself fail.
+    label_for = _conjunction_label(pso_only, {"microsaccade_max_deg": 1.0}, np.zeros((10, 2)))
+
+    with pytest.raises(UndecidedConjunctionLabel, match="declares no saccadic label"):
+        label_for(0, 5)
+
+
 def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_conjunction():
     """Until 2026-09-05 this test asserted that `_conjunction_label` RAISED
     `UndecidedConjunctionLabel` for `{saccade, pso, fixation}` -- the guard
@@ -2156,20 +2203,37 @@ def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_
 
 def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabulary():
     """Reviewer finding 2. `_AMPLITUDE_DERIVED_VOCABULARY` is a SUBSET test,
-    so design spec section 3.1's Otero-Millan (`{microsaccade}`) and U'n'Eye
-    (`{saccade}`) both reach the conjunction rule -- and `classify` answers
-    both sides of the cut for any detector. Before the fix a
-    `{microsaccade}`-only detector's 2.9 deg intersection came back
-    `Run(100, 130, Label.SACCADE)`, a label `registry.Detector.detect`
-    refuses from that same detector's own intervals one function earlier.
+    so a detector declaring `{microsaccade}` alone or `{saccade}` alone both
+    reach the conjunction rule -- and `classify` answers both sides of the
+    cut for any detector. Before the fix a `{microsaccade}`-only detector's
+    2.9 deg intersection came back `Run(100, 130, Label.SACCADE)`, a label
+    `registry.Detector.detect` refuses from that same detector's own
+    intervals one function earlier.
+
+    **The loop below names its two cases "otero_millan" and "uneye"; only
+    the second name matches its real detector's real vocabulary.** This test
+    was added `4d66502`, 2026-09-01 13:52, when Otero-Millan was still
+    believed to be the `{microsaccade}`-only case -- corrected the same day
+    at 16:06 (`3e857e1`; design spec section 3.1's own correction) once
+    reading the reference implementation showed it declares the FULL split
+    instead, `{saccade, microsaccade}`, matching
+    `registry.DETECTORS["otero_millan"]`. "otero_millan" survives here as a
+    name for that now-superseded belief, not as a claim about the real
+    detector; U'n'Eye (`{saccade}`) is unaffected by the correction and is
+    the one real detector this test's other case models.
 
     Unreachable in stage 1 -- the one registered detector declares the whole
-    split -- and reachable for two of section 3.1's seven the moment either
-    lands. It matters because section 6.1's coarsening lattice reads the
-    DECLARATION and coarsens the STORED labels into it, with
-    `microsaccade -> saccade` its only amplitude-split rule: a stored
-    `saccade` on a trace declared `{microsaccade}` has no rule to place it,
-    and the pair gets scored in a vocabulary that trace does not speak.
+    split -- and reachable today for U'n'Eye's real `{saccade}` the moment
+    it lands. The `{microsaccade}`-only case no longer matches any of
+    section 3.1's seven now that Otero-Millan's vocabulary is corrected, but
+    is kept as a hypothetical: the guard it tests -- a size-one vocabulary
+    getting its one label degenerately, never `classify`'s other answer --
+    is the same guard a real `{microsaccade}`-only detector would need. It
+    matters because section 6.1's coarsening lattice reads the DECLARATION
+    and coarsens the STORED labels into it, with `microsaccade -> saccade`
+    its only amplitude-split rule: a stored `saccade` on a trace declared
+    `{microsaccade}` has no rule to place it, and the pair gets scored in a
+    vocabulary that trace does not speak.
 
     **Both directions, and on both sides of the cut**, because a fix that
     pinned one class rather than reading the declaration would pass half of
