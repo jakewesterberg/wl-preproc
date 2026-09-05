@@ -2992,6 +2992,57 @@ def _register_default_paramsets_including(name: str, real: dict[str, int]) -> di
     return registered
 
 
+def _delete_fixture_paramset(name: str) -> None:
+    """Both multi-kind tests' own cleanup, keyed by the fixture's NAME rather
+    than a paramset index the caller captured earlier -- and that difference
+    is the fix, not a stylistic choice (fix round 2, on top of fix round 1's
+    own pin).
+
+    **Round 1 captured `idx` by calling the patched `register_default_
+    paramsets()` as the first statement inside the `with` block, BEFORE
+    `try`.** That call is exactly what INSERTS this fixture's `ParamSet` row
+    (`_register_default_paramsets_including`'s own dict comprehension), and
+    it runs the round-1 pin assertion LAST, after the insert. So the one
+    scenario the pin exists to catch -- the real `register_default_
+    paramsets` diverging from this hand copy -- raised from BEFORE `try`,
+    `finally` never ran, and the just-inserted row leaked. Confirmed
+    directly (review's own reproduction, and re-confirmed here before this
+    fix was written): mutate the copy's `engbert_kliegl` defaults, force the
+    pin to fire, and the fixture's `ParamSet` row survives the test.
+
+    **The fix moves `idx`'s own capture to the FIRST statement INSIDE
+    `try`** (see both tests below), so a pin failure there -- which happens
+    strictly after the insert, since the insert is what the very call
+    computing `idx` performs -- now unwinds through `finally`. But `finally`
+    itself must not need to already know `idx`: if the pin failed while
+    computing it, the LOCAL VARIABLE `idx` in the test's own frame was never
+    assigned (the assignment's right-hand side raised before binding), so a
+    `finally` that referenced it would raise a SECOND, masking exception
+    (`UnboundLocalError`) instead of running the delete at all -- exactly
+    the "early failure must not raise a second exception out of `finally`"
+    hazard this round's own instructions warn about.
+
+    **So this cleanup does not take `idx` as an argument, and does not
+    write anything before it deletes.** It reads `paramset.ParamSet`
+    (`eye_detection` rows only), filters in Python for whichever one (if
+    any) has THIS fixture's own name in its stored `params['detector']`, and
+    deletes that row if one exists. A pure SELECT plus a conditional
+    DELETE-of-what-was-found: nothing here can insert, so nothing here can
+    leave a partial write for a later step to depend on (fix round 1's own
+    concern, about `_detector`/`register_default_paramsets` as `finally`'s
+    first statement, stays fixed rather than reappearing in a new shape) --
+    and if the fixture's row was never inserted at all, the filter simply
+    finds nothing and this returns having done nothing, rather than raising.
+    """
+    from wl_preproc.schema import paramset
+
+    rows = (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+    stale = [row for row in rows if row["params"].get("detector") == name]
+    for row in stale:
+        (paramset.ParamSet
+         & {"paramset_type": "eye_detection", "paramset_idx": row["paramset_idx"]}).delete()
+
+
 def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_session, prefix):
     """The four blocked detectors, in the only form that exists today.
 
@@ -3069,7 +3120,7 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     from wl_preproc import daemon
     from wl_preproc.eye.detect.labels import Label, LabelledInterval
     from wl_preproc.eye.detect.registry import DETECTORS
-    from wl_preproc.schema import detect, paramset
+    from wl_preproc.schema import detect
 
     def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
         """A saccade with a glissade on its tail, in both eyes, at the same
@@ -3104,16 +3155,21 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
             lambda: _register_default_paramsets_including("two_kinds", real_registered),
         ),
     ):
-        # Captured ONCE, as the first statement inside the `with` -- before
-        # `try` -- so `finally` below never has to call `_detector`/
-        # `register_default_paramsets` itself (fix round: that would be
-        # three more `paramset.register` writes made FROM `finally`, and if
-        # any of them raised, the delete they gate would never run, leaving
-        # exactly the residue this cleanup exists to prevent). If this one
-        # call raises, nothing has been registered yet beyond what the two
-        # `with` context managers already restore on their own.
-        idx = detect.register_default_paramsets()["two_kinds"]
         try:
+            # First statement INSIDE `try`, not before it (fix round 2):
+            # this call is what INSERTS `"two_kinds"`'s own `ParamSet` row
+            # (`_register_default_paramsets_including`'s dict comprehension)
+            # and then runs fix round 1's own pin assertion, LAST, against
+            # the already-inserted row. Capturing `idx` before `try` (fix
+            # round 1's own choice) put that insert-then-maybe-raise
+            # sequence entirely OUTSIDE the region `finally` protects, so a
+            # genuine pin failure -- the exact scenario the pin exists to
+            # catch -- leaked the row it had just written. See
+            # `_delete_fixture_paramset`'s own docstring for the rest of
+            # this reasoning and for why `finally` below does not need
+            # `idx` to already be bound.
+            idx = detect.register_default_paramsets()["two_kinds"]
+
             daemon.run_once(prefix=prefix)
 
             rows = (
@@ -3140,19 +3196,21 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
             saccade_rows = [r for r in rows if r["label"] == "saccade"]
             assert saccade_rows[0]["amplitude_deg"] is not None
         finally:
-            # The `paramset.ParamSet` row itself, not only the `EyeDetection`
-            # rows it produced. Deleting `EyeDetection` alone (this task's own
-            # first attempt) leaves the paramset registered with no detection
-            # to show for it, so `EyeDetection.key_source` reads it as
-            # PENDING again on every later `daemon.run_once()` in the suite --
-            # and forever failing, since `DETECTORS["two_kinds"]` is gone by
-            # then. Deleting the `ParamSet` row cascades (a real dependency:
-            # `EyeDetection` declares a bare `-> paramset.ParamSet` for its
-            # detector reference) through `EyeDetection`, `EyeDetection.Run`
-            # and any `DetectorAgreement` row that named it, in one call, and
-            # removes it from `key_source` entirely rather than merely
-            # un-computing it.
-            (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": idx}).delete()
+            # By NAME, not by the `idx` above -- which this block must not
+            # depend on, since a pin failure while computing it means `idx`
+            # was never bound in this frame at all. Deleting `EyeDetection`
+            # alone (this task's own first attempt, before either fix round)
+            # leaves the paramset registered with no detection to show for
+            # it, so `EyeDetection.key_source` reads it as PENDING again on
+            # every later `daemon.run_once()` in the suite -- and forever
+            # failing, since `DETECTORS["two_kinds"]` is gone by then.
+            # Deleting the `ParamSet` row instead cascades (a real
+            # dependency: `EyeDetection` declares a bare `-> paramset.
+            # ParamSet` for its detector reference) through `EyeDetection`,
+            # `EyeDetection.Run` and any `DetectorAgreement` row that named
+            # it, in one call, and removes it from `key_source` entirely
+            # rather than merely un-computing it.
+            _delete_fixture_paramset("two_kinds")
 
 
 def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
@@ -3179,7 +3237,7 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
     from wl_preproc import daemon
     from wl_preproc.eye.detect.labels import Label, LabelledInterval
     from wl_preproc.eye.detect.registry import DETECTORS
-    from wl_preproc.schema import detect, paramset
+    from wl_preproc.schema import detect
 
     def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
         return [
@@ -3206,10 +3264,12 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
             lambda: _register_default_paramsets_including("two_kinds_traces", real_registered),
         ),
     ):
-        # See the sibling test's own comment above its identical line for why
-        # this is the first statement inside the `with`, ahead of `try`.
-        idx = detect.register_default_paramsets()["two_kinds_traces"]
         try:
+            # See the sibling test's own comment above its identical line
+            # (fix round 2) for why this is the first statement INSIDE
+            # `try` rather than before it.
+            idx = detect.register_default_paramsets()["two_kinds_traces"]
+
             report = daemon.run_once(prefix=prefix)
             errors = report["errors"]
 
@@ -3241,7 +3301,7 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
                 or f"'paramset_b': {idx}" in e
             ]
         finally:
-            # See the sibling test's own `finally` for why this deletes the
-            # `ParamSet` row itself and not only the `EyeDetection` rows it
-            # produced.
-            (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": idx}).delete()
+            # See the sibling test's own `finally`, and `_delete_fixture_
+            # paramset`'s own docstring, for why this is by NAME rather
+            # than by the `idx` above, which this block must not depend on.
+            _delete_fixture_paramset("two_kinds_traces")
