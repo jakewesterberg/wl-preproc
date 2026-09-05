@@ -1,3 +1,24 @@
+> **SUPERSEDED 2026-09-05** by
+> `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md`. **None of
+> the four conventions below was adopted, and the question was withdrawn
+> rather than answered.**
+>
+> The premise was wrong. This brief argues that a conjunction run's label
+> cannot come from a detector because the conjunction is derived. The first
+> half is true; the second does not follow. When both eyes independently call
+> the same stretch `pso`, their agreement on KIND supplies the label, and the
+> conjunction stores `pso` as `pso`.
+>
+> What actually blocked the four detectors was a defect: `_overlapping`
+> intersected every left run against every right run on time alone and never
+> read a label, which made the label question look unanswerable.
+>
+> **What below is still accurate and worth reading:** the account of what a
+> glissade is, Deubel & Bridgeman's 0.5 deg against a 1.0 deg microsaccade
+> threshold, Nystrom & Holmqvist's finding that the assignment is made
+> "largely arbitrarily", and the transaction behaviour that made a blocked
+> detector write nothing at all.
+
 # The one decision blocking four detectors
 
 **Written 2026-09-02**, after stage 2A merged (`a8fd3cb`, CI green). This is a
