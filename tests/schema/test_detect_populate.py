@@ -3257,6 +3257,61 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
             _delete_fixture_paramset("two_kinds_traces")
 
 
+def test_nystrom_holmqvist_populates_all_three_traces(stepped_session, prefix):
+    """The first REAL multi-kind detector to reach the conjunction. Until
+    2026-09-05 a `pso`-emitting detector could not produce a conjunction
+    trace at all -- `_conjunction_label` raised, and because DataJoint wraps
+    `make()` in a transaction and cancels it on any exception, it wrote no
+    rows whatsoever, not even the per-eye traces inserted before the raise.
+
+    Through `daemon.run_once()`, never `make()` by hand: stage 1's worst
+    defect was that nothing in production registered the detection paramsets,
+    and it stayed invisible because every test registered its own."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+
+    daemon.run_once(prefix=prefix)
+
+    traces = set(
+        (detect.EyeDetection & {**session_key, **_detector("nystrom_holmqvist")})
+        .to_arrays("trace")
+    )
+    assert traces == {"left", "right", "conjunction"}
+
+
+def test_the_conjunction_of_a_pso_detector_can_carry_pso(stepped_session, prefix):
+    """The shape rule, on a real detector: the conjunction's vocabulary is
+    the detector's. A binocular glissade is stored as `pso`, not folded into
+    a saccade and not dropped.
+
+    Asserted as a SUBSET rather than a presence, because whether the planted
+    fixture produces a BINOCULAR glissade is a property of the fixture, not
+    of the rule under test. `test_a_multi_kind_detector_populates_and_keeps_
+    its_vocabulary` already pins presence on a fixture built to guarantee
+    it."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+
+    daemon.run_once(prefix=prefix)
+
+    labels = set(
+        (
+            detect.EyeDetection.Run
+            & {**session_key, "trace": "conjunction",
+               **_detector("nystrom_holmqvist")}
+        ).to_arrays("label")
+    )
+    assert labels <= {"saccade", "pso", "fixation", "blink", "invalid"}
+    assert "microsaccade" not in labels, (
+        "this detector's saccadic slice is `{saccade}` alone, so `classify` "
+        "must never be asked and `microsaccade` must never be stored"
+    )
+
+
 def test_registering_a_third_detector_does_not_raise(daemon_module):
     """The defect this fix exists to close. `register_default_paramsets` kept
     a hardcoded `defaults` dict of the two real detector names and did
