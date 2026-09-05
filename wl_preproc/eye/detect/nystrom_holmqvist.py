@@ -22,11 +22,12 @@ names; nothing here is tuned (design spec
 It carries the twelve published parameters, the paper's first step (the
 adaptive peak-velocity threshold, p. 193, Figure 4, that converges to the
 data's own noise floor rather than asking an experimenter to choose one,
-which is what makes the algorithm "settings-free for the user"), and its
-second (onset/offset search around a detected peak, p. 194, Figure 5).
-Glissade detection, fixation detection, and registration with `registry.py`
-are separate tasks in the same implementation plan and are not yet in this
-file -- `nystrom_holmqvist` does not yet appear in `registry.DETECTORS`.
+which is what makes the algorithm "settings-free for the user"), its second
+(onset/offset search around a detected peak, p. 194, Figure 5), and its
+third (glissade detection, p. 195). Fixation detection and registration with
+`registry.py` are separate tasks in the same implementation plan and are not
+yet in this file -- `nystrom_holmqvist` does not yet appear in
+`registry.DETECTORS`.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+
+from wl_preproc.eye.detect.measure import amplitude
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,3 +352,85 @@ def _saccade_bounds(
     if offset - onset < min_samples:
         return None
     return onset, offset, offset_threshold
+
+
+def _glissade_bounds(
+    speed_deg_s: np.ndarray,
+    gaze_deg: np.ndarray,
+    saccade_onset: int,
+    saccade_offset: int,
+    offset_threshold_deg_s: float,
+    thresholds: PeakThreshold,
+    fs_hz: float,
+    params: NystromHolmqvistParams,
+) -> tuple[int, int] | None:
+    """`[start, stop)` of the glissade following one saccade, or `None`.
+
+    **Both of the paper's criteria, because Table 3's 47.8% is their union**
+    (design spec §3, an inference from Figure 10 and marked as one). The two
+    are defined as mutually exclusive in how the paper COUNTS them -- "low-
+    velocity glissades are not a subset of high-velocity glissades" -- but
+    that is a labelling convention over which bucket a qualifying window
+    falls into, not a claim that the underlying velocity conditions are
+    disjoint in time. Since this vocabulary has no separate label for either
+    kind (both emit `pso`), only the union matters here:
+
+    - HIGH-velocity: the curve rises above `theta_PT` within `tau_min` of
+      the saccade offset. "A high-velocity glissade has a velocity peak that
+      would qualify it for saccadic status" (p. 195).
+    - LOW-velocity: identical, but only above `theta_ST^offset`
+      (`offset_threshold_deg_s`, the third element `_saccade_bounds`
+      returned for this same saccade).
+
+    **A sample qualifies by clearing EITHER threshold, so the window is
+    compared against whichever of the two is smaller.** `theta_ST^offset`
+    is usually the smaller of the two -- it blends `_saccade_bounds`'
+    onset threshold with a LOCAL noise estimate over a window preceding the
+    saccade, and that local estimate's mean is checked against `theta_PT`
+    (the "no stillness" reject) but its spread is not: a noisy-but-not-
+    elevated baseline can push `theta_ST^offset` above `theta_PT` itself.
+    Comparing only against `offset_threshold_deg_s` would then miss a real
+    high-velocity excursion, so `thresholds.peak_deg_s` is checked too, not
+    assumed to already be covered by the low-velocity threshold.
+    (`test_the_high_velocity_criterion_survives_an_inflated_low_velocity_
+    threshold` is what makes that assumption a checked one rather than a
+    silent one.)
+
+    **Onset is the saccade's offset.** Offset is where
+    `(theta_i - theta_(i+1)) <= 0` after the last velocity peak in the
+    glissade -- a forward walk shaped like `_saccade_bounds`' own offset
+    search, but not identical to it: that search re-checks each sample
+    against a threshold because it starts at the peak itself, while this one
+    starts at the LAST sample already known to be above `qualifying_
+    threshold`, so everything from there on is already past the exceeding
+    stretch and only the local-minimum condition remains to be found. A
+    glissade whose amplitude exceeds its preceding saccade's is omitted
+    (p. 196): "Glissades with an amplitude larger than their preceeding
+    saccades were omitted."
+
+    `speed_deg_s` is the same scalar speed `_peak_threshold` and
+    `_saccade_bounds` take. `gaze_deg` is the two-column position trace
+    `amplitude` measures endpoint-to-endpoint displacement from.
+    """
+    tau = max(int(round(params.min_fixation_duration_ms * fs_hz / 1000.0)), 1)
+    end = min(saccade_offset + tau, speed_deg_s.size)
+    window = speed_deg_s[saccade_offset:end]
+    if window.size == 0:
+        return None
+
+    qualifying_threshold = min(offset_threshold_deg_s, thresholds.peak_deg_s)
+    above = np.flatnonzero(window > qualifying_threshold)
+    if above.size == 0:
+        return None
+
+    last_peak = saccade_offset + int(above[-1])
+    stop = last_peak
+    limit = speed_deg_s.size - 1
+    while stop < limit and speed_deg_s[stop] - speed_deg_s[stop + 1] > 0:
+        stop += 1
+    stop = min(stop + 1, speed_deg_s.size)
+
+    saccade_amp = amplitude(gaze_deg, saccade_onset, saccade_offset)
+    if amplitude(gaze_deg, saccade_offset, stop) > saccade_amp:
+        return None
+    return saccade_offset, stop

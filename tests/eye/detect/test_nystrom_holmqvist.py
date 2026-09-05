@@ -334,3 +334,237 @@ def test_a_saccade_not_preceded_by_stillness_is_rejected():
     thresholds = PeakThreshold(100.0, 20.0, 2, True)
 
     assert _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS) is None
+
+
+def test_a_high_velocity_glissade_is_found():
+    """Paper p. 195: the high-velocity criterion "requires that the velocity
+    curve within a tau_min (40) msec window after the saccadic offset raises
+    above the peak saccade threshold, theta_PT, and down below it, at least
+    once. In other words, a high-velocity glissade has a velocity peak that
+    would qualify it for saccadic status".
+
+    **`assert stop > start` was this test's original, and only, check on
+    `stop` -- too loose to discriminate the direction of the exceeds-
+    threshold comparison.** Verified directly: mutating `_glissade_bounds`
+    to compare `window < qualifying_threshold` instead of `>` and re-running
+    left this test passing, because the inverted comparison still returns a
+    `stop` past `start` for this fixture -- it picks up the quiet baseline
+    beyond the excursion (index 339) rather than the excursion's own decay,
+    landing at `stop == 340` instead of the correct 331. `331` is computed
+    independently of the implementation: the last sample above 25 deg/s is
+    index 329 (`speed[320:330]`'s final 150), the forward walk immediately
+    finds `speed[330] - speed[331] == 0` (the baseline past the excursion is
+    already flat), stopping at 330, and `stop` is one past that to stay
+    exclusive like `Run`."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0                       # saccade
+    speed[320:330] = 150.0                       # above peak threshold (100)
+    gaze = np.zeros((600, 2))
+    gaze[320:, 0] = 0.4                          # small, smaller than the saccade
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[:300, 0] = 0.0
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    bounds = _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    )
+
+    assert bounds is not None
+    start, stop = bounds
+    assert start == 320, "the glissade's onset IS the saccade's offset"
+    assert stop == 331, stop
+
+
+def test_a_low_velocity_glissade_is_found():
+    """Same criterion, except the curve need only rise above the saccade
+    OFFSET threshold rather than the peak threshold (paper p. 195, Figure
+    5B). This is the one that catches the small post-saccadic wobbles that
+    §2.5 argues a dual-Purkinje tracker shows after every saccade.
+
+    **This test originally checked only `bounds[0]`, leaving `stop`
+    unchecked at all** -- the same comparison-direction gap as the
+    high-velocity test above, and verified the same way: mutating
+    `_glissade_bounds` to compare `<` instead of `>` still returned a
+    non-`None` result starting at 320, so an assertion that stopped at
+    `bounds[0]` would not have caught it. `329` is computed independently:
+    the last sample above 25 deg/s is index 327 (`speed[320:328]`'s final
+    40), the forward walk immediately finds `speed[328] - speed[329] == 0`,
+    and `stop` is one past that to stay exclusive."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    speed[320:328] = 40.0                        # above offset (25), below peak (100)
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[320:, 0] = 0.45
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    bounds = _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    )
+
+    assert bounds is not None
+    start, stop = bounds
+    assert start == 320
+    assert stop == 329, stop
+
+
+def test_no_glissade_when_the_window_stays_quiet():
+    """Below the offset threshold is not a glissade -- it is the fixation
+    that follows the saccade."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[320:, 0] = 0.4
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    ) is None
+
+
+def test_one_saccade_yields_at_most_one_glissade():
+    """Spec §8 item 4 asks that the two criteria be "mutually exclusive."
+    Under §3's resolution that is not a test of two code paths: both criteria
+    emit `pso`, and their UNION is what Table 3's 47.8% measures. What
+    remains checkable, and what matters to storage, is that one saccade never
+    yields two overlapping glissade runs -- `_insert_trace` paints intervals
+    onto one array, so a duplicate would silently overwrite itself.
+
+    A window holding both a high-velocity excursion and a later low-velocity
+    one must still produce a single run.
+
+    **`stop >= 330` was this test's original check -- a floor, not a pin,
+    and too loose to discriminate the comparison-direction bug the two
+    tests above were fixed for.** Verified directly: a `<`-for-`>` mutation
+    also lands past 330 for this fixture (index 339, the trailing baseline,
+    rather than either excursion), so the floor was satisfied anyway. 331 is
+    the same excursion-decay endpoint as `test_a_high_velocity_glissade_
+    is_found`: the low-velocity plateau's last sample above 25 deg/s is
+    index 329, and `stop` is one past that."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    speed[320:324] = 150.0                       # above peak (100)
+    speed[324:330] = 40.0                        # above offset (25), below peak
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[320:, 0] = 0.45
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    bounds = _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    )
+
+    assert bounds is not None
+    start, stop = bounds
+    assert start == 320
+    assert stop == 331, "one run must span both excursions, not two"
+
+
+def test_a_glissade_larger_than_its_saccade_is_omitted():
+    """Paper p. 196: "Glissades with an amplitude larger than their
+    preceeding saccades were omitted." A post-saccadic movement bigger than
+    the saccade it follows is not lens wobble."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    speed[320:330] = 150.0
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.2, 20)   # a 0.2 deg saccade
+    gaze[320:330, 0] = np.linspace(0.2, 3.0, 10)   # a 2.8 deg "glissade"
+    gaze[330:, 0] = 3.0
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    ) is None
+
+
+def test_the_high_velocity_criterion_survives_an_inflated_low_velocity_threshold():
+    """The two criteria are genuinely independent, not merely nested by
+    coincidence of typical magnitudes. `_saccade_bounds` blends a LOCAL
+    noise estimate into `theta_ST^offset` (`alpha*theta_ST^onset +
+    beta*theta_t`), and that local estimate's variance term is unbounded even
+    though its MEAN is checked against `theta_PT` (the "no stillness" reject
+    in `_saccade_bounds`) -- a pre-saccade baseline that is noisy but not
+    elevated can push `theta_ST^offset` above `theta_PT` itself. When that
+    happens, the paper's HIGH-velocity criterion is still a peak "that would
+    qualify it for saccadic status" against the untouched, global `theta_PT`
+    (p. 195) -- it does not inherit the inflated local number. Implementing
+    the union as "above `offset_threshold_deg_s`" alone, rather than above
+    WHICHEVER of the two thresholds is smaller, would silently lose every
+    high-velocity glissade whenever this happens -- which spec §3's own
+    inference (both criteria genuinely implemented, not one standing in for
+    both by coincidence) requires not to happen.
+
+    `offset_threshold_deg_s=500.0` here stands in for that inflated-local-
+    noise case, deliberately far above `thresholds.peak_deg_s=100.0`; the
+    post-saccadic excursion (150 deg/s) clears the peak threshold but not
+    this inflated one."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    speed[320:330] = 150.0                       # clears peak (100), not offset (500)
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[320:, 0] = 0.45
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    bounds = _glissade_bounds(
+        speed, gaze, 300, 320, 500.0, thresholds, fs, DEFAULT_NH_PARAMS
+    )
+
+    assert bounds is not None, (
+        "a genuine high-velocity excursion must not be hidden behind an "
+        "inflated low-velocity threshold"
+    )
+    start, stop = bounds
+    assert start == 320
+    # Same excursion-decay endpoint as `test_a_high_velocity_glissade_is_
+    # found` (the effective threshold here is also 100, since `min(500,
+    # 100) == 100`): last sample above it is index 329, one past which is
+    # 331. Pinned, rather than left as a bare not-None check, so this test
+    # also discriminates a comparison-direction inversion in `_glissade_
+    # bounds`, not only the union-drops-the-peak-threshold bug it was
+    # written for.
+    assert stop == 331, stop
