@@ -19,7 +19,7 @@ status:
     of intersecting on time alone, so a non-saccadic label (`pso`,
     `pursuit`, `drift`) survives a conjunction instead of being crossed
     with an unrelated label -- is built and tested on branch
-    `spec/conjunction-shape` (ten commits, tip `d396d85`), NOT YET MERGED
+    `spec/conjunction-shape` (thirteen commits, tip `7680563`), MERGED as `76a8199`
     to `main`. Phase 2b's back half remains hardware-blocked.
   next: >-
     Saccade detection stage 2B — the five detectors still unwritten
@@ -39,9 +39,10 @@ status:
     The glissade-label decision that used to gate four of the five is
     WITHDRAWN, not answered
     (docs/superpowers/specs/2026-09-05-conjunction-shape-design.md, branch
-    `spec/conjunction-shape`, ten commits `c0838b8..d396d85` -- 1301 passed
-    locally on Python 3.11, CI on 3.11/3.13 not yet run for this branch,
-    NOT YET MERGED to `main`). The premise was wrong: a conjunction's
+    `spec/conjunction-shape`, thirteen commits `c0838b8..7680563`, MERGED to
+    `main` as `76a8199` on 2026-09-05 -- 1301 passed locally on Python 3.11
+    on the MERGED tree, CI on 3.11/3.13 still NOT RUN, because `main` has
+    not been pushed since). The premise was wrong: a conjunction's
     label does not need to come from a detector, because when both eyes
     independently call a stretch the same KIND, their agreement on kind
     supplies the label, and a binocular glissade now stores as `pso`. What
@@ -91,12 +92,17 @@ status:
     2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
     (which validity criterion 4 is blocked on) and rehydration are the other
     hardware-free pieces outstanding.
-  # d396d85 is the tip of the ten conjunction-shape commits on branch
-  # `spec/conjunction-shape` (c0838b8..d396d85), NOT a commit on `main` --
-  # `main` is at c3f6c5e as of this update. Named the same way `phase`/`next`
-  # above name it: the substantive anchor commit the status text describes,
-  # with this file's own edit landing one commit on top of it, on that branch.
-  describes: d396d85
+  # 76a8199 is the merge commit that landed the thirteen conjunction-shape
+  # commits (c0838b8..7680563), and is `main`'s tip. `main` also moved
+  # independently during that work, to c0abc75 (a LICENSE one-liner), which
+  # is why 76a8199 is a real two-parent merge rather than a fast-forward.
+  #
+  # This block previously named d396d85, the branch tip at the moment Task 6
+  # wrote it. That was correct when written and went stale twice within the
+  # hour: three more commits landed on the branch, then it merged. Recorded
+  # because it is this file's own recurring failure -- a status block is only
+  # true of the commit it names, and merging is exactly when it stops being.
+  describes: 76a8199
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

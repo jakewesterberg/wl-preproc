@@ -1,16 +1,24 @@
 # Where this build actually is
 
-**Last updated 2026-09-05**, describing `main` at `c3f6c5e` (unchanged by this
-update) plus branch `spec/conjunction-shape` at `d396d85` — ten commits,
-`c0838b8..d396d85`, implementing per-kind conjunction intersection — with the
-`wl.yaml` update and this file's own commit on top of *that branch*. **Not yet
-merged to `main`**: `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md`
-is built and tested (1301 passed locally on Python 3.11; CI on 3.11/3.13 has not
-been run for this branch) but has not gone through the whole-branch review or the
-PR this file's own "Before opening a PR" checklist requires. Check
-`git branch --show-current` and `git log --oneline -1`; if the branch has merged
-or moved past `d396d85`, or `main` has moved past `c3f6c5e`, this file is stale
-and the spec wins.
+**Last updated 2026-09-05**, describing `main` at `76a8199` — the merge commit
+that landed `spec/conjunction-shape`, thirteen commits `c0838b8..7680563`
+implementing per-kind conjunction intersection
+(`docs/superpowers/specs/2026-09-05-conjunction-shape-design.md`) — with this
+file's own commit on top. `main` also moved independently during that work, to
+`c0abc75` (a LICENSE one-liner), so `76a8199` is a real two-parent merge.
+
+**Merged, whole-branch reviewed, and NOT pushed.** The whole-branch review ran
+and came back clean after one fix wave; **1301 passed on the MERGED tree** on
+Python 3.11. **CI on 3.11/3.13 has still never run for any of it**, because
+`main` is unpushed — so every claim here is evidence about 3.11 on macOS arm64
+and nothing else. Check `git log --oneline -1`; if `main` has moved past
+`76a8199`, this file is stale and the spec wins.
+
+*The paragraph above replaced one written four commits earlier that said "not
+yet merged" and named ten commits. It was true when written and false within
+the hour — three more commits landed and the branch merged. That is this
+file's own recurring failure mode, and the reason its header is part of every
+update.*
 
 *This header named `bfdfd7f` for two commits after the body had moved past it — the
 file's own test catching its own author. If you update this file, the header is part of
@@ -233,8 +241,9 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    the decision "the cheapest item on this list." **That is now false, and
    the reversal is recorded rather than quietly edited.**
    `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md` (branch
-   `spec/conjunction-shape`, ten commits `c0838b8..d396d85`, built and tested
-   — 1301 passed locally on 3.11 — but **not yet merged to `main`**) ruled
+   `spec/conjunction-shape`, thirteen commits `c0838b8..7680563`, **merged to
+   `main` as `76a8199`** — 1301 passed on the merged tree on 3.11, CI never
+   run) ruled
    that the premise was wrong: a conjunction's label does not have to come
    from a detector, because when both eyes independently call a stretch the
    same KIND, their agreement on kind supplies the label. A binocular
