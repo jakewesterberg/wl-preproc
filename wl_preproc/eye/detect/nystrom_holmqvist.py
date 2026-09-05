@@ -118,6 +118,11 @@ class NystromHolmqvistParams:
     #: section 9, item 2). This is this implementation's own guard, and
     #: `PeakThreshold.converged=False` is how a caller tells a genuine
     #: convergence apart from one that only hit this limit.
+    #:
+    #: **Whether real data can actually reach this limit, rather than only a
+    #: constructed one, is an open question this implementation searched but
+    #: did not settle** -- see `_peak_threshold`'s own docstring and
+    #: task-2-report.md.
     max_iterations: int
 
     #: Table 2: saccades shorter than this are discarded -- "large enough to
@@ -163,9 +168,12 @@ DEFAULT_NH_PARAMS = NystromHolmqvistParams(
 @dataclass(frozen=True, slots=True)
 class PeakThreshold:
     """The converged thresholds, plus whether the iteration actually got
-    there. `converged=False` is not a failure to hide: the paper gives no
-    iteration cap, so a caller must be able to tell a converged threshold
-    from one that hit this implementation's own guard."""
+    there. `converged=False` is not a failure to hide -- it is either of two
+    honest outcomes, both distinct from a genuine convergence: the
+    sub-threshold population went empty before settling (nothing left to
+    estimate `mu, sigma` from), or the paper gives no iteration cap and this
+    implementation's own guard (`max_iterations`) was reached first. Either
+    way, a caller can tell a converged threshold from one that is not."""
 
     peak_deg_s: float
     onset_deg_s: float
@@ -191,6 +199,21 @@ def _peak_threshold(
     notes it "is also used in microsaccade detection algorithms (Engbert &
     Kliegl, 2003)" -- the same 6 `engbert_kliegl.py::DEFAULT_LAMBDA` already
     carries.
+
+    **Whether `params.max_iterations` is ever exhausted by real data, as
+    opposed to only by construction, was searched for and not found.** Every
+    fixture in this module's own tests converges or empties well within the
+    default 100. An adversarial search went further: tens of thousands of
+    random multi-cluster and heavy-tailed distributions, plus an exhaustive
+    sweep of the most direct way to engineer a sustained two-value
+    oscillation -- a population with real spread, and a point mass sitting
+    at the regime boundary its own update would cross, swept across six
+    orders of magnitude of relative population size -- and none exhausted
+    the cap; a closed-form argument covers why the extreme end of that sweep
+    (an overwhelming point mass) cannot work, by a wide margin. That falls
+    short of a proof over every conceivable finite array, so the guard
+    stays and `PeakThreshold.converged` stays meaningful. Full search and
+    argument in task-2-report.md.
 
     **Unusable samples are excluded**, for `detect_engbert_kliegl`'s own
     stated reason: a blink's velocity spike would inflate the scale and

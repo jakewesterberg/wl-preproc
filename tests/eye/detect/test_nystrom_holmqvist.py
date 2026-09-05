@@ -57,12 +57,30 @@ def test_the_starting_value_does_not_matter():
     assert max(results) - min(results) < 1.0, results
 
 
-def test_an_oscillating_distribution_terminates():
-    """Spec §9 item 2: **the paper states no iteration cap.** It reports
-    convergence "in about two iterations" and gives a criterion, but a
-    distribution that never satisfies it would loop forever. `max_iterations`
-    is this implementation's own guard, not the paper's, and the result says
-    so rather than pretending to have converged."""
+def test_a_constant_speed_terminates_by_emptying_not_by_converging():
+    """Renamed at review from `test_an_oscillating_distribution_terminates`:
+    the fixture below does not oscillate. Traced directly, it terminates
+    after 2 iterations via the `below.size == 0` branch (`nystrom_holmqvist.
+    py`'s early return when nothing remains below the current threshold),
+    not via `max_iterations` exhaustion -- no test in this module reaches
+    that branch.
+
+    Whether a genuinely oscillating or slow-converging distribution exists
+    at all was searched for directly, not assumed: tens of thousands of
+    random multi-cluster and heavy-tailed constructions, plus an exhaustive
+    sweep of the most direct way to engineer a sustained two-value
+    oscillation (a spread population and a point mass at the regime
+    boundary, across six orders of magnitude of relative population size).
+    None exhausted `max_iterations`; task-2-report.md has the search and a
+    closed-form argument covering the extreme end of that swept family.
+    `_peak_threshold`'s own docstring carries the same finding, since it
+    bears on reading the code and not only on reading this test.
+
+    What this test still checks, and it is worth checking on its own:
+    spec §9 item 2's point that the paper states no iteration cap, so
+    `converged=False` on a degenerate input must be an honest report
+    (uniform speed collapses the threshold onto the data, so no sample is
+    ever below it) rather than a crash or a false `converged=True`."""
     import numpy as np
 
     from wl_preproc.eye.detect.nystrom_holmqvist import (
@@ -78,6 +96,22 @@ def test_an_oscillating_distribution_terminates():
 
     assert result.iterations <= DEFAULT_NH_PARAMS.max_iterations
     assert not result.converged
+
+
+def test_no_usable_samples_returns_the_stated_zero_default():
+    """`nystrom_holmqvist.py`'s `sub.size == 0` early return: every sample
+    already excluded by the mask leaves nothing to compute `mu, sigma` from.
+    Untested until now -- coverage gap noted at review of this task."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _peak_threshold,
+    )
+
+    speed = np.abs(np.random.default_rng(3).normal(5.0, 2.0, 500))
+    usable = np.zeros(500, dtype=bool)
+
+    assert _peak_threshold(speed, usable, DEFAULT_NH_PARAMS) == PeakThreshold(0.0, 0.0, 0, False)
 
 
 def test_unusable_samples_are_excluded_from_the_estimate():
