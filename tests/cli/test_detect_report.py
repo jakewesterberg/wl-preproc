@@ -531,7 +531,13 @@ def test_the_agreement_line_appears_once_a_second_detector_exists(
     subject = "detr0004"
     dt = datetime.datetime(2027, 6, 10, 12, 0)
     _land_session(subject, dt)
-    paramset_a, paramset_b = detect_schema.pair
+    # The two SMALLEST of however many are registered, not "the" two: this
+    # test is about the TRANSITION (a real pair reaches the subsection at
+    # all), never about which two detectors, so it only needs any two --
+    # `detect_schema.pair` is already every registered index (fixture's own
+    # comment), and slicing rather than requiring exactly two is what keeps
+    # this working as design spec section 3.1's remaining detectors arrive.
+    paramset_a, paramset_b = detect_schema.pair[:2]
     for index in (paramset_a, paramset_b):
         _insert_detection(
             detect_schema.module,
