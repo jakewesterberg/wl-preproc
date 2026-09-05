@@ -55,6 +55,26 @@ import time
 import numpy as np
 import pytest
 
+# Module-level, unlike every other import in this file (each test function
+# imports what it needs locally). Required here rather than optional: this
+# file's own `from __future__ import annotations` (above) makes every
+# annotation a STRING (PEP 563), and `typing.get_type_hints` -- which
+# `schema/detect.py::_params_for` calls on a detector's `run` to find its
+# params dataclass -- resolves such a string against the function's OWN
+# `__globals__`, which for any function defined in this file is THIS
+# module's globals, regardless of how deeply the function is nested inside
+# a test body. A fixture detector's `run` needs a `params: EngbertKlieglParams`
+# annotation for `_params_for` to build one (test_a_multi_kind_detector_
+# populates_and_keeps_its_vocabulary/test_a_multi_kind_detector_writes_all_
+# three_traces, below) -- confirmed directly: a local import of the same
+# name, inside the test function that defines the annotated callable, left
+# it unresolvable (`NameError: name 'EngbertKlieglParams' is not defined`,
+# raised from inside `_params_for` and caught as a per-key `EyeDetection`
+# error rather than failing the import itself) because a NESTED function's
+# `__globals__` is still the ENCLOSING MODULE's namespace, never the
+# enclosing function's own locals.
+from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
+
 TRIAL_DURATION_S = 3.0
 
 # The affine's own slope, `degrees = CAL_SCALE * raw_px` (no cross terms, no
@@ -2877,3 +2897,265 @@ def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
         # runs total, not thousands -- only a broken encoder, or a detector
         # firing on nearly every sample, would come anywhere near this bound.
         assert len(runs) < row["n_samples"] / 10, (name, trace)
+
+
+def _register_default_paramsets_including(name: str) -> dict[str, int]:
+    """`schema/detect.py::register_default_paramsets`'s own body, plus one
+    more entry in its `defaults` dict -- substituted for the real function,
+    via `unittest.mock.patch.object`, for exactly the span of the two tests
+    below that register a fixture detector into `DETECTORS`.
+
+    **Needed because the real function cannot know a fixture's name.** Its
+    own `defaults` dict is a literal, keyed by string for `engbert_kliegl`
+    and `otero_millan` alone -- correct today, when those are the only two
+    detectors that exist -- and the comprehension below it reads
+    `defaults[name]` for `name in DETECTORS` UNCONDITIONALLY. Registering a
+    third name into `DETECTORS` therefore makes that lookup raise `KeyError`,
+    confirmed directly (this task's own investigation, before this helper
+    existed): adding `"two_kinds"` to `DETECTORS` and calling the real,
+    unpatched `daemon.run_once()` raised `KeyError: 'two_kinds'` from inside
+    `register_default_paramsets`'s own dict comprehension, and it is not a
+    per-key error `populate()`'s `suppress_errors=True` can catch --
+    `daemon.run_once()` calls `register_default_paramsets()` directly, so the
+    exception aborts the WHOLE call before any table's `key_source` is asked
+    a single question, taking the two REAL detectors' registration down with
+    it too. **Not a defect this branch introduced or could fix here**: `git
+    blame` puts every line of that `defaults` dict at 2026-09-01/2026-09-02
+    (stage 1 / stage 2A), and this task adds no production code regardless.
+
+    A real stage 2B detector module would add its own `DEFAULT_*_PARAMS`
+    dataclass and its own line in that dict. The fixture built by the two
+    tests below has no such module, and its `run` (`detect_two_kinds`)
+    ignores `params` entirely, so reusing Engbert-Kliegl's own defaults is a
+    harmless stand-in: `schema/detect.py::_params_for` only needs SOME
+    dataclass instance whose declared fields the paramset dict can fill, and
+    never a value the fixture actually consults.
+    """
+    from dataclasses import asdict
+
+    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
+    from wl_preproc.schema import paramset
+
+    paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
+    defaults = {
+        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
+        "otero_millan": asdict(DEFAULT_OM_PARAMS),
+        name: asdict(DEFAULT_EK_PARAMS),
+    }
+    return {
+        detector_name: paramset.register(
+            "eye_detection",
+            {
+                "detector": detector_name,
+                **defaults[detector_name],
+                "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
+            },
+        )
+        for detector_name in DETECTORS
+    }
+
+
+def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_session, prefix):
+    """The four blocked detectors, in the only form that exists today.
+
+    Registered through `DETECTORS` and driven by `daemon.run_once()`, never
+    by `make()` -- stage 1's worst defect was that nothing in production
+    registered the detection paramsets, so both `key_source`s named zero
+    candidates and the subsystem wrote no rows while every test that
+    registered its own paramsets passed.
+
+    The fixture's vocabulary below, `{saccade, pso, fixation}`, is not an
+    arbitrary shape: it is exactly Nystrom-Holmqvist's own declared
+    vocabulary (design spec `2026-09-05-conjunction-shape-design.md` section
+    3, "What each detector produces") -- one of the four detectors this task
+    exists to prove are unblocked.
+
+    **`register_default_paramsets` is patched for the span of this test**;
+    see `_register_default_paramsets_including` for why the real one cannot
+    be called unpatched once a fixture detector is registered.
+
+    **`DETECTORS` and `register_default_paramsets` are both restored via
+    `unittest.mock.patch` context managers, not a bare try/finally.**
+    `DETECTORS` is process-wide module state shared across the whole test
+    session -- `test_the_registered_paramsets_match_the_detector_registry`
+    and every `_detector_names()`-driven test in this file read it live -- so
+    a leaked entry here would corrupt the registry's own completeness claim
+    in unrelated tests, and could make test order significant. A correctly
+    written `try/finally` around the body below would restore just as
+    reliably on any exception raised inside it; `patch.dict`/`patch.object`
+    are used instead because they give that identical guarantee while
+    matching a precedent this codebase already has for the exact same
+    dict (`tests/schema/test_consensus_populate.py:466`'s
+    `patch.dict(DETECTORS, {"otero_millan": narrowed})`), rather than
+    hand-rolling a second mechanism, with a second chance to misname the key
+    in a `del`, for the same job.
+
+    **The fixture's OWN `EyeDetection` rows are deleted before this test
+    ends, GLOBALLY rather than scoped to `stepped_session` alone, and that
+    is load-bearing rather than tidiness.** `EyeDetection.key_source` crosses
+    every `eye_validity` row EVER computed in this shared `t_` schema against
+    every `eye_detection` paramset -- not only `stepped_session`'s own -- so
+    registering `"two_kinds"` and calling `daemon.run_once()` computes it for
+    every OTHER module-scoped session this file's own earlier tests already
+    realized too (confirmed directly: `populated` on this call is not
+    explained by `stepped_session`'s three traces alone). `DETECTORS` itself
+    unwinds cleanly on its own, but the ROWS those other sessions' detections
+    wrote do not, and `consensus.DetectorAgreement.key_source` crosses every
+    PAIR of `EyeDetection` rows regardless of which session they came from --
+    so a later test in THIS file registering a different fixture name found
+    `DetectorNotRegistered` on `"two_kinds"` (this task's own investigation,
+    before this cleanup existed): a stale `EyeDetection` row this fixture
+    left behind was still `status='computed'`, `DetectorAgreement`'s
+    key_source paired it against the newer fixture, and `get_detector
+    ("two_kinds")` failed because `DETECTORS` -- correctly -- no longer had
+    it. Deleting by `_detector("two_kinds")` alone, with no session
+    restriction, removes every `EyeDetection` row this fixture ever wrote and
+    cascades (a real DataJoint dependency, not an ad hoc join: `consensus.py::
+    DetectorAgreement` declares `-> detect.EyeDetection.proj(paramset_a=
+    'paramset_idx')` and `-> ...proj(paramset_b=...)` twice) to every
+    `DetectorAgreement` row that named it, in either position, for any
+    session -- which is what makes this fixture leave no candidate for a
+    later `key_source` to ever cross again.
+    """
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from wl_preproc import daemon
+    from wl_preproc.eye.detect.labels import Label, LabelledInterval
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect, paramset
+
+    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+        """A saccade with a glissade on its tail, in both eyes, at the same
+        samples -- the lens ringing this instrument's own design spec says
+        this rig records after every real saccade (`2026-08-31-saccade-
+        detection-design.md` section 2.5)."""
+        return [
+            LabelledInterval(1000, 1060, Label.SACCADE),
+            LabelledInterval(1060, 1090, Label.PSO),
+        ]
+
+    fake = replace(
+        DETECTORS["engbert_kliegl"],
+        name="two_kinds",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=detect_two_kinds,
+    )
+    session_key, _report, _ = stepped_session
+
+    with (
+        patch.dict(DETECTORS, {"two_kinds": fake}),
+        patch.object(
+            detect, "register_default_paramsets",
+            lambda: _register_default_paramsets_including("two_kinds"),
+        ),
+    ):
+        try:
+            daemon.run_once(prefix=prefix)
+
+            rows = (
+                detect.EyeDetection.Run
+                & {**session_key, "trace": "conjunction", **_detector("two_kinds")}
+            ).to_dicts(order_by="run_index")
+
+            labels = {r["label"] for r in rows}
+            # THE shape rule: the conjunction's vocabulary is the detector's.
+            assert "pso" in labels, "the binocular glissade was dropped or renamed"
+            assert "saccade" in labels
+
+            pso_rows = [r for r in rows if r["label"] == "pso"]
+            assert len(pso_rows) == 1
+            assert (pso_rows[0]["run_start"], pso_rows[0]["run_stop"]) == (1060, 1090)
+
+            # A `pso` run stores NULL amplitude -- `_run_row` measures only
+            # `saccade`/`microsaccade` (design spec section 4) -- so the
+            # 12.3% label/amplitude contradiction stage 1 found (section 1.1)
+            # is unreachable for it. There is no amplitude to contradict.
+            assert pso_rows[0]["amplitude_deg"] is None
+            assert pso_rows[0]["peak_velocity_deg_s"] is None
+
+            saccade_rows = [r for r in rows if r["label"] == "saccade"]
+            assert saccade_rows[0]["amplitude_deg"] is not None
+        finally:
+            # The `paramset.ParamSet` row itself, not only the `EyeDetection`
+            # rows it produced. Deleting `EyeDetection` alone (this task's own
+            # first attempt) leaves the paramset registered with no detection
+            # to show for it, so `EyeDetection.key_source` reads it as
+            # PENDING again on every later `daemon.run_once()` in the suite --
+            # and forever failing, since `DETECTORS["two_kinds"]` is gone by
+            # then. Deleting the `ParamSet` row cascades (a real dependency:
+            # `EyeDetection` declares a bare `-> paramset.ParamSet` for its
+            # detector reference) through `EyeDetection`, `EyeDetection.Run`
+            # and any `DetectorAgreement` row that named it, in one call, and
+            # removes it from `key_source` entirely rather than merely
+            # un-computing it.
+            (paramset.ParamSet & {"paramset_type": "eye_detection", **_detector("two_kinds")}).delete()
+
+
+def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
+    """`EyeDetection.make()` inserts `left` and `right` BEFORE the conjunction
+    branch, and DataJoint's `AutoPopulate._populate1` wraps the whole call in
+    a transaction and cancels it on any exception. So the old raise did not
+    yield per-eye data awaiting a conjunction -- it yielded NO rows at all,
+    silently, with the failure visible only in `run_once`'s error list.
+
+    This asserts the outcome that failure mode denied. See
+    `test_a_multi_kind_detector_populates_and_keeps_its_vocabulary` above for
+    why the fixture's vocabulary is shaped the way it is, why
+    `register_default_paramsets` and `DETECTORS` are both patched here rather
+    than mutated with a bare try/finally, and why this fixture's own
+    `EyeDetection` rows are deleted globally (not scoped to `stepped_session`)
+    before the test ends -- a distinct name from that test's own `"two_kinds"`
+    (`"two_kinds_traces"`) so the two never collide mid-suite, but the exact
+    same GLOBAL cleanup either one skipping would leave for the other to find
+    as a stale, no-longer-registered `DetectorAgreement` pairing.
+    """
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from wl_preproc import daemon
+    from wl_preproc.eye.detect.labels import Label, LabelledInterval
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect, paramset
+
+    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+        return [
+            LabelledInterval(1000, 1060, Label.SACCADE),
+            LabelledInterval(1060, 1090, Label.PSO),
+        ]
+
+    fake = replace(
+        DETECTORS["engbert_kliegl"],
+        name="two_kinds_traces",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=detect_two_kinds,
+    )
+    session_key, _report, _ = stepped_session
+
+    with (
+        patch.dict(DETECTORS, {"two_kinds_traces": fake}),
+        patch.object(
+            detect, "register_default_paramsets",
+            lambda: _register_default_paramsets_including("two_kinds_traces"),
+        ),
+    ):
+        try:
+            report = daemon.run_once(prefix=prefix)
+            errors = report["errors"]
+
+            traces = set(
+                (detect.EyeDetection & {**session_key, **_detector("two_kinds_traces")})
+                .to_arrays("trace")
+            )
+            assert traces == {"left", "right", "conjunction"}
+            assert not [e for e in errors if "two_kinds_traces" in str(e)]
+        finally:
+            # See the sibling test's own `finally` for why this deletes the
+            # `ParamSet` row itself and not only the `EyeDetection` rows it
+            # produced.
+            (paramset.ParamSet
+             & {"paramset_type": "eye_detection", **_detector("two_kinds_traces")}).delete()
