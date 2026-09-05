@@ -1302,23 +1302,57 @@ def register_default_paramsets() -> dict[str, int]:
     """
     from dataclasses import asdict
 
-    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
-    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
-    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
     paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
-    defaults = {
-        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
-        "otero_millan": asdict(DEFAULT_OM_PARAMS),
-    }
     return {
-        name: paramset.register(
-            "eye_detection",
-            {"detector": name, **defaults[name], "microsaccade_max_deg": MICROSACCADE_MAX_DEG},
-        )
-        for name in DETECTORS
+        name: paramset.register("eye_detection", _eye_detection_params(detector))
+        for name, detector in DETECTORS.items()
+    }
+
+
+def _eye_detection_params(detector) -> dict:
+    """One detector's `eye_detection` paramset dict: its own declared
+    defaults, plus the keys the whole subsystem shares.
+
+    **Split out of `register_default_paramsets` so the merge ORDER has a test
+    of its own.** That order is load-bearing and invisible in every stored
+    row -- see the shared-key paragraph below -- and the two values it
+    arbitrates between are equal today, so reversing it would fail nothing.
+    `test_the_shared_threshold_still_wins_over_a_detectors_own_field` is what
+    would.
+
+    **The defaults come from `registry.Detector.defaults`, never from a table
+    keyed by detector name here.** They lived in exactly such a table until
+    2026-09-05, which made them a THIRD thing that had to agree with the
+    registry and with the registered paramsets while being checked against
+    neither: a detector present in `DETECTORS` and absent from that dict
+    raised `KeyError` inside a dict comprehension, uncaught, from
+    `daemon.run_once()` -- before `reap_stale_jobs` and before the
+    try-wrapped `_computed_tables()` loop, so the entire pass died rather
+    than the one detector. Design spec section 3.1 plans five more detectors;
+    it would have fired on the first.
+
+    **`microsaccade_max_deg` is written LAST, after the detector's own
+    defaults, so a detector can never shadow it.** A detector that consumes
+    the shared key declares a field of that name on its own params dataclass
+    (`_params_for` explains why that is how a shared key reaches a detector at
+    all), so `asdict` of its defaults carries a `microsaccade_max_deg` of its
+    own. Merged in the other order THAT value would win and each detector
+    would quietly get to pick the amplitude cut its own rows are split at --
+    exactly the per-detector threshold this paramset shape exists to prevent.
+
+    `detector` is the whole `registry.Detector`, not its name, because the
+    name alone is what required a lookup table in the first place."""
+    from dataclasses import asdict
+
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+
+    return {
+        "detector": detector.name,
+        **asdict(detector.defaults),
+        "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
     }
 
 

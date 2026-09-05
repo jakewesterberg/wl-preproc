@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from wl_preproc.eye.detect.labels import Label
@@ -35,6 +37,13 @@ def test_no_detector_claims_a_mask_owned_label():
 # --- Below: `vocabulary` is enforced, not merely declared.
 
 
+@dataclass(frozen=True, slots=True)
+class _NoParams:
+    """What a detector with no tunable parameters declares. `Detector.defaults`
+    is required rather than defaulting to `{}` -- registry.py's own comment
+    says why -- so a stub still has to say it has none."""
+
+
 def _fake_detector(name, vocabulary, intervals):
     """A `Detector` over a stub `run` that ignores its inputs and returns
     `intervals`. Built here rather than by registering into `DETECTORS`: the
@@ -47,6 +56,11 @@ def _fake_detector(name, vocabulary, intervals):
         name=name,
         vocabulary=frozenset(vocabulary),
         run=lambda gaze_deg, velocity_deg_s, available, params: list(intervals),
+        # `defaults` is required (registry.py's own comment says why a `{}`
+        # fallback would be the same quiet failure one layer down), and these
+        # tests are about `vocabulary` enforcement, which never reads it. An
+        # empty frozen dataclass is what a detector with no tunables passes.
+        defaults=_NoParams(),
     )
 
 
