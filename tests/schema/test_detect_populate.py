@@ -2548,7 +2548,7 @@ def _bounds(intervals):
     return [(interval.start, interval.stop) for interval in intervals]
 
 
-def _detect(gaze, v, mask):
+def _detect(gaze, v, mask, fs_hz):
     """The registered Engbert-Kliegl detector (`registry.get_detector`, the
     same lookup `EyeDetection.make()` uses), through `Detector.detect` -- the
     vocabulary-checked entry point `make()` itself calls, not the raw `run` --
@@ -2556,7 +2556,7 @@ def _detect(gaze, v, mask):
     from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
     from wl_preproc.eye.detect.registry import get_detector
 
-    return get_detector("engbert_kliegl").detect(gaze, v, mask, DEFAULT_EK_PARAMS)
+    return get_detector("engbert_kliegl").detect(gaze, v, mask, fs_hz, DEFAULT_EK_PARAMS)
 
 
 def _encode(mask, intervals):
@@ -2704,8 +2704,8 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     right_gaze, right_v, right_mask = _mask_and_velocity(
         raw["right"], quality["RightDataQuality"], recording.fs_hz, recording.frame_gaps, scale_ref
     )
-    left_spans = _detect(left_gaze, left_v, left_mask)
-    right_spans = _detect(right_gaze, right_v, right_mask)
+    left_spans = _detect(left_gaze, left_v, left_mask, recording.fs_hz)
+    right_spans = _detect(right_gaze, right_v, right_mask, recording.fs_hz)
     # Both the filtered conjunction and the raw intersection, so the finding
     # this floor closes stays MEASURED on real data rather than remembered
     # from a fix report: `floor=1` is exactly the `stop > start` test
@@ -2754,7 +2754,8 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     scale_b = 3.0 * scale_ref
     gaze_b = apply_map(_scaled_affine_map(scale_b), raw["left"])
     v_b = velocity(gaze_b, recording.fs_hz)
-    spans_b_fixed_mask = _detect(gaze_b, v_b, left_mask)  # `left_mask` REUSED, not recomputed.
+    # `left_mask` REUSED, not recomputed.
+    spans_b_fixed_mask = _detect(gaze_b, v_b, left_mask, recording.fs_hz)
 
     # The saccade/microsaccade split at the two scales, over the SAME fixed
     # spans -- the concrete demonstration that the split (unlike the count)
@@ -2847,7 +2848,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
             gaze, v, mask = _mask_and_velocity(
                 raw["left"], quality["LeftDataQuality"], recording.fs_hz, recording.frame_gaps, scale
             )
-            spans = _detect(gaze, v, mask)
+            spans = _detect(gaze, v, mask, recording.fs_hz)
             runs, _, _ = _encode(mask, spans)
             frac_invalid = float(np.mean(mask == Label.INVALID))
             print(
@@ -3080,7 +3081,9 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.schema import detect
 
-    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+    def detect_two_kinds(
+        gaze_deg, velocity_deg_s, available, fs_hz, params: EngbertKlieglParams
+    ):
         """A saccade with a glissade on its tail, in both eyes, at the same
         samples -- the lens ringing this instrument's own design spec says
         this rig records after every real saccade (`2026-08-31-saccade-
@@ -3188,7 +3191,9 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.schema import detect
 
-    def detect_two_kinds(gaze_deg, velocity_deg_s, available, params: EngbertKlieglParams):
+    def detect_two_kinds(
+        gaze_deg, velocity_deg_s, available, fs_hz, params: EngbertKlieglParams
+    ):
         return [
             LabelledInterval(1000, 1060, Label.SACCADE),
             LabelledInterval(1060, 1090, Label.PSO),

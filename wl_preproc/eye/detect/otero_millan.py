@@ -202,6 +202,11 @@ def detect_otero_millan(
     gaze_deg: np.ndarray,
     velocity_deg_s: np.ndarray,
     available: np.ndarray,
+    # Accepted and unused: this detector has no minimum DURATION at all --
+    # its one temporal parameter, `min_isi_samples`, is a minimum peak
+    # SEPARATION, and it is already in samples (`OteroMillanParams.
+    # min_isi_samples`'s own docstring), not time.
+    fs_hz: float,
     params: OteroMillanParams,
 ) -> list[Run]:
     """Labelled half-open `[start, stop)` intervals, in sample indices.

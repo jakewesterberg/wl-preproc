@@ -60,6 +60,15 @@ class DetectFn(Protocol):
         gaze_deg: np.ndarray,
         velocity_deg_s: np.ndarray,
         available: np.ndarray,
+        # The RECORDING's sampling rate, not a parameter. Positional rather
+        # than a paramset key because a paramset is immutable and
+        # content-addressed: a rate stored there would make two sessions
+        # recorded at different rates need two paramsets for one set of
+        # parameters. Detectors that express durations in samples
+        # (Engbert-Kliegl) accept and ignore it; those that express them in
+        # time (design spec section 3.1's Nystrom-Holmqvist, NSLR and
+        # REMoDNaV) need it to convert.
+        fs_hz: float,
         params: Any,
     ) -> list[LabelledInterval]: ...
 
@@ -103,6 +112,7 @@ class Detector:
         gaze_deg: np.ndarray,
         velocity_deg_s: np.ndarray,
         available: np.ndarray,
+        fs_hz: float,
         params: Any,
     ) -> list[LabelledInterval]:
         """Run the detector and hold it to its declared `vocabulary`.
@@ -123,7 +133,7 @@ class Detector:
         that succeeds because `blink` and `invalid` are valid enum values on
         `EyeDetection.Run` regardless of who wrote them -- names none of that.
         """
-        intervals = self.run(gaze_deg, velocity_deg_s, available, params)
+        intervals = self.run(gaze_deg, velocity_deg_s, available, fs_hz, params)
         undeclared = {interval.label for interval in intervals} - self.vocabulary
         if undeclared:
             raise UndeclaredLabel(

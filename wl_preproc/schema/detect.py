@@ -519,7 +519,7 @@ class EyeDetection(dj.Computed):
             # `detector.detect`, never `detector.run`: the wrapper is what
             # holds the detector to its own declared `vocabulary`, and this
             # is the one place in production that runs a detector at all.
-            spans[eye_value] = detector.detect(gaze, v, offered, detector_params)
+            spans[eye_value] = detector.detect(gaze, v, offered, fs_hz, detector_params)
             per_eye[eye_value] = (gaze, v, offered)
 
         for eye_value in ("left", "right"):
