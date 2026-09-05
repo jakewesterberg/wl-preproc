@@ -2002,24 +2002,112 @@ def test_two_touching_intersections_become_one_conjunction_event():
     assert event["amplitude_deg"] == pytest.approx(1.95)
 
 
-def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunction():
-    """Design spec section 2.5: whether a `pso` run counts as saccade or as
-    fixation is "an explicit parameter, never a default". `PRECEDENCE` made
-    that choice silently -- `saccade` outranked `pso`, so a left-eye saccade
-    meeting a right-eye glissade became a saccade with nothing asked and
-    nothing recorded -- on an instrument where section 2.5 argues PSO
-    follows every saccade.
+def test_a_pso_capable_detector_no_longer_raises():
+    """The raise that blocked four detectors. It fired on any vocabulary that
+    was not a subset of the amplitude split -- because ONE label had to cover
+    a mixed vocabulary. Under per-kind intersection each kind labels itself,
+    so the mixed case does not arise."""
+    import numpy as np
+    from dataclasses import replace
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
 
-    No detector emitting `pso` is registered in stage 1, so this raise is
-    unreachable today. That is the point: a loud unreachable failure is what
-    the ruling requires, and the alternative is the silent default it
-    forbids. The message must name where the choice belongs (section 6.1's
-    `pso_as`), because an error that only says "unsupported" sends the next
-    reader to invent a rule here.
+    nystrom = replace(
+        DETECTORS["engbert_kliegl"],
+        name="nystrom_holmqvist",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+    )
+    gaze = np.zeros(1000)
+    label_for = _conjunction_label(nystrom, {"microsaccade_max_deg": 1.0}, gaze)
+
+    # `{saccade, pso, fixation}` has a saccadic slice of `{saccade}` alone --
+    # a DEGENERATE split, so the constant, never `classify`'s other answer.
+    assert label_for(0, 10) is Label.SACCADE
+
+
+def test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary():
+    """Five of the seven detectors take the degenerate branch, and only
+    Engbert-Kliegl and Otero-Millan declare BOTH sides of the amplitude cut.
+    Testing `len(vocabulary) == 1` -- what stage 1 did -- would send
+    Nystrom-Holmqvist's three-label vocabulary to `classify`, which would put
+    `microsaccade` in the mouth of a detector that cannot emit it."""
+    import numpy as np
+    from dataclasses import replace
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
+
+    gaze = np.linspace(0.0, 9.0, 1000)  # a large amplitude on any interval
+    bmd = replace(
+        DETECTORS["engbert_kliegl"],
+        name="bayesian_microsaccade",
+        vocabulary=frozenset({Label.MICROSACCADE, Label.DRIFT}),
+    )
+    label_for = _conjunction_label(bmd, {"microsaccade_max_deg": 1.0}, gaze)
+
+    # Amplitude across this interval is far above the 1.0 deg cut, so
+    # `classify` would answer `saccade`. The degenerate branch must not ask.
+    assert label_for(0, 999) is Label.MICROSACCADE
+
+
+def test_the_full_split_still_classifies_by_amplitude():
+    """Engbert-Kliegl and Otero-Millan are unchanged, and this is the
+    assertion that says so at the unit level."""
+    import numpy as np
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _conjunction_label
+
+    # `amplitude()` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an (x, y)
+    # pair -- `measure.py::amplitude`'s own `displacement[0], displacement[1]`
+    # -- matching every real gaze array in this codebase (`eye/calibration.py
+    # ::apply_map`, which is what `eye/gaze.py::gaze_trace` returns, ends in
+    # `np.column_stack([x, y])`) and this file's own `_ramp_gaze` helper. A
+    # bare 1-D array is not a shape `amplitude` ever receives outside a test,
+    # and indexing `displacement[1]` on a 1-D difference raises `IndexError`
+    # before `classify` is ever reached. The y column is all zero, so the x
+    # column alone -- unchanged from a plain `linspace` -- still carries the
+    # ~9 deg and ~0.08 deg amplitudes asserted below.
+    gaze = np.column_stack([np.linspace(0.0, 9.0, 1000), np.zeros(1000)])
+    label_for = _conjunction_label(
+        DETECTORS["engbert_kliegl"], {"microsaccade_max_deg": 1.0}, gaze
+    )
+
+    assert label_for(0, 999) is Label.SACCADE       # ~9 deg
+    assert label_for(0, 10) is Label.MICROSACCADE   # ~0.08 deg
+
+
+def test_an_empty_vocabulary_still_raises():
+    """Unchanged, and for its own reason: `frozenset() <= anything` is True,
+    so a detector declaring nothing passes any subset test while
+    `registry.Detector.detect` refuses every label it emits."""
+    import numpy as np, pytest
+    from dataclasses import replace
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+
+    empty = replace(DETECTORS["engbert_kliegl"], vocabulary=frozenset())
+    with pytest.raises(UndecidedConjunctionLabel, match="empty vocabulary"):
+        _conjunction_label(empty, {"microsaccade_max_deg": 1.0}, np.zeros(10))
+
+
+def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_conjunction():
+    """Until 2026-09-05 this test asserted that `_conjunction_label` RAISED
+    `UndecidedConjunctionLabel` for `{saccade, pso, fixation}` -- the guard
+    fired on any vocabulary that was not a SUBSET of `{saccade, microsaccade}`,
+    because ONE label had to cover a mixed vocabulary. Per-kind intersection
+    (`_conjunction_runs`, Task 2) means each kind labels itself, so the mixed
+    case that guard was refusing does not arise any more, and the guard is
+    gone. `test_a_pso_capable_detector_no_longer_raises` and
+    `test_the_saccadic_slice_decides_degeneracy_not_the_whole_vocabulary`
+    assert the replacement rule directly; this test keeps its other two
+    assertions below, which that change did not touch and which are not
+    duplicated there.
     """
     from wl_preproc.eye.detect.labels import Label
     from wl_preproc.eye.detect.registry import Detector
-    from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
+    from wl_preproc.schema.detect import _conjunction_label
 
     glissade_aware = Detector(
         name="nystrom_holmqvist",
@@ -2027,17 +2115,23 @@ def test_a_vocabulary_beyond_the_amplitude_split_refuses_to_label_the_conjunctio
         run=_amplitude_blind_detect,
     )
 
-    with pytest.raises(UndecidedConjunctionLabel) as excinfo:
-        _conjunction_label(glissade_aware, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
+    # The saccadic slice of `{saccade, pso, fixation}` is `{saccade}` alone --
+    # a degenerate split -- so this no longer raises and never reaches
+    # `classify`.
+    label_for = _conjunction_label(
+        glissade_aware, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1)
+    )
+    assert label_for(0, 6) is Label.SACCADE
 
-    message = str(excinfo.value)
-    assert "2.5" in message and "6.1" in message and "pso_as" in message
-    assert "nystrom_holmqvist" in message
-
-    # Otero-Millan's `{microsaccade}` is a SUBSET of the amplitude split, not
-    # equal to it, and must still be labelled rather than refused -- design
-    # spec section 3.1 gives it that vocabulary, and it is stage 2's second
-    # amplitude-derived detector.
+    # A detector declaring `{microsaccade}` ALONE is a SUBSET of the
+    # amplitude split, not equal to it, and must still be labelled rather
+    # than refused. Named "otero_millan" here as a hypothetical rather than
+    # as the real detector: design spec section 3.1, corrected 2026-09-01,
+    # gives the real Otero-Millan the FULL split (`{saccade, microsaccade}`,
+    # matching `registry.DETECTORS["otero_millan"]`) -- U'n'Eye (`{saccade}`)
+    # is the only half-split case among the seven, on the amplitude cut's
+    # other side. This name predates that correction and stands in for "some
+    # detector declaring microsaccade alone", not for the real one.
     subset = Detector(
         name="otero_millan",
         vocabulary=frozenset({Label.MICROSACCADE}),

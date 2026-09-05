@@ -779,12 +779,21 @@ def _overlapping(
 # LOWER noise floor (design spec section 3.1's correction). U'n'Eye is the
 # surviving half-split example.
 #
-# **A PROPER subset is a DEGENERATE split, and that is what decides the label
-# there** (fix round, reviewer finding 2). Otero-Millan and U'n'Eye each
-# declare one side of the cut and cannot emit the other, so `classify` -- which
-# answers both sides for any detector -- would put a word in their mouths that
-# `registry.Detector.detect` refuses from the detector itself. See
-# `_conjunction_label`, which reads this set rather than restating it.
+# **The SACCADIC SLICE of a vocabulary decides the label, and a slice of size
+# one is a DEGENERATE split.** U'n'Eye (`{saccade}`), Bayesian microsaccade
+# detection (`{microsaccade, drift}`) and the three `pso`-capable detectors
+# each declare one side of the cut and cannot emit the other, so `classify` --
+# which answers both sides for any detector -- would put a word in their
+# mouths that `registry.Detector.detect` refuses from the detector itself.
+# Five of the seven land there; only Engbert-Kliegl and Otero-Millan declare
+# both sides. See `_conjunction_label`, which reads this set rather than
+# restating it.
+#
+# **This set is no longer a gate on whether a conjunction can be built at
+# all.** It was, until 2026-09-05: a vocabulary that was not a subset raised,
+# because ONE label had to cover a mixed vocabulary. Per-kind intersection
+# (`_conjunction_runs`) means each kind labels itself, so the mixed case does
+# not arise and there is nothing left to refuse.
 _AMPLITUDE_DERIVED_VOCABULARY = frozenset({Label.SACCADE, Label.MICROSACCADE})
 
 
@@ -966,23 +975,33 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     split; below it is scoped, because a detector that declares half the
     split makes no cut for a stored amplitude to agree or disagree with.
 
-    **A vocabulary that is HALF the split gets that half, and never
-    `classify`'s other answer** (fix round, reviewer finding 2).
-    `_AMPLITUDE_DERIVED_VOCABULARY` is a subset test, deliberately, so
-    design spec section 3.1's U'n'Eye (`{saccade}`) qualifies along with
-    Engbert-Kliegl and Otero-Millan (both `{saccade, microsaccade}`). But
-    `classify` answers both sides of the cut for any detector, and a
+    **A vocabulary whose SACCADIC SLICE is HALF the split gets that half,
+    and never `classify`'s other answer** (fix round, reviewer finding 2).
+    Finding 2 was first fixed as a subset test on the detector's WHOLE
+    vocabulary -- correct as long as every registered vocabulary was
+    entirely saccadic, which was true of design spec section 3.1's U'n'Eye
+    (`{saccade}`) and of Engbert-Kliegl/Otero-Millan's shared full split
+    (`{saccade, microsaccade}`), the only detectors registered at the time.
+    `_conjunction_label` now intersects `detector.vocabulary` with
+    `_AMPLITUDE_DERIVED_VOCABULARY` instead (see this function's own
+    SACCADIC SLICE comment below) -- the same answer for those three, and
+    additionally correct for a vocabulary that mixes a saccadic label with a
+    non-saccadic one, which a whole-vocabulary subset test cannot admit at
+    all. `classify` answers both sides of the cut for any detector, and a
     conjunction interval is the INTERSECTION of the two eyes' events --
     shorter than either, and systematically smaller in amplitude (section
-    5.1) -- so short intersections fall below the cut routinely. Left as it
-    was, U'n'Eye would have stored `microsaccade` rows: a label its own
+    5.1) -- so short intersections fall below the cut routinely. Left
+    ungated, U'n'Eye would have stored `microsaccade` rows: a label its own
     detector declares it cannot emit.
 
     **This paragraph named Otero-Millan as the second half-split case until
     2026-09-01.** It is not one -- it declares the whole split, so `classify`
     is called for its conjunctions and both answers are in vocabulary. The
-    guard still matters for U'n'Eye, and for BMD's `{microsaccade, drift}`,
-    which reaches the raise below rather than this branch:
+    guard still matters for U'n'Eye and, since 2026-09-05's SACCADIC SLICE
+    generalization, for BMD's `{microsaccade, drift}` and the three
+    `pso`-capable detectors as well -- all four reach THIS branch,
+    degenerately, because none of them declares both `saccade` and
+    `microsaccade`:
 
     - `registry.Detector.detect` refuses exactly that label from the
       detector itself, and its own docstring is why -- the declaration is
@@ -1024,26 +1043,52 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     could have changed the answer -- demanding a number and then ignoring
     it would tell a reader the threshold governs those rows.
 
-    **Any other vocabulary raises.** One containing `pso`, `pursuit`,
-    `drift` or `fixation` is one no amplitude cut can answer for, and
-    section 2.5 forbids answering it by default -- the choice belongs where
-    section 6.1 already puts it, in a stated `pso_as` comparison parameter.
-    No such detector is registered in stage 1, so this is a loud unreachable
-    failure rather than a silent default, which is the whole of the ruling
-    it enforces. Raised HERE, where the undecided question is actually
-    asked, rather than at `get_detector`: such a detector's own per-eye
-    traces are perfectly well defined, and it is only the conjunction that
-    has no rule. An EMPTY vocabulary raises for a related but distinct
-    reason, stated at its own guard below.
+    **Until 2026-09-05, any vocabulary not entirely within
+    `_AMPLITUDE_DERIVED_VOCABULARY` RAISED here** -- a subset test on the
+    WHOLE vocabulary, which blocked four of design spec section 3.1's seven
+    detectors: Nystrom-Holmqvist, NSLR and REMoDNaV all declare `pso`
+    alongside `saccade`, and BMD declares `drift` alongside `microsaccade`.
+    The guard existed because ONE label had to cover a mixed vocabulary, and
+    `pso`, `pursuit` and `drift` are all labels no amplitude cut has a rule
+    for -- design spec section 2.5 forbids answering `pso`'s fate by default,
+    and an amplitude cut simply offers no rule for `pursuit` or `drift`
+    either.
+
+    **It is removed, not merely widened, because per-kind intersection
+    (`_conjunction_runs`, design spec `2026-09-05-conjunction-shape-design.
+    md`) removes the reason it existed.** Each conjunction kind now labels
+    itself: `pso`, `pursuit` and `drift` each get their OWN kind, labelled
+    by neither eye's opinion nor by `classify` (`_KIND_OF`), and `fixation`
+    is not intersected at all, being the synthesized background rather than
+    a detector's finding (`_NOT_INTERSECTED`). None of the four blocked
+    detectors needs THIS function to say anything about `pso`, `pursuit`,
+    `drift` or `fixation` any more -- only about the SACCADIC SLICE of its
+    vocabulary, which is what `_AMPLITUDE_DERIVED_VOCABULARY`'s own comment
+    and the code below this docstring now compute.
+
+    **A vocabulary whose saccadic slice is EMPTY -- no `saccade`, no
+    `microsaccade` at all -- still cannot answer the amplitude question, but
+    now says so by returning a callable that raises if ever called, rather
+    than raising eagerly here.** Eager raising would refuse a conjunction
+    for that detector's OTHER kinds too, over a question `_conjunction_
+    runs`'s own grouping was never going to ask of THIS callable. See this
+    function's own SACCADIC SLICE comment below for that callable. An EMPTY
+    vocabulary -- no labels declared, of any kind -- is different again and
+    still raises eagerly, for the distinct reason stated at its own guard
+    below.
     """
     from wl_preproc.eye.detect.measure import amplitude, classify
 
     if not detector.vocabulary:
-        # `frozenset() <= anything` is True, so the subset test below admits
-        # a detector that declares nothing at all -- and every label is then
-        # outside its vocabulary, which is finding 2's defect in its most
-        # extreme form. Separate from the ruling below because the reason is
-        # different: there is no undecided question here, only a detector
+        # `frozenset() & anything` is `frozenset()`, so the saccadic-slice
+        # computation below would treat a detector that declares NOTHING
+        # exactly like one that declares only non-saccadic labels -- and
+        # hand back a callable that raises only if a saccadic conjunction is
+        # ever asked for, rather than refusing outright. That is the wrong
+        # answer for this detector specifically: it has no OTHER kind either,
+        # so there is nothing it could produce a conjunction for at all.
+        # Separate from the ruling below because the reason is different:
+        # there is no undecided question here, only a detector
         # `registry.Detector.detect` would refuse every interval from.
         raise UndecidedConjunctionLabel(
             f"detector {detector.name!r} declares an empty vocabulary, so there is no "
@@ -1051,28 +1096,47 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
             "allowed to emit -- `registry.Detector.detect` refuses every label for "
             "such a detector. Declare what it emits before asking for its conjunction"
         )
-    if not detector.vocabulary <= _AMPLITUDE_DERIVED_VOCABULARY:
-        raise UndecidedConjunctionLabel(
-            f"detector {detector.name!r} declares vocabulary "
-            f"{sorted(label.value for label in detector.vocabulary)}, which is not a "
-            "split by amplitude, so a conjunction run cannot take its label from its "
-            "own amplitude -- and design spec section 2.5 requires that assignment to "
-            "be 'an explicit parameter, never a default'. State it where section 6.1 "
-            "puts the choice, in a `pso_as`-style comparison parameter, rather than "
-            "letting this function invent one"
-        )
+    # The SACCADIC SLICE, not the whole vocabulary. Nystrom-Holmqvist
+    # declares `{saccade, pso, fixation}` and Bayesian microsaccade detection
+    # `{microsaccade, drift}`; neither is size one, and both make only half
+    # the amplitude cut. Testing the whole vocabulary -- which is what stage 1
+    # did, correctly, when the whole vocabulary WAS the cut -- would send both
+    # to `classify` and put a label in each one's mouth that
+    # `registry.Detector.detect` refuses from the detector itself.
+    #
+    # Five of the seven detectors land here and only Engbert-Kliegl and
+    # Otero-Millan reach `classify`. The degenerate branch arrived as a
+    # fix-round finding about U'n'Eye and is now the majority path.
+    saccadic = detector.vocabulary & _AMPLITUDE_DERIVED_VOCABULARY
 
-    if len(detector.vocabulary) == 1:
-        # The degenerate split, above. Returned from the DECLARATION rather
-        # than from any amplitude, so the label is in the detector's
-        # vocabulary by construction and not by a check that could be
-        # removed.
-        (declared,) = detector.vocabulary
+    if not saccadic:
+        # No saccadic label at all, so `_conjunction_runs` builds no saccadic
+        # group and never calls this. Returned rather than raised here so the
+        # detector's OTHER kinds still produce a conjunction: it is only the
+        # amplitude split that has nothing to say.
+        def _no_saccadic_label(_start: int, _stop: int) -> Label:
+            raise UndecidedConjunctionLabel(
+                f"detector {detector.name!r} declares no saccadic label, so it "
+                f"can produce no saccadic conjunction run -- and one was asked "
+                f"to be labelled anyway, which is a bug in `_conjunction_runs`' "
+                f"grouping rather than a question about this detector"
+            )
+
+        return _no_saccadic_label
+
+    if len(saccadic) == 1:
+        # The degenerate split. Returned from the DECLARATION rather than
+        # from any amplitude, so the label is in the detector's vocabulary by
+        # construction and not by a check that could be removed.
+        (declared,) = saccadic
         return lambda _start, _stop: declared
 
-    # Non-empty, a subset, and not of size one, so `detector.vocabulary` IS
-    # `_AMPLITUDE_DERIVED_VOCABULARY` -- which is exactly the set of answers
-    # `classify` can give. In-vocabulary by construction here too.
+    # `saccadic` is `detector.vocabulary & _AMPLITUDE_DERIVED_VOCABULARY`, not
+    # empty (ruled out above) and not size one (ruled out above), so on a
+    # two-label universe it IS `_AMPLITUDE_DERIVED_VOCABULARY` -- exactly the
+    # set of answers `classify` can give. In-vocabulary by construction here
+    # too. (This no longer says `detector.vocabulary` itself is that set --
+    # only its saccadic slice is, which is the whole point of slicing.)
     microsaccade_max_deg = params["microsaccade_max_deg"]
 
     def label_for(start: int, stop: int) -> Label:
