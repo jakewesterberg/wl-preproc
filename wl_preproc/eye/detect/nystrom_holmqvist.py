@@ -491,25 +491,52 @@ def detect_nystrom_holmqvist(
     # interval's label onto one shared per-sample array in list order and
     # never checks for a collision, so an overlap would silently let
     # whichever interval is painted later erase part of an earlier one --
-    # this mask is what keeps that from being possible, by construction,
-    # rather than by trusting the two search functions to agree.
+    # non-overlap is enforced here, by construction, rather than by trusting
+    # the two search functions to agree.
     #
-    # **The rule is: the first (leftmost) candidate to reach a span of
-    # samples keeps it, and a later candidate that would touch any already-
-    # claimed sample is dropped whole, never merged or trimmed.** This is
-    # this implementation's own rule -- the paper never adjudicates
-    # overlapping events, because its own peak threshold and search windows
-    # never produce one on its data. Its known cost: on a close pair of
-    # genuinely distinct saccades (or a saccade's own glissade search window
-    # reaching into the NEXT saccade's own onset), the later event is
-    # dropped entirely rather than clipped to what is still free, which
-    # could under-count on very noisy data or on rapid, closely-spaced
-    # saccades. Dropping rather than trimming is deliberate:
-    # a trimmed span is not one either search function actually computed,
-    # so storing it would attribute a boundary to the algorithm that the
-    # algorithm never found, and `_glissade_bounds`' own amplitude-vs-
-    # saccade check would need to be re-run against whatever the trim left
-    # -- a second decision the paper gives no rule for either.
+    # **The rule is: an overlapping saccade candidate MERGES into whatever
+    # it overlaps, rather than being dropped.** This implementation's first
+    # version dropped the later candidate outright, and review found that
+    # rule wrong in a way worse than undercounting. A saccade's own peak
+    # occasionally splits into two `_true_runs` peak-runs -- sensor noise,
+    # or Table 2's own max-velocity/acceleration rejection excluding one
+    # sample from a real saccade's crest -- and the two candidates'
+    # independent onset/offset searches then return OVERLAPPING spans:
+    # typically the SECOND one's own backward search, unable to read the
+    # brief dip between the two peaks as a genuine local minimum, walks all
+    # the way back past the FIRST candidate's own onset, making the second
+    # candidate a strict SUPERSET of the first (`test_no_run_overlaps_
+    # another`'s own fixture, verified directly: candidates `(595, 612)`
+    # and `(595, 626)`). DROPPING that superset kept only the narrower
+    # first span and left the region between the two peaks unclaimed, and
+    # `_insert_trace` then filled that unclaimed region with `fixation` --
+    # turning a REAL second saccade into an explicit, false claim that the
+    # eye was still. That is not an omission: per the paper (p. 196)
+    # fixations are "everything that is not noise, saccades, or glissades",
+    # so labelling a genuine saccade `fixation` contradicts the algorithm's
+    # own definition -- and it is exactly the confound parent design spec
+    # section 3.2 warns a reimplementation can manufacture, one that "does
+    # not look like a defect, it looks like a finding", in the one detector
+    # whose entire purpose is to be compared against six others.
+    #
+    # MERGING instead: two peaks whose independent bounds searches overlap
+    # are far more plausibly ONE saccade with a double-peaked velocity
+    # profile -- which sensor noise, Table 2's own rejection, and a
+    # glissade-like wobble mid-flight can all produce -- than two genuinely
+    # separate saccades landing within the same collision-scale window,
+    # which the oculomotor refractory period makes implausible. `_merged_
+    # bounds` below widens `[onset, offset)` to the union of every run
+    # (saccade OR glissade) the new candidate overlaps and removes them, so
+    # the result is one wider SACCADE run rather than a gap `_insert_trace`
+    # would otherwise paint over as `fixation`.
+    #
+    # **The residual cost is the mirror image of the one this replaces, and
+    # smaller.** A genuinely double-STEP saccade -- two real, distinct hops
+    # landing close enough together to collide -- is now reported as ONE
+    # merged saccade whose amplitude is the two hops' NET displacement, not
+    # two separate ones. That is a real event reported as one instead of
+    # two (a measurement error on something that happened), not a genuine
+    # event erased and replaced with a fabricated period of stillness.
     runs: list[Run] = []
     claimed = np.zeros(speed.size, dtype=bool)
     for peak_start, peak_stop in _true_runs((speed > thresholds.peak_deg_s) & usable):
@@ -517,14 +544,38 @@ def detect_nystrom_holmqvist(
         if bounds is None:
             continue
         onset, offset, offset_threshold = bounds
-        if claimed[onset:offset].any():
-            continue          # an earlier saccade already owns these samples
+        onset, offset = _merged_bounds(runs, onset, offset)
         runs.append(Run(start=onset, stop=offset, label=Label.SACCADE))
         claimed[onset:offset] = True
 
         glissade = _glissade_bounds(
             speed, gaze_deg, onset, offset, offset_threshold, thresholds, fs_hz, params
         )
+        # **This check is reachable, and it is the glissade-side twin of
+        # the saccade-side merge above -- not free insurance against an
+        # impossible case.** An earlier version of this comment claimed the
+        # overlap branch below was provably unreachable, reasoning that a
+        # glissade's own span starts at `offset` and only extends forward,
+        # so nothing claimed EARLIER (by a different, prior event) can
+        # reach it. That reasoning is correct as far as it goes and still
+        # rules out a DIFFERENT event colliding here -- but it missed the
+        # SAME saccade being processed twice: a triangular velocity profile
+        # occasionally has its own apex replaced by a shallow dip (sensor
+        # noise) that splits one `_true_runs` peak-run into two without
+        # either half's own `_saccade_bounds` search reading the dip as a
+        # genuine local minimum, so both halves resolve to the IDENTICAL
+        # `(onset, offset, offset_threshold)`. The saccade side of this is
+        # already handled -- `_merged_bounds` merges the second, identical
+        # candidate into a no-op -- but `_glissade_bounds` is a pure
+        # function of those same three values, so it is called a second
+        # time with IDENTICAL inputs and returns the IDENTICAL span the
+        # first occurrence already claimed. Without this check that
+        # identical span would be appended twice.
+        # `test_a_recomputed_glissade_does_not_duplicate_an_already_claimed_
+        # one` constructs exactly this, confirms one `pso` run rather than
+        # a literal duplicate, and confirms directly (mutating this line to
+        # drop the `not claimed[...].any()` half) that removing this check
+        # reproduces the duplicate.
         if glissade is not None and not claimed[glissade[0]:glissade[1]].any():
             runs.append(Run(start=glissade[0], stop=glissade[1], label=Label.PSO))
             claimed[glissade[0]:glissade[1]] = True
@@ -556,3 +607,33 @@ def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     padded = np.concatenate(([False], mask, [False]))
     edges = np.diff(padded.astype(np.int8))
     return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
+
+
+def _merged_bounds(runs: list[Run], onset: int, offset: int) -> tuple[int, int]:
+    """`[onset, offset)` widened to the union of every run in `runs` it
+    overlaps, with those runs removed from `runs` in place.
+
+    See `detect_nystrom_holmqvist`'s own comment for why an overlapping
+    saccade candidate merges into what it overlaps rather than being
+    dropped. A no-op (returns `(onset, offset)` unchanged, removes nothing)
+    when nothing in `runs` overlaps -- the ordinary case, and the only one
+    on a trace built from well-separated events.
+
+    **One sweep of `runs` is provably enough; a second could never find
+    more.** Every run already in `runs` was itself added only after this
+    same function found no overlap for it, so `runs` is pairwise
+    non-overlapping THROUGHOUT -- for any two runs R and R' in it with R
+    before R', non-overlap means `R.stop <= R'.start`. Absorbing R can
+    therefore widen `offset` to at most `R.stop`, which is at most
+    `R'.start` -- never strictly past it -- so absorbing one run already in
+    the candidate's reach can never bring a second, untouched run into
+    reach. One pass over `runs`, updating `onset`/`offset` as it goes and
+    removing what it absorbs, finds everything any number of passes could.
+    """
+    for index in range(len(runs) - 1, -1, -1):
+        run = runs[index]
+        if run.start < offset and onset < run.stop:      # half-open overlap test
+            onset = min(onset, run.start)
+            offset = max(offset, run.stop)
+            del runs[index]
+    return onset, offset

@@ -629,6 +629,13 @@ def test_the_detector_emits_saccade_pso_and_fixation():
     labels = {run.label for run in runs}
     assert Label.SACCADE in labels
     assert Label.PSO in labels, "no glissade found on a trace built to contain three"
+    # Review finding: this test's name is its headline claim, and until now
+    # nothing checked the third of the three. Removing `fixation` from the
+    # emitted set (verified directly, mutating the assembly to skip the
+    # trailing fixation loop) still passed the two assertions above and the
+    # subset check below, since a SUBSET of `{SACCADE, PSO}` is also a
+    # subset of `{SACCADE, PSO, FIXATION}`.
+    assert Label.FIXATION in labels, "no fixation found on a trace with quiet stretches"
     assert labels <= {Label.SACCADE, Label.PSO, Label.FIXATION}
 
 
@@ -654,11 +661,15 @@ def test_no_run_overlaps_another():
     a local minimum below the onset threshold) all the way to the SAME true
     onset the first saccade already found -- `_saccade_bounds` returns
     `(595, 612, ...)` for the first candidate and `(595, 626, ...)` for the
-    second, which overlap almost entirely. With the mask in place only the
-    first survives; with it removed (checked directly against a mutated
-    copy of `detect_nystrom_holmqvist`) both are stored and the pair at
-    `(595, 612)` and `(595, 626)` fails this test's own `earlier.stop <=
-    later.start` assertion, confirming the fixture discriminates."""
+    second, which overlap almost entirely. With merging in place the two
+    are absorbed into one `(595, 626)` saccade run (`test_overlapping_
+    saccade_candidates_merge_into_one_true_event` below pins the exact
+    result and why merging, not dropping, is correct here); with the
+    overlap check removed entirely (checked directly against a mutated
+    copy of `detect_nystrom_holmqvist`) both are stored unmerged and the
+    pair at `(595, 612)` and `(595, 626)` fails this test's own
+    `earlier.stop <= later.start` assertion, confirming the fixture
+    discriminates."""
     import numpy as np
 
     from wl_preproc.eye.detect.nystrom_holmqvist import (
@@ -683,4 +694,343 @@ def test_no_run_overlaps_another():
     )
 
     for earlier, later in zip(runs, runs[1:]):
+        assert earlier.stop <= later.start, (earlier, later)
+
+
+def test_overlapping_saccade_candidates_merge_into_one_true_event():
+    """Review finding, and the reason `_merged_bounds` exists rather than a
+    bare drop-on-overlap check: dropping the later of two overlapping
+    saccade candidates -- this function's first version -- is wrong in a
+    way worse than undercounting.
+
+    Same fixture as `test_no_run_overlaps_another` above, whose docstring
+    derives why the two candidates overlap the way they do: `(595, 612)`
+    and `(595, 626)`, the second a strict SUPERSET of the first. Dropping
+    the superset (verified directly, against the commit before this fix)
+    kept only `Run(595, 612, SACCADE)` and left samples 612-625 unclaimed;
+    `_insert_trace` (schema/detect.py) then fills every unclaimed sample
+    with `fixation`, so the stored trace read `Run(595, 612, SACCADE)`
+    followed by `Run(612, 1397, FIXATION)` -- and 613-624 is a REAL second
+    3-degree saccade, not a fixation. Per the paper (p. 196), fixations are
+    "everything that is not noise, saccades, or glissades", so that stored
+    trace asserts something the algorithm's own definition contradicts: a
+    FALSE event, not a missing one, and precisely the kind of
+    reimplementation artifact parent design spec section 3.2 warns "does
+    not look like a defect, it looks like a finding."
+
+    Merging produces one wider saccade instead, and this test pins both
+    halves of the fix: the merged span's exact bounds, and -- the sharper
+    check -- that no `fixation` run touches any sample the second real
+    saccade actually occupies.
+    """
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 3000
+    rng = np.random.default_rng(4)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    for onset in (600, 1400, 2200):
+        gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+        gaze[onset + 12:, 0] += 3.0
+    close_onset = 600 + 12 + 1          # one sample after the first ends
+    gaze[close_onset:close_onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[close_onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    # Runs actually overlapping the collision span `[595, 626)` -- not a
+    # bare `start < 630`, which would also catch the leading and trailing
+    # fixation runs that merely happen to START near it.
+    overlapping = [run for run in runs if run.start < 626 and run.stop > 595]
+    assert overlapping == [Run(595, 626, Label.SACCADE)], overlapping
+    # The second saccade's own peak sample (613, well inside its 613-624
+    # span) must never fall inside a `fixation` run.
+    assert not any(
+        run.label == Label.FIXATION and run.start <= 613 < run.stop for run in runs
+    ), runs
+
+
+def test_merged_bounds_is_a_no_op_when_nothing_overlaps():
+    """The ordinary case, and the only one on a trace of well-separated
+    saccades: nothing in `runs` overlaps the new candidate, so it is
+    returned unchanged and `runs` is untouched."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.nystrom_holmqvist import _merged_bounds
+
+    runs = [Run(0, 10, Label.SACCADE), Run(50, 60, Label.PSO)]
+
+    onset, offset = _merged_bounds(runs, 20, 30)
+
+    assert (onset, offset) == (20, 30)
+    assert runs == [Run(0, 10, Label.SACCADE), Run(50, 60, Label.PSO)]
+
+
+def test_merged_bounds_absorbs_one_overlapping_run():
+    """The direct case `detect_nystrom_holmqvist` hits on `test_overlapping_
+    saccade_candidates_merge_into_one_true_event`'s own fixture: one
+    existing run overlaps the candidate, so the two widen into their union
+    and the existing run is removed rather than left to also be returned."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.nystrom_holmqvist import _merged_bounds
+
+    runs = [Run(10, 20, Label.SACCADE)]
+
+    onset, offset = _merged_bounds(runs, 15, 30)
+
+    assert (onset, offset) == (10, 30)
+    assert runs == []
+
+
+def test_merged_bounds_absorbs_every_run_it_overlaps_at_once():
+    """Two EXISTING runs, both already within the new candidate's own
+    original reach (no cascade required -- `_merged_bounds`' own docstring
+    proves a cascade beyond one sweep can never be needed, since `runs` is
+    pairwise non-overlapping throughout, so this is the multi-absorption
+    case that IS reachable: a wide candidate straddling two smaller,
+    already-separate runs). Both must be absorbed and removed, not just
+    the first one found."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.nystrom_holmqvist import _merged_bounds
+
+    runs = [Run(10, 20, Label.SACCADE), Run(30, 40, Label.PSO)]
+
+    onset, offset = _merged_bounds(runs, 15, 35)
+
+    assert (onset, offset) == (10, 40)
+    assert runs == []
+
+
+def test_a_velocity_spike_above_the_physiological_limit_is_excluded():
+    """Table 2, p. 194: velocity above 1,000 deg/sec is "not physiologically
+    possible" and is dropped before detection. Review finding: this
+    rejection had no test anywhere in the suite -- mutating either
+    `usable &=` line in `detect_nystrom_holmqvist` to `pass` left `tests/eye`
+    fully green.
+
+    **A sustained plateau, not a one-sample spike, and the reason is
+    load-bearing.** A single-sample jump to 1,250 deg/sec was this test's
+    first draft, and it does not discriminate: verified directly, that
+    fixture passes identically whether the velocity rejection line is
+    present or mutated to `pass`. The reason is the SAME mechanism
+    `test_an_acceleration_spike_above_the_physiological_limit_is_excluded`
+    below documents for its own single-sample draft -- a lone spike's own
+    acceleration is small (both neighbours are back at baseline), but its
+    two IMMEDIATE NEIGHBOURS see the whole jump in one step and are excluded
+    by the (unmutated) acceleration rejection regardless, isolating the
+    single spike sample into a 1-sample gap too short to survive
+    `min_fixation`'s floor either way -- so the spike vanishes from the
+    returned runs whether the velocity line does its job or not, and the
+    assertion below passed for the wrong reason. A `speed`-only PLATEAU
+    long enough to have an interior -- samples surrounded by other plateau
+    samples rather than by baseline -- fixes this: the interior's own
+    central-difference acceleration is small (verified directly: under
+    1 deg/sec^2, nowhere near the 100,000 limit) precisely because its
+    neighbours are more of the SAME plateau, so only the velocity rejection
+    stands between it and being usable.
+
+    Checked as a genuine EXCLUSION, not merely a value that happens not to
+    change the result: the plateau's interior is covered by NO returned run
+    at all -- neither claimed as part of a saccade nor filled as a
+    fixation, exactly like an `available`-masked sample (`engbert_kliegl.py`
+    's own convention this detector also follows). A real saccade is
+    planted elsewhere in the same trace so the fixture is non-vacuous in
+    the other direction too.
+    """
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 2000
+    rng = np.random.default_rng(10)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    onset = 500
+    gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+    # A sustained "not physiologically possible" plateau, imposed directly
+    # on the velocity trace this detector actually receives -- production
+    # never re-derives velocity from gaze internally, it is handed the
+    # shared estimator's own output (design spec section 2).
+    plateau_start, plateau_len = 1200, 8
+    velocity[plateau_start:plateau_start + plateau_len, 0] = 1200.0
+    speed = np.hypot(velocity[:, 0], velocity[:, 1])
+    acceleration = np.abs(np.gradient(speed)) * fs
+    # The two samples at each edge see the jump; the interior does not.
+    interior = range(plateau_start + 2, plateau_start + plateau_len - 2)
+    assert all(speed[i] > DEFAULT_NH_PARAMS.max_velocity_deg_s for i in interior)
+    assert all(acceleration[i] <= DEFAULT_NH_PARAMS.max_acceleration_deg_s2 for i in interior), (
+        "the plateau's interior must stay under the acceleration limit, or "
+        "this test would no longer isolate the velocity rejection"
+    )
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    assert any(run.label == Label.SACCADE for run in runs), "fixture produced no saccade at all"
+    covering = [run for run in runs if any(run.start <= i < run.stop for i in interior)]
+    assert covering == [], (
+        f"the physiologically-impossible velocity plateau's interior "
+        f"{list(interior)} was covered by a run: {covering}"
+    )
+
+
+def test_an_acceleration_spike_above_the_physiological_limit_is_excluded():
+    """Table 2, p. 194: acceleration above 100,000 deg/sec^2 is "not
+    physiologically possible" and is dropped before detection -- checked
+    independently of the velocity rejection above.
+
+    **A two-sample plateau, not a one-sample spike, and the reason is
+    load-bearing.** A single-sample jump to a speed high enough to clear
+    100,000 deg/sec^2 (`np.gradient`'s central difference needs roughly
+    `V * fs_hz / 2 > max_acceleration_deg_s2`, so `V` past ~400 deg/sec at
+    500 Hz) leaves the SPIKE SAMPLE ITSELF with both neighbours back at
+    baseline -- its own acceleration is therefore small (verified directly:
+    22 deg/sec^2, nowhere near the limit) even though its speed alone would
+    exceed the adaptive peak threshold and seed its own `_true_runs`
+    peak-run, and `_saccade_bounds`' onset/offset search reads raw
+    `speed_deg_s` directly (`detect_nystrom_holmqvist`'s own docstring: the
+    rejection narrows `usable`, which Task 2-4's pure search functions do
+    not themselves see) -- so that search sweeps straight through the
+    excluded flanking samples and reports one ordinary-looking saccade,
+    exercising nothing. A two-sample plateau at the same speed makes BOTH
+    plateau samples' own central difference span the edge (each one's
+    neighbours are baseline on one side and the plateau on the other),
+    so both -- and the two just outside the plateau -- exceed the
+    acceleration limit while the plateau's raw speed (500 deg/sec) stays
+    comfortably under the 1,000 deg/sec velocity limit, isolating this
+    rejection from that one. Verified directly before writing this
+    assertion: `usable` is `False` for exactly the four samples spanning
+    the plateau and its two immediate neighbours, and nothing seeds a peak
+    -run there -- the returned trace has a genuine gap, not a swept-through
+    saccade.
+    """
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 2000
+    rng = np.random.default_rng(11)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    onset = 500
+    gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+
+    plateau_start = 1200
+    velocity[plateau_start, 0] = 500.0
+    velocity[plateau_start + 1, 0] = 500.0
+
+    speed = np.hypot(velocity[:, 0], velocity[:, 1])
+    acceleration = np.abs(np.gradient(speed)) * fs
+    plateau = range(plateau_start, plateau_start + 2)
+    assert all(speed[i] <= DEFAULT_NH_PARAMS.max_velocity_deg_s for i in plateau), (
+        "the plateau's own speed must stay under the velocity limit, or this "
+        "test would no longer isolate the acceleration rejection"
+    )
+    assert all(
+        acceleration[i] > DEFAULT_NH_PARAMS.max_acceleration_deg_s2 for i in plateau
+    ), "the fixture does not actually clear the acceleration limit at the plateau"
+
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    assert any(run.label == Label.SACCADE for run in runs), "fixture produced no saccade at all"
+    covering = [
+        run for run in runs
+        if run.start <= plateau_start < run.stop or run.start <= plateau_start + 1 < run.stop
+    ]
+    assert covering == [], (
+        f"the physiologically-impossible acceleration plateau at "
+        f"{plateau_start}-{plateau_start + 1} was covered by a run: {covering}"
+    )
+
+
+def test_a_recomputed_glissade_does_not_duplicate_an_already_claimed_one():
+    """Review claimed the glissade-side half of the `claimed` guard --
+    `if glissade is not None and not claimed[glissade[0]:glissade[1]].any()`
+    -- is unreachable, proven by an argument that a glissade's own span
+    starts at its saccade's `offset` and only extends forward, so nothing
+    claimed earlier can reach it. **That argument is incomplete, and this
+    fixture is the counterexample, found by an independent randomized
+    search (200 trials, a different construction from review's own 400) and
+    confirmed by tracing this module's real functions line for line, not by
+    a second reimplementation of the loop.**
+
+    The gap: the argument only rules out a DIFFERENT, earlier-positioned
+    event reaching forward into a glissade. It does not rule out the SAME
+    conceptual event being processed twice. A saccade's triangular
+    velocity profile occasionally has its own apex replaced by a shallow
+    dip -- sensor noise, or (as here) constructed directly -- low enough to
+    fall below the adaptive peak threshold and split one `_true_runs`
+    peak-run into two, but neither shallow enough nor shaped as a genuine
+    local minimum for either half's own `_saccade_bounds` search to stop
+    there: both searches walk through the dip and land on the SAME true
+    `(onset, offset)`. The first occurrence's saccade claims that span and
+    its glissade search (deterministic, a pure function of `(onset, offset,
+    offset_threshold)`) finds and claims a real following excursion. The
+    SECOND occurrence resolves to the identical `(onset, offset,
+    offset_threshold)` -- `_merged_bounds` correctly merges it into a no-op
+    (the saccade side is not duplicated) -- and then recomputes the
+    IDENTICAL glissade candidate a second time. Without this guard, that
+    second, identical candidate would be appended again: not a wider or
+    narrower span, THE SAME ONE, so `runs` would hold it twice and
+    `test_no_run_overlaps_another`'s own `earlier.stop <= later.start`
+    check would fail comparing a run against its own duplicate.
+
+    This is not a defect the merge introduced -- `claimed[onset:offset]`
+    for the saccade side has exactly the analogous protection, and this is
+    its glissade-side counterpart, doing the same dedup job for the same
+    underlying "same event detected twice" cause. The guard is real,
+    reachable, and load-bearing; it is not free insurance against an
+    impossible case.
+    """
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 3000
+    rng = np.random.default_rng(1026)
+    speed = np.abs(rng.normal(3.0, 2.0, n))
+
+    # One triangular velocity profile, apex replaced by a shallow dip.
+    onset, length, peak, dip_value = 2132, 17, 346.06731596779116, 11.83035982059965
+    ramp = np.concatenate(
+        [np.linspace(0, peak, length // 2), np.linspace(peak, 0, length - length // 2)]
+    )
+    speed[onset:onset + len(ramp)] = np.maximum(speed[onset:onset + len(ramp)], ramp)
+    speed[onset + length // 2] = dip_value   # the shallow dip, replacing the true apex
+
+    velocity = np.zeros((n, 2))
+    velocity[:, 0] = speed             # constructed directly, matching _saccade_bounds'
+                                        # and _glissade_bounds' own unit tests above
+    gaze = np.zeros((n, 2))
+    gaze[:, 0] = np.cumsum(speed) / fs  # a monotone proxy; only its endpoint differences
+                                        # (amplitude) matter to _glissade_bounds' own check
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    pso_runs = [run for run in runs if run.label == Label.PSO]
+    assert len(pso_runs) == 1, (
+        "expected exactly one glissade for one underlying event, got "
+        f"{len(pso_runs)}: {pso_runs}"
+    )
+    sorted_runs = sorted(runs, key=lambda run: run.start)
+    for earlier, later in zip(sorted_runs, sorted_runs[1:]):
         assert earlier.stop <= later.start, (earlier, later)
