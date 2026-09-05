@@ -1753,6 +1753,15 @@ def test_a_shared_paramset_key_reaches_the_detector_that_declares_it():
     assert built.microsaccade_max_deg == revised
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _NoParams:
+    """What a detector with no tunable parameters declares.
+    `registry.Detector.defaults` is required rather than defaulting to `{}` --
+    registry.py's own comment says why a silent empty default would be the
+    same class of quiet failure one layer down -- so a stub still says it has
+    none, rather than being allowed to omit the question."""
+
+
 def test_a_detector_with_no_amplitude_labels_is_not_handed_the_threshold():
     """Design spec section 3.1: U'n'Eye emits `saccade` alone, so there is no
     amplitude split for a threshold to place and no field for it to arrive
@@ -1772,6 +1781,7 @@ def test_a_detector_with_no_amplitude_labels_is_not_handed_the_threshold():
         name="amplitude_blind",
         vocabulary=frozenset({Label.MICROSACCADE}),
         run=_amplitude_blind_detect,
+        defaults=_NoParams(),
     )
     raw = {
         "detector": "amplitude_blind",
@@ -2269,6 +2279,7 @@ def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_
         name="nystrom_holmqvist",
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
         run=_amplitude_blind_detect,
+        defaults=_NoParams(),
     )
 
     # The saccadic slice of `{saccade, pso, fixation}` is `{saccade}` alone --
@@ -2292,6 +2303,7 @@ def test_a_vocabulary_beyond_the_amplitude_split_no_longer_refuses_to_label_the_
         name="otero_millan",
         vocabulary=frozenset({Label.MICROSACCADE}),
         run=_amplitude_blind_detect,
+        defaults=_NoParams(),
     )
     subset_label = _conjunction_label(subset, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
     assert subset_label(0, 6) is Label.MICROSACCADE
@@ -2366,7 +2378,8 @@ def test_a_degenerate_amplitude_split_never_labels_outside_the_declared_vocabula
         ("uneye", Label.SACCADE),
     ):
         detector = Detector(
-            name=name, vocabulary=frozenset({declared}), run=_amplitude_blind_detect
+            name=name, vocabulary=frozenset({declared}),
+            run=_amplitude_blind_detect, defaults=_NoParams(),
         )
         # Both paramsets, and each says something different. WITH the
         # threshold is the reviewer's own reproduction, and the case that
@@ -2416,7 +2429,10 @@ def test_a_detector_declaring_nothing_cannot_label_a_conjunction():
     from wl_preproc.eye.detect.registry import Detector
     from wl_preproc.schema.detect import UndecidedConjunctionLabel, _conjunction_label
 
-    silent = Detector(name="declares_nothing", vocabulary=frozenset(), run=_amplitude_blind_detect)
+    silent = Detector(
+        name="declares_nothing", vocabulary=frozenset(),
+        run=_amplitude_blind_detect, defaults=_NoParams(),
+    )
 
     with pytest.raises(UndecidedConjunctionLabel) as excinfo:
         _conjunction_label(silent, {"microsaccade_max_deg": 1.0}, _ramp_gaze(50, 0.1))
@@ -2934,96 +2950,6 @@ def test_the_run_encoding_stays_far_below_one_run_per_sample(stepped_session):
         assert len(runs) < row["n_samples"] / 10, (name, trace)
 
 
-def _register_default_paramsets_including(name: str, real: dict[str, int]) -> dict[str, int]:
-    """`schema/detect.py::register_default_paramsets`'s own body, plus one
-    more entry in its `defaults` dict -- substituted for the real function,
-    via `unittest.mock.patch.object`, for exactly the span of the two tests
-    below that register a fixture detector into `DETECTORS`.
-
-    **Needed because the real function cannot know a fixture's name.** Its
-    own `defaults` dict is a literal, keyed by string for `engbert_kliegl`
-    and `otero_millan` alone -- correct today, when those are the only two
-    detectors that exist -- and the comprehension below it reads
-    `defaults[name]` for `name in DETECTORS` UNCONDITIONALLY. Registering a
-    third name into `DETECTORS` therefore makes that lookup raise `KeyError`,
-    confirmed directly (this task's own investigation, before this helper
-    existed): adding `"two_kinds"` to `DETECTORS` and calling the real,
-    unpatched `daemon.run_once()` raised `KeyError: 'two_kinds'` from inside
-    `register_default_paramsets`'s own dict comprehension, and it is not a
-    per-key error `populate()`'s `suppress_errors=True` can catch --
-    `daemon.run_once()` calls `register_default_paramsets()` directly, so the
-    exception aborts the WHOLE call before any table's `key_source` is asked
-    a single question, taking the two REAL detectors' registration down with
-    it too. **Not a defect this branch introduced or could fix here**: `git
-    blame` puts every line of that `defaults` dict at 2026-09-01/2026-09-02
-    (stage 1 / stage 2A), and this task adds no production code regardless.
-
-    A real stage 2B detector module would add its own `DEFAULT_*_PARAMS`
-    dataclass and its own line in that dict. The fixture built by the two
-    tests below has no such module, and its `run` (`detect_two_kinds`)
-    ignores `params` entirely, so reusing Engbert-Kliegl's own defaults is a
-    harmless stand-in: `schema/detect.py::_params_for` only needs SOME
-    dataclass instance whose declared fields the paramset dict can fill, and
-    never a value the fixture actually consults.
-
-    **`real` pins this hand copy to the function it stands in for, and this
-    is load-bearing, not a nicety** (fix round: a review correctly pointed
-    out nothing previously tied the two together). This copy substitutes for
-    `register_default_paramsets` entirely -- so a docstring claiming the
-    tests below "drive the production registration path" would overclaim
-    the one part of that path (registering a NEW name) this copy exists
-    specifically to avoid calling for real. What it does NOT need to avoid
-    is drifting from the real function's `engbert_kliegl`/`otero_millan`
-    handling, which is unrelated to the `KeyError` and exercised identically
-    either way. `real` is `register_default_paramsets()`'s own return value,
-    captured by each caller BEFORE the fixture name is added to `DETECTORS`
-    (calling it after would hit the exact `KeyError` this copy exists to
-    work around, on the real function this time). `paramset.register` is
-    idempotent by content hash, so if this copy's `engbert_kliegl`/
-    `otero_millan` entries are built the same way the real function builds
-    them, both resolve to the SAME already-registered index -- asserted
-    below rather than trusted, so a future change to the real function's
-    shape (a new shared key, a reordered merge) makes this copy's answer for
-    those two names disagree with the real one, and fails here, loudly,
-    instead of this copy quietly going stale while every test that uses it
-    keeps passing.
-    """
-    from dataclasses import asdict
-
-    from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS
-    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
-    from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS
-    from wl_preproc.eye.detect.registry import DETECTORS
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
-    from wl_preproc.schema import paramset
-
-    paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
-    defaults = {
-        "engbert_kliegl": asdict(DEFAULT_EK_PARAMS),
-        "otero_millan": asdict(DEFAULT_OM_PARAMS),
-        name: asdict(DEFAULT_EK_PARAMS),
-    }
-    registered = {
-        detector_name: paramset.register(
-            "eye_detection",
-            {
-                "detector": detector_name,
-                **defaults[detector_name],
-                "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
-            },
-        )
-        for detector_name in DETECTORS
-    }
-    for real_name in ("engbert_kliegl", "otero_millan"):
-        assert registered[real_name] == real[real_name], (
-            f"this test's hand copy of register_default_paramsets now disagrees "
-            f"with the real one about {real_name!r}'s own registered paramset "
-            f"index ({registered[real_name]!r} != {real[real_name]!r}) -- the "
-            f"real function's shape changed and this copy did not follow"
-        )
-    return registered
-
-
 def _delete_fixture_paramset(name: str) -> None:
     """Both multi-kind tests' own cleanup, keyed by the fixture's NAME rather
     than a paramset index the caller captured earlier -- and that difference
@@ -3172,34 +3098,25 @@ def test_a_multi_kind_detector_populates_and_keeps_its_vocabulary(stepped_sessio
     )
     session_key, _report, _ = stepped_session
 
-    # Captured BEFORE `"two_kinds"` is added to `DETECTORS`, while it still
-    # holds only the two real detectors -- calling the real, unpatched
-    # `register_default_paramsets()` after that point is exactly the
-    # `KeyError` this whole workaround exists to avoid. This is what
-    # `_register_default_paramsets_including` pins its own `engbert_kliegl`/
-    # `otero_millan` handling against.
-    real_registered = detect.register_default_paramsets()
-
     with (
         patch.dict(DETECTORS, {"two_kinds": fake}),
-        patch.object(
-            detect, "register_default_paramsets",
-            lambda: _register_default_paramsets_including("two_kinds", real_registered),
-        ),
     ):
         try:
-            # First statement INSIDE `try`, not before it (fix round 2):
-            # this call is what INSERTS `"two_kinds"`'s own `ParamSet` row
-            # (`_register_default_paramsets_including`'s dict comprehension)
-            # and then runs fix round 1's own pin assertion, LAST, against
-            # the already-inserted row. Capturing `idx` before `try` (fix
-            # round 1's own choice) put that insert-then-maybe-raise
-            # sequence entirely OUTSIDE the region `finally` protects, so a
-            # genuine pin failure -- the exact scenario the pin exists to
-            # catch -- leaked the row it had just written. See
-            # `_delete_fixture_paramset`'s own docstring for the rest of
-            # this reasoning and for why `finally` below does not need
-            # `idx` to already be bound.
+            # First statement INSIDE `try`, not before it: this call is
+            # what INSERTS the fixture's own `ParamSet` row, and an insert
+            # that happens outside the region `finally` protects leaks the
+            # row when anything after it raises.
+            #
+            # **This is now the REAL `register_default_paramsets`.** It was a
+            # hand copy of that function, patched over it for the span of
+            # these two tests, because the real one kept a hardcoded
+            # `defaults` dict that raised `KeyError` for any name not in it.
+            # A test driving a copy of the thing it claims to exercise is
+            # stage 1's worst defect in miniature -- there, every test
+            # registered its own paramsets, which is exactly why nobody
+            # noticed production registered none. `registry.Detector` now
+            # carries its own defaults, so the real function handles a
+            # fixture detector with no special case and the copy is gone.
             idx = detect.register_default_paramsets()["two_kinds"]
 
             daemon.run_once(prefix=prefix)
@@ -3291,10 +3208,6 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
 
     with (
         patch.dict(DETECTORS, {"two_kinds_traces": fake}),
-        patch.object(
-            detect, "register_default_paramsets",
-            lambda: _register_default_paramsets_including("two_kinds_traces", real_registered),
-        ),
     ):
         try:
             # See the sibling test's own comment above its identical line
@@ -3337,3 +3250,102 @@ def test_a_multi_kind_detector_writes_all_three_traces(stepped_session, prefix):
             # paramset`'s own docstring, for why this is by NAME rather
             # than by the `idx` above, which this block must not depend on.
             _delete_fixture_paramset("two_kinds_traces")
+
+
+def test_registering_a_third_detector_does_not_raise(daemon_module):
+    """The defect this fix exists to close. `register_default_paramsets` kept
+    a hardcoded `defaults` dict of the two real detector names and did
+    `defaults[name]` in a comprehension over `DETECTORS`, so a third detector
+    raised `KeyError` -- uncaught, from `daemon.run_once()` at
+    `daemon.py`'s `register_default_paramsets()` call, which sits BEFORE
+    `reap_stale_jobs` and before the try-wrapped `_computed_tables()` loop.
+    The whole pass died, not one detector.
+
+    Stage 2B registers five more (design spec section 3.1), so this fired on
+    the first one. It stayed invisible because the registry's own
+    completeness claim -- set equality against `DETECTORS` -- did not cover
+    the defaults, which were a THIRD thing that had to agree with the other
+    two and that nothing checked.
+
+    Defaults now live on `registry.Detector` itself, so a detector that has
+    none cannot be constructed at all, and the failure is a `TypeError` at
+    import naming the detector rather than a `KeyError` at daemon time
+    naming nothing."""
+    from dataclasses import dataclass, replace
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect, paramset
+
+    @dataclass(frozen=True, slots=True)
+    class _ThirdParams:
+        some_threshold: float = 0.25
+
+    third = replace(
+        DETECTORS["engbert_kliegl"],
+        name="a_third_detector",
+        vocabulary=frozenset({Label.SACCADE}),
+        defaults=_ThirdParams(),
+    )
+    DETECTORS["a_third_detector"] = third
+    try:
+        registered = detect.register_default_paramsets()
+
+        assert set(registered) == set(DETECTORS), (
+            "the returned mapping is the subsystem's completeness claim and must "
+            "cover every registered detector"
+        )
+        params = (paramset.ParamSet & {
+            "paramset_type": "eye_detection",
+            "paramset_idx": registered["a_third_detector"],
+        }).fetch1("params")
+        assert params["detector"] == "a_third_detector"
+        assert params["some_threshold"] == 0.25
+    finally:
+        del DETECTORS["a_third_detector"]
+
+
+def test_the_shared_threshold_still_wins_over_a_detectors_own_field():
+    """`microsaccade_max_deg` is merged LAST, after the detector's own
+    defaults, and that ordering is load-bearing while being invisible in any
+    stored row.
+
+    A detector that consumes the shared key declares a field of that name on
+    its own params dataclass (`_params_for` explains why that is how a shared
+    key reaches a detector at all), so `asdict` of its defaults carries a
+    `microsaccade_max_deg` of its own. Merged in the other order THAT value
+    would win, and each detector would quietly pick the amplitude cut its own
+    rows are split at -- the per-detector threshold this paramset shape exists
+    to prevent.
+
+    The two values are equal today, so reversing the merge order would fail
+    NO existing test. This is the test that would."""
+    from dataclasses import dataclass, replace
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect
+
+    shadowing_value = MICROSACCADE_MAX_DEG + 4.0
+
+    @dataclass(frozen=True, slots=True)
+    class _ShadowingParams:
+        microsaccade_max_deg: float = shadowing_value
+
+    shadower = replace(
+        DETECTORS["engbert_kliegl"],
+        name="tries_to_shadow",
+        vocabulary=frozenset({Label.SACCADE}),
+        defaults=_ShadowingParams(),
+    )
+    DETECTORS["tries_to_shadow"] = shadower
+    try:
+        built = detect._eye_detection_params(shadower)
+
+        assert built["microsaccade_max_deg"] == MICROSACCADE_MAX_DEG, (
+            f"the detector's own {shadowing_value} shadowed the shared cut; the "
+            "merge order is reversed"
+        )
+    finally:
+        del DETECTORS["tries_to_shadow"]

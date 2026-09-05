@@ -30,9 +30,9 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from wl_preproc.eye.detect.engbert_kliegl import detect_engbert_kliegl
+from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, LabelledInterval
-from wl_preproc.eye.detect.otero_millan import detect_otero_millan
+from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS, detect_otero_millan
 
 
 class DetectorNotRegistered(KeyError):
@@ -76,6 +76,27 @@ class Detector:
     # reads its `params` annotation): `run` is unchecked, `detect` is the
     # entry point that holds the detector to its own declared vocabulary.
     run: DetectFn
+    # This detector's OWN frozen params dataclass, at its default values --
+    # the instance, not a dict. `schema/detect.py::register_default_paramsets`
+    # calls `asdict` on it to build the `eye_detection` paramset.
+    #
+    # **REQUIRED, and here rather than in a table beside `DETECTORS`.** It
+    # lived in a hardcoded `{name: asdict(...)}` dict inside
+    # `register_default_paramsets` until 2026-09-05, which made the defaults
+    # a THIRD thing that had to agree with this registry and with the
+    # registered paramsets, checked against neither. A detector registered
+    # without an entry there raised `KeyError` from a dict comprehension over
+    # `DETECTORS` -- inside `daemon.run_once()`, before `reap_stale_jobs` and
+    # before the try-wrapped `_computed_tables()` loop, so the WHOLE daemon
+    # pass died rather than the one detector. Design spec section 3.1 plans
+    # five more detectors, so it would have fired on the first of them.
+    #
+    # Required, never defaulted to `{}`: a detector that registered with
+    # silently no tunables is the same quiet failure one layer down. One with
+    # genuinely no parameters passes an empty frozen dataclass and says so.
+    # Missing now raises `TypeError` at construction, at import, naming the
+    # detector -- which is where it is cheapest to read.
+    defaults: Any
 
     def detect(
         self,
@@ -119,6 +140,7 @@ DETECTORS: dict[str, Detector] = {
         name="engbert_kliegl",
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
         run=detect_engbert_kliegl,
+        defaults=DEFAULT_EK_PARAMS,
     ),
     # **`saccade` AND `microsaccade`, per design spec section 3.1 as corrected
     # 2026-09-01.** That table gave this detector `microsaccade` alone, from
@@ -133,6 +155,7 @@ DETECTORS: dict[str, Detector] = {
         name="otero_millan",
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
         run=detect_otero_millan,
+        defaults=DEFAULT_OM_PARAMS,
     ),
 }
 
