@@ -19,14 +19,14 @@ names; nothing here is tuned (design spec
 `2026-09-05-nystrom-holmqvist-design.md`, section 7).
 
 **This module is one step of several, by design -- not the whole detector.**
-It carries the twelve published parameters and the paper's first step: the
-adaptive peak-velocity threshold (p. 193, Figure 4) that converges to the
+It carries the twelve published parameters, the paper's first step (the
+adaptive peak-velocity threshold, p. 193, Figure 4, that converges to the
 data's own noise floor rather than asking an experimenter to choose one,
-which is what makes the algorithm "settings-free for the user." Onset/offset
-search, saccade and glissade detection, fixation detection, and registration
-with `registry.py` are separate tasks in the same implementation plan and are
-not yet in this file -- `nystrom_holmqvist` does not yet appear in
-`registry.DETECTORS`.
+which is what makes the algorithm "settings-free for the user"), and its
+second (onset/offset search around a detected peak, p. 194, Figure 5).
+Glissade detection, fixation detection, and registration with `registry.py`
+are separate tasks in the same implementation plan and are not yet in this
+file -- `nystrom_holmqvist` does not yet appear in `registry.DETECTORS`.
 """
 
 from __future__ import annotations
@@ -258,3 +258,94 @@ def _peak_threshold(
             return PeakThreshold(updated, onset, iteration, True)
         threshold = updated
     return PeakThreshold(threshold, onset, params.max_iterations, False)
+
+
+def _saccade_bounds(
+    speed_deg_s: np.ndarray,
+    peak_start: int,
+    peak_stop: int,
+    thresholds: PeakThreshold,
+    fs_hz: float,
+    params: NystromHolmqvistParams,
+) -> tuple[int, int, float] | None:
+    """`(onset, offset, offset_threshold_deg_s)` for one velocity peak found
+    between `peak_start` and `peak_stop`, or `None` if the saccade is
+    rejected.
+
+    **Onset** (paper p. 194, Figure 5A): search backward from the peak's
+    first sample to the first one below `theta_ST^onset = mu_z + 3*sigma_z`
+    (`thresholds.onset_deg_s`, already computed by `_peak_threshold`) where
+    `(theta_i - theta_(i+1)) >= 0` -- "until the first local minimum is
+    found."
+
+    **Offset is the adaptive half, and the reason this algorithm exists.** It
+    weights the trial-wide onset threshold against a LOCAL noise estimate:
+
+        theta_t          = mu_t + 3*sigma_t     over tau_min samples PRECEDING onset
+        theta_ST^offset  = alpha*theta_ST^onset + beta*theta_t
+
+    with `alpha = 0.7`, `beta = 0.3` (Table 2). Offset is the first sample,
+    searching FORWARD from `peak_stop`, below that threshold where
+    `(theta_i - theta_(i+1)) <= 0`.
+
+    **The window PRECEDES the saccade, and inverting that is the single
+    easiest way to break this detector.** The paper's reason (p. 194): "To
+    avoid contamination from glissadic movements." A window placed after the
+    saccade would measure the glissade instead of the quiet baseline, raise
+    `theta_ST^offset`, and let it accept a still-elevated sample as the
+    offset -- cutting the saccade's own decay short
+    (`test_the_local_noise_window_precedes_the_saccade` verifies this
+    directly, both the correct placement and the broken one).
+
+    **Two rejections, both from p. 194-195:**
+
+    - `mu_t > theta_PT` -- the local window itself is elevated, "indicating
+      that there was no period of stillness prior to the saccade onset (most
+      often, indicating recording imperfections)." Checked before the offset
+      search runs, since a saccade failing this is rejected regardless of
+      where its offset would land.
+    - A saccade shorter than `min_saccade_duration_ms` (10 msec, Table 2) is
+      discarded as noise.
+
+    **The returned threshold is not a diagnostic extra.** Task 4's glissade
+    search reuses this same `theta_ST^offset` for its "low-velocity
+    glissade" definition (design spec §1.4); returning it here keeps the
+    alpha/beta weighting computed in one place rather than a second one it
+    could drift from.
+
+    `speed_deg_s` is the same scalar speed `_peak_threshold` takes, not the
+    two-column `velocity_deg_s`.
+    """
+    tau = max(int(round(params.min_fixation_duration_ms * fs_hz / 1000.0)), 1)
+
+    onset = peak_start
+    while onset > 0:
+        if speed_deg_s[onset] <= thresholds.onset_deg_s and (
+            speed_deg_s[onset] - speed_deg_s[onset + 1] >= 0
+        ):
+            break
+        onset -= 1
+
+    window = speed_deg_s[max(onset - tau, 0):onset]
+    if window.size == 0:
+        return None
+    local = float(window.mean()) + params.local_noise_sigma * float(window.std())
+    if float(window.mean()) > thresholds.peak_deg_s:
+        return None  # mu_t > theta_PT: no stillness before the saccade (p. 195)
+
+    offset_threshold = (
+        params.offset_alpha * thresholds.onset_deg_s + params.offset_beta * local
+    )
+    offset = peak_stop
+    limit = speed_deg_s.size - 1
+    while offset < limit:
+        if speed_deg_s[offset] <= offset_threshold and (
+            speed_deg_s[offset] - speed_deg_s[offset + 1] <= 0
+        ):
+            break
+        offset += 1
+
+    min_samples = max(int(round(params.min_saccade_duration_ms * fs_hz / 1000.0)), 1)
+    if offset - onset < min_samples:
+        return None
+    return onset, offset, offset_threshold

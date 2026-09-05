@@ -215,3 +215,122 @@ def test_unusable_samples_are_excluded_from_the_estimate():
     ).peak_deg_s
 
     assert masked < unmasked, (masked, unmasked)
+
+
+def test_the_local_noise_window_precedes_the_saccade():
+    """Spec §1.2, from the paper p. 194: the local noise factor is computed
+    "over the velocity samples within a window with size tau_min msec ... and
+    PRECEDING the saccade currently being processed. To avoid contamination
+    from glissadic movements."
+
+    **This fixture is not the task brief's original one, and the reason is
+    load-bearing.** The brief's first draft had the saccade's velocity jump
+    directly from its plateau (300 deg/s) to the glissade's plateau (40
+    deg/s) with no decay between them -- a pure step function. Run against
+    the brief's own reference implementation (verified directly), that
+    fixture gives `offset == 340` -- the far side of the glissade -- for
+    BOTH a correctly-preceding window and a deliberately-inverted
+    following one, because neither window's threshold (14.6 or 26.0) ever
+    exceeds the glissade's flat 40 deg/s, so the forward search skips
+    through the whole glissade regardless of which window computed the
+    threshold. A test that reaches the same wrong answer both ways is not
+    testing the direction it names, and 340 also falls outside that draft's
+    own asserted range (318-325).
+
+    The fixture below gives the saccade an actual decay: a shoulder at 25
+    deg/s, then a true low point at 8 deg/s, and only then the glissade at
+    40 deg/s. A window taken from BEFORE the saccade measures the quiet
+    baseline (mean 2, std 0), giving a low offset threshold (14.6) that is
+    below the shoulder and skips past it, stopping at the true low point
+    (325) right where the glissade begins. A window taken from AFTER the
+    saccade instead measures the shoulder and part of the glissade
+    (mean ~34.6, std ~8.9), inflating the threshold to ~32.4 -- high enough
+    to accept the shoulder itself (320) as the offset, cutting the saccade's
+    own decay short. Both outcomes were verified directly against this
+    task's implementation before this assertion was written."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)               # quiet baseline
+    speed[300:320] = 300.0                  # the saccade
+    speed[320:325] = 25.0                   # a shoulder in its decay
+    speed[325] = 8.0                        # the true low point, right after
+    speed[326:346] = 40.0                   # a glissade right after that
+    thresholds = PeakThreshold(
+        peak_deg_s=100.0, onset_deg_s=20.0, iterations=2, converged=True
+    )
+
+    bounds = _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS)
+
+    assert bounds is not None
+    onset, offset, offset_threshold = bounds
+    assert offset_threshold > 0.0
+    assert offset_threshold < 25.0, offset_threshold  # low enough to skip the shoulder
+    # The offset lands at the saccade's own true low point, NOT at the
+    # shoulder a contaminated (post-saccade) window would have stopped at
+    # (320), and not extended through the glissade.
+    assert 295 <= onset <= 300, onset
+    assert 323 <= offset <= 327, offset
+
+
+def test_a_saccade_shorter_than_the_minimum_is_rejected():
+    """Table 2: minimum saccade duration 10 msec -- "large enough to avoid
+    noise being falsely categorized as saccades but small enough to include
+    short saccades (~1 deg)". At 500 Hz that is 5 samples."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(400, 2.0)
+    speed[200:202] = 300.0                  # 2 samples = 4 ms, below 10 ms
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _saccade_bounds(speed, 200, 202, thresholds, fs, DEFAULT_NH_PARAMS) is None
+
+
+def test_a_saccade_not_preceded_by_stillness_is_rejected():
+    """The paper, p. 195: "we exclude saccades that are preceded by a period
+    where mu_t > theta_PT, since this indicates that there was no period of
+    stillness prior to the saccade onset (most often, indicating recording
+    imperfections)".
+
+    **This fixture is not the task brief's original one, and the reason is
+    load-bearing.** The brief's first draft set the elevated ("no
+    stillness") stretch flush against the saccade's own rise, with no gap
+    at all. Run against the brief's own reference implementation (verified
+    directly), that fixture returns `(258, 320, 14.6)` -- a valid result,
+    not the `None` the test asserts. The reason: the onset search walks
+    backward through anything above the onset threshold regardless of how
+    long the stretch is, so it walks straight through the whole elevated
+    stretch and lands on the genuine baseline before it (258); the tau_min
+    window immediately preceding THAT point then looks even further back,
+    past the elevated stretch entirely, and measures only quiet baseline --
+    the contamination is never seen by the check meant to catch it.
+
+    The fixture below leaves a two-sample gap of genuine quiet between the
+    elevated stretch and the saccade's rise -- just enough for the onset
+    search to find its local minimum inside that gap (298) rather than
+    behind the whole elevated stretch, so the tau_min window immediately
+    preceding onset lands on the elevated stretch itself (mean 250, far
+    above `theta_PT` = 100) rather than skipping past it."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[260:298] = 250.0                  # no stillness before the saccade
+    speed[298:300] = 2.0                    # too brief a gap to count as rest
+    speed[300:320] = 300.0
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS) is None
