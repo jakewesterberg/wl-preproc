@@ -28,9 +28,10 @@ status:
     Stage 2B's first detector, Nystrom-Holmqvist, is written, tested and
     registered -- the third registered detector, and the first to emit
     `pso` and `fixation` -- eleven commits `6e952f6..a78dcf0` on branch
-    `spec/nystrom-holmqvist`, based on `main` at `19daf07`. NOT merged,
-    NOT pushed: `origin` has no `spec/nystrom-holmqvist` ref. Phase 2b's
-    back half remains hardware-blocked.
+    `spec/nystrom-holmqvist`, based on `main` at `19daf07`, with a
+    whole-branch review's own fix wave on top (`84247d1` -- see `next`
+    below). NOT merged, NOT pushed: `origin` has no `spec/nystrom-holmqvist`
+    ref. Phase 2b's back half remains hardware-blocked.
   next: >-
     Saccade detection stage 2B has its first detector: Nystrom-Holmqvist
     is written, tested and registered -- the third registered detector,
@@ -144,20 +145,37 @@ status:
     2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
     (which validity criterion 4 is blocked on) and rehydration are the other
     hardware-free pieces outstanding.
-  # a78dcf0 is `spec/nystrom-holmqvist`'s own tip -- the last commit before
-  # this file's own documentation commit on top of it, eleven commits past
-  # the branch's plan commit (6e952f6..a78dcf0). The branch is NOT merged
+
+    **The whole-branch review ran, and its fix wave is `84247d1`.** Eight
+    mutation-testing gaps in the adaptive offset threshold (seven new tests
+    in `tests/eye/detect/test_nystrom_holmqvist.py`, each mutation verified
+    caught by literal source mutation and revert), the missing test that
+    the real detector's own conjunction ever stores a `pso`
+    (`test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_
+    run` in `tests/schema/test_detect_populate.py`, on a new fixture with a
+    genuine binocular post-saccadic wobble), the stale `detect()` signature
+    in the parent spec, and every stale or false claim named above in this
+    field -- the "installed" REMoDNaV wording, the 9/1/9 test-break split,
+    the register_default_paramsets/kind-disagreement paragraph this file
+    itself carried uncorrected -- are all closed. 1341 passed (1333 plus
+    the eight new tests), 8 skipped, 1 deselected, 1 xfailed, zero warnings.
+    Still not pushed; a whole-branch review is no longer on the "before
+    opening a PR" checklist, but pushing and reading CI off the run still
+    are.
+  # 84247d1 is `spec/nystrom-holmqvist`'s own tip -- the whole-branch
+  # review's own fix wave, landed on top of `a78dcf0` (itself the last
+  # commit before this file's own documentation commit, eleven commits past
+  # the branch's plan commit, 6e952f6..a78dcf0). The branch is NOT merged
   # and NOT pushed: `git ls-remote --heads origin` shows only `main`, at
   # `19daf07`, which is this branch's own unmoved base -- no
   # `spec/nystrom-holmqvist` ref exists on `origin` at all.
   #
-  # `76a8199` (the conjunction-shape merge this block previously named) is
-  # no longer `main`'s tip either: one further merge landed on `main` since,
-  # `fix/detector-carries-its-defaults` (19daf07), before this branch's own
-  # first commit. Recorded because it is this file's own recurring failure
-  # -- a status block is only true of the commit it names, and both merging
-  # and a sibling branch landing are ways it stops being.
-  describes: a78dcf0
+  # `76a8199` (the conjunction-shape merge this block once named) and
+  # `a78dcf0` (this block's own value before the fix wave) are both
+  # superseded in turn. Recorded because it is this file's own recurring
+  # failure -- a status block is only true of the commit it names, and
+  # further work landing is one more way it stops being.
+  describes: 84247d1
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

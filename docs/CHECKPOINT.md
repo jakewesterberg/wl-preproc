@@ -1,12 +1,29 @@
 # Where this build actually is
 
 **Last updated 2026-09-06**, describing branch `spec/nystrom-holmqvist` at
-`a78dcf0` — eleven commits past its own plan commit, `6e952f6..a78dcf0` —
-with this file's own commit on top of `a78dcf0`. **Not merged, not pushed**:
-`git ls-remote --heads origin` returns only `main`, at `19daf07`; no
-`spec/nystrom-holmqvist` ref exists on `origin` at all. Check
-`git log --oneline -1`; if the branch has moved past `a78dcf0`, or merged,
-this file is stale and the spec wins.
+`84247d1` — the whole-branch review's own fix wave, landed on top of
+`a78dcf0` (itself eleven commits past its own plan commit,
+`6e952f6..a78dcf0`), with this file's own commit on top of `84247d1`.
+**Not merged, not pushed**: `git ls-remote --heads origin` returns only
+`main`, at `19daf07`; no `spec/nystrom-holmqvist` ref exists on `origin` at
+all. Check `git log --oneline -1`; if the branch has moved past `84247d1`,
+or merged, this file is stale and the spec wins.
+
+**`84247d1` closed every finding the whole-branch review raised** — eight
+mutation-testing gaps in the adaptive offset threshold (seven new tests,
+`tests/eye/detect/test_nystrom_holmqvist.py`, each mutation verified caught
+by literal source mutation and revert), the missing test that the real
+detector's own conjunction ever stores a `pso`
+(`test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_run`,
+`tests/schema/test_detect_populate.py`, verified to fail when
+`_glissade_bounds` is mutated to find nothing), the stale `detect()`
+signature in the parent spec, `measure.py`'s stale justification for
+splitting out `amplitude`, three false production docstrings, four false
+claims in the handoff and in this file's own body (below, where this
+paragraph's own predecessor sat uncorrected in place), and six further
+staleness findings. The review itself was conducted from a task brief, not
+from a document committed anywhere in this repository; commit `84247d1`'s
+own message has the itemised account of what it closed.
 
 `main` itself is not what this file's 2026-09-05 update described, either.
 That update named `main` at `76a8199` — the conjunction-shape merge — as
@@ -20,13 +37,15 @@ re-assert that either move was checked against CI.
 
 **The full local suite, freshly run for this update**
 (`.venv/bin/python -m pytest -q`, `__pycache__` cleared,
-`PYTHONDONTWRITEBYTECODE=1`, from the repo root): **1333 passed, 8 skipped, 1
-deselected, 1 xfailed, zero warnings**, Python 3.11. **CI on 3.11/3.13 has
-never run for any commit on this branch** — it has never been pushed — so
-every number in this file is evidence about 3.11 on macOS arm64 and nothing
-else. A whole-branch review, pushing, and reading CI off the run are all
-still on the plan's own "before opening a PR" checklist; none of them is
-done.
+`PYTHONDONTWRITEBYTECODE=1`, from the repo root): **1341 passed, 8 skipped, 1
+deselected, 1 xfailed, zero warnings**, Python 3.11 — 1333 (`a78dcf0`'s own
+count, above) plus the eight tests `84247d1`'s fix wave added. **CI on
+3.11/3.13 has never run for any commit on this branch** — it has never been
+pushed — so every number in this file is evidence about 3.11 on macOS arm64
+and nothing else. **The whole-branch review IS now done** — `84247d1` is
+its fix wave, closing every finding it raised (above) — but pushing and
+reading CI off the run are still on the plan's own "before opening a PR"
+checklist; neither is done.
 
 *This file's 2026-09-05 status paragraph — describing `main` at `76a8199` —
 had itself replaced one written four commits earlier that said "not yet
@@ -451,9 +470,12 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    `drift,fixation`) is documented inline but the strategy itself was not
    re-architected. A fourth detector may collide with it again.
 
-   **Full local suite: 1333 passed, 8 skipped, 1 deselected, 1 xfailed,
-   zero warnings**, Python 3.11, `.venv/bin/python -m pytest -q` from the
-   repo root with `__pycache__` cleared. CI has not run for any of it.
+   **Full local suite at `a78dcf0`: 1333 passed, 8 skipped, 1 deselected, 1
+   xfailed, zero warnings**, Python 3.11, `.venv/bin/python -m pytest -q`
+   from the repo root with `__pycache__` cleared. **At `84247d1`, the
+   whole-branch review's own fix wave (this section's header): 1341
+   passed**, same other counts, zero warnings — eight new tests, none
+   removed. CI has not run for any of it.
 5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
    written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
    no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
