@@ -1,4 +1,4 @@
-# Nystrom-Holmqvist is written, tested and registered. Not merged.
+# Nystrom-Holmqvist is written, tested, registered and merged.
 
 **Built 2026-09-06** on `spec/nystrom-holmqvist`, eleven commits past the
 plan commit, `6e952f6..a78dcf0`
@@ -15,16 +15,19 @@ tests in this commit.
 Suite **1333 passed, 8 skipped, 1 deselected, 1 xfailed**, zero warnings,
 run as `.venv/bin/python -m pytest -q` from the repo root with
 `__pycache__` cleared and `PYTHONDONTWRITEBYTECODE=1`, on Python 3.11.
-**This branch has not been pushed to origin** — `git ls-remote --heads
-origin` returns only `main`, at `19daf07`; there is no
-`spec/nystrom-holmqvist` ref on `origin` at all — so **CI on 3.11 or 3.13
-has not run for any of it**. Do not read the local green run as evidence
-about 3.13: the eye merge left CI red on 3.13 alone for a day once already
-while every local run on this machine was green
-(`docs/CHECKPOINT.md`'s own warning), and nothing here has been checked
-against that fact. A whole-branch review, pushing, and reading
-`gh run list --branch spec/nystrom-holmqvist` are all still on the plan's
-own "before opening a PR" checklist. None of them is done in this task.
+**Corrected 2026-09-06, after this document's own task finished.** All
+three of the plan's remaining checklist items are now done. The
+whole-branch review ran and raised six Important and six Minor findings
+plus a failed spec verdict for the documentation task; one fix wave closed
+every one of them, and a scoped re-review confirmed each. The branch merged
+to `main` as `534e8b5` and was pushed. **CI is green on both interpreters**
+— `gh run view 34014528809` reports `test (3.11): success` and
+`test (3.13): success`, with Manifest green on the same push.
+
+The suite figure below (1333) is this task's own measurement and is left as
+it was; the merged tree runs **1341**, the difference being the eight tests
+the fix wave added to kill eight surviving mutations in the adaptive offset
+threshold.
 
 `main` itself moved since this repository's own last status update
 (`docs/CHECKPOINT.md`'s 2026-09-05 header and `wl.yaml`'s own
@@ -352,9 +355,10 @@ Four of the seven design-spec detectors remain unwritten: NSLR, REMoDNaV
 a test-time dependency), Bayesian microsaccade detection, and U'n'Eye.
 The kind-disagreement measurement above is the highest-priority item
 regardless of which of those is written next. Before this branch is a PR,
-per the plan's own checklist: a whole-branch review (stage 1's nine
+per the plan's own checklist — **all three since done, see the correction
+at the top of this document**: a whole-branch review (stage 1's nine
 per-task reviews were all green and a whole-branch review then found ten
-defects — this branch has had no equivalent pass yet), push and read CI
+defects; this branch's equivalent pass found twelve), push and read CI
 off the run on both interpreters, and confirm every constant in
 `NystromHolmqvistParams` traces to the paper's Table 2 or the page cited
 (the one stated exception being `max_iterations`, this implementation's

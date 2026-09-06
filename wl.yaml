@@ -62,8 +62,7 @@ status:
     (docs/superpowers/specs/2026-09-05-conjunction-shape-design.md, branch
     `spec/conjunction-shape`, thirteen commits `c0838b8..7680563`, MERGED to
     `main` as `76a8199` on 2026-09-05 -- 1301 passed locally on Python 3.11
-    on the MERGED tree, CI on 3.11/3.13 still NOT RUN, because `main` has
-    not been pushed since). The premise was wrong: a conjunction's
+    on the MERGED tree; CI green on 3.11 and 3.13, read off the run). The premise was wrong: a conjunction's
     label does not need to come from a detector, because when both eyes
     independently call a stretch the same KIND, their agreement on kind
     supplies the label, and a binocular glissade now stores as `pso`. What
@@ -175,7 +174,7 @@ status:
   # superseded in turn. Recorded because it is this file's own recurring
   # failure -- a status block is only true of the commit it names, and
   # further work landing is one more way it stops being.
-  describes: 84247d1
+  describes: 534e8b5
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

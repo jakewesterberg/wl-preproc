@@ -1,13 +1,23 @@
 # Where this build actually is
 
-**Last updated 2026-09-06**, describing branch `spec/nystrom-holmqvist` at
-`84247d1` — the whole-branch review's own fix wave, landed on top of
-`a78dcf0` (itself eleven commits past its own plan commit,
-`6e952f6..a78dcf0`), with this file's own commit on top of `84247d1`.
-**Not merged, not pushed**: `git ls-remote --heads origin` returns only
-`main`, at `19daf07`; no `spec/nystrom-holmqvist` ref exists on `origin` at
-all. Check `git log --oneline -1`; if the branch has moved past `84247d1`,
-or merged, this file is stale and the spec wins.
+**Last updated 2026-09-06**, describing `main` at `534e8b5` — the merge
+commit that landed `spec/nystrom-holmqvist`, sixteen commits
+`19daf07..2f93374`, spec and plan included.
+
+**MERGED, PUSHED, AND CI GREEN ON BOTH INTERPRETERS.** Read off the run,
+not asserted: `gh run view 34014528809` reports `test (3.11): success` and
+`test (3.13): success`, and the Manifest workflow succeeded on the same
+push. Suite on the merged tree: **1341 passed, 8 skipped, 1 deselected,
+1 xfailed**, zero warnings. Check `git log --oneline -1`; if `main` has
+moved past `534e8b5`, this file is stale and the spec wins.
+
+*The paragraph above replaced one that said "Not merged, not pushed" and
+named the branch tip. It was true when written and false within the hour —
+the branch merged and CI ran. That is this file's own recurring failure
+mode and the fourth instance of it on this project: a status sentence is
+only true of the commit it names, and merging is exactly when it stops
+being. If you are updating this file from a branch, assume your own header
+will be wrong the moment the branch lands.*
 
 **`84247d1` closed every finding the whole-branch review raised** — eight
 mutation-testing gaps in the adaptive offset threshold (seven new tests,
