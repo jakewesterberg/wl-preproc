@@ -176,6 +176,23 @@ third_party:
     why: >-
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
+  - name: remodnav
+    constraint: ">=1.1"
+    why: >-
+      The test-time ORACLE tests/eye/detect/test_nystrom_holmqvist_
+      validation.py::test_remodnav_finds_a_comparable_number_of_saccades
+      checks this package's own Nystrom-Holmqvist reimplementation against
+      (design spec 2026-09-05-nystrom-holmqvist-design.md section 5). MIT
+      and on PyPI, unlike Otero-Millan's and BMD's own MATLAB references,
+      which carry no licence and cannot fill this role -- pyproject.toml's
+      dev extra only, same bucket as spikeinterface above, never a runtime
+      dependency and never shipped. >=1.1 floors at the first 1.x release,
+      confirmed against PyPI's own release metadata (0.1, 0.2, 0.3, 0.4,
+      1.0, 1.1, 1.1.1, 1.1.2 as of 2026-09-06) rather than assumed; no
+      ceiling, since the test tolerates disagreement by design (it checks a
+      comparable saccade count, not exact agreement) and pins against only
+      the classifier's constructor, preproc() and __call__(), all present
+      since at least 1.1.
   - name: zarr
     constraint: ">=2,<3"
     why: >-

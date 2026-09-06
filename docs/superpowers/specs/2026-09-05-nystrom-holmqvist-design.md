@@ -260,6 +260,46 @@ specification** — REMoDNaV deliberately changed parts of the method, so
 agreement with it is evidence and disagreement with it is not automatically a
 defect.
 
+**Task 7's status, 2026-09-06: the null was run and measured; the reference-
+recording checks were not.** All four checks above are implemented in
+`tests/eye/detect/test_nystrom_holmqvist_validation.py` — the null first, as
+this section requires, then the glissade-rate band, the glissade-duration
+band, and the REMoDNaV comparison, each gated on `WLPP_OHDPI_REFERENCE`.
+
+The null (`test_the_null_fails_the_glissade_rate_check`) is the one measurement
+this task actually made, and it passes: a duration-matched random-span
+control, 500 fake saccades and 500 fake glissades placed uniformly at random
+over 500,000 samples, scores 0.016 at the test's own pinned seed (7), and
+0.008–0.030 across seeds 0–19 measured directly — both far under the 0.10
+ceiling and nowhere near the paper's 47.8%. Mutating the check to drop its
+`tau_samples` window (counting any later glissade anywhere in the recording,
+not one within the paper's own adjacency window) raises the same control to
+0.998, confirming the test would catch a version of this statistic that no
+longer discriminates, not only pass one that does. The glissade-rate check is
+therefore established as real by this section's own standard, before it is
+ever pointed at a real recording.
+
+**The three reference-recording checks were not executed.**
+`WLPP_OHDPI_REFERENCE` was unset in this task's environment, so all three are
+correctly SKIPPED rather than run — this was expected going in, not
+discovered partway through, and the task that wrote them was explicit that
+claiming a measurement never made would be worse than leaving one out.
+Separately, and for the same reason REMoDNaV's own check could not be run
+either way here: this task's project `.venv` has no `pip` installed at all,
+so REMoDNaV could not be installed into it regardless of the recording's
+availability. The table above therefore still records PREDICTIONS, not
+measurements — nothing in it has been confirmed or refuted against this rig's
+own data. Whoever next has the reference recording and a normal venv should
+run
+
+    WLPP_OHDPI_REFERENCE=/path/to/OpenIris-2024Jul31-114628.txt \
+        .venv/bin/python -m pytest tests/eye/detect/test_nystrom_holmqvist_validation.py -v
+
+and record what comes back here, replacing this paragraph rather than
+appending beside it — the discipline `test_otero_millan_validation.py` and
+this file's own §9 item 3 both name: a number without its configuration
+stated beside it is how this document has twice carried a wrong one.
+
 ## 6. The measurement this unblocks
 
 The conjunction spec's open question 1: how often do the two eyes disagree
@@ -343,7 +383,20 @@ the algorithm and a separate validation module.
 
 1. **Whether the shared velocity estimator preserves glissades on this rig**
    (§2). Unmeasurable until this detector runs. The §5 glissade rate is what
-   answers it.
+   answers it. **Still open after task 7**: the check exists
+   (`test_the_glissade_rate_is_in_the_papers_band`) and its null passed, but
+   `WLPP_OHDPI_REFERENCE` was unset in that task's environment, so it has
+   never been run against the reference recording — see §5's own "Task 7's
+   status" note. **Not answered by the `stepped_session` synthetic fixture
+   either**, and this is worth stating explicitly because it is easy to
+   mistake for an answer: task 6 found that fixture's conjunction carries no
+   `pso` at all, but its planted transitions are constant-velocity ramps
+   with a hard stop and no post-saccadic excursion, so a glissade is
+   impossible there by construction. A zero rate on a fixture built without
+   any wobble to find and a zero rate from a velocity estimator that smooths
+   real wobble away would look identical from that fixture alone — which is
+   exactly why this item can only be closed by the reference recording, not
+   by synthetic data.
 2. **The paper states no iteration cap.** It reports convergence "in about
    two iterations" and gives a convergence criterion, but a distribution that
    oscillates would loop forever. `max_iterations = 100` is this
@@ -353,7 +406,11 @@ the algorithm and a separate validation module.
    paper does not have.
 3. **Whether Table 3's 47.8% is the union of both criteria** (§3). Inferred
    from Figure 10, not stated. If the measured rate is far off, re-examine
-   this before the estimator or the algorithm.
+   this before the estimator or the algorithm. **Still open after task 7**,
+   for the identical reason item 1 is: the check that would settle it ran its
+   null successfully but never ran against the reference recording in that
+   task's environment. Nothing in task 7 either confirms or refutes the
+   inference.
 4. **How the paper's noise on/offset rule interacts with this repository's
    validity mask.** The paper detects noise on/offset "when the velocity
    reaches the median value of the velocities over the whole trial";

@@ -167,7 +167,30 @@ dependencies = [
 # their own emitted session in tests/synth/, and Intan is checked past merely
 # opening: the amplifier stream is reshaped correctly and the Stim stream's gain
 # is the stim step size the header declares.
-dev = ["pytest>=8.0", "spikeinterface>=0.101", "testcontainers[mysql]>=4.15,<5"]
+# remodnav is the test-time ORACLE `tests/eye/detect/test_nystrom_holmqvist_
+# validation.py::test_remodnav_finds_a_comparable_number_of_saccades` checks
+# this repository's own Nystrom-Holmqvist reimplementation against (design
+# spec `2026-09-05-nystrom-holmqvist-design.md` section 5; parent
+# `2026-08-31-saccade-detection-design.md` section 3.2: "a development
+# dependency used to check our output, never a runtime dependency and never
+# shipped"). It is MIT-licensed and on PyPI -- unlike Otero-Millan's and
+# BMD's own MATLAB references, which carry no licence and cannot fill this
+# role -- so it needs no vendoring and no credential.
+#
+# `>=1.1` floors at the first 1.x release; confirmed against PyPI's own
+# release metadata (0.1, 0.2, 0.3, 0.4, 1.0, 1.1, 1.1.1, 1.1.2 as of
+# 2026-09-06) rather than assumed. No ceiling: this repository calls only
+# `remodnav.EyegazeClassifier`'s constructor, `.preproc()` and `.__call__()`,
+# all present since at least 1.1, and the test that uses it tolerates
+# disagreement by design (it is an oracle, not a specification), so a future
+# 1.x or 2.x release changing its own thresholds is not this repository's
+# concern to pin against pre-emptively.
+dev = [
+    "pytest>=8.0",
+    "spikeinterface>=0.101",
+    "testcontainers[mysql]>=4.15,<5",
+    "remodnav>=1.1",
+]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
