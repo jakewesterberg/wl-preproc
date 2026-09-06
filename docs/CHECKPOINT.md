@@ -1,24 +1,41 @@
 # Where this build actually is
 
-**Last updated 2026-09-05**, describing `main` at `76a8199` — the merge commit
-that landed `spec/conjunction-shape`, thirteen commits `c0838b8..7680563`
-implementing per-kind conjunction intersection
-(`docs/superpowers/specs/2026-09-05-conjunction-shape-design.md`) — with this
-file's own commit on top. `main` also moved independently during that work, to
-`c0abc75` (a LICENSE one-liner), so `76a8199` is a real two-parent merge.
+**Last updated 2026-09-06**, describing branch `spec/nystrom-holmqvist` at
+`a78dcf0` — eleven commits past its own plan commit, `6e952f6..a78dcf0` —
+with this file's own commit on top of `a78dcf0`. **Not merged, not pushed**:
+`git ls-remote --heads origin` returns only `main`, at `19daf07`; no
+`spec/nystrom-holmqvist` ref exists on `origin` at all. Check
+`git log --oneline -1`; if the branch has moved past `a78dcf0`, or merged,
+this file is stale and the spec wins.
 
-**Merged, whole-branch reviewed, and NOT pushed.** The whole-branch review ran
-and came back clean after one fix wave; **1301 passed on the MERGED tree** on
-Python 3.11. **CI on 3.11/3.13 has still never run for any of it**, because
-`main` is unpushed — so every claim here is evidence about 3.11 on macOS arm64
-and nothing else. Check `git log --oneline -1`; if `main` has moved past
-`76a8199`, this file is stale and the spec wins.
+`main` itself is not what this file's 2026-09-05 update described, either.
+That update named `main` at `76a8199` — the conjunction-shape merge — as
+locally merged but not yet pushed. `main` has since taken one further merge,
+`fix/detector-carries-its-defaults` (`19daf07`): a `Detector` now carries its
+own paramset defaults rather than a hardcoded two-entry dict, which is what
+let a third detector register at all. `origin/main` is at `19daf07` today —
+so `main` was pushed at some point in between, and `76a8199`'s own
+"not pushed" claim is stale too. This file records what moved; it does not
+re-assert that either move was checked against CI.
 
-*The paragraph above replaced one written four commits earlier that said "not
-yet merged" and named ten commits. It was true when written and false within
-the hour — three more commits landed and the branch merged. That is this
-file's own recurring failure mode, and the reason its header is part of every
-update.*
+**The full local suite, freshly run for this update**
+(`.venv/bin/python -m pytest -q`, `__pycache__` cleared,
+`PYTHONDONTWRITEBYTECODE=1`, from the repo root): **1333 passed, 8 skipped, 1
+deselected, 1 xfailed, zero warnings**, Python 3.11. **CI on 3.11/3.13 has
+never run for any commit on this branch** — it has never been pushed — so
+every number in this file is evidence about 3.11 on macOS arm64 and nothing
+else. A whole-branch review, pushing, and reading CI off the run are all
+still on the plan's own "before opening a PR" checklist; none of them is
+done.
+
+*This file's 2026-09-05 status paragraph — describing `main` at `76a8199` —
+had itself replaced one written four commits earlier that said "not yet
+merged" and named ten commits. It was true when written and false within the
+hour — three more commits landed and the branch merged. That is this file's
+own recurring failure mode, and the reason its header is part of every
+update. It has now recurred twice more in one day: `main` moved again after
+that update (to `19daf07`, above), and this paragraph is itself the
+NH-branch's turn at the same lesson.*
 
 *This header named `bfdfd7f` for two commits after the body had moved past it — the
 file's own test catching its own author. If you update this file, the header is part of
@@ -57,7 +74,7 @@ so that January validates rather than discovers.
 | Repo | Visibility | State |
 |---|---|---|
 | **wl-sync** | **public**, CI green on 3.11/3.13 | Session identity, barcode codec, log format, backend protocol, PIO FIFO decoding. **Task 5b — the PIO program and `piolib` binding — awaits a Pi 5.** |
-| **wl-preproc** | private, CI green on 3.11 and 3.13 (verified 2026-09-02 off `gh run list`, see above), **1284 tests, 5 skipped, 1 deselected, 1 xfailed** — 1288 passed with `WLPP_OHDPI_REFERENCE` set, which flips four gated real-recording tests | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression, the eye reader/calibration/gaze, second-order calibration, the saccade-detection substrate (stage 1), **saccade detection stage 2A** and wl-expcontroller's five asks are all merged.** Phase 1c is done. |
+| **wl-preproc** | private, CI green on 3.11 and 3.13 (verified 2026-09-02 off `gh run list`, see above), **1284 tests, 5 skipped, 1 deselected, 1 xfailed** — 1288 passed with `WLPP_OHDPI_REFERENCE` set, which flips four gated real-recording tests. **Stale**: `main` has since taken the conjunction-shape and defaults-carries-its-own-paramset merges (now at `19daf07`, see header) and this row was not re-counted against it — do not trust it without a fresh `gh run list` and test run. | Phase 0 contracts, 1a synthetic generator, 1b Intan RHS, 1b2 the RHS header, 1c-1 schemas, 1c-2 ingest watcher, 1c-3 responder — all merged. **1c-4, 1c-5, 2a, 2b-2's front half, archival-and-compression, the eye reader/calibration/gaze, second-order calibration, the saccade-detection substrate (stage 1), **saccade detection stage 2A** and wl-expcontroller's five asks are all merged.** Phase 1c is done. |
 | **wl-works** | — | The ELN and lab site. **Another worker owns it, including its remote.** Do not push, do not create branches; check `git branch --show-current` before any read. |
 
 **The dependency runs one way only.** `wl-sync` owns everything the sync box produces —
@@ -313,18 +330,112 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    depended on the glissade question either way. Its obstacles remain
    **PyTorch declared properly** — `where: serv`, following `kilosort`'s
    precedent, since a CNN detector belongs on the preprocessing server and
-   not a rig — plus vendoring and a GPU. **`registry.py::DETECTORS` still
-   registers only Engbert-Kliegl and Otero-Millan**; the other five,
-   including U'n'Eye, are specified (design spec §3.1) but unwritten, and
-   five of those seven declared vocabularies take the degenerate
-   saccadic-slice branch — only Engbert-Kliegl and Otero-Millan declare both
-   sides of the amplitude cut and reach `classify`.
+   not a rig — plus vendoring and a GPU. **`registry.py::DETECTORS`
+   registers THREE today** — Engbert-Kliegl, Otero-Millan,
+   Nystrom-Holmqvist — corrected 2026-09-06 from "only Engbert-Kliegl and
+   Otero-Millan" above, which this section said before Nystrom-Holmqvist
+   existed. The other four (NSLR, REMoDNaV, Bayesian microsaccade
+   detection, U'n'Eye) are specified (design spec §3.1) but unwritten.
+   Five of the seven declared vocabularies take the degenerate
+   saccadic-slice branch — only Engbert-Kliegl and Otero-Millan declare
+   both sides of the amplitude cut and reach `classify`; Nystrom-Holmqvist
+   is now one of the five degenerate ones for real, not hypothetically.
 
    Also stage 2B, unchanged by any of the above: the N-way `blended_agreement`,
    saccade vigor and the main-sequence fits (which need an amplitude floor
    AND a duration ceiling — 18–20% of accepted events sit below the floor
-   they were accepted by), `pso`/`pursuit`/`drift` as PRODUCED labels, and
-   wl-expcontroller's online detector as an eighth registry entry.
+   they were accepted by), `pursuit`/`drift` as PRODUCED labels (`pso` now
+   IS produced, by Nystrom-Holmqvist — see below), and wl-expcontroller's
+   online detector as an eighth registry entry.
+
+   **2026-09-06 — Nystrom-Holmqvist is written, tested and registered. NOT
+   merged.** Branch `spec/nystrom-holmqvist`, eleven commits
+   `6e952f6..a78dcf0` past its own plan commit (thirteen from where the
+   branch actually forks `main` at `19daf07`, spec and plan commits
+   included), reviewed per-task throughout but not yet whole-branch
+   reviewed, not pushed (`docs/handoffs/2026-09-05-nystrom-holmqvist-built.md`
+   has the full account; design spec
+   `docs/superpowers/specs/2026-09-05-nystrom-holmqvist-design.md` is the
+   binding authority). It is the **third registered detector**, and the
+   **first ever to emit `pso` and `fixation`** — declared vocabulary
+   `{saccade, pso, fixation}`, saccadic slice `{saccade}` alone, so its
+   conjunction runs take the degenerate branch above. Along the way the
+   shared `DetectFn`/`Detector.detect` contract gained a positional
+   `fs_hz` (between `available` and `params`), because Nystrom-Holmqvist
+   specifies its durations in milliseconds rather than samples.
+
+   **Two claims made about stage 2B before this detector existed are now
+   corrected, not silently edited.** The "PRE-EXISTING production defect
+   ... deliberately not fixed" named above — `register_default_paramsets`
+   hardcoding a two-entry `defaults` dict and raising `KeyError` on a
+   third detector — **is fixed**, on `main`, before this branch's own
+   first commit: `fix/detector-carries-its-defaults` (merged `19daf07`)
+   made `Detector` carry its own required `defaults` field, and
+   Nystrom-Holmqvist registered without incident. And the open question
+   called "unmeasured and unmeasurable until a pso-capable detector
+   exists" is now **measurable, and still unmeasured**: measuring how
+   often the two eyes disagree on an event's KIND is stage 2B's
+   highest-priority remaining item, and it must run against the **PER-EYE
+   traces, never the conjunction** — when the eyes disagree on kind, no
+   intersection covers those samples, so `_insert_trace`'s fill paints
+   them `fixation`, indistinguishable from genuine binocular fixation, and
+   a query against the conjunction's own `pso` fraction would silently
+   report zero rather than "unmeasured" (design spec section 6).
+
+   **The null result, this branch's strongest evidence.** Following the
+   rule the Otero-Millan round left behind — an oracle-free statistic is
+   worthless until a null has been run against it — the glissade-rate
+   statistic's null was built and run BEFORE the check itself: a
+   duration-matched random-span control (500 fake saccades, 500 fake
+   glissades, placed uniformly at random over 500,000 samples) scores
+   **0.016 at the test's own pinned seed (7), 0.008–0.030 measured
+   directly across seeds 0–19** — far under the check's 0.10 ceiling and
+   nowhere near the paper's 47.8%. Mutating the check to drop its
+   `tau_samples` adjacency window (counting any later glissade anywhere in
+   the recording, rather than one within the paper's own window) raises
+   the same control to **0.998**, confirming the check would also catch a
+   version of itself that stopped discriminating. The check **discriminates
+   and is RETAINED** — the opposite outcome from the Otero-Millan round,
+   where a random control and a deliberately broken detector both scored
+   HIGHER than the correct detector and the check was withdrawn as
+   invalid.
+
+   **What has NOT been measured.** The three checks that need the real
+   reference recording — glissade rate, glissade duration, and the
+   REMoDNaV oracle comparison — are gated on `WLPP_OHDPI_REFERENCE`, which
+   is unset, and **have never been run**. The paper's 47.8% glissade rate
+   and 22.2 ms mean duration remain PREDICTIONS in the design spec, not
+   measurements against this rig's data — spec section 9 items 1 and 3
+   (whether the shared Engbert–Kliegl-style velocity estimator preserves
+   glissades at all, and whether 47.8% really is the union of both
+   glissade criteria per spec section 3) are both still open for the same
+   reason. Separately, the REMoDNaV oracle comparison is unverified even
+   as CODE: its API (`remodnav.EyegazeClassifier`, `.preproc()`,
+   `.__call__()`) was read from the installed PyPI package's own source
+   rather than recalled, and the test is written against it correctly, but
+   it has never executed — this project's `.venv` has no `pip` installed
+   at all, so `remodnav` cannot be installed into it regardless of the
+   recording's availability.
+
+   **Registering a third detector broke 19 pre-existing tests** that
+   hardcoded "exactly 2 detectors / 1 pair"
+   (`tests/schema/test_consensus_populate.py`, 9;
+   `tests/cli/test_detect_report.py`, 1;
+   `tests/cli/test_consensus_report.py`, 9) — fixed by deriving counts
+   from the registry (`len(DETECTORS)`, its triangular pair count) rather
+   than hardcoding a new literal, precisely so a fourth detector does not
+   break them again. One of those fixes is itself a standing caution:
+   `tests/cli/test_consensus_report.py`'s own isolation strategy relies on
+   picking a vocabulary string "no REGISTERED pair can produce"
+   (its own module docstring) — Nystrom-Holmqvist's real vocabulary
+   collided with the constant chosen for that role by a prior detector
+   that didn't yet exist, and today's fix (a different constant,
+   `drift,fixation`) is documented inline but the strategy itself was not
+   re-architected. A fourth detector may collide with it again.
+
+   **Full local suite: 1333 passed, 8 skipped, 1 deselected, 1 xfailed,
+   zero warnings**, Python 3.11, `.venv/bin/python -m pytest -q` from the
+   repo root with `__pycache__` cleared. CI has not run for any of it.
 5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
    written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
    no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
@@ -349,10 +460,11 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
 
 **Everything in Phase 2b proper still needs the compute machine.** The subsystems merged
 this week were chosen precisely because they needed no GPU and no container. Stage 2B's
-four glissade-freed detectors — Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade
-detection (item 4 above) — are the next of that kind, each simply unwritten now that the
-glissade question is withdrawn rather than gating them; U'n'Eye is the first piece of this
-project that genuinely wants the GPU. Gap-aware segmentation and rehydration are both
+four glissade-freed detectors were Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian
+microsaccade detection (item 4 above); Nyström–Holmqvist is now written, tested and
+registered (2026-09-06, on an unmerged branch), and NSLR, REMoDNaV and BMD are the
+remaining ones of that kind, each still simply unwritten. U'n'Eye is the first piece of
+this project that genuinely wants the GPU. Gap-aware segmentation and rehydration are both
 hardware-free.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
