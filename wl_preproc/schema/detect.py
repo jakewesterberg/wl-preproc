@@ -519,7 +519,7 @@ class EyeDetection(dj.Computed):
             # `detector.detect`, never `detector.run`: the wrapper is what
             # holds the detector to its own declared `vocabulary`, and this
             # is the one place in production that runs a detector at all.
-            spans[eye_value] = detector.detect(gaze, v, offered, detector_params)
+            spans[eye_value] = detector.detect(gaze, v, offered, fs_hz, detector_params)
             per_eye[eye_value] = (gaze, v, offered)
 
         for eye_value in ("left", "right"):
@@ -632,21 +632,31 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        Neither registered detector can make that second measurement
-        redundant: `engbert_kliegl.py::_true_runs` only ever returns MAXIMAL
-        runs and `otero_millan.py::_merge` guarantees a gap, so two of
-        `intervals` are always separated by at least one sample neither
-        claims, and `runs_from_labels` can therefore never merge two of this
-        call's own intervals into one run. But nothing in
-        `registry.py::DetectFn`'s own contract requires a future detector
-        (the five still unwritten -- Nystrom-Holmqvist, NSLR, REMoDNaV, BMD,
-        U'n'Eye) to leave such a gap, and if two adjacent intervals ever DID
-        carry
-        the same label, `runs_from_labels` would merge them into one run
-        whose real `[start, stop)` matches neither original interval.
-        Measuring the FINAL run rather than trusting either input interval
-        is what keeps the stored measurement correct regardless of whether
-        that gap holds.
+        Two of the three registered detectors make that second measurement
+        redundant on their own: `engbert_kliegl.py::_true_runs` only ever
+        returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
+        so two of `intervals` are always separated by at least one sample
+        neither claims, and `runs_from_labels` can therefore never merge two
+        of THEIR call's own intervals into one run.
+
+        **The third does not, and this is no longer a hypothetical about
+        some future detector -- it is true of Nystrom-Holmqvist today.**
+        `nystrom_holmqvist.py::_glissade_bounds` returns `(saccade_offset,
+        stop)` for its glissade, so a saccade and the `pso` that follows it
+        are ADJACENT with no gap between them; and two SACCADE candidates
+        whose independent bounds searches land exactly `S1.stop == S2.start`
+        apart do not overlap under `_merged_bounds`' own half-open test
+        (`run.start < offset and onset < run.stop`, both strict), so both
+        survive as separate, touching runs carrying the SAME label. Nothing
+        in `registry.py::DetectFn`'s own contract requires ANY detector --
+        registered or still unwritten (NSLR, REMoDNaV, BMD, U'n'Eye) -- to
+        leave such a gap, and if two adjacent intervals ever DO carry the
+        same label, `runs_from_labels` merges them into one run whose real
+        `[start, stop)` matches neither original interval. Measuring the
+        FINAL run rather than trusting either input interval is what keeps
+        the stored measurement correct regardless of whether that gap holds
+        -- for Nystrom-Holmqvist, that is not insurance against a future
+        case, it is load-bearing today.
 
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
@@ -935,18 +945,25 @@ def _conjunction_runs(
     **This is what makes the conjunction trace the same shape as the per-eye
     traces.** `_overlapping` intersects on time alone and never reads a
     label, which is correct only while every emitted label is the same kind
-    of thing -- true of Engbert-Kliegl and Otero-Millan, and false for all
-    four BLOCKED detectors. Three of them (Nystrom-Holmqvist, NSLR, REMoDNaV)
-    emit `pso` and `fixation`; the fourth (BMD) emits `drift` instead and
-    never `pso` at all. `fixation` TILES the recording, so an ungrouped
-    intersection would have crossed a left fixation with a right saccade and
-    kept it.
+    of thing -- true of Engbert-Kliegl and Otero-Millan, and false for
+    Nystrom-Holmqvist (registered 2026-09-06) and for the three detectors
+    still BLOCKED (unwritten): NSLR, REMoDNaV and BMD. Nystrom-Holmqvist,
+    NSLR and REMoDNaV all emit `pso` and `fixation` alongside `saccade`; BMD
+    emits `drift` instead of `pso`. `fixation` TILES the recording, so an
+    ungrouped intersection would have crossed a left fixation with a right
+    saccade and kept it.
 
-    **Grouping first also makes the loop cheaper.** `_overlapping` is
-    `O(|left| x |right|)`; summing that over kinds is strictly less than the
-    product of the totals whenever more than one kind is present, and
-    identical when only one is -- which is the case for both registered
-    detectors, whose rows are therefore unchanged.
+    **Grouping first also makes the loop cheaper -- though no longer for
+    every registered detector.** `_overlapping` is `O(|left| x |right|)`;
+    summing that over kinds is strictly less than the product of the totals
+    whenever more than one kind is present, and identical when only one is
+    -- which is the case for Engbert-Kliegl and Otero-Millan (each single-
+    kind, `saccadic` alone), whose rows are therefore unchanged. It is NOT
+    the case for Nystrom-Holmqvist: its own per-eye trace can carry both a
+    `saccadic` run and a `pso` run at once, so `by_kind` genuinely has more
+    than one entry there, and grouping does real algorithmic work rather
+    than costing nothing extra for it, for the first time among the
+    registered detectors.
 
     Not folded into `_overlapping`: that function is the single-kind
     primitive and every one of its call sites, in production and in tests,

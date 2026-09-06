@@ -33,19 +33,28 @@ def amplitude(gaze_deg: np.ndarray, start: int, stop: int) -> float:
     """One interval's amplitude in degrees. `stop` is exclusive, matching `Run`.
 
     **Split out of `measure` so a DETECTOR can call it, and there is still
-    exactly one implementation.** Design spec section 3 fixes the detector
-    signature as `detect(gaze_deg, velocity, valid, params)` -- no sampling
-    rate -- but `measure` needs `fs_hz` for `Measurement.duration_s`, and a
-    detector whose vocabulary is an amplitude split (`engbert_kliegl.py::
-    detect_engbert_kliegl`, and every other entry in design spec section
-    3.1's table that names both `saccade` and `microsaccade`) needs the
-    amplitude to label its own intervals. Handing such a detector an invented
-    `fs_hz` purely to reach one of three returned fields would put a
-    fabricated sampling rate in the call, and a private amplitude formula
-    inside the detector would break section 3's own guarantee that a
-    disagreement is "never a disagreement about measurement". This function
-    is what both `measure` below and the detector call, so that guarantee
-    holds literally: one formula, one caller-independent answer.
+    exactly one implementation.** Design spec section 3's detector signature
+    now carries `fs_hz` too (`detect(gaze_deg, velocity, valid, fs_hz,
+    params)`, amended in place -- `2026-08-31-saccade-detection-design.md`
+    section 3), so a detector calling this directly is not fabricating a
+    sampling rate it does not have; that was this function's original
+    reason for existing, and it no longer holds now that every detector is
+    handed one.
+
+    The split still holds, for a narrower reason: `amplitude` needs neither
+    `fs_hz` nor velocity at all, so a detector comparing amplitudes MID-
+    DETECTION -- classifying saccade versus microsaccade
+    (`engbert_kliegl.py::detect_engbert_kliegl`, and every other entry in
+    design spec section 3.1's table that names both `saccade` and
+    `microsaccade`), or comparing a glissade's amplitude against its
+    preceding saccade's (`nystrom_holmqvist.py::_glissade_bounds`) -- can
+    call this directly on `gaze_deg` alone, rather than building a velocity
+    slice and calling the fuller `measure` merely to read one of its three
+    returned fields. And a private amplitude formula inside the detector
+    would still break section 3's own guarantee that a disagreement is
+    "never a disagreement about measurement": this function is what both
+    `measure` below and the detector call, so that guarantee holds
+    literally: one formula, one caller-independent answer.
 
     **Precondition:** `stop > start`, enforced by `measure` and again here --
     `gaze_deg[stop - 1]` on an empty interval reads the wrong end of the

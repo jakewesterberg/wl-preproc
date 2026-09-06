@@ -86,7 +86,7 @@ def test_a_planted_large_saccade_is_detected_and_labelled_saccade():
     planted = [(1000, 1020), (2000, 2020), (3000, 3020)]
     gaze, v, available = _trace([(start, stop, 4.0) for start, stop in planted])
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert len(intervals) == len(planted)
     for interval, (want_start, want_stop) in zip(intervals, planted, strict=True):
@@ -100,7 +100,7 @@ def test_a_planted_small_event_is_labelled_microsaccade():
     `microsaccade_max_deg` is declared on this detector's params."""
     gaze, v, available = _trace([(1000, 1015, 0.4), (2000, 2015, 0.4), (3000, 3015, 0.4)])
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert intervals
     assert all(interval.label is Label.MICROSACCADE for interval in intervals)
@@ -133,7 +133,7 @@ def test_both_sizes_in_one_trace_are_split_at_the_shared_threshold():
         ]
     )
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
     labels = {interval.label for interval in intervals}
 
     assert Label.SACCADE in labels
@@ -146,7 +146,7 @@ def test_it_returns_nothing_on_a_trace_with_no_events():
     meaningless, and this is the cheapest place to catch it."""
     gaze, v, available = _trace([])
 
-    assert detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS) == []
+    assert detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS) == []
 
 
 def test_unavailable_samples_are_never_claimed():
@@ -156,7 +156,7 @@ def test_unavailable_samples_are_never_claimed():
     gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
     available[990:1030] = Label.BLINK
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     for interval in intervals:
         assert not (interval.start < 1030 and 990 < interval.stop)
@@ -170,8 +170,8 @@ def test_it_is_deterministic():
     disagreement unattributable to a method."""
     gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
 
-    first = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
-    second = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    first = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
+    second = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert [(i.start, i.stop, i.label) for i in first] == [
         (i.start, i.stop, i.label) for i in second
@@ -187,8 +187,8 @@ def test_determinism_extends_to_the_reliability_value_itself():
     the right comparison rather than `pytest.approx`."""
     gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
 
-    first = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
-    second = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    first = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
+    second = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert [i.reliability for i in first] == [i.reliability for i in second]
 
@@ -201,7 +201,7 @@ def test_reliability_is_populated_per_detection():
     is available in the method and this reimplementation retains it."""
     gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert intervals
     assert all(interval.reliability is not None for interval in intervals)
@@ -226,7 +226,7 @@ def test_a_lone_accepted_detection_is_maximally_confident_not_minimally():
     """
     gaze, v, available = _trace([(2000, 2020, 4.0)])
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert len(intervals) == 1
     assert intervals[0].reliability == 1.0
@@ -264,7 +264,7 @@ def test_the_noise_floor_is_a_lower_bound_and_is_the_only_amplitude_rule():
         microsaccade_max_deg=DEFAULT_OM_PARAMS.microsaccade_max_deg,
     )
 
-    assert detect_otero_millan(gaze, v, available, strict) == []
+    assert detect_otero_millan(gaze, v, available, 500.0, strict) == []
 
 
 def test_the_slowest_cluster_is_never_accepted_however_large_its_displacement():
@@ -327,7 +327,7 @@ def test_a_large_saccade_survives_a_floor_that_silences_a_small_one():
         microsaccade_max_deg=DEFAULT_OM_PARAMS.microsaccade_max_deg,
     )
 
-    intervals = detect_otero_millan(gaze, v, available, strict)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, strict)
 
     assert intervals
     assert all(interval.label is Label.SACCADE for interval in intervals)
@@ -343,7 +343,7 @@ def test_the_returned_intervals_are_disjoint_and_ordered():
         [(700, 708, 0.7), (1300, 1316, 1.5), (1900, 1908, 0.7), (2500, 2516, 1.5)]
     )
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert intervals
     assert intervals == sorted(intervals, key=lambda i: i.start)
@@ -372,7 +372,7 @@ def test_the_registered_detector_accepts_what_this_one_emits():
         [(700, 708, 0.7), (1300, 1316, 1.5), (1900, 1908, 0.7), (2500, 2516, 1.5)]
     )
 
-    intervals = DETECTORS["otero_millan"].detect(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = DETECTORS["otero_millan"].detect(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert intervals
     assert {interval.label for interval in intervals} <= DETECTORS["otero_millan"].vocabulary
@@ -425,8 +425,8 @@ def test_moving_the_shared_cut_moves_this_detector_s_labels():
         microsaccade_max_deg=10.0,
     )
 
-    default = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
-    raised = detect_otero_millan(gaze, v, available, lifted)
+    default = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
+    raised = detect_otero_millan(gaze, v, available, 500.0, lifted)
 
     assert [(i.start, i.stop) for i in default] == [(i.start, i.stop) for i in raised]
     assert all(i.label is Label.SACCADE for i in default)
@@ -766,7 +766,7 @@ def test_normalisation_is_global_so_a_late_noisy_chunk_is_not_flattered():
     """
     gaze, v, available, onsets = _drifting_half_trace()
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
     half = len(gaze) // 2
 
     assert len(intervals) == len(onsets)
@@ -857,7 +857,7 @@ def test_a_blink_ending_a_segment_on_a_velocity_peak_does_not_crash():
     gaze, v, available = _trace([(1000, 1020, 4.0), (2000, 2020, 4.0), (3000, 3020, 4.0)])
     available[1005:1085] = Label.BLINK
 
-    intervals = detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS)
+    intervals = detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS)
 
     assert intervals
     assert all(interval.stop <= 1005 or interval.start >= 1085 for interval in intervals)
@@ -895,8 +895,8 @@ def test_neither_registered_detector_can_produce_a_merged_run():
     )
 
     for intervals in (
-        detect_otero_millan(gaze, v, available, DEFAULT_OM_PARAMS),
-        detect_engbert_kliegl(gaze, v, available, DEFAULT_EK_PARAMS),
+        detect_otero_millan(gaze, v, available, 500.0, DEFAULT_OM_PARAMS),
+        detect_engbert_kliegl(gaze, v, available, 500.0, DEFAULT_EK_PARAMS),
     ):
         assert intervals
         for earlier, later in zip(intervals, intervals[1:], strict=False):

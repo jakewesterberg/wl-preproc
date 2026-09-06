@@ -45,8 +45,23 @@ from wl_preproc.cli.report import build_report
 # docstring. The comment beside each names a pair from section 3.1 that could
 # meet there; every string is in `Label`'s declaration order, which is what
 # `schema/consensus.py::vocabulary_text` stores.
+#
+# **`_VOCAB_COARSE` was `"saccade,fixation"` until Nystrom-Holmqvist's
+# registration made that string reachable for real.** Its vocabulary
+# (`{saccade, pso, fixation}`) shares only `saccade` with Engbert-Kliegl's
+# and Otero-Millan's own (`{saccade, microsaccade}`), so BOTH real pairs that
+# include it -- Engbert-Kliegl/Nystrom-Holmqvist and Otero-Millan/Nystrom-
+# Holmqvist -- now land on `saccade,fixation` too (`shared_vocabulary`,
+# checked directly). This module's own isolation strategy is picking a
+# string "no REGISTERED pair can produce" (module docstring); that stopped
+# being true here without any change in this file, and did not fail under
+# pytest's default collection order only because `tests/cli/` sorts before
+# `tests/schema/`, so this test's own rows are written and read before
+# `test_consensus_populate.py`'s real ones exist -- an accident of directory
+# names, not a guarantee, and it broke the moment this file was run together
+# with that one in a different order (this task's own mutation round).
 _VOCAB_NAMES = "microsaccade,fixation"              # Engbert-Kliegl <-> BMD
-_VOCAB_COARSE = "saccade,fixation"                  # U'n'Eye <-> BMD
+_VOCAB_COARSE = "drift,fixation"                    # a drift-only detector <-> BMD
 _VOCAB_FINE = "saccade,microsaccade,pso,fixation"   # NSLR <-> REMoDNaV
 _VOCAB_SAMPLES = "microsaccade,drift,fixation"      # BMD <-> a drift-aware BMD
 _VOCAB_CONVENTIONS = "saccade,pursuit,fixation"     # U'n'Eye <-> NSLR
@@ -142,8 +157,15 @@ def agreement_schema(dj_conn, prefix):
     # from the order `register_default_paramsets` happens to return them in:
     # indices are allocated by `paramset.register` in whatever order this
     # shared database first saw them, which is not this file's to predict.
+    #
+    # **The two SMALLEST of however many are registered, not "the" two.**
+    # This fixture builds a synthetic pair to plant rows against; it does not
+    # care WHICH two real detectors it borrows, only that both are real
+    # registered `eye_detection` paramsets -- so `len(DETECTORS)` growing past
+    # two (design spec section 3.1 plans seven) must not shrink `by_index`
+    # back to exactly two for this line to keep working.
     by_index = {index: name for name, index in detector_paramsets.items()}
-    index_a, index_b = sorted(by_index)
+    index_a, index_b = sorted(by_index)[:2]
     return SimpleNamespace(
         consensus=consensus,
         detect=detect,

@@ -39,7 +39,7 @@ def test_it_finds_planted_saccades_at_their_planted_times():
     gaze, planted = _trace_with_saccades([300, 800, 1400])
     available = np.full(len(gaze), None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert len(found) == len(planted)
     for got, (want_start, want_stop) in zip(found, planted, strict=True):
@@ -56,7 +56,10 @@ def test_a_still_eye_yields_nothing():
     gaze = rng.normal(0.0, 0.01, (2000, 2))
     available = np.full(2000, None, dtype=object)
 
-    assert detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS) == []
+    assert (
+        detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
+        == []
+    )
 
 
 def test_events_shorter_than_the_minimum_duration_are_rejected():
@@ -66,7 +69,7 @@ def test_events_shorter_than_the_minimum_duration_are_rejected():
     available = np.full(len(gaze), None, dtype=object)
     strict = EngbertKlieglParams(lambda_=6.0, min_duration_samples=6)
 
-    assert detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, strict) == []
+    assert detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, strict) == []
 
 
 def test_a_higher_lambda_finds_fewer_events():
@@ -78,8 +81,8 @@ def test_a_higher_lambda_finds_fewer_events():
     available = np.full(len(gaze), None, dtype=object)
     v = velocity(gaze, FS_HZ)
 
-    lenient = detect_engbert_kliegl(gaze, v, available, EngbertKlieglParams(3.0, 6))
-    strict = detect_engbert_kliegl(gaze, v, available, EngbertKlieglParams(30.0, 6))
+    lenient = detect_engbert_kliegl(gaze, v, available, FS_HZ, EngbertKlieglParams(3.0, 6))
+    strict = detect_engbert_kliegl(gaze, v, available, FS_HZ, EngbertKlieglParams(30.0, 6))
 
     assert len(lenient) > len(strict)
 
@@ -94,7 +97,7 @@ def test_unavailable_samples_are_never_part_of_an_event():
     available = np.full(len(gaze), None, dtype=object)
     available[295:320] = Label.BLINK
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert all(not (run.start < 320 and run.stop > 295) for run in found)
 
@@ -121,7 +124,10 @@ def test_a_fully_unavailable_trace_yields_nothing():
     gaze, _ = _trace_with_saccades([300, 800])
     available = np.full(len(gaze), Label.INVALID, dtype=object)
 
-    assert detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS) == []
+    assert (
+        detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
+        == []
+    )
 
 
 def test_a_degenerate_constant_velocity_axis_yields_nothing():
@@ -148,7 +154,7 @@ def test_a_degenerate_constant_velocity_axis_yields_nothing():
     gaze = np.zeros((n, 2))
     available = np.full(n, None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity_deg_s, available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity_deg_s, available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert found == []
 
@@ -220,7 +226,7 @@ def test_a_heavily_contaminated_trace_still_finds_a_small_saccade():
 
     available = np.full(n, None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert len(found) == len(planted)
     assert abs(found[-1].start - small_onset) <= 3
@@ -267,7 +273,7 @@ def test_a_big_step_labels_saccade_and_a_sub_threshold_step_labels_microsaccade(
     gaze, planted = _mixed_amplitude_trace()
     available = np.full(len(gaze), None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert len(found) == len(planted) == 3
     assert [run.label for run in found] == [Label.SACCADE, Label.MICROSACCADE, Label.SACCADE]
@@ -283,7 +289,7 @@ def test_every_returned_interval_is_a_run_from_the_declared_vocabulary():
     gaze, _ = _mixed_amplitude_trace()
     available = np.full(len(gaze), None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert found
     assert all(isinstance(run, Run) for run in found)
@@ -303,7 +309,7 @@ def test_each_label_is_what_classify_gives_for_that_intervals_own_amplitude():
     gaze, _ = _mixed_amplitude_trace()
     available = np.full(len(gaze), None, dtype=object)
 
-    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, DEFAULT_EK_PARAMS)
+    found = detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert found
     for run in found:
@@ -333,7 +339,7 @@ def test_the_paramsets_own_threshold_moves_the_split():
             min_duration_samples=DEFAULT_EK_PARAMS.min_duration_samples,
             microsaccade_max_deg=threshold_deg,
         )
-        return [run.label for run in detect_engbert_kliegl(gaze, v, available, params)]
+        return [run.label for run in detect_engbert_kliegl(gaze, v, available, FS_HZ, params)]
 
     assert labels_at(0.1) == [Label.SACCADE] * 3
     assert labels_at(20.0) == [Label.MICROSACCADE] * 3

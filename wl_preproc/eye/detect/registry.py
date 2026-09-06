@@ -32,6 +32,9 @@ import numpy as np
 
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, LabelledInterval
+from wl_preproc.eye.detect.nystrom_holmqvist import (
+    DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+)
 from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS, detect_otero_millan
 
 
@@ -60,6 +63,15 @@ class DetectFn(Protocol):
         gaze_deg: np.ndarray,
         velocity_deg_s: np.ndarray,
         available: np.ndarray,
+        # The RECORDING's sampling rate, not a parameter. Positional rather
+        # than a paramset key because a paramset is immutable and
+        # content-addressed: a rate stored there would make two sessions
+        # recorded at different rates need two paramsets for one set of
+        # parameters. Detectors that express durations in samples
+        # (Engbert-Kliegl) accept and ignore it; those that express them in
+        # time (design spec section 3.1's Nystrom-Holmqvist, NSLR and
+        # REMoDNaV) need it to convert.
+        fs_hz: float,
         params: Any,
     ) -> list[LabelledInterval]: ...
 
@@ -103,6 +115,7 @@ class Detector:
         gaze_deg: np.ndarray,
         velocity_deg_s: np.ndarray,
         available: np.ndarray,
+        fs_hz: float,
         params: Any,
     ) -> list[LabelledInterval]:
         """Run the detector and hold it to its declared `vocabulary`.
@@ -123,7 +136,7 @@ class Detector:
         that succeeds because `blink` and `invalid` are valid enum values on
         `EyeDetection.Run` regardless of who wrote them -- names none of that.
         """
-        intervals = self.run(gaze_deg, velocity_deg_s, available, params)
+        intervals = self.run(gaze_deg, velocity_deg_s, available, fs_hz, params)
         undeclared = {interval.label for interval in intervals} - self.vocabulary
         if undeclared:
             raise UndeclaredLabel(
@@ -156,6 +169,18 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
         run=detect_otero_millan,
         defaults=DEFAULT_OM_PARAMS,
+    ),
+    # **The first registered detector to declare `pso` or `fixation`.**
+    # Design spec `2026-08-31-saccade-detection-design.md` section 3.1 gives
+    # it `saccade / pso / fixation`; its saccadic slice is `{saccade}` alone
+    # (no `microsaccade`), so `_conjunction_label` (schema/detect.py) takes
+    # the DEGENERATE branch for its conjunction runs rather than asking
+    # `classify` -- see `detect_nystrom_holmqvist`'s own docstring.
+    "nystrom_holmqvist": Detector(
+        name="nystrom_holmqvist",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
+        run=detect_nystrom_holmqvist,
+        defaults=DEFAULT_NH_PARAMS,
     ),
 }
 

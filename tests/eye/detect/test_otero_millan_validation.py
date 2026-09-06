@@ -362,8 +362,8 @@ class _Trace:
         self.name, self.gaze, self.v, self.mask, self.fs_hz = name, gaze, v, mask, fs_hz
         self.om_detector = get_detector("otero_millan")
         self.ek_detector = get_detector("engbert_kliegl")
-        self.om_runs = self.om_detector.detect(gaze, v, mask, DEFAULT_OM_PARAMS)
-        self.ek_runs = self.ek_detector.detect(gaze, v, mask, DEFAULT_EK_PARAMS)
+        self.om_runs = self.om_detector.detect(gaze, v, mask, fs_hz, DEFAULT_OM_PARAMS)
+        self.ek_runs = self.ek_detector.detect(gaze, v, mask, fs_hz, DEFAULT_EK_PARAMS)
         self.om_amplitude, self.om_peak_velocity, self.om_duration = _measured(
             self.om_runs, gaze, v, fs_hz
         )

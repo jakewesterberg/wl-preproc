@@ -83,6 +83,7 @@ def detect_engbert_kliegl(
     gaze_deg: np.ndarray,
     velocity_deg_s: np.ndarray,
     available: np.ndarray,
+    fs_hz: float,  # Accepted and unused: this detector's minimum duration is in SAMPLES.
     params: EngbertKlieglParams,
 ) -> list[Run]:
     """Labelled half-open `[start, stop)` intervals, in sample indices.

@@ -55,7 +55,7 @@ def _fake_detector(name, vocabulary, intervals):
     return Detector(
         name=name,
         vocabulary=frozenset(vocabulary),
-        run=lambda gaze_deg, velocity_deg_s, available, params: list(intervals),
+        run=lambda gaze_deg, velocity_deg_s, available, fs_hz, params: list(intervals),
         # `defaults` is required (registry.py's own comment says why a `{}`
         # fallback would be the same quiet failure one layer down), and these
         # tests are about `vocabulary` enforcement, which never reads it. An
@@ -85,7 +85,7 @@ def test_a_detector_emitting_an_undeclared_label_is_rejected():
     )
 
     with pytest.raises(UndeclaredLabel) as excinfo:
-        liar.detect(None, None, None, None)
+        liar.detect(None, None, None, None, None)
 
     message = str(excinfo.value)
     assert "liar" in message
@@ -103,7 +103,7 @@ def test_a_conforming_detectors_intervals_pass_through_unchanged():
     intervals = [Run(0, 10, Label.SACCADE), Run(20, 30, Label.MICROSACCADE)]
     honest = _fake_detector("honest", {Label.SACCADE, Label.MICROSACCADE}, intervals)
 
-    assert honest.detect(None, None, None, None) == intervals
+    assert honest.detect(None, None, None, None, None) == intervals
 
 
 def test_the_registered_detector_runs_through_detect_and_conforms():
@@ -123,7 +123,55 @@ def test_the_registered_detector_runs_through_detect_and_conforms():
     available = np.full(len(gaze), None, dtype=object)
 
     detector = get_detector("engbert_kliegl")
-    found = detector.detect(gaze, velocity(gaze, 500.0), available, DEFAULT_EK_PARAMS)
+    found = detector.detect(gaze, velocity(gaze, 500.0), available, 500.0, DEFAULT_EK_PARAMS)
 
     assert found
     assert {run.label for run in found} == detector.vocabulary
+
+
+def test_a_detector_receives_the_sampling_rate():
+    """Design spec `2026-09-05-nystrom-holmqvist-design.md` §7 expresses NH's
+    durations in MILLISECONDS -- `min_saccade_duration_ms`,
+    `min_fixation_duration_ms` -- and says why: a sample count is wrong at a
+    different `fs_hz`. Three of the four remaining detectors (NH, NSLR,
+    REMoDNaV) specify durations in time, so the sampling rate belongs in the
+    shared contract.
+
+    Positional, not a paramset key: `fs_hz` is a property of the RECORDING.
+    A paramset is immutable and content-addressed, so a rate stored there
+    would make two sessions recorded at different rates need two paramsets
+    for one set of parameters."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.registry import Detector
+
+    seen = {}
+
+    def _record_fs(gaze_deg, velocity_deg_s, available, fs_hz, params):
+        seen["fs_hz"] = fs_hz
+        return [Run(start=0, stop=2, label=Label.SACCADE)]
+
+    detector = Detector(
+        name="records_fs", vocabulary=frozenset({Label.SACCADE}),
+        run=_record_fs, defaults=_NoParams(),
+    )
+    gaze = np.zeros((4, 2))
+    available = np.array([None] * 4, dtype=object)
+
+    detector.detect(gaze, gaze, available, 500.0, _NoParams())
+
+    assert seen["fs_hz"] == 500.0
+
+
+def test_nystrom_holmqvist_is_registered_with_its_vocabulary_and_defaults():
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import NystromHolmqvistParams
+    from wl_preproc.eye.detect.registry import get_detector
+
+    detector = get_detector("nystrom_holmqvist")
+
+    assert detector.vocabulary == frozenset(
+        {Label.SACCADE, Label.PSO, Label.FIXATION}
+    )
+    assert isinstance(detector.defaults, NystromHolmqvistParams)

@@ -18,17 +18,38 @@ status:
     the binocular intersection now groups both eyes' runs by kind instead
     of intersecting on time alone, so a non-saccadic label (`pso`,
     `pursuit`, `drift`) survives a conjunction instead of being crossed
-    with an unrelated label -- is built and tested on branch
-    `spec/conjunction-shape` (thirteen commits, tip `7680563`), MERGED as `76a8199`
-    to `main`. Phase 2b's back half remains hardware-blocked.
+    with an unrelated label -- MERGED as `76a8199` to `main`, thirteen
+    commits `c0838b8..7680563`. A follow-up fix on `main`
+    (`fix/detector-carries-its-defaults`, merged `19daf07`) made a
+    `Detector` carry its own paramset defaults instead of a hardcoded
+    two-entry dict, so a third detector can register without crashing
+    `daemon.run_once()`. `origin`'s `main` is at `19daf07` today.
+
+    Stage 2B's first detector, Nystrom-Holmqvist, is written, tested and
+    registered -- the third registered detector, and the first to emit
+    `pso` and `fixation` -- eleven commits `6e952f6..a78dcf0` on branch
+    `spec/nystrom-holmqvist`, based on `main` at `19daf07`, with a
+    whole-branch review's own fix wave on top (`84247d1` -- see `next`
+    below). NOT merged, NOT pushed: `origin` has no `spec/nystrom-holmqvist`
+    ref. Phase 2b's back half remains hardware-blocked.
   next: >-
-    Saccade detection stage 2B — the five detectors still unwritten
-    (Nyström–Holmqvist, NSLR, REMoDNaV, Bayesian microsaccade detection,
-    U'n'Eye), the N-way `blended_agreement`, saccade vigor and the
-    main-sequence fits, `pso`/`pursuit`/`drift` as PRODUCED rather than merely
-    declared labels, the PyTorch declaration and U'n'Eye vendoring, and
+    Saccade detection stage 2B has its first detector: Nystrom-Holmqvist
+    is written, tested and registered -- the third registered detector,
+    and the first ever to emit `pso` and `fixation` -- on branch
+    `spec/nystrom-holmqvist` (eleven commits `6e952f6..a78dcf0`), NOT
+    merged and NOT pushed (`origin` has no `spec/nystrom-holmqvist` ref).
+    `docs/handoffs/2026-09-05-nystrom-holmqvist-built.md` has the full
+    account. Four detectors remain unwritten -- NSLR, REMoDNaV (the
+    detector; the `remodnav` PyPI package is a separate, `dev`-only test
+    oracle -- see `third_party` below), Bayesian microsaccade detection,
+    U'n'Eye -- plus the N-way `blended_agreement`, saccade vigor and the
+    main-sequence fits, `pursuit`/`drift` as PRODUCED labels (`pso` now
+    IS produced), the PyTorch declaration and U'n'Eye vendoring, and
     wl-expcontroller's online detector as an eighth registry entry
     (docs/handoffs/2026-09-01-consensus-and-otero-millan-built.md).
+    Before this branch is a PR: a whole-branch review, push and read CI
+    on both interpreters, and confirm every params-dataclass constant
+    traces to the paper's Table 2 -- none of this is done yet.
 
     Stage 2A is MERGED (a8fd3cb): a second detector (Otero-Millan,
     reimplemented), the coarsening lattice and comparability rule, `event_f1`
@@ -62,27 +83,59 @@ status:
     (`test_the_run_count_measured_against_the_reference_recording`) is
     env-gated and skipped by default.
 
-    So Nyström–Holmqvist, NSLR, REMoDNaV and Bayesian microsaccade detection
-    are unblocked on this question and simply unwritten, same as U'n'Eye,
-    whose own obstacles remain `torch`, vendoring and a GPU instead.
-    `registry.py::DETECTORS` registers only Engbert-Kliegl and Otero-Millan
-    today. Five of the seven detectors specified in design spec §3.1 take
-    the degenerate saccadic-slice branch and never reach `classify` -- only
-    those two declare both sides of the amplitude cut.
+    NSLR, REMoDNaV and Bayesian microsaccade detection are still simply
+    unwritten, same as U'n'Eye, whose own obstacles remain `torch`,
+    vendoring and a GPU instead. `registry.py::DETECTORS` registers
+    THREE today -- Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist,
+    corrected from the "only Engbert-Kliegl and Otero-Millan" this
+    field said before. Five of the seven detectors specified in design
+    spec §3.1 take the degenerate saccadic-slice branch and never reach
+    `classify` -- only Engbert-Kliegl and Otero-Millan declare both
+    sides of the amplitude cut; Nystrom-Holmqvist is now one of the five
+    degenerate ones for real, not hypothetically.
 
-    Two things for whoever writes the next detector
-    (docs/handoffs/2026-09-05-conjunction-shape-built.md has the full
-    account): a PRE-EXISTING production defect found on this branch and
-    deliberately not fixed -- `schema/detect.py::register_default_paramsets`
-    hardcodes a two-entry `defaults` dict and indexes it by detector name
-    inside a dict comprehension over `DETECTORS`; registering a third
-    detector without also extending `defaults` raises `KeyError` there,
-    uncaught, in `daemon.run_once()`, aborting the ENTIRE daemon pass, not
-    only that detector's registration. And the open question that matters:
-    how often the two eyes disagree on KIND is unmeasured and unmeasurable
-    until a pso-capable detector exists -- Nyström–Holmqvist, the simplest
-    of the four, is what measures it, and that measurement should be the
-    first thing stage 2B does.
+    Two corrections to what this field said before Nystrom-Holmqvist
+    existed (docs/handoffs/2026-09-05-nystrom-holmqvist-built.md has the
+    full account). First, the "PRE-EXISTING production defect ...
+    deliberately not fixed" -- `register_default_paramsets` hardcoding a
+    two-entry `defaults` dict and raising `KeyError` on a third detector
+    -- IS FIXED, on `main`, before this branch's own first commit
+    (`fix/detector-carries-its-defaults`, merged `19daf07`; `Detector`
+    now carries its own required `defaults` field). Nystrom-Holmqvist
+    registered without incident. Second, the open question called
+    "unmeasured and unmeasurable until a pso-capable detector exists" is
+    now measurable and STILL unmeasured -- Nystrom-Holmqvist is that
+    detector, and measuring how often the two eyes disagree on an
+    event's KIND is stage 2B's highest remaining priority. It MUST run
+    against the PER-EYE traces, never the conjunction: when the eyes
+    disagree, no intersection covers those samples, so
+    `_insert_trace`'s fill paints them `fixation`, identical to genuine
+    binocular fixation, and a query against the conjunction would
+    silently report zero (design spec
+    `2026-09-05-nystrom-holmqvist-design.md` section 6).
+
+    Nystrom-Holmqvist's own null ran first, per the rule the
+    Otero-Millan round left behind: a duration-matched random-span
+    control scores 0.016 (seed 7; 0.008-0.030 across seeds 0-19)
+    against a 0.10 ceiling and the paper's own 47.8% -- far under it, so
+    the glissade-rate check discriminates and is RETAINED, the opposite
+    outcome from Otero-Millan's withdrawn one. The checks that need the
+    real reference recording -- glissade rate, glissade duration, the
+    REMoDNaV oracle comparison -- are gated on `WLPP_OHDPI_REFERENCE`
+    and have never run; the paper's 47.8% / 22.2 ms remain predictions,
+    not measurements. REMoDNaV's own integration is unverified end to
+    end: its API was read from a downloaded wheel, not an installed
+    package -- remodnav is not installed anywhere this repository's
+    tooling has checked -- and this `.venv` has no `pip`, so the test has
+    never executed.
+
+    Registering a third detector broke 19 pre-existing tests that
+    hardcoded "exactly 2 detectors / 1 pair", fixed by deriving counts
+    from the registry rather than a new literal.
+    `tests/cli/test_consensus_report.py`'s own isolation strategy (a
+    vocabulary string "no REGISTERED pair can produce") is still
+    order-sensitive and collided once already; a fourth detector may
+    collide again.
 
     And Otero-Millan's rows are PROVISIONAL: no oracle-free statistic
     on an uncalibrated recording has been found that discriminates it, so a
@@ -92,17 +145,37 @@ status:
     2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
     (which validity criterion 4 is blocked on) and rehydration are the other
     hardware-free pieces outstanding.
-  # 76a8199 is the merge commit that landed the thirteen conjunction-shape
-  # commits (c0838b8..7680563), and is `main`'s tip. `main` also moved
-  # independently during that work, to c0abc75 (a LICENSE one-liner), which
-  # is why 76a8199 is a real two-parent merge rather than a fast-forward.
+
+    **The whole-branch review ran, and its fix wave is `84247d1`.** Eight
+    mutation-testing gaps in the adaptive offset threshold (seven new tests
+    in `tests/eye/detect/test_nystrom_holmqvist.py`, each mutation verified
+    caught by literal source mutation and revert), the missing test that
+    the real detector's own conjunction ever stores a `pso`
+    (`test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_
+    run` in `tests/schema/test_detect_populate.py`, on a new fixture with a
+    genuine binocular post-saccadic wobble), the stale `detect()` signature
+    in the parent spec, and every stale or false claim named above in this
+    field -- the "installed" REMoDNaV wording, the 9/1/9 test-break split,
+    the register_default_paramsets/kind-disagreement paragraph this file
+    itself carried uncorrected -- are all closed. 1341 passed (1333 plus
+    the eight new tests), 8 skipped, 1 deselected, 1 xfailed, zero warnings.
+    Still not pushed; a whole-branch review is no longer on the "before
+    opening a PR" checklist, but pushing and reading CI off the run still
+    are.
+  # 84247d1 is `spec/nystrom-holmqvist`'s own tip -- the whole-branch
+  # review's own fix wave, landed on top of `a78dcf0` (itself the last
+  # commit before this file's own documentation commit, eleven commits past
+  # the branch's plan commit, 6e952f6..a78dcf0). The branch is NOT merged
+  # and NOT pushed: `git ls-remote --heads origin` shows only `main`, at
+  # `19daf07`, which is this branch's own unmoved base -- no
+  # `spec/nystrom-holmqvist` ref exists on `origin` at all.
   #
-  # This block previously named d396d85, the branch tip at the moment Task 6
-  # wrote it. That was correct when written and went stale twice within the
-  # hour: three more commits landed on the branch, then it merged. Recorded
-  # because it is this file's own recurring failure -- a status block is only
-  # true of the commit it names, and merging is exactly when it stops being.
-  describes: 76a8199
+  # `76a8199` (the conjunction-shape merge this block once named) and
+  # `a78dcf0` (this block's own value before the fix wave) are both
+  # superseded in turn. Recorded because it is this file's own recurring
+  # failure -- a status block is only true of the commit it names, and
+  # further work landing is one more way it stops being.
+  describes: 84247d1
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
@@ -176,6 +249,23 @@ third_party:
     why: >-
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
+  - name: remodnav
+    constraint: ">=1.1"
+    why: >-
+      The test-time ORACLE tests/eye/detect/test_nystrom_holmqvist_
+      validation.py::test_remodnav_finds_a_comparable_number_of_saccades
+      checks this package's own Nystrom-Holmqvist reimplementation against
+      (design spec 2026-09-05-nystrom-holmqvist-design.md section 5). MIT
+      and on PyPI, unlike Otero-Millan's and BMD's own MATLAB references,
+      which carry no licence and cannot fill this role -- pyproject.toml's
+      dev extra only, same bucket as spikeinterface above, never a runtime
+      dependency and never shipped. >=1.1 floors at the first 1.x release,
+      confirmed against PyPI's own release metadata (0.1, 0.2, 0.3, 0.4,
+      1.0, 1.1, 1.1.1, 1.1.2 as of 2026-09-06) rather than assumed; no
+      ceiling, since the test tolerates disagreement by design (it checks a
+      comparable saccade count, not exact agreement) and pins against only
+      the classifier's constructor, preproc() and __call__(), all present
+      since at least 1.1.
   - name: zarr
     constraint: ">=2,<3"
     why: >-

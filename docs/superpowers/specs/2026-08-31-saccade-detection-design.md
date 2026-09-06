@@ -219,6 +219,32 @@ DETECTORS: dict[str, Detector]              # name -> callable + declared vocabu
 def detect(gaze_deg, velocity, valid, params) -> list[LabelledInterval]
 ```
 
+> **Amended 2026-09-06 by the Nystrom-Holmqvist build.** The signature above
+> is stale. `Detector.detect` (and every registered `DetectFn`) is now
+>
+> ```python
+> def detect(gaze_deg, velocity, valid, fs_hz, params) -> list[LabelledInterval]
+> ```
+>
+> `fs_hz` — the recording's own sampling rate — sits between `valid` and
+> `params`, added because Nystrom-Holmqvist's own durations are Table 2's
+> milliseconds, not samples, and converting one to the other needs the rate.
+> Engbert-Kliegl and Otero-Millan already express their minimum durations in
+> samples, so both accept the argument and ignore it; NSLR and REMoDNaV are
+> expected to need it for the identical reason once written (`registry.py`'s
+> own `DetectFn` docstring names both).
+>
+> **Positional, not a paramset key — a deliberate choice, not an oversight.**
+> A paramset is immutable and content-addressed, so a value stored on one is
+> part of what makes two paramsets the same or different. The sampling rate
+> is a property of the RECORDING, not of a detector's own tuning: two
+> sessions recorded at different rates should be free to share one
+> `eye_detection` paramset, and an `fs_hz` field on that paramset would force
+> a new paramset per rate for parameters that never actually changed.
+> Recorded here, where a reader of this interface's own shape will look
+> first; `registry.py::DetectFn`'s own docstring carries the identical
+> reasoning where the type itself lives.
+
 **Velocity is computed once, upstream, and passed in.** Every
 threshold-based method inherits its differentiator, and if each filtered its
 own way the agreement metric would compare *differentiators* as well as
