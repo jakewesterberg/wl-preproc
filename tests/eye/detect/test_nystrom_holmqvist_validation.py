@@ -66,9 +66,14 @@ an oracle, not a specification: it deliberately changed parts of
 Nystrom-Holmqvist's own method, so agreement is evidence and disagreement is
 not automatically a defect. Its actual Python API (`remodnav.
 EyegazeClassifier`, `.preproc`, `.__call__`, the event `label` vocabulary)
-was read directly from the installed package's own `clf.py` (PyPI remodnav
-1.1.2) before being called here, not recalled -- the same rule this
-repository applies to a paper applies to a dependency's API surface.
+was read directly from a DOWNLOADED remodnav 1.1.2 wheel's own `clf.py`
+before being called here, not recalled -- NOT from an installed package.
+An earlier version of this paragraph said "installed"; remodnav is not
+installed in this project's `.venv` (`test_remodnav_finds_a_comparable_
+number_of_saccades` skips via `pytest.importorskip`) or in any other
+environment this repository's own tooling has checked. Reading the wheel
+is the same rule this repository applies to a paper, applied to a
+dependency's API surface.
 """
 
 from __future__ import annotations
@@ -463,10 +468,13 @@ def _remodnav_saccade_count(remodnav_module, raw_xy: np.ndarray, fs_hz: float, p
     same trace `reference`'s own `gaze` is calibrated from) and count its
     saccade-labelled events.
 
-    **Read directly from the installed package's own `remodnav/clf.py`
-    (PyPI remodnav 1.1.2) before being written, not recalled** -- design
-    spec section 3.2's rule about verifying a source before writing a claim
-    about it applies to a dependency's API exactly as it does to a paper.
+    **Read directly from a DOWNLOADED remodnav 1.1.2 wheel's own
+    `remodnav/clf.py` before being written, not recalled and not from an
+    installed package** -- this file's own module docstring explains why
+    "installed" is wrong (remodnav is not installed anywhere this
+    repository's tooling has checked). Design spec section 3.2's rule about
+    verifying a source before writing a claim about it applies to a
+    dependency's API exactly as it does to a paper.
     `EyegazeClassifier(px2deg, sampling_rate)` takes a scalar, isotropic
     `px2deg` -- exactly what `reference`'s own `scale` already is, since it
     too maps raw pixels to degrees with one factor on both axes

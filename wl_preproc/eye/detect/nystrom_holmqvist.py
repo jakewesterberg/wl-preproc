@@ -13,15 +13,20 @@ exists to surface."
 
 Nyström, M., & Holmqvist, K. (2010). An adaptive algorithm for fixation,
 saccade, and glissade detection in eyetracking data. *Behavior Research
-Methods*, 42(1), 188-204. 10.3758/BRM.42.1.188. Every constant below is the
-paper's own, from its Table 2, with the one exception its own field comment
-names; nothing here is tuned (design spec
+Methods*, 42(1), 188-204. 10.3758/BRM.42.1.188. Ten of the twelve constants
+below are the paper's own, from its Table 2; the other two say plainly, in
+their own field comments, that they are not -- `max_iterations` (this
+implementation's own guard) and `initial_peak_threshold_deg_s` (this
+implementation's own midpoint of a range the paper states, not a value it
+names directly). Nothing here is tuned (design spec
 `2026-09-05-nystrom-holmqvist-design.md`, section 7).
 
-**This module carries the whole detector.** It has the twelve published
-parameters, the paper's first step (the adaptive peak-velocity threshold,
-p. 193, Figure 4, that converges to the data's own noise floor rather than
-asking an experimenter to choose one, which is what makes the algorithm
+**This module carries the whole detector.** It has all twelve of this
+detector's parameters (ten published, two this implementation's own -- see
+`NystromHolmqvistParams`'s own docstring), the paper's first step (the
+adaptive peak-velocity threshold, p. 193, Figure 4, that converges to the
+data's own noise floor rather than asking an experimenter to choose one,
+which is what makes the algorithm
 "settings-free for the user"), its second (onset/offset search around a
 detected peak, p. 194, Figure 5), its third (glissade detection, p. 195),
 and its fourth (fixation detection, p. 196) -- assembled by
@@ -43,19 +48,27 @@ from wl_preproc.eye.detect.measure import amplitude
 class NystromHolmqvistParams:
     """The paper's own constants (Table 2 unless a field says otherwise),
     one field per row of design spec `2026-09-05-nystrom-holmqvist-design.md`
-    section 7. Twelve fields; eleven are the paper's own, and the twelfth
-    (`max_iterations`) says plainly that it is not.
+    section 7. Twelve fields; TEN carry the paper's own published values, and
+    two say plainly that they do not: `max_iterations` (this implementation's
+    own guard -- see its own field comment) and `initial_peak_threshold_deg_s`
+    (this implementation's own midpoint of the range the paper states, not a
+    value it names directly -- see that field's own comment).
 
     **Five of these twelve are read by this module's `_peak_threshold`**:
     `initial_peak_threshold_deg_s`, `peak_threshold_sigma`,
-    `onset_threshold_sigma`, `convergence_deg_s`, `max_iterations`. The other
-    seven -- `local_noise_sigma`, `offset_alpha`, `offset_beta`,
-    `min_saccade_duration_ms`, `min_fixation_duration_ms`,
-    `max_velocity_deg_s`, `max_acceleration_deg_s2` -- are declared now,
-    together, because spec section 7 puts all twelve in one dataclass; they
-    are consumed by later tasks in the same plan (onset/offset search,
-    rejection, and glissade/fixation detection), not by anything in this
-    file yet.
+    `onset_threshold_sigma`, `convergence_deg_s`, `max_iterations`. **The
+    other seven are consumed too, elsewhere in this same module** --
+    `local_noise_sigma`, `offset_alpha` and `offset_beta` by
+    `_saccade_bounds`' offset threshold; `min_saccade_duration_ms` by
+    `_saccade_bounds`' own minimum-duration reject; `min_fixation_duration_ms`
+    by `_saccade_bounds` and `_glissade_bounds`' shared tau_min window and by
+    the trailing fixation floor in `detect_nystrom_holmqvist`; `max_velocity_
+    deg_s` and `max_acceleration_deg_s2` by `detect_nystrom_holmqvist`'s own
+    `usable` mask. All twelve are declared together here because spec
+    section 7 puts them in one dataclass, not because seven of them were
+    still waiting on a later task -- that was true only while this module
+    was being built one piece at a time, and it is not true of the shipped
+    module.
 
     `min_duration_samples` is deliberately absent, unlike
     `EngbertKlieglParams`' analogous field: this detector's minimum durations
@@ -221,11 +234,21 @@ def _peak_threshold(
     smaller regime after advancing to a larger one requires the larger
     regime's own `mu + 6*sigma` to fall strictly below a value the smaller
     regime's `mu + 6*sigma` already exceeded. For the natural family for
-    engineering exactly that -- a population with real spread, plus
-    additional mass at the shared boundary -- this cannot happen, checked
-    in closed form and by an exhaustive sweep across the added mass's
-    relative size (task-2-report.md). That covers one family, not a proof
-    that no finite array anywhere can cycle.
+    engineering exactly that -- a population `A` with real spread, giving a
+    "small" regime `g_A = mean(A) + 6*std(A)`, plus additional mass `B`
+    sitting exactly at the boundary `c` to form a "large" regime `g_AB =
+    mean(A∪B) + 6*std(A∪B)` -- oscillating forever needs BOTH `g_A > c` (the
+    small regime's own update pulls `B` in) AND `g_AB < c` (the combined
+    population immediately pushes it back out). Writing `r = |A|/(|A|+|B|)`
+    and `D = c - mean(A)`, those two conditions together reduce to `sqrt(r)
+    > 6*sqrt(std(A)^2 + D^2)/D` for every `D < 6*std(A)` the first condition
+    allows; minimizing the right side over that range gives a floor of
+    `sqrt(37)` ~= 6.08 -- so `sqrt(r) > 6.08` is REQUIRED, but `r` is a
+    population fraction (`r <= 1`, hence `sqrt(r) <= 1`), short by a factor
+    of roughly 6 regardless of how `A`, `B` or `c` are chosen. Checked this
+    way in closed form, and confirmed by an exhaustive grid sweep across the
+    added mass's relative size with no asymptotic approximation. That covers
+    one family, not a proof that no finite array anywhere can cycle.
 
     **Practically: this guard protects against pathological input, not
     against a real recording.** The crawl above needs velocities up to
@@ -300,15 +323,27 @@ def _saccade_bounds(
     (`test_the_local_noise_window_precedes_the_saccade` verifies this
     directly, both the correct placement and the broken one).
 
-    **Two rejections, both from p. 194-195:**
+    **Three `return None` paths, not two.** An earlier version of this
+    docstring documented only the two from the paper (whole-branch review,
+    minor finding 8); the third is this implementation's own, forced by the
+    paper's own onset search having no floor on how far back it may need to
+    look:
 
-    - `mu_t > theta_PT` -- the local window itself is elevated, "indicating
-      that there was no period of stillness prior to the saccade onset (most
-      often, indicating recording imperfections)." Checked before the offset
-      search runs, since a saccade failing this is rejected regardless of
-      where its offset would land.
-    - A saccade shorter than `min_saccade_duration_ms` (10 msec, Table 2) is
-      discarded as noise.
+    - `window.size == 0` -- the backward onset search never finds a
+      qualifying local minimum before reaching index 0 (a saccade already in
+      flight when the recording starts), so `onset` is 0 and the tau_min
+      window preceding it, `speed_deg_s[max(onset - tau, 0):onset]`,
+      collapses to an empty slice. Checked before `.mean()`/`.std()` ever see
+      it -- an empty array's mean is `nan`, which would silently poison every
+      threshold computed from it rather than raising
+      (`test_a_saccade_in_progress_at_recording_start_is_rejected`).
+    - `mu_t > theta_PT` (p. 195) -- the local window itself is elevated,
+      "indicating that there was no period of stillness prior to the saccade
+      onset (most often, indicating recording imperfections)." Checked
+      before the offset search runs, since a saccade failing this is
+      rejected regardless of where its offset would land.
+    - A saccade shorter than `min_saccade_duration_ms` (10 msec, Table 2,
+      p. 194) is discarded as noise.
 
     **The returned threshold is not a diagnostic extra.** Task 4's glissade
     search reuses this same `theta_ST^offset` for its "low-velocity
@@ -620,10 +655,21 @@ def _merged_bounds(runs: list[Run], onset: int, offset: int) -> tuple[int, int]:
     on a trace built from well-separated events.
 
     **One sweep of `runs` is provably enough; a second could never find
-    more.** Every run already in `runs` was itself added only after this
-    same function found no overlap for it, so `runs` is pairwise
-    non-overlapping THROUGHOUT -- for any two runs R and R' in it with R
-    before R', non-overlap means `R.stop <= R'.start`. Absorbing R can
+    more.** `runs` is pairwise non-overlapping THROUGHOUT, but not because
+    every run in it passed through this same function -- an earlier version
+    of this docstring said so, and it is false. Only SACCADE runs reach
+    `_merged_bounds` at all (`detect_nystrom_holmqvist` calls it once, right
+    before appending the saccade). PSO runs never do: they are gated by
+    `claimed` instead (`detect_nystrom_holmqvist`'s own `if glissade is not
+    None and not claimed[glissade[0]:glissade[1]].any()`), and every run
+    already in `runs` -- saccade or PSO alike -- marks its own span
+    `claimed` immediately on being appended, so a new PSO candidate
+    overlapping anything already there is rejected before it is ever added.
+    Two different gates, the same guarantee: whichever one is checking,
+    nothing already in `runs` can be overlapped by whatever is added next --
+    which is the only premise the rest of this proof actually needs. For any
+    two runs R and R' in it with R before R', non-overlap means `R.stop <=
+    R'.start`. Absorbing R can
     therefore widen `offset` to at most `R.stop`, which is at most
     `R'.start` -- never strictly past it -- so absorbing one run already in
     the candidate's reach can never bring a second, untouched run into

@@ -123,8 +123,10 @@ status:
     REMoDNaV oracle comparison -- are gated on `WLPP_OHDPI_REFERENCE`
     and have never run; the paper's 47.8% / 22.2 ms remain predictions,
     not measurements. REMoDNaV's own integration is unverified end to
-    end: its API was read from the installed source, but this `.venv`
-    has no `pip`, so the test has never executed.
+    end: its API was read from a downloaded wheel, not an installed
+    package -- remodnav is not installed anywhere this repository's
+    tooling has checked -- and this `.venv` has no `pip`, so the test has
+    never executed.
 
     Registering a third detector broke 19 pre-existing tests that
     hardcoded "exactly 2 detectors / 1 pair", fixed by deriving counts

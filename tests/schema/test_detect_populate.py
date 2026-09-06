@@ -164,6 +164,146 @@ _NEAR_MISS_N_SUBSTEPS = 16
 # naming it if a detector change ever moves the overlap out of it.
 _NEAR_MISS_SHIFT_SAMPLES = 14
 
+# A saccade immediately followed by a genuine post-saccadic wobble -- the one
+# shape `stepped_session`'s own hard-stop ramps cannot produce. Design spec
+# `2026-09-05-nystrom-holmqvist-design.md` section 9 item 1 records that
+# `stepped_session`'s own conjunction carries no `pso` at all BY
+# CONSTRUCTION (its planted transitions are constant-velocity ramps with a
+# hard stop and no post-saccadic excursion), so nothing built from that
+# fixture can ever exercise the real detector's own glissade path.
+# `_GLISSADE_SACCADE_*` reuse `_STEPS_PX[0]`/`_DURATIONS_S[0]`/`_N_SUBSTEPS[0]`
+# exactly -- the same magnitude and timing `stepped_session` itself already
+# proves detectable on this synthetic pipeline.
+_GLISSADE_SACCADE_STEP_PX = _STEPS_PX[0]
+_GLISSADE_SACCADE_DURATION_S = _DURATIONS_S[0]
+_GLISSADE_SACCADE_N_SUBSTEPS = _N_SUBSTEPS[0]
+_GLISSADE_ONSET_OFFSET_S = _ONSET_OFFSETS_S[0]
+
+# The quiet gap between the saccade's own ramp and the wobble that follows
+# it. 10 samples (20 ms) -- long enough that the shared five-point velocity
+# estimator's own +-2-sample window has genuine quiet samples on both sides
+# at the gap's centre, the same reasoning `nystrom_holmqvist.py`'s own
+# `test_the_detector_emits_saccade_pso_and_fixation` uses a 5-sample gap for,
+# widened here because this fixture goes through the real estimator and a
+# real, per-eye-jittered recording rather than a hand-built velocity array.
+_GLISSADE_GAP_SAMPLES = 10
+
+# The wobble itself: `_WOBBLE_STEP_PX` out from the saccade's own landing
+# point and back, `_WOBBLE_N_SUBSTEPS` samples each way. A round trip, so its
+# net endpoint-to-endpoint amplitude is ~0 -- comfortably under the saccade's
+# own ~2.4 deg, satisfying `_glissade_bounds`' "no larger than its saccade"
+# omission rule by construction rather than by choosing a value and hoping.
+#
+# Verified directly against the real `wl_preproc.eye.detect.velocity.
+# velocity` and `detect_nystrom_holmqvist` functions, not estimated: fed a
+# raw trace shaped exactly like this (the same 500 px / 0.032 s / 16-substep
+# saccade `stepped_session` already uses, this gap, this wobble), with
+# INDEPENDENT per-eye noise at `synth/ohdpi.py::P1_JITTER_STD_PX`'s own 6.0
+# px standard deviation, both simulated eyes produce exactly one `pso` run
+# and the two eyes' spans overlap by at least 12 samples, across seeds
+# 601-620 with zero failures.
+_WOBBLE_STEP_PX = 250.0
+_WOBBLE_N_SUBSTEPS = 8
+
+
+def _build_glissade_session(
+    tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
+):
+    """A single saccade followed by a genuine, genuinely binocular
+    post-saccadic wobble -- the one shape `stepped_session`'s own hard-stop
+    ramps cannot produce (see `_WOBBLE_STEP_PX`'s own comment).
+
+    Calibration is `_build_stepped_session`'s own approach, unchanged: four
+    trials of natural, untouched two-frequency drift, fitted afterward. Only
+    the detection trial differs: one ramp, one quiet gap, one wobble out and
+    back, one trailing hold -- built from `EyeFixationSpec`s exactly like
+    `_build_stepped_session`'s own three-transition trial, so both eyes move
+    together by the same mechanism (`write_ohdpi`'s own derivation of the
+    right eye from the left -- a constant offset on top of the same
+    `rot_x_left` signal every `EyeFixationSpec` writes into).
+
+    A separate session rather than a fourth event appended to
+    `stepped_session`, for the same reason `near_miss_session`'s own
+    docstring gives: several of that fixture's tests assert its planted-event
+    COUNT by name, and this fixture's whole subject -- whether the real
+    detector's conjunction ever carries a real `pso` -- is a different
+    table's behaviour entirely.
+
+    Returns `session_key`.
+    """
+    from wl_preproc.contracts.events import TaskTypeCode
+    from wl_preproc.schema import core, timebase
+    from wl_preproc.synth.ohdpi import OHDPI_FPS
+    from wl_preproc.synth.recipe import BlockSpec, EyeFixationSpec, MontageSpec, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    from tests.schema.test_eye_populate import _expected_raw_points, _land, _write_fixations
+
+    n_cal_trials = 4
+    n_trials = n_cal_trials + 1
+    detect_trial_start = n_cal_trials * TRIAL_DURATION_S
+
+    onset_s = detect_trial_start + _GLISSADE_ONSET_OFFSET_S
+    settled = (_GLISSADE_SACCADE_STEP_PX, 0.0)
+    wobbled = (_GLISSADE_SACCADE_STEP_PX + _WOBBLE_STEP_PX, 0.0)
+
+    ramp_end_s = onset_s + _GLISSADE_SACCADE_DURATION_S
+    gap_end_s = ramp_end_s + _GLISSADE_GAP_SAMPLES / OHDPI_FPS
+    wobble_half_dur_s = _WOBBLE_N_SUBSTEPS / OHDPI_FPS
+    rise_end_s = gap_end_s + wobble_half_dur_s
+    fall_end_s = rise_end_s + wobble_half_dur_s
+
+    # Hold, ramp (the saccade), hold (the gap), ramp out and ramp back (the
+    # wobble/glissade), hold -- CONTIGUOUS throughout, exactly
+    # `_build_stepped_session`'s own reasoning for why a detection region is
+    # built from back-to-back `EyeFixationSpec` entries rather than isolated
+    # ones (this module's own docstring).
+    detect_fixations = [
+        EyeFixationSpec(start_s=detect_trial_start, end_s=onset_s, x_px=0.0, y_px=0.0),
+        *_ramp_fixations(onset_s, (0.0, 0.0), settled, _GLISSADE_SACCADE_DURATION_S,
+                          _GLISSADE_SACCADE_N_SUBSTEPS),
+        EyeFixationSpec(start_s=ramp_end_s, end_s=gap_end_s, x_px=settled[0], y_px=0.0),
+        *_ramp_fixations(gap_end_s, settled, wobbled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
+        *_ramp_fixations(rise_end_s, wobbled, settled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
+        EyeFixationSpec(start_s=fall_end_s, end_s=n_trials * TRIAL_DURATION_S,
+                         x_px=settled[0], y_px=0.0),
+    ]
+
+    recipe = SessionRecipe(
+        session_id=session_id,
+        subject=subject,
+        rig="rig-a",
+        systems=("syncbox", "ohdpi"),
+        blocks=(
+            BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=n_trials, trial_duration_s=TRIAL_DURATION_S),
+        ),
+        montages=(MontageSpec(start_s=0.0, end_s=n_trials * TRIAL_DURATION_S),),
+        n_ap_channels=4,
+        ap_sample_rate_hz=30_000.0,
+        seed=seed,
+        eye_fixations=tuple(detect_fixations),
+    )
+
+    root = tmp_path_factory.mktemp(dirname)
+    truth = generate_session(root, recipe)
+    session_dir = root / recipe.session_id
+    session_key = _land(
+        root, recipe, session_datetime,
+        acquisition_systems=("syncbox", "ohdpi"),
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+
+    window_starts = [index * TRIAL_DURATION_S + 1.0 for index in range(n_cal_trials)]
+    fixation_windows = [(start + 0.2, start + 0.8) for start in window_starts]
+    raw_points = _expected_raw_points(session_dir, segment, "Left", fixation_windows)
+    targets = [(CAL_SCALE * raw[0], CAL_SCALE * raw[1]) for raw in raw_points]
+    _write_fixations(session_dir, recipe, truth, list(zip(window_starts, targets, strict=True)))
+
+    return session_key
+
 
 def _first_row_at(onset_s: float) -> int:
     """The file row an injection at session time `onset_s` starts on.
@@ -472,6 +612,23 @@ def near_miss_session(daemon_module, prefix, tmp_path_factory):
         dirname="detectnear", session_id="2027-06-06_01", subject="detnear1",
         session_datetime=datetime.datetime(2027, 6, 6, 9, 0), seed=606,
         after_generate=_inject_near_miss_pair,
+    )
+
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
+
+
+@pytest.fixture(scope="module")
+def glissade_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_glissade_session`'s own construction, with the daemon run
+    immediately after -- nothing to intervene on between `EyeCalibration`
+    and `EyeValidity`/`EyeDetection`, the same as `stepped_session`.
+    """
+    session_key = _build_glissade_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` (element-animal's own limit) -- exactly 8.
+        dirname="detectglissade", session_id="2027-06-07_01", subject="detglis1",
+        session_datetime=datetime.datetime(2027, 6, 7, 9, 0), seed=607,
     )
 
     report = daemon_module.run_once(prefix=prefix)
@@ -1647,9 +1804,14 @@ class _AmplitudeBlindParams:
 
     **Otero-Millan was this example until 2026-09-01.** Reading its reference
     corrected its vocabulary to the full `saccade / microsaccade` split, so it
-    DOES declare that field -- see `otero_millan.OteroMillanParams`. A stand-in
-    is still the right shape here: the detector this describes is not written
-    yet, and the point is the filtering rule, not any one detector.
+    DOES declare that field -- see `otero_millan.OteroMillanParams`. A
+    stand-in is still the right shape here even though a real example now
+    exists: `NystromHolmqvistParams` is exactly this shape too (its saccadic
+    slice is `{saccade}` alone, so it declares no `microsaccade_max_deg`
+    field either -- `nystrom_holmqvist.py`), but a purpose-built, minimal
+    dataclass keeps this test about the filtering rule itself, not about
+    twelve fields of `NystromHolmqvistParams` that have nothing to do with
+    it.
 
     Module level, not inside the test that uses it: this file starts
     `from __future__ import annotations`, so `_params_for`'s own
@@ -3286,11 +3448,27 @@ def test_the_conjunction_of_a_pso_detector_can_carry_pso(stepped_session, prefix
     the detector's. A binocular glissade is stored as `pso`, not folded into
     a saccade and not dropped.
 
-    Asserted as a SUBSET rather than a presence, because whether the planted
-    fixture produces a BINOCULAR glissade is a property of the fixture, not
-    of the rule under test. `test_a_multi_kind_detector_populates_and_keeps_
-    its_vocabulary` already pins presence on a fixture built to guarantee
-    it."""
+    **Asserted as a SUBSET rather than a presence, and that is not a choice
+    -- `stepped_session` cannot produce a `pso` at all.** Design spec
+    `2026-09-05-nystrom-holmqvist-design.md` section 9 item 1 records that
+    this fixture's planted transitions are constant-velocity ramps with a
+    hard stop and no post-saccadic excursion, so its conjunction carries no
+    `pso` regardless of whether the detector's own glissade path works. What
+    this test still checks, and is worth checking on its own, is that
+    nothing OUTSIDE the declared vocabulary leaks in -- in particular
+    `microsaccade`, which this detector's degenerate `{saccade}` saccadic
+    slice must never let `classify` emit.
+
+    **This test's own docstring used to say presence was "already pinned"
+    by `test_a_multi_kind_detector_populates_and_keeps_its_vocabulary` --
+    true of storage, not of this algorithm.** That test's fixture is a
+    hand-written stand-in detector built to always emit `pso`; it proves
+    `EyeDetection` can STORE a `pso` conjunction row, never that Nystrom-
+    Holmqvist's own glissade search ever produces one.
+    `test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_
+    run`, below, is the test that closes that gap, on a fixture
+    (`glissade_session`) built to contain a genuine post-saccadic wobble in
+    both eyes."""
     from wl_preproc import daemon
     from wl_preproc.schema import detect
 
@@ -3309,6 +3487,47 @@ def test_the_conjunction_of_a_pso_detector_can_carry_pso(stepped_session, prefix
     assert "microsaccade" not in labels, (
         "this detector's saccadic slice is `{saccade}` alone, so `classify` "
         "must never be asked and `microsaccade` must never be stored"
+    )
+
+
+def test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_run(
+    glissade_session, prefix,
+):
+    """The presence pin the test above cannot give, and the one whole-branch
+    review finding 4 asked for: on a fixture built to contain a genuine
+    post-saccadic wobble in BOTH eyes (`glissade_session` /
+    `_build_glissade_session`), the REAL Nystrom-Holmqvist detector's own
+    conjunction actually carries `pso` -- not merely a subset check that
+    would also pass on a trace containing none.
+
+    `stepped_session` cannot stand in for this fixture (see the test above,
+    and design spec section 9 item 1): its planted transitions have no
+    post-saccadic excursion, so its conjunction carries no `pso` by
+    construction, whether or not the real glissade search works.
+    `test_a_multi_kind_detector_populates_and_keeps_its_vocabulary` pins
+    presence too, but on a FIXTURE detector built to always emit `pso` --
+    it proves the storage path, never that this algorithm's own glissade
+    search fires on real data.
+
+    Through `daemon.run_once()`, never `make()` by hand, matching every
+    other test in this file."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import detect
+
+    session_key, _report = glissade_session
+
+    daemon.run_once(prefix=prefix)
+
+    labels = set(
+        (
+            detect.EyeDetection.Run
+            & {**session_key, "trace": "conjunction",
+               **_detector("nystrom_holmqvist")}
+        ).to_arrays("label")
+    )
+    assert "pso" in labels, (
+        "a saccade followed by a genuine binocular wobble must produce a "
+        f"conjunction `pso` run; stored labels were {labels}"
     )
 
 

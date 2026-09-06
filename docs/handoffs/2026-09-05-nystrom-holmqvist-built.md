@@ -26,13 +26,17 @@ against that fact. A whole-branch review, pushing, and reading
 `gh run list --branch spec/nystrom-holmqvist` are all still on the plan's
 own "before opening a PR" checklist. None of them is done in this task.
 
-`main` itself moved since this repository's last handoff
-(`docs/handoffs/2026-09-05-conjunction-shape-built.md`, describing `main`
-at `76a8199`): a follow-up branch, `fix/detector-carries-its-defaults`,
-merged as `19daf07`, made a registry `Detector` carry its own paramset
-`defaults` field instead of a hardcoded two-entry dict. That fix landed
-**before this branch's own first commit** and is what let a third
-detector register at all — see "Two corrections" below.
+`main` itself moved since this repository's own last status update
+(`docs/CHECKPOINT.md`'s 2026-09-05 header and `wl.yaml`'s own
+`status.describes`, both corrected by commit `bac3721` to record `main` at
+`76a8199` — the conjunction-shape merge; NOT `docs/handoffs/2026-09-05-
+conjunction-shape-built.md`, which never names that commit at all, and
+which an earlier version of this sentence credited wrongly): a follow-up
+branch, `fix/detector-carries-its-defaults`, merged as `19daf07`, made a
+registry `Detector` carry its own paramset `defaults` field instead of a
+hardcoded two-entry dict. That fix landed **before this branch's own first
+commit** and is what let a third detector register at all — see "Two
+corrections" below.
 
 ---
 
@@ -182,10 +186,16 @@ open, for the identical reason:
 data-gating above.** Its Python API
 (`remodnav.EyegazeClassifier(px2deg, sampling_rate)`, `.preproc()`
 returning `vel`/`med_vel`-augmented data, `.__call__()` returning event
-dicts with an 8-label vocabulary) was read directly from the installed
-PyPI package's own `clf.py` (remodnav 1.1.2) before the test was written
-against it, per this repository's own rule that a dependency's API
-surface gets the same verification-before-claim treatment as a paper.
+dicts with an 8-label vocabulary) was read directly from a downloaded
+remodnav 1.1.2 wheel's own `clf.py` before the test was written against
+it -- NOT from an installed package. Said plainly because an earlier
+version of this paragraph said "installed", and remodnav is not installed
+anywhere: not in this project's `.venv` (below), and not in any other
+environment this branch has touched. Reading the wheel is what this
+repository's own rule that a dependency's API surface gets the same
+verification-before-claim treatment as a paper actually permits here --
+the same reasoning parent design spec section 3.2 uses for a vendored
+reference's own source ("reading it is not redistributing it").
 The test is written correctly against that real API. **It has never
 executed once**, in any environment, because this project's `.venv` has
 no `pip` installed at all:
@@ -241,17 +251,25 @@ microsaccade detection, all three of which remain simply unwritten.
 
 **Registering a third detector broke 19 pre-existing tests** that
 hardcoded "exactly 2 detectors / 1 pair" —
-`tests/schema/test_consensus_populate.py` (9),
-`tests/cli/test_detect_report.py` (1), and
-`tests/cli/test_consensus_report.py` (9). None of the 19 were wrong about
-anything except a count that legitimately changed; all were fixed by
-deriving counts from the registry (`len(DETECTORS)`, its triangular pair
-count `n*(n-1)//2`) rather than hardcoding a new literal in their place,
-precisely so a fourth detector does not repeat the break. Full detail —
-including two fixes that were "more than a count" (a coarsening-test
-partition that guessed from detector names rather than reading the stored
-vocabulary column, and a real logic error in a three-way `zip` that would
-have been silently wrong even at exactly three detectors forever) — is in
+`tests/schema/test_consensus_populate.py` (8 failed),
+`tests/cli/test_detect_report.py` (1 failed), and
+`tests/cli/test_consensus_report.py` (10 errored, from one fixture
+unpacking exactly two paramset indices). Recounted directly from source
+rather than carried over from an earlier draft's `9/1/9`: checking out the
+pre-fix commit (`49cab88`) and running those three files together
+reproduces pytest's own `9 failed, 15 passed, 10 errors` exactly — 8 of the
+9 failures are in `test_consensus_populate.py`, the ninth is `test_detect_
+report.py`'s own, and all 10 errors are in `test_consensus_report.py`,
+matching commit `3d1c1ab`'s own message. Most of the 19 were wrong about
+nothing except a count that legitimately changed; two were more than that,
+below — all were fixed by deriving counts from the registry
+(`len(DETECTORS)`, its triangular pair count `n*(n-1)//2`) rather than
+hardcoding a new literal in their place, precisely so a fourth detector
+does not repeat the break. Full detail — including those two fixes that
+were "more than a count" (a coarsening-test partition that guessed from
+detector names rather than reading the stored vocabulary column, and a
+real logic error in a three-way `zip` that would have been silently wrong
+even at exactly three detectors forever) — is in
 `.superpowers/sdd/2026-09-05-nystrom-holmqvist/task-5-report.md`.
 
 **`tests/cli/test_consensus_report.py`'s own isolation strategy remains

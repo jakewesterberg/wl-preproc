@@ -112,9 +112,15 @@ def test_a_monotone_crawl_exhausts_max_iterations():
     through `_peak_threshold` from `initial_peak_threshold_deg_s=200.0`
     retraces the exact sequence of thresholds used to build it -- pulling in
     one new element per iteration, a monotone crawl through many tiers
-    rather than a cycle. `test_a_constant_speed_terminates_by_emptying_not_
-    by_converging`'s closed-form result (no 2-value OSCILLATION can do this,
-    for the natural family checked there) is unaffected: this is not an
+    rather than a cycle. The closed-form result that no 2-value OSCILLATION
+    can occur, for the natural family engineered to try building one
+    (`_peak_threshold`'s own docstring states the full argument: a "small"
+    regime plus added mass at the boundary needs `sqrt(r) > 6.08` for some
+    population fraction `r`, which `r <= 1` makes impossible by a factor of
+    roughly 6) -- an earlier version of this sentence attributed that
+    argument to `test_a_constant_speed_terminates_by_emptying_not_by_
+    converging`'s own docstring, which states only that a search was run,
+    never the derivation itself -- is unaffected regardless: this is not an
     oscillation, and does not need to be one.
 
     Verified directly before writing this assertion, not assumed: with 142
@@ -277,6 +283,128 @@ def test_the_local_noise_window_precedes_the_saccade():
     assert 323 <= offset <= 327, offset
 
 
+def test_the_offset_threshold_actually_blends_the_local_estimate():
+    """Whole-branch review, finding 3: the fixture above
+    (`test_the_local_noise_window_precedes_the_saccade`) uses a FLAT (sigma=0)
+    pre-onset window, so `params.local_noise_sigma * window.std()` is always
+    0 regardless of `local_noise_sigma`'s own value, and `offset_alpha`/
+    `offset_beta` mutated to `1.0`/`0.0` (dropping the local term entirely)
+    still lands the offset at the same sample -- both the alpha/beta swap
+    AND `local_noise_sigma` being ignored survive that fixture's own
+    `323 <= offset <= 327` band. Verified directly: mutating either one and
+    re-running that test leaves it green.
+
+    This fixture gives the pre-onset window real variance -- alternating
+    10/14 deg/s, mean 12, population std 2 -- so the local term actually
+    moves `theta_ST^offset` by a checkable amount, and pins the returned
+    `offset_threshold` (the third element `_saccade_bounds` returns) to the
+    exact value the paper's own formula produces, computed independently
+    here rather than read back from the implementation:
+
+        theta_t          = 12.0 + 3.0*2.0 = 18.0
+        theta_ST^offset  = 0.7*20.0 + 0.3*18.0 = 19.4
+
+    Mutating `offset_alpha`/`offset_beta` to `1.0`/`0.0` gives `20.0`
+    instead (the local term dropped entirely); mutating `local_noise_sigma`
+    to `0` gives `17.6` instead (`theta_t` collapses to the bare mean). Both
+    differ from `19.4` by far more than floating-point noise, so this single
+    pinned value catches either mutation independently. Verified directly
+    against the shipped code, and against both mutations, before trusting
+    this assertion."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(400, 2.0)
+    # tau_min = round(40 * 500 / 1000) = 20 samples: the pre-onset window
+    # `_saccade_bounds` reads is exactly `speed[278:298]` once onset lands at
+    # 298 (below), filled with a repeating 10/14 pair -- mean 12.0,
+    # population std 2.0, both exact.
+    speed[278:298] = np.tile([10.0, 14.0], 10)
+    speed[298:300] = 2.0                    # two flat samples: onset lands at 298
+    speed[300:320] = 300.0                  # the saccade
+    thresholds = PeakThreshold(
+        peak_deg_s=200.0, onset_deg_s=20.0, iterations=2, converged=True
+    )
+
+    bounds = _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS)
+
+    assert bounds is not None
+    onset, offset, offset_threshold = bounds
+    assert onset == 298, onset
+    assert abs(offset_threshold - 19.4) < 1e-6, offset_threshold
+
+
+def test_the_local_window_is_sized_by_tau_min_not_the_saccade_floor():
+    """Whole-branch review, finding 3: `tau = round(min_fixation_duration_ms
+    * fs_hz / 1000)` (line 322) is `min_fixation_duration_ms`'s own tau_min
+    -- 20 samples at 500 Hz with the paper's defaults -- not `min_saccade_
+    duration_ms`'s 10 msec (5 samples). Mutating line 322 to read the wrong
+    field shrinks the pre-onset window from 20 samples to 5, and no existing
+    fixture's pre-onset window has different CONTENT at samples [-20,-5)
+    versus [-5,0) that a shrunk window would actually miss.
+
+    This fixture does: a 15-sample contaminated stretch (speed 50) fills
+    samples [-20,-5) of the pre-onset window, and the final 5 samples [-5,0)
+    are quiet (speed 2) -- so the CORRECT 20-sample window sees both and the
+    WRONG 5-sample window sees only the quiet tail. The two windows' own
+    `theta_t` therefore differ enormously (by construction, not by luck),
+    and the returned `offset_threshold` is asserted against the 20-sample
+    computation, independently reconstructed here from the same array
+    slicing rather than read back from the implementation: mean 38.0,
+    population std `sqrt(432)` ~= 20.785, `theta_t` ~= 100.35,
+    `theta_ST^offset` ~= 44.11 -- versus 14.6 the 5-sample window would give.
+    Verified directly against the shipped code, and against the
+    `min_saccade_duration_ms`-instead-of-`min_fixation_duration_ms`
+    mutation, before trusting this assertion."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(400, 2.0)
+    speed[278:293] = 50.0                   # contamination: inside the correct
+                                             # 20-sample window, outside a 5-sample one
+    speed[293:298] = 2.0                    # quiet immediately before onset
+    speed[298:300] = 2.0                    # onset lands at 298 (flat pair)
+    speed[300:320] = 300.0                  # the saccade
+    thresholds = PeakThreshold(
+        peak_deg_s=200.0, onset_deg_s=20.0, iterations=2, converged=True
+    )
+
+    bounds = _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS)
+
+    assert bounds is not None
+    onset, offset, offset_threshold = bounds
+    assert onset == 298, onset
+    tau_min_window = speed[298 - 20 : 298]
+    expected_local = (
+        float(tau_min_window.mean())
+        + DEFAULT_NH_PARAMS.local_noise_sigma * float(tau_min_window.std())
+    )
+    expected_offset_threshold = (
+        DEFAULT_NH_PARAMS.offset_alpha * 20.0
+        + DEFAULT_NH_PARAMS.offset_beta * expected_local
+    )
+    assert abs(offset_threshold - expected_offset_threshold) < 1e-6, (
+        offset_threshold, expected_offset_threshold
+    )
+    # The 5-sample window `min_saccade_duration_ms` would give is quiet
+    # throughout (14.6, see `test_the_local_noise_window_precedes_the_
+    # saccade`'s own fixture) -- a coarse floor that also discriminates the
+    # mutation without depending on floating-point precision at all.
+    assert offset_threshold > 30.0, (
+        f"offset_threshold this low means the window was NOT the correct "
+        f"20 samples (a 5-sample, quiet-only window would give 14.6): "
+        f"{offset_threshold}"
+    )
+
+
 def test_a_saccade_shorter_than_the_minimum_is_rejected():
     """Table 2: minimum saccade duration 10 msec -- "large enough to avoid
     noise being falsely categorized as saccades but small enough to include
@@ -334,6 +462,36 @@ def test_a_saccade_not_preceded_by_stillness_is_rejected():
     thresholds = PeakThreshold(100.0, 20.0, 2, True)
 
     assert _saccade_bounds(speed, 300, 320, thresholds, fs, DEFAULT_NH_PARAMS) is None
+
+
+def test_a_saccade_in_progress_at_recording_start_is_rejected():
+    """`_saccade_bounds`' own docstring documents "Two rejections"; there are
+    three `return None` paths (minor finding 8). The third -- `window.size
+    == 0` -- fires when the backward onset search never finds a qualifying
+    local minimum before reaching index 0: a saccade already in flight when
+    the recording starts. `window = speed_deg_s[max(onset - tau, 0):onset]`
+    then collapses to `speed_deg_s[0:0]`, empty, and this is what stops that
+    empty window from reaching `.mean()`/`.std()` (silently poisoning every
+    threshold downstream with `nan` rather than raising).
+
+    Elevated for its entire length -- never a sample at or below the onset
+    threshold, so the backward search never breaks and walks all the way to
+    index 0. Verified directly against the shipped code, and against this
+    check removed, before trusting this assertion: without it, `_saccade_
+    bounds` returns a `(0, 399, nan)`-shaped tuple instead of `None`
+    (`nan <= anything` is always `False`, so the forward offset search never
+    finds a stopping point either and runs to the array's own end)."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _saccade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(400, 300.0)
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _saccade_bounds(speed, 50, 70, thresholds, fs, DEFAULT_NH_PARAMS) is None
 
 
 def test_a_high_velocity_glissade_is_found():
@@ -570,6 +728,42 @@ def test_the_high_velocity_criterion_survives_an_inflated_low_velocity_threshold
     assert stop == 331, stop
 
 
+def test_a_glissade_search_window_is_bounded_by_tau_min():
+    """Whole-branch review, finding 3: `end = min(saccade_offset + tau,
+    speed_deg_s.size)` (line 416) bounds the glissade search to `tau_min`
+    (40 msec, 20 samples at 500 Hz) after the saccade's own offset. Doubling
+    `tau` there would let a LATER, unrelated excursion -- one the paper's own
+    window would never reach -- count as this saccade's glissade.
+
+    Nothing exceeds `qualifying_threshold` within the correct 20-sample
+    window `[320, 340)` here; a real excursion sits at `[345, 350)`, inside
+    a DOUBLED window `[320, 360)` but outside the correct one. The correct
+    code must find nothing and return `None`; the doubled-window mutation
+    would instead walk out to the excursion and return a real span. Verified
+    directly against the shipped code, and against the window-doubled
+    mutation, before trusting this assertion."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0                  # saccade, offset at 320
+    speed[345:350] = 150.0                  # a real excursion, but 25-29 samples
+                                             # past the offset -- outside tau_min
+                                             # (20), inside a doubled 2*tau_min (40)
+    gaze = np.zeros((600, 2))
+    gaze[300:320, 0] = np.linspace(0.0, 0.4, 20)
+    gaze[320:, 0] = 0.4
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _glissade_bounds(
+        speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS
+    ) is None
+
+
 def test_the_detector_emits_saccade_pso_and_fixation():
     """The first registered detector to emit anything beyond the amplitude
     split. Its declared vocabulary is parent design spec §3.1's own:
@@ -637,6 +831,80 @@ def test_the_detector_emits_saccade_pso_and_fixation():
     # subset of `{SACCADE, PSO, FIXATION}`.
     assert Label.FIXATION in labels, "no fixation found on a trace with quiet stretches"
     assert labels <= {Label.SACCADE, Label.PSO, Label.FIXATION}
+
+
+def test_a_zero_converged_peak_threshold_returns_no_runs():
+    """`if thresholds.peak_deg_s <= 0: return []` (line 480) -- `<=`, not
+    `<`. A perfectly still recording (zero velocity throughout) converges
+    `_peak_threshold` to EXACTLY 0.0 (verified directly: `below.mean()` and
+    `.std()` are both 0.0 on an all-zero array, and the very next
+    iteration's `below = sub[sub < 0.0]` is empty, returning `PeakThreshold
+    (0.0, ..., converged=False)`) -- a genuine value Table 2 does not
+    forbid. `< 0` would let this exact case through: `speed > 0.0` is
+    `False` everywhere on a zero-velocity trace, so no peak-run is ever
+    seeded and the saccade loop still contributes nothing -- but the
+    trailing fixation loop then claims the WHOLE recording as one giant
+    `fixation`, where the correct code returns nothing at all. Verified
+    directly against the shipped code, and against `<=` mutated to `<`,
+    before trusting this assertion."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 200
+    gaze = np.zeros((n, 2))
+    velocity = np.zeros((n, 2))
+    available = np.array([None] * n, dtype=object)
+
+    assert detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS) == []
+
+
+def test_the_returned_runs_are_sorted_by_start():
+    """`return sorted(runs, key=lambda run: run.start)` (line 599) -- without
+    it, the returned list is in ASSEMBLY order, not chronological order.
+    `runs` collects every `saccade`/`pso` in the order `_true_runs` finds
+    their peaks (left to right), then every `fixation` in a SEPARATE,
+    subsequent loop -- so a LEADING fixation (covering the quiet stretch
+    before the first saccade, starting at or near sample 0) is appended
+    LAST, after a saccade whose own `start` is far larger. No other test in
+    this file reads `detect_nystrom_holmqvist`'s return value without first
+    re-sorting it itself (`test_no_run_overlaps_another` and others build
+    their own `sorted(...)` before checking adjacency), so none of them
+    would notice this line's removal.
+
+    This fixture has exactly that shape: one saccade well after a long
+    leading quiet stretch, and nothing else. Checked on the RAW return
+    value, with no sorting of this test's own. Verified directly against
+    the shipped code, and against `sorted(...)` replaced with a bare
+    `runs`, before trusting this assertion: without it, the leading
+    fixation's `start` (0) appears AFTER the saccade's `start` (~988) in the
+    returned list."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 2000
+    rng = np.random.default_rng(42)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    onset = 1000
+    gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+    available = np.array([None] * n, dtype=object)
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    assert any(run.label == Label.SACCADE for run in runs), "fixture produced no saccade at all"
+    starts = [run.start for run in runs]
+    assert starts == sorted(starts), (
+        f"the leading fixation must sort before the later saccade, not be "
+        f"appended after it unsorted: {runs}"
+    )
 
 
 def test_no_run_overlaps_another():
@@ -955,6 +1223,60 @@ def test_an_acceleration_spike_above_the_physiological_limit_is_excluded():
     assert covering == [], (
         f"the physiologically-impossible acceleration plateau at "
         f"{plateau_start}-{plateau_start + 1} was covered by a run: {covering}"
+    )
+
+
+def test_min_fixation_excludes_a_too_short_usable_island():
+    """Whole-branch review, finding 3: `if stop - start >= min_fixation:`
+    (line 596) is the floor that keeps a too-short leftover stretch from
+    being stored as its own `fixation` run. Two genuinely separate saccades
+    close enough together to leave a short gap do not isolate this floor --
+    verified directly, a candidate gap of 15 samples between two real 3-deg
+    saccades falls inside `tau_min` (20 samples) of the first saccade's own
+    offset, so `_glissade_bounds` claims it as a glissade before the
+    fixation loop ever sees it, leaving nothing between them to test the
+    floor with.
+
+    This fixture decouples the floor from that dynamic entirely: a 15-sample
+    USABLE island (`available[400:415] = None`), surrounded on both sides by
+    an unrelated unavailable stretch (`available[200:600] = Label.BLINK`),
+    far from the one real saccade planted elsewhere in the trace. Nothing
+    claims this island and nothing masks it, so it is exactly the kind of
+    leftover stretch the fixation loop considers -- 15 samples (30 msec) is
+    shorter than `min_fixation` (40 msec, 20 samples), so the correct code
+    must leave it uncovered by any run at all. Verified directly against the
+    shipped code, and against the floor check removed (which stores it as a
+    `fixation` run instead), before trusting this assertion."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
+    )
+
+    fs, n = 500.0, 2000
+    rng = np.random.default_rng(77)
+    gaze = np.cumsum(rng.normal(0.0, 0.002, (n, 2)), axis=0)
+    onset = 1000
+    gaze[onset:onset + 12, 0] += np.linspace(0.0, 3.0, 12)
+    gaze[onset + 12:, 0] += 3.0
+    velocity = np.gradient(gaze, axis=0) * fs
+    available = np.array([None] * n, dtype=object)
+    available[200:600] = Label.BLINK
+    island_start, island_len = 400, 15      # 30 ms, shorter than min_fixation's 40 ms
+    available[island_start:island_start + island_len] = None
+
+    runs = detect_nystrom_holmqvist(gaze, velocity, available, fs, DEFAULT_NH_PARAMS)
+
+    assert any(run.label == Label.SACCADE for run in runs), "fixture produced no saccade at all"
+    covering = [
+        run for run in runs
+        if run.start <= island_start < run.stop
+        or run.start < island_start + island_len <= run.stop
+    ]
+    assert covering == [], (
+        f"the {island_len}-sample usable island is shorter than min_fixation "
+        f"and must remain uncovered by any run: {covering}"
     )
 
 

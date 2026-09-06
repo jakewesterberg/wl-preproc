@@ -313,17 +313,29 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    conventions was adopted. `docs/handoffs/2026-09-05-conjunction-shape-built.md`
    has the full account, including two things worth knowing before writing
    the next detector: a **pre-existing production defect found on this
-   branch and deliberately NOT fixed** — `register_default_paramsets`
-   hardcodes a two-entry `defaults` dict and raises `KeyError` inside a dict
-   comprehension over `DETECTORS`, uncaught, in `daemon.run_once()`, the
-   moment a third detector is registered without also extending that dict,
-   aborting the ENTIRE daemon pass rather than just that registration — and
-   the **open question that matters most**: how often the two eyes disagree
-   on KIND (one calls a stretch `saccade`, the other `pso`) is unmeasured
-   and unmeasurable until a pso-capable detector exists, so §1's agreement
-   requirement rests on reasoning rather than a number. Nyström–Holmqvist —
-   the simplest of the four — is what measures it, and that measurement
-   should be the first thing stage 2B does.
+   branch and deliberately NOT fixed** [**corrected 2026-09-06: this is now
+   false, not merely stale — see the dated block below. The defect WAS
+   fixed, on `main`, before this branch's own first commit.**] —
+   `register_default_paramsets` hardcodes a two-entry `defaults` dict and
+   raises `KeyError` inside a dict comprehension over `DETECTORS`, uncaught,
+   in `daemon.run_once()`, the moment a third detector is registered without
+   also extending that dict, aborting the ENTIRE daemon pass rather than
+   just that registration — and the **open question that matters most**:
+   how often the two eyes disagree on KIND (one calls a stretch `saccade`,
+   the other `pso`) is unmeasured and unmeasurable until a pso-capable
+   detector exists [**corrected 2026-09-06: also now false as stated — a
+   pso-capable detector exists and is registered (below), so this is
+   measurable, though STILL unmeasured**], so §1's agreement requirement
+   rests on reasoning rather than a number. Nyström–Holmqvist — the
+   simplest of the four — is what measures it, and that measurement should
+   be the first thing stage 2B does.
+
+   **Task 8's own report claimed both corrections above were made in
+   place; only the registry-count one below actually was — this paragraph's
+   own two claims sat uncorrected until this note.** Recorded here, rather
+   than silently rewritten, per this file's own convention: a reader who
+   stops at this paragraph — this file's own recurring failure mode, named
+   in its header — must not be left believing either defect is still true.
 
    **U'n'Eye's obstacles are unchanged by any of this** — it declares
    `{saccade}`, a subset of the amplitude-derived vocabulary, so it never
@@ -411,20 +423,26 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    glissade criteria per spec section 3) are both still open for the same
    reason. Separately, the REMoDNaV oracle comparison is unverified even
    as CODE: its API (`remodnav.EyegazeClassifier`, `.preproc()`,
-   `.__call__()`) was read from the installed PyPI package's own source
-   rather than recalled, and the test is written against it correctly, but
-   it has never executed — this project's `.venv` has no `pip` installed
-   at all, so `remodnav` cannot be installed into it regardless of the
-   recording's availability.
+   `.__call__()`) was read from a DOWNLOADED remodnav wheel's own source --
+   corrected from an earlier draft that said "the installed PyPI package":
+   remodnav is not installed anywhere, in this project's `.venv` or in any
+   other environment this branch has touched (below) -- rather than
+   recalled, and the test is written against it correctly, but it has
+   never executed — this project's `.venv` has no `pip` installed at all,
+   so `remodnav` cannot be installed into it regardless of the recording's
+   availability.
 
    **Registering a third detector broke 19 pre-existing tests** that
    hardcoded "exactly 2 detectors / 1 pair"
-   (`tests/schema/test_consensus_populate.py`, 9;
-   `tests/cli/test_detect_report.py`, 1;
-   `tests/cli/test_consensus_report.py`, 9) — fixed by deriving counts
-   from the registry (`len(DETECTORS)`, its triangular pair count) rather
-   than hardcoding a new literal, precisely so a fourth detector does not
-   break them again. One of those fixes is itself a standing caution:
+   (`tests/schema/test_consensus_populate.py`, 8 failed;
+   `tests/cli/test_detect_report.py`, 1 failed;
+   `tests/cli/test_consensus_report.py`, 10 errored — corrected from an
+   earlier draft's `9/1/9`, recounted by checking out the pre-fix commit
+   and re-running: pytest's own `9 failed, 15 passed, 10 errors`, matching
+   commit `3d1c1ab`) — fixed by deriving counts from the registry
+   (`len(DETECTORS)`, its triangular pair count) rather than hardcoding a
+   new literal, precisely so a fourth detector does not break them again.
+   One of those fixes is itself a standing caution:
    `tests/cli/test_consensus_report.py`'s own isolation strategy relies on
    picking a vocabulary string "no REGISTERED pair can produce"
    (its own module docstring) — Nystrom-Holmqvist's real vocabulary

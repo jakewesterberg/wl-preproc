@@ -131,6 +131,24 @@ omitted.**
 proposed a paramset key choosing between them; reading Figure 10 removed the
 need. See §3.
 
+**Amended 2026-09-06, from implementing it: "mutually exclusive" above is
+the paper's own COUNTING convention, not a code-level invariant this
+implementation enforces.** The paper's words describe which bucket a
+qualifying window is TALLIED into for Table 3's own statistics — "low-
+velocity glissades are not a subset of high-velocity glissades" — not a
+claim that the two velocity conditions can never both hold on the same
+window. Since this vocabulary has no separate label for either kind (both
+emit `pso`, §3), nothing here ever has to decide which bucket a window
+falls into, so there is no code path where the two could conflict in the
+first place: `_glissade_bounds` compares against `min(theta_ST^offset,
+theta_PT)` — EITHER threshold qualifies a sample — and returns one span
+regardless of which condition, or both, fired. What this implementation can
+promise, and what `_glissade_bounds`' own docstring and `test_one_saccade_
+yields_at_most_one_glissade` (`tests/eye/detect/test_nystrom_holmqvist.py`)
+actually state and check, is narrower and different: one saccade never
+yields two overlapping glissade runs. §8 item 4's test plan is amended to
+match.
+
 ### 1.5 Fixation detection (pp. 195–197)
 
 "Fixations are everything that is not noise, saccades, or glissades" —
@@ -366,8 +384,15 @@ the algorithm and a separate validation module.
    a large glissade after the saccade and quiet before it: a following window
    raises `θ̇_ST^offset` and truncates or loses the glissade. This is §1.2's
    easiest-to-invert rule and the test exists to catch the inversion.
-4. **Both glissade criteria fire, and are mutually exclusive** — a
-   high-velocity glissade is not also counted as a low-velocity one.
+4. **Both glissade criteria fire.** Originally continued "...and are
+   mutually exclusive — a high-velocity glissade is not also counted as a
+   low-velocity one," which asked for the wrong test. **Amended 2026-09-06,
+   matching §1.4's own amendment**: "mutually exclusive" is the paper's own
+   counting convention for Table 3's statistics, not a code-level invariant
+   — both criteria emit the identical label (`pso`), so there is no "which
+   one fired" for a test to distinguish between. What IS checked, and is
+   what `test_one_saccade_yields_at_most_one_glissade` actually tests: one
+   saccade never yields two overlapping glissade runs.
 5. **A glissade larger in amplitude than its preceding saccade is omitted.**
 6. **A saccade not preceded by stillness is excluded** (`μ_t > θ̇_PT`).
 7. **Emitted labels are a subset of the declared vocabulary** — enforced by
@@ -375,7 +400,17 @@ the algorithm and a separate validation module.
    against real output rather than a fixture's.
 8. **The conjunction is produced, and carries `pso`** — the first production
    exercise of per-kind intersection. Through `daemon.run_once()`, never
-   `make()` by hand.
+   `make()` by hand. **Unmet through the whole-branch review, closed
+   2026-09-06**: the test that existed
+   (`test_the_conjunction_of_a_pso_detector_can_carry_pso`) asserted only a
+   vocabulary SUBSET on `stepped_session`, a fixture §9 item 1 records as
+   incapable of a `pso` at all — nothing anywhere asserted the real detector
+   ever stored one. `test_a_real_saccade_and_glissade_produce_a_binocular_
+   pso_conjunction_run` (same file), on a new fixture
+   (`glissade_session`/`_build_glissade_session`) built to contain a
+   genuine post-saccadic wobble in both eyes, is what actually does this
+   item now — through `daemon.run_once()`, and verified to fail when
+   `_glissade_bounds` is mutated to find nothing.
 9. **Validation, in its own module**: the §5 statistics against the reference
    recording, each with a null run against it first.
 
