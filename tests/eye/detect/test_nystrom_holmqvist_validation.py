@@ -80,7 +80,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections import namedtuple
+from collections import Counter, namedtuple
 
 import numpy as np
 import pytest
@@ -118,6 +118,25 @@ GLISSADE_DURATION_MS_MAX = 60.0
 #: headroom under 0.10, not a bound tuned to just barely clear it.
 NULL_GLISSADE_RATE_CEILING = 0.10
 
+#: `test_the_null_fails_the_kind_agreement_check`'s own FLOOR -- a floor, not
+#: a ceiling, because this null runs in the opposite direction from the one
+#: above: the finding here is LOW kind-disagreement, so chance has to be
+#: measurably HIGH for the finding to mean anything. Chance disagreement is
+#: the kind mix's own collision probability, about 0.5 for the 50/50 mix that
+#: test plants; 0.25 is headroom under it rather than a bound tuned to clear.
+NULL_KIND_DISAGREEMENT_FLOOR = 0.25
+
+#: The conjunction's duration floor for THIS detector, in samples.
+#: `schema/detect.py::_min_duration_samples` reads `min_duration_samples` off
+#: the detector's own params with `getattr(..., 1)`. That field belongs to
+#: `EngbertKlieglParams`; `NystromHolmqvistParams` states its durations in
+#: milliseconds and has none -- so Nystrom-Holmqvist's conjunction admits a
+#: ONE-sample binocular event where Engbert-Kliegl's requires six. Measured
+#: rather than assumed (`_min_duration_samples(DEFAULT_NH_PARAMS)` returns 1),
+#: and restated as a literal here because this file imports nothing from
+#: `wl_preproc.schema`.
+NH_CONJUNCTION_FLOOR_SAMPLES = 1
+
 #: REMoDNaV oracle comparison, restricted to a leading slice of the
 #: recording rather than the full ~39 minutes / 1.17M samples -- following
 #: REMoDNaV's own test suite's precedent (`remodnav/tests/test_detect.py::
@@ -153,6 +172,15 @@ def _skip_reason() -> str:
 
 _Span = namedtuple("_Span", "start stop")
 
+#: `_Span` plus the one field the kind-agreement statistic needs. A sibling
+#: rather than a third field on `_Span`: the glissade null above builds
+#: `_Span`s that have no kind at all, and widening that type would force a
+#: placeholder label into a null where the concept does not apply. Field names
+#: match `Run`'s (`labels.py`) for the reason `_random_span_null` documents --
+#: one statistic function has to read both the real frozen dataclass and the
+#: null's stand-ins, and `Run` has no `__getitem__`.
+_LabelledSpan = namedtuple("_LabelledSpan", "start stop label")
+
 
 def _random_span_null(runs, n_samples, rng):
     """A duration-matched random-span control: the same number of spans, with
@@ -182,6 +210,26 @@ def _random_span_null(runs, n_samples, rng):
     for duration in durations:
         start = int(rng.integers(0, max(n_samples - duration, 1)))
         spans.append(_Span(start, start + duration))
+    return sorted(spans)
+
+
+def _random_labelled_span_null(runs, n_samples, rng):
+    """`_random_span_null` preserving each run's KIND as well as its duration.
+
+    **Preserving the kind is what makes this the right null for the question.**
+    The measurement asks whether the two eyes agree on kind more often than
+    they would by accident. An accident here still has each eye's real
+    vocabulary mix in it -- a detector emitting mostly saccades will match
+    another mostly-saccade trace often, for no binocular reason at all. A null
+    that reassigned kinds would destroy that mix too, and would flatter the
+    measurement by comparing it against something no detector could produce.
+    Only the temporal relationship between the eyes is destroyed here.
+    """
+    spans = []
+    for run in runs:
+        duration = run.stop - run.start
+        start = int(rng.integers(0, max(n_samples - duration, 1)))
+        spans.append(_LabelledSpan(start, start + duration, run.label))
     return sorted(spans)
 
 
@@ -235,6 +283,307 @@ def test_the_null_fails_the_glissade_rate_check():
     assert rate < NULL_GLISSADE_RATE_CEILING, (
         f"a random control scored {rate:.3f} on the glissade-rate check; the "
         "check does not discriminate and must be withdrawn, not relaxed"
+    )
+
+
+#: The conjunction's own kind mapping, RESTATED from `schema/detect.py`
+#: (`_KIND_OF`, `_NOT_INTERSECTED`) rather than imported, for this file's
+#: standing reason: it imports nothing from `wl_preproc.schema`, because the
+#: 3.13 cross-check runs `tests/eye` with `--noconftest` in a venv with no
+#: DataJoint (module docstring).
+#:
+#: **The drift risk is real and is named rather than left implicit.** Two
+#: definitions of one rule is how they come apart, and nothing here can catch
+#: it: a ninth label, or a remapped kind, would change the conjunction and
+#: leave this measurement quietly reporting the old rule's number. The durable
+#: fix is to move `_KIND_OF` into `eye/detect/labels.py`, which both sides can
+#: import -- it is vocabulary knowledge, not schema knowledge -- and that is
+#: recorded as a follow-up rather than done here, being a production change to
+#: the conjunction outside this measurement's scope.
+_NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID})
+_KIND_OF = {
+    Label.SACCADE: "saccadic",
+    Label.MICROSACCADE: "saccadic",
+    Label.PSO: Label.PSO.value,
+    Label.PURSUIT: Label.PURSUIT.value,
+    Label.DRIFT: Label.DRIFT.value,
+}
+
+
+def _kind_of(label):
+    """`label`'s conjunction kind, or `None` where the conjunction never
+    intersects it. Raises on an unmapped label for the same reason the
+    original does -- a ninth label must not vanish silently."""
+    if label in _NOT_INTERSECTED:
+        return None
+    try:
+        return _KIND_OF[label]
+    except KeyError as exc:
+        raise AssertionError(
+            f"{label!r} has no conjunction kind in this file's restated "
+            "`_KIND_OF`. `schema/detect.py` has probably gained one; this "
+            "copy must gain it too"
+        ) from exc
+
+
+class _Agreement:
+    """One eye's detected runs, bucketed by what the other eye said about the
+    same stretch of time. Three buckets, and every own-run lands in exactly
+    one.
+
+    `agree` -- an overlapping run of the same kind.
+    `disagree` -- overlapping run(s), none of the same kind.
+    `alone` -- no overlapping detected run at all; the other eye calls that
+    stretch `fixation`, which `_conjunction_runs` never intersects.
+
+    **Both of the last two are dropped by the binocular agreement rule**
+    (conjunction-shape design spec section 1), which is why `drop_rate` adds
+    them and `kind_disagreement_rate` does not. The spec's open question 1 is
+    literally about the middle bucket; its "conservative or costly" framing
+    needs both.
+    """
+
+    def __init__(self, agree: int, disagree: int, alone: int):
+        self.agree = agree
+        self.disagree = disagree
+        self.alone = alone
+
+    @property
+    def total(self) -> int:
+        return self.agree + self.disagree + self.alone
+
+    @property
+    def compared(self) -> int:
+        """Own-runs the other eye also called an event -- the only ones on
+        which a KIND comparison is defined at all."""
+        return self.agree + self.disagree
+
+    @property
+    def kind_disagreement_rate(self) -> float:
+        """Of the stretches where both eyes found something, the fraction
+        where they named it differently. Spec section 6 open question 1."""
+        return self.disagree / self.compared if self.compared else 0.0
+
+    @property
+    def drop_rate(self) -> float:
+        """Of this eye's detected runs, the fraction the binocular agreement
+        rule discards -- kind disagreements and unmatched runs together."""
+        return (self.disagree + self.alone) / self.total if self.total else 0.0
+
+
+def _kind_agreement(own, other, floor: int) -> _Agreement:
+    """Bucket each run in `own` by what `other` says over the same samples.
+
+    `floor` is the conjunction's own duration floor, in samples: an overlap
+    shorter than it would not have survived `_overlapping` and so must not
+    count here either. **For Nystrom-Holmqvist that floor is 1, not the 6 the
+    run-count measurement reports** -- `schema/detect.py::_min_duration_
+    samples` reads `min_duration_samples` off the detector's own params with
+    `getattr(..., 1)`, and that field belongs to `EngbertKlieglParams`;
+    `NystromHolmqvistParams` states its durations in milliseconds and has
+    none. Passed in rather than computed here, so this file keeps importing
+    nothing from `wl_preproc.schema` (module docstring).
+
+    **KIND, not label.** `saccade` and `microsaccade` are one kind to the
+    conjunction (`_KIND_OF`), so a left `saccade` over a right `microsaccade`
+    is an AGREEMENT here exactly as it is there; and `fixation`/`blink`/
+    `invalid` are dropped from both sides, since the conjunction never
+    intersects them. An own-run overlapping only the other eye's `fixation`
+    is therefore `alone` -- the other eye detected nothing -- and not a kind
+    disagreement, which is the distinction spec section 6 needs kept apart.
+
+    Stated generically over anything exposing `.start`/`.stop`/`.label`, so
+    the null and the real traces run the IDENTICAL statistic rather than two
+    similar-looking ones -- the same reason `_glissadic_fraction` is generic.
+
+    **`other` is not assumed disjoint.** Real detector output is, but the null
+    places spans independently and they can overlap each other, so candidates
+    are found by a bounded window on start rather than by a neighbour walk.
+    """
+    own_runs = [run for run in own if _kind_of(run.label) is not None]
+    other_runs = sorted(
+        (run for run in other if _kind_of(run.label) is not None),
+        key=lambda run: (run.start, run.stop),
+    )
+    if not own_runs:
+        return _Agreement(0, 0, 0)
+    if not other_runs:
+        return _Agreement(0, 0, len(own_runs))
+
+    starts = np.array([run.start for run in other_runs], dtype=np.int64)
+    stops = np.array([run.stop for run in other_runs], dtype=np.int64)
+    kinds = [_kind_of(run.label) for run in other_runs]
+    widest = int((stops - starts).max())
+
+    agree = disagree = alone = 0
+    for run in own_runs:
+        own_kind = _kind_of(run.label)
+        lo = int(np.searchsorted(starts, run.start - widest, side="left"))
+        hi = int(np.searchsorted(starts, run.stop, side="left"))
+        same_kind = other_kind = False
+        for index in range(lo, hi):
+            overlap = min(run.stop, int(stops[index])) - max(
+                run.start, int(starts[index])
+            )
+            if overlap < floor:
+                continue
+            if kinds[index] == own_kind:
+                same_kind = True
+                break
+            other_kind = True
+        if same_kind:
+            agree += 1
+        elif other_kind:
+            disagree += 1
+        else:
+            alone += 1
+    return _Agreement(agree, disagree, alone)
+
+
+def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
+    """`_KIND_OF` (`schema/detect.py`) maps both to `"saccadic"`, so the
+    conjunction intersects a left `saccade` with a right `microsaccade` and
+    labels the result by amplitude. A statistic comparing raw labels would
+    score that same stretch a KIND DISAGREEMENT and report a rate the
+    conjunction does not have.
+
+    Nystrom-Holmqvist declares `{saccade}` as its saccadic slice and emits no
+    `microsaccade` today, so nothing in the reference measurement exercises
+    this. It is pinned anyway: the statistic is stated generically over
+    labels, and the next detector to register both sides of the amplitude cut
+    would otherwise change this number silently.
+    """
+    counts = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(0, 20, Label.MICROSACCADE)],
+        floor=1,
+    )
+
+    assert (counts.agree, counts.disagree, counts.alone) == (1, 0, 0)
+
+
+def test_the_agreement_statistic_ignores_the_labels_the_conjunction_never_intersects():
+    """`_NOT_INTERSECTED` is `{fixation, blink, invalid}` (`schema/detect.py`):
+    `fixation` is the synthesized background `_insert_trace` paints, and
+    `blink`/`invalid` come from the validity mask rather than from any
+    detector.
+
+    So an own-run overlapping only the other eye's `fixation` is ALONE, not a
+    kind disagreement -- the other eye detected nothing there. Counting it as
+    a disagreement would fold "the eyes named it differently" together with
+    "one eye saw nothing", which is exactly the distinction spec section 6's
+    open question needs kept apart. And a `fixation` run on the OWN side is
+    not an own-run at all: it must not reach any denominator.
+    """
+    over_fixation = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(0, 20, Label.FIXATION)],
+        floor=1,
+    )
+    assert (over_fixation.agree, over_fixation.disagree, over_fixation.alone) == (0, 0, 1)
+
+    own_fixation = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.FIXATION), _LabelledSpan(30, 50, Label.BLINK)],
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        floor=1,
+    )
+    assert own_fixation.total == 0, (
+        "a fixation/blink/invalid run is not a detected event and must not "
+        "reach the denominator of either rate"
+    )
+
+
+def test_an_own_run_the_other_eye_did_not_find_is_alone_not_a_disagreement():
+    """The `alone` bucket, reached through the MAIN LOOP rather than through
+    the empty-`other` early return.
+
+    **This test exists because the obvious one does not cover it.**
+    `test_the_agreement_statistic_ignores_the_labels_the_conjunction_never_
+    intersects` also expects `alone`, but its `other` side is a lone
+    `fixation` that the kind filter removes entirely, so it returns early and
+    never executes the loop's own `alone` branch. A mutation counting
+    unmatched runs as kind disagreements survived that test and was caught
+    only by this one -- verified by literal source mutation and revert, not
+    assumed.
+
+    Keeping the two apart matters for the measurement: folding `alone` into
+    `disagree` would inflate the kind-disagreement rate with stretches where
+    one eye simply saw nothing, which is the distinction conjunction-shape
+    design spec section 6 turns on.
+    """
+    counts = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(100, 120, Label.SACCADE)],
+        floor=1,
+    )
+
+    assert (counts.agree, counts.disagree, counts.alone) == (0, 0, 1)
+    assert counts.compared == 0
+    assert counts.drop_rate == 1.0
+
+
+def test_an_overlap_shorter_than_the_floor_does_not_count_as_a_counterpart():
+    """The duration floor is `_overlapping`'s own (`schema/detect.py`): an
+    intersection shorter than it never becomes a conjunction run, so it must
+    not count as a counterpart here either.
+
+    Pinned in BOTH directions on one pair of runs -- the same one-sample
+    overlap is a counterpart at `floor=1` and not one at `floor=6` -- so the
+    floor is shown to do work rather than merely be passed. A mutation
+    dropping the floor comparison survived every other test in this file.
+
+    `floor=6` is Engbert-Kliegl's real value and `floor=1` is
+    Nystrom-Holmqvist's (`NH_CONJUNCTION_FLOOR_SAMPLES`); both appear here
+    because the statistic is generic over the detector.
+    """
+    own = [_LabelledSpan(0, 20, Label.SACCADE)]
+    other = [_LabelledSpan(19, 40, Label.SACCADE)]  # one sample of overlap
+
+    admitted = _kind_agreement(own, other, floor=1)
+    assert (admitted.agree, admitted.disagree, admitted.alone) == (1, 0, 0)
+
+    rejected = _kind_agreement(own, other, floor=6)
+    assert (rejected.agree, rejected.disagree, rejected.alone) == (0, 0, 1)
+
+
+def test_the_null_fails_the_kind_agreement_check():
+    """Two eyes that share nothing but a kind mix still agree on kind a large
+    fraction of the time. This test measures that chance level, so the
+    binocular measurement below is read against it rather than against zero.
+
+    **Same rule, opposite direction from the glissade null above.** There, a
+    high rate was the finding, so the null had to score LOW. Here the finding
+    will be LOW kind-disagreement -- the two eyes naming the same stretch the
+    same thing -- so the null has to score HIGH. If randomly placed runs
+    disagree about as rarely as the real eyes do, the measurement is
+    describing the vocabulary's own kind mix and not binocularity at all, and
+    the check must be WITHDRAWN rather than relaxed.
+
+    Chance agreement here is the collision probability of the kind mix: with
+    the 50/50 mix planted below, an overlapping run matches kind half the
+    time, so chance DISAGREEMENT is about 0.5. The floor asserted is 0.25 --
+    comfortable headroom under that, not a bound tuned to just clear it.
+    """
+    rng = np.random.default_rng(7)
+    n_samples = 50_000
+    template = [_LabelledSpan(0, 20, Label.SACCADE)] * 500 + [
+        _LabelledSpan(0, 12, Label.PSO)
+    ] * 500
+
+    left = _random_labelled_span_null(template, n_samples, rng)
+    right = _random_labelled_span_null(template, n_samples, rng)
+
+    counts = _kind_agreement(left, right, floor=1)
+
+    assert counts.compared > 0, (
+        "no randomly placed run overlapped any other; the null measured "
+        "nothing and cannot say whether the check discriminates"
+    )
+    assert counts.kind_disagreement_rate > NULL_KIND_DISAGREEMENT_FLOOR, (
+        f"randomly placed runs disagreed on kind only "
+        f"{counts.kind_disagreement_rate:.3f} of the time; chance agreement "
+        "is already as good as binocular agreement, so the kind-disagreement "
+        "measurement does not discriminate and must be withdrawn, not relaxed"
     )
 
 
@@ -492,6 +841,103 @@ def _remodnav_saccade_count(remodnav_module, raw_xy: np.ndarray, fs_hz: float, p
     preprocessed = classifier.preproc(data)
     events = classifier(preprocessed)
     return sum(1 for event in events if event["label"] in ("SACC", "ISAC"))
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
+    """Conjunction-shape design spec `2026-09-05-conjunction-shape-design.md`
+    section 6, open question 1 -- "the largest piece of unquantified reasoning
+    in this spec", and unmeasurable until a pso-capable detector existed.
+
+    Section 1 keeps a binocular event only where both eyes independently call
+    the same stretch the same KIND. Everything else is dropped. This measures
+    what that costs, in two numbers that answer two different questions:
+
+    - **kind disagreement** -- of the stretches where BOTH eyes found an
+      event, how often they named it differently. The spec's literal
+      question.
+    - **drop rate** -- of one eye's detected events, the fraction section 1
+      discards for any reason: named differently, or not found by the other
+      eye at all. The spec's "conservative or costly" framing needs this one,
+      because the agreement rule drops both.
+
+    **Measured from the PER-EYE traces, never the conjunction** (spec section
+    6, and this module's own docstring). `_insert_trace` paints `fixation`
+    over every sample no surviving interval claims, so a disagreement leaves
+    no trace of either kind in the conjunction and a query against it would
+    report this rate as exactly zero -- not as unmeasured, but as a wrong
+    answer that looks like a finding.
+
+    **Read against the null, not against zero.** Two traces sharing only a
+    kind mix already agree often by accident;
+    `test_the_null_fails_the_kind_agreement_check` measures that chance level
+    at 0.376-0.470 across seeds 0-19. The bound asserted here is that same
+    null's floor: if the real eyes do not disagree measurably LESS often than
+    randomly placed runs, the statistic is describing the vocabulary's kind
+    mix rather than binocularity, and it must be withdrawn rather than
+    relaxed -- the rule the Otero-Millan round left behind.
+    """
+    left_trace, right_trace = reference["traces"]
+    directions = [
+        (
+            "left->right",
+            _kind_agreement(
+                left_trace.runs, right_trace.runs, NH_CONJUNCTION_FLOOR_SAMPLES
+            ),
+        ),
+        (
+            "right->left",
+            _kind_agreement(
+                right_trace.runs, left_trace.runs, NH_CONJUNCTION_FLOOR_SAMPLES
+            ),
+        ),
+    ]
+
+    with capsys.disabled():
+        print(
+            f"\n  eye KIND disagreement -- conjunction-shape spec section 6 "
+            f"open question 1, first measurement. Floor "
+            f"{NH_CONJUNCTION_FLOOR_SAMPLES} sample (this detector's own, not "
+            f"Engbert-Kliegl's 6); null measures "
+            f"{NULL_KIND_DISAGREEMENT_FLOOR}+ by chance:"
+        )
+        for name, counts in directions:
+            print(
+                f"    {name}  agree={counts.agree:6d}  disagree="
+                f"{counts.disagree:5d}  alone={counts.alone:6d}"
+            )
+            print(
+                f"                 kind disagreement "
+                f"{counts.kind_disagreement_rate:.4f} of "
+                f"{counts.compared} compared -- drop rate "
+                f"{counts.drop_rate:.4f} of {counts.total} detected"
+            )
+        # Spec section 6 open question 2 -- the row-count effect of a
+        # multi-kind detector -- is not a separate measurement: these are the
+        # per-eye counts it asks for, printed while they are in hand.
+        print("  per-eye runs by label (spec section 6 open question 2):")
+        for trace in reference["traces"]:
+            tally = Counter(run.label.value for run in trace.runs)
+            print(
+                f"    {trace.name:5s} {len(trace.runs):6d} runs -- "
+                + ", ".join(f"{label} {n}" for label, n in sorted(tally.items()))
+            )
+
+    for name, counts in directions:
+        assert counts.compared > 0, (
+            f"{name}: no detected run in one eye overlapped a detected run in "
+            "the other; the statistic measured nothing"
+        )
+        assert counts.kind_disagreement_rate < NULL_KIND_DISAGREEMENT_FLOOR, (
+            f"{name}: the two eyes disagreed on kind "
+            f"{counts.kind_disagreement_rate:.4f} of the time, no better than "
+            f"the {NULL_KIND_DISAGREEMENT_FLOOR} a random control reaches. "
+            "Section 1's agreement requirement then rests on nothing, and "
+            "this check must be withdrawn rather than relaxed"
+        )
 
 
 @pytest.mark.skipif(
