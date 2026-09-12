@@ -269,9 +269,92 @@ left CI red on 3.13 alone for a day while every local run was green.
    zero, silently, rather than as unmeasured. The rate can only be
    recovered by comparing the two PER-EYE traces directly — which is
    exactly what Nyström–Holmqvist's own measurement, above, has to do.
+   **ANSWERED 2026-09-12, against the real reference recording. The
+   question above is left standing rather than rewritten, per this
+   repository's convention; everything from here down is the answer.**
+
+   Measured by `tests/eye/detect/test_nystrom_holmqvist_validation.py::
+   test_the_two_eyes_agree_on_kind_far_better_than_chance`, from the PER-EYE
+   Nyström–Holmqvist traces exactly as this section requires, on
+   `OpenIris-2024Jul31-114628.txt` (1,177,799 frames, 498.55 Hz):
+
+   | direction | agree | disagree | alone | kind disagreement | drop rate |
+   |---|---|---|---|---|---|
+   | left→right | 5,763 | 721 | 595 | **0.1112** of 6,484 compared | **0.1859** of 7,079 detected |
+   | right→left | 5,792 | 855 | 733 | **0.1286** of 6,647 compared | **0.2152** of 7,380 detected |
+
+   **The null was built and run first**, per the rule the Otero-Millan round
+   left behind. Two traces sharing only a kind mix already agree by accident:
+   randomly placed runs preserving each eye's durations AND kinds disagree
+   **0.376–0.470** of the time across seeds 0–19 (0.446 at the pinned seed
+   7). The real eyes disagree 0.111–0.129 — about three and a half times less
+   often than chance — so the statistic is measuring binocularity rather than
+   the vocabulary's own kind mix, and the check **discriminates and is
+   RETAINED**. `test_the_null_fails_the_kind_agreement_check` is what says so,
+   and a label-blind mutation of the statistic drives the null to 0.000 and
+   fails it.
+
+   **The answer to this section's own framing — conservative or costly — is
+   about a fifth.** §1's agreement requirement discards 18.6% of the left
+   eye's detected events and 21.5% of the right's. That is the cost, and it
+   is now a number rather than an argument.
+
+   **What was not expected: disagreement dominates absence.** In both
+   directions there are MORE stretches where the two eyes both detected
+   something and named it differently (721, 855) than stretches where one eye
+   detected nothing at all (595, 733). The eyes nearly always agree that
+   *something* happened; the fifth that §1 drops is mostly the two of them
+   disagreeing about *what*. Which kind pairs those are — almost certainly
+   `saccade` against `pso`, the two eyes placing a saccade's own trailing
+   glissade boundary differently — is NOT measured, and is the obvious next
+   question.
+
+   **A detector asymmetry found while measuring, and not previously written
+   down anywhere.** The conjunction's duration floor is the detector's own:
+   `schema/detect.py::_min_duration_samples` reads `min_duration_samples` off
+   the params with `getattr(..., 1)`, and that field belongs to
+   `EngbertKlieglParams`. `NystromHolmqvistParams` states its durations in
+   milliseconds and has none — so **Nyström–Holmqvist's conjunction admits a
+   one-sample binocular event where Engbert–Kliegl's requires six**, and the
+   6-sample floor §5 reports is Engbert–Kliegl's alone, not a property of the
+   conjunction. The measurement above uses 1, matching what the conjunction
+   really does for this detector.
+
+   **One drift risk taken on deliberately.** The measurement lives in
+   `tests/eye/`, which imports nothing from `wl_preproc.schema` (that file's
+   own docstring: the 3.13 cross-check runs it with `--noconftest` in a venv
+   with no DataJoint), so `_KIND_OF` and `_NOT_INTERSECTED` are RESTATED
+   there rather than imported. Two definitions of one rule is how they come
+   apart, and nothing can currently catch it: a ninth label, or a remapped
+   kind, would change the conjunction and leave this measurement quietly
+   reporting the old rule's number. The durable fix is to move `_KIND_OF`
+   into `eye/detect/labels.py` — it is vocabulary knowledge, not schema
+   knowledge — which both sides could then import. Recorded as a follow-up
+   rather than done, being a production change to the conjunction outside the
+   measurement's scope.
+
 2. **The row-count effect is unmeasured.** §5's measured 36,101 rows covers
    one session, one detector, three traces, one kind. A multi-kind detector's
    conjunction carries runs this figure does not describe.
+
+   **PARTIALLY answered 2026-09-12 — the per-eye half only, and the
+   distinction matters.** The same measurement printed Nyström–Holmqvist's
+   own per-eye counts against the reference recording:
+
+   | eye | runs | fixation | pso | saccade |
+   |---|---|---|---|---|
+   | left | 12,092 | 5,013 | 2,017 | 5,062 |
+   | right | 12,446 | 5,066 | 2,167 | 5,213 |
+
+   Against Engbert–Kliegl's 12,767 / 12,631 on the same recording (§5), a
+   multi-kind detector's per-eye trace is very close in TOTAL and quite
+   different in composition — the extra kind does not multiply the rows.
+
+   **Its CONJUNCTION row count is still unmeasured**, and that is the half
+   this question actually asks about. Measuring it needs the schema, which
+   the test file holding this measurement deliberately cannot import, so it
+   belongs with `test_the_run_count_measured_against_the_reference_recording`
+   in `tests/schema/` rather than here. Not done.
 3. **Pursuit as a data-quality signal.** The lab's paradigms produce no
    smooth pursuit (ruled 2026-09-05), so a `pursuit` run from NSLR or
    REMoDNaV is more likely a misfire on noise than a finding — and under §1 a
