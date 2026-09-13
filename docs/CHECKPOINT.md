@@ -1,30 +1,32 @@
 # Where this build actually is
 
-**Last updated 2026-09-12.** The reference-recording measurements below
-were taken on that day; the commit they describe is named in the status
-paragraph that follows, per this file's own header lesson.
+**Last updated 2026-09-13**, describing `main` at `ea08678`.
 
 *The 2026-09-06 header this replaced described `main` at `534e8b5`, the
 merge commit that landed `spec/nystrom-holmqvist` — sixteen commits
 `19daf07..2f93374`, spec and plan included. That is still where the
 detector came from; it is simply no longer the tip.*
 
-**THE REFERENCE-GATED CHECKS HAVE RUN. NOT PUSHED, CI NOT RUN.** Every
-statement in this paragraph is about a local working tree on Python 3.11,
-macOS arm64, plus one 3.13 cross-check run by hand — not about CI, which has
-seen none of it. Suite: **1346 passed, 9 skipped, 1 deselected, 1 xfailed**
-without the recording, and **1354 passed, 1 skipped** with
-`WLPP_OHDPI_REFERENCE` set. The 3.13 cross-check
-(`tests/eye` + `tests/contracts`, `--noconftest`, a 3.13 venv built per the
-Working notes) is green at 350 passed, 8 skipped, 1 xfailed, and the new
-measurement returns byte-identical numbers on both interpreters.
+**THE REFERENCE-GATED CHECKS HAVE RUN, AND MAIN IS MERGED, PUSHED AND CI
+GREEN ON BOTH INTERPRETERS.** Read off the run, not asserted: `gh run view
+34761368613` reports `test (3.11): success` and `test (3.13): success`, with
+Manifest green on the same push — **1345 passed, 11 skipped, 1 xfailed** on
+3.13 in CI. Locally on this machine: **1346 passed, 9 skipped, 1 deselected,
+1 xfailed** without the recording, **1354 passed, 1 skipped** with
+`WLPP_OHDPI_REFERENCE` set.
 
-**`534e8b5` was merged, pushed and CI-green on both interpreters** — read off
-the run, not asserted: `gh run view 34014528809` reports `test (3.11):
-success` and `test (3.13): success`, Manifest green on the same push, 1341
-passed / 8 skipped / 1 deselected / 1 xfailed on the merged tree. That is the
-last state CI has actually seen. Check `git log --oneline -1`; if `main` has
-moved past what this file names, it is stale and the spec wins.
+**It took two pushes, and the first one turned `main` red.** `1dc1676` — the
+merge itself — failed CI on BOTH interpreters, in a test that had nothing to
+do with the work being merged: DataJoint **2.3.3** was released between this
+repository's last green run (2026-09-06) and this one, and it turned the
+silent `longblob` corruption that `tests/schema/test_harness.py` pinned into
+a loud `DataJointError`. The constraint is `datajoint>=2.3,<3` and the
+development venv was resolved at **2.3.2**, so every local run was green
+while `main` was red. Fixed in `ea08678`; the full account is in the Traps
+section below, because the shape of it will recur.
+
+Check `git log --oneline -1`; if `main` has moved past `ea08678`, this file
+is stale and the spec wins.
 
 *The paragraph above replaced one that said "Not merged, not pushed" and
 named the branch tip. It was true when written and false within the hour —
@@ -707,6 +709,35 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Traps that cost real time, recorded so they are paid for once
 
+- **A patch release of a pinned-by-range dependency can turn `main` red while every
+  local run stays green, and the axis is the VERSION, not the interpreter.** Found
+  2026-09-13. `pyproject.toml` says `datajoint>=2.3,<3`; the development venv had been
+  resolved at **2.3.2** months earlier and never re-resolved, while CI resolves fresh on
+  every run and got **2.3.3**. 2.3.3 changed a behaviour this repository pins on purpose —
+  a bare `longblob` now raises `DataJointError` on an ndarray instead of silently
+  corrupting it — so `tests/schema/test_harness.py` failed on both 3.11 and 3.13, in a
+  test with no connection to the work being merged. 1,344 of 1,345 passed.
+  - **This is the same shape as the 3.13 breakages recorded below**, and it is worth
+    seeing as one family rather than two incidents: the local environment is ONE
+    resolution of the constraints, CI is another, and anything the range admits is
+    untested here until CI says otherwise. A green local run is evidence about the
+    versions you happen to have.
+  - **The test did its job, and that is the part worth copying.** Its docstring said: *"If
+    a future DataJoint makes bare longblob safe again, this test fails and the rule can be
+    revisited deliberately rather than by assumption."* It failed, and the rule was
+    revisited rather than the test deleted or the version pinned. `<blob>` stands; its
+    justification moved from "corrupts your data" to "refuses it at insert time, on a real
+    session, after the pipeline has already done the work", and
+    `test_guardrails.py::test_no_table_declares_a_bare_longblob` — which catches it at
+    DECLARATION, earlier than 2.3.3's own error — is therefore worth strictly more after
+    the bump, not less. `ea08678`.
+  - **The rewritten pin was verified to discriminate in both directions**, not assumed: it
+    passes on 2.3.3 and FAILS on 2.3.2, so a future revert trips it exactly as the original
+    intended.
+  - To re-resolve the local venv against what CI will actually install:
+    `uv pip install --python .venv/bin/python --upgrade datajoint`. Doing it before a merge
+    is cheaper than doing it after a red `main`.
+
 - **A double quote on a definition's FIRST comment line breaks table declaration.**
   DataJoint emits only that first `#` line as the table's SQL `COMMENT`, wrapped in
   **unescaped double quotes**, and drops every later comment line
@@ -1009,6 +1040,18 @@ leaves something behind that does:
 
 - Both `wl-sync` and `wl-preproc` use `uv` with a `.venv`; develop against **3.11**, the
   floor, since CI also tests 3.13.
+- **The `.venv` has no `pip`, and that does NOT mean packages cannot be installed into
+  it.** This file and `wl.yaml` both concluded the opposite — "this project's `.venv` has
+  no `pip` installed at all, so `remodnav` cannot be installed into it" — and that
+  inference was wrong for eleven days, keeping a written test from ever executing.
+  `uv pip install --python .venv/bin/python <spec>` installs into a venv with no `pip`,
+  and `uv` is on this machine. Use it.
+- **Two packages were added to the `.venv` on 2026-09-12/13 and are not in a lockfile**,
+  because this project has none: `remodnav==1.1.2` (plus `statsmodels`, `formulaic`,
+  `patsy`, `interface-meta`), which `pyproject.toml`'s `dev` extra already declared and
+  nothing had installed; and `datajoint` moved **2.3.2 → 2.3.3** to match what CI
+  resolves. A fresh checkout gets both from `pip install -e ".[dev]"`; an existing venv
+  does not, which is the whole of the trap recorded above.
 - **The `.pth` trap is one root cause, and it was diagnosed on 2026-08-16 after two workers had
   worked around its symptoms separately.** Every `.pth` in
   `.venv/lib/python3.11/site-packages/` carries macOS's BSD **`UF_HIDDEN`** flag, and CPython

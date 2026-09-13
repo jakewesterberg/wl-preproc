@@ -47,9 +47,13 @@ status:
     IS produced), the PyTorch declaration and U'n'Eye vendoring, and
     wl-expcontroller's online detector as an eighth registry entry
     (docs/handoffs/2026-09-01-consensus-and-otero-millan-built.md).
-    Before this branch is a PR: a whole-branch review, push and read CI
-    on both interpreters, and confirm every params-dataclass constant
-    traces to the paper's Table 2 -- none of this is done yet.
+    That checklist is DONE, and this field said "none of this is done
+    yet" until 2026-09-13 -- a week after the branch merged as 534e8b5
+    with CI green on both interpreters. The whole-branch review happened
+    (six Important, six Minor, one fix wave, a scoped re-review), the
+    constants were confirmed against Table 2, and the commit 5969c60
+    corrected the sibling claims in CHECKPOINT and the handoff while
+    leaving these two behind.
 
     Stage 2A is MERGED (a8fd3cb): a second detector (Otero-Millan,
     reimplemented), the coarsening lattice and comparability rule, `event_f1`
@@ -172,9 +176,9 @@ status:
     the register_default_paramsets/kind-disagreement paragraph this file
     itself carried uncorrected -- are all closed. 1341 passed (1333 plus
     the eight new tests), 8 skipped, 1 deselected, 1 xfailed, zero warnings.
-    Still not pushed; a whole-branch review is no longer on the "before
-    opening a PR" checklist, but pushing and reading CI off the run still
-    are.
+    Pushed and CI-green since 534e8b5 (gh run view 34014528809, both
+    interpreters); "still not pushed" was true when written and false
+    within the hour, and stayed in this file for a week after.
   # 84247d1 is `spec/nystrom-holmqvist`'s own tip -- the whole-branch
   # review's own fix wave, landed on top of `a78dcf0` (itself the last
   # commit before this file's own documentation commit, eleven commits past
@@ -188,7 +192,7 @@ status:
   # superseded in turn. Recorded because it is this file's own recurring
   # failure -- a status block is only true of the commit it names, and
   # further work landing is one more way it stops being.
-  describes: d3e7d6f
+  describes: ea08678
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

@@ -1,8 +1,25 @@
 # The reference-gated checks ran, and the two eyes agree on kind
 
 Branch `measure/eye-kind-disagreement`, forked from `main` at `5969c60`.
-**Not merged, not pushed, CI has not run** — and by this project's own
-recurring lesson, assume that sentence is false the moment the branch lands.
+
+> **MERGED 2026-09-13 as `1dc1676`, and CI green on both interpreters at
+> `ea08678`** — `gh run view 34761368613`, `test (3.11): success`,
+> `test (3.13): success`, Manifest green on the same push.
+>
+> *This document opened with "Not merged, not pushed, CI has not run — and by
+> this project's own recurring lesson, assume that sentence is false the
+> moment the branch lands." It was false within the day, which is the fifth
+> instance of that lesson on this project and the first time the sentence
+> warning about it was in the same paragraph.*
+>
+> **The merge turned `main` red, and not because of this work.** `1dc1676`
+> failed CI on both interpreters in `tests/schema/test_harness.py::test_a_
+> bare_longblob_corrupts_silently` — DataJoint 2.3.3, released between the
+> last green run and this one, made bare `longblob` refuse an ndarray instead
+> of silently corrupting it. That test existed to catch exactly that and its
+> docstring asked for the rule to be revisited deliberately; `ea08678` is the
+> revisit. 1,344 of 1,345 tests passed on the red run, every one of this
+> branch's own among them.
 
 Two things happened, and the first is not code at all.
 
