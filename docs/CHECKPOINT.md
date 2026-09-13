@@ -1,15 +1,30 @@
 # Where this build actually is
 
-**Last updated 2026-09-06**, describing `main` at `534e8b5` — the merge
-commit that landed `spec/nystrom-holmqvist`, sixteen commits
-`19daf07..2f93374`, spec and plan included.
+**Last updated 2026-09-12.** The reference-recording measurements below
+were taken on that day; the commit they describe is named in the status
+paragraph that follows, per this file's own header lesson.
 
-**MERGED, PUSHED, AND CI GREEN ON BOTH INTERPRETERS.** Read off the run,
-not asserted: `gh run view 34014528809` reports `test (3.11): success` and
-`test (3.13): success`, and the Manifest workflow succeeded on the same
-push. Suite on the merged tree: **1341 passed, 8 skipped, 1 deselected,
-1 xfailed**, zero warnings. Check `git log --oneline -1`; if `main` has
-moved past `534e8b5`, this file is stale and the spec wins.
+*The 2026-09-06 header this replaced described `main` at `534e8b5`, the
+merge commit that landed `spec/nystrom-holmqvist` — sixteen commits
+`19daf07..2f93374`, spec and plan included. That is still where the
+detector came from; it is simply no longer the tip.*
+
+**THE REFERENCE-GATED CHECKS HAVE RUN. NOT PUSHED, CI NOT RUN.** Every
+statement in this paragraph is about a local working tree on Python 3.11,
+macOS arm64, plus one 3.13 cross-check run by hand — not about CI, which has
+seen none of it. Suite: **1346 passed, 9 skipped, 1 deselected, 1 xfailed**
+without the recording, and **1354 passed, 1 skipped** with
+`WLPP_OHDPI_REFERENCE` set. The 3.13 cross-check
+(`tests/eye` + `tests/contracts`, `--noconftest`, a 3.13 venv built per the
+Working notes) is green at 350 passed, 8 skipped, 1 xfailed, and the new
+measurement returns byte-identical numbers on both interpreters.
+
+**`534e8b5` was merged, pushed and CI-green on both interpreters** — read off
+the run, not asserted: `gh run view 34014528809` reports `test (3.11):
+success` and `test (3.13): success`, Manifest green on the same push, 1341
+passed / 8 skipped / 1 deselected / 1 xfailed on the merged tree. That is the
+last state CI has actually seen. Check `git log --oneline -1`; if `main` has
+moved past what this file names, it is stale and the spec wins.
 
 *The paragraph above replaced one that said "Not merged, not pushed" and
 named the branch tip. It was true when written and false within the hour —
@@ -414,10 +429,26 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    made `Detector` carry its own required `defaults` field, and
    Nystrom-Holmqvist registered without incident. And the open question
    called "unmeasured and unmeasurable until a pso-capable detector
-   exists" is now **measurable, and still unmeasured**: measuring how
-   often the two eyes disagree on an event's KIND is stage 2B's
-   highest-priority remaining item, and it must run against the **PER-EYE
-   traces, never the conjunction** — when the eyes disagree on kind, no
+   exists" is now **MEASURED — 2026-09-12**, and this sentence read "still
+   unmeasured" until that day. Kind disagreement is **0.1112**
+   (left→right) and **0.1286** (right→left), against a duration- and
+   kind-matched random control's **0.376–0.470** across seeds 0–19: the two
+   eyes agree about three and a half times better than chance, so the
+   statistic measures binocularity rather than the vocabulary's kind mix,
+   and the check discriminates and is RETAINED. **The binocular agreement
+   requirement drops 18.6% of the left eye's detected events and 21.5% of
+   the right's** — conjunction-shape spec §6's "conservative or costly"
+   framing answered at about a fifth. Unexpected, and worth carrying: in
+   both directions the eyes more often detect an event and **name it
+   differently** (721, 855 runs) than one eye **misses it entirely** (595,
+   733). Which kind pairs disagree — almost certainly `saccade` against
+   `pso`, the two eyes placing a glissade boundary differently — is not
+   measured and is the obvious next question. Full account in
+   `docs/superpowers/specs/2026-09-05-conjunction-shape-design.md` §6,
+   amended in place, and in
+   `docs/handoffs/2026-09-12-the-reference-checks-ran-and-the-eyes-agree.md`.
+   It ran against the **PER-EYE traces, never the
+   conjunction** — when the eyes disagree on kind, no
    intersection covers those samples, so `_insert_trace`'s fill paints
    them `fixation`, indistinguishable from genuine binocular fixation, and
    a query against the conjunction's own `pso` fraction would silently
@@ -441,16 +472,47 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    HIGHER than the correct detector and the check was withdrawn as
    invalid.
 
-   **What has NOT been measured.** The three checks that need the real
-   reference recording — glissade rate, glissade duration, and the
-   REMoDNaV oracle comparison — are gated on `WLPP_OHDPI_REFERENCE`, which
-   is unset, and **have never been run**. The paper's 47.8% glissade rate
-   and 22.2 ms mean duration remain PREDICTIONS in the design spec, not
-   measurements against this rig's data — spec section 9 items 1 and 3
+   **MEASURED 2026-09-12. This paragraph said "have never been run" until
+   that day, and every clause of it is now false** — recorded rather than
+   silently edited, per this file's own convention. The recording was on
+   this machine the whole time, at
+   `~/Downloads/Tutorial/OpenIris-2024Jul31-114628/`. All three checks run
+   and all three pass:
+
+   | check | measured | paper |
+   |---|---|---|
+   | glissade rate | 0.399 left / 0.416 right | 0.478 reading, 0.591 scene |
+   | glissade duration | 18.4 ± 10.8 ms / 19.5 ± 10.5 ms | 22.2 ± 9.8 ms reading |
+   | REMoDNaV saccade count | 571 vs 574 (L), 570 vs 565 (R) | — (oracle, 2× tolerance) |
+
+   **Spec section 9 item 1 is answered: the velocity estimator does NOT
+   smooth glissades away.** That was the predicted failure mode of using the
+   shared five-point differentiator in place of the paper's Savitzky-Golay,
+   and the rate came back at 0.4, not at zero. Both the rate and the
+   duration do land BELOW the paper in the same direction, which one
+   mechanism explains — mild truncation of every glissade by that smoother,
+   lowering the mean and pushing the shortest below the minimum-duration
+   criterion — but both sit inside the paper's own sd, and this tutorial
+   recording's task is neither reading nor scene perception, so it is not
+   necessarily an artefact.
+
+   **REMoDNaV is installed and the oracle check has executed.** This file
+   and `wl.yaml` both said it could not be: "this project's `.venv` has no
+   `pip` installed at all, so `remodnav` cannot be installed into it". That
+   is wrong — `uv pip install --python .venv/bin/python 'remodnav>=1.1'`
+   installs into a venv with no `pip`, and `uv` is on this machine. Five
+   packages added (`remodnav`, `statsmodels`, `formulaic`, `patsy`,
+   `interface-meta`), nothing upgraded or downgraded. Its two `numpy.core`
+   DeprecationWarnings, from remodnav's own source, are the suite's only
+   warnings when the recording is present.
+
+   *What the original paragraph said, kept because the reasoning is still
+   right even though the status was wrong: spec section 9 items 1 and 3
    (whether the shared Engbert–Kliegl-style velocity estimator preserves
    glissades at all, and whether 47.8% really is the union of both
-   glissade criteria per spec section 3) are both still open for the same
-   reason. Separately, the REMoDNaV oracle comparison is unverified even
+   glissade criteria per spec section 3) were both open because the checks
+   had not run. Item 1 is now answered above; item 3 — whether 47.8% is the
+   union of both criteria — is NOT, and is untouched by this measurement.* Separately, the REMoDNaV oracle comparison is unverified even
    as CODE: its API (`remodnav.EyegazeClassifier`, `.preproc()`,
    `.__call__()`) was read from a DOWNLOADED remodnav wheel's own source --
    corrected from an earlier draft that said "the installed PyPI package":

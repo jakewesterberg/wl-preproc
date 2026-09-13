@@ -103,30 +103,44 @@ status:
     now carries its own required `defaults` field). Nystrom-Holmqvist
     registered without incident. Second, the open question called
     "unmeasured and unmeasurable until a pso-capable detector exists" is
-    now measurable and STILL unmeasured -- Nystrom-Holmqvist is that
-    detector, and measuring how often the two eyes disagree on an
-    event's KIND is stage 2B's highest remaining priority. It MUST run
-    against the PER-EYE traces, never the conjunction: when the eyes
-    disagree, no intersection covers those samples, so
-    `_insert_trace`'s fill paints them `fixation`, identical to genuine
-    binocular fixation, and a query against the conjunction would
-    silently report zero (design spec
-    `2026-09-05-nystrom-holmqvist-design.md` section 6).
+    now MEASURED -- 2026-09-12, and this field said "STILL unmeasured"
+    until that day. How often the two eyes disagree about an event's
+    KIND, from the PER-EYE traces as design spec
+    `2026-09-05-nystrom-holmqvist-design.md` section 6 requires: 0.1112
+    (left->right) and 0.1286 (right->left), against a random control's
+    0.376-0.470, so the eyes agree about three and a half times better
+    than chance and the check discriminates. The binocular agreement
+    requirement drops 18.6% / 21.5% of each eye's detected events -- the
+    "conservative or costly" question answered at about a fifth. In both
+    directions the eyes more often disagree about WHAT happened (721,
+    855 runs) than one eye misses an event entirely (595, 733); which
+    kind pairs disagree is not yet measured.
 
     Nystrom-Holmqvist's own null ran first, per the rule the
     Otero-Millan round left behind: a duration-matched random-span
     control scores 0.016 (seed 7; 0.008-0.030 across seeds 0-19)
     against a 0.10 ceiling and the paper's own 47.8% -- far under it, so
     the glissade-rate check discriminates and is RETAINED, the opposite
-    outcome from Otero-Millan's withdrawn one. The checks that need the
+    outcome from Otero-Millan's withdrawn one. The three checks that need the
     real reference recording -- glissade rate, glissade duration, the
-    REMoDNaV oracle comparison -- are gated on `WLPP_OHDPI_REFERENCE`
-    and have never run; the paper's 47.8% / 22.2 ms remain predictions,
-    not measurements. REMoDNaV's own integration is unverified end to
-    end: its API was read from a downloaded wheel, not an installed
-    package -- remodnav is not installed anywhere this repository's
-    tooling has checked -- and this `.venv` has no `pip`, so the test has
-    never executed.
+    REMoDNaV oracle comparison -- RAN for the first time on 2026-09-12,
+    and this field said "have never run" until that day. All three pass.
+    Glissade rate 0.399 (left) / 0.416 (right) against the paper's 0.478
+    reading; glissade duration 18.4 +/- 10.8 ms / 19.5 +/- 10.5 ms
+    against the paper's 22.2 +/- 9.8 ms. So the paper's numbers are no
+    longer predictions, and the shared five-point velocity differentiator
+    does NOT smooth glissades away -- design spec section 9 item 1,
+    answered. Both measurements land below the paper in the same
+    direction, consistent with mild truncation by that smoother; both sit
+    inside the paper's own sd, and the tutorial recording's task is
+    neither reading nor scene perception.
+
+    REMoDNaV's integration is verified end to end: `remodnav==1.1.2`
+    installed with `uv pip install --python .venv/bin/python`, which
+    works despite this `.venv` having no `pip` -- a claim this field
+    previously made the other way. The oracle agrees within 1% (571 vs
+    574 saccades left, 570 vs 565 right) on a check that tolerates a
+    factor of two.
 
     Registering a third detector broke 19 pre-existing tests that
     hardcoded "exactly 2 detectors / 1 pair", fixed by deriving counts
@@ -174,7 +188,7 @@ status:
   # superseded in turn. Recorded because it is this file's own recurring
   # failure -- a status block is only true of the commit it names, and
   # further work landing is one more way it stops being.
-  describes: 534e8b5
+  describes: d3e7d6f
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
