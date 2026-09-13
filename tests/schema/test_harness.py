@@ -92,10 +92,37 @@ def test_blob_round_trips_as_an_array(dj_conn):
     schema.drop()
 
 
-def test_a_bare_longblob_corrupts_silently(dj_conn):
-    """Pinned as an executable statement of WHY <blob> is mandatory. If a future
-    DataJoint makes bare longblob safe again, this test fails and the rule can
-    be revisited deliberately rather than by assumption."""
+def test_a_bare_longblob_refuses_an_array_instead_of_corrupting_it(dj_conn):
+    """Pinned as an executable statement of WHY <blob> is mandatory.
+
+    **DataJoint 2.3.3 changed this, and the rule was revisited rather than
+    assumed** -- which is what the previous version of this test asked for in
+    so many words: "if a future DataJoint makes bare longblob safe again, this
+    test fails and the rule can be revisited deliberately rather than by
+    assumption." It did, it failed, and this is the revisit.
+
+    Under 2.3.2 a bare `longblob` accepted an ndarray and returned something
+    that was not one -- silent corruption, and the test was named for it. Under
+    2.3.3 `insert1` raises `DataJointError` naming the attribute and telling
+    you to declare `<blob>`. The failure mode moved from silent to loud.
+
+    **The <blob> rule stands, and its justification is what changed.** It is no
+    longer "a bare longblob corrupts your data"; it is "a bare longblob refuses
+    it at insert time, on a real session, after the pipeline has already done
+    the work". `tests/schema/test_guardrails.py::test_no_table_declares_a_bare_
+    longblob` still catches it at DECLARATION, which is earlier than 2.3.3's
+    own error and earlier than any recording, so that guardrail is worth
+    strictly more than the version bump, not less.
+
+    The `codec is None` half of the pin is unchanged by 2.3.3 -- that is the
+    metadata signal the declaration guard actually keys on, and it is asserted
+    below for exactly that reason.
+
+    Caught by CI on 2026-09-13, not locally: the constraint is
+    `datajoint>=2.3,<3`, the development venv was resolved at 2.3.2, and CI
+    resolves fresh. A green local run said nothing about the version the
+    preprocessing server will install.
+    """
     schema = dj.Schema("longblob_probe")
 
     @schema
@@ -119,10 +146,17 @@ def test_a_bare_longblob_corrupts_silently(dj_conn):
     )
 
     arr = np.arange(2048, dtype=np.float32)
-    Bare.insert1({"n": 1, "arr": arr})
-    got = (Bare & "n=1").fetch1("arr")
-    assert not isinstance(got, np.ndarray), (
-        "a bare longblob round-tripped an array: DataJoint's behaviour changed, "
-        "and the <blob> guardrail in tests/schema/test_guardrails.py should be revisited"
+    with pytest.raises(dj.errors.DataJointError, match="arr"):
+        Bare.insert1({"n": 1, "arr": arr})
+
+    # The row must not have landed. `insert1` raising is only half the
+    # guarantee -- a partial write that raised on the way out would be worse
+    # than the silent corruption this replaces, because nothing downstream
+    # would know to look.
+    assert len(Bare & "n=1") == 0, (
+        "a bare longblob raised on insert but stored a row anyway: the failure "
+        "is no longer silent but it is still corruption, and the <blob> "
+        "guardrail in tests/schema/test_guardrails.py is now load-bearing in a "
+        "way this test does not describe"
     )
     schema.drop()

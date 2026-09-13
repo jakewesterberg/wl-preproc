@@ -97,7 +97,7 @@ def test_ingestion_topology_blob_round_trips_as_a_genuine_dict(activated):
     docstring describes a bare `longblob` silently storing an inserted numpy
     array as its Python `repr()`, elided above ~1000 elements, with nothing
     raising on insert or fetch — confirmed for arrays by
-    test_harness.py::test_a_bare_longblob_corrupts_silently. `topology` never
+    test_harness.py::test_a_bare_longblob_refuses_an_array_instead_of_corrupting_it. `topology` never
     carries an array, only a `dict`, and a `dict` is not the same failure:
     verified directly (mutating this table's `topology` to a bare `longblob`
     and inserting the exact payload below) that pymysql's own encoder registry
