@@ -33,7 +33,7 @@ status:
     `WLPP_OHDPI_REFERENCE`-gated reference checks and the eye
     kind-disagreement statistic (`1dc1676`), and a DataJoint 2.3.3 pin move
     (`ea08678`) after that merge turned `main` red in a test unrelated to
-    it. `origin`'s `main` is at `b996447` today, CI green on 3.11 and 3.13,
+    it. `origin`'s `main` is at `eb5a979` today, CI green on 3.11 and 3.13,
     read off the run. Phase 2b's back half remains hardware-blocked.
 
     *The three sentences above replaced ones reading "NOT merged, NOT
@@ -46,7 +46,8 @@ status:
     commit it names.*
   next: >-
     The mechanism behind the glissade cost is measured as of 2026-09-19
-    (branch `measure/eye-saccade-offset-difference`, NOT merged): the two
+    (MERGED as `eb5a979`, CI green on both interpreters, read off run
+    35444119197): the two
     eyes place a saccade's offset a median 10.03 ms apart over disagreeing
     glissades against 6.02 ms on saccades they agree about -- about 1.7x
     ordinary boundary jitter, NOT the one-glissade-duration displacement

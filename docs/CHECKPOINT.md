@@ -1,7 +1,7 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (second update that day)**, describing branch
-`measure/eye-saccade-offset-difference`, forked from `main` at `668637a`.
+**Last updated 2026-09-19 (second update that day)**, describing `main` at
+`eb5a979`.
 
 **THE MECHANISM BEHIND THE GLISSADE COST IS MEASURED, AND IT IS NOT THE ONE
 PREDICTED.** The morning's finding — that §1's binocular agreement rule
@@ -17,8 +17,14 @@ the disagreements are not boundary placement at all but the other eye
 carrying a much longer saccade over the whole event. Spec §6 and
 `handoffs/2026-09-19-the-glissade-is-short-not-the-eyes-disagreeing.md`
 carry the numbers, the control, and the truncation caveat — **read those
-rather than trusting numbers recalled here.** Not merged, not pushed, CI has
-not run.
+rather than trusting numbers recalled here.**
+
+**MERGED as `eb5a979`, pushed, CI GREEN on both interpreters** — read off
+the run: `gh run view 35444119197`, `test (3.11): success`,
+`test (3.13): success`. Verified before merging rather than after: 1366
+passed on 3.11, and 1365 passed / 12 skipped / 1 xfailed on 3.13 against a
+fresh dependency resolution that came back identical to the morning's, so
+nothing moved upstream between the day's two merges.
 
 *The first 2026-09-19 header described `main` at `b996447` — the
 which-kinds-disagree merge, CI green on both interpreters — and is where the

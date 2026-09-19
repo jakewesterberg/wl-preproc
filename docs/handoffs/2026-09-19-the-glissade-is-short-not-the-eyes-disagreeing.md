@@ -3,10 +3,19 @@
 Branch `measure/eye-saccade-offset-difference`, forked from `main` at
 `668637a`.
 
-> **Not merged, not pushed, CI has not run** — and this project's own
-> recurring lesson says that sentence goes stale the moment the branch
-> lands. It has now done so six times; assume it has done so again and check
-> `git log --oneline -1`.
+> **MERGED 2026-09-19 as `eb5a979`, pushed, and CI GREEN on both
+> interpreters.** Read off the run: `gh run view 35444119197` reports
+> `test (3.11): success` and `test (3.13): success`, with Manifest green on
+> the same push (`35444119159`).
+>
+> *This document opened with "Not merged, not pushed, CI has not run" and
+> the observation that the sentence goes stale the moment the branch lands.
+> Seventh instance, third one in a row where the paragraph naming the lesson
+> was itself the one that went stale.*
+>
+> Exact CI counts are not quoted — the API truncates a log this size, so the
+> summary line is not readable off the run. The job status is, and the count
+> evidence is the pre-merge 3.13 run in §3.
 
 This measures the mechanism hypothesis that
 `handoffs/2026-09-19-which-kinds-disagree.md` and conjunction-shape spec §6
