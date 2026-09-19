@@ -169,8 +169,12 @@ the venv.
 ## 4. What is next
 
 1. **§1's rule is now a design question, not a measurement gap.** Better
-   than a third of glissades are dropped; the cause is understood; and the
-   measurement says no detector change fixes it. Whether to admit a `pso`
+   than a HALF of glissades are dropped (0.5359 / 0.5681 — this document
+   said "better than a third", counting only kind disagreements and not the
+   `alone` bucket; corrected later the same day, see
+   `2026-09-19-what-the-agreement-rule-costs-saccades.md`); the cause of
+   the disagreement half is understood; and the measurement says no
+   detector change fixes it. Whether to admit a `pso`
    whose counterpart `saccadic` run ends within it — or to accept the cost —
    is the decision this leaves on the table, and it belongs in the spec
    rather than in a test file.

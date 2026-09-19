@@ -102,6 +102,24 @@ conjunction-shape spec exists to store. The "about a fifth" this project
 recorded on 2026-09-12 is a true average over two kinds that are not
 affected alike, and it concealed this.
 
+> **CORRECTED 2026-09-19, later the same day. Both numbers in the paragraph
+> above are understatements, and the smaller one is an order of magnitude
+> out.** They count only the runs dropped for a KIND DISAGREEMENT. §1 drops
+> the `alone` bucket too — a run the other eye did not detect at all — and
+> that bucket had never been attributed by kind. With both counted: `pso`
+> **0.5359 / 0.5681** (better than a half, not a third) and `saccadic`
+> **0.0464 / 0.0685** (4.6–6.9%, not 0.2–0.4%).
+>
+> **And it reverses which finding matters.** For `saccadic`, the
+> disagreement half is 10 and 20 runs; essentially all of its cost is 225
+> and 337 saccades that one eye detected and the other did not detect at
+> all. Not a labelling disagreement, not boundary placement, and nothing
+> the glissade mechanism explains.
+> `handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md` has the
+> account. This paragraph is left standing rather than edited because the
+> way it went wrong — quoting the narrower of two numbers in one report —
+> is the useful part.
+
 **The mechanism is a hypothesis, not a measurement, and is labelled that way
 in the spec.** A glissade is short (18–20 ms, measured) and sits immediately
 after a saccade; a saccade is long. If the two eyes place a saccade's offset

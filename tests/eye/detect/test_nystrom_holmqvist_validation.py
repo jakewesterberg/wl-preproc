@@ -337,7 +337,9 @@ class _Agreement:
     stretch `fixation`, which `_conjunction_runs` never intersects.
 
     `agreements` and `disagreements` record WHICH run on the other side each
-    own-run matched; `pairs` derives the kind breakdown from the second.
+    own-run matched and `unmatched` records the own-runs with no counterpart
+    at all; `pairs` derives the kind breakdown from the second, and
+    `dropped_by_kind` the per-kind cost from the second and third together.
 
     **Both of the last two are dropped by the binocular agreement rule**
     (conjunction-shape design spec section 1), which is why `drop_rate` adds
@@ -347,7 +349,13 @@ class _Agreement:
     """
 
     def __init__(
-        self, agree: int, disagree: int, alone: int, agreements=None, disagreements=None
+        self,
+        agree: int,
+        disagree: int,
+        alone: int,
+        agreements=None,
+        disagreements=None,
+        unmatched=None,
     ):
         self.agree = agree
         self.disagree = disagree
@@ -359,6 +367,25 @@ class _Agreement:
         #: the other eye needs. Both hold the LARGEST-OVERLAP counterpart.
         self.agreements = list(agreements or ())
         self.disagreements = list(disagreements or ())
+        #: The own-runs with no counterpart at all -- no pair to record,
+        #: since there is no second run. Kept for the same reason as the
+        #: other two: `alone` is dropped by section 1's rule exactly as a
+        #: kind disagreement is, so a per-kind cost that cannot see this
+        #: bucket is not a cost at all.
+        self.unmatched = list(unmatched or ())
+
+    def dropped_by_kind(self) -> Counter:
+        """Own-runs section 1's agreement rule discards, tallied by KIND and
+        counting BOTH reasons it discards one: named differently by the other
+        eye, or not found by it at all.
+
+        The two buckets are dropped alike, so attributing only one of them
+        answers a question nobody asked. `drop_rate` above already adds them
+        for the whole population; this is the same sum per kind.
+        """
+        tally = Counter(_kind_of(own.label) for own, _other in self.disagreements)
+        tally.update(_kind_of(own.label) for own in self.unmatched)
+        return tally
 
     @property
     def pairs(self) -> Counter:
@@ -437,7 +464,11 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
     if not own_runs:
         return _Agreement(0, 0, 0)
     if not other_runs:
-        return _Agreement(0, 0, len(own_runs))
+        # Every own-run is unmatched, and the list must be populated HERE as
+        # well as in the loop below: this early return is a second path to
+        # the same bucket, and it is the path that hid a surviving mutation
+        # in the 2026-09-12 round.
+        return _Agreement(0, 0, len(own_runs), unmatched=own_runs)
 
     starts = np.array([run.start for run in other_runs], dtype=np.int64)
     stops = np.array([run.stop for run in other_runs], dtype=np.int64)
@@ -447,6 +478,7 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
     agree = disagree = alone = 0
     agreements: list = []
     disagreements: list = []
+    unmatched: list = []
     for run in own_runs:
         own_kind = _kind_of(run.label)
         lo = int(np.searchsorted(starts, run.start - widest, side="left"))
@@ -493,7 +525,8 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
             disagreements.append((run, best_other))
         else:
             alone += 1
-    return _Agreement(agree, disagree, alone, agreements, disagreements)
+            unmatched.append(run)
+    return _Agreement(agree, disagree, alone, agreements, disagreements, unmatched)
 
 
 def _kind_mix(runs) -> Counter:
@@ -1155,6 +1188,93 @@ def test_the_baseline_is_the_same_difference_on_saccades_the_eyes_agree_about():
     assert list(_agreeing_saccade_offset_differences(counts.agreements)) == [4]
 
 
+def test_an_unmatched_run_is_recorded_not_only_counted():
+    """`alone` is a count; which KIND each unmatched run was is what says who
+    pays for it.
+
+    This matters more than the tally suggests. The binocular agreement rule
+    (conjunction-shape spec section 1) drops `alone` runs exactly as it drops
+    kind disagreements, so a per-kind cost that counts only disagreements
+    understates the real one -- and on this recording the disagreements are
+    almost entirely `pso`, which would leave `saccadic`'s true cost looking
+    like 0.2% when the `alone` bucket might hold most of it.
+    """
+    own = _LabelledSpan(0, 20, Label.SACCADE)
+
+    counts = _kind_agreement([own], [_LabelledSpan(100, 120, Label.SACCADE)], floor=1)
+
+    assert counts.alone == 1
+    assert counts.unmatched == [own]
+
+
+def test_an_unmatched_run_is_recorded_on_the_early_return_path_too():
+    """The same, reached through the empty-`other` EARLY RETURN rather than
+    through the main loop.
+
+    **This test exists because this file has already been caught by exactly
+    this gap.** The 2026-09-12 round found that a mutation of the `alone`
+    branch survived, because the only test expecting `alone` had an `other`
+    side that filtered to empty and so never executed the loop at all. The
+    two paths both produce `alone` and are written separately, so they are
+    tested separately.
+    """
+    own = _LabelledSpan(0, 20, Label.SACCADE)
+
+    no_other = _kind_agreement([own], [], floor=1)
+    assert (no_other.alone, no_other.unmatched) == (1, [own])
+
+    only_fixation = _kind_agreement([own], [_LabelledSpan(0, 20, Label.FIXATION)], floor=1)
+    assert (only_fixation.alone, only_fixation.unmatched) == (1, [own]), (
+        "a counterpart the conjunction never intersects filters to empty, "
+        "which reaches the same early return"
+    )
+
+
+def test_the_unmatched_list_accounts_for_every_alone_run():
+    """`len(unmatched) == alone`, over a population large enough that both
+    the main loop and the floor path fire.
+
+    The third of the three partition identities this statistic rests on --
+    `pairs` partitions `disagree`, `agreements` partitions `agree`, and this
+    one partitions `alone`. Together they are what lets a per-kind cost be
+    read against the headline drop rate rather than merely printed beside it.
+    """
+    rng = np.random.default_rng(17)
+    template = (
+        [_LabelledSpan(0, 20, Label.SACCADE)] * 400
+        + [_LabelledSpan(0, 12, Label.PSO)] * 400
+    )
+    left = _random_labelled_span_null(template, 200_000, rng)
+    right = _random_labelled_span_null(template, 200_000, rng)
+
+    counts = _kind_agreement(left, right, floor=1)
+
+    assert counts.alone > 0, "the null produced no unmatched run to partition"
+    assert len(counts.unmatched) == counts.alone
+
+
+def test_the_dropped_tally_counts_both_reasons_the_rule_discards_a_run():
+    """What section 1 actually costs each kind: kind disagreements AND
+    unmatched runs, which the rule discards alike.
+
+    Counting only disagreements is the error this whole branch exists to
+    correct -- it is what made `saccadic` look like it paid 0.2% while
+    `pso` paid 35%, when the two buckets are dropped by the same rule and
+    only one of them had been attributed.
+
+    Hand-derived: the saccade disagrees (the other eye calls it a glissade)
+    and the glissade is unmatched (the other eye found nothing there), so
+    each kind is charged exactly one.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(60, 70, Label.PSO)]
+    other = [_LabelledSpan(0, 30, Label.PSO)]
+
+    counts = _kind_agreement(own, other, floor=1)
+
+    assert (counts.disagree, counts.alone) == (1, 1)
+    assert counts.dropped_by_kind() == Counter({"saccadic": 1, Label.PSO.value: 1})
+
+
 def test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes():
     """What the breakdown must be read against.
 
@@ -1748,22 +1868,32 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
                         f"{pair[1]:<9s} {n:5d}  observed {observed:.4f}  "
                         f"chance {chance:.4f}  {ratio}"
                     )
-                # The same disagreements divided by each kind's OWN
-                # population rather than by their total. This is the number
-                # section 1's "conservative or costly" framing actually
-                # needs: a share of disagreements says which pair is common,
-                # but only a share of the kind itself says what the
-                # agreement rule COSTS that kind.
-                by_own_kind: Counter = Counter()
-                for (own_kind, _other_kind), n in counts.pairs.items():
-                    by_own_kind[own_kind] += n
-                print("                 cost to each kind, of its own runs:")
-                for own_kind, n in sorted(by_own_kind.items()):
-                    population = own_mix[own_kind]
-                    print(
-                        f"                   {own_kind:>9s} {n:5d} of "
-                        f"{population:6d}  {n / population:.4f}"
-                    )
+        # **What section 1 costs each kind, counting BOTH reasons it drops a
+        # run.** This block used to divide only the DISAGREEMENTS by each
+        # kind's population, and that understated every kind's cost by
+        # whatever share of the `alone` bucket it owned -- on this recording
+        # the disagreements are almost entirely `pso`, so `saccadic` read as
+        # paying 0.2% while its `alone` share was never attributed at all.
+        # Outside the `if counts.disagree` guard above, because a kind can
+        # be dropped for being unmatched without disagreeing with anything.
+        for name, counts, _expected, own_mix in measured:
+            dropped = counts.dropped_by_kind()
+            unmatched = Counter(_kind_of(run.label) for run in counts.unmatched)
+            disagreed = Counter()
+            for (own_kind, _other_kind), n in counts.pairs.items():
+                disagreed[own_kind] += n
+            print(
+                f"    {name}  what the agreement rule costs each kind "
+                f"(disagreed + unmatched, of that kind's own runs):"
+            )
+            for kind in sorted(own_mix):
+                population = own_mix[kind]
+                print(
+                    f"      {kind:>9s}  disagreed {disagreed[kind]:5d}  "
+                    f"unmatched {unmatched[kind]:5d}  = {dropped[kind]:5d} "
+                    f"of {population:6d}   {dropped[kind] / population:.4f}"
+                )
+
         # Spec section 6 open question 2 -- the row-count effect of a
         # multi-kind detector -- is not a separate measurement: these are the
         # per-eye counts it asks for, printed while they are in hand.
@@ -1776,6 +1906,11 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
             )
 
     for name, counts, _expected, _own_mix in measured:
+        assert len(counts.unmatched) == counts.alone, (
+            f"{name}: {len(counts.unmatched)} unmatched runs recorded for "
+            f"{counts.alone} counted; the per-kind cost above is missing "
+            "part of the bucket it divides"
+        )
         assert sum(counts.pairs.values()) == counts.disagree, (
             f"{name}: the breakdown accounts for "
             f"{sum(counts.pairs.values())} of {counts.disagree} "

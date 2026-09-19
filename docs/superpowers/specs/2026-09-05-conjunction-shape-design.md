@@ -356,6 +356,42 @@ left CI red on 3.13 alone for a day while every local run was green.
    this spec exists to store. That is the sentence this section's "conservative
    or costly" framing was asking for, and the aggregate fifth concealed it.
 
+   **BOTH NUMBERS IN THE PARAGRAPH ABOVE ARE UNDERSTATEMENTS, corrected
+   2026-09-19 and left standing rather than edited away.** They counted only
+   the runs section 1 drops for a KIND DISAGREEMENT. Section 1 drops the
+   `alone` bucket too — an own-run the other eye did not detect at all — and
+   that bucket had never been attributed by kind. Measured:
+
+   | direction | kind | disagreed | unmatched | total dropped | of its own runs |
+   |---|---|---|---|---|---|
+   | left→right | `pso` | 711 | 370 | 1,081 of 2,017 | **0.5359** |
+   | left→right | `saccadic` | 10 | 225 | 235 of 5,062 | **0.0464** |
+   | right→left | `pso` | 835 | 396 | 1,231 of 2,167 | **0.5681** |
+   | right→left | `saccadic` | 20 | 337 | 357 of 5,213 | **0.0685** |
+
+   So the glissade cost is better than **a half**, not better than a third;
+   and the saccade cost is **4.6–6.9%**, not two to four tenths of a percent
+   — an order of magnitude out, and out in the direction that matters, since
+   `saccadic` is the kind most consumers of this pipeline actually care
+   about.
+
+   **The correction reverses which of the two findings is load-bearing.**
+   For `saccadic` the disagreement half is negligible (10 and 20 runs) and
+   essentially ALL of the cost is `alone`: 225 and 337 saccades that one eye
+   detected and the other did not detect at all. That is not a labelling
+   disagreement, not a boundary-placement question, and nothing the glissade
+   mechanism above explains. It is the two eyes disagreeing about whether a
+   saccade happened, and it is the only part of this section's cost that
+   touches a pipeline with no interest in glissades.
+
+   **How it was missed:** the per-kind block printed alongside the pair
+   breakdown divided only `pairs` by each kind's population, while the
+   `drop_rate` printed two lines above it correctly added `disagree + alone`
+   for the population as a whole. Two numbers in one report, one counting a
+   bucket the other omitted, and the narrower one was the one quoted. The
+   report now prints `disagreed + unmatched = total` per kind so the two
+   cannot diverge again, and `len(unmatched) == alone` is asserted.
+
    **A mechanism is available and is NOT measured — stated as the leading
    hypothesis, not as a finding.** A glissade is short (18–20 ms, §5's own
    measurement) and sits immediately after a saccade; a saccade is long. If

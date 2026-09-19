@@ -67,8 +67,13 @@ status:
     almost entirely in ONE direction -- one eye calling a stretch a glissade
     while the other still calls it a saccade, at about twice its chance
     share, with the mirror depleted to a thirtieth of chance. Restated as
-    cost, the binocular agreement rule discards 35-39% of every detected
-    glissade and 0.2-0.4% of saccades, so the "about a fifth" recorded on
+    cost, the binocular agreement rule discards 53.6-56.8% of every detected
+    glissade and 4.6-6.9% of saccades -- CORRECTED 2026-09-19 from "35-39%"
+    and "0.2-0.4%", which counted only kind disagreements and not the
+    `alone` bucket the same rule drops; for saccades essentially the whole
+    cost is 225 and 337 events one eye detected and the other did not detect
+    at all, which is the only part of it that reaches a consumer with no
+    interest in glissades. So the "about a fifth" recorded on
     2026-09-12 is an average over two kinds that are not affected alike.
     `docs/handoffs/2026-09-19-which-kinds-disagree.md` has the account. The
     next measurement is the saccade-offset difference between the eyes over
