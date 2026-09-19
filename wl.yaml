@@ -33,7 +33,7 @@ status:
     `WLPP_OHDPI_REFERENCE`-gated reference checks and the eye
     kind-disagreement statistic (`1dc1676`), and a DataJoint 2.3.3 pin move
     (`ea08678`) after that merge turned `main` red in a test unrelated to
-    it. `origin`'s `main` is at `5f68161` today, CI green on 3.11 and 3.13,
+    it. `origin`'s `main` is at `b996447` today, CI green on 3.11 and 3.13,
     read off the run. Phase 2b's back half remains hardware-blocked.
 
     *The three sentences above replaced ones reading "NOT merged, NOT
@@ -45,8 +45,9 @@ status:
     repository's recurring lesson that a status sentence is only true of the
     commit it names.*
   next: >-
-    The eye subsystem's open measurement is answered as of 2026-09-19, on
-    branch `measure/which-kinds-disagree`: conjunction-shape spec section 6
+    The eye subsystem's open measurement is answered as of 2026-09-19,
+    MERGED as `b996447` with CI green on both interpreters (read off run
+    35442225561): conjunction-shape spec section 6
     asked WHICH kinds the two eyes disagree about, and it is `pso` against
     `saccadic` in essentially every case (721 of 721 and 855 of 855), but
     almost entirely in ONE direction -- one eye calling a stretch a glissade

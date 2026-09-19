@@ -2,10 +2,23 @@
 
 Branch `measure/which-kinds-disagree`, forked from `main` at `5f68161`.
 
-> **Not merged, not pushed, CI has not run.** By this project's own recurring
-> lesson — now on its fifth recorded instance — assume that sentence is false
-> the moment the branch lands, and check `git log --oneline -1` rather than
-> trusting it.
+> **MERGED 2026-09-19 as `b996447`, pushed, and CI GREEN on both
+> interpreters.** Read off the run, not asserted: `gh run view 35442225561`
+> reports `test (3.11): success` and `test (3.13): success`, with Manifest
+> green on the same push (`35442225547`).
+>
+> *This document opened with "Not merged, not pushed, CI has not run" and a
+> warning that the sentence would be false the moment the branch landed. It
+> was false within the hour — the sixth instance of that lesson on this
+> project, and the second time running that the paragraph warning about it
+> was the paragraph that went stale.*
+>
+> **The exact CI test counts are NOT recorded here, and that is deliberate.**
+> `gh run view --job ... --log` returns a truncated log for a run this size —
+> 703 of 1,364 collected tests' lines came back — so the summary line is not
+> readable off the run. The job STATUS is, and that is what is quoted above.
+> The count evidence is the pre-merge 3.13 run in §3, not a number recalled
+> from CI.
 
 The question this answers is the one
 `handoffs/2026-09-12-the-reference-checks-ran-and-the-eyes-agree.md` left at
@@ -149,6 +162,21 @@ oracle test executes at all. This project records suites as "zero warnings"
 elsewhere, so the number is stated here rather than left for a reader to
 find and wonder about: it is a third-party deprecation inside a `dev`-only
 test oracle, on a code path this repository does not own.
+
+**The dependency set was re-resolved before merging, not after.** This
+repository turned `main` red on 2026-09-13 because DataJoint 2.3.3 shipped
+between two runs while the venv stayed at 2.3.2, and the rule left behind
+was to re-resolve before merging. Done here with
+`uv pip compile pyproject.toml --extra dev --python-version 3.13`: **24
+packages resolve differently in CI than in the development venv** — numpy
+2.4.6 → 2.5.3, pandas 3.0.5 → 3.0.6, scipy 1.17.1 → 1.18.1, pynwb 4.1.0 →
+4.2.0 and spikeinterface 0.104.8 → 0.104.9 among them — and `datajoint`
+pins to **2.3.3 on both sides**, so the trap that fired last time is closed.
+The full suite was then run on 3.13 against that fresh resolution:
+**1353 passed, 11 skipped, 1 xfailed**. That is the number CI's own shape
+matches (the 2026-09-12 round's CI 3.13 run reported 1345 passed, 11
+skipped, 1 xfailed; this branch adds eight tests), and it is the closest
+thing to CI evidence obtainable before pushing.
 
 **3.13 cross-check, hand-run**, per this file family's standing convention:
 `tests/eye tests/contracts --noconftest` in a 3.13 venv with no DataJoint —

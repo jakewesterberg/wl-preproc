@@ -1,8 +1,6 @@
 # Where this build actually is
 
-**Last updated 2026-09-19**, describing branch `measure/which-kinds-disagree`
-forked from `main` at `5f68161`. `main` itself has not moved since
-2026-09-13.
+**Last updated 2026-09-19**, describing `main` at `b996447`.
 
 **WHICH kinds the two eyes disagree about is measured.** Conjunction-shape
 spec §6's last open sub-question, and the item at the top of the 2026-09-12
@@ -14,9 +12,25 @@ stretch a glissade while the other is still calling it a saccade, at about
 Restated as cost, §1's binocular agreement rule discards **35–39% of every
 detected glissade against 0.2–0.4% of saccades**, so the "about a fifth"
 recorded on 2026-09-12 is a true average over two kinds that are not
-affected alike, and it concealed this. Not merged, not pushed, CI has not
-run — and by this file's own recurring lesson, assume that clause is false
-the moment the branch lands.
+affected alike, and it concealed this.
+
+**MERGED as `b996447`, pushed, CI GREEN on both interpreters** — read off
+the run: `gh run view 35442225561` reports `test (3.11): success` and
+`test (3.13): success`, Manifest green on the same push. Exact CI counts are
+not quoted because the API truncates a log this size; the count evidence is
+the pre-merge run below. *The clause this replaced said "Not merged, not
+pushed, CI has not run" and warned that it would be false the moment the
+branch landed. It was, within the hour — the sixth instance.*
+
+**The dependency set was re-resolved before merging this time**, which is
+the rule 2026-09-13 left behind and the first time it has been carried out
+and recorded. `uv pip compile --extra dev --python-version 3.13` differs
+from the development venv on **24 packages** (numpy 2.4.6 → 2.5.3, pandas
+3.0.5 → 3.0.6, scipy 1.17.1 → 1.18.1 among them), `datajoint` pins to 2.3.3
+on both sides, and the full suite against that fresh resolution on 3.13 is
+**1353 passed, 11 skipped, 1 xfailed**. On 3.11 in the venv: **1354 passed,
+9 skipped, 1 deselected, 1 xfailed**; with `WLPP_OHDPI_REFERENCE` set,
+**1362 passed**.
 
 *The 2026-09-13 header this replaced described `main` at `ea08678` and is
 still where the DataJoint pin move came from; `5f68161` is the docs commit
