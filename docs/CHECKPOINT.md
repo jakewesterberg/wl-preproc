@@ -1,8 +1,7 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (third update that day)**, describing branch
-`measure/what-the-agreement-rule-costs-saccades`, forked from `main` at
-`ba71bfd`.
+**Last updated 2026-09-19 (third update that day)**, describing `main` at
+`30d4761`.
 
 **THE DAY'S TWO EARLIER FINDINGS BOTH UNDERSTATED THE COST, AND THE SACCADE
 NUMBER WAS AN ORDER OF MAGNITUDE OUT.** Both counted only the runs §1 drops
@@ -17,8 +16,21 @@ and 337 saccades one eye detected and the other did not detect at all**.
 That is not a labelling disagreement, not boundary placement, and nothing
 the glissade mechanism explains — and it is the only part of this cost that
 touches a pipeline with no interest in glissades. See
-`handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`. Not merged,
-not pushed, CI has not run.
+`handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`.
+
+**MERGED as `30d4761`, CI green on both interpreters** — read off
+`gh run view 35445656987`. Verified before merging: 1370 passed on 3.11,
+1369 on 3.13 against a freshly compiled dependency resolution, identical to
+both earlier compiles today.
+
+> **Priority note, 2026-09-19, from the requester and not derivable from
+> this repository:** glissades are **peripheral** to what this pipeline is
+> for. Three of the eye subsystem's recent rounds were pso-motivated —
+> Nyström–Holmqvist was chosen *because* it is the pso-capable detector, and
+> the conjunction-shape spec was rewritten around storing `pso`. That work
+> stands and its findings are correct, but its practical weight is not what
+> the documents around it imply. **The saccade numbers are the ones to read
+> first**, and NH's standing value here is as a third SACCADE detector.
 
 **THE MECHANISM BEHIND THE GLISSADE COST IS MEASURED, AND IT IS NOT THE ONE
 PREDICTED.** The morning's finding — that §1's binocular agreement rule

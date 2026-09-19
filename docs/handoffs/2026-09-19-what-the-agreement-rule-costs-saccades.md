@@ -3,9 +3,10 @@
 Branch `measure/what-the-agreement-rule-costs-saccades`, forked from `main`
 at `ba71bfd`.
 
-> **Not merged, not pushed, CI has not run.** Eighth time this project has
-> written that sentence knowing it goes stale on landing; check
-> `git log --oneline -1`.
+> **MERGED 2026-09-19 as `30d4761`, pushed, CI GREEN on both interpreters** —
+> read off the run: `gh run view 35445656987`, `test (3.11): success`,
+> `test (3.13): success`, Manifest green on the same push (`35445656919`).
+> Eighth instance of the lesson, and the day's third.
 
 This branch exists because the day's two earlier findings were both about
 `pso`, and the question that followed was whether any of it touched
