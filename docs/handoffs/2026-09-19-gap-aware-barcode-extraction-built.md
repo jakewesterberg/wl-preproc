@@ -246,3 +246,23 @@ Step 4 of this branch's own close-out plan — merge to `main` and push — was
 branch and belongs to the repository's owner. CI has therefore never run on
 any commit of this branch, and no claim about CI appears anywhere in this
 file or in `CHECKPOINT.md`.
+
+
+> **MERGED 2026-09-19 as `f5fb642`, pushed, and CI GREEN on both
+> interpreters.** Read off the run: `gh run view 35466730194` reports
+> `test (3.11): success` and `test (3.13): success`, with Manifest green on
+> the same push (`35466730191`).
+>
+> *Two commits later than this document describes. After it was written, the
+> whole-branch review found a Critical defect no task review could have seen:
+> `Segment.n_samples` had become a frame span while
+> `schema/eye.py::_session_time_to_row` still read it as a row count, so on a
+> gapped recording the per-row Purkinje trace was over-run — NaN into
+> `lstsq`, "SVD did not converge", suppressed by `run_once()`, and a gapped
+> session stored NO calibration row at all. Silent data loss, on exactly the
+> sessions this branch exists to admit. Fixed in `8685c0d`; the obvious
+> remedy of rescaling by the row count is mutation-verified wrong, because
+> the map is linear in sample index and piecewise in row index.*
+>
+> Exact CI counts are not quoted — the API truncates a log this size. The
+> count evidence is the pre-merge runs above.

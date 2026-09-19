@@ -38,10 +38,13 @@ status:
     (`dee5073`, `d30cbc6`) have not been re-read off a run here. Phase 2b's
     back half remains hardware-blocked.
 
-    Gap-aware barcode extraction is BUILT and NOT merged, on branch
-    `spec/gap-aware-barcode-extraction` (22 commits `d30cbc6..HEAD`, the
-    spec commit `66e9cf2` first; `origin` has no ref for it, and CI has
-    never run on it). `extract_ohdpi`
+    Gap-aware barcode extraction is BUILT and MERGED as `f5fb642` (24
+    commits `d30cbc6..5a80156`, the spec commit `66e9cf2` first), with CI
+    GREEN on both interpreters -- `gh run view 35466730194` reports
+    `test (3.11): success` and `test (3.13): success`. This block said "NOT
+    merged ... 22 commits ... CI has never run on it" while that was true;
+    a whole-branch review then found a Critical defect and its fix added two
+    commits. `extract_ohdpi`
     no longer refuses a recording with a dropped frame: it rebuilds the
     trace at true length from the file's own frame-number column and
     discards only the barcode words a gap falls inside. `Segment` gains
