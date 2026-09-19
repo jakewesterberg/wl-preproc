@@ -1,6 +1,28 @@
 # Where this build actually is
 
-**Last updated 2026-09-19**, describing `main` at `b996447`.
+**Last updated 2026-09-19 (second update that day)**, describing branch
+`measure/eye-saccade-offset-difference`, forked from `main` at `668637a`.
+
+**THE MECHANISM BEHIND THE GLISSADE COST IS MEASURED, AND IT IS NOT THE ONE
+PREDICTED.** The morning's finding — that §1's binocular agreement rule
+discards 35–39% of every detected glissade — was explained by a hypothesis:
+the two eyes placing a saccade's offset *about a glissade's duration* apart.
+Measured, that displacement is **10.03 ms against a 6.02 ms control on
+saccades the eyes agree about** — about 1.7× ordinary boundary jitter, not
+one glissade. What destroys the agreement is that the glissade is SHORT
+(median 14.04/16.05 ms), so ordinary jitter lands inside it. **No detector
+change removes this**; the lever is §1's rule itself, which makes it a
+design question rather than a defect. Separately, a quarter to a third of
+the disagreements are not boundary placement at all but the other eye
+carrying a much longer saccade over the whole event. Spec §6 and
+`handoffs/2026-09-19-the-glissade-is-short-not-the-eyes-disagreeing.md`
+carry the numbers, the control, and the truncation caveat — **read those
+rather than trusting numbers recalled here.** Not merged, not pushed, CI has
+not run.
+
+*The first 2026-09-19 header described `main` at `b996447` — the
+which-kinds-disagree merge, CI green on both interpreters — and is where the
+finding this branch explains came from.*
 
 **WHICH kinds the two eyes disagree about is measured.** Conjunction-shape
 spec §6's last open sub-question, and the item at the top of the 2026-09-12

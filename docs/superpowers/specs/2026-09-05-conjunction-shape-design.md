@@ -378,6 +378,80 @@ left CI red on 3.13 alone for a day while every local run was green.
    glissade offset criterion should SHRINK this asymmetry. The finding lives
    here and in the handoff, not in an assertion.
 
+   **THE MECHANISM WAS MEASURED 2026-09-19, and it is right about most of
+   the events and wrong about why.** The paragraph above predicted the
+   offset difference would be "centred near one glissade duration and not
+   near zero". Measured by `test_how_far_apart_the_two_eyes_place_a_saccades_
+   offset`, on the same recording, with `unpaired == 0` in both directions —
+   so `pso.start == saccade.stop` held on every one of the 711 and 835
+   events, and the statistic read the boundary it claims to:
+
+   | direction | population | n | share | median | mean |
+   |---|---|---|---|---|---|
+   | left→right | all disagreeing glissades | 711 | — | 10.03 ms | 23.01 ms |
+   | left→right | counterpart ends INSIDE the glissade | 497 | **0.699** | 8.02 ms | 8.35 ms |
+   | left→right | counterpart ends BEYOND it | 214 | 0.301 | 24.07 ms | 57.07 ms |
+   | right→left | all disagreeing glissades | 835 | — | 10.03 ms | 30.08 ms |
+   | right→left | counterpart ends INSIDE the glissade | 632 | **0.757** | 8.02 ms | 8.66 ms |
+   | right→left | counterpart ends BEYOND it | 203 | 0.243 | 30.09 ms | 96.76 ms |
+
+   **Three corrections to the prediction, in descending order of how much
+   they change what to do.**
+
+   **1. The displacement is NOT one glissade duration. It is about 1.7× the
+   eyes' ordinary boundary jitter, and that is enough because the glissade
+   is short.** The control is the same quantity on saccades the two eyes DO
+   agree about, restricted the same way the glissade figure is forced
+   (counterpart ends later) — comparing a forced-positive number against an
+   unsigned one overstates the gap. Agreeing saccades: **median 6.02 ms**.
+   Disagreeing glissades: **10.03 ms**. Not a different regime, a modestly
+   larger displacement. What destroys the agreement is the glissade's own
+   length: at a median 14.04/16.05 ms, an ordinary 6–10 ms offset
+   displacement lands *inside* it, and that is all it takes.
+
+   **This is the correction that matters for the fix.** The earlier reading
+   — that a better glissade offset criterion should shrink the asymmetry —
+   followed from the eyes disagreeing unusually about glissade boundaries.
+   They do not. They disagree about saccade offsets roughly as much as they
+   always do, and the glissade is simply short enough for that to matter.
+   **No detector change removes this**; it is a property of requiring
+   sample-level binocular kind agreement on an event a few samples long. The
+   lever is §1's rule rather than the detector — for instance admitting a
+   `pso` whose counterpart `saccadic` run ends within it — and that is a
+   design question this section should now ask, not an implementation defect
+   to go and fix.
+
+   **2. A quarter to a third of the disagreements are not boundary placement
+   at all.** Where the counterpart ends BEYOND the glissade (0.301 / 0.243),
+   the other eye's saccade runs a median 24–30 ms and a mean 57–97 ms past
+   this eye's: not the same saccade's offset placed later, but a longer or
+   merged saccade covering the whole event. A different defect with a
+   different fix, and what pulls the whole population's mean to two and
+   three times its median. Any statement about "the" offset difference that
+   does not split these two describes neither.
+
+   **3. The sign of this quantity is forced, and is not evidence.** A
+   counterpart only reaches the disagreement bucket by overlapping the
+   glissade, which requires the other eye's saccade to end after this one's.
+   Every difference is at least one sample whatever the eyes did. Only the
+   magnitude carries anything, and only against the control. Stated because
+   "the other eye ends later, every single time" reads like a finding and is
+   a tautology.
+
+   **A caveat on the INSIDE row, which is the one a reader will want to
+   quote.** That population is defined by the counterpart ending at or
+   before the glissade's end, so its values are bounded above by the
+   glissade duration by construction. Its 8.02 ms median is a truncated
+   statistic and cannot be read as "the displacement is 8 ms". The
+   untruncated comparison is the 10.03 ms against the control's 6.02 ms,
+   which is the one quoted in correction 1.
+
+   **Still not asserted**, for the reason the paragraph above gives. The new
+   assertions are identities: that the measurement measured something, that
+   a baseline exists to read it against, and that `unpaired == 0` — the last
+   a check that `_glissade_bounds`' construction still holds, not a bound on
+   any result.
+
    **A detector asymmetry found while measuring, and not previously written
    down anywhere.** The conjunction's duration floor is the detector's own:
    `schema/detect.py::_min_duration_samples` reads `min_duration_samples` off

@@ -45,8 +45,21 @@ status:
     repository's recurring lesson that a status sentence is only true of the
     commit it names.*
   next: >-
-    The eye subsystem's open measurement is answered as of 2026-09-19,
-    MERGED as `b996447` with CI green on both interpreters (read off run
+    The mechanism behind the glissade cost is measured as of 2026-09-19
+    (branch `measure/eye-saccade-offset-difference`, NOT merged): the two
+    eyes place a saccade's offset a median 10.03 ms apart over disagreeing
+    glissades against 6.02 ms on saccades they agree about -- about 1.7x
+    ordinary boundary jitter, NOT the one-glissade-duration displacement
+    that was hypothesised. What costs the glissades is that they are SHORT
+    (median 14-16 ms), so ordinary jitter lands inside them. No detector
+    change removes this; the lever is the binocular agreement rule itself,
+    which makes it a design question. A quarter to a third of the
+    disagreements are a separate defect -- the other eye carrying a much
+    longer saccade over the whole event. See
+    `docs/handoffs/2026-09-19-the-glissade-is-short-not-the-eyes-disagreeing.md`.
+
+    The measurement that produced the finding it explains was MERGED as
+    `b996447` with CI green on both interpreters (read off run
     35442225561): conjunction-shape spec section 6
     asked WHICH kinds the two eyes disagree about, and it is `pso` against
     `saccadic` in essentially every case (721 of 721 and 855 of 855), but
