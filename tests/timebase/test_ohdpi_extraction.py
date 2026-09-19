@@ -1,9 +1,10 @@
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from wl_preproc.timebase.extract import extract_ohdpi, find_recordings
+from wl_preproc.timebase.extract import barcode_clear_of_gaps, extract_ohdpi, find_recordings
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
 
@@ -154,3 +155,31 @@ def test_it_extracts_a_bitstream_from_the_real_fixture():
     # more than the single start-of-recording edge an always-truthy raw
     # sample would.
     assert len(stream.edges) > 1
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_the_reference_recording_is_untouched_by_gap_handling(capsys):
+    """1,177,799 rows and zero gaps, so the reconstruction is the identity and
+    every edge, barcode and sample count must be exactly what it was.
+
+    Asserted on the gap fields rather than against a stored golden: a golden
+    would pin this file's contents, and what is being checked is that the CODE
+    PATH is inert, not that the recording never changes."""
+    from wl_sync.barcode import decode_edges
+
+    stream = extract_ohdpi(Path(os.environ["WLPP_OHDPI_REFERENCE"]))
+    barcodes = decode_edges(list(stream.edges))
+
+    with capsys.disabled():
+        print(
+            f"\n  reference: {stream.n_samples} samples, {len(stream.edges)} edges, "
+            f"{len(barcodes)} barcodes, {len(stream.gaps)} gaps"
+        )
+
+    assert stream.gaps == ()
+    assert stream.n_frames_missing == 0
+    assert all(barcode_clear_of_gaps(b, stream.gaps) for b in barcodes)
+    assert len(barcodes) > 0, "the recording must still decode barcodes at all"
