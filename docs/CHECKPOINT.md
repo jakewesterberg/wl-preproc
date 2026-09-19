@@ -1,11 +1,29 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (second update that day)**, describing `main` at
-`eb5a979`.
+**Last updated 2026-09-19 (third update that day)**, describing branch
+`measure/what-the-agreement-rule-costs-saccades`, forked from `main` at
+`ba71bfd`.
+
+**THE DAY'S TWO EARLIER FINDINGS BOTH UNDERSTATED THE COST, AND THE SACCADE
+NUMBER WAS AN ORDER OF MAGNITUDE OUT.** Both counted only the runs §1 drops
+for a KIND DISAGREEMENT; §1 drops the `alone` bucket too — a run the other
+eye did not detect at all — and that bucket had never been attributed by
+kind. With both counted, **`pso` 0.5359 / 0.5681** (better than a half, not
+a third) and **`saccadic` 0.0464 / 0.0685** (4.6–6.9%, not 0.2–0.4%).
+
+**It also reverses which finding is load-bearing.** For `saccadic` the
+disagreement half is 10 and 20 runs; essentially all of its cost is **225
+and 337 saccades one eye detected and the other did not detect at all**.
+That is not a labelling disagreement, not boundary placement, and nothing
+the glissade mechanism explains — and it is the only part of this cost that
+touches a pipeline with no interest in glissades. See
+`handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`. Not merged,
+not pushed, CI has not run.
 
 **THE MECHANISM BEHIND THE GLISSADE COST IS MEASURED, AND IT IS NOT THE ONE
 PREDICTED.** The morning's finding — that §1's binocular agreement rule
-discards 35–39% of every detected glissade — was explained by a hypothesis:
+discards 35–39% of every detected glissade (itself later corrected to
+53.6–56.8%, above) — was explained by a hypothesis:
 the two eyes placing a saccade's offset *about a glissade's duration* apart.
 Measured, that displacement is **10.03 ms against a 6.02 ms control on
 saccades the eyes agree about** — about 1.7× ordinary boundary jitter, not
@@ -40,7 +58,11 @@ stretch a glissade while the other is still calling it a saccade, at about
 Restated as cost, §1's binocular agreement rule discards **35–39% of every
 detected glissade against 0.2–0.4% of saccades**, so the "about a fifth"
 recorded on 2026-09-12 is a true average over two kinds that are not
-affected alike, and it concealed this.
+affected alike, and it concealed this. *(Both figures in that sentence are
+themselves understatements, corrected later the same day to 53.6–56.8% and
+4.6–6.9% — see this file's own header. They counted only kind
+disagreements, not the `alone` bucket the same rule drops. Left standing
+rather than edited, because the way it went wrong is the useful part.)*
 
 **MERGED as `b996447`, pushed, CI GREEN on both interpreters** — read off
 the run: `gh run view 35442225561` reports `test (3.11): success` and
@@ -621,8 +643,10 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    (`measure/which-kinds-disagree`, this branch) asked which kinds, and the
    aggregate turned out to be hiding the finding**: the disagreements are
    `pso` against `saccadic` in essentially every case, almost entirely in
-   one direction, and the cost is **35–39% of every detected glissade
-   against 0.2–0.4% of saccades**. §1's agreement rule is not a uniform tax;
+   one direction, and the cost is **53.6–56.8% of every detected glissade
+   against 4.6–6.9% of saccades** (both corrected upward 2026-09-19 from
+   35–39% and 0.2–0.4%, which omitted the `alone` bucket). §1's agreement
+   rule is not a uniform tax;
    it falls almost entirely on the one kind the conjunction-shape spec exists
    to store. Spec §6 and
    `handoffs/2026-09-19-which-kinds-disagree.md` carry the numbers and the
