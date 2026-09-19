@@ -134,17 +134,80 @@ def _inject_fixations(session_dir, recipe, truth, targets_deg: list[tuple[float,
     _write_fixations(session_dir, recipe, truth, windows)
 
 
-def _row_for_time(segment: dict, session_s: float) -> int:
-    """Ground truth for `eye._session_time_to_row`, computed here by an
-    INDEPENDENT re-derivation of the same linear map -- not by calling that
-    function -- so a broken production implementation cannot also corrupt
-    the expected value a test compares it against. `session_s = start_s +
-    (row / (n_samples - 1)) * (end_s - start_s)`, inverted."""
+def _frame_offsets_of(path) -> list[int]:
+    """Each surviving row's own TRUE SAMPLE INDEX, read off the recording's
+    frame-number column -- `frame_numbers - frame_numbers[0]`, as a plain
+    list of ints."""
+    from wl_preproc.eye.ohdpi import read_ohdpi
+
+    numbers = read_ohdpi(path).frame_numbers
+    return [int(number - numbers[0]) for number in numbers]
+
+
+def _sample_for_time(segment: dict, session_s: float) -> int:
+    """Step one of `eye._session_time_to_row`, on its own: session time to the
+    recording's own TRUE SAMPLE INDEX, `session_s = start_s + (sample /
+    (n_samples - 1)) * (end_s - start_s)` inverted.
+
+    Separate from `_row_for_time` below because on a recording that dropped
+    frames these are two different numbers, and several assertions in this
+    file need to name the sample index specifically -- it is what the naive,
+    one-step conversion answers, and the gap placement below is stated in it.
+    On a gap-free recording the two coincide.
+    """
     n_samples = segment["n_samples"]
     span = segment["end_s"] - segment["start_s"]
     frac = (session_s - segment["start_s"]) / span
-    row = round(frac * (n_samples - 1))
-    return min(max(row, 0), n_samples - 1)
+    return min(max(round(frac * (n_samples - 1)), 0), n_samples - 1)
+
+
+def _row_for_time(segment: dict, session_s: float, offsets: list[int]) -> int:
+    """Ground truth for `eye._session_time_to_row`, computed here by an
+    INDEPENDENT re-derivation of the same TWO-step map -- not by calling that
+    function -- so a broken production implementation cannot also corrupt
+    the expected value a test compares it against.
+
+    Step one is `_sample_for_time` above. `n_samples` is the recording's true
+    frame SPAN -- rows plus the frames the camera dropped -- so it lands on a
+    sample index and NOT on a row.
+
+    Step two, true sample index to row: `offsets[row]` is that row's own true
+    sample index, so the row carrying sample `i` (or, when `i` fell inside a
+    hole, the last real row before it) is the rightmost offset at or below
+    `i`. Written as a plain scan rather than `np.searchsorted` precisely
+    because the production code uses `searchsorted`: a re-derivation that
+    borrowed the same call would agree with a wrong one by construction.
+
+    On a gap-free recording `offsets` is `0, 1, 2, ...` and step two is the
+    identity, which is why every caller predating dropped-frame fixtures
+    reads exactly the row it always did.
+    """
+    sample = _sample_for_time(segment, session_s)
+    return max(row for row, offset in enumerate(offsets) if offset <= sample)
+
+
+def _rows_for_times(session_key: dict, segment: dict, session_times) -> list[int]:
+    """`_row_for_time` for several instants at once, for a caller holding a
+    session key rather than the recording's own frame offsets.
+
+    Reads the offsets ONCE for the whole list, and looks the session
+    directory up through `ingest.Ingestion` -- the same place
+    `EyeCalibration.make()` reads it from -- so a caller needs nothing but
+    what it already has.
+
+    A separate helper rather than an `offsets=None` default on
+    `_row_for_time` itself: a default meaning "assume nothing was dropped" is
+    exactly the silently-wrong conversion this two-step map exists to
+    replace, and a caller on a gapped recording would inherit it without
+    ever seeing the argument.
+    """
+    import pathlib
+
+    from wl_preproc.schema import ingest
+
+    session_dir = pathlib.Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["file_path"])
+    return [_row_for_time(segment, session_s, offsets) for session_s in session_times]
 
 
 def _expected_raw_points(
@@ -157,11 +220,13 @@ def _expected_raw_points(
     resolves each bound to."""
     from wl_preproc.eye.gaze import purkinje_vector
 
-    trace = purkinje_vector(session_dir / "ohdpi" / segment["file_path"], file_eye)
+    path = session_dir / "ohdpi" / segment["file_path"]
+    trace = purkinje_vector(path, file_eye)
+    offsets = _frame_offsets_of(path)
     points = []
     for t_start, t_end in windows_session_time:
-        row_start = _row_for_time(segment, t_start)
-        row_end = _row_for_time(segment, t_end)
+        row_start = _row_for_time(segment, t_start, offsets)
+        row_end = _row_for_time(segment, t_end, offsets)
         lo, hi = sorted((row_start, row_end))
         points.append(trace[lo : hi + 1].mean(axis=0))
     return points
@@ -883,9 +948,9 @@ def round_trip_session(daemon_module, prefix, tmp_path_factory):
 
     `raw_points` is read via `_expected_raw_points`, which resolves each
     window's row range through `_row_for_time` -- an INDEPENDENT
-    re-derivation of `eye._session_time_to_row`'s own linear map, not a
-    call to it -- so a broken production alignment cannot also corrupt this
-    fixture's own idea of the truth. A window a WRONG `_session_time_to_row`
+    re-derivation of `eye._session_time_to_row`'s own map, not a call to it
+    -- so a broken production alignment cannot also corrupt this fixture's
+    own idea of the truth. A window a WRONG `_session_time_to_row`
     would sample from row 0 every time is not what this fixture asks the
     production code to sample from; the targets below are built against
     where each window's raw signal REALLY is.
@@ -976,6 +1041,257 @@ def test_block_residual_rows_are_actually_produced_and_checked(round_trip_sessio
 
     assert block_row["n_points"] == 4
     assert block_row["residual_deg_rms"] == pytest.approx(master["residual_deg_rms"], abs=1e-9)
+
+
+# --- The same known affine, over a recording that dropped frames -------------
+#
+# `round_trip_session` above is the only test in this file that checks a fitted
+# map is numerically CORRECT, and its recording is gap-free -- so on it a row
+# index and a true sample index are the same number and the distinction this
+# section exists for is invisible. This branch made `Segment.n_samples` the
+# recording's TRUE FRAME SPAN (rows PLUS dropped frames, design spec section
+# 5), and `eye._session_time_to_row` scales by it: on a gapped file that
+# answer is a SAMPLE index being used to index an array with one entry per
+# ROW. Two consequences, and the fixture below is built to produce both at
+# once:
+#
+#   - a window late in the recording indexes PAST the end of the file. numpy
+#     returns an empty slice, `.mean(axis=0)` returns `[nan, nan]` with two
+#     RuntimeWarnings, and nothing in `resolve_calibration` guards NaN -- so a
+#     NaN calibration map is what gets stored.
+#   - a window merely AFTER a gap samples rows late by exactly the missing
+#     frames, which at 500 Hz is 2 ms per frame of the wrong eye signal.
+#
+# A window BEFORE the gap is the control: there the two indices still agree,
+# so it must read exactly what it read before this branch existed.
+
+#: How far the planted gap keeps clear of the calibration window on each side.
+#: The gap goes in the dead space between window 1 and window 2 (see
+#: `_inject_fixations`: windows are `[trial_start + 1.2, trial_start + 1.8]`),
+#: so no window ever straddles it -- a window straddling a gap asks a
+#: different question (which row does a sample INSIDE a hole resolve to) and
+#: would blur the two measurements this fixture wants separate.
+_GAP_CLEARANCE_S = 0.2
+
+
+@pytest.fixture(scope="module")
+def gapped_round_trip_session(daemon_module, prefix, tmp_path_factory):
+    """`round_trip_session`'s construction, over a recording whose camera
+    dropped a two-second burst of frames between the first and second
+    calibration windows.
+
+    Deliberately NOT one of `tests/schema/conftest.py`'s three gapped
+    sessions. Those plant gaps measured against `truth.barcodes`, to ask what
+    a gap costs the BARCODE stream; this one plants a gap measured against the
+    CALIBRATION WINDOWS, to ask which rows those windows then sample -- and it
+    needs `round_trip_session`'s inverted build order (segment first, targets
+    computed from the real raw signal, sync box log rewritten last), which
+    `conftest._plant` does not have. Their gaps are also three frames, which
+    this cannot use: three frames is 6 ms of drift and puts the
+    past-the-end-of-the-file threshold inside the last 6 ms of the recording,
+    where no calibration window sits. The pattern that IS followed from them
+    is the important one -- the fixture asserts its own contract below, so a
+    placement that silently stopped planting anything cannot leave the test
+    passing against a clean file.
+
+    Returns `(session_key, caught_warnings, true_a)`. The warnings are
+    recorded around the real `run_once()` rather than in the test because that
+    is the call that does the sampling, and this repository holds itself to
+    zero warnings -- "Mean of empty slice" is precisely the symptom of the
+    defect this fixture exists to catch.
+    """
+    import warnings
+
+    from wl_preproc.schema import core, timebase
+    from wl_preproc.synth.faults import drop_ohdpi_frames
+    from wl_preproc.synth.ohdpi import OHDPI_FPS, OHDPI_PRE_ROLL_S, frame_count
+
+    root = tmp_path_factory.mktemp("eyegaproundtrip")
+    recipe = _recipe("2027-04-12_01", "eyegap01", seed=415, include_ohdpi=True)
+
+    window_starts = [trial_index * TRIAL_DURATION_S + 1.0 for trial_index in range(N_TRIALS)]
+    fixation_windows = [(start + 0.2, start + 0.8) for start in window_starts]
+
+    # The whole dead stretch between window 1's end and window 2's start, less
+    # a clearance at each end -- derived from the window placement rather than
+    # written down as a frame index, so a change to the session's shape moves
+    # the gap with it instead of silently leaving it somewhere harmless.
+    # `drop_ohdpi_frames` takes RECORDING time, which leads session time by
+    # `OHDPI_PRE_ROLL_S` (that function's own docstring says so in as many
+    # words, and getting it wrong moves the gap by 300 frames silently).
+    gap_start_s = fixation_windows[0][1] + _GAP_CLEARANCE_S
+    gap_end_s = fixation_windows[1][0] - _GAP_CLEARANCE_S
+    n_dropped = round((gap_end_s - gap_start_s) * OHDPI_FPS)
+    dropped = drop_ohdpi_frames(
+        frame_count=frame_count(recipe),
+        at_s=gap_start_s + OHDPI_PRE_ROLL_S,
+        n_frames=n_dropped,
+    )
+    recipe = recipe.model_copy(update={"ohdpi_dropped_frames": dropped})
+
+    truth = generate_session(root, recipe)
+    session_dir = root / recipe.session_id
+    session_key = _land(
+        root, recipe, datetime.datetime(2027, 4, 12, 9, 0),
+        acquisition_systems=("syncbox", "ohdpi"),
+    )
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+
+    ohdpi_txt = session_dir / "ohdpi" / segment["file_path"]
+    offsets = _frame_offsets_of(ohdpi_txt)
+
+    assert segment["n_frame_gaps"] == 1 and segment["n_frames_missing"] == n_dropped, (
+        f"the planted {n_dropped}-frame gap must survive into the stored "
+        f"Segment row, which reads {segment['n_frame_gaps']} gap(s) and "
+        f"{segment['n_frames_missing']} missing frame(s). A fixture whose "
+        "fault never lands leaves every test written against it passing "
+        "against a clean recording"
+    )
+    # The gap must sit strictly BETWEEN window 1 and window 2 -- neither
+    # straddling a window nor, after the arithmetic above, somewhere else
+    # entirely. Checked in TRUE SAMPLE space against the file's own frame
+    # numbers, not against the placement that was asked for.
+    (gap_at,) = [row for row in range(len(offsets) - 1) if offsets[row + 1] - offsets[row] > 1]
+    assert _sample_for_time(segment, fixation_windows[0][1]) <= offsets[gap_at], (
+        "the gap must fall after the first calibration window, which is this "
+        "fixture's only un-shifted control"
+    )
+    assert offsets[gap_at + 1] <= _sample_for_time(segment, fixation_windows[1][0]), (
+        "and before the second, so no calibration window straddles it"
+    )
+    # **The fixture's whole claim.** Scaled by the true frame span, the LAST
+    # window's own start lands beyond the last row the file actually has --
+    # which is what makes the empty slice, the two RuntimeWarnings and the NaN
+    # map reachable at all. Without this the session would merely drift, and
+    # the NaN half of the defect would go untested.
+    naive_row = _sample_for_time(segment, fixation_windows[-1][0])
+    assert naive_row >= len(offsets), (
+        f"the last calibration window's naive row {naive_row} must fall past "
+        f"this recording's {len(offsets)} rows, or the NaN this fixture "
+        "exists to expose is out of reach and only the drift is measured"
+    )
+
+    raw_points = _expected_raw_points(session_dir, segment, "Left", fixation_windows)
+    # `round_trip_session`'s own map, reused unchanged: nonzero scale,
+    # cross-term and offset on both axes, so a fit recovering only part of it
+    # is still caught.
+    true_a = (0.05, 0.01, 2.0, -0.02, 0.06, -1.5)
+
+    def apply_true(raw):
+        x, y = raw
+        return (
+            true_a[0] * x + true_a[1] * y + true_a[2],
+            true_a[3] * x + true_a[4] * y + true_a[5],
+        )
+
+    targets = [apply_true(raw) for raw in raw_points]
+    _write_fixations(session_dir, recipe, truth, list(zip(window_starts, targets, strict=True)))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        daemon_module.run_once(prefix=prefix)
+    return session_key, caught, true_a
+
+
+def test_a_known_affine_round_trips_through_a_gapped_recording(gapped_round_trip_session):
+    """The same round trip as `test_a_known_affine_round_trips_through_the_fit`,
+    on a recording with a hole in it.
+
+    It fails on a `_session_time_to_row` that hands a TRUE SAMPLE index to an
+    array indexed by ROW, twice over and independently: the last window's
+    range starts past the end of the file, so its raw point is `[nan, nan]`
+    and every recovered coefficient is NaN; and the two windows after the gap
+    sample rows a thousand frames late, so even with the NaN removed the
+    recovered map would be fit against eye signal from two seconds away from
+    where the target was actually held.
+    """
+    from wl_preproc.schema import eye
+
+    session_key, _caught, true_a = gapped_round_trip_session
+    row = (eye.EyeCalibration & {**session_key, "eye": "left"}).fetch1()
+
+    assert row["calibration_source"] == "fitted", (
+        f"a gapped recording with four good calibration windows must still "
+        f"fit: {row['reason']}"
+    )
+    recovered = (
+        row["gx_dx"], row["gx_dy"], row["gx_const"],
+        row["gy_dx"], row["gy_dy"], row["gy_const"],
+    )
+    assert all(np.isfinite(value) for value in recovered), (
+        f"a NaN calibration map was stored: {recovered}"
+    )
+    for got, want in zip(recovered, true_a, strict=True):
+        assert got == pytest.approx(want, abs=0.01)
+    assert row["residual_deg_rms"] < 0.05
+    assert row["validation_error_deg"] < 0.05
+
+
+def test_a_gapped_recording_calibrates_without_a_runtime_warning(gapped_round_trip_session):
+    """"Mean of empty slice" is not cosmetic here -- it is numpy announcing
+    that a calibration window sampled nothing at all, and the `[nan, nan]` it
+    returns propagates silently into the stored map. This repository holds
+    itself to zero warnings, so the symptom is asserted on directly rather
+    than left for the value check above to catch after the fact."""
+    _session_key, caught, _true_a = gapped_round_trip_session
+
+    runtime = [
+        f"{warning.category.__name__}: {warning.message} "
+        f"({warning.filename}:{warning.lineno})"
+        for warning in caught
+        if issubclass(warning.category, RuntimeWarning)
+    ]
+    assert not runtime, "\n".join(runtime)
+
+
+def test_the_windows_after_a_gap_sample_the_rows_the_frame_numbers_name(
+    gapped_round_trip_session,
+):
+    """The drift half, measured directly on the conversion rather than
+    inferred from a fitted map.
+
+    Both claims matter. Before the gap, the row `eye._session_time_to_row`
+    resolves must be the one it always resolved -- this conversion must not
+    move a window on a recording where nothing was dropped. After the gap it
+    must be exactly `n_frames_missing` EARLIER than the naive answer, because
+    every row after a hole carries a true sample index that far ahead of its
+    own position. Asserting the second without the first would pass on a
+    conversion that simply shifted everything.
+    """
+    import pathlib
+
+    from wl_preproc.schema import core, eye, ingest
+
+    session_key, _caught, _true_a = gapped_round_trip_session
+    session_dir = pathlib.Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["file_path"])
+    n_missing = segment["n_frames_missing"]
+    assert n_missing > 0
+
+    window_starts = [trial_index * TRIAL_DURATION_S + 1.0 for trial_index in range(N_TRIALS)]
+    before, *after = [(start + 0.2, start + 0.8) for start in window_starts]
+
+    for bound in before:
+        got = eye._session_time_to_row(segment, bound, np.asarray(offsets))
+        assert got == _row_for_time(segment, bound, offsets)
+        assert got == _sample_for_time(segment, bound), (
+            "a window entirely before the gap must resolve to the row it "
+            "always did -- nothing was dropped ahead of it"
+        )
+
+    for window in after:
+        for bound in window:
+            got = eye._session_time_to_row(segment, bound, np.asarray(offsets))
+            assert got == _row_for_time(segment, bound, offsets)
+            assert got == _sample_for_time(segment, bound) - n_missing, (
+                f"a window after a {n_missing}-frame gap must sample "
+                f"{n_missing} rows earlier than the sample index the naive, "
+                "one-step conversion answers"
+            )
 
 
 @pytest.fixture(scope="module")

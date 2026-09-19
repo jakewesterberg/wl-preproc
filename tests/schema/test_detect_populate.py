@@ -8,7 +8,7 @@ test that calls `make()` directly while never proving these tables compute
 anything in production).
 
 Reuses `tests/schema/test_eye_populate.py`'s own plain helper functions
-(`_land`, `_recipe`, `_inject_fixations`, `_row_for_time`,
+(`_land`, `_recipe`, `_inject_fixations`, `_rows_for_times`,
 `_expected_raw_points`, `_write_fixations`), following the precedent
 `tests/schema/test_ephys.py` already sets for importing another test
 module's helpers directly (`pyproject.toml`'s own `pythonpath = ["."]`
@@ -572,7 +572,7 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     `EyeValidity`/`EyeDetection`, unlike `left_refused_session`/`right_
     refused_session` below.
     """
-    from tests.schema.test_eye_populate import _row_for_time
+    from tests.schema.test_eye_populate import _rows_for_times
 
     session_key, segment, onset_times = _build_stepped_session(
         tmp_path_factory,
@@ -583,7 +583,7 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
 
     report = daemon_module.run_once(prefix=prefix)
 
-    planted_onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
+    planted_onsets = _rows_for_times(session_key, segment, onset_times)
     return session_key, report, planted_onsets
 
 
@@ -680,7 +680,7 @@ def _build_mixed_eye_session(
     SECOND `run_once()` call, the one whose errors this fixture's own
     callers actually care about.
     """
-    from tests.schema.test_eye_populate import _row_for_time
+    from tests.schema.test_eye_populate import _rows_for_times
     from wl_preproc.schema import detect, eye as eye_schema
     from wl_preproc.schema.eye import _coefficient_columns
 
@@ -711,7 +711,7 @@ def _build_mixed_eye_session(
     (detect.EyeDetection & session_key).delete()
 
     report = daemon_module.run_once(prefix=prefix)
-    onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
+    onsets = _rows_for_times(session_key, segment, onset_times)
     return session_key, report, onsets
 
 
@@ -763,7 +763,7 @@ def out_of_order_session(daemon_module, prefix, tmp_path_factory):
     Returns `(session_key, rows written out of order, report from the full
     pass that follows, planted onsets)`.
     """
-    from tests.schema.test_eye_populate import _row_for_time
+    from tests.schema.test_eye_populate import _rows_for_times
     from wl_preproc.schema import detect
 
     session_key, segment, onset_times = _build_stepped_session(
@@ -777,7 +777,7 @@ def out_of_order_session(daemon_module, prefix, tmp_path_factory):
     out_of_order_rows = (detect.EyeValidity & session_key).to_dicts()
 
     report = daemon_module.run_once(prefix=prefix)
-    onsets = [_row_for_time(segment, onset_s) for onset_s in onset_times]
+    onsets = _rows_for_times(session_key, segment, onset_times)
     return session_key, out_of_order_rows, report, onsets
 
 
