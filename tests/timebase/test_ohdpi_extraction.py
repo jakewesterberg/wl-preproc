@@ -1,8 +1,94 @@
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from wl_preproc.timebase.extract import extract_ohdpi, find_recordings
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
+
+_HEADER = " ".join(["LeftFrameNumber", "LeftSeconds", "Int0", "LeftCR1X", "LeftCR4X"])
+
+
+def _write_ohdpi(path, frame_numbers, sync_bits, fs_hz=500.0):
+    """A minimal OpenIrisDPI file. `Seconds` is derived from the frame NUMBER,
+    so a dropped frame costs real time exactly as it does on the instrument --
+    a fixture that timestamped by row would hide the bug under test."""
+    from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX
+
+    lines = [_HEADER]
+    first = frame_numbers[0]
+    for number, bit in zip(frame_numbers, sync_bits):
+        seconds = (number - first) / fs_hz
+        lines.append(f"{number} {seconds:.6f} {bit << SYNC_BIT_INDEX} 1.0 1.0")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_a_clean_recording_has_no_gaps_and_spans_its_own_rows(tmp_path):
+    """`np.repeat` with all-ones counts returns its input, so nothing about a
+    gap-free file may change. This is the pin that says the whole change is
+    invisible to every recording that works today."""
+    numbers = list(range(1000, 1200))
+    bits = [0] * 200
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "clean.txt", numbers, bits))
+
+    assert stream.gaps == ()
+    assert stream.n_frames_missing == 0
+    assert stream.n_samples == 200
+
+
+def test_a_dropped_frame_no_longer_refuses_the_recording(tmp_path):
+    """The behaviour this whole plan exists to change. Before it, one dropped
+    frame anywhere cost the session its entire eye pipeline -- no
+    SystemTimebase fit, no Segment row, not even a RejectedSegment."""
+    numbers = list(range(1000, 1100)) + list(range(1103, 1200))  # 3 missing
+    bits = [0] * len(numbers)
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "gapped.txt", numbers, bits))
+
+    assert stream.n_frames_missing == 3
+    assert len(stream.gaps) == 1
+    assert stream.n_samples == 200, (
+        "the true span, not the row count: 197 rows covering 200 frames"
+    )
+
+
+def test_the_gap_span_brackets_the_two_known_samples(tmp_path):
+    """The level is known AT the last sample before the gap and AT the first
+    after it, and unknown strictly between. Bracketing is what makes a word
+    overlapping either half-interval untrustworthy; spanning only the missing
+    slots would leave those halves looking sound."""
+    numbers = list(range(0, 10)) + list(range(13, 20))  # rows 0..9, then 13..19
+    bits = [0] * len(numbers)
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "bracket.txt", numbers, bits))
+
+    # fs is derived from the file's own timestamps; at 500 Hz a frame is 2000 us.
+    assert stream.gaps == ((round(9 / 500.0 * 1e6), round(13 / 500.0 * 1e6)),)
+
+
+def test_holding_the_level_across_a_gap_invents_no_transition(tmp_path):
+    """Hold-previous fill is the conservative reconstruction: the line appears
+    to have held. Anything cleverer -- interpolating, or emitting an edge at
+    the gap -- would manufacture evidence about samples nobody has."""
+    numbers = list(range(0, 10)) + list(range(13, 20))
+    bits = [1] * len(numbers)  # same level either side of the gap
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "hold.txt", numbers, bits))
+
+    assert len(stream.edges) == 1, "one rising edge at sample 0 and nothing else"
+
+
+def test_an_edge_after_a_gap_gets_the_time_it_would_have_had(tmp_path):
+    """The whole point of reconstructing rather than splitting: a transition
+    after the gap is timed from its TRUE sample position, not from its row."""
+    numbers = list(range(0, 10)) + list(range(13, 20))
+    bits = [0] * 10 + [0, 0, 1, 1, 1, 1, 1]  # rises at frame number 15
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "after.txt", numbers, bits))
+
+    assert stream.edges[0] == (round(15 / 500.0 * 1e6), 1)
 
 
 def test_the_glob_matches_a_real_recording_and_not_its_events_sibling(tmp_path):

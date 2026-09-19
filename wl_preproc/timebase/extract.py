@@ -44,6 +44,17 @@ class BitStream:
     edges: tuple[tuple[int, int], ...]
     fs_hz: float
     n_samples: int
+    #: `(start_us, end_us)` per dropped-frame gap, in this stream's own time
+    #: base -- the same one `edges` and `Barcode.start_us` use. Each spans the
+    #: LAST KNOWN sample to the NEXT KNOWN one: the level is known at both
+    #: ends and unknown strictly between, so bracketing is the conservative
+    #: choice and is what makes a word overlapping either half-interval
+    #: untrustworthy. Empty for every extractor but `extract_ohdpi`.
+    gaps: tuple[tuple[int, int], ...] = ()
+    #: Total frames absent across `gaps`. Carried rather than derived from the
+    #: spans, which are rounded microseconds and cannot be inverted exactly at
+    #: an arbitrary rate.
+    n_frames_missing: int = 0
 
     def __post_init__(self) -> None:
         floor = min_sample_rate_hz()
@@ -257,37 +268,40 @@ def extract_ohdpi(path: Path) -> BitStream:
     from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX, read_ohdpi
 
     recording = read_ohdpi(path)
-    if recording.frame_gaps:
-        # **The refusal `read_ohdpi` used to make, moved to the caller that
-        # actually cannot tolerate a gap.** That reader now REPORTS gaps
-        # instead, because losing a 39-minute recording over one dropped frame
-        # is the wrong blast radius for the eye path, which can exclude the
-        # affected regions. This path cannot: `edges_from_samples` turns a
-        # sample INDEX into a time by dividing by `fs_hz`, so every edge after
-        # a gap is early by the dropped frames' own duration, and a barcode
-        # decoded from those edges names a sync time that never happened. That
-        # is a silently wrong alignment for the whole session rather than a
-        # visibly absent one.
-        #
-        # Refused rather than truncated at the first gap: a partial BitStream
-        # would align the session on its prefix alone and report success, and
-        # `BitStream`'s own floor check cannot tell a deliberately truncated
-        # stream from a short recording. Gap-aware segmentation -- decoding
-        # each contiguous run and fitting them separately -- is a real option
-        # and a `core.Segment` decision, not something to improvise here.
-        first = recording.frame_gaps[0]
-        raise ValueError(
-            f"{path}: {len(recording.frame_gaps)} dropped-frame gap(s), the "
-            f"first {first.n_missing} frame(s) after row {first.row}. A frame "
-            "index is a time on this line, so every edge after a gap would be "
-            "early by the dropped frames' duration and the barcodes decoded "
-            "from them would name sync times that never happened"
-        )
-    bits = (recording.digital >> SYNC_BIT_INDEX) & 1
+    # **The sample-index-to-time map is CORRECTED, not refused.**
+    # `wl_sync.barcode.edges_from_samples` times each edge as
+    # `round(index / fs_hz * 1e6)` -- a row's POSITION. Drop a frame and every
+    # later edge is early by the missing frames' duration. The file states
+    # exactly which frames are absent, in its own frame-number column, so the
+    # trace is rebuilt at true length and the position becomes the true sample
+    # index again. wl-sync is untouched: it owns the format the hardware
+    # emits, and a second copy of that codec here would be free to drift.
+    #
+    # `np.repeat` IS hold-previous fill -- a row spanning a gap repeats its own
+    # level across the missing slots, so NO TRANSITION IS INVENTED. That is
+    # conservative rather than correct (the line may well have transitioned in
+    # the hole), which is exactly why `segments.scan_system` then discards any
+    # barcode overlapping a gap. See the design spec, sections 2 and 3.
+    #
+    # `read_ohdpi` already refuses a recording too short to establish a rate,
+    # so `offsets[-1]` is always defined here.
+    offsets = recording.frame_numbers - recording.frame_numbers[0]
+    counts = np.diff(np.append(offsets, offsets[-1] + 1))
+    bits = np.repeat((recording.digital >> SYNC_BIT_INDEX) & 1, counts)
+
+    def _at(sample: int) -> int:
+        return round(int(sample) / recording.fs_hz * 1_000_000)
+
+    gaps = tuple(
+        (_at(offsets[index]), _at(offsets[index + 1]))
+        for index in np.flatnonzero(counts > 1)
+    )
     return BitStream(
         edges=tuple(edges_from_samples(list(bits), fs_hz=recording.fs_hz)),
         fs_hz=recording.fs_hz,
-        n_samples=recording.n_frames,
+        n_samples=int(bits.size),
+        gaps=gaps,
+        n_frames_missing=int(counts.sum() - counts.size),
     )
 
 
