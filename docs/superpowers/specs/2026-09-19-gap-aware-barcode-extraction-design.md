@@ -266,10 +266,24 @@ deliberate.** `schema/core.py` already stores `scan.stream.n_samples`, and
 instead of understated by the missing frames. On a gap-free file the value is
 unchanged, which is part of the no-change pin.
 
-**Cost, stated plainly.** `Segment` is in the exported schema. CI asserts
-`docs/schemas` is current, and wl.works and the behaviour-camera project build
-against it. The columns are purely additive so nothing breaks, but it is a
-contract change and the re-export belongs in the same commit.
+**Cost: smaller than this section first claimed.** An earlier draft of this
+paragraph read *"`Segment` is in the exported schema. CI asserts
+`docs/schemas` is current, and wl.works and the behaviour-camera project
+build against it ... it is a contract change."* **That is false, and it is
+corrected here rather than edited away because the way it went wrong is this
+repository's own named failure — a claim about another repository written
+without opening its documents.**
+
+`docs/schemas/` holds six JSON WIRE contracts —
+`behavior_camera_sidecar`, `done_marker`, `health_response`, `job_request`,
+`session_manifest`, `syncbox_log_header`. `Segment` is a DataJoint table and
+appears in none of them. CI's "exported schemas are current" step is real,
+but it governs those six files, not this one. **Adding three columns to
+`Segment` is therefore a purely local change: no re-export, and no contract
+change reaching wl.works or the behaviour-camera project.**
+
+What remains true is the ordinary cost of a schema change: existing rows need
+the columns, and the additive form is what keeps that cheap.
 
 ---
 

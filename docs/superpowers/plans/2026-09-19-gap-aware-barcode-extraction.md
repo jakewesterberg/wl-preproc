@@ -31,7 +31,7 @@
 | `wl_preproc/synth/recipe.py` | `SessionRecipe` carries which eye-camera frames to drop |
 | `wl_preproc/synth/ohdpi.py` | `write_ohdpi` omits those rows so a synthetic session carries a real gap |
 | `wl_preproc/synth/faults.py` | the dropped-frame fault, beside the existing restart fault |
-| `docs/schemas/` | re-exported; CI asserts it is current |
+| `docs/schemas/` | UNCHANGED — six JSON wire contracts; `Segment` is not among them. Task 4 verifies this rather than assuming it |
 
 ---
 
@@ -660,15 +660,20 @@ In the `accepted.append({...})` dict, after `"n_barcodes": offset.n_barcodes,`:
 Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/schema/ -q`
 Expected: PASS.
 
-- [ ] **Step 6: Re-export the schema**
+- [ ] **Step 6: Verify the export is UNCHANGED**
 
-Run: `.venv/bin/python -m wl_preproc.cli.main schemas export --out docs/schemas && git diff --stat -- docs/schemas`
-Expected: `docs/schemas` shows the three added columns. CI asserts this file is current, and wl.works and the behaviour-camera project build against it — the columns are purely additive, so nothing breaks, but the re-export must ride in the same commit.
+Run: `.venv/bin/python -m wl_preproc.cli.main schemas export --out docs/schemas && git status --porcelain -- docs/schemas`
+
+Expected: **no output** — `docs/schemas` must be byte-identical. That directory holds six JSON WIRE contracts (`behavior_camera_sidecar`, `done_marker`, `health_response`, `job_request`, `session_manifest`, `syncbox_log_header`); `Segment` is a DataJoint table and is in none of them, so adding columns to it changes nothing there and reaches neither wl.works nor the behaviour-camera project.
+
+This step proves that rather than assuming it. **If the export DOES change, stop and report it** — the premise above is then wrong and the change has a cross-repo consequence nobody has scoped.
+
+*(An earlier draft of this step said the export would show the three new columns and called it a contract change. That was wrong — see the spec's section 5 for the correction.)*
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add wl_preproc/schema/core.py tests/schema/test_segment_populate.py docs/schemas
+git add wl_preproc/schema/core.py tests/schema/test_segment_populate.py
 git commit -m "schema: Segment records the gaps its recording had"
 ```
 
