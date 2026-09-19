@@ -66,6 +66,30 @@ status:
     repository's recurring lesson that a status sentence is only true of the
     commit it names.*
   next: >-
+    **Hardware status as of 2026-09-19, stated by the requester at session
+    close: the rig is NOT ready and the compute machine is NOT assembled.**
+    The next session is hardware-free code development; ask whether that has
+    changed before planning around it. Recommended order, with the reasoning
+    in `docs/CHECKPOINT.md`'s own "Start here next session" header:
+    (1) REHYDRATION -- decompress-to-scratch, which turns `wlpp reclaim` from
+    a preview into real disk-freeing and is the last unbuilt piece with
+    operational rather than analytical consequences; (2) the three remaining
+    hardware-free detectors, NSLR, REMoDNaV (the detector, not the PyPI test
+    oracle) and Bayesian microsaccade detection, which matter here as SACCADE
+    detectors because the requester has said glissades are peripheral;
+    (3) moving `_KIND_OF` out of `schema/detect.py` into
+    `eye/detect/labels.py`, a duplicate with four consumers and nothing able
+    to catch it drifting; (4) measuring which of the 225/337 unmatched
+    saccades are real.
+
+    Two items are BLOCKED on hardware and should be raised again when it
+    exists. The barcode and timebase alignment path has never been exercised
+    against real data and cannot be with the recording this lab has -- a few
+    minutes of recording on the real rig with the sync box live would
+    validate the whole timebase chain before January, and it is not a code
+    task. And all of Phase 2b waits on the compute machine; if that is
+    assembled, it outranks every hardware-free item above.
+
     The mechanism behind the glissade cost is measured as of 2026-09-19
     (MERGED as `eb5a979`, CI green on both interpreters, read off run
     35444119197): the two

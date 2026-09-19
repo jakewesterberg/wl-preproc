@@ -1,7 +1,58 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (fourth update that day)**, describing `main` at
-`f5fb642` — the merge commit for `spec/gap-aware-barcode-extraction`.
+**Last updated 2026-09-19 (session close)**, describing `main` at `13dc4d0`.
+CI green on both interpreters — `gh run view 35467153322`.
+
+> ## Start here next session
+>
+> **Hardware status, stated by the requester at session close on 2026-09-19:
+> the rig is NOT ready and the compute machine is NOT assembled.** Both of the
+> highest-value items this session surfaced are therefore blocked on
+> something nobody here can unblock, and **the next session is hardware-free
+> code development.** Do not re-derive this; ask whether it has changed.
+>
+> **Blocked on the rig — raise it again when the rig runs.** The barcode and
+> timebase alignment path has never been exercised against real data and
+> cannot be with the recording this lab has (see the finding below). A few
+> minutes of recording with the sync box live would validate the whole
+> timebase chain before January. It is the cheapest large risk reduction
+> available and it is not a code task.
+>
+> **Blocked on the compute machine.** All of Phase 2b. If the machine has
+> been assembled since, Phase 2b outranks everything on the hardware-free
+> list — its window is Oct–Nov and it is the bulk of the pipeline.
+>
+> **Otherwise, pick up in this order:**
+>
+> 1. **Rehydration** (item 6 below). The last unbuilt piece with operational
+>    rather than analytical consequences: it turns `wlpp reclaim` from a
+>    preview into real disk-freeing. Small, hardware-free, reuses
+>    `archive/verify.py`'s existing reconstruction.
+> 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
+>    microsaccade detection.** Real code, hardware-free, and they matter as
+>    SACCADE detectors — see the priority note below about glissades. U'n'Eye
+>    is the fourth and wants the GPU, so it stays blocked.
+> 3. **Move `_KIND_OF` from `schema/detect.py` to `eye/detect/labels.py`.**
+>    Roughly half an hour; kills a duplicate that now has four consumers and
+>    nothing that can catch the copies drifting.
+> 4. **Which of the 225/337 unmatched saccades are real.** One eye detects a
+>    saccade the other misses entirely — essentially the whole 4.6–6.9%
+>    saccade cost. A measurement that refines a number already in hand, so it
+>    ranks below the code items.
+>
+> **Deferred minors from the gap-aware branch** are listed in
+> `handoffs/2026-09-19-gap-aware-barcode-extraction-built.md` and are not
+> worth a dedicated pass — let them ride with whatever next touches those
+> files. One is worth knowing because it is this repository's own rule
+> turned on itself: `eye/detect/validity.py` cites a "whole-branch review,
+> finding H2" and no document of that name exists anywhere under `docs/`.
+>
+> **A priority the code does not imply**, stated by the requester on
+> 2026-09-19: **glissades are peripheral.** Three recent rounds were
+> pso-motivated — Nyström–Holmqvist was chosen because it is the pso-capable
+> detector, and the conjunction-shape spec was rewritten around storing
+> `pso`. That work is correct and stands, but its weight in these documents
+> overstates its weight to the lab. Read eye findings saccade-first.
 
 *This header named `d30cbc6` and the branch tip `f9e02c7` while the work was
 unmerged. Both were true when written. The branch merged as `f5fb642`, two
@@ -774,7 +825,10 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    full chain.
 6. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
-   Worth doing before the hardware lands.
+   Worth doing before the hardware lands. **This is the recommended next
+   piece of work as of 2026-09-19** — see this file's own header, which
+   records that the rig and the compute machine are both unavailable and
+   that the next session is hardware-free code development.
 7. **The eye subsystem's two open decisions are both settled.** The calibration-block
    marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits
