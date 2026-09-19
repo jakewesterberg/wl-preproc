@@ -70,8 +70,13 @@ UNFITTED_SYSTEM = "unfitted_system"
 # to keep up with.
 GAP_CORRUPTED = "gap_corrupted"
 
-#: Every reason `RejectedSegment.reason` can hold. The first two come from
-#: `classify_segment`; the third is decided per system, above the file.
+#: Every reason `RejectedSegment.reason` can hold, and where each is
+#: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
+#: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
+#: exists for it to inherit. `GAP_CORRUPTED` is decided per FILE, in
+#: `Segment.make`, overriding the verdict `classify_segment` returned for
+#: that file rather than adding a fact `classify_segment` itself lacked the
+#: inputs to see.
 REJECTION_REASONS: frozenset[str] = frozenset(
     {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED}
 )

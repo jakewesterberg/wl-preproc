@@ -174,9 +174,17 @@ class Segment(dj.Computed):
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
             if scan.verdict != segments.ALIGNABLE:
-                # Gaps outrank the verdict as the REASON: `classify_segment`
-                # sees only how many barcodes survived, and when gaps are what
-                # removed them it names the symptom rather than the cause.
+                # Not two competing causes -- the only one available here.
+                # `classify_segment` (timebase/segments.py) returns ALIGNABLE
+                # whenever n_barcodes >= 1, so this branch is reached only
+                # when the file's surviving count is zero. A positive
+                # `n_barcodes_dropped` in that situation means every barcode
+                # this file ever decoded was one the gaps then removed, and
+                # but for the gap `classify_segment` would have returned
+                # ALIGNABLE. `scan.verdict` at that point can only be
+                # `too_short` or `no_barcode` -- both honest about the zero
+                # count and silent about why it is zero -- so GAP_CORRUPTED
+                # replaces it rather than adding to it.
                 reason = (
                     segments.GAP_CORRUPTED
                     if scan.n_barcodes_dropped
@@ -231,6 +239,21 @@ class Segment(dj.Computed):
         # negative half of this same scan, and 1c-1's comment says why it
         # exists at all: recorded rather than dropped, so "why is this session
         # short" has an answer.
+        #
+        # `REJECTION_REASONS` documents every value this column may hold, but
+        # a documented vocabulary nothing checks is a comment, not a contract
+        # -- so it is enforced here, at the one place that writes the column,
+        # immediately before the write reaches it. A reason outside the set is
+        # a programming error in this method (a branch that names a reason it
+        # never registered), not data to drop, so it raises rather than
+        # filtering the row out.
+        for row in rejected:
+            if row["reason"] not in segments.REJECTION_REASONS:
+                raise ValueError(
+                    f"{row['reason']!r} is not in segments.REJECTION_REASONS "
+                    f"{sorted(segments.REJECTION_REASONS)} -- add it there "
+                    "before writing it to RejectedSegment.reason"
+                )
         RejectedSegment.insert(rejected, skip_duplicates=True)
 
 
