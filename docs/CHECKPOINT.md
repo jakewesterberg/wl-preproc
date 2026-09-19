@@ -1,8 +1,12 @@
 # Where this build actually is
 
 **Last updated 2026-09-19 (fourth update that day)**, describing `main` at
-`d30cbc6` and the UNMERGED branch `spec/gap-aware-barcode-extraction` at
-`f9e02c7`.
+`f5fb642` — the merge commit for `spec/gap-aware-barcode-extraction`.
+
+*This header named `d30cbc6` and the branch tip `f9e02c7` while the work was
+unmerged. Both were true when written. The branch merged as `f5fb642`, two
+commits later than `f9e02c7` because a whole-branch review found a Critical
+defect after that header was composed — see below.*
 
 *The line above said `30d4761` until this update. `main` had moved twice past
 it — `dee5073` and `d30cbc6`, both docs commits made after that header was
@@ -37,10 +41,17 @@ session recorded on the synced rig with the sync box actually driving the
 ohDPI digital line — the same hardware unblock a calibrated session would be
 for Otero-Millan's provisional rows.
 
-**GAP-AWARE BARCODE EXTRACTION IS BUILT — NOT MERGED, NOT PUSHED, AND CI HAS
-NEVER RUN ON IT.** Branch `spec/gap-aware-barcode-extraction`, 22 commits
-`d30cbc6..HEAD` — from the spec commit `66e9cf2` through this documentation
-commit, spec and plan included; `origin` has no ref for it.
+**GAP-AWARE BARCODE EXTRACTION IS BUILT AND MERGED as `f5fb642`**, 24
+commits `d30cbc6..f56ad59` plus the fix wave — from the spec commit
+`66e9cf2` through `5a80156`, spec and plan included.
+
+> *This paragraph read "NOT MERGED, NOT PUSHED, AND CI HAS NEVER RUN ON IT"
+> and said 22 commits. All three clauses were true when written and the
+> count was right for that moment; a whole-branch review then found a
+> Critical defect (below) and its fix added two commits. Left recorded
+> rather than edited, per this file's own convention — and it is the ninth
+> time this project has watched a status sentence go stale between writing
+> and landing.*
 `extract_ohdpi` no longer refuses a recording with a dropped frame: it
 rebuilds the trace at true length from the file's own frame-number column
 (`np.repeat`, hold-previous fill, so no transition is invented) and
@@ -729,9 +740,8 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    here.** The next measurement is named there: the saccade-offset
    difference between the eyes over those events, which settles whether
    boundary placement is the cause.
-5. **Gap-aware barcode extraction — BUILT 2026-09-19, NOT merged, NOT pushed, CI has
-   never run on it.** Branch `spec/gap-aware-barcode-extraction`, 22 commits
-   `d30cbc6..HEAD`, the spec commit `66e9cf2` first.
+5. **Gap-aware barcode extraction — BUILT AND MERGED 2026-09-19 as `f5fb642`.**
+   24 commits `d30cbc6..5a80156`, the spec commit `66e9cf2` first.
    `specs/2026-09-19-gap-aware-barcode-extraction-design.md`,
    `plans/2026-09-19-gap-aware-barcode-extraction.md` and
    `handoffs/2026-09-19-gap-aware-barcode-extraction-built.md`. The problem this item

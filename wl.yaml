@@ -274,12 +274,13 @@ status:
   # superseded in turn. Recorded because it is this file's own recurring
   # failure -- a status block is only true of the commit it names, and
   # further work landing is one more way it stops being.
-  # The tip of the branch this block was written from, per the field's own
-  # definition -- `spec/gap-aware-barcode-extraction`, not `main`, because
-  # that branch is where the work this status describes actually is. `main`
-  # is at `d30cbc6` and does not contain it. Was `ea08678` until 2026-09-19,
-  # which `main` had by then moved ELEVEN commits past.
-  describes: f9e02c7
+  # The MERGE COMMIT on `main`, which is where the work this status describes
+  # now lives. This field named the branch tip `f9e02c7` while the branch was
+  # unmerged -- correct then, per the field's own definition, but a branch sha
+  # does not survive a rebase or a squash-merge and is not a reference anyone
+  # else can resolve. A merge commit on `main` is. Was `ea08678` before
+  # 2026-09-19, which `main` had by then moved eleven commits past.
+  describes: f5fb642
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
