@@ -91,7 +91,7 @@ class SystemTimebase(dj.Computed):
     ---
     fit_status         : {_FIT_STATUS_ENUM}  # read this before any column below
     time_source        : {_TIME_SOURCE_ENUM}  # the mechanism attempted
-    n_barcodes_decoded : int unsigned  # recovered from this system's own files
+    n_barcodes_decoded : int unsigned  # decoded AND trusted -- see make()
     n_barcodes_matched : int unsigned  # of those, present in the sync box's log
     nominal_rate_hz=null : double  # what the device believes it samples at
     fitted_rate_hz=null  : double  # nominal * (1 + drift_ppm/1e6)
@@ -159,6 +159,14 @@ class SystemTimebase(dj.Computed):
             self.insert1({**row, "fit_status": "no_recording"})
             return
 
+        # `scan.barcodes` is the gap-CLEAR set, not the raw decode:
+        # `segments.scan_system` drops any word a dropped-frame gap fell
+        # inside, because such a word decodes to a plausible WRONG value
+        # rather than failing `decode_edges`' structural checks. The filter
+        # sits before this point deliberately -- `fit_rate` below maps barcode
+        # VALUE to time, so one corrupt value would skew the whole session's
+        # rate. On every system but ohdpi, and on any ohdpi recording with no
+        # gaps, this is identical to the raw decode.
         decoded = [barcode for scan in scans for barcode in scan.barcodes]
         nominal_rate_hz = scans[0].stream.fs_hz
         row["n_barcodes_decoded"] = len(decoded)
