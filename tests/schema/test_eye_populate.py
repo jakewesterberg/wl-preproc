@@ -1824,3 +1824,79 @@ def test_the_margin_is_null_below_the_point_count_rather_than_misleading(fitted_
         # The affine measure is still recorded: that one IS meaningful at four
         # points, and it is what says whether the fit that ran was constrained.
         assert row["conditioning"] is not None
+
+
+# --- Validity criterion 4, end to end: the frame-gap window fires on a ------
+# --- stored trace, not merely inside its own unit tests ---------------------
+#
+# `wl_preproc/eye/detect/validity.py`'s frame-gap loop is one of OpenIrisDPI's
+# own five validity criteria (design spec section 2) and has been unit-tested
+# since the 2026-08-31 saccade-detection design -- but a gapped ohDPI
+# recording used to be REFUSED in `extract_ohdpi`, so `EyeValidity.make()`
+# could only ever pass it `frame_gaps=()`. This branch's Task 1 (`053c2cd`)
+# and Task 2 (`53d8615`) removed that refusal, so `gapped_session` (Task 6,
+# `tests/schema/conftest.py`) is now the first stored trace this criterion has
+# ever run against. See `validity.py`'s own rewritten comment beside
+# `across_gap` for the reasoning in full.
+
+
+def test_the_frame_gap_criterion_fires_on_a_stored_trace(dj_conn, prefix, gapped_session):
+    """Validity criterion 4's first run in production. `frac_frame_gap` is a
+    RAW per-criterion count over all samples (see `EyeValidity`'s own
+    definition), so a non-zero value means THIS criterion rejected something
+    rather than that the mask rejected something for any reason.
+
+    `daemon.run_once()` first: `gapped_session` (Task 6) lands the session and
+    aligns `SystemTimebase` but deliberately stops there (that fixture's own
+    docstring), and `EyeValidity.key_source` also needs a registered
+    `eye_validity` paramset, a real `core.Segment` row, an assembled event
+    stage and `eye.EyeCalibration` to have RUN -- the same chain every other
+    `EyeValidity`-reaching fixture in this file and in
+    `test_detect_populate.py` goes through via a real `run_once()`, never
+    `make()` called by hand. The explicit `EyeValidity.populate()` call below
+    is then the brief's own line, kept verbatim: `run_once()` suppresses
+    per-key errors, so this second, `suppress_errors=False` call is what
+    would actually raise if something were wrong, on top of covering any key
+    `run_once()` left outstanding.
+    """
+    from wl_preproc import daemon
+    from wl_preproc.schema import detect
+
+    daemon.run_once(prefix=prefix)
+    detect.EyeValidity.populate(gapped_session, suppress_errors=False)
+    rows = (detect.EyeValidity & gapped_session).to_dicts()
+
+    assert rows, "the gapped session must produce a validity row at all"
+    assert all(row["status"] == "computed" for row in rows), (
+        "a gapped recording must no longer refuse: that was the old behaviour"
+    )
+    assert any(row["frac_frame_gap"] > 0 for row in rows)
+
+
+def test_the_frame_gap_criterion_is_silent_on_a_clean_session(dj_conn, prefix, fitted_session):
+    """The control. Without it, the test above could pass because the
+    criterion fires on every session, which would mean it measures nothing.
+
+    This task's own brief names `stepped_session` for this role; that fixture
+    lives in `test_detect_populate.py`, not in this file. `fitted_session` is
+    this file's own clean session in the same role -- a real ohDPI recording
+    whose `ohdpi_dropped_frames` sits at `SessionRecipe`'s default `()`, so
+    `frame_gaps` is empty and this criterion has nothing to reject -- and its
+    own `daemon_module.run_once()` (inside the fixture) already reaches
+    `EyeValidity` the same way `test_key_source_is_not_empty_for_a_landed_
+    session`/`test_daemon_run_once_populates_both_tables` above rely on it
+    reaching `EyeCalibration`/`EyeQuality`.
+    """
+    from wl_preproc.schema import detect
+
+    session_key, _report = fitted_session
+    detect.EyeValidity.populate(session_key, suppress_errors=False)
+    rows = (detect.EyeValidity & session_key).to_dicts()
+
+    assert rows
+    assert all(row["status"] == "computed" for row in rows), (
+        "a clean, well-conditioned session must compute, not refuse -- a "
+        "refused row's frac_frame_gap is NULL, which would make the "
+        "assertion below compare None to 0 and fail for the wrong reason"
+    )
+    assert all(row["frac_frame_gap"] == 0 for row in rows)
