@@ -23,16 +23,42 @@ status:
     (`fix/detector-carries-its-defaults`, merged `19daf07`) made a
     `Detector` carry its own paramset defaults instead of a hardcoded
     two-entry dict, so a third detector can register without crashing
-    `daemon.run_once()`. `origin`'s `main` is at `19daf07` today.
+    `daemon.run_once()`.
 
-    Stage 2B's first detector, Nystrom-Holmqvist, is written, tested and
-    registered -- the third registered detector, and the first to emit
-    `pso` and `fixation` -- eleven commits `6e952f6..a78dcf0` on branch
-    `spec/nystrom-holmqvist`, based on `main` at `19daf07`, with a
-    whole-branch review's own fix wave on top (`84247d1` -- see `next`
-    below). NOT merged, NOT pushed: `origin` has no `spec/nystrom-holmqvist`
-    ref. Phase 2b's back half remains hardware-blocked.
+    Stage 2B's first detector, Nystrom-Holmqvist, is written, tested,
+    registered and MERGED -- the third registered detector, and the first
+    to emit `pso` and `fixation` -- as `534e8b5`, sixteen commits
+    `19daf07..2f93374`, with a whole-branch review's own fix wave in
+    `84247d1`. Two measurement rounds have landed on top of it: the three
+    `WLPP_OHDPI_REFERENCE`-gated reference checks and the eye
+    kind-disagreement statistic (`1dc1676`), and a DataJoint 2.3.3 pin move
+    (`ea08678`) after that merge turned `main` red in a test unrelated to
+    it. `origin`'s `main` is at `5f68161` today, CI green on 3.11 and 3.13,
+    read off the run. Phase 2b's back half remains hardware-blocked.
+
+    *The three sentences above replaced ones reading "NOT merged, NOT
+    pushed: `origin` has no `spec/nystrom-holmqvist` ref" and "`origin`'s
+    `main` is at `19daf07` today". Both were true when written and had been
+    false since 2026-09-06 and 2026-09-13 respectively. `next` below had
+    already recorded its own version of this same staleness; this block was
+    left behind by that correction, which is the fifth instance of this
+    repository's recurring lesson that a status sentence is only true of the
+    commit it names.*
   next: >-
+    The eye subsystem's open measurement is answered as of 2026-09-19, on
+    branch `measure/which-kinds-disagree`: conjunction-shape spec section 6
+    asked WHICH kinds the two eyes disagree about, and it is `pso` against
+    `saccadic` in essentially every case (721 of 721 and 855 of 855), but
+    almost entirely in ONE direction -- one eye calling a stretch a glissade
+    while the other still calls it a saccade, at about twice its chance
+    share, with the mirror depleted to a thirtieth of chance. Restated as
+    cost, the binocular agreement rule discards 35-39% of every detected
+    glissade and 0.2-0.4% of saccades, so the "about a fifth" recorded on
+    2026-09-12 is an average over two kinds that are not affected alike.
+    `docs/handoffs/2026-09-19-which-kinds-disagree.md` has the account. The
+    next measurement is the saccade-offset difference between the eyes over
+    those events, which settles whether the mechanism is boundary placement.
+
     Saccade detection stage 2B has its first detector: Nystrom-Holmqvist
     is written, tested and registered -- the third registered detector,
     and the first ever to emit `pso` and `fixation` -- on branch
