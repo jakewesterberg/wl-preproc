@@ -83,6 +83,20 @@ _GAP_FRAMES = 3
 _TRIAL_DURATION_S = 3.0
 _N_TRIALS = 4
 
+#: `test_eye_populate.py::fitted_session`'s own four targets, copied rather
+#: than imported for the same reason `_TRIAL_DURATION_S`/`_N_TRIALS` above
+#: are: four well-spread points (not collinear, not coincident), proven to
+#: fit -- `test_a_well_conditioned_session_yields_fitted` already checks that,
+#: on the identical constellation. `_plant` below plants one calibration
+#: window per trial from these, at each trial's own `+1.0 s` (`_inject_
+#: fixations`'s own placement, clear of the TRIAL_START/TRIAL_NUMBER and
+#: TRIAL_CORRECT/TRIAL_END clusters `synth/timeline.py::_emit` puts at each
+#: trial's start and end) -- so `EyeCalibration` has something to fit and a
+#: gapped session's own `EyeValidity` row can reach `status='computed'`
+#: instead of a refused "no usable calibration" one that leaves every
+#: `frac_*` column `NULL`.
+_CALIBRATION_TARGETS_DEG = [(0.0, 0.0), (8.0, 8.0), (-8.0, 8.0), (8.0, -8.0)]
+
 
 def _gap_recipe(session_id: str, subject: str, seed: int, dropped_frames: tuple[int, ...]):
     """`test_eye_populate.py::_recipe`'s minimal session, plus dropped frames.
@@ -147,6 +161,24 @@ def _plant(
     and "in the idle" versus "inside a word" is the entire difference
     between these two fixtures.
 
+    **Also plants `_CALIBRATION_TARGETS_DEG`, one window per trial, via
+    `test_eye_populate.py::_inject_fixations`.** `_gap_recipe` on its own
+    carries no `TARGET_POSITION`/`FIXATION_ACQUIRED`/`FIXATION_END` code at
+    all -- `resolve_calibration` refuses UNCONDITIONALLY the moment its own
+    `raw_xy` is empty (`eye/calibration.py`, before it ever tries an online
+    or carried-forward map), so with none of these a session built from
+    `_gap_recipe` alone can never reach `EyeCalibration`'s `fitted` rung, and
+    `EyeValidity.make()`'s own `map_ is None` branch would then refuse both
+    eyes -- a row with `status='refused'` and every `frac_*` column `NULL`,
+    which answers a different question than the one these fixtures exist to
+    let a caller ask (design spec section 2's frame-gap criterion, over a
+    `status='computed'` row). Independent of the planted gap: barcodes and
+    code words are separate GPIO channels on the same sync box log
+    (`synth/syncbox.py::write_syncbox_log` writes `truth.barcodes` and
+    `truth.code_words` from two untouched, unrelated fields), so adding a
+    calibration window here changes neither the barcode stream `place`
+    reasons about nor the frame gap dropped from the ohDPI file.
+
     Returns `(key, scan, truth)`. The key names the ohDPI RECORDING, not
     merely the session: it carries `system` so that `Segment & key` and
     `RejectedSegment & key` each resolve to exactly one row. Both consuming
@@ -175,7 +207,7 @@ def _plant(
     # shared rather than copied for the reason `test_segment_populate.py`
     # already gives for importing `_build_stepped_session`: a second copy of
     # the landing rows is a second thing free to drift.
-    from tests.schema.test_eye_populate import _land
+    from tests.schema.test_eye_populate import _inject_fixations, _land
 
     daemon.activate_all(prefix=prefix)
 
@@ -192,6 +224,7 @@ def _plant(
     root = tmp_path_factory.mktemp(dirname)
     generate_session(root, recipe)
     session_dir = root / recipe.session_id
+    _inject_fixations(session_dir, recipe, truth, list(_CALIBRATION_TARGETS_DEG))
 
     (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
     assert read_ohdpi(ohdpi_txt).frame_gaps, (
