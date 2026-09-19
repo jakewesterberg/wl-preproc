@@ -1,6 +1,26 @@
 # Where this build actually is
 
-**Last updated 2026-09-13**, describing `main` at `ea08678`.
+**Last updated 2026-09-19**, describing branch `measure/which-kinds-disagree`
+forked from `main` at `5f68161`. `main` itself has not moved since
+2026-09-13.
+
+**WHICH kinds the two eyes disagree about is measured.** Conjunction-shape
+spec §6's last open sub-question, and the item at the top of the 2026-09-12
+handoff's own "not measured" list. The answer: `pso` against `saccadic` in
+essentially every disagreement (721 of 721 left→right, 855 of 855
+right→left), but **almost entirely in one direction** — one eye calling a
+stretch a glissade while the other is still calling it a saccade, at about
+2× its chance share, with the mirror depleted to a thirtieth of chance.
+Restated as cost, §1's binocular agreement rule discards **35–39% of every
+detected glissade against 0.2–0.4% of saccades**, so the "about a fifth"
+recorded on 2026-09-12 is a true average over two kinds that are not
+affected alike, and it concealed this. Not merged, not pushed, CI has not
+run — and by this file's own recurring lesson, assume that clause is false
+the moment the branch lands.
+
+*The 2026-09-13 header this replaced described `main` at `ea08678` and is
+still where the DataJoint pin move came from; `5f68161` is the docs commit
+on top of it.*
 
 *The 2026-09-06 header this replaced described `main` at `534e8b5`, the
 merge commit that landed `spec/nystrom-holmqvist` — sixteen commits
@@ -550,6 +570,24 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    whole-branch review's own fix wave (this section's header): 1341
    passed**, same other counts, zero warnings — eight new tests, none
    removed. CI has not run for any of it.
+
+   **2026-09-19 — stage 2B's measurement half is finished, and it moved the
+   conclusion.** Two rounds landed on top of the merged detector. The first
+   (`1dc1676`, merged, CI green) ran the three reference-gated checks and
+   measured that the two eyes disagree on kind 11–13% of the time, costing
+   about a fifth of each eye's detected events. **The second
+   (`measure/which-kinds-disagree`, this branch) asked which kinds, and the
+   aggregate turned out to be hiding the finding**: the disagreements are
+   `pso` against `saccadic` in essentially every case, almost entirely in
+   one direction, and the cost is **35–39% of every detected glissade
+   against 0.2–0.4% of saccades**. §1's agreement rule is not a uniform tax;
+   it falls almost entirely on the one kind the conjunction-shape spec exists
+   to store. Spec §6 and
+   `handoffs/2026-09-19-which-kinds-disagree.md` carry the numbers and the
+   mechanism hypothesis — **read those rather than trusting numbers recalled
+   here.** The next measurement is named there: the saccade-offset
+   difference between the eyes over those events, which settles whether
+   boundary placement is the cause.
 5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
    written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
    no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and

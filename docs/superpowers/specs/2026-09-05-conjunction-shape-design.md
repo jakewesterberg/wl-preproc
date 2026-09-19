@@ -309,6 +309,75 @@ left CI red on 3.13 alone for a day while every local run was green.
    glissade boundary differently — is NOT measured, and is the obvious next
    question.
 
+   **ANSWERED 2026-09-19. The pair was guessed right and the DIRECTION was
+   not guessed at all, which is the whole finding.** Measured by the same
+   test, on the same recording, extended to break `disagree` down by the
+   ordered pair `(own kind, other kind)`:
+
+   | direction | pair | n | share of disagreements | chance share | ratio |
+   |---|---|---|---|---|---|
+   | left→right | `pso` over `saccadic` | 711 | **0.9861** | 0.4894 | **2.01×** |
+   | left→right | `saccadic` over `pso` | 10 | 0.0139 | 0.5106 | 0.03× |
+   | right→left | `pso` over `saccadic` | 835 | **0.9766** | 0.5106 | **1.91×** |
+   | right→left | `saccadic` over `pso` | 20 | 0.0234 | 0.4894 | 0.05× |
+
+   The guess above named `saccade` against `pso` and is confirmed: those two
+   kinds are essentially the ONLY disagreement, 721 of 721 and 855 of 855.
+   But the two eyes do not disagree symmetrically. Nearly every disagreement
+   is one eye calling a stretch a glissade while the other is still calling
+   it a saccade; the mirror — one eye calling a saccade what the other calls
+   a glissade — is not merely rarer, it is *depleted to a thirtieth of its
+   chance share*.
+
+   **The chance share is what makes that a finding rather than a restatement
+   of the kind mix**, and it is computed rather than assumed: the two
+   marginals with the agreeing diagonal removed and the rest renormalised
+   (`_expected_pair_shares`, hand-derived expectations pinned in
+   `test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes`).
+   With roughly two `pso` for every five `saccade` in each eye, chance
+   divides the disagreements almost evenly between the two directions —
+   0.489/0.511. The measurement finds 0.986/0.014. Without that baseline,
+   "`pso` over `saccadic` dominates" would have been the vocabulary talking.
+
+   **Restated as a cost, §1's agreement requirement is not a uniform tax.**
+   The fifth this section already reported is an average over two kinds that
+   are not affected alike:
+
+   | direction | kind | dropped for disagreement | of its own runs | rate |
+   |---|---|---|---|---|
+   | left→right | `pso` | 711 | 2,017 | **0.3525** |
+   | left→right | `saccadic` | 10 | 5,062 | 0.0020 |
+   | right→left | `pso` | 835 | 2,167 | **0.3853** |
+   | right→left | `saccadic` | 20 | 5,213 | 0.0038 |
+
+   **Better than a third of every detected glissade is discarded by the
+   binocular agreement rule, against two to four tenths of a percent of
+   saccades.** The cost of §1 falls almost entirely on `pso` — the one kind
+   this spec exists to store. That is the sentence this section's "conservative
+   or costly" framing was asking for, and the aggregate fifth concealed it.
+
+   **A mechanism is available and is NOT measured — stated as the leading
+   hypothesis, not as a finding.** A glissade is short (18–20 ms, §5's own
+   measurement) and sits immediately after a saccade; a saccade is long. If
+   the two eyes place a saccade's OFFSET differently by about a glissade's
+   duration, then over those samples one eye has already begun its `pso`
+   while the other is still inside its `saccade` — producing exactly this
+   pair in exactly this direction. The asymmetry follows too: a long own
+   `saccade` nearly always finds SOME same-kind counterpart and agrees,
+   while a short own `pso` swallowed by the other eye's saccade has none.
+   **What would settle it** is the distribution of (other eye's saccade
+   offset − own eye's saccade offset) over these 711 and 835 events; if the
+   mechanism is right it is centred near one glissade duration and not near
+   zero. That is a new measurement, and it is the next question rather than
+   part of this answer.
+
+   **Deliberately not asserted.** The breakdown is printed and the only new
+   assertion is an identity — that the pairs partition `disagree`. A bound
+   on the shares would be tuned to the run that produced them, and worse, it
+   would fire on an IMPROVEMENT: if the mechanism above is right, a better
+   glissade offset criterion should SHRINK this asymmetry. The finding lives
+   here and in the handoff, not in an assertion.
+
    **A detector asymmetry found while measuring, and not previously written
    down anywhere.** The conjunction's duration floor is the detector's own:
    `schema/detect.py::_min_duration_samples` reads `min_duration_samples` off

@@ -336,6 +336,9 @@ class _Agreement:
     `alone` -- no overlapping detected run at all; the other eye calls that
     stretch `fixation`, which `_conjunction_runs` never intersects.
 
+    `pairs` splits the middle bucket further, by WHICH two kinds disagreed
+    -- see its own comment below.
+
     **Both of the last two are dropped by the binocular agreement rule**
     (conjunction-shape design spec section 1), which is why `drop_rate` adds
     them and `kind_disagreement_rate` does not. The spec's open question 1 is
@@ -343,10 +346,17 @@ class _Agreement:
     needs both.
     """
 
-    def __init__(self, agree: int, disagree: int, alone: int):
+    def __init__(self, agree: int, disagree: int, alone: int, pairs=None):
         self.agree = agree
         self.disagree = disagree
         self.alone = alone
+        #: The `disagree` bucket broken down by WHICH two kinds disagreed --
+        #: a `Counter` keyed by the ordered pair `(own kind, other kind)`,
+        #: partitioning `disagree` exactly (`test_the_pair_breakdown_
+        #: accounts_for_every_disagreement`). Ordered, not symmetric: the
+        #: measurement runs both directions and "left said saccadic where
+        #: right said pso" is a different finding from its mirror.
+        self.pairs: Counter = Counter() if pairs is None else Counter(pairs)
 
     @property
     def total(self) -> int:
@@ -416,11 +426,23 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
     widest = int((stops - starts).max())
 
     agree = disagree = alone = 0
+    pairs: Counter = Counter()
     for run in own_runs:
         own_kind = _kind_of(run.label)
         lo = int(np.searchsorted(starts, run.start - widest, side="left"))
         hi = int(np.searchsorted(starts, run.stop, side="left"))
-        same_kind = other_kind = False
+        same_kind = False
+        # `best_kind is not None` stands in for the boolean this loop used
+        # to carry, so `-1` rather than `0`: the first ADMITTED counterpart
+        # must take the slot whatever `floor` is, and a `0` start would
+        # reclassify a zero-sample counterpart as `alone` under a `floor` of
+        # 0. **No test discriminates the two, and that is stated rather than
+        # left to look like coverage** -- every caller's floor is at least 1
+        # (`_min_duration_samples` defaults to 1), so the case is unreachable
+        # today. Mutating this to `0` survives the whole file. It is kept at
+        # `-1` because exact equivalence with the boolean is free here and
+        # the next detector's params are the thing that would change it.
+        best_overlap, best_kind = -1, None
         for index in range(lo, hi):
             overlap = min(run.stop, int(stops[index])) - max(
                 run.start, int(starts[index])
@@ -430,14 +452,59 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
             if kinds[index] == own_kind:
                 same_kind = True
                 break
-            other_kind = True
+            # Strictly greater, so equal overlaps keep the FIRST -- and
+            # `other_runs` is sorted by `(start, stop)`, so "first" is a
+            # stated order rather than whatever the caller passed in.
+            if overlap > best_overlap:
+                best_overlap, best_kind = overlap, kinds[index]
         if same_kind:
             agree += 1
-        elif other_kind:
+        elif best_kind is not None:
             disagree += 1
+            pairs[(own_kind, best_kind)] += 1
         else:
             alone += 1
-    return _Agreement(agree, disagree, alone)
+    return _Agreement(agree, disagree, alone, pairs)
+
+
+def _kind_mix(runs) -> Counter:
+    """`runs` tallied by conjunction KIND, with the labels the conjunction
+    never intersects dropped -- the marginal both the chance baseline and the
+    per-kind report line are built from, defined once so the two cannot come
+    apart."""
+    return Counter(k for k in (_kind_of(run.label) for run in runs) if k is not None)
+
+
+def _expected_pair_shares(own, other) -> dict:
+    """What fraction of disagreements each ordered kind pair would take if the
+    two eyes' kinds were independent -- the baseline `_kind_agreement`'s
+    `pairs` is read against.
+
+    The two marginals with the agreeing diagonal removed and the rest
+    renormalised, since a pair only reaches the breakdown when the kinds
+    differ. Same kind filter as the statistic itself, so both describe the
+    same population.
+
+    Returns `{}` where no pair is reachable -- either eye empty, or both
+    carrying only one kind and the same one -- rather than raising: an empty
+    baseline is the correct answer to "how would chance divide zero
+    disagreements", and the callers below print it beside a `pairs` that is
+    empty for the same reason.
+    """
+    own_mix, other_mix = _kind_mix(own), _kind_mix(other)
+    own_total, other_total = sum(own_mix.values()), sum(other_mix.values())
+    if not own_total or not other_total:
+        return {}
+    weights = {
+        (a, b): (own_mix[a] / own_total) * (other_mix[b] / other_total)
+        for a in own_mix
+        for b in other_mix
+        if a != b
+    }
+    denominator = sum(weights.values())
+    if not denominator:
+        return {}
+    return {pair: weight / denominator for pair, weight in weights.items()}
 
 
 def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
@@ -544,6 +611,234 @@ def test_an_overlap_shorter_than_the_floor_does_not_count_as_a_counterpart():
 
     rejected = _kind_agreement(own, other, floor=6)
     assert (rejected.agree, rejected.disagree, rejected.alone) == (0, 0, 1)
+
+
+def test_a_kind_disagreement_records_which_two_kinds_disagreed():
+    """The headline rate says HOW OFTEN the eyes name a stretch differently;
+    it does not say WHICH names. Conjunction-shape design spec section 6's
+    open question 1 is answered by the rate, but what to DO about the cost it
+    measures depends entirely on the pair: `saccadic` against `pso` is the
+    two eyes placing one glissade boundary differently, which is a tolerance
+    question, while `saccadic` against `pursuit` would be the two eyes
+    disagreeing about what the animal did, which is not.
+
+    The breakdown is a `Counter` keyed by the ordered pair, so it is read
+    directly against `disagree` -- see
+    `test_the_pair_breakdown_accounts_for_every_disagreement`.
+    """
+    counts = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(0, 20, Label.PSO)],
+        floor=1,
+    )
+
+    assert counts.disagree == 1
+    assert counts.pairs == Counter({("saccadic", Label.PSO.value): 1})
+
+
+def test_the_disagreeing_pair_names_the_own_eyes_kind_first():
+    """The pair is ORDERED, own kind first, and the two directions are read
+    separately because they are different questions: "left called it a
+    saccade where right called it a glissade" is not the same finding as its
+    mirror, and the measurement below runs `_kind_agreement` both ways
+    precisely so the asymmetry is visible.
+
+    A key built with `frozenset` or `tuple(sorted(...))` would pass every
+    other test in this file and silently merge the two directions into one
+    number.
+    """
+    left_first = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(0, 20, Label.PSO)],
+        floor=1,
+    )
+    right_first = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.PSO)],
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        floor=1,
+    )
+
+    assert list(left_first.pairs) == [("saccadic", Label.PSO.value)]
+    assert list(right_first.pairs) == [(Label.PSO.value, "saccadic")]
+
+
+def test_an_agreement_and_an_unmatched_run_contribute_no_pair():
+    """Only the `disagree` bucket has a pair to report. An agreement has one
+    kind and no disagreement; an `alone` run has no counterpart at all, so
+    there is no second kind to name -- recording either would put runs into
+    the breakdown that section 1 does not drop for a naming reason, and the
+    breakdown would stop summing to `disagree`.
+    """
+    agreed = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        floor=1,
+    )
+    assert (agreed.agree, agreed.disagree) == (1, 0)
+    assert agreed.pairs == Counter()
+
+    unmatched = _kind_agreement(
+        [_LabelledSpan(0, 20, Label.SACCADE)],
+        [_LabelledSpan(100, 120, Label.SACCADE)],
+        floor=1,
+    )
+    assert (unmatched.alone, unmatched.disagree) == (1, 0)
+    assert unmatched.pairs == Counter()
+
+
+def test_a_run_disagreeing_with_two_kinds_is_attributed_to_the_larger_overlap():
+    """One own-run can overlap several counterparts of different kinds, and
+    it is still exactly ONE disagreement -- `disagree` counts own-runs, not
+    counterparts, so the breakdown must too or it stops summing to it.
+
+    Which of the two names it: the counterpart sharing the most samples. The
+    alternative -- first by start time -- would attribute this run to a
+    10-sample `pso` clipping its leading edge over a 70-sample `pursuit`
+    covering most of it, which is the wrong one of the two to report and the
+    one an unsorted scan happens to reach first.
+    """
+    counts = _kind_agreement(
+        [_LabelledSpan(0, 100, Label.SACCADE)],
+        [
+            _LabelledSpan(0, 10, Label.PSO),  # 10 samples of overlap
+            _LabelledSpan(20, 90, Label.PURSUIT),  # 70 samples of overlap
+        ],
+        floor=1,
+    )
+
+    assert counts.disagree == 1, "one own-run is one disagreement, not two"
+    assert counts.pairs == Counter({("saccadic", Label.PURSUIT.value): 1})
+
+
+def test_two_counterparts_tied_on_overlap_are_broken_by_start_order():
+    """`best_overlap` is taken with a STRICT comparison, so two counterparts
+    sharing the same number of samples keep the earlier one -- and
+    `_kind_agreement` sorts `other` by `(start, stop)` first, so "earlier"
+    is a rule rather than whatever order the caller happened to build its
+    list in.
+
+    Pinned because the rule is otherwise invisible: relaxing the comparison
+    to `>=` changes which kind this run is attributed to and passes every
+    other test in this file. A tie is not exotic here -- an overlap is a
+    count of samples, runs are tens of samples long at this rate, and two
+    small integers land equal often enough that the rule has to be stated
+    rather than left to the iteration order.
+    """
+    counts = _kind_agreement(
+        [_LabelledSpan(0, 100, Label.SACCADE)],
+        [
+            _LabelledSpan(0, 50, Label.PSO),  # 50 samples, starts first
+            _LabelledSpan(50, 100, Label.PURSUIT),  # 50 samples, starts second
+        ],
+        floor=1,
+    )
+
+    assert counts.disagree == 1
+    assert counts.pairs == Counter({("saccadic", Label.PSO.value): 1})
+
+
+def test_the_pair_breakdown_accounts_for_every_disagreement():
+    """`sum(pairs.values()) == disagree`, over a population large enough that
+    the multi-counterpart and floor paths both fire.
+
+    This is the invariant that lets the breakdown be read beside the headline
+    rate: if it holds, the pairs are a PARTITION of the disagreements and
+    their fractions are fractions of `disagree`. If it does not, the two
+    numbers in the report describe different populations and neither can be
+    quoted against the other. Run against the same null generator the chance
+    level uses, so the population has three kinds, real overlaps and real
+    ties rather than a hand-built pair.
+    """
+    rng = np.random.default_rng(11)
+    n_samples = 50_000
+    template = (
+        [_LabelledSpan(0, 20, Label.SACCADE)] * 400
+        + [_LabelledSpan(0, 12, Label.PSO)] * 400
+        + [_LabelledSpan(0, 60, Label.PURSUIT)] * 200
+    )
+
+    left = _random_labelled_span_null(template, n_samples, rng)
+    right = _random_labelled_span_null(template, n_samples, rng)
+
+    counts = _kind_agreement(left, right, floor=1)
+
+    assert counts.disagree > 0, "the null produced no disagreement to partition"
+    assert sum(counts.pairs.values()) == counts.disagree, (
+        f"the breakdown accounts for {sum(counts.pairs.values())} of "
+        f"{counts.disagree} disagreements; the pairs are not a partition of "
+        "them and their fractions cannot be read against the headline rate"
+    )
+
+
+def test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes():
+    """What the breakdown must be read against.
+
+    **A dominant pair is not automatically a finding.** If one eye's runs are
+    mostly `saccadic` and the other's carry plenty of `pso`, then
+    `saccadic`-over-`pso` is the most common disagreement for a reason that
+    has nothing to do with binocularity: it is the most common way to draw
+    two different kinds out of those two mixes. This is the same rule the
+    headline rate already obeys -- read against chance, not against zero --
+    applied to the breakdown, and the reason the Otero-Millan round's
+    main-sequence check was withdrawn rather than relaxed.
+
+    Chance share of the ordered pair `(a, b)`, given a disagreement, is
+
+        p(a) * q(b) / sum over every a' != b' of p(a') * q(b')
+
+    where `p` is the OWN eye's kind mix and `q` the OTHER eye's -- the same
+    two marginals, with the agreeing diagonal removed, since a pair only
+    reaches the breakdown when the kinds differ.
+
+    Expectations below are hand-derived from a deliberately asymmetric pair
+    of mixes, not computed by the helper: own is half `saccadic` and half
+    `pso`, other is one quarter `saccadic` and three quarters `pursuit`, so
+    the three reachable pairs weigh .5*.75, .5*.25 and .5*.75 -- 3/7, 1/7
+    and 3/7 of a .875 total.
+    """
+    own = [_LabelledSpan(0, 1, Label.SACCADE)] * 2 + [_LabelledSpan(0, 1, Label.PSO)] * 2
+    other = [_LabelledSpan(0, 1, Label.SACCADE)] + [
+        _LabelledSpan(0, 1, Label.PURSUIT)
+    ] * 3
+
+    shares = _expected_pair_shares(own, other)
+
+    assert shares == pytest.approx(
+        {
+            ("saccadic", Label.PURSUIT.value): 3 / 7,
+            (Label.PSO.value, "saccadic"): 1 / 7,
+            (Label.PSO.value, Label.PURSUIT.value): 3 / 7,
+        }
+    )
+
+
+def test_the_expected_pair_shares_ignore_the_labels_the_conjunction_drops():
+    """`fixation`/`blink`/`invalid` are not detected events and never reach
+    the conjunction (`_NOT_INTERSECTED`), so they must not enter either
+    marginal -- counting them would shrink every real kind's share and make
+    the observed breakdown look inflated against chance across the board.
+
+    Own here is half `fixation` by count and the expectation is unchanged
+    from the test above's `saccadic`/`pso` half.
+    """
+    own = (
+        [_LabelledSpan(0, 1, Label.SACCADE)] * 2
+        + [_LabelledSpan(0, 1, Label.PSO)] * 2
+        + [_LabelledSpan(0, 1, Label.FIXATION)] * 4
+    )
+    other = [_LabelledSpan(0, 1, Label.SACCADE)] + [
+        _LabelledSpan(0, 1, Label.PURSUIT)
+    ] * 3
+
+    shares = _expected_pair_shares(own, other)
+
+    assert shares == pytest.approx(
+        {
+            ("saccadic", Label.PURSUIT.value): 3 / 7,
+            (Label.PSO.value, "saccadic"): 1 / 7,
+            (Label.PSO.value, Label.PURSUIT.value): 3 / 7,
+        }
+    )
 
 
 def test_the_null_fails_the_kind_agreement_check():
@@ -871,6 +1166,17 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
     report this rate as exactly zero -- not as unmeasured, but as a wrong
     answer that looks like a finding.
 
+    **WHICH kinds disagree is reported and deliberately NOT asserted.** The
+    breakdown and its chance baseline are printed, and the one assertion
+    added for them is an identity -- that the pairs partition `disagree` --
+    rather than a bound on what the pairs turn out to be. A bound would be
+    tuned to a number this run just produced, which is the failure the
+    Otero-Millan round left a rule about; worse, the obvious bound here
+    would fire on an IMPROVEMENT, since the whole asymmetry below is a
+    boundary-placement artefact that a better glissade offset criterion
+    should shrink. What is measured belongs in the spec and the handoff,
+    not in an assertion.
+
     **Read against the null, not against zero.** Two traces sharing only a
     kind mix already agree often by accident;
     `test_the_null_fails_the_kind_agreement_check` measures that chance level
@@ -882,18 +1188,17 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
     """
     left_trace, right_trace = reference["traces"]
     directions = [
+        ("left->right", left_trace.runs, right_trace.runs),
+        ("right->left", right_trace.runs, left_trace.runs),
+    ]
+    measured = [
         (
-            "left->right",
-            _kind_agreement(
-                left_trace.runs, right_trace.runs, NH_CONJUNCTION_FLOOR_SAMPLES
-            ),
-        ),
-        (
-            "right->left",
-            _kind_agreement(
-                right_trace.runs, left_trace.runs, NH_CONJUNCTION_FLOOR_SAMPLES
-            ),
-        ),
+            name,
+            _kind_agreement(own, other, NH_CONJUNCTION_FLOOR_SAMPLES),
+            _expected_pair_shares(own, other),
+            _kind_mix(own),
+        )
+        for name, own, other in directions
     ]
 
     with capsys.disabled():
@@ -904,7 +1209,7 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
             f"Engbert-Kliegl's 6); null measures "
             f"{NULL_KIND_DISAGREEMENT_FLOOR}+ by chance:"
         )
-        for name, counts in directions:
+        for name, counts, expected, own_mix in measured:
             print(
                 f"    {name}  agree={counts.agree:6d}  disagree="
                 f"{counts.disagree:5d}  alone={counts.alone:6d}"
@@ -915,6 +1220,40 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
                 f"{counts.compared} compared -- drop rate "
                 f"{counts.drop_rate:.4f} of {counts.total} detected"
             )
+            # WHICH kinds disagreed, against what the two kind mixes alone
+            # predict. A pair that merely tracks its own chance share is the
+            # vocabulary talking, not the eyes -- the same rule the headline
+            # rate is read under, applied to the breakdown.
+            if counts.disagree:
+                print(
+                    "                 which kinds -- observed share of "
+                    f"{counts.disagree}, vs the kind mix's own expectation:"
+                )
+                for pair, n in counts.pairs.most_common():
+                    observed = n / counts.disagree
+                    chance = expected.get(pair, 0.0)
+                    ratio = f"{observed / chance:.2f}x" if chance else "n/a"
+                    print(
+                        f"                   {pair[0]:>9s} over "
+                        f"{pair[1]:<9s} {n:5d}  observed {observed:.4f}  "
+                        f"chance {chance:.4f}  {ratio}"
+                    )
+                # The same disagreements divided by each kind's OWN
+                # population rather than by their total. This is the number
+                # section 1's "conservative or costly" framing actually
+                # needs: a share of disagreements says which pair is common,
+                # but only a share of the kind itself says what the
+                # agreement rule COSTS that kind.
+                by_own_kind: Counter = Counter()
+                for (own_kind, _other_kind), n in counts.pairs.items():
+                    by_own_kind[own_kind] += n
+                print("                 cost to each kind, of its own runs:")
+                for own_kind, n in sorted(by_own_kind.items()):
+                    population = own_mix[own_kind]
+                    print(
+                        f"                   {own_kind:>9s} {n:5d} of "
+                        f"{population:6d}  {n / population:.4f}"
+                    )
         # Spec section 6 open question 2 -- the row-count effect of a
         # multi-kind detector -- is not a separate measurement: these are the
         # per-eye counts it asks for, printed while they are in hand.
@@ -926,7 +1265,14 @@ def test_the_two_eyes_agree_on_kind_far_better_than_chance(reference, capsys):
                 + ", ".join(f"{label} {n}" for label, n in sorted(tally.items()))
             )
 
-    for name, counts in directions:
+    for name, counts, _expected, _own_mix in measured:
+        assert sum(counts.pairs.values()) == counts.disagree, (
+            f"{name}: the breakdown accounts for "
+            f"{sum(counts.pairs.values())} of {counts.disagree} "
+            "disagreements on the real recording; the pairs printed above "
+            "are not a partition of them and their shares cannot be read "
+            "against the headline rate"
+        )
         assert counts.compared > 0, (
             f"{name}: no detected run in one eye overlapped a detected run in "
             "the other; the statistic measured nothing"
