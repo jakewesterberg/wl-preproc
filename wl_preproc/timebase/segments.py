@@ -62,10 +62,18 @@ NO_BARCODE = "no_barcode"
 # that did have one.
 UNFITTED_SYSTEM = "unfitted_system"
 
+# Also not a verdict `classify_segment` can reach: the file DID carry
+# barcodes and dropped frames removed them, so both `no_barcode` and
+# `too_short` are true of what is left and wrong about why. Distinguished
+# because the two call for different actions -- a short file is a recording
+# that did not happen, a gap-corrupted one is a recording the camera failed
+# to keep up with.
+GAP_CORRUPTED = "gap_corrupted"
+
 #: Every reason `RejectedSegment.reason` can hold. The first two come from
 #: `classify_segment`; the third is decided per system, above the file.
 REJECTION_REASONS: frozenset[str] = frozenset(
-    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM}
+    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED}
 )
 
 

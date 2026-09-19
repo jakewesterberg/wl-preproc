@@ -137,6 +137,16 @@ def test_a_scan_records_what_the_gaps_cost_it(tmp_path):
     assert (scan.n_frame_gaps, scan.n_frames_missing, scan.n_barcodes_dropped) == (1, 2, 3)
 
 
+def test_the_gap_reason_is_in_the_documented_vocabulary():
+    """`REJECTION_REASONS` states every value `RejectedSegment.reason` can
+    hold. Nothing reads it today, which is exactly how it would rot: a reason
+    written to the table but missing from the set is a silent lie in the one
+    document a reader would trust."""
+    from wl_preproc.timebase import segments
+
+    assert segments.GAP_CORRUPTED in segments.REJECTION_REASONS
+
+
 # --- Populate. These need a real MySQL, and a real generated session. ---
 
 import datetime  # noqa: E402

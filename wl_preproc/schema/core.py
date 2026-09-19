@@ -174,7 +174,15 @@ class Segment(dj.Computed):
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
             if scan.verdict != segments.ALIGNABLE:
-                rejected.append({**key, "file_path": file_path, "reason": scan.verdict})
+                # Gaps outrank the verdict as the REASON: `classify_segment`
+                # sees only how many barcodes survived, and when gaps are what
+                # removed them it names the symptom rather than the cause.
+                reason = (
+                    segments.GAP_CORRUPTED
+                    if scan.n_barcodes_dropped
+                    else scan.verdict
+                )
+                rejected.append({**key, "file_path": file_path, "reason": reason})
                 continue
             if rate is None:
                 rejected.append(

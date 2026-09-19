@@ -88,3 +88,20 @@ def test_a_clean_segment_records_zero_for_all_three(dj_conn, prefix, stepped_ses
     core.Segment.populate(stepped_session, suppress_errors=False)
     for row in (core.Segment & stepped_session).fetch(as_dict=True):
         assert (row["n_frame_gaps"], row["n_frames_missing"], row["n_barcodes_dropped"]) == (0, 0, 0)
+
+
+@pytest.mark.xfail(reason="needs the dropped-frame fault, Task 6", strict=True)
+def test_a_file_gapped_below_the_floor_names_the_gaps_as_the_reason(
+    dj_conn, prefix, heavily_gapped_session
+):
+    """A file whose surviving barcodes fall below the alignment floor is
+    already rejected. Without this it is rejected as `no_barcode`, which is
+    true of the file and wrong about the cause -- the barcodes were there and
+    the gaps removed them."""
+    from wl_preproc.schema import core
+    from wl_preproc.timebase import segments
+
+    core.Segment.populate(heavily_gapped_session, suppress_errors=False)
+    reason = (core.RejectedSegment & heavily_gapped_session).fetch1("reason")
+
+    assert reason == segments.GAP_CORRUPTED
