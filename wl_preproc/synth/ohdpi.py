@@ -235,10 +235,32 @@ def write_ohdpi(
     profile predating it is unchanged. It exists because free viewing cannot
     represent a calibration session at all -- see `EyeFixationSpec`, which
     carries the measurement.
+
+    `recipe.ohdpi_dropped_frames` OMITS the rows it names while leaving
+    `FrameNumber` derived from the original index, so the file carries the
+    hole a real dropped frame leaves in the camera's own counter -- the one
+    thing `eye/ohdpi.py::read_ohdpi` detects a gap from. Also empty by
+    default. Every other column of every surviving row is untouched by it,
+    including `Seconds`, which stays derived from the original index: the
+    camera kept running through the frames that never reached disk, so the
+    surviving rows' timestamps do NOT close up, and `extract_ohdpi`'s rate
+    measurement depends on exactly that.
     """
     line = _digital_line(recipe, truth, drift_ppm)
     n = len(line)
     rng = np.random.default_rng(recipe.seed)
+
+    # Skip the ROW, keep the numbering: the frame counter is the camera's own
+    # and a dropped frame leaves a hole in it. Renumbering contiguously would
+    # produce a file with no detectable gap, which would make every gap test
+    # in the suite pass against a fixture that has none.
+    #
+    # A set, and resolved before the row loop rather than inside it, because
+    # `heavily_gapped_session` (tests/schema/conftest.py) plants one run per
+    # barcode word -- a linear scan of a tuple per row would turn writing a
+    # fixture into quadratic work for no reason. Empty for every recipe that
+    # does not ask for gaps, so those files are byte-identical to before.
+    dropped = set(recipe.ohdpi_dropped_frames)
 
     # Not zero: matches the reference recording's own camera counter, and
     # `wl_preproc/eye/ohdpi.py`'s reader depends on frame numbers being
@@ -304,6 +326,8 @@ def write_ohdpi(
     with path.open("w", encoding="utf-8") as handle:
         handle.write(" ".join(HEADER) + "\n")
         for i in range(n):
+            if i in dropped:
+                continue
             row: list[str] = []
             for eye_index in range(2):
                 if eye_index == 0:

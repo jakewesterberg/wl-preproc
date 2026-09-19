@@ -80,3 +80,35 @@ def test_every_fault_has_an_implementation():
         and not hasattr(faults, FAULT_FUNCTIONS.get(fault, ""))
     ]
     assert unimplemented == []
+
+
+def test_a_dropped_frame_fault_leaves_a_real_gap_in_the_written_file(tmp_path):
+    """The fixture must drop the ROW and keep the frame NUMBER sequence's
+    hole, which is what the reader detects. A fixture that renumbered rows
+    contiguously would produce a file with no gap at all and would make every
+    gap test pass against nothing."""
+    from wl_preproc.eye.ohdpi import read_ohdpi
+    from wl_preproc.synth import faults
+    from wl_preproc.synth.ohdpi import frame_count, write_ohdpi
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.timeline import build_timeline
+
+    # `RECIPES["eye"]` rather than `CI_RECIPE`: it is the profile that
+    # actually records an `ohdpi`, and `frame_count` is read off it rather
+    # than written down, so the row indices this fault names are indices the
+    # written file genuinely has.
+    recipe = RECIPES["eye"]
+    truth = build_timeline(recipe)
+    dropped = faults.drop_ohdpi_frames(
+        frame_count=frame_count(recipe), at_s=1.0, n_frames=3
+    )
+
+    # `SessionRecipe` is a frozen pydantic model, not a dataclass, so
+    # `model_copy` is the replace -- the idiom `tests/cli/test_report.py` and
+    # `tests/ingest/test_watcher.py` already use on this same object.
+    recipe = recipe.model_copy(update={"ohdpi_dropped_frames": dropped})
+    path = write_ohdpi(tmp_path, recipe, truth)
+    recording = read_ohdpi(path)
+
+    assert len(recording.frame_gaps) == 1
+    assert recording.frame_gaps[0].n_missing == 3
