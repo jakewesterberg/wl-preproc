@@ -91,6 +91,9 @@ class Segment(dj.Computed):
     offset_s     : double  # session_s = native_s / timebase.scale + offset_s
     residual_us  : double  # RMS about this segment's own offset
     n_barcodes   : int unsigned
+    n_frame_gaps      : int unsigned  # dropped-frame discontinuities in this recording
+    n_frames_missing  : int unsigned  # frames absent across those gaps
+    n_barcodes_dropped: int unsigned  # words discarded because a gap fell inside them
     """
 
     # first_sample, offset_s and residual_us are here because spec 4.5 requires
@@ -200,6 +203,16 @@ class Segment(dj.Computed):
                     "offset_s": offset.offset_s,
                     "residual_us": offset.residual_us,
                     "n_barcodes": offset.n_barcodes,
+                    # Three columns rather than one summary, for the reason
+                    # Phase 1c-5's TimingProvenance gives: spec section 4.7's
+                    # "derived, not asserted" holds on the row itself only if
+                    # each input is stored separately. They answer different
+                    # questions -- how fragmented, how much time is absent,
+                    # what it cost the alignment -- and none is derivable from
+                    # the others.
+                    "n_frame_gaps": scan.n_frame_gaps,
+                    "n_frames_missing": scan.n_frames_missing,
+                    "n_barcodes_dropped": scan.n_barcodes_dropped,
                 }
             )
 
