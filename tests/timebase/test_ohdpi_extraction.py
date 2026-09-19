@@ -173,11 +173,16 @@ def test_the_reference_recording_is_untouched_by_gap_handling(capsys):
     the FILE rather than a failure of the decoder.** Measured from its own
     `Int0` line: 5,789 transitions, shortest run 124.4 ms, median 126.4 ms,
     and not one run shorter than a single 5 ms `BIT_SLOT_US`. A 32-bit word
-    occupies 200 ms with a transition available per bit; this line is a ~4 Hz
-    square wave. It is OpenIrisDPI's own tutorial recording, not a session
-    from this lab's synced rig, so `decode_edges` correctly returns nothing
-    and the barcode count is asserted as a non-vacuity check on EDGES rather
-    than on words. The consequence is larger than this test: the barcode and
+    occupies 200 ms with a transition available per bit; this
+    line carries a consistent ~125 ms HIGH pulse (2,894 of them, 124.4-126.4
+    ms) separated by irregular LOW gaps of 124.4 ms to 1.25 s, repeating at
+    about 1.2 Hz on average. Its SHORTEST feature is therefore 124.4 ms --
+    nearly twenty-five times a `BIT_SLOT_US` -- so no arrangement of these
+    edges can express a barcode's bit pattern. It is OpenIrisDPI's own
+    tutorial recording, not a session from this lab's synced rig, so
+    `decode_edges` correctly returns nothing and the barcode count is
+    asserted as a non-vacuity check on EDGES rather than on words. The
+    consequence is larger than this test: the barcode and
     timebase alignment path has never been exercised against real data, and
     cannot be with the recording this lab currently has."""
     from wl_sync.barcode import decode_edges
