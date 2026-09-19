@@ -825,6 +825,43 @@ defensible call, but it is a reversal rather than a gap.
 
 ## Traps that cost real time, recorded so they are paid for once
 
+- **A red `main` on a DOCS-ONLY commit is probably the MySQL testcontainer, not
+  your change.** Found 2026-09-19, and it cost a full diagnosis pass before the
+  cause was visible. `dee5073` touched `docs/` and `wl.yaml` and nothing else;
+  its 3.13 job failed with ~40 tests in `ERROR at setup`, spread across
+  `tests/responder/`, `tests/ingest/` and `tests/schema/` — which looks exactly
+  like a real breakage in an unrelated subsystem. It is not. The real message
+  is buried in the ERRORS section, ~1,900 lines into the log:
+
+      TimeoutError: Container did not emit logs containing
+      '.*: ready for connections.*' within 120.000 seconds.
+
+  `tests/conftest.py::dj_conn` starts a `MySqlContainer("mysql:8.0")` at SESSION
+  scope, so when it times out **every database-backed test in the run ERRORs at
+  setup at once**, and the failure surface has nothing to do with the cause.
+  The container had started and was still initialising 70 seconds in when the
+  120-second budget expired. Re-running the job was green on both interpreters
+  with no change.
+
+  **What makes it hard to see, and how to skip the whole pass next time.**
+  `gh run view --job <id> --log` TRUNCATES for a run this size, and the ERRORS
+  section sits past the truncation point — the filtered views show only the
+  cascade. `gh api repos/<owner>/<repo>/actions/jobs/<id>/logs` returns the
+  whole thing; grep it for `ERROR at setup` or `TimeoutError`. Before assuming
+  a code cause, check two things that took two commands and settled it here:
+  `git diff --name-only <last-green> <red>` (docs-only means it is not your
+  change), and diff the `Successfully installed ...` lines of the two jobs
+  (identical dependency sets means it is not a dependency float either — the
+  trap above).
+
+  **Not fixed, and worth deciding on.** Two things make this recurrent rather
+  than unlucky: the image tag `mysql:8.0` FLOATS (it resolved to 8.0.46 here),
+  so a cold pull of a new patch image lands inside the same 120-second budget
+  as a warm start; and that budget is testcontainers' default, never chosen for
+  this suite. Raising the timeout, pinning the image by digest, or both would
+  close it. Left as a decision rather than a unilateral change to shared test
+  infrastructure.
+
 - **A patch release of a pinned-by-range dependency can turn `main` red while every
   local run stays green, and the axis is the VERSION, not the interpreter.** Found
   2026-09-13. `pyproject.toml` says `datajoint>=2.3,<3`; the development venv had been
