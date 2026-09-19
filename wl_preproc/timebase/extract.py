@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from wl_sync.barcode import BIT_SLOT_US, edges_from_samples, encode
+from wl_sync.barcode import BIT_SLOT_US, FRAME_US, edges_from_samples, encode
 
 
 def min_sample_rate_hz() -> float:
@@ -64,6 +64,30 @@ class BitStream:
                 f"{BIT_SLOT_US} us bit slot: at least two samples per bit are "
                 "needed, so this stream cannot yield a barcode at all"
             )
+
+
+def barcode_clear_of_gaps(barcode, gaps) -> bool:
+    """Whether every sample this word was decoded from was actually recorded.
+
+    **`decode_edges` cannot answer this, and that is the whole reason this
+    exists.** It discards *unverifiable* frames -- ones failing its wrapper
+    and trailer checks. A transition lost inside a gap produces no edge at
+    all, so `_level_at` simply reports the level that was held; if the lost
+    transition is in the data region rather than a wrapper, every structural
+    check still passes and one bit decodes to the WRONG VALUE. The frame is
+    not unverifiable. It is plausible and wrong. At 500 Hz a bit slot is 2.5
+    samples, so a single dropped frame is about four tenths of a bit --
+    enough to swallow a narrow pulse whole.
+
+    Half-open at both ends: a word ending exactly where a gap opens, or
+    opening exactly where one closes, is kept, because the sample at each gap
+    boundary is a known one.
+    """
+    stop_us = barcode.start_us + FRAME_US
+    return not any(
+        barcode.start_us < gap_end and gap_start < stop_us
+        for gap_start, gap_end in gaps
+    )
 
 
 # The sync box logs at microsecond resolution, so its "sampling rate" is

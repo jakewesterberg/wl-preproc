@@ -138,6 +138,18 @@ class RecordingScan:
     path: Path
     stream: BitStream
     barcodes: tuple[Barcode, ...]
+    #: How many decoded words were discarded because a gap fell inside them.
+    #: Zero on every clean recording, which is all of them until a real
+    #: session drops a frame.
+    n_barcodes_dropped: int = 0
+
+    @property
+    def n_frame_gaps(self) -> int:
+        return len(self.stream.gaps)
+
+    @property
+    def n_frames_missing(self) -> int:
+        return self.stream.n_frames_missing
 
     @property
     def duration_s(self) -> float:
@@ -158,16 +170,19 @@ def scan_system(system: str, system_dir: Path) -> list[RecordingScan]:
     """
     from wl_sync.barcode import decode_edges
 
-    from wl_preproc.timebase.extract import EXTRACTORS, find_recordings
+    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps, find_recordings
 
     scans = []
     for path in find_recordings(system, system_dir):
         stream = EXTRACTORS[system](path)
+        decoded = decode_edges(list(stream.edges))
+        kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
         scans.append(
             RecordingScan(
                 path=path,
                 stream=stream,
-                barcodes=tuple(decode_edges(list(stream.edges))),
+                barcodes=kept,
+                n_barcodes_dropped=len(decoded) - len(kept),
             )
         )
     return scans

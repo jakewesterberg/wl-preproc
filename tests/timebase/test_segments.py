@@ -74,6 +74,69 @@ def test_the_bounds_are_derived_from_the_barcode_interval_not_written_down():
     assert IDLE_MIN_US < INTERVAL_US
 
 
+from wl_sync.barcode import FRAME_US, Barcode
+
+from wl_preproc.timebase.extract import barcode_clear_of_gaps
+
+
+def test_a_word_overlapping_a_gap_is_not_clear():
+    """The word under test starts 1000 us before the gap opens, so the gap
+    falls inside its 200 ms extent."""
+    word = Barcode(value=7, start_us=0)
+
+    assert not barcode_clear_of_gaps(word, ((1_000, 3_000),))
+
+
+def test_a_word_wholly_before_or_after_a_gap_is_clear():
+    early = Barcode(value=7, start_us=0)
+    late = Barcode(value=8, start_us=1_000_000)
+
+    assert barcode_clear_of_gaps(early, ((500_000, 600_000),))
+    assert barcode_clear_of_gaps(late, ((500_000, 600_000),))
+
+
+def test_the_boundaries_are_half_open_at_both_ends():
+    """A word ending exactly where a gap opens, or opening exactly where one
+    closes, is KEPT. Both cases are sound: the sample at each gap boundary is
+    a known one, so no bit of that word was reconstructed.
+
+    Pinned because `<` and `<=` are both defensible-looking here and they
+    disagree on precisely these two words."""
+    ends_at_gap_start = Barcode(value=1, start_us=0)
+    starts_at_gap_end = Barcode(value=2, start_us=300_000)
+
+    assert barcode_clear_of_gaps(ends_at_gap_start, ((FRAME_US, 300_000),))
+    assert barcode_clear_of_gaps(starts_at_gap_end, ((200_001, 300_000),))
+
+
+def test_a_word_is_dropped_for_any_one_of_several_gaps():
+    word = Barcode(value=7, start_us=0)
+
+    assert not barcode_clear_of_gaps(word, ((900_000, 910_000), (1_000, 3_000)))
+
+
+def test_a_stream_with_no_gaps_clears_every_word():
+    assert barcode_clear_of_gaps(Barcode(value=7, start_us=0), ())
+
+
+def test_a_scan_records_what_the_gaps_cost_it(tmp_path):
+    """The counts are evidence and are carried, not discarded. A gap that cost
+    nothing and a gap that cost three barcodes are different facts about a
+    session, and `Segment` stores both (Task 4)."""
+    from wl_preproc.timebase.segments import RecordingScan
+    from wl_preproc.timebase.extract import BitStream
+
+    stream = BitStream(
+        edges=(), fs_hz=500.0, n_samples=200,
+        gaps=((10_000, 14_000),), n_frames_missing=2,
+    )
+    scan = RecordingScan(
+        path=tmp_path / "x.txt", stream=stream, barcodes=(), n_barcodes_dropped=3
+    )
+
+    assert (scan.n_frame_gaps, scan.n_frames_missing, scan.n_barcodes_dropped) == (1, 2, 3)
+
+
 # --- Populate. These need a real MySQL, and a real generated session. ---
 
 import datetime  # noqa: E402
