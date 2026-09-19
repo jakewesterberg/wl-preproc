@@ -209,8 +209,24 @@ evidence that this change is invisible to everything working today.
 | a barcode after a gap gets the time it would have had | the reconstruction arithmetic, against a hand-computed value |
 | same level either side of a gap ⇒ edge count unchanged | an invented transition |
 | the three `Segment` columns carry the right values | §5's storage |
-| a file gapped below the alignment floor becomes a `RejectedSegment` | the degenerate path, with gap detail in its reason |
+| a file whose every word a gap destroyed becomes a `RejectedSegment` reading `gap_corrupted` | the degenerate path, and that its cause is named rather than misreported as `no_barcode` |
 | validity criterion 4 fires end to end | the dead code path this unblocks (§6) |
+
+**Correction to that row, which said two wrong things.** It read *"a file
+gapped below the alignment floor becomes a `RejectedSegment` | the degenerate
+path, with gap detail in its reason"*. Corrected here rather than edited away,
+for the reason §5's own correction gives.
+
+*"Gapped below the alignment floor"* names the wrong mechanism. The floor is
+`MIN_ALIGNABLE_DURATION_S`, and nothing about this file is short of it: every
+one of its words **decoded**, and §2.2 then discarded each of them for
+overlapping a gap. `classify_segment` only ever sees the surviving count —
+zero — so it returns `no_barcode`, which is true of what it can see and wrong
+about why. **What `GAP_CORRUPTED` overrides is `NO_BARCODE`, not a floor**,
+and `timebase/segments.py`'s own comment beside the constant says so.
+
+*"With gap detail in its reason"* describes something the code does not do and
+should not. See §5.
 
 **Mutation verification**, per this repository's standing practice: each must
 fail a named test, by literal source mutation and revert.
@@ -255,9 +271,35 @@ trace with holes. A consumer must be able to separate those sessions from
 clean ones. This pipeline exists so that January validates rather than
 discovers; a quality fact that cannot be queried is one nobody will notice.
 
-A file with gaps that still yields zero barcodes already becomes a
-`RejectedSegment`. Its existing reason text gains the gap detail, rather than
-the columns being duplicated onto a second table.
+**A file with gaps that still yields zero barcodes becomes a
+`RejectedSegment` under a reason of its own — the bare token `gap_corrupted`,
+carrying no counts.** An earlier draft of this paragraph read *"Its existing
+reason text gains the gap detail, rather than the columns being duplicated
+onto a second table."* **The second half stands. The first is wrong, and it is
+corrected here rather than edited away** — the same way this section's cost
+claim below is, and for the same reason.
+
+`RejectedSegment.reason` is a **closed vocabulary**:
+`timebase/segments.py::REJECTION_REASONS`, checked against every row in
+`schema/core.py::Segment.make` immediately before the insert, which raises on
+a value outside the set. That check is what makes the vocabulary a contract
+instead of a comment, and free text in the column would defeat it outright — a
+reason a reader has to parse is one nobody can count rejections by, and one a
+future edit can change without changing anything a test can see.
+
+The counts belong where they can be queried, which is the three columns above,
+on `Segment` — so the gap detail is neither duplicated onto a second table nor
+smuggled into a string. `gap_corrupted` says what went wrong; the columns say
+what it cost.
+
+**What that costs, stated rather than glossed.** A *rejected* file's own gap
+counts are stored nowhere. It has no `Segment` row to carry them and
+structurally cannot get one: that table is keyed on `segment_barcode`, "the
+first barcode value in the segment", and a file yielding zero barcodes has no
+such value. So `gap_corrupted` names the cause, and how many gaps there were
+and how much time they took is recoverable only by re-reading the file. That
+is accepted: the alternatives are a string nobody can query, or the second
+table this paragraph already rejects.
 
 **`Segment.n_samples` changes meaning on a gapped file, and this is
 deliberate.** `schema/core.py` already stores `scan.stream.n_samples`, and

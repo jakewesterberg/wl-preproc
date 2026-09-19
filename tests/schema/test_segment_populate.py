@@ -143,13 +143,20 @@ def test_a_clean_segment_records_zero_for_all_three(dj_conn, prefix, stepped_ses
         assert (row["n_frame_gaps"], row["n_frames_missing"], row["n_barcodes_dropped"]) == (0, 0, 0)
 
 
-def test_a_file_gapped_below_the_floor_names_the_gaps_as_the_reason(
+def test_a_file_whose_every_word_a_gap_destroyed_names_the_gaps_as_the_reason(
     dj_conn, prefix, heavily_gapped_session
 ):
-    """A file whose surviving barcodes fall below the alignment floor is
-    already rejected. Without this it is rejected as `no_barcode`, which is
-    true of the file and wrong about the cause -- the barcodes were there and
-    the gaps removed them."""
+    """A file that decoded twelve words and then discarded all twelve for
+    overlapping a gap is already rejected: `classify_segment` sees the
+    SURVIVING count, zero, and there is nothing left to align to.
+
+    **No floor is involved, despite this test's own former name.** The
+    alignment floor is `MIN_ALIGNABLE_DURATION_S`, a DURATION, and this
+    recording is full length -- every word was there and every word decoded.
+    What `GAP_CORRUPTED` overrides is `NO_BARCODE`, which is true of what is
+    left and wrong about the cause. See the design spec's section 4, where
+    the same wrong mechanism is corrected in the table this test came from.
+    """
     from wl_preproc.schema import core
     from wl_preproc.timebase import segments
 
