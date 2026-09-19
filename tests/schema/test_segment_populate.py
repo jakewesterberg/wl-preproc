@@ -17,12 +17,18 @@ rather than the object, exactly as every other file sharing those names
 already does.
 
 The GAPPED cases are Task 6's `gapped_session` and `heavily_gapped_session`
-fixtures, which live in `tests/schema/conftest.py` because they are session
-builders rather than assertions -- see their own docstrings for how each
-one's gaps are placed and why placement is the only thing that separates
-them. Both tests below carried `xfail(strict=True)` until those fixtures
-landed, so the debt showed up in every test report rather than going quiet;
-the markers are gone now that the tests pass for real.
+fixtures, plus Task 9's `partially_gapped_session`, all in
+`tests/schema/conftest.py` because they are session builders rather than
+assertions -- see their own docstrings for how each one's gaps are placed
+and why placement is what separates the first two. Two of the tests below
+carried `xfail(strict=True)` until those fixtures landed, so the debt showed
+up in every test report rather than going quiet; the markers are gone now
+that the tests pass for real.
+
+The third fixture and `test_a_segment_records_a_barcode_cost_it_paid` were
+added later, by Task 9's mutation battery, which found that `Segment.make`
+could write a literal `0` for `n_barcodes_dropped` with the whole suite
+still green -- the one mutation of eight that survived.
 """
 
 from __future__ import annotations
@@ -88,6 +94,40 @@ def test_a_segment_records_the_gaps_its_recording_had(dj_conn, prefix, gapped_se
     # pin nothing: it passes just as happily on a transposition that put
     # `n_frames_missing`'s 3 in this column.
     assert row["n_barcodes_dropped"] == 0
+
+
+def test_a_segment_records_a_barcode_cost_it_paid(
+    dj_conn, prefix, partially_gapped_session
+):
+    """`n_barcodes_dropped` stored NONZERO -- which nothing else in this
+    repository checks.
+
+    **Found by Task 9's mutation battery, as a survivor.** Replacing
+    `scan.n_barcodes_dropped` with a literal `0` in `Segment.make` left the
+    suite entirely green: 381 passed, 2 skipped, nothing red. The two gapped
+    fixtures that existed then could not catch it and neither can be made to
+    -- `gapped_session`'s gap sits in the idle and costs no word, and
+    `heavily_gapped_session` loses every word, so it is rejected and writes
+    no `Segment` row for anything to read. `test_core.py`'s rows are
+    hand-built `insert1`s that never reach `make()` at all. So the one column
+    of the three that says what a gap actually COST the alignment was pinned
+    only at the value the mutation writes.
+
+    `partially_gapped_session` is the missing middle: three words destroyed,
+    nine surviving, so the file stays alignable and its row records a real
+    price. Asserted as `== 3` rather than `> 0` for the reason the sibling
+    test above gives about `>= 0` -- an exact value also fails on a
+    transposition, and this row's three values are 3, 9 and 3.
+    """
+    from wl_preproc.schema import core
+
+    core.Segment.populate(partially_gapped_session, suppress_errors=False)
+    row = (core.Segment & partially_gapped_session).fetch1()
+
+    assert row["n_barcodes_dropped"] == 3, (
+        "three words decoded and were then discarded for overlapping a gap"
+    )
+    assert (row["n_frame_gaps"], row["n_frames_missing"]) == (3, 9)
 
 
 def test_a_clean_segment_records_zero_for_all_three(dj_conn, prefix, stepped_session):

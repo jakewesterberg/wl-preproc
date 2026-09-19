@@ -1,5 +1,5 @@
 # tests/schema/conftest.py
-"""What every schema test module shares: an enum parser, and the two sessions
+"""What every schema test module shares: an enum parser, and the three sessions
 whose eye recording genuinely dropped frames.
 
 The `prefix` fixture used to live here too, declared separately in six modules
@@ -51,14 +51,23 @@ def enum_values():
 # was exercised only by hand-built files until these existed. A hand-built
 # file proves the unit works; it cannot prove a gap survives the whole path
 # from `synth/ohdpi.py`'s writer, through the OpenIris reader, the extractor,
-# the decoder and the scan, into a row. These two fixtures are that path, run
-# end to end, once per shape that matters.
+# the decoder and the scan, into a row. These three fixtures are that path,
+# run end to end, once per shape that matters.
 #
-# The two differ ONLY in where their gaps go. That is deliberate and is the
-# finding: at 500 Hz a barcode word is 200 ms and the idle between words is
-# 800 ms, so the same three-frame burst costs nothing in one place and
+# The first two differ ONLY in where their gaps go. That is deliberate and is
+# the finding: at 500 Hz a barcode word is 200 ms and the idle between words
+# is 800 ms, so the same three-frame burst costs nothing in one place and
 # destroys a word in the other (design spec sections 2 and 3). A pair of
 # fixtures differing in gap COUNT would say nothing about that.
+#
+# The THIRD, `partially_gapped_session`, differs in COUNT rather than place,
+# and it was added for a reason the first two cannot serve. Both of them
+# store `n_barcodes_dropped` as zero -- one because its gap costs no word,
+# the other because it is rejected and stores no row at all -- so the column
+# that says what the gaps COST was pinned only ever at the value a broken
+# `Segment.make` would write anyway. Task 9's mutation battery proved it by
+# replacing that write with a literal `0` and watching the suite stay green.
+# Some words gapped and some intact is the shape that catches it.
 
 #: One barcode word's own length, in seconds. Read off wl-sync rather than
 #: written down as 0.2: the placement below divides the recording into
@@ -74,6 +83,14 @@ _WORD_S = FRAME_US / 1_000_000.0
 #: nowhere near either neighbouring word. The SAME number in both fixtures on
 #: purpose: what separates them is where the frames go, not how many.
 _GAP_FRAMES = 3
+
+#: How many of the twelve words `partially_gapped_session` destroys. Any
+#: count strictly between zero and twelve makes that fixture's point: some
+#: word must decode and then be discarded while others survive intact, so the
+#: recording stays alignable AND `n_barcodes_dropped` is stored nonzero.
+#: Three rather than one only so the stored count is visibly a count and not
+#: a flag that happens to read 1.
+_N_PARTIALLY_GAPPED_WORDS = 3
 
 #: `test_eye_populate.py::_recipe`'s own session shape -- four three-second
 #: trials -- which gives twelve barcodes at `BARCODE_INTERVAL_S`. Copied
@@ -348,4 +365,64 @@ def heavily_gapped_session(dj_conn, prefix, tmp_path_factory):
         "and at least one word must have DECODED before being discarded, or "
         "the rejection reads `no_barcode` rather than `gap_corrupted`"
     )
+    return key
+
+
+@pytest.fixture(scope="module")
+def partially_gapped_session(dj_conn, prefix, tmp_path_factory):
+    """A gap inside three of the twelve words; the other nine survive intact.
+
+    **The case neither fixture above can produce, and the only one in which a
+    stored `Segment` row carries a nonzero `n_barcodes_dropped`.**
+    `gapped_session` puts its one gap in the idle, so that column is 0 there
+    by design; `heavily_gapped_session` destroys every word, so its file
+    becomes a `RejectedSegment` and stores no `Segment` row at all. Between
+    the two of them `Segment.make` could write a literal `0` into that column
+    and the whole suite would still pass -- which is not a hypothetical.
+    Task 9's mutation battery applied exactly that edit and it SURVIVED: 381
+    passed, 2 skipped, nothing red. This fixture and
+    `test_segment_populate.py::test_a_segment_records_a_barcode_cost_it_paid`
+    are what close it.
+
+    Placement is `heavily_gapped_session`'s, applied to three words instead
+    of all twelve: each gap sits at its word's MIDPOINT, in the middle of the
+    32-bit data region and clear of both wrapper pulses, so the word still
+    DECODES and is only then discarded by `barcode_clear_of_gaps`. That is
+    what makes it a *dropped* barcode rather than an undecodable one, and it
+    is the only way `n_barcodes_dropped` can be positive at all -- the same
+    distinction `heavily_gapped_session`'s own docstring turns on.
+    """
+    from wl_preproc.timebase import segments
+
+    def place(truth, n_frames):
+        from wl_preproc.synth.faults import drop_ohdpi_frames
+
+        rows: list[int] = []
+        for _value, start_s in truth.barcodes[:_N_PARTIALLY_GAPPED_WORDS]:
+            rows.extend(
+                drop_ohdpi_frames(
+                    frame_count=n_frames,
+                    at_s=_recording_time_s(start_s + _WORD_S / 2),
+                    n_frames=_GAP_FRAMES,
+                )
+            )
+        return tuple(rows)
+
+    key, scan, truth = _plant(
+        tmp_path_factory, prefix,
+        dirname="segpartgapped", session_id="2027-09-19_03", subject="seggap3",
+        session_datetime=datetime.datetime(2027, 9, 19, 11, 0), seed=921,
+        place=place,
+    )
+    assert (scan.n_frame_gaps, scan.n_frames_missing, scan.n_barcodes_dropped) == (
+        _N_PARTIALLY_GAPPED_WORDS,
+        _N_PARTIALLY_GAPPED_WORDS * _GAP_FRAMES,
+        _N_PARTIALLY_GAPPED_WORDS,
+    ), "three gaps, each inside its own word, each costing exactly that word"
+    assert len(scan.barcodes) == len(truth.barcodes) - _N_PARTIALLY_GAPPED_WORDS, (
+        "the other nine words must survive untouched -- if they do not, this "
+        "is a second heavily_gapped_session, it is rejected, and it stores no "
+        "`Segment` row for the test to read"
+    )
+    assert scan.verdict == segments.ALIGNABLE
     return key
