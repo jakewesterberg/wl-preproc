@@ -336,8 +336,8 @@ class _Agreement:
     `alone` -- no overlapping detected run at all; the other eye calls that
     stretch `fixation`, which `_conjunction_runs` never intersects.
 
-    `pairs` splits the middle bucket further, by WHICH two kinds disagreed
-    -- see its own comment below.
+    `agreements` and `disagreements` record WHICH run on the other side each
+    own-run matched; `pairs` derives the kind breakdown from the second.
 
     **Both of the last two are dropped by the binocular agreement rule**
     (conjunction-shape design spec section 1), which is why `drop_rate` adds
@@ -346,17 +346,36 @@ class _Agreement:
     needs both.
     """
 
-    def __init__(self, agree: int, disagree: int, alone: int, pairs=None):
+    def __init__(
+        self, agree: int, disagree: int, alone: int, agreements=None, disagreements=None
+    ):
         self.agree = agree
         self.disagree = disagree
         self.alone = alone
-        #: The `disagree` bucket broken down by WHICH two kinds disagreed --
-        #: a `Counter` keyed by the ordered pair `(own kind, other kind)`,
-        #: partitioning `disagree` exactly (`test_the_pair_breakdown_
-        #: accounts_for_every_disagreement`). Ordered, not symmetric: the
-        #: measurement runs both directions and "left said saccadic where
-        #: right said pso" is a different finding from its mirror.
-        self.pairs: Counter = Counter() if pairs is None else Counter(pairs)
+        #: `(own run, other run)` for each own-run that found a same-kind
+        #: counterpart, and for each that found only a different-kind one.
+        #: The COUNTS above answer "how often"; these answer "which runs",
+        #: which is what a measurement reading an actual event BOUNDARY off
+        #: the other eye needs. Both hold the LARGEST-OVERLAP counterpart.
+        self.agreements = list(agreements or ())
+        self.disagreements = list(disagreements or ())
+
+    @property
+    def pairs(self) -> Counter:
+        """The `disagree` bucket by WHICH two kinds disagreed -- a `Counter`
+        keyed by the ordered pair `(own kind, other kind)`.
+
+        DERIVED from `disagreements` rather than tallied alongside it, so the
+        breakdown cannot drift from the runs it describes; that it partitions
+        `disagree` is then structural rather than a coincidence two
+        accumulators have to maintain. Ordered, not symmetric: the
+        measurement runs both directions and "left said saccadic where right
+        said pso" is a different finding from its mirror.
+        """
+        return Counter(
+            (_kind_of(own.label), _kind_of(other.label))
+            for own, other in self.disagreements
+        )
 
     @property
     def total(self) -> int:
@@ -426,45 +445,55 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
     widest = int((stops - starts).max())
 
     agree = disagree = alone = 0
-    pairs: Counter = Counter()
+    agreements: list = []
+    disagreements: list = []
     for run in own_runs:
         own_kind = _kind_of(run.label)
         lo = int(np.searchsorted(starts, run.start - widest, side="left"))
         hi = int(np.searchsorted(starts, run.stop, side="left"))
-        same_kind = False
-        # `best_kind is not None` stands in for the boolean this loop used
-        # to carry, so `-1` rather than `0`: the first ADMITTED counterpart
-        # must take the slot whatever `floor` is, and a `0` start would
-        # reclassify a zero-sample counterpart as `alone` under a `floor` of
-        # 0. **No test discriminates the two, and that is stated rather than
-        # left to look like coverage** -- every caller's floor is at least 1
+        # `is not None` stands in for the two booleans this loop used to
+        # carry, so `-1` rather than `0`: the first ADMITTED counterpart must
+        # take its slot whatever `floor` is, and a `0` start would reclassify
+        # a zero-sample counterpart as `alone` under a `floor` of 0. **No
+        # test discriminates the two, and that is stated rather than left to
+        # look like coverage** -- every caller's floor is at least 1
         # (`_min_duration_samples` defaults to 1), so the case is unreachable
-        # today. Mutating this to `0` survives the whole file. It is kept at
-        # `-1` because exact equivalence with the boolean is free here and
-        # the next detector's params are the thing that would change it.
-        best_overlap, best_kind = -1, None
+        # today. Mutating either to `0` survives the whole file.
+        best_same_overlap, best_same = -1, None
+        best_other_overlap, best_other = -1, None
         for index in range(lo, hi):
             overlap = min(run.stop, int(stops[index])) - max(
                 run.start, int(starts[index])
             )
             if overlap < floor:
                 continue
-            if kinds[index] == own_kind:
-                same_kind = True
-                break
-            # Strictly greater, so equal overlaps keep the FIRST -- and
-            # `other_runs` is sorted by `(start, stop)`, so "first" is a
+            # **The same-kind side no longer stops at the first match.** It
+            # used to `break`, which was correct while only the COUNT
+            # mattered -- an agreement is an agreement whichever run supplies
+            # it. It is not correct now that the matched run is READ: an
+            # own-run straddling two same-kind counterparts would record a
+            # clipped edge instead of its real counterpart, and the offset
+            # measurement reads a boundary off exactly that run. Counts are
+            # untouched by the change, since `agree` still means "some
+            # same-kind counterpart exists".
+            #
+            # Strictly greater on both, so equal overlaps keep the FIRST --
+            # and `other_runs` is sorted by `(start, stop)`, so "first" is a
             # stated order rather than whatever the caller passed in.
-            if overlap > best_overlap:
-                best_overlap, best_kind = overlap, kinds[index]
-        if same_kind:
+            if kinds[index] == own_kind:
+                if overlap > best_same_overlap:
+                    best_same_overlap, best_same = overlap, other_runs[index]
+            elif overlap > best_other_overlap:
+                best_other_overlap, best_other = overlap, other_runs[index]
+        if best_same is not None:
             agree += 1
-        elif best_kind is not None:
+            agreements.append((run, best_same))
+        elif best_other is not None:
             disagree += 1
-            pairs[(own_kind, best_kind)] += 1
+            disagreements.append((run, best_other))
         else:
             alone += 1
-    return _Agreement(agree, disagree, alone, pairs)
+    return _Agreement(agree, disagree, alone, agreements, disagreements)
 
 
 def _kind_mix(runs) -> Counter:
@@ -505,6 +534,101 @@ def _expected_pair_shares(own, other) -> dict:
     if not denominator:
         return {}
     return {pair: weight / denominator for pair, weight in weights.items()}
+
+
+#: `_glissade_offset_differences`' result: the per-event differences, the
+#: count of glissades whose own saccade could not be located, and how many
+#: counterparts ended INSIDE the glissade, as a per-event MASK over
+#: `samples` rather than a tally, so that subpopulation's own distribution
+#: can be read. The second is not a diagnostic to
+#: be discarded -- it is what says whether the first measured the boundary it
+#: claims to. The third separates the hypothesis from its alternative, which
+#: share a sign and differ only in magnitude.
+_OffsetDifferences = namedtuple("_OffsetDifferences", "samples unpaired within")
+
+
+def _glissade_offset_differences(own_runs, disagreements) -> _OffsetDifferences:
+    """How much later the OTHER eye's saccade ends, for each stretch this eye
+    calls a glissade while the other still calls it a saccade.
+
+    Conjunction-shape design spec section 6's mechanism hypothesis, stated
+    there and deliberately not asserted: if the two eyes place a saccade's
+    OFFSET about a glissade's duration apart, then over those samples one eye
+    has already begun its `pso` while the other is still inside its
+    `saccade`. This is the quantity that settles it -- centred near one
+    glissade duration if the mechanism is right, near the floor if it is not.
+
+    **The own eye's saccade offset is the glissade's own start.**
+    `_glissade_bounds` (`eye/detect/nystrom_holmqvist.py`) returns
+    `(saccade_offset, stop)`, so a `pso` begins exactly where its saccade
+    ended. Rather than assume that, each event looks up an own saccadic run
+    ending exactly at the glissade's start; a glissade with none is counted
+    `unpaired` and contributes no difference. On this detector's output that
+    count should be zero, and printing it is how that stays a checked claim.
+
+    **Only `pso`-over-`saccadic` disagreements are candidates.** The mirror
+    is a different event with a different boundary story, and it is not
+    counted `unpaired` either -- it was never a candidate.
+
+    **The sign is not evidence.** A counterpart only reaches the disagreement
+    bucket by overlapping the glissade, which forces the other eye's saccade
+    to end after this one's; every difference is at least 1 whatever the eyes
+    did. Only the magnitude means anything, and only against the agreeing
+    baseline below.
+
+    **`within` is what separates the hypothesis from its alternative**, since
+    the two share that forced sign. A counterpart ending inside the glissade
+    is the same saccade's offset placed later -- section 6's proposal. One
+    ending well past it is not a boundary disagreement at all: the other eye
+    has a longer or merged saccade covering the whole event, a different
+    defect with a different fix. Averaging the two populations together
+    describes neither, and on this recording the second is a long enough tail
+    to pull the mean to twice the median.
+    """
+    saccade_ends = {}
+    for run in own_runs:
+        if _kind_of(run.label) == "saccadic":
+            saccade_ends.setdefault(run.stop, run)
+
+    samples, unpaired, within = [], 0, []
+    for own, other in disagreements:
+        if own.label is not Label.PSO or _kind_of(other.label) != "saccadic":
+            continue
+        own_saccade = saccade_ends.get(own.start)
+        if own_saccade is None:
+            unpaired += 1
+            continue
+        samples.append(int(other.stop) - int(own_saccade.stop))
+        # `<=`, not `<`: a counterpart ending exactly where the glissade ends
+        # covered it and stopped, which is still one saccade's offset placed
+        # later rather than an unrelated longer saccade.
+        within.append(int(other.stop) <= int(own.stop))
+    return _OffsetDifferences(
+        np.array(samples, dtype=np.int64),
+        unpaired,
+        np.array(within, dtype=bool),
+    )
+
+
+def _agreeing_saccade_offset_differences(agreements) -> np.ndarray:
+    """The same offset difference, on saccades the two eyes DO agree about --
+    ordinary binocular boundary jitter, and what the glissade number above is
+    read against.
+
+    Without it the glissade figure is uninterpretable: "the other eye ends N
+    samples later" means one thing if agreeing saccades differ by 1 and
+    another if they differ by N-1. Unsigned differences are returned as
+    measured; the caller takes magnitudes, because here -- unlike above --
+    both signs are reachable and the spread is the point.
+    """
+    return np.array(
+        [
+            int(other.stop) - int(own.stop)
+            for own, other in agreements
+            if _kind_of(own.label) == "saccadic"
+        ],
+        dtype=np.int64,
+    )
 
 
 def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
@@ -768,6 +892,267 @@ def test_the_pair_breakdown_accounts_for_every_disagreement():
         f"{counts.disagree} disagreements; the pairs are not a partition of "
         "them and their fractions cannot be read against the headline rate"
     )
+
+
+def test_each_bucket_records_the_counterpart_it_matched():
+    """`agree` and `disagree` are counts; the OFFSET measurement needs to know
+    WHICH run on the other side each own-run was matched to, so both buckets
+    record the pair rather than only tallying it.
+
+    Both record the LARGEST-OVERLAP counterpart, the agreeing bucket included.
+    Pinned here on an own-run straddling two same-kind counterparts: a scan
+    that stopped at the first match would record the 10-sample one over the
+    70-sample one, and the offset measurement built on it would then be
+    reading a clipped edge rather than the real counterpart.
+    """
+    own = _LabelledSpan(0, 100, Label.SACCADE)
+    small, large = (
+        _LabelledSpan(0, 10, Label.SACCADE),
+        _LabelledSpan(20, 90, Label.SACCADE),
+    )
+
+    counts = _kind_agreement([own], [small, large], floor=1)
+
+    assert counts.agree == 1
+    assert counts.agreements == [(own, large)]
+    assert counts.disagreements == []
+
+
+def test_a_disagreement_records_both_runs_not_just_their_kinds():
+    """The pair of KINDS answers "which kinds disagree"; the pair of RUNS is
+    what the saccade-offset measurement needs, since it has to read the other
+    eye's saccade boundary off the actual run.
+    """
+    own = _LabelledSpan(30, 40, Label.PSO)
+    other = _LabelledSpan(0, 45, Label.SACCADE)
+
+    counts = _kind_agreement([own], [other], floor=1)
+
+    assert counts.disagreements == [(own, other)]
+    assert counts.pairs == Counter({(Label.PSO.value, "saccadic"): 1})
+
+
+def test_every_bucket_records_exactly_as_many_pairs_as_it_counts():
+    """`len(agreements) == agree` and `len(disagreements) == disagree`, over a
+    population large enough that the multi-counterpart path fires.
+
+    The same partition argument the pair breakdown already rests on, now for
+    the recorded runs: if either list drifts from its count, every statistic
+    built on it is describing a different population from the one the
+    headline rate reports.
+    """
+    rng = np.random.default_rng(13)
+    template = (
+        [_LabelledSpan(0, 20, Label.SACCADE)] * 400
+        + [_LabelledSpan(0, 12, Label.PSO)] * 400
+        + [_LabelledSpan(0, 60, Label.PURSUIT)] * 200
+    )
+    left = _random_labelled_span_null(template, 50_000, rng)
+    right = _random_labelled_span_null(template, 50_000, rng)
+
+    counts = _kind_agreement(left, right, floor=1)
+
+    assert counts.agree > 0 and counts.disagree > 0
+    assert len(counts.agreements) == counts.agree
+    assert len(counts.disagreements) == counts.disagree
+
+
+def test_the_glissade_offset_difference_is_measured_from_the_two_saccade_ends():
+    """The quantity conjunction-shape spec section 6's mechanism hypothesis
+    turns on: when this eye has begun a glissade and the other is still
+    inside its saccade, HOW MUCH LATER does the other eye's saccade end?
+
+    Measured as `other saccade's stop - own saccade's stop`, and the own
+    saccade's stop is the glissade's own start: `_glissade_bounds` returns
+    `(saccade_offset, stop)`, so a `pso` begins exactly where its saccade
+    ended. That is a property of the detector rather than an assumption of
+    this statistic, so it is CHECKED per event rather than trusted -- see
+    `test_a_glissade_not_adjacent_to_an_own_saccade_is_counted_unpaired`.
+
+    Hand-derived: the own saccade ends at 30, the other eye's at 45, so the
+    other eye is still saccading 15 samples into this eye's glissade.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+    other = [_LabelledSpan(0, 45, Label.SACCADE)]
+
+    counts = _kind_agreement(own, other, floor=1)
+    measured = _glissade_offset_differences(own, counts.disagreements)
+
+    assert list(measured.samples) == [15]
+    assert measured.unpaired == 0
+
+
+def test_a_glissade_not_adjacent_to_an_own_saccade_is_counted_unpaired():
+    """`pso.start == saccade.stop` holds by construction in this detector,
+    and the statistic verifies it per event instead of assuming it. A
+    glissade with no own saccade ending exactly at its start contributes NO
+    difference and is counted separately.
+
+    Counted rather than skipped silently, and counted rather than raising:
+    the number is itself evidence. Zero unpaired on the real recording is
+    what says the construction held across every measured event; a nonzero
+    count would mean this statistic is reading a boundary that is not the
+    one it claims to read, and the measurement below prints it for exactly
+    that reason.
+    """
+    own = [_LabelledSpan(0, 25, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+    other = [_LabelledSpan(0, 45, Label.SACCADE)]
+
+    counts = _kind_agreement(own, other, floor=1)
+    measured = _glissade_offset_differences(own, counts.disagreements)
+
+    assert counts.disagree == 1, "the glissade still disagrees; only its pairing fails"
+    assert list(measured.samples) == []
+    assert measured.unpaired == 1
+
+
+def test_only_a_glissade_over_the_other_eyes_saccade_is_measured():
+    """The mirror disagreement -- this eye calling a saccade what the other
+    calls a glissade -- is a different event with a different boundary story
+    and is not this measurement's subject. It contributes nothing, and it is
+    not counted `unpaired` either: it was never a candidate.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE)]
+    other = [_LabelledSpan(0, 30, Label.PSO)]
+
+    counts = _kind_agreement(own, other, floor=1)
+    measured = _glissade_offset_differences(own, counts.disagreements)
+
+    assert counts.pairs == Counter({("saccadic", Label.PSO.value): 1})
+    assert list(measured.samples) == []
+    assert measured.unpaired == 0
+
+
+def test_a_counterpart_ending_inside_the_glissade_is_counted_separately():
+    """The mechanism hypothesis and its alternative produce the same sign and
+    are told apart only by MAGNITUDE, so the two are counted apart.
+
+    If the other eye merely placed the same saccade's offset a little later,
+    its saccade ends INSIDE this eye's glissade -- a boundary disagreement
+    about one event, which is what section 6 proposes. If it ends well past
+    the glissade, the two eyes are not disagreeing about a boundary at all;
+    the other eye has a longer or merged saccade covering the whole thing,
+    which is a different defect with a different fix. The mean of the two
+    populations together is a number describing neither.
+
+    Both cases below overlap the glissade identically at the floor, so only
+    the counting rule can tell them apart.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+
+    inside = _glissade_offset_differences(
+        own, _kind_agreement(own, [_LabelledSpan(0, 35, Label.SACCADE)], floor=1).disagreements
+    )
+    assert (list(inside.samples), list(inside.within)) == ([5], [True])
+
+    beyond = _glissade_offset_differences(
+        own, _kind_agreement(own, [_LabelledSpan(0, 60, Label.SACCADE)], floor=1).disagreements
+    )
+    assert (list(beyond.samples), list(beyond.within)) == ([30], [False])
+
+
+def test_a_counterpart_ending_exactly_at_the_glissade_end_counts_as_inside():
+    """The boundary of the boundary rule, pinned because `<=` and `<` are
+    both defensible-looking here and they disagree on exactly this event: the
+    other eye's saccade ends where this eye's glissade ends, having covered
+    it entirely and stopped. That is still one saccade's offset placed later
+    rather than an unrelated longer saccade, so it counts as inside.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+    other = [_LabelledSpan(0, 40, Label.SACCADE)]
+
+    measured = _glissade_offset_differences(
+        own, _kind_agreement(own, other, floor=1).disagreements
+    )
+
+    assert (list(measured.samples), list(measured.within)) == ([10], [True])
+
+
+def test_a_glissade_disagreeing_with_a_non_saccadic_counterpart_is_not_measured():
+    """The measurement is `pso`-over-`saccadic` specifically, not
+    `pso`-over-anything. A glissade the other eye calls a PURSUIT is still a
+    kind disagreement and still dropped by section 1, but the difference
+    between a glissade's start and a pursuit's end is not a saccade-offset
+    difference and means nothing in this statistic's terms.
+
+    **Not reachable with Nystrom-Holmqvist, which emits no `pursuit`, and
+    pinned anyway** -- the statistic is stated generically over kinds, and a
+    mutation dropping this half of the filter survived every other test in
+    this file. The detector that registers `pursuit` would otherwise silently
+    fold those events into this number.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+    other = [_LabelledSpan(0, 45, Label.PURSUIT)]
+
+    counts = _kind_agreement(own, other, floor=1)
+    measured = _glissade_offset_differences(own, counts.disagreements)
+
+    assert counts.disagree == 2, "both own runs disagree with the pursuit"
+    assert list(measured.samples) == []
+    assert measured.unpaired == 0, (
+        "the glissade was never a candidate, so it is not an unpaired one"
+    )
+
+
+def test_the_baseline_excludes_agreements_that_are_not_saccades():
+    """The baseline is binocular jitter on SACCADE boundaries, because that
+    is the quantity the glissade figure is a version of. Two eyes agreeing on
+    a glissade is a different event with a different boundary, and letting it
+    into the baseline would mix the control with the thing being controlled
+    for -- glissade boundaries are exactly what is under suspicion.
+
+    A mutation dropping this filter survived every other test in this file.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(50, 70, Label.PSO)]
+    other = [_LabelledSpan(0, 34, Label.SACCADE), _LabelledSpan(50, 70, Label.PSO)]
+
+    counts = _kind_agreement(own, other, floor=1)
+
+    assert counts.agree == 2, "both own runs found a same-kind counterpart"
+    assert list(_agreeing_saccade_offset_differences(counts.agreements)) == [4], (
+        "only the saccade pair belongs to the baseline"
+    )
+
+
+def test_the_difference_is_positive_by_construction_so_only_its_size_is_evidence():
+    """**The sign of this quantity carries no information and must not be
+    read as if it did.** A counterpart only reaches the disagreement bucket
+    by overlapping the glissade for at least `floor` samples, which forces
+    the other eye's saccade to end AFTER the own eye's -- so every
+    difference is at least 1, whatever the two eyes actually did. "The other
+    eye ends later" is therefore not a finding; only HOW MUCH later is.
+
+    Pinned at the floor itself: the other eye's saccade ends one sample past
+    this eye's, overlapping the glissade by exactly the one sample that
+    admits it, and the measurement bottoms out at 1 rather than at 0.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE), _LabelledSpan(30, 40, Label.PSO)]
+    other = [_LabelledSpan(0, 31, Label.SACCADE)]
+
+    measured = _glissade_offset_differences(
+        own, _kind_agreement(own, other, floor=1).disagreements
+    )
+
+    assert list(measured.samples) == [1]
+
+
+def test_the_baseline_is_the_same_difference_on_saccades_the_eyes_agree_about():
+    """What the glissade number is read against: the offset difference the
+    two eyes show on saccades they DO agree about. That is ordinary binocular
+    boundary jitter, and it is the only honest comparison -- "15 samples"
+    means nothing until it is known whether agreeing saccades differ by 1 or
+    by 14.
+
+    Same quantity, `other.stop - own.stop`, on the agreeing bucket, where no
+    adjacency lookup is needed because both runs ARE the saccades.
+    """
+    own = [_LabelledSpan(0, 30, Label.SACCADE)]
+    other = [_LabelledSpan(0, 34, Label.SACCADE)]
+
+    counts = _kind_agreement(own, other, floor=1)
+
+    assert counts.agree == 1
+    assert list(_agreeing_saccade_offset_differences(counts.agreements)) == [4]
 
 
 def test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes():
@@ -1104,6 +1489,131 @@ def test_the_glissade_duration_is_in_the_low_tens_of_milliseconds(reference, cap
             "of milliseconds means glissades are being merged with the "
             "fixations that follow them; single-digit means they are being "
             "truncated at the offset threshold."
+        )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_how_far_apart_the_two_eyes_place_a_saccades_offset(reference, capsys):
+    """Conjunction-shape design spec section 6's mechanism hypothesis, which
+    that section states and deliberately does not assert.
+
+    The finding it explains: better than a third of every detected glissade
+    is discarded by the binocular agreement rule, almost always because the
+    other eye is still calling that stretch a saccade. The proposed cause is
+    boundary placement -- the two eyes ending one saccade about a glissade's
+    duration apart. This measures the difference directly.
+
+    **Read against two things, neither of them zero.** Against the AGREEING
+    baseline, because the sign is forced (see
+    `_glissade_offset_differences`' own docstring) and "the other eye ends
+    later" is therefore not a finding -- only how much later, compared with
+    the jitter the two eyes show on saccades they agree about. And against
+    this eye's own GLISSADE DURATIONS, because the hypothesis is specific:
+    about one glissade, not merely "more than the baseline".
+
+    **Nothing here is asserted but identities**, for the reason the kind
+    breakdown records: a bound would be tuned to the run that produced it,
+    and would fire on an improvement. `unpaired == 0` is not a bound -- it
+    is the check that `pso.start == saccade.stop` held on every measured
+    event, which is the construction this whole statistic reads the own
+    eye's saccade offset from. A nonzero count would mean the numbers below
+    describe a boundary other than the one they claim.
+    """
+    fs_hz = reference["recording"].fs_hz
+    left_trace, right_trace = reference["traces"]
+    directions = [
+        ("left->right", left_trace, right_trace),
+        ("right->left", right_trace, left_trace),
+    ]
+
+    measured = []
+    for name, own_trace, other_trace in directions:
+        counts = _kind_agreement(
+            own_trace.runs, other_trace.runs, NH_CONJUNCTION_FLOOR_SAMPLES
+        )
+        measured.append(
+            (
+                name,
+                own_trace,
+                _glissade_offset_differences(own_trace.runs, counts.disagreements),
+                _agreeing_saccade_offset_differences(counts.agreements),
+            )
+        )
+
+    with capsys.disabled():
+        print(
+            "\n  saccade-offset difference between the eyes -- "
+            "conjunction-shape spec section 6's mechanism hypothesis. How "
+            "much LATER the other eye's saccade ends:"
+        )
+        for name, own_trace, offsets, baseline in measured:
+            ms = offsets.samples / fs_hz * 1000.0
+            jitter = np.abs(baseline) / fs_hz * 1000.0
+            durations = own_trace.glissade_durations_ms
+            print(f"    {name}")
+            print(
+                f"      over this eye's glissades  n={offsets.samples.size:5d}  "
+                f"median {np.median(ms):6.2f} ms  mean {ms.mean():6.2f} ms  "
+                f"sd {ms.std():5.2f}  (unpaired {offsets.unpaired})"
+            )
+            # The two populations the mean above averages together, split.
+            # Only the first is section 6's proposed mechanism; the second
+            # is a different defect and is what makes that mean twice that
+            # median.
+            inside, beyond = ms[offsets.within], ms[~offsets.within]
+            print(
+                f"        ends INSIDE the glissade n={inside.size:5d}  "
+                f"median {np.median(inside):6.2f} ms  mean {inside.mean():6.2f} ms"
+                f"  sd {inside.std():5.2f}   "
+                f"{inside.size / offsets.samples.size:.3f} of them"
+            )
+            if beyond.size:
+                print(
+                    f"        ends BEYOND it           n={beyond.size:5d}  "
+                    f"median {np.median(beyond):6.2f} ms  mean {beyond.mean():6.2f} ms"
+                    f"  sd {beyond.std():5.2f}   "
+                    f"{beyond.size / offsets.samples.size:.3f} of them"
+                )
+            print(
+                f"      baseline, agreed saccades  n={baseline.size:5d}  "
+                f"median {np.median(jitter):6.2f} ms  mean {jitter.mean():6.2f} ms  "
+                f"sd {jitter.std():5.2f}  (unsigned)"
+            )
+            # **The like-for-like control.** The glissade figure above is
+            # forced positive by the overlap rule, so comparing it against
+            # an UNSIGNED baseline compares a half-distribution to a whole
+            # one and overstates the gap. This restricts the baseline the
+            # same way: agreed saccades where the other eye also ends later.
+            later = baseline[baseline > 0] / fs_hz * 1000.0
+            print(
+                f"        other eye ends later     n={later.size:5d}  "
+                f"median {np.median(later):6.2f} ms  mean {later.mean():6.2f} ms"
+                f"  sd {later.std():5.2f}   <- compare the INSIDE row to this"
+            )
+            print(
+                f"      this eye's glissades       n={durations.size:5d}  "
+                f"median {np.median(durations):6.2f} ms  "
+                f"mean {durations.mean():6.2f} ms  sd {durations.std():5.2f}"
+            )
+
+    for name, _own_trace, offsets, baseline in measured:
+        assert offsets.samples.size > 0, (
+            f"{name}: no glissade-over-saccade disagreement produced a "
+            "measurable offset difference; the statistic measured nothing"
+        )
+        assert baseline.size > 0, (
+            f"{name}: no agreed saccade pair produced a baseline, so the "
+            "figure above cannot be read against anything"
+        )
+        assert offsets.unpaired == 0, (
+            f"{name}: {offsets.unpaired} glissades had no own saccade ending "
+            "at their start. `_glissade_bounds` returns `(saccade_offset, "
+            "stop)`, so that should be impossible -- the offset differences "
+            "above are reading a boundary other than the one they claim, and "
+            "the detector's run assembly is what changed"
         )
 
 
