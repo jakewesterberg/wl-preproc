@@ -33,8 +33,26 @@ status:
     `WLPP_OHDPI_REFERENCE`-gated reference checks and the eye
     kind-disagreement statistic (`1dc1676`), and a DataJoint 2.3.3 pin move
     (`ea08678`) after that merge turned `main` red in a test unrelated to
-    it. `origin`'s `main` is at `30d4761` today, CI green on 3.11 and 3.13,
-    read off the run. Phase 2b's back half remains hardware-blocked.
+    it. `origin`'s `main` is at `d30cbc6` today; the last commit CI was read
+    off is `30d4761`, green on 3.11 and 3.13, and the two docs commits since
+    (`dee5073`, `d30cbc6`) have not been re-read off a run here. Phase 2b's
+    back half remains hardware-blocked.
+
+    Gap-aware barcode extraction is BUILT and NOT merged, on branch
+    `spec/gap-aware-barcode-extraction` (22 commits `d30cbc6..HEAD`, the
+    spec commit `66e9cf2` first; `origin` has no ref for it, and CI has
+    never run on it). `extract_ohdpi`
+    no longer refuses a recording with a dropped frame: it rebuilds the
+    trace at true length from the file's own frame-number column and
+    discards only the barcode words a gap falls inside. `Segment` gains
+    `n_frame_gaps`, `n_frames_missing` and `n_barcodes_dropped`; a file the
+    gaps left with no barcode is rejected as `gap_corrupted`; and validity
+    criterion 4 fires end to end for the first time. 26 new tests; 1394
+    passed on 3.11 and 1393 on 3.13 against a freshly compiled resolution,
+    verified before any merge rather than after. No published contract
+    changed: `Segment` is a DataJoint table and appears in none of the six
+    JSON schemas under `docs/schemas`, which the design spec itself first
+    claimed the other way and corrects in place.
 
     *The three sentences above replaced ones reading "NOT merged, NOT
     pushed: `origin` has no `spec/nystrom-holmqvist` ref" and "`origin`'s
@@ -204,10 +222,28 @@ status:
     on an uncalibrated recording has been found that discriminates it, so a
     CALIBRATED SESSION is the highest-value unblock for this subsystem.
 
+    THE LARGEST OPEN FINDING IS NOT A DEFECT IN ANY OF THIS. The lab's only
+    real recording carries no wl-sync barcodes at all, so the barcode and
+    timebase alignment path has never been exercised against real data, and
+    cannot be with the recording this lab currently has. Measured 2026-09-19
+    off `OpenIris-2024Jul31-114628.txt`'s own Int0 line (1,177,799 rows,
+    498.55 Hz from its own timestamps, zero frame gaps): 5,789 transitions,
+    2,894 complete HIGH pulses of a consistent 124.4-126.4 ms separated by
+    irregular LOW runs of 124.4 ms to 1,251.6 ms, repeating at about 1.2 Hz.
+    Its shortest complete feature is 124.4 ms, nearly twenty-five times a
+    5 ms BIT_SLOT_US, so no arrangement of those edges can express a 32-bit
+    word in a 200 ms frame, and `decode_edges` recovers zero barcodes from
+    it. It is OpenIrisDPI's own tutorial recording, not a session from this
+    lab's synced rig. Every barcode test here therefore runs on synthetic
+    fixtures. The unblock is a session recorded on the synced rig with the
+    sync box driving the ohDPI digital line -- the same hardware unblock a
+    calibrated session would be for Otero-Millan's provisional rows.
+
     Everything before this remains as it was: 2b-2's back half is gated on
-    2b-1, the container seam, still hardware-blocked. Gap-aware segmentation
-    (which validity criterion 4 is blocked on) and rehydration are the other
-    hardware-free pieces outstanding.
+    2b-1, the container seam, still hardware-blocked. Gap-aware barcode
+    extraction (which validity criterion 4 was blocked on) is now BUILT on
+    an unmerged branch -- see `phase` above -- which leaves rehydration as
+    the only hardware-free piece outstanding.
 
     **The whole-branch review ran, and its fix wave is `84247d1`.** Eight
     mutation-testing gaps in the adaptive offset threshold (seven new tests
@@ -238,7 +274,12 @@ status:
   # superseded in turn. Recorded because it is this file's own recurring
   # failure -- a status block is only true of the commit it names, and
   # further work landing is one more way it stops being.
-  describes: ea08678
+  # The tip of the branch this block was written from, per the field's own
+  # definition -- `spec/gap-aware-barcode-extraction`, not `main`, because
+  # that branch is where the work this status describes actually is. `main`
+  # is at `d30cbc6` and does not contain it. Was `ea08678` until 2026-09-19,
+  # which `main` had by then moved ELEVEN commits past.
+  describes: f9e02c7
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

@@ -62,10 +62,23 @@ NO_BARCODE = "no_barcode"
 # that did have one.
 UNFITTED_SYSTEM = "unfitted_system"
 
-#: Every reason `RejectedSegment.reason` can hold. The first two come from
-#: `classify_segment`; the third is decided per system, above the file.
+# Also not a verdict `classify_segment` can reach: the file DID carry
+# barcodes and dropped frames removed them, so both `no_barcode` and
+# `too_short` are true of what is left and wrong about why. Distinguished
+# because the two call for different actions -- a short file is a recording
+# that did not happen, a gap-corrupted one is a recording the camera failed
+# to keep up with.
+GAP_CORRUPTED = "gap_corrupted"
+
+#: Every reason `RejectedSegment.reason` can hold, and where each is
+#: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
+#: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
+#: exists for it to inherit. `GAP_CORRUPTED` is decided per FILE, in
+#: `Segment.make`, overriding the verdict `classify_segment` returned for
+#: that file rather than adding a fact `classify_segment` itself lacked the
+#: inputs to see.
 REJECTION_REASONS: frozenset[str] = frozenset(
-    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM}
+    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED}
 )
 
 
@@ -138,6 +151,18 @@ class RecordingScan:
     path: Path
     stream: BitStream
     barcodes: tuple[Barcode, ...]
+    #: How many decoded words were discarded because a gap fell inside them.
+    #: Zero on every clean recording, which is all of them until a real
+    #: session drops a frame.
+    n_barcodes_dropped: int = 0
+
+    @property
+    def n_frame_gaps(self) -> int:
+        return len(self.stream.gaps)
+
+    @property
+    def n_frames_missing(self) -> int:
+        return self.stream.n_frames_missing
 
     @property
     def duration_s(self) -> float:
@@ -158,16 +183,19 @@ def scan_system(system: str, system_dir: Path) -> list[RecordingScan]:
     """
     from wl_sync.barcode import decode_edges
 
-    from wl_preproc.timebase.extract import EXTRACTORS, find_recordings
+    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps, find_recordings
 
     scans = []
     for path in find_recordings(system, system_dir):
         stream = EXTRACTORS[system](path)
+        decoded = decode_edges(list(stream.edges))
+        kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
         scans.append(
             RecordingScan(
                 path=path,
                 stream=stream,
-                barcodes=tuple(decode_edges(list(stream.edges))),
+                barcodes=kept,
+                n_barcodes_dropped=len(decoded) - len(kept),
             )
         )
     return scans

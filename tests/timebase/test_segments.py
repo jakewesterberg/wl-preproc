@@ -74,6 +74,79 @@ def test_the_bounds_are_derived_from_the_barcode_interval_not_written_down():
     assert IDLE_MIN_US < INTERVAL_US
 
 
+from wl_sync.barcode import FRAME_US, Barcode
+
+from wl_preproc.timebase.extract import barcode_clear_of_gaps
+
+
+def test_a_word_overlapping_a_gap_is_not_clear():
+    """The word under test starts 1000 us before the gap opens, so the gap
+    falls inside its 200 ms extent."""
+    word = Barcode(value=7, start_us=0)
+
+    assert not barcode_clear_of_gaps(word, ((1_000, 3_000),))
+
+
+def test_a_word_wholly_before_or_after_a_gap_is_clear():
+    early = Barcode(value=7, start_us=0)
+    late = Barcode(value=8, start_us=1_000_000)
+
+    assert barcode_clear_of_gaps(early, ((500_000, 600_000),))
+    assert barcode_clear_of_gaps(late, ((500_000, 600_000),))
+
+
+def test_the_boundaries_are_half_open_at_both_ends():
+    """A word ending exactly where a gap opens, or opening exactly where one
+    closes, is KEPT. Both cases are sound: the sample at each gap boundary is
+    a known one, so no bit of that word was reconstructed.
+
+    Pinned because `<` and `<=` are both defensible-looking here and they
+    disagree on precisely these two words."""
+    ends_at_gap_start = Barcode(value=1, start_us=0)
+    starts_at_gap_end = Barcode(value=2, start_us=300_000)
+
+    assert barcode_clear_of_gaps(ends_at_gap_start, ((FRAME_US, 300_000),))
+    assert barcode_clear_of_gaps(starts_at_gap_end, ((200_001, 300_000),))
+
+
+def test_a_word_is_dropped_for_any_one_of_several_gaps():
+    word = Barcode(value=7, start_us=0)
+
+    assert not barcode_clear_of_gaps(word, ((900_000, 910_000), (1_000, 3_000)))
+
+
+def test_a_stream_with_no_gaps_clears_every_word():
+    assert barcode_clear_of_gaps(Barcode(value=7, start_us=0), ())
+
+
+def test_a_scan_records_what_the_gaps_cost_it(tmp_path):
+    """The counts are evidence and are carried, not discarded. A gap that cost
+    nothing and a gap that cost three barcodes are different facts about a
+    session, and `Segment` stores both (Task 4)."""
+    from wl_preproc.timebase.segments import RecordingScan
+    from wl_preproc.timebase.extract import BitStream
+
+    stream = BitStream(
+        edges=(), fs_hz=500.0, n_samples=200,
+        gaps=((10_000, 14_000),), n_frames_missing=2,
+    )
+    scan = RecordingScan(
+        path=tmp_path / "x.txt", stream=stream, barcodes=(), n_barcodes_dropped=3
+    )
+
+    assert (scan.n_frame_gaps, scan.n_frames_missing, scan.n_barcodes_dropped) == (1, 2, 3)
+
+
+def test_the_gap_reason_is_in_the_documented_vocabulary():
+    """`REJECTION_REASONS` states every value `RejectedSegment.reason` can
+    hold. Nothing reads it today, which is exactly how it would rot: a reason
+    written to the table but missing from the set is a silent lie in the one
+    document a reader would trust."""
+    from wl_preproc.timebase import segments
+
+    assert segments.GAP_CORRUPTED in segments.REJECTION_REASONS
+
+
 # --- Populate. These need a real MySQL, and a real generated session. ---
 
 import datetime  # noqa: E402
@@ -299,6 +372,104 @@ def test_an_unalignable_file_lands_in_rejected_segment_with_its_reason(
     assert rejected[0]["file_path"] == sidecar_path.name
     # And it is NOT also a segment: the two are exclusive by construction.
     assert not (core.Segment & {**session_key, "system": "bcam"})
+
+
+def test_an_unknown_reason_raises_rather_than_being_written(
+    dj_conn, prefix, tmp_path, monkeypatch
+):
+    """`REJECTION_REASONS` is documentation nothing enforced -- exactly the
+    rot the constant exists to prevent. `Segment.make` now guards the one
+    place that writes `RejectedSegment.reason`: forcing `classify_segment`
+    to hand back a verdict outside the set must raise there, before the row
+    reaches the table, rather than silently writing a reason the vocabulary
+    does not document.
+
+    `classify_segment` is broken by monkeypatch rather than by handing
+    `Segment.make` a hand-built bad row, so the guard is exercised exactly
+    where production would reach it -- through `populate()`, not by calling
+    `make()` directly (this file's own `test_segment_populate.py` gives the
+    reason: a permanently empty `key_source` would pass while proving
+    nothing).
+    """
+    from wl_preproc.schema import core, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+    from wl_preproc.timebase import segments
+
+    timebase.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
+
+    recipe = RECIPES["ci"]
+    generate_session(tmp_path, recipe)
+    session_dir = tmp_path / recipe.session_id
+
+    pipeline.lab.Lab.insert1(
+        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+        skip_duplicates=True,
+    )
+    pipeline.subject.Subject.insert1(
+        {
+            "subject": recipe.subject,
+            "sex": "M",
+            "subject_birth_date": datetime.date(2020, 1, 1),
+            "subject_description": "",
+        },
+        skip_duplicates=True,
+    )
+    session_key = {
+        "subject": recipe.subject,
+        # 3/28: every synth recipe shares subject "pico" (`RECIPES["ci"]`
+        # included), so `session_datetime` is this key's only free
+        # coordinate -- checked against every literal `datetime.datetime
+        # (2027, ...)` elsewhere under tests/ before picking it. 3/20
+        # collided with `test_timebase.py::provenance_session`'s own
+        # hardcoded date and cost fix round 1's first attempt two failures
+        # there: `skip_duplicates=True` on `Ingestion.insert1` let this
+        # test's 3-system `session_dir` win silently, so a LATER, unrelated
+        # `Segment.populate()` for the 5-system `drift` recipe read this
+        # test's directory instead of its own.
+        "session_datetime": datetime.datetime(2027, 3, 28, 9, 0),
+    }
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1(
+        {
+            **session_key,
+            "ingested_at": datetime.datetime(2027, 3, 28, 19, 0),
+            "session_dir": str(session_dir),
+            "integrity": "verified",
+            "topology": {system: "present" for system in recipe.systems},
+            "manifest_hash": "blake3:test",
+        },
+        skip_duplicates=True,
+    )
+    core.AcquisitionSystem.insert(
+        [{**session_key, "system": system} for system in recipe.systems],
+        skip_duplicates=True,
+    )
+
+    # Fit for real first, with the real `classify_segment`: the guard under
+    # test sits downstream of this, in `Segment.make`, and an unfitted
+    # system would be rejected as `UNFITTED_SYSTEM` before ever asking
+    # `classify_segment` for a per-file verdict.
+    timebase.SystemTimebase.populate()
+
+    # The one thing the guard exists to catch: a verdict outside
+    # `REJECTION_REASONS`. Every file in every system now gets this verdict,
+    # so `Segment.make` rejects all of them under a name the set does not
+    # hold.
+    monkeypatch.setattr(
+        segments,
+        "classify_segment",
+        lambda duration_s, n_barcodes: "not_a_real_reason",
+    )
+
+    with pytest.raises(ValueError, match="not_a_real_reason"):
+        core.Segment.populate(session_key, suppress_errors=False)
+
+    # Raised, not filtered: nothing from this session reached either table.
+    # A partial write here would mean the guard fired too late to matter.
+    assert not (core.RejectedSegment & session_key)
+    assert not (core.Segment & session_key)
 
 
 def test_populate_writes_only_the_tables_this_phase_owns(

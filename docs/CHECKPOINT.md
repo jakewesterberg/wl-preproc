@@ -1,7 +1,70 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (third update that day)**, describing `main` at
-`30d4761`.
+**Last updated 2026-09-19 (fourth update that day)**, describing `main` at
+`d30cbc6` and the UNMERGED branch `spec/gap-aware-barcode-extraction` at
+`f9e02c7`.
+
+*The line above said `30d4761` until this update. `main` had moved twice past
+it — `dee5073` and `d30cbc6`, both docs commits made after that header was
+written and neither of which updated it. Seventh instance of this file's own
+recurring failure: a status sentence is only true of the commit it names.*
+
+**THE LAB'S ONLY REAL RECORDING CARRIES NO wl-sync BARCODES AT ALL, SO THE
+BARCODE AND TIMEBASE ALIGNMENT PATH HAS NEVER BEEN EXERCISED AGAINST REAL
+DATA — AND CANNOT BE WITH THE RECORDING THIS LAB CURRENTLY HAS.** Measured
+2026-09-19 directly off `OpenIris-2024Jul31-114628.txt`'s own `Int0` line
+(1,177,799 rows, 498.55 Hz from its own timestamps, zero frame gaps):
+**5,789 transitions**; **2,894 complete HIGH pulses** of a consistent
+**124.4–126.4 ms**; 2,894 complete LOW runs of **124.4 ms to 1,251.6 ms**,
+median 748.2 ms; rise-to-rise median 874.5 ms, so about **1.2 Hz**. Its
+**shortest complete feature is 124.4 ms — 24.9× a 5 ms `BIT_SLOT_US`** — so
+no arrangement of those edges can express a 32-bit word in a 200 ms
+`FRAME_US` frame, and `decode_edges` recovers **zero** barcodes from it. It
+is **OpenIrisDPI's own tutorial recording**, not a session from this lab's
+synced rig. *(The file's very last HIGH pulse is cut off by the end of the
+recording at 36.1 ms; both boundary runs are excluded as incomplete, which is
+why the counts are 2,894 and not 2,895.)*
+
+**Every barcode test in this repository therefore runs on synthetic
+fixtures.** The reference recording can pin that gap handling is INERT on a
+gap-free file — real evidence, and what
+`test_the_reference_recording_is_untouched_by_gap_handling` asserts — but it
+cannot exercise decoding, rate fitting or offset alignment, because it
+carries nothing to decode. **This is the same shape as the three
+`WLPP_OHDPI_REFERENCE`-gated checks found on 2026-09-12 to have never run,
+and it gets the same prominence here for the same reason.** The unblock is a
+session recorded on the synced rig with the sync box actually driving the
+ohDPI digital line — the same hardware unblock a calibrated session would be
+for Otero-Millan's provisional rows.
+
+**GAP-AWARE BARCODE EXTRACTION IS BUILT — NOT MERGED, NOT PUSHED, AND CI HAS
+NEVER RUN ON IT.** Branch `spec/gap-aware-barcode-extraction`, 22 commits
+`d30cbc6..HEAD` — from the spec commit `66e9cf2` through this documentation
+commit, spec and plan included; `origin` has no ref for it.
+`extract_ohdpi` no longer refuses a recording with a dropped frame: it
+rebuilds the trace at true length from the file's own frame-number column
+(`np.repeat`, hold-previous fill, so no transition is invented) and
+`scan_system` discards only the barcode words a gap actually falls inside.
+`Segment` records `n_frame_gaps`/`n_frames_missing`/`n_barcodes_dropped`, a
+file whose barcodes the gaps destroyed is rejected as `gap_corrupted`, `synth`
+can plant dropped frames, and **validity criterion 4 fires end to end for the
+first time** — item 5 below, whose 2026-09-01 remedy this supersedes. 26 new
+tests. `wl-sync` untouched; `docs/schemas/` untouched and needing no
+re-export, which corrects a claim the spec itself first made the other way.
+
+**Verified before any merge, not after: 1394 passed, 11 skipped, 1 deselected,
+1 xfailed on 3.11 in the venv, and 1393 passed, 13 skipped, 1 xfailed on 3.13
+against a dependency set compiled fresh that day** — 24 packages different
+from the venv (numpy 2.4.6 → 2.5.3, pandas 3.0.5 → 3.0.6, scipy 1.17.1 →
+1.18.1 among them), `datajoint` at **2.3.3 on both sides**. **The mutation
+battery ran all eight mutations; seven were caught by the named test the plan
+predicted and ONE SURVIVED** — `Segment.make` writing a literal `0` for
+`n_barcodes_dropped` left the covering suites entirely green, because
+`gapped_session`'s gap costs no word and `heavily_gapped_session` is rejected
+and stores no row, so the column was only ever pinned at the value the
+mutation writes. Closed in `f9e02c7` with a third fixture; eight of eight now
+caught. `docs/handoffs/2026-09-19-gap-aware-barcode-extraction-built.md` has
+the full table and both suite counts.
 
 **THE DAY'S TWO EARLIER FINDINGS BOTH UNDERSTATED THE COST, AND THE SACCADE
 NUMBER WAS AN ORDER OF MAGNITUDE OUT.** Both counted only the runs §1 drops
@@ -666,16 +729,39 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    here.** The next measurement is named there: the saccade-offset
    difference between the eyes over those events, which settles whether
    boundary placement is the cause.
-5. **Gap-aware segmentation** (timebase) — ruled 2026-09-01, spec and plan not yet
-   written. `extract_ohdpi` raises on any dropped frame, so a recording with one gap gets
-   no `SystemTimebase` row, no `core.Segment`, and therefore no eye pipeline at all — and
-   leaves no `RejectedSegment` row either, existing only as a line in `run_once`'s error
-   list. The refusal is CORRECT where it stands: a frame index IS a time on that line, so
-   every barcode edge after a gap would be early by the dropped frames' duration. The fix
-   is to decode each contiguous run as its own segment. **Validity criterion 4 — the
-   frame-gap window — cannot fire in production until this lands**, and the reference
-   recording has zero gaps across 1,177,799 rows, so real data has never exercised it
-   either. Detection spec §2 carries the full chain.
+5. **Gap-aware barcode extraction — BUILT 2026-09-19, NOT merged, NOT pushed, CI has
+   never run on it.** Branch `spec/gap-aware-barcode-extraction`, 22 commits
+   `d30cbc6..HEAD`, the spec commit `66e9cf2` first.
+   `specs/2026-09-19-gap-aware-barcode-extraction-design.md`,
+   `plans/2026-09-19-gap-aware-barcode-extraction.md` and
+   `handoffs/2026-09-19-gap-aware-barcode-extraction-built.md`. The problem this item
+   described is unchanged and was correctly stated: `extract_ohdpi` raised on any dropped
+   frame, so a recording with one gap got no `SystemTimebase` row, no `core.Segment` and
+   therefore no eye pipeline at all — and left no `RejectedSegment` row either, existing
+   only as a line in `run_once`'s error list. The refusal's REASONING was also correct and
+   is kept: a frame index IS a time on that line, so every barcode edge after a gap would
+   be early by the dropped frames' duration.
+
+   **What is superseded is the remedy.** This item read *"The fix is to decode each
+   contiguous run as its own segment"* from 2026-09-01 until this update. It is not, and
+   the 2026-09-01 ruling was reasonable rather than wrong: it was made before anyone had
+   noticed that an OpenIrisDPI file carries its own frame-number column, so the only
+   apparent way to keep index arithmetic honest was to stop indexing across the gap. The
+   file states exactly which frames are absent and where, so the index is now CORRECTED
+   rather than the recording DIVIDED — one `np.repeat` of hold-previous fill, no schema
+   restructuring — and only the barcode words a gap actually falls inside are discarded.
+   Splitting would additionally have needed a `RejectedSegment` keyed on more than
+   `file_path`, a per-run rather than pooled rate fit, and several `Segment` rows where
+   there is one today — **and would still have needed the word-level exclusion anyway.**
+   Design spec §0 carries the full reasoning; it is written there rather than as an edit
+   because what changed is a fact about the file format, not a change of mind.
+
+   **Validity criterion 4 — the frame-gap window, dead code in production until now —
+   fires end to end on this branch**, which was the point. Note what has NOT changed: the
+   reference recording still has zero gaps across 1,177,799 rows, so real data has still
+   never exercised any of this. See the header — that recording carries no decodable
+   barcode at all, which is a larger problem than this item. Detection spec §2 carries the
+   full chain.
 6. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
    reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
    Worth doing before the hardware lands.
@@ -694,8 +780,9 @@ four glissade-freed detectors were Nyström–Holmqvist, NSLR, REMoDNaV, Bayesia
 microsaccade detection (item 4 above); Nyström–Holmqvist is now written, tested and
 registered (2026-09-06, on an unmerged branch), and NSLR, REMoDNaV and BMD are the
 remaining ones of that kind, each still simply unwritten. U'n'Eye is the first piece of
-this project that genuinely wants the GPU. Gap-aware segmentation and rehydration are both
-hardware-free.
+this project that genuinely wants the GPU. Gap-aware extraction and rehydration are both
+hardware-free; the first of those is now built (item 5 above, unmerged), which leaves
+rehydration as the only hardware-free piece outstanding.
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief

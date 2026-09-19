@@ -59,7 +59,7 @@ from wl_preproc.eye.calibration import (
     validate_map,
 )
 from wl_preproc.eye.gaze import purkinje_vector
-from wl_preproc.eye.ohdpi import read_columns
+from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
 from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
@@ -574,12 +574,22 @@ class EyeCalibration(dj.Computed):
         row_ranges: list[
             tuple[int, int, tuple[float, float], int | None, bool, dict]
         ] = []
+        # One read of each recording's frame counter, shared by every window
+        # that lands in it and by BOTH eyes -- see `_frame_offsets`. It
+        # belongs here rather than in the per-eye loop below for the same
+        # reason this whole loop does: which rows a window resolves to is a
+        # property of the file and the segment's timing, and only the values
+        # sampled from those rows differ per eye.
+        frame_offsets: dict[Path, np.ndarray] = {}
         for t_start, t_end, target_xy, block_id, is_calibration in windows:
             segment = _containing_segment(segments, t_start, t_end)
             if segment is None:
                 continue
-            row_start = _session_time_to_row(segment, t_start)
-            row_end = _session_time_to_row(segment, t_end)
+            offsets = _frame_offsets(
+                session_dir / "ohdpi" / segment["file_path"], frame_offsets
+            )
+            row_start = _session_time_to_row(segment, t_start, offsets)
+            row_end = _session_time_to_row(segment, t_end, offsets)
             if row_start is None or row_end is None:
                 continue
             lo, hi = sorted((row_start, row_end))
@@ -808,20 +818,94 @@ def _containing_segment(segments: list[dict], t_start: float, t_end: float) -> d
     return None
 
 
-def _session_time_to_row(segment: dict, session_s: float) -> int | None:
-    """The ohDPI file row (0-based) nearest `session_s`, by the same linear
-    map `core.Segment.make()` fit -- `session_s = native_s/scale + offset_s`
-    -- here inverted and expressed directly through the segment's own
-    stored extent (`start_s` at row 0, `end_s` at the last row) rather than
-    re-deriving `scale`/`offset_s` separately. The two are equivalent by
-    construction, and this needs no rate or barcode reference of its own."""
+def _frame_offsets(path: Path, cache: dict[Path, np.ndarray]) -> np.ndarray:
+    """Each surviving row's own TRUE SAMPLE INDEX within its recording --
+    `frame_numbers - frame_numbers[0]`, straight off the file's own frame
+    counter -- which is what `_session_time_to_row` needs to turn a sample
+    index into a row.
+
+    **Cached per FILE, and read once for both eyes.** Every fixation window
+    in a session usually falls in the same recording and needs this for both
+    of its bounds, so a `read_ohdpi` per window would re-read the largest
+    file in the pipeline (~2.5 s on a real 1.18M-row recording --
+    `eye/gaze.py`'s own module docstring) once per window instead of once per
+    session. The same shape of cache as `make()`'s own `purkinje_vector`
+    one, and a SEPARATE one deliberately: the trace is per eye and is read
+    inside the per-eye loop, while the row resolution is identical for both
+    eyes and is settled before that loop begins.
+
+    A second read of the same file rather than an extension of the Purkinje
+    cache, because the two want different columns: `purkinje_vector` reads
+    four `CR*` columns and `read_ohdpi` reads the frame counter, the
+    timestamp and the sync word. Widening either read to serve both would
+    put the eye module's column list in the format reader, or the reader's
+    in the eye module, to save one pass per file per session.
+    """
+    offsets = cache.get(path)
+    if offsets is None:
+        numbers = read_ohdpi(path).frame_numbers
+        offsets = numbers - numbers[0]
+        cache[path] = offsets
+    return offsets
+
+
+def _session_time_to_row(
+    segment: dict, session_s: float, offsets: np.ndarray
+) -> int | None:
+    """The ohDPI file row (0-based) that carries `session_s`.
+
+    **Two steps, because a row index and a sample index are not the same
+    number on a recording whose camera dropped frames.**
+
+    Step one -- session time to TRUE SAMPLE INDEX -- is the same linear map
+    `core.Segment.make()` fit (`session_s = native_s/scale + offset_s`),
+    here inverted and expressed directly through the segment's own stored
+    extent (`start_s` at sample 0, `end_s` at sample `n_samples - 1`) rather
+    than re-deriving `scale`/`offset_s` separately. The two are equivalent
+    by construction, and this needs no rate or barcode reference of its own.
+
+    Step two -- true sample index to ROW -- exists because `Segment.
+    n_samples` is the recording's TRUE FRAME SPAN, rows PLUS the frames the
+    camera dropped (the gap-aware barcode extraction design spec's section 5,
+    "`Segment.n_samples` changes meaning on a gapped file, and this is
+    deliberate"), while the file -- and so `gaze.purkinje_vector`'s array,
+    which is what the caller indexes with this answer -- has one entry per
+    row it actually kept. Until this step existed, step one's answer was
+    handed straight to that array and a gapped recording paid for it twice:
+    a window late in the file indexed PAST ITS END, numpy returned an empty
+    slice and `.mean(axis=0)` gave `[nan, nan]` with two RuntimeWarnings,
+    and nothing in `resolve_calibration` guards NaN -- a NaN calibration map
+    was stored; a window merely after a gap sampled rows late by the missing
+    frames.
+
+    **Scaling by the ROW COUNT instead -- "subtract the missing frames" --
+    does not fix it, and that was checked rather than assumed.** Session
+    time is linear in the TRUE sample index, while the row index SKIPS at
+    each gap, so the map is piecewise and no single denominator is right
+    everywhere. Modelling one 3-frame gap after row 99 in a 200-frame span:
+    true sample 50 belongs to row 50 and that scaling answers 49, true
+    sample 150 belongs to row 147 and it answers 148, true sample 199
+    belongs to row 196 and it answers 196. The error is systematic, changes
+    sign across the gap, and grows with the number and size of the gaps.
+
+    `offsets[row]` is that row's own true sample index, so the row carrying
+    sample `i` -- or, when `i` fell inside a hole, the last real row before
+    it -- is the rightmost offset at or below `i`, which is exactly
+    `searchsorted(..., side="right") - 1`. Resolving BACKWARD is the point:
+    a sample inside a gap lands on a frame that was really measured, never
+    on one from the far side of the hole. `offsets[0]` is 0 and step one
+    clamps to `[0, n_samples - 1]`, so the result is always a real row --
+    and `n_samples - 1` IS `offsets[-1]`, since `timebase/extract.py::
+    extract_ohdpi` builds `n_samples` from this same counter.
+    """
     n_samples = segment["n_samples"]
     if n_samples <= 0:
         return None
     span = segment["end_s"] - segment["start_s"]
     frac = 0.0 if span <= 0 else (session_s - segment["start_s"]) / span
-    row = int(round(frac * (n_samples - 1)))
-    return min(max(row, 0), n_samples - 1)
+    sample = int(round(frac * (n_samples - 1)))
+    sample = min(max(sample, 0), n_samples - 1)
+    return int(np.searchsorted(offsets, sample, side="right")) - 1
 
 
 def _find_expcontroller_log(session_dir: Path) -> Path | None:

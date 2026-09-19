@@ -1,8 +1,101 @@
+import os
 from pathlib import Path
 
-from wl_preproc.timebase.extract import extract_ohdpi, find_recordings
+import numpy as np
+import pytest
+
+from wl_preproc.timebase.extract import barcode_clear_of_gaps, extract_ohdpi, find_recordings
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "ohdpi" / "OpenIris-sample.txt"
+
+_HEADER = " ".join(["LeftFrameNumber", "LeftSeconds", "Int0", "LeftCR1X", "LeftCR4X"])
+
+
+def _write_ohdpi(path, frame_numbers, sync_bits, fs_hz=500.0):
+    """A minimal OpenIrisDPI file. `Seconds` is derived from the frame NUMBER,
+    so a dropped frame costs real time exactly as it does on the instrument --
+    a fixture that timestamped by row would hide the bug under test."""
+    from wl_preproc.eye.ohdpi import SYNC_BIT_INDEX
+
+    lines = [_HEADER]
+    first = frame_numbers[0]
+    for number, bit in zip(frame_numbers, sync_bits):
+        seconds = (number - first) / fs_hz
+        lines.append(f"{number} {seconds:.6f} {bit << SYNC_BIT_INDEX} 1.0 1.0")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_a_clean_recording_has_no_gaps_and_spans_its_own_rows(tmp_path):
+    """`np.repeat` with all-ones counts returns its input, so nothing about a
+    gap-free file may change. This is the pin that says the whole change is
+    invisible to every recording that works today."""
+    numbers = list(range(1000, 1200))
+    bits = [0] * 200
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "clean.txt", numbers, bits))
+
+    assert stream.gaps == ()
+    assert stream.n_frames_missing == 0
+    assert stream.n_samples == 200
+
+
+def test_a_dropped_frame_no_longer_refuses_the_recording(tmp_path):
+    """The behaviour this whole plan exists to change. Before it, one dropped
+    frame anywhere cost the session its entire eye pipeline -- no
+    SystemTimebase fit, no Segment row, not even a RejectedSegment."""
+    numbers = list(range(1000, 1100)) + list(range(1103, 1200))  # 3 missing
+    bits = [0] * len(numbers)
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "gapped.txt", numbers, bits))
+
+    assert stream.n_frames_missing == 3
+    assert len(stream.gaps) == 1
+    assert stream.n_samples == 200, (
+        "the true span, not the row count: 197 rows covering 200 frames"
+    )
+
+
+def test_the_gap_span_brackets_the_two_known_samples(tmp_path):
+    """The level is known AT the last sample before the gap and AT the first
+    after it, and unknown strictly between. Bracketing is what makes a word
+    overlapping either half-interval untrustworthy; spanning only the missing
+    slots would leave those halves looking sound."""
+    numbers = list(range(0, 10)) + list(range(13, 20))  # rows 0..9, then 13..19
+    bits = [0] * len(numbers)
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "bracket.txt", numbers, bits))
+
+    # fs is derived from the file's own timestamps; at 500 Hz a frame is 2000 us.
+    assert stream.gaps == ((round(9 / 500.0 * 1e6), round(13 / 500.0 * 1e6)),)
+
+
+def test_holding_the_level_across_a_gap_invents_no_transition(tmp_path):
+    """Hold-previous fill is the conservative reconstruction: the line appears
+    to have held. Anything cleverer -- interpolating, or emitting an edge at
+    the gap -- would manufacture evidence about samples nobody has."""
+    numbers = list(range(0, 10)) + list(range(13, 20))
+    bits = [1] * len(numbers)  # same level either side of the gap
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "hold.txt", numbers, bits))
+
+    assert len(stream.edges) == 1, "one rising edge at sample 0 and nothing else"
+
+
+def test_an_edge_after_a_gap_gets_the_time_it_would_have_had(tmp_path):
+    """The whole point of reconstructing rather than splitting: a transition
+    after the gap is timed from its TRUE sample position, not from its row.
+
+    The leading `(0, 0)` is `edges_from_samples`' own: it starts with
+    `previous = None`, so the FIRST sample always emits an edge whatever its
+    level. Pinned here rather than indexed past, because filtering it out
+    costs a barcode -- `decode_edges` with `start_us=None` needs a first
+    transition to anchor the idle before the first frame."""
+    numbers = list(range(0, 10)) + list(range(13, 20))
+    bits = [0] * 10 + [0, 0, 1, 1, 1, 1, 1]  # rises at frame number 15
+
+    stream = extract_ohdpi(_write_ohdpi(tmp_path / "after.txt", numbers, bits))
+
+    assert stream.edges == ((0, 0), (round(15 / 500.0 * 1e6), 1))
 
 
 def test_the_glob_matches_a_real_recording_and_not_its_events_sibling(tmp_path):
@@ -62,3 +155,52 @@ def test_it_extracts_a_bitstream_from_the_real_fixture():
     # more than the single start-of-recording edge an always-truthy raw
     # sample would.
     assert len(stream.edges) > 1
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_the_reference_recording_is_untouched_by_gap_handling(capsys):
+    """1,177,799 rows and zero gaps, so the reconstruction is the identity and
+    every edge, barcode and sample count must be exactly what it was.
+
+    Asserted on the gap fields rather than against a stored golden: a golden
+    would pin this file's contents, and what is being checked is that the CODE
+    PATH is inert, not that the recording never changes.
+
+    **This recording carries no wl-sync barcodes, and that is a property of
+    the FILE rather than a failure of the decoder.** Measured from its own
+    `Int0` line: 5,789 transitions, shortest run 124.4 ms, median 126.4 ms,
+    and not one run shorter than a single 5 ms `BIT_SLOT_US`. A 32-bit word
+    occupies 200 ms with a transition available per bit; this
+    line carries a consistent ~125 ms HIGH pulse (2,894 of them, 124.4-126.4
+    ms) separated by irregular LOW gaps of 124.4 ms to 1.25 s, repeating at
+    about 1.2 Hz on average. Its SHORTEST feature is therefore 124.4 ms --
+    nearly twenty-five times a `BIT_SLOT_US` -- so no arrangement of these
+    edges can express a barcode's bit pattern. It is OpenIrisDPI's own
+    tutorial recording, not a session from this lab's synced rig, so
+    `decode_edges` correctly returns nothing and the barcode count is
+    asserted as a non-vacuity check on EDGES rather than on words. The
+    consequence is larger than this test: the barcode and
+    timebase alignment path has never been exercised against real data, and
+    cannot be with the recording this lab currently has."""
+    from wl_sync.barcode import decode_edges
+
+    stream = extract_ohdpi(Path(os.environ["WLPP_OHDPI_REFERENCE"]))
+    barcodes = decode_edges(list(stream.edges))
+
+    with capsys.disabled():
+        print(
+            f"\n  reference: {stream.n_samples} samples, {len(stream.edges)} edges, "
+            f"{len(barcodes)} barcodes, {len(stream.gaps)} gaps"
+        )
+
+    assert stream.gaps == ()
+    assert stream.n_frames_missing == 0
+    assert all(barcode_clear_of_gaps(b, stream.gaps) for b in barcodes)
+    assert len(stream.edges) > 0, (
+        "the sync line produced no transitions at all, so this test proved "
+        "nothing -- a file that read as empty would satisfy every gap "
+        "assertion above vacuously"
+    )

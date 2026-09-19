@@ -108,7 +108,14 @@ def _segment_row(a_session, **overrides):
     gained the five that make the transform reversible (spec 4.5). A helper
     rather than a literal per test: two copies of this dict would let one grow
     an attribute the other lacks, and the failure is an insert error in an
-    unrelated test.
+    unrelated test -- exactly what happened here when Task 4 gave the table
+    three more required columns (`n_frame_gaps`, `n_frames_missing`,
+    `n_barcodes_dropped`), none with a database default by design (see
+    `core.py`'s own `Segment.definition`), and every test below started
+    failing with `MissingAttributeError` until this helper grew to match.
+    All three are 0 here: this file's rows are hand-built round-trip
+    fixtures, not gap fixtures -- `tests/schema/test_segment_populate.py` is
+    where a real gap gets scanned and counted.
     """
     row = {
         **a_session,
@@ -122,6 +129,9 @@ def _segment_row(a_session, **overrides):
         "offset_s": -0.7,
         "residual_us": 4.2,
         "n_barcodes": 12,
+        "n_frame_gaps": 0,
+        "n_frames_missing": 0,
+        "n_barcodes_dropped": 0,
     }
     row.update(overrides)
     return row

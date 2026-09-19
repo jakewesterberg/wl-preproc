@@ -162,6 +162,22 @@ class SessionRecipe(BaseModel):
     # signal is unchanged; see `EyeFixationSpec` for why a calibration fixture
     # needs it and free viewing cannot substitute.
     eye_fixations: tuple[EyeFixationSpec, ...] = ()
+
+    # Which ROW indices `write_ohdpi` omits from the eye recording, leaving the
+    # camera's frame-number sequence with a hole where they were. Empty by
+    # default, so every profile predating it is byte-identical; built by
+    # `faults.drop_ohdpi_frames`, which is where the reasoning about placement
+    # lives.
+    #
+    # Carried here rather than threaded through `generate_session` as a
+    # parameter, and NOT a `Fault` enum member: `Fault.DROPPED_CAMERA_FRAMES`
+    # is the BEHAVIOUR camera's, whose frames are sync-box triggered so a drop
+    # costs samples and shifts nothing, and a recipe field is what lets a
+    # fixture say WHERE the gap goes. Where it goes is the whole question --
+    # a gap in the idle between barcode words costs nothing and one inside a
+    # word destroys it (design spec sections 2 and 3), and a randomly-placed
+    # drop cannot express either case on purpose.
+    ohdpi_dropped_frames: tuple[int, ...] = ()
     ap_sample_rate_hz: float
     seed: int
     faults: tuple[Fault, ...] = ()

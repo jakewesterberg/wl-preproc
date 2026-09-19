@@ -91,6 +91,9 @@ class Segment(dj.Computed):
     offset_s     : double  # session_s = native_s / timebase.scale + offset_s
     residual_us  : double  # RMS about this segment's own offset
     n_barcodes   : int unsigned
+    n_frame_gaps      : int unsigned  # dropped-frame discontinuities in this recording
+    n_frames_missing  : int unsigned  # frames absent across those gaps
+    n_barcodes_dropped: int unsigned  # words discarded because a gap fell inside them
     """
 
     # first_sample, offset_s and residual_us are here because spec 4.5 requires
@@ -171,7 +174,23 @@ class Segment(dj.Computed):
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
             if scan.verdict != segments.ALIGNABLE:
-                rejected.append({**key, "file_path": file_path, "reason": scan.verdict})
+                # Not two competing causes -- the only one available here.
+                # `classify_segment` (timebase/segments.py) returns ALIGNABLE
+                # whenever n_barcodes >= 1, so this branch is reached only
+                # when the file's surviving count is zero. A positive
+                # `n_barcodes_dropped` in that situation means every barcode
+                # this file ever decoded was one the gaps then removed, and
+                # but for the gap `classify_segment` would have returned
+                # ALIGNABLE. `scan.verdict` at that point can only be
+                # `too_short` or `no_barcode` -- both honest about the zero
+                # count and silent about why it is zero -- so GAP_CORRUPTED
+                # replaces it rather than adding to it.
+                reason = (
+                    segments.GAP_CORRUPTED
+                    if scan.n_barcodes_dropped
+                    else scan.verdict
+                )
+                rejected.append({**key, "file_path": file_path, "reason": reason})
                 continue
             if rate is None:
                 rejected.append(
@@ -200,6 +219,16 @@ class Segment(dj.Computed):
                     "offset_s": offset.offset_s,
                     "residual_us": offset.residual_us,
                     "n_barcodes": offset.n_barcodes,
+                    # Three columns rather than one summary, for the reason
+                    # Phase 1c-5's TimingProvenance gives: spec section 4.7's
+                    # "derived, not asserted" holds on the row itself only if
+                    # each input is stored separately. They answer different
+                    # questions -- how fragmented, how much time is absent,
+                    # what it cost the alignment -- and none is derivable from
+                    # the others.
+                    "n_frame_gaps": scan.n_frame_gaps,
+                    "n_frames_missing": scan.n_frames_missing,
+                    "n_barcodes_dropped": scan.n_barcodes_dropped,
                 }
             )
 
@@ -210,6 +239,21 @@ class Segment(dj.Computed):
         # negative half of this same scan, and 1c-1's comment says why it
         # exists at all: recorded rather than dropped, so "why is this session
         # short" has an answer.
+        #
+        # `REJECTION_REASONS` documents every value this column may hold, but
+        # a documented vocabulary nothing checks is a comment, not a contract
+        # -- so it is enforced here, at the one place that writes the column,
+        # immediately before the write reaches it. A reason outside the set is
+        # a programming error in this method (a branch that names a reason it
+        # never registered), not data to drop, so it raises rather than
+        # filtering the row out.
+        for row in rejected:
+            if row["reason"] not in segments.REJECTION_REASONS:
+                raise ValueError(
+                    f"{row['reason']!r} is not in segments.REJECTION_REASONS "
+                    f"{sorted(segments.REJECTION_REASONS)} -- add it there "
+                    "before writing it to RejectedSegment.reason"
+                )
         RejectedSegment.insert(rejected, skip_duplicates=True)
 
 

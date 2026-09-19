@@ -226,24 +226,29 @@ def test_the_rate_counts_dropped_frames_as_elapsed_time(tmp_path):
     assert rec.n_frames == 7  # and NOT 12, the frame span -- rows are rows
 
 
-def test_the_barcode_extractor_refuses_a_gapped_recording(tmp_path):
-    """The refusal `read_ohdpi` used to make, moved to the one caller that
-    genuinely cannot tolerate a gap.
+def test_the_barcode_extractor_reconstructs_a_gapped_recording(tmp_path):
+    """The barcode extractor now reconstructs gaps instead of refusing them,
+    correcting the sample-index-to-time map using the file's own frame numbers.
 
     `edges_from_samples` turns a sample INDEX into a time by dividing by
     `fs_hz`, so every edge after a gap is early by the dropped frames'
-    duration and the barcodes decoded from them would name sync times that
-    never happened -- a silently wrong alignment for the whole session rather
-    than a visibly absent one. The eye path has no such indexing and keeps the
-    recording.
+    duration. The reconstruction uses `np.repeat` to fill the gap with
+    hold-previous fill, making the reconstructed bits array the true span
+    and the sample indices the true frame positions. This way, edges are
+    timed correctly and can be decoded, rather than silently wrong.
     """
     from wl_preproc.timebase.extract import extract_ohdpi
 
     path = tmp_path / "gapped_for_barcode.txt"
     path.write_text(_minimal_rows([100, 101, 103, 104, 105, 106]), encoding="utf-8")
 
-    # The reader itself is content.
+    # The reader itself detects the gap.
     assert read_ohdpi(path).frame_gaps == (FrameGap(row=1, n_missing=1),)
 
-    with pytest.raises(ValueError, match="dropped-frame gap"):
-        extract_ohdpi(path)
+    # The barcode extractor now reconstructs instead of refusing.
+    stream = extract_ohdpi(path)
+    assert stream.n_frames_missing == 1
+    # Frame numbers 100, 101, [103 missing], 103, 104, 105, 106
+    # Offsets are 0, 1, 3, 4, 5, 6 relative to first (100)
+    # Gap brackets offset 1 (frame 101 at time 2000 us) to offset 3 (frame 103 at time 6000 us)
+    assert stream.gaps == ((round(1 / 500.0 * 1e6), round(3 / 500.0 * 1e6)),)

@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from wl_sync.log import Edge, Record
 
+from wl_preproc.synth.ohdpi import OHDPI_FPS
 from wl_preproc.synth.recipe import Fault
 from wl_preproc.synth.truth import GroundTruth
 
@@ -70,6 +71,51 @@ def stop_mid_trial(records: Sequence[Record], at_s: float) -> list[Record]:
 def drop_camera_frames(frame_count: int, rng: np.random.Generator) -> tuple[int, ...]:
     n_dropped = max(1, frame_count // 200)
     return tuple(sorted(rng.choice(frame_count, n_dropped, replace=False).tolist()))
+
+
+def drop_ohdpi_frames(
+    frame_count: int, at_s: float, n_frames: int, fps: float = OHDPI_FPS
+) -> tuple[int, ...]:
+    """Row indices for one contiguous run of dropped eye-camera frames.
+
+    A contiguous run rather than a scatter, because that is what the failure
+    looks like: OpenIrisDPI's own notebook describes it as the computer being
+    too slow to process images in time, which loses a burst.
+    `split_into_segments` above models a mid-session RESTART, which is a
+    different fault -- that one shifts time, this one removes it. And
+    `drop_camera_frames` above is the BEHAVIOUR camera's: those frames are
+    sync-box triggered, so a dropped one costs its own samples and shifts
+    nothing after it (`timebase/extract.py::extract_bcam` says so in as many
+    words), whereas an ohDPI frame number is the camera's own free-running
+    counter and its hole is exactly what has to survive into the file.
+
+    **`at_s` is the RECORDING's own time, not session time.** A row's index
+    IS its timestamp here (`write_ohdpi` derives `Seconds` from the frame
+    index), and the recording starts `OHDPI_PRE_ROLL_S` before session t=0 --
+    so a caller naming a session-time instant must add that pre-roll itself.
+    Stated because getting it wrong moves a gap by 300 frames silently, and a
+    gap 300 frames from where it was meant to be is still a gap: nothing
+    downstream would notice.
+
+    Refuses a run that would touch either end of the file. A gap is detected
+    from the JUMP between two rows that were both KEPT (`eye/ohdpi.py`
+    diffs the frame-number column), so a run starting at row 0, or running to
+    the last row, leaves no such pair and plants no detectable gap at all.
+    That is the silent no-op this repository keeps paying for -- a fixture
+    that appears to inject a fault, injects nothing, and makes every test
+    written against it pass against a clean file.
+    """
+    first = int(at_s * fps)
+    stop = first + n_frames
+    if not 0 < first < stop < frame_count:
+        raise ValueError(
+            f"rows {first}..{stop - 1} ({n_frames} frames at {at_s} s, "
+            f"{fps} fps) leave no surviving row on both sides of the gap "
+            f"within this recording's {frame_count} frames, so the file would "
+            "carry no DETECTABLE gap -- a fixture that plants nothing while "
+            "looking like it planted something"
+        )
+    return tuple(range(first, stop))
 
 
 def corrupt_trial_count(truth: GroundTruth) -> GroundTruth:
