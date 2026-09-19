@@ -16,10 +16,13 @@ defines its own `daemon_module`/`stepped_session`, mirroring the shape
 rather than the object, exactly as every other file sharing those names
 already does.
 
-The GAPPED case is Task 6's `gapped_session` fixture, which does not exist
-yet; `test_a_segment_records_the_gaps_its_recording_had` below is marked
-`xfail(strict=True)` until it lands, so that debt shows up in every test
-report rather than going quiet.
+The GAPPED cases are Task 6's `gapped_session` and `heavily_gapped_session`
+fixtures, which live in `tests/schema/conftest.py` because they are session
+builders rather than assertions -- see their own docstrings for how each
+one's gaps are placed and why placement is the only thing that separates
+them. Both tests below carried `xfail(strict=True)` until those fixtures
+landed, so the debt showed up in every test report rather than going quiet;
+the markers are gone now that the tests pass for real.
 """
 
 from __future__ import annotations
@@ -64,7 +67,6 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     return session_key
 
 
-@pytest.mark.xfail(reason="needs the dropped-frame fault, Task 6", strict=True)
 def test_a_segment_records_the_gaps_its_recording_had(dj_conn, prefix, gapped_session):
     """A session that previously produced NOTHING now produces eye data, and
     its alignment rests on a trace with holes. A consumer must be able to
@@ -77,7 +79,15 @@ def test_a_segment_records_the_gaps_its_recording_had(dj_conn, prefix, gapped_se
 
     assert row["n_frame_gaps"] == 1
     assert row["n_frames_missing"] == 3
-    assert row["n_barcodes_dropped"] >= 0
+    # Exactly zero, not `>= 0`. The gap sits in the idle between two barcode
+    # words, so it costs no word -- and every one of the clean session's
+    # three expected values below is also 0, which leaves THIS test as the
+    # only one in the suite whose three values differ from each other and so
+    # the only one that can catch a transposition of the three columns in
+    # `Segment.make`. `>= 0` is trivially true of an `int unsigned` and would
+    # pin nothing: it passes just as happily on a transposition that put
+    # `n_frames_missing`'s 3 in this column.
+    assert row["n_barcodes_dropped"] == 0
 
 
 def test_a_clean_segment_records_zero_for_all_three(dj_conn, prefix, stepped_session):
@@ -86,11 +96,13 @@ def test_a_clean_segment_records_zero_for_all_three(dj_conn, prefix, stepped_ses
     from wl_preproc.schema import core
 
     core.Segment.populate(stepped_session, suppress_errors=False)
-    for row in (core.Segment & stepped_session).fetch(as_dict=True):
+    # `to_dicts()`, not `fetch(as_dict=True)`: the latter raises a real
+    # DeprecationWarning under the installed DataJoint 2.3.3, and this
+    # repository holds itself to zero warnings.
+    for row in (core.Segment & stepped_session).to_dicts():
         assert (row["n_frame_gaps"], row["n_frames_missing"], row["n_barcodes_dropped"]) == (0, 0, 0)
 
 
-@pytest.mark.xfail(reason="needs the dropped-frame fault, Task 6", strict=True)
 def test_a_file_gapped_below_the_floor_names_the_gaps_as_the_reason(
     dj_conn, prefix, heavily_gapped_session
 ):
