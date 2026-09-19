@@ -82,13 +82,19 @@ def test_holding_the_level_across_a_gap_invents_no_transition(tmp_path):
 
 def test_an_edge_after_a_gap_gets_the_time_it_would_have_had(tmp_path):
     """The whole point of reconstructing rather than splitting: a transition
-    after the gap is timed from its TRUE sample position, not from its row."""
+    after the gap is timed from its TRUE sample position, not from its row.
+
+    The leading `(0, 0)` is `edges_from_samples`' own: it starts with
+    `previous = None`, so the FIRST sample always emits an edge whatever its
+    level. Pinned here rather than indexed past, because filtering it out
+    costs a barcode -- `decode_edges` with `start_us=None` needs a first
+    transition to anchor the idle before the first frame."""
     numbers = list(range(0, 10)) + list(range(13, 20))
     bits = [0] * 10 + [0, 0, 1, 1, 1, 1, 1]  # rises at frame number 15
 
     stream = extract_ohdpi(_write_ohdpi(tmp_path / "after.txt", numbers, bits))
 
-    assert stream.edges[0] == (round(15 / 500.0 * 1e6), 1)
+    assert stream.edges == ((0, 0), (round(15 / 500.0 * 1e6), 1))
 
 
 def test_the_glob_matches_a_real_recording_and_not_its_events_sibling(tmp_path):
