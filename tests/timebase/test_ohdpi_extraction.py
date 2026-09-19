@@ -167,7 +167,19 @@ def test_the_reference_recording_is_untouched_by_gap_handling(capsys):
 
     Asserted on the gap fields rather than against a stored golden: a golden
     would pin this file's contents, and what is being checked is that the CODE
-    PATH is inert, not that the recording never changes."""
+    PATH is inert, not that the recording never changes.
+
+    **This recording carries no wl-sync barcodes, and that is a property of
+    the FILE rather than a failure of the decoder.** Measured from its own
+    `Int0` line: 5,789 transitions, shortest run 124.4 ms, median 126.4 ms,
+    and not one run shorter than a single 5 ms `BIT_SLOT_US`. A 32-bit word
+    occupies 200 ms with a transition available per bit; this line is a ~4 Hz
+    square wave. It is OpenIrisDPI's own tutorial recording, not a session
+    from this lab's synced rig, so `decode_edges` correctly returns nothing
+    and the barcode count is asserted as a non-vacuity check on EDGES rather
+    than on words. The consequence is larger than this test: the barcode and
+    timebase alignment path has never been exercised against real data, and
+    cannot be with the recording this lab currently has."""
     from wl_sync.barcode import decode_edges
 
     stream = extract_ohdpi(Path(os.environ["WLPP_OHDPI_REFERENCE"]))
@@ -182,4 +194,8 @@ def test_the_reference_recording_is_untouched_by_gap_handling(capsys):
     assert stream.gaps == ()
     assert stream.n_frames_missing == 0
     assert all(barcode_clear_of_gaps(b, stream.gaps) for b in barcodes)
-    assert len(barcodes) > 0, "the recording must still decode barcodes at all"
+    assert len(stream.edges) > 0, (
+        "the sync line produced no transitions at all, so this test proved "
+        "nothing -- a file that read as empty would satisfy every gap "
+        "assertion above vacuously"
+    )
