@@ -251,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     archive_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     reclaim_p = subparsers.add_parser(
-        "reclaim", help="preview whether a session's scratch copy may be freed"
+        "reclaim", help="preview, or perform, freeing a session's scratch copy"
     )
     reclaim_p.add_argument("--session", required=True, help="path to the session directory")
     # `--no-dry-run` + `--confirm`, not the brief's own `--dry-run` (Controller
@@ -261,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:
     # parser above) so the two guardrails teach one convention, not two.
     reclaim_p.add_argument("--no-dry-run", action="store_true")
     reclaim_p.add_argument("--confirm", default=None)
+    # Required with --no-dry-run, ignored otherwise: the preview stays cheap
+    # and never reads the NAS, and a real reclamation proves the NAS copy
+    # before it deletes anything (2026-09-26 rehydration design, section 3).
+    reclaim_p.add_argument("--nas-root", type=Path, default=None)
     reclaim_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     hold_p = subparsers.add_parser("hold", help="block or force reclamation")
@@ -390,9 +394,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "reclaim":
         from wl_preproc.archive import reclaim as archive_reclaim
+        from wl_preproc.archive.scratch import Refused, free_session
         from wl_preproc.archive.verify import _expected_digests
 
         session_dir = Path(args.session)
+        if not session_dir.is_dir():
+            print(
+                f"refusing: {session_dir} is not a directory -- already reclaimed? "
+                f"`wlpp rehydrate --session {session_dir} --nas-root <mount>` brings "
+                "a reclaimed session back."
+            )
+            return 1
         key = _session_key_from_dir(session_dir)
         # `_expected_digests` (package-internal, underscored) rather than a
         # second walk of the DONE markers: it is the one place this
@@ -433,7 +445,11 @@ def main(argv: list[str] | None = None) -> int:
 
         if not args.no_dry_run:
             print("\nthis was a DRY RUN — nothing was freed.")
-            print("re-run with --no-dry-run --confirm <session> to proceed.")
+            print(
+                "the NAS proof (sentinel, digest, every file rebuilt) runs only on "
+                "a real reclamation."
+            )
+            print("re-run with --no-dry-run --confirm <session> --nas-root <mount> to proceed.")
             return 0
         if args.confirm != args.session:
             # "session path", not "session id": `--session` names a
@@ -443,27 +459,24 @@ def main(argv: list[str] | None = None) -> int:
             # accurate for THAT command's own `--session` but not this one's.
             print("\nrefusing: --confirm must repeat the session path exactly.")
             return 2
-        # Controller ruling A: reclaim previews and deletes nothing in this
-        # build, on PURPOSE, regardless of --no-dry-run/--confirm -- not an
-        # oversight to fix later. Rehydration is not in this plan yet -- the
-        # PLAN's own "Not in this plan" section (`docs/superpowers/plans/
-        # 2026-08-27-archival-and-compression.md`, "Not in this plan"):
-        # "Rehydration -- decompress-to-scratch. [Parent design spec] §8.4
-        # names it as the path that makes reclamation safe, and it is the
-        # natural next plan." (Review round: an earlier version of this
-        # comment attributed that quote to "design spec section 8.4" of
-        # THIS archival design document, which has no such section -- its
-        # own `## 8` is "Schema", with no subsections at all, and every
-        # "§8.4"/"§8.5" this document itself uses names the PARENT spec,
-        # e.g. its own section 5's title, "Reclamation, and the reversal of
-        # §8.5".) Freeing a session's only fast copy with no built path back
-        # is the identical loss `wlpp delete`'s own guardrail refuses a few
-        # branches above, for the same reason.
+        if args.nas_root is None:
+            print(
+                "\nrefusing: a real reclamation needs --nas-root, to prove the "
+                "archive before deleting anything."
+            )
+            return 2
+        # A person frees scratch; the daemon never does (2026-09-26
+        # rehydration design, section 0, ruling 1). Everything that must be
+        # true before deleting is checked inside `free_session`, not here, so
+        # no caller can skip it.
+        try:
+            freed = free_session(session_dir, key, args.nas_root, prefix=args.prefix)
+        except Refused as exc:
+            print(f"\nrefusing: {exc}")
+            return 1
         print(
-            "\nthis build never performs a real reclamation: rehydration "
-            "(decompress-to-scratch), the path that makes freeing scratch "
-            "safe to reverse, is not built yet -- so the preview above is "
-            "as far as this command goes."
+            f"\nfreed {freed} bytes: {session_dir} is gone. "
+            f"`wlpp rehydrate --session {session_dir} --nas-root <mount>` brings it back."
         )
         return 0
 
