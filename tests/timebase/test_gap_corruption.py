@@ -10,9 +10,7 @@ exclusion rule in `timebase/extract.py::barcode_clear_of_gaps` is only
 justified if that case is real.
 """
 
-import numpy as np
-import pytest
-from wl_sync.barcode import BIT_SLOT_US, FRAME_US, N_BITS, WRAPPER_US, decode_edges, encode
+from wl_sync.barcode import BIT_SLOT_US, FRAME_US, WRAPPER_US, decode_edges, encode
 
 from wl_preproc.timebase.extract import barcode_clear_of_gaps, extract_ohdpi
 

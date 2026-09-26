@@ -64,6 +64,25 @@ sidecars, the sync box log, the task file, the session manifest and every DONE
 marker. Those are a rounding error against ~100 GB, and a byte kept
 untransformed is a byte that cannot be reconstructed wrongly.
 
+> **Amended 2026-09-26: "a rounding error" is false of their RAW size, and
+> verbatim storage stands anyway.** Intan's *RHS Application Note: Data File
+> Formats* ("One File Per Signal Type") says `stim.dat` is one uint16 per
+> enabled amplifier channel per sample — the same size as `amplifier.dat` —
+> and `dcamplifier.dat`, when saved, is the same shape (the rehydration
+> design, §12). So on an RHS session these are bulk data. What keeps verbatim
+> storage right is compression and streaming, not size: measured on the
+> synthetic `STIM_RECIPE` session, `stim.dat` is 2,988,368 bytes (exactly
+> `amplifier.dat`'s), 0.04% of its words are non-zero, and stored verbatim
+> (bytes, blosc-zstd, no shuffle) it takes 542 bytes; and since 2026-09-26 the
+> writer streams every verbatim file in 16 MiB blocks, so its size never has
+> to fit in memory (§10 item 5). Stimulation words are zero except while a
+> pulse is delivered, which is why real ones should compress as well —
+> **unmeasured on a real session**, and `dcamplifier.dat`, a dense signal
+> stored as bytes without shuffle, would not; the synthetic generator writes
+> neither a real stimulation train nor `dcamplifier.dat`. If a real RHS
+> session shows either costing real space, storing it as a typed array
+> beside `amplifier.dat` is the change.
+
 **A directory tree is not a compromise.** `nas_artifact_observation` carries
 **`fileCount`** beside `path` and `sizeBytes` — verified in the lab wiki design's
 column list — precisely because an artifact may be many files.

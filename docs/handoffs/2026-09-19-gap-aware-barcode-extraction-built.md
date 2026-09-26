@@ -228,6 +228,13 @@ review and parked rather than fixed mid-task.
    `DeprecationWarning` under the installed DataJoint 2.3.3. Recorded so
    nobody reopens it.
 
+*Items 1–3 DONE 2026-09-26 (`chore/gap-aware-deferred-minors`): the three
+unused imports are gone; `drop_ohdpi_frames` rounds; and `validity.py` now
+cites what exists -- commit `7d4a00f`'s amendment to the saccade-detection
+design spec -- in place of "finding H2", a label from a working ledger that no
+longer exists. Item 4 (no session-date allocator) remains; item 5 needs
+nothing.*
+
 ---
 
 ## What this does not do

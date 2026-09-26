@@ -105,7 +105,10 @@ def drop_ohdpi_frames(
     that appears to inject a fault, injects nothing, and makes every test
     written against it pass against a clean file.
     """
-    first = int(at_s * fps)
+    # `round`, not `int`: a caller's `at_s` accumulated in floating point can
+    # land a hair under a frame boundary, and truncating would move the gap
+    # one frame early (the gap-aware branch's deferred minor 2).
+    first = round(at_s * fps)
     stop = first + n_frames
     if not 0 < first < stop < frame_count:
         raise ValueError(

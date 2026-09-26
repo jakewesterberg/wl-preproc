@@ -77,12 +77,14 @@ requester chose to merge the same day; true when written.*
 >    changes size mid-write is an error, not a padded copy, and it no longer
 >    crashes on a stream with no samples, and a stream wider than 512
 >    channels gets shorter chunks. *Until then this said the writer read each file whole and
->    that no real session could be archived yet; true when written.* Still
->    open in this line: the rehydration spec (§12) records that Intan's
->    `stim.dat` is one uint16 per channel per sample, as large as
->    `amplifier.dat`, not the rounding error the archival design calls it;
->    it is streamed now, but whether it should be a compressed array
->    deserves its own amendment.
+>    that no real session could be archived yet; true when written.* The
+>    `stim.dat` finding (rehydration spec §12) has its amendment too, in the
+>    archival design's §1: it is bulk in raw size — as large as
+>    `amplifier.dat` — and stays verbatim, because it streams now and its
+>    stimulation words are almost all zero (synthetic: 2,988,368 bytes store
+>    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
+>    storing either as a typed array is the change if a real one costs real
+>    space.
 > 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
 >    microsaccade detection.** Real code, hardware-free, and they matter as
 >    SACCADE detectors — see the priority note below about glissades. U'n'Eye
