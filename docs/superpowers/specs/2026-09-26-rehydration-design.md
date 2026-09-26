@@ -154,6 +154,12 @@ against the NAS copy, in this order, and deletes nothing if any fails:
 2. **The NAS copy's manifest digest equals `ArchiveArtifact.manifest_digest`.**
    This proves the artifact is byte-for-byte the one confirmed at archive time,
    and it is the only check that covers the four files no rig digest names.
+   It is computed over every file **except the completion sentinel**:
+   `archive_session` confirms the digest and only then writes the sentinel, so
+   a published artifact always holds one file the recorded digest never
+   covered (`tests/cli/test_archive_cli.py::_digest_of_published_content`
+   found this first). `store.manifest_digest` gains an `exclude` parameter for
+   it.
 3. **Every file the rig checksummed rebuilds, from the NAS copy, to the rig's
    digest.** The expected digests are the `ArchiveVerification.expected_blake3`
    rows — the rig's numbers, recorded at archive time, independent of the
@@ -193,17 +199,20 @@ In order, stopping at the first refusal:
 4. No `root/.<name>.reclaiming` or `root/.<name>.rehydrating` directory may
    already exist — the staging names of step 6 and of §5.3.
 5. The proof (§3) must pass.
-6. **Rename** `root/<name>` to `root/.<name>.reclaiming/<name>`. From this
-   instant the session is gone from its path, in one step, and the renamed
-   tree is invisible to the watcher (fact 4: the root's child is
-   `.<name>.reclaiming`, which holds no manifest of its own).
-7. **Record** a `ScratchReclamation` row, with `bytes_freed` the total size of
-   the session's files, measured before the rename. Written here, not after
-   step 8, because every consumer cares whether the session is at its path,
-   and step 6 is when that changed.
-8. **Remove** `root/.<name>.reclaiming`.
+6. **Record and rename, in one database transaction.** Insert a
+   `ScratchReclamation` row, with `bytes_freed` the total size of the
+   session's files measured beforehand, then rename `root/<name>` to
+   `root/.<name>.reclaiming/<name>`. If the insert fails, the rename never
+   happens; if the rename fails, the insert rolls back and the empty staging
+   directory is removed. From the rename on, the session is gone from its
+   path, in one step, and the renamed tree is invisible to the watcher (fact
+   4: the root's child is `.<name>.reclaiming`, which holds no manifest of its
+   own). The row is written here, not after step 7, because every consumer
+   cares whether the session is at its path, and the rename is when that
+   changed.
+7. **Remove** `root/.<name>.reclaiming`.
 
-If step 8 fails part-way, the dot-directory stays, and both commands refuse
+If step 7 fails part-way, the dot-directory stays, and both commands refuse
 (step 4 here, §5.2 there) until a person removes it. The refusal names the
 path. No automatic clean-up: a leftover from an interrupted deletion is exactly
 the thing a person should look at.
@@ -271,9 +280,10 @@ stalled).
 
 ### 5.5 Moving into place, or not
 
-**If every check passes:** rename `root/.<name>.rehydrating/<name>` to
-`root/<name>` — one step, same filesystem — remove the now-empty
-`root/.<name>.rehydrating`, and record a `ScratchRehydration` row.
+**If every check passes:** in one database transaction, insert a
+`ScratchRehydration` row and rename `root/.<name>.rehydrating/<name>` to
+`root/<name>` — one step, same filesystem — then remove the now-empty
+`root/.<name>.rehydrating`.
 
 **If anything fails:** remove `root/.<name>.rehydrating` entirely, print a
 `MISMATCH <relative path>` line per failing file, as `wlpp archive` already
@@ -347,7 +357,8 @@ its Critical defect in a consumer no task touched.
 
 | Changed | Consumers |
 |---|---|
-| `reclaim_conditions` return shape, `reclaimable`, `blocking` | `cli/main.py` (`reclaim` dispatch), `cli/report.py::_unreclaimed_sessions`, `tests/archive/test_reclaim.py`, `tests/cli/test_eye_report.py` (reads the blocked list) |
+| `reclaim_conditions` return shape, `reclaimable`, `blocking` | `cli/main.py` (`reclaim` dispatch), `cli/report.py::_unreclaimed_sessions`, `tests/archive/test_reclaim.py`, and `tests/cli/test_archive_cli.py`'s report tests — `test_report_omits_a_fully_reclaimable_session_from_unreclaimed` needs a force now, because `canonical_nwb_present` fails for every unforced session. (`tests/cli/test_eye_report.py` mentions the blocked list only in a docstring.) |
+| `store.manifest_digest` gains `exclude` | `archive/stage.py::archive_session` (unchanged: empty `exclude` is the old behaviour), the proof |
 | `verify.reconstruct` becomes a generator | `verify.verify_store`, `tests/archive/test_verify_reconstruction.py` |
 | `verify_store`'s reference digests | `archive/stage.py::archive_session` (unchanged call), the new proof and rehydration (by rows) |
 | `ScratchReclamation` key | `tests/cli/test_archive_cli.py` (two tests assert it empty) |
