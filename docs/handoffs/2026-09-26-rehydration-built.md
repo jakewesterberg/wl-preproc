@@ -47,9 +47,18 @@ Per mutation: apply the literal source edit, clear `__pycache__`, run
 `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest <named test ids> -q`,
 record the failure, `git checkout -- <file>`, re-run to confirm the pass
 returns. The table below is the **controller's corrected** mutation table —
-review changed code after the plan was written, so four rows differ from the
-brief's own table (rows 2, 5, 6, and the addition of rows 11–13, none of
-which the ten-row brief listed at all).
+review changed code after the plan was written, so five rows differ from the
+brief's own table: row 5 is retargeted (the brief's own mutation was
+`target = staging / session_path.name` → `target = session_path`, caught by
+`test_a_failure_part_way_through_leaves_nothing`; review's staging-mkdir fix
+moved the vulnerable line, so the mutation that now exercises the same
+neighborhood is `target.mkdir()`'s placement, caught by
+`test_a_failure_creating_the_staged_session_leaves_no_leftover`); row 10 is
+retargeted (the brief's own comparison was `str(Path(session_dir)) !=
+recorded`; review changed the production comparison itself to
+`Path(session_dir) != Path(recorded)`, so the mutation follows it — the same
+test still catches it); and rows 11–13 are new, none of which the ten-row
+brief listed at all. Rows 2 and 6 are unchanged from the brief.
 
 | # | mutation | caught by | result |
 |---|---|---|---|
