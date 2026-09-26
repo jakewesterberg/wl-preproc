@@ -566,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"populated: {report['populated']}")
         print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
+        print(f"freed sessions skipped: {report['freed_skipped']}")
         # `None`, not `0`: `run_once` returns `None` specifically when
         # archival was never configured, so this is never collapsed into the
         # same line a genuinely-ran-and-found-nothing pass would print --

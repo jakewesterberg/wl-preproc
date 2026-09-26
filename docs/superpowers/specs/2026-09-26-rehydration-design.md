@@ -564,6 +564,34 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 > directory `core.Segment.make` inserts nothing and leaves its key
 > outstanding — retried after rehydration, a cost and never a false row.
 
+> **Amended 2026-09-26, third, after merge: item 3's open decision is
+> decided and built.** The requester chose that the daemon skips a freed
+> session until it is rehydrated (over "keep attempting it" and "free
+> nothing until every stage is done"). `archive/scratch.py::currently_freed`
+> names every session whose latest `ScratchReclamation` is newer than its
+> latest `ScratchRehydration` — read from those history tables, never from
+> the disk, so a session whose directory is missing but was never reclaimed
+> is treated exactly as before — and `daemon.run_once` leaves those sessions
+> out of the event stage and restricts every `_computed_tables()` stage with
+> `dj.Not(freed)`. That restriction is sound only for a stage that keys its
+> work by session: every stage does today, which a test pins, and a stage
+> that did not would be left unrestricted rather than emptied
+> (`daemon.py::_not_freed`). The freed list is re-read before every stage,
+> so a reclamation committing part-way through a long pass is seen by the
+> next stage; the archive stage skips freed sessions too; and `run_once`
+> returns `freed_skipped`, so a skip never reads as an all-clear. A freed
+> session therefore meets none of item 3's consequences. Work the daemon
+> never attempted while the session was freed is done on the first pass
+> after rehydration. A key that had already FAILED before the freeing
+> stays parked, as any failed key does, until its job error is cleared by
+> hand -- with one exception that is a DataJoint side effect, not a
+> design: if a pass ran while the session was freed and that job row was
+> more than an hour old (`dj.config` `stale_timeout`), `populate`'s
+> stale-job cleanup, now restricted, deleted it and its diagnostics, and
+> the key is retried after rehydration.
+> Two sessions recorded at one path still make `wlpp rehydrate` refuse as
+> ambiguous.
+
 ## 12. Two findings outside this scope
 
 **Archiving a real session will run out of memory.** `store.write_store` reads

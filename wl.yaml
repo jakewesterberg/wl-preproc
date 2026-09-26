@@ -82,13 +82,13 @@ status:
     Phase 3, so every real reclamation needs a recorded force until then; a
     seventh, `timing_resolved`, is never overridden, so no session is freed
     before its timebase stages ran on its real files. On a freed session
-    the stages that read raw files raise -- job errors, not rows, and an
-    errored key stays errored after rehydration until cleared by hand --
-    and the event stage, for a session it has not built, errors each pass
-    until rehydrated; a future stage that treats a missing directory as
-    absence would write false rows.
-    Whether the daemon should skip currently freed sessions is an OPEN
-    DECISION for the requester, not settled on this branch. Its spec names
+    the stages that read raw files would raise and a future
+    absence-tolerant stage would write false rows -- so, DECIDED by the
+    requester and built 2026-09-26, the daemon skips a freed session, every
+    stage, until it is rehydrated (`archive/scratch.py::currently_freed`);
+    work it never attempted meanwhile is done on the first pass after, while
+    a key that had already failed stays parked until cleared by hand. Its
+    spec names
     what is next
     in this line: the archive writer still reads each file whole into
     memory and a two-hour Neuropixels AP file is ~166 GB, so a STREAMING

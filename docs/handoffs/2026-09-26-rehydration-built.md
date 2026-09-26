@@ -234,6 +234,13 @@ one path make `wlpp rehydrate` refuse as ambiguous. **Whether the daemon
 should skip currently freed sessions is unresolved and not changed on this
 branch.**
 
+*Decided and built 2026-09-26, after merge: the daemon skips a freed session, every stage, until it is rehydrated (`archive/scratch.py::currently_freed`, re-read before every stage in `daemon.run_once`, and the archive stage too). Work the daemon never attempted while the session was freed is done on the first pass after rehydration. A key that had already FAILED before the freeing stays parked, as any failed key does, until its job error is cleared by hand -- with one exception that is a DataJoint side effect, not a design: if a pass ran while the session was freed and that job row was more than an hour old (`dj.config` `stale_timeout`), `populate`'s stale-job cleanup, now restricted, deleted it and its diagnostics, and the key is retried after rehydration. Apart from that, everything
+this section lists as what a freed session meets no longer happens to it
+(`tests/schema/test_daemon_skips_freed_sessions.py`, which also pins that every
+stage in `daemon._computed_tables()` keys its work by session, so the skip
+cannot exclude a stage whole). One item stays: two sessions recorded at one
+path still make `wlpp rehydrate` refuse as ambiguous.*
+
 ## Parked follow-ups
 
 The review's Minors 1–6, none of which loses data. 1 and 2 first.

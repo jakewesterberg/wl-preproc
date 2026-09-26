@@ -58,18 +58,19 @@ requester chose to merge the same day; true when written.*
 >    seventh, `timing_resolved`, is safety and no force clears it: a
 >    session is never freed before its timebase stages ran on its real
 >    files, because they read an absent directory as an absent device and
->    would record a permanent tier D. On a freed session the stages that
->    read raw files afterwards (eye calibration and quality, validity,
->    detection) raise, so they give job errors, not rows, and an errored
->    job key is **not** retried after rehydration until the error is
->    cleared by hand; the event stage, for a session it has not yet built,
->    errors every pass and recovers by itself once rehydrated. A stage
->    added later that treats a missing directory as absence would write
->    false rows, and a later session landing at a freed session's path
->    would be read in its place, so whether the daemon should skip
->    currently freed sessions is an **open decision for the requester**,
->    not changed on this branch. **Next in this line: a streaming archive
->    writer.**
+>    would record a permanent tier D. **Decided by the requester and built
+>    2026-09-26: the daemon skips a freed session, every stage, until it is rehydrated (`archive/scratch.py::currently_freed`, read in `daemon.run_once` before every stage).** So a freed session no longer
+>    meets new job errors, false rows from an absence-tolerant stage, or a
+>    later session landing at its path being read in its place
+>    (`tests/schema/test_daemon_skips_freed_sessions.py`). Work never
+>    attempted while it was freed is done on the first pass after
+>    rehydration; a key that had already failed before the freeing stays
+>    parked until cleared by hand (the spec's third amendment has the one
+>    DataJoint side-effect exception). `run_once` reports how many sessions
+>    it skipped (`freed_skipped`). *Until then this
+>    item described those as what a freed session meets, with the skip an
+>    open decision; true when written.* **Next in this line: a streaming
+>    archive writer.**
 >    `store.write_store` reads each file whole into memory, and a
 >    two-hour Neuropixels AP file is ~166 GB, so no real session can be
 >    archived yet. Due before January. Its spec (§12) also records that

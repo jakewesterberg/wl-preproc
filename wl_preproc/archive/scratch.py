@@ -57,6 +57,41 @@ def now_utc() -> datetime.datetime:
     return landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
 
 
+def currently_freed(*, prefix: str = DEFAULT_PREFIX) -> list[dict]:
+    """Every session whose scratch copy is freed right now: its latest
+    `ScratchReclamation` is newer than its latest `ScratchRehydration`, or it
+    has none. `daemon.run_once` skips these until they are rehydrated
+    (decided by the requester 2026-09-26).
+
+    Read from the two history tables `free_session` and `rehydrate_session`
+    write, never from the disk: a session whose directory is missing but
+    which was never reclaimed -- a moved scratch root, a fixture that plants
+    rows -- is not freed, and the daemon keeps treating it exactly as before.
+    A reclamation and a rehydration stamped in the same whole second read as
+    rehydrated, which fails toward attempting the session rather than hiding
+    it; rehydrating a real session takes minutes, so the tie is not reached.
+    """
+    from wl_preproc.schema import archive
+
+    archive.activate(prefix=prefix)
+    last_freed: dict[tuple, datetime.datetime] = {}
+    for row in archive.ScratchReclamation.to_dicts():
+        session = (row["subject"], row["session_datetime"])
+        last_freed[session] = max(row["reclaimed_at"], last_freed.get(session, row["reclaimed_at"]))
+    last_restored: dict[tuple, datetime.datetime] = {}
+    for row in archive.ScratchRehydration.to_dicts():
+        session = (row["subject"], row["session_datetime"])
+        last_restored[session] = max(
+            row["rehydrated_at"], last_restored.get(session, row["rehydrated_at"])
+        )
+    return [
+        {"subject": subject, "session_datetime": session_datetime}
+        for (subject, session_datetime), freed_at in sorted(last_freed.items())
+        if (subject, session_datetime) not in last_restored
+        or freed_at > last_restored[(subject, session_datetime)]
+    ]
+
+
 def recorded_session_dir(key: dict, *, prefix: str = DEFAULT_PREFIX) -> str:
     """`Ingestion.session_dir` -- where every downstream stage reads this
     session's files, and so where rehydration restores it."""
