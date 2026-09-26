@@ -257,6 +257,15 @@ The review's Minors 1–6, none of which loses data. 1 and 2 first.
 5. No `fsync` before the rehydrate commit.
 6. `wlpp hold` on a freed session prints a traceback.
 
+*1–3 DONE 2026-09-26 (`fix/operator-messages-after-a-failure`): the report's
+Disk section names every interrupted `.reclaiming`/`.rehydrating` directory
+(`cli/report.py::_interrupted_staging_dirs`); a failure after a command's
+checks passed prints a sentence saying what is on disk now
+(`archive/scratch.py::scratch_state`, read from the disk at that moment)
+before the traceback, and exits 1; and `NOT restored` reports a staging
+directory the cleanup could not remove rather than assuming it is gone.
+4–6 remain.*
+
 ## Next items — the two findings of spec §12
 
 1. **Archiving a real session will run out of memory.** `store.write_store`

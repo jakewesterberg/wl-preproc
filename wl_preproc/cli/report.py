@@ -333,6 +333,31 @@ def _verified_archives(
     return verified
 
 
+def _interrupted_staging_dirs(root: Path) -> list[Path]:
+    """`.<session>.reclaiming` and `.<session>.rehydrating` directories left by
+    an interrupted `wlpp reclaim` or `wlpp rehydrate` (`archive/scratch.py::
+    staging_dir`). Either can hold a whole session in a directory the watcher
+    never looks at, and both commands refuse while one exists -- so, like the
+    `.archiving` directories below, it is named in the report rather than
+    left for someone to discover (the rehydration handoff's parked follow-up
+    1). Best-effort in exactly the way `_orphaned_archiving_dirs` is."""
+    from wl_preproc.archive.scratch import RECLAIMING, REHYDRATING
+
+    found = []
+    for suffix in (RECLAIMING, REHYDRATING):
+        try:
+            candidates = list(root.glob(f".*{suffix}"))
+        except OSError:
+            continue
+        for path in candidates:
+            try:
+                if path.is_dir():
+                    found.append(path)
+            except OSError:
+                continue
+    return sorted(found)
+
+
 def _orphaned_archiving_dirs(root: Path) -> list[Path]:
     """`.{session_id}.archiving` scratch directories `archive_session`
     created and never reclaimed. `archive/stage.py`'s own `scratch =
@@ -1216,6 +1241,7 @@ def build_report(
     # treated as zero.
     verified_archives = _verified_archives(prefix=prefix, nas_root=nas_root)
     orphaned_archiving = _orphaned_archiving_dirs(root)
+    interrupted_staging = _interrupted_staging_dirs(root)
     # Task-11 brief, Controller ruling A: computed here, not inside
     # `gather_readings` -- see `_eye_rows`' own docstring for why.
     eye_quality_rows, eye_calibration_rows = _eye_rows(prefix=prefix)
@@ -1384,6 +1410,14 @@ def build_report(
             "(a failed archive attempt's compressed copy, reclaimed only by "
             "a future successful archive of the same session): "
             + ", ".join(f"`{path}`" for path in orphaned_archiving)
+        ]
+    if interrupted_staging:
+        noun = "directory" if len(interrupted_staging) == 1 else "directories"
+        lines += [
+            f"- {len(interrupted_staging)} interrupted reclaim/rehydrate staging {noun} "
+            "(may hold a whole session; `wlpp reclaim` and `wlpp rehydrate` refuse "
+            "for that session until it is checked and removed by hand): "
+            + ", ".join(f"`{path}`" for path in interrupted_staging)
         ]
 
     # Design spec section 8: per session and per eye, tracking-loss

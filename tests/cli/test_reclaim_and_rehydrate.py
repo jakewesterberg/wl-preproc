@@ -374,18 +374,22 @@ def test_an_interrupted_removal_is_named_by_the_next_reclaim(landed, prefix, cap
 
     session_dir, key, nas_root = _ready(landed, "rhrmtree", prefix)
 
+    capsys.readouterr()
     with patch(
         "wl_preproc.archive.scratch.shutil.rmtree",
         side_effect=OSError("simulated removal failure"),
     ):
-        with pytest.raises(OSError):
-            _reclaim(session_dir, nas_root, prefix)
+        assert _reclaim(session_dir, nas_root, prefix) == 1
 
+    leftover = _staging(session_dir, ".reclaiming")
+    # A sentence saying what is on disk, not a bare traceback (the
+    # rehydration handoff's parked follow-up 2).
+    out = capsys.readouterr().out
+    assert "failed part-way" in out
+    assert f"{leftover} is left over" in out
     assert len(archive.ScratchReclamation & key) == 1
     assert not session_dir.exists()
-    leftover = _staging(session_dir, ".reclaiming")
     assert (leftover / session_dir.name).is_dir()
-    capsys.readouterr()
 
     assert _reclaim(session_dir, nas_root, prefix) == 1
     assert str(leftover) in _refusal(capsys.readouterr().out)
@@ -535,7 +539,7 @@ def test_reclaiming_an_already_reclaimed_session_refuses_cleanly(landed, prefix,
     assert "wlpp rehydrate" in out
 
 
-def test_a_failed_record_leaves_the_session_where_it_was(landed, prefix):
+def test_a_failed_record_leaves_the_session_where_it_was(landed, prefix, capsys):
     """The row and the rename are one transaction: an insert that fails means
     the rename never happens, and the empty staging directory is removed."""
     session_dir, key, nas_root = _ready(landed, "rhtxn", prefix)
@@ -545,13 +549,14 @@ def test_a_failed_record_leaves_the_session_where_it_was(landed, prefix):
         "wl_preproc.schema.archive.ScratchReclamation.insert1",
         side_effect=RuntimeError("simulated insert failure"),
     ):
-        with pytest.raises(RuntimeError, match="simulated insert failure"):
-            _reclaim(session_dir, nas_root, prefix)
+        assert _reclaim(session_dir, nas_root, prefix) == 1
 
+    out = capsys.readouterr().out
+    assert f"{session_dir} is in place; no staging directory is left over" in out
     _untouched(session_dir, key, before)
 
 
-def test_a_failed_rename_rolls_back_the_record(landed, prefix):
+def test_a_failed_rename_rolls_back_the_record(landed, prefix, capsys):
     """The sibling this needs, and the one the test above cannot stand in
     for: that test makes the INSERT fail, which would still pass even with
     the transaction removed entirely, since the insert never reaches the
@@ -565,9 +570,9 @@ def test_a_failed_rename_rolls_back_the_record(landed, prefix):
         "wl_preproc.archive.scratch.os.rename",
         side_effect=OSError("simulated rename failure"),
     ):
-        with pytest.raises(OSError):
-            _reclaim(session_dir, nas_root, prefix)
+        assert _reclaim(session_dir, nas_root, prefix) == 1
 
+    assert "is in place; no staging directory is left over" in capsys.readouterr().out
     _untouched(session_dir, key, before)
 
 
@@ -825,7 +830,34 @@ def test_a_rebuilt_file_that_disagrees_with_the_rig_is_not_restored(landed, pref
     _nothing_restored(session_dir, key)
 
 
-def test_a_failure_part_way_through_leaves_nothing(landed, prefix):
+def test_not_restored_names_a_partial_copy_the_cleanup_could_not_remove(
+    landed, prefix, capsys
+):
+    """The staging directory is removed with `ignore_errors=True`, which can
+    fail silently; the message must say what is actually left, not assume
+    (the rehydration handoff's parked follow-up 3)."""
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhleftc", prefix)
+    row = (archive.ArchiveVerification & key).to_dicts()[0]
+    archive.ArchiveVerification.update1({
+        **key, "relative_path": row["relative_path"], "expected_blake3": "0" * 64,
+    })
+    capsys.readouterr()
+
+    with patch("wl_preproc.archive.rehydrate.shutil.rmtree"):  # the removal silently does nothing
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    leftover = _staging(session_dir, ".rehydrating")
+    out = capsys.readouterr().out
+    assert "NOT restored" in out
+    assert f"{leftover} is left over" in out
+    assert "no staging directory is left over" not in out
+
+    shutil.rmtree(leftover)
+
+
+def test_a_failure_part_way_through_leaves_nothing(landed, prefix, capsys):
     from wl_preproc.archive import rehydrate as rehydrate_module
 
     session_dir, key, nas_root, _ = _reclaimed(landed, "rhpart", prefix)
@@ -838,14 +870,17 @@ def test_a_failure_part_way_through_leaves_nothing(landed, prefix):
             raise OSError("simulated write failure")
         return real(store, relative, target_root)
 
+    capsys.readouterr()
     with patch.object(rehydrate_module, "_write", flaky):
-        with pytest.raises(OSError, match="simulated write failure"):
-            _rehydrate(session_dir, nas_root, prefix)
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
 
+    out = capsys.readouterr().out
+    assert "failed part-way; the NAS artifact is untouched" in out
+    assert f"{session_dir} is not present; no staging directory is left over" in out
     _nothing_restored(session_dir, key)
 
 
-def test_a_failed_rename_leaves_no_rehydration_record(landed, prefix):
+def test_a_failed_rename_leaves_no_rehydration_record(landed, prefix, capsys):
     """Pins the one-transaction rule (2026-09-26 rehydration design, section
     5): the `ScratchRehydration` insert and the rename that puts the session
     back at its recorded path succeed or fail together, exactly like
@@ -857,13 +892,13 @@ def test_a_failed_rename_leaves_no_rehydration_record(landed, prefix):
         "wl_preproc.archive.rehydrate.os.rename",
         side_effect=OSError("simulated rename failure"),
     ):
-        with pytest.raises(OSError):
-            _rehydrate(session_dir, nas_root, prefix)
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
 
+    assert "no staging directory is left over" in capsys.readouterr().out
     _nothing_restored(session_dir, key)
 
 
-def test_a_failure_creating_the_staged_session_leaves_no_leftover(landed, prefix):
+def test_a_failure_creating_the_staged_session_leaves_no_leftover(landed, prefix, capsys):
     """Round 2 review: `target.mkdir()` sits INSIDE the try/finally now, as
     its first statement, not beside `staging.mkdir()` -- a fault creating it
     must reach the existing cleanup, or the (empty) staging directory this
@@ -884,7 +919,7 @@ def test_a_failure_creating_the_staged_session_leaves_no_leftover(landed, prefix
         return real(self, *args, **kwargs)
 
     with patch.object(Path, "mkdir", autospec=True, side_effect=flaky):
-        with pytest.raises(OSError, match="simulated mkdir failure"):
-            _rehydrate(session_dir, nas_root, prefix)
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
 
+    assert "no staging directory is left over" in capsys.readouterr().out
     _nothing_restored(session_dir, key)

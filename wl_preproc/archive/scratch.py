@@ -50,6 +50,28 @@ def refuse_leftovers(session_dir: Path) -> None:
             )
 
 
+def scratch_state(session_dir: Path) -> str:
+    """One sentence on what is on scratch for this session right now: whether
+    the session directory is in place, and any staging directory left over.
+    Read from the disk at the moment of asking, so what a command prints after
+    failing part-way describes what actually happened, not what was hoped."""
+    parts = [f"{session_dir} is {'in place' if session_dir.is_dir() else 'not present'}"]
+    leftovers = [
+        staging_dir(session_dir, suffix)
+        for suffix in (RECLAIMING, REHYDRATING)
+        if os.path.lexists(staging_dir(session_dir, suffix))
+    ]
+    if leftovers:
+        parts.extend(
+            f"{leftover} is left over -- check it and remove it by hand; until then "
+            "`wlpp reclaim` and `wlpp rehydrate` refuse"
+            for leftover in leftovers
+        )
+    else:
+        parts.append("no staging directory is left over")
+    return "; ".join(parts) + "."
+
+
 def now_utc() -> datetime.datetime:
     """Naive UTC now, the form every DataJoint datetime here stores."""
     from wl_preproc.ingest import landing
