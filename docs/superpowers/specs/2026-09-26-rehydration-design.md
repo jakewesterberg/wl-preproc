@@ -619,3 +619,8 @@ and will compress well, so the storage cost may be small, but the in-memory
 writer above meets them at full size (*no longer: it streams, see the resolution
 above*), and the claim in §1 is false as written.
 It deserves its own amendment, not a line here.
+
+> **Amended 2026-09-26: that amendment is written** — the archival design,
+> §1. `stim.dat` is bulk in raw size and stays verbatim: it streams now, and
+> on the synthetic `STIM_RECIPE` session its 2,988,368 bytes store as 542.
+> Unmeasured on a real session, as is `dcamplifier.dat`.

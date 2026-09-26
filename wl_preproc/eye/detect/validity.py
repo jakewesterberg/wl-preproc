@@ -149,8 +149,11 @@ def validity_labels(
     # estimator's window changes, the mask's excluded range changes with it.
     #
     # **This loop WAS unreachable in production, and the reason was one layer
-    # out** (whole-branch review, finding H2 -- recorded, true when written,
-    # and deliberately not fixed in that pass). `timebase/extract.py::
+    # out** (found by the saccade-detection branch's whole-branch review and
+    # recorded in commit `7d4a00f`'s amendment to the saccade-detection design
+    # spec, 2026-09-01 -- true when written, and deliberately not fixed in that
+    # pass; that review's own "finding H2" label lived only in a working
+    # ledger that no longer exists, so it is not cited here). `timebase/extract.py::
     # extract_ohdpi` raised on any non-empty `frame_gaps`; `timebase/
     # segments.py::scan_system` did not catch it and `SystemTimebase.make()`
     # wrapped only `fit_rate`, so such a session got no `SystemTimebase` row
