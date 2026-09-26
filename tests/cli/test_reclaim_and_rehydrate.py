@@ -26,45 +26,21 @@ def landed(landed, prefix):
     session this test landed.
 
     Needed here and nowhere else in `tests/cli/`: these tests FREE sessions,
-    leaving `Ingestion` rows whose files are gone, and `tests/schema/`'s
-    `daemon.run_once()` assertions sweep the whole shared database and would
-    re-attempt those sessions' never-populated stages against missing files
-    (the rule `tests/cli/test_consensus_report.py::_plant_pair` states: never
-    leave a key a later module's `run_once()` fails on). Deleting the
-    `pipeline.Session` row cascades to everything keyed on it.
+    leaving `Ingestion` rows whose files are gone. The daemon now skips a
+    freed session until it is rehydrated (`daemon.run_once`, via
+    `archive/scratch.py::currently_freed`; the requester's decision of
+    2026-09-26), so a later module's `run_once()` would no longer fail on
+    them -- but several tests here plant rows by hand, including an
+    `Ingestion.session_dir` rewritten to a relative path, and deleting each
+    test's `pipeline.Session` row (which cascades to everything keyed on it)
+    keeps the shared database free of states production never produces.
 
-    **This is production behaviour too, not only test pollution** (Task 5
-    review, finding I3; controller ruling: record it here rather than change
-    the daemon). A freed session keeps its `Ingestion` row for real, and
-    `daemon.run_once()` goes on sweeping it. Corrected by the whole-branch
-    review, which found this paragraph said "errors" of every stage:
-    - The timebase stages would NOT error. `timebase/extract.py::
-      find_recordings` returns `[]` for a missing directory by design, so
-      they would record `no_recording` and a permanent tier D. The safety
-      condition `timing_resolved` now means no session is freed before they
-      ran on its real files (`archive/reclaim.py::reclaim_conditions`).
-    - The stages that read raw files afterwards -- eye calibration and
-      quality, validity, detection -- open the ohDPI files named by the
-      session's `core.Segment` rows (calibration decodes the sync box log
-      first) and RAISE on a missing file: job errors, not rows. An errored
-      key lands at `status='error'` in its `~jobs` table, and
-      `_populate_distributed` draws only from `jobs.pending`
-      (`daemon.py::reap_stale_jobs`'s docstring), so it is not retried,
-      even after rehydration restores the files, until someone clears that
-      job error by hand.
-    - The event stage reserves no job at all (`reap_stale_jobs` again: "it
-      never calls `.populate()`"), so for a session it has not built it
-      re-errors EVERY pass while the session is freed and recovers by itself
-      once it is rehydrated.
-    - A stage registered in future that treats a missing directory as
-      absence, as the timebase stages do, would write false rows for a
-      freed session; whether the daemon should skip freed sessions is an
-      open decision for the requester (the rehydration spec's amendment
-      block, item 3).
-    Deleting the row here is a choice available to a test tearing down its
-    own fixture; it is not available to the real pipeline, which is exactly
-    why it is written out here rather than left for a future reader to
-    discover the hard way.
+    *Until 2026-09-26 this docstring also recorded, as production behaviour,
+    what the daemon did to a freed session: the event stage errored on every
+    pass, job-table stages errored once and stayed parked after
+    rehydration, and an absence-tolerant stage could write false rows. That
+    was true when written; `tests/schema/test_daemon_skips_freed_sessions.py`
+    pins that none of it happens now.*
     """
     from wl_preproc.schema import pipeline
 
@@ -598,12 +574,23 @@ def test_a_failed_rename_rolls_back_the_record(landed, prefix):
 def test_the_daemon_never_frees_a_session():
     """Ruling 1: a person frees scratch, for now. A source scan in the shape
     of `tests/schema/test_guardrails.py`'s own, because the rule is about
-    what the daemon's code must never contain."""
+    what the daemon's code must never contain.
+
+    The daemon may import exactly one name from `archive/scratch.py`:
+    `currently_freed`, the read-only lookup it uses to SKIP freed sessions
+    (the requester's decision of 2026-09-26). Anything else from that module
+    -- above all `free_session` -- would be the daemon reaching for deletion.
+    This used to forbid the module outright, which was right until the daemon
+    had a reason to read from it."""
+    import re
+
     import wl_preproc.daemon as daemon
 
     source = Path(daemon.__file__).read_text(encoding="utf-8")
     assert "free_session" not in source
-    assert "archive.scratch" not in source
+    imported = re.findall(r"from wl_preproc\.archive\.scratch import ([^\n]+)", source)
+    assert imported == ["currently_freed"], imported
+    assert "archive.scratch." not in source  # no attribute access around the import
 
 
 # -- wlpp rehydrate ------------------------------------------------------------

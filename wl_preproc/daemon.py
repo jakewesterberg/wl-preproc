@@ -688,10 +688,33 @@ def _event_stage_keys() -> list[dict]:
     `populate_session` inserts, so a half-finished session would otherwise be
     marked done with no trials in it. See that function.
     """
-    return ((pipeline.Session & ingest.Ingestion) - pipeline.event.BehaviorRecording).keys()
+    return (
+        (pipeline.Session & ingest.Ingestion) - pipeline.event.BehaviorRecording
+    ).keys()
 
 
-def _populate_event_stage() -> tuple[int, list[str]]:
+_SESSION_KEY = frozenset({"subject", "session_datetime"})
+
+
+def _not_freed(table, freed: list[dict]) -> tuple:
+    """The restriction that leaves out every session in `freed`, as a tuple
+    to splat into `table.populate(*...)`.
+
+    Empty when nothing is freed -- `dj.Not([])` is "not nothing", and an
+    empty tuple says the same without a query term -- and empty for a stage
+    whose `key_source` does not carry the session key. There, "not these
+    sessions" matches on no common attribute, and `dj.Not` of that would
+    exclude the stage's EVERY key; such a stage reads no session directory,
+    so it has nothing to skip. Every stage in `_computed_tables()` is
+    per-session today (`tests/schema/test_daemon_skips_freed_sessions.py::
+    test_every_daemon_stage_keys_its_work_by_session`); this guard is what
+    keeps a future one that is not from being silently emptied."""
+    if not freed or not _SESSION_KEY <= set(table.key_source.primary_key):
+        return ()
+    return (dj.Not(freed),)
+
+
+def _populate_event_stage(freed: list[dict] = ()) -> tuple[int, list[str]]:
     """Build the canonical trial list for each session still missing one.
 
     Returns `(sessions built, per-session failures)` -- the same two quantities
@@ -722,7 +745,9 @@ def _populate_event_stage() -> tuple[int, list[str]]:
     at this stage's scale, not a new one.
     """
     built, errors = 0, []
-    for key in _event_stage_keys():
+    # A freed session has no directory to decode; it is left for the pass
+    # after it is rehydrated (see `run_once`).
+    for key in (k for k in _event_stage_keys() if k not in freed):
         session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
         try:
             with dj.conn().transaction:
@@ -913,13 +938,27 @@ def run_once(
     reaped = reap_stale_jobs(prefix=prefix)
     populated, errors = 0, []
 
-    built, event_errors = _populate_event_stage()
+    # Sessions whose scratch copy is freed are skipped, every stage, until
+    # they are rehydrated -- the requester's decision of 2026-09-26. Without
+    # this, a freed session's never-populated stages read its absent
+    # directory: the event stage errored on every pass, a job-table stage
+    # errored once and stayed parked after rehydration until cleared by hand,
+    # an absence-tolerant stage could record a device that recorded as having
+    # recorded nothing, and a new session landing at the same path would be
+    # read in its place. See `archive/scratch.py::currently_freed`.
+    from wl_preproc.archive.scratch import currently_freed
+
+    freed = currently_freed(prefix=prefix)
+
+    built, event_errors = _populate_event_stage(freed)
     populated += built
     errors.extend(event_errors)
 
     for table in _computed_tables():
         try:
-            result = table.populate(reserve_jobs=True, suppress_errors=True)
+            result = table.populate(
+                *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
+            )
             populated += int(result["success_count"])
             # error_list entries are (key, error) -- datajoint/autopopulate.py.
             errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
