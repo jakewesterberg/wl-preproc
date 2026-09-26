@@ -24,6 +24,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from wl_preproc.eye.detect.labels import Label, Run
+
 #: statsmodels' `mad` normalisation, `scipy.stats.norm.ppf(0.75)` -- the
 #: constant `clf.py` 311 divides by (spec 1.1). The exact float statsmodels
 #: carries, so the arithmetic below is its arithmetic.
@@ -192,3 +194,163 @@ def _offset(speed: np.ndarray, start: int, threshold: float) -> int:
     while index < last and (speed[index] > threshold or speed[index] > speed[index + 1]):
         index += 1
     return index
+
+
+@dataclass(frozen=True, slots=True)
+class Signals:
+    """What `classify` reads (spec section 3), one entry per sample; NaN marks
+    a sample the algorithm treats as missing -- REMoDNaV's own representation
+    of signal loss.
+
+    - `x`, `y`: positions, degrees.
+    - `speed`: the primary speed, deg/s. Thresholds, onsets, offsets and PSOs
+      are all read from it.
+    - `candidate_speed`: the speed of median-filtered positions, deg/s. It is
+      used only to find the major saccades that chunk the recording
+      (paper Table 1: "for initial data chunking only").
+    """
+
+    x: np.ndarray
+    y: np.ndarray
+    speed: np.ndarray
+    candidate_speed: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class _Samples:
+    """Every duration in samples at one rate, rounded (spec 2.1), plus the
+    saccade cap per sample (`clf.py` 272)."""
+
+    min_saccade: int
+    min_intersaccade: int
+    max_pso: int
+    min_fixation: int
+    min_pursuit: int
+    context: int
+    max_saccades_per_sample: float
+
+    @classmethod
+    def at(cls, params: RemodnavParams, fs_hz: float) -> _Samples:
+        def count(ms: float) -> int:
+            return int(round(ms * fs_hz / 1000.0))
+
+        return cls(
+            min_saccade=count(params.min_saccade_duration_ms),
+            min_intersaccade=count(params.min_intersaccade_duration_ms),
+            max_pso=count(params.max_pso_duration_ms),
+            min_fixation=count(params.min_fixation_duration_ms),
+            min_pursuit=count(params.min_pursuit_duration_ms),
+            context=count(params.saccade_context_window_ms),
+            max_saccades_per_sample=params.max_initial_saccade_freq_hz / fs_hz,
+        )
+
+
+def _context_window(run_start: int, run_stop: int, context: int, lo: int, hi: int) -> tuple[int, int]:
+    """`clf.py` 433-438 (spec 1.2). Half the window before the run's start,
+    the rest after it, clipped to `[lo, hi)`. The paper says "centered on the
+    peak velocity"; the code anchors it on the run's start (spec 2)."""
+    win_start = max(lo, run_start - int(context / 2))
+    return win_start, min(hi, run_stop + context - (run_start - win_start))
+
+
+def _amplitude(signals: Signals, start: int, stop: int) -> float:
+    """`clf.py` 274-283: the distance between the first and last samples in
+    `[start, stop)` whose primary speed is present, in its own arithmetic.
+    NaN when there is none, which fails every comparison -- as there."""
+    present = np.flatnonzero(~np.isnan(signals.speed[start:stop]))
+    if present.size == 0:
+        return float("nan")
+    first, last = start + int(present[0]), start + int(present[-1])
+    return float(((signals.x[first] - signals.x[last]) ** 2
+                  + (signals.y[first] - signals.y[last]) ** 2) ** 0.5)
+
+
+def _pso(signals: Signals, sac_start: int, sac_stop: int, local: Thresholds,
+         samples: _Samples) -> Run | None:
+    """`clf.py` 115-138 and 486-506 (spec 1.4). Only the first
+    `max_pso` samples after the saccade are looked at.
+
+    - **Kind:** high-velocity if a run there exceeds the peak threshold,
+      otherwise low-velocity if one exceeds the on/offset threshold. Both
+      are `pso`.
+    - **End:** the on/offset search from the last run's end, within the
+      window.
+    - **Dropped** if any speed before that end is missing, or if its
+      amplitude is not below its saccade's. (`clf.py` 134's
+      `pso_end > len(velocities)` can never hold and has no counterpart.)
+    """
+    window = signals.speed[sac_stop:sac_stop + samples.max_pso]
+    peaks = _runs_above(window, local.peak) or _runs_above(window, local.onset)
+    if not peaks:
+        return None
+    end = _offset(window, peaks[-1].stop, local.onset)
+    if np.isnan(window[:end]).any():
+        return None
+    if not _amplitude(signals, sac_stop, sac_stop + end) < _amplitude(signals, sac_start, sac_stop):
+        return None
+    return Run(start=sac_stop, stop=sac_stop + end, label=Label.PSO)
+
+
+def _saccades(signals: Signals, start: int, end: int, candidates: list[_Candidate] | None,
+              context: int | None, samples: _Samples, params: RemodnavParams) -> list[Run]:
+    """`clf.py` 389-512: saccades, each followed by its PSO if it has one, in
+    the order the oracle yields them.
+
+    **Two modes.**
+    - **Major pass** (spec 1.2): `candidates` and a `context` length are
+      given. Each candidate's thresholds come from its context window on the
+      primary speed.
+    - **Piece search** (spec 1.5): `candidates` and `context` are `None`.
+      Thresholds come from the whole piece `[start, end)`, and candidates
+      are its runs of primary speed above the peak threshold.
+
+    Onset and offset searches run over the whole array, not the piece, as
+    the oracle's do.
+
+    A candidate is rejected if it is shorter than the minimum saccade, has a
+    missing position, or lies within `min_intersaccade` of anything already
+    accepted in this call. The `claimed` mask is fresh per call (`clf.py`
+    419); `np.zeros` is lazily zeroed memory, so it costs only the pages
+    touched. The major pass stops once the saccades accepted exceed the
+    frequency cap times the recording's length (`clf.py` 508-512).
+    """
+    n = signals.speed.size
+    speed = signals.speed
+    local: Thresholds | None = None
+    if context is None:
+        local = _thresholds(speed[start:end], params)
+        if local is None:
+            return []
+        candidates = [
+            _Candidate(c.start + start, c.stop + start, c.weight)
+            for c in _runs_above(speed[start:end], local.peak)
+        ]
+    claimed = np.zeros(n, dtype=bool)
+    found: list[Run] = []
+    accepted = 0
+    for candidate in sorted(candidates, key=lambda c: -c.weight):
+        if context is not None:
+            win_start, win_end = _context_window(candidate.start, candidate.stop, context, start, end)
+            local = _thresholds(speed[win_start:win_end], params)
+            if local is None:
+                continue
+        sac_start = _onset(speed, candidate.start, local.onset)
+        sac_stop = _offset(speed, candidate.stop, local.onset)
+        if sac_stop - sac_start < samples.min_saccade:
+            continue
+        if np.isnan(signals.x[sac_start:sac_stop]).any():
+            continue
+        near = claimed[max(0, sac_start - samples.min_intersaccade):
+                       min(n, sac_stop + samples.min_intersaccade)]
+        if near.any():
+            continue
+        found.append(Run(start=sac_start, stop=sac_stop, label=Label.SACCADE))
+        accepted += 1
+        claimed[sac_start:sac_stop] = True
+        pso = _pso(signals, sac_start, sac_stop, local, samples)
+        if pso is not None:
+            found.append(pso)
+            claimed[pso.start:pso.stop] = True
+        if samples.max_saccades_per_sample and accepted / n > samples.max_saccades_per_sample:
+            break
+    return found
