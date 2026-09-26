@@ -35,22 +35,36 @@ def landed(landed, prefix):
 
     **This is production behaviour too, not only test pollution** (Task 5
     review, finding I3; controller ruling: record it here rather than change
-    the daemon). A session freed before every stage that will ever want it
-    has actually populated is this exact same state for real, not only under
-    this fixture's teardown. `daemon.run_once()` goes on sweeping it going
-    forward: the event stage never reserves a `~jobs` row at all
-    (`daemon.py::reap_stale_jobs`'s own docstring -- "it never calls
-    `.populate()`"), so it re-attempts and re-errors on the freed session
-    EVERY single pass, forever. Any OTHER, Computed/Imported stage that had
-    not yet run for this session when it was freed errors ONCE against the
-    now-missing files and lands at `status='error'` in its own `~jobs` table
-    -- and `_populate_distributed` draws only from `jobs.pending`
-    (`reap_stale_jobs`'s docstring again), so that key is not retried on any
-    later pass, including one after rehydration restores the files, until
-    someone clears that job error by hand. Deleting the row here is a choice
-    available to a test tearing down its own fixture; it is not available to
-    the real pipeline, which is exactly why it is written out here rather
-    than left for a future reader to discover the hard way.
+    the daemon). A freed session keeps its `Ingestion` row for real, and
+    `daemon.run_once()` goes on sweeping it. Corrected by the whole-branch
+    review, which found this paragraph said "errors" of every stage:
+    - The timebase stages would NOT error. `timebase/extract.py::
+      find_recordings` returns `[]` for a missing directory by design, so
+      they would record `no_recording` and a permanent tier D. The safety
+      condition `timing_resolved` now means no session is freed before they
+      ran on its real files (`archive/reclaim.py::reclaim_conditions`).
+    - The stages that read raw files afterwards -- eye calibration and
+      quality, validity, detection -- open the ohDPI files named by the
+      session's `core.Segment` rows (calibration decodes the sync box log
+      first) and RAISE on a missing file: job errors, not rows. An errored
+      key lands at `status='error'` in its `~jobs` table, and
+      `_populate_distributed` draws only from `jobs.pending`
+      (`daemon.py::reap_stale_jobs`'s docstring), so it is not retried,
+      even after rehydration restores the files, until someone clears that
+      job error by hand.
+    - The event stage reserves no job at all (`reap_stale_jobs` again: "it
+      never calls `.populate()`"), so for a session it has not built it
+      re-errors EVERY pass while the session is freed and recovers by itself
+      once it is rehydrated.
+    - A stage registered in future that treats a missing directory as
+      absence, as the timebase stages do, would write false rows for a
+      freed session; whether the daemon should skip freed sessions is an
+      open decision for the requester (the rehydration spec's amendment
+      block, item 3).
+    Deleting the row here is a choice available to a test tearing down its
+    own fixture; it is not available to the real pipeline, which is exactly
+    why it is written out here rather than left for a future reader to
+    discover the hard way.
     """
     from wl_preproc.schema import pipeline
 

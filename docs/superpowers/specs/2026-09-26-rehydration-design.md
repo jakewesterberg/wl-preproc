@@ -441,8 +441,10 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
   (archival handoff, deferred item 3). Still unchecked; a wrong mount fails
   closed at §3 check 1 or 2.
 
-> **Amended 2026-09-26 by task review, before merge.** Three things task
-> review found that the sections above do not know:
+> **Amended 2026-09-26 by task review, and then by the whole-branch review,
+> before merge.** Six things review found that the sections above do not know.
+> Items 1-3 are task review's; the whole-branch review corrected items 2 and 3
+> in place and added items 4-6.
 >
 > 1. **Reclaim refuses unless every file on scratch is held by the archive at
 >    the same size** (`archive/scratch.py::free_session`, using
@@ -451,29 +453,95 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 >    so a file added to or changed on scratch after archiving would have been
 >    deleted without ever being archived. §4's steps gain this refusal
 >    directly after the proof (step 5), before the record-and-rename step.
+>    Sizes alone miss a change that keeps a file's length; item 5 adds the
+>    content checks.
 >
 > 2. **Rehydrate matches `--session` against `Ingestion.session_dir` exactly,
 >    in Python** (`archive/rehydrate.py::session_for_path`). MySQL 8's default
 >    collation (`utf8mb4_0900_ai_ci`) makes `=` ignore case and accents, so a
 >    differently spelled path was being restored to the caller's own spelling
->    rather than the recorded one. §4 step 2 and §5.1's matching against
->    `Ingestion.session_dir`, both described above as compared "after `Path`
->    normalisation," are now an exact string comparison done in Python, not a
->    comparison left to the database.
+>    rather than the recorded one. §5.1's matching is now an exact string
+>    comparison, in Python, of `str(Path(<given path>))` with the recorded
+>    `session_dir` string. §4 step 2 (`free_session`) never went through the
+>    database: it finds the session's key from its manifest and compares
+>    `Path(session_dir) != Path(recorded)` — `Path` objects, in Python, so
+>    `Path`'s own normalisation applies (a trailing slash names the same
+>    session: `tests/cli/test_reclaim_and_rehydrate.py::
+>    test_a_trailing_slash_names_the_same_session`) and case still matters.
+>    (Corrected by the whole-branch review: this item said both were "an
+>    exact string comparison".)
 >
-> 3. **An open decision for the requester, not changed on this branch.** A
->    session freed before all its stages have populated makes
->    `daemon.run_once()` error on it two different ways. The event stage
->    (`_populate_event_stage`) never calls `.populate()` and reserves no
->    DataJoint job, so it errors every pass while the session is freed and
->    recovers by itself the moment the session is rehydrated. Any stage
->    registered after the session was freed (for example the next eye
->    detector) instead runs through `.populate(suppress_errors=True)`,
->    which reserves a job and errors it **once**; that key is then **not**
->    retried even after rehydration until the job error is cleared by hand.
->    Until Phase 3 every real reclamation needs a recorded force (§2), so
->    this is reachable only by a deliberate force. Whether the daemon should
->    skip a currently-freed session is the requester's call.
+> 3. **An open decision for the requester, not changed on this branch.**
+>    Corrected by the whole-branch review: this item said a session freed
+>    before all its stages had populated makes `daemon.run_once()` *error*.
+>    For the timebase stages it was false — they would have written false
+>    rows, silently — and item 4 closes that. What a freed session meets now:
+>    - **The timebase stages no longer meet one** (one exception below).
+>      `timebase/extract.py::
+>      find_recordings` returns `[]` for a missing directory by design
+>      ("device absence never blocks"), so on a freed session
+>      `SystemTimebase` records `fit_status='no_recording'` and
+>      `TimingProvenance` tier D, permanent and still there after
+>      rehydration. With `timing_resolved` (item 4) a session is never freed
+>      before those stages ran on its real files.
+>    - **The stages that read raw files afterwards** — eye calibration and
+>      quality (`schema/eye.py`), validity and detection (`schema/detect.py`)
+>      — open the ohDPI files named by the session's `core.Segment` rows
+>      (calibration decodes the sync box log first) and raise on a missing
+>      file, so a freed session gives them job errors, not rows. An errored
+>      job-table key is not retried, even after rehydration, until the job
+>      error is cleared by hand (`daemon.py::reap_stale_jobs`).
+>    - **The event stage** (`daemon.py::_populate_event_stage`) keeps no job
+>      table: for a session it has not yet built, it errors on every pass
+>      while the session is freed and recovers by itself once it is
+>      rehydrated.
+>    - **`core.Segment`**, which re-scans a system with no aligned file on
+>      every pass, finds nothing on a freed session and writes nothing.
+>
+>    What stays open: a stage registered in future that treats a missing
+>    directory as absence, as the timebase stages do, would write false rows
+>    for a freed session (so would a `SystemTimebase` key whose job error is
+>    cleared by hand while its session is freed); and — the whole-branch
+>    review's D5 — a later session landing at a freed session's recorded
+>    path would be read in its place by every stage that reads
+>    `Ingestion.session_dir`, and two sessions recorded at one path make
+>    `wlpp rehydrate` refuse as ambiguous. That is the case for the decision: **should the daemon skip
+>    currently freed sessions?** Until Phase 3 every real reclamation needs a
+>    recorded force (§2), so all of this is reachable only by a deliberate
+>    force. The requester's call.
+>
+> 4. **A seventh condition, `timing_resolved`, of the safety kind**
+>    (`archive/reclaim.py::reclaim_conditions`), placed directly after
+>    `every_file_verified` in §2's table: it passes exactly when a
+>    `TimingProvenance` row exists for the session. Safety, not judgement,
+>    because freeing a session whose timing has not been computed does not
+>    cost a rehydration later — it corrupts data (item 3's first bullet),
+>    which §2's own definition of judgement excludes. §0 ruling 4 is
+>    unchanged: a force still overrides every judgement condition.
+>    `not_tier_d` stays judgement and unchanged; with no row it still fails
+>    with "no tier resolved", a force still overrides it, and
+>    `timing_resolved` blocks on the same absence. The cost: a session whose
+>    timing never resolves can never be freed without a code change.
+>
+> 5. **Reclaim checks scratch content, not only sizes**
+>    (`archive/scratch.py::free_session`, after item 1's size check, still
+>    before anything changes). It refuses unless the DONE markers on scratch
+>    list exactly the digests recorded in `ArchiveVerification` — a
+>    same-size re-sent file arrives with a new digest in its marker, while
+>    the archive holds the old bytes that rehydration would restore — and
+>    unless every scratch file no rig digest names (the manifest, the DONE
+>    markers, operator files) hashes the same as its rebuild from the
+>    artifact. Every scratch-content refusal, item 1's included, says to
+>    re-archive with `wlpp archive` first. **Residual, stated:** a
+>    rig-checksummed file edited in place on scratch *without* its DONE
+>    marker being updated is not detected. The archive holds the rig's
+>    version, which is what rehydration restores; seeing the edit would mean
+>    hashing every scratch file, doubling reclaim's reading.
+>
+> 6. **Peak memory is a few copies of one stored chunk, not one chunk**
+>    (§5.3, §6): the block as read, its `SAMPLE_DTYPE` cast for a stream,
+>    and its bytes (`archive/verify.py::iter_reconstruct`). Still never a
+>    whole file.
 
 ## 12. Two findings outside this scope
 

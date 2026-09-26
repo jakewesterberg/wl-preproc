@@ -1,9 +1,11 @@
 # Rehydration is verified: counts, the mutation battery, and the open daemon decision
 
-**Written 2026-09-26, Task 8 of the rehydration plan, closing out `spec/rehydration`.**
-The branch is 14 commits past `main` (`76c67b1..e8f6ac8`, spec and plan
-commits included), 26 files changed, 5726 insertions / 293 deletions. **It is
-not merged** — integration is a decision for the requester
+**Written 2026-09-26, Task 8 of the rehydration plan, closing out `spec/rehydration`;
+amended the same day by the whole-branch review's fix wave.** As of the fix
+wave's final commit (the one that wrote this sentence), the branch is
+18 commits past `main` (`git log --oneline main..HEAD`, spec and plan
+commits included): 27 files changed, 6329 insertions, 299 deletions.
+**It is not merged** — integration is a decision for the requester
 (`superpowers:finishing-a-development-branch`), not made here.
 
 ## The one-paragraph version
@@ -15,7 +17,9 @@ copy, behind a fresh proof against the NAS artifact that no force can skip.
 Tasks 1–7 built this and were reviewed per-task; this task re-verified the
 whole branch rather than trusting the per-task reviews to compose. Both
 interpreters are green, and all 13 mutations the controller specified were
-caught by the named test — no coverage gap found.
+caught by the named test — no coverage gap found. A whole-branch review then
+found one Critical and one Important defect that the per-task reviews had
+not; the fix wave below closes both, with five more mutations, all caught.
 
 ## Both suites, verified fresh for this task
 
@@ -40,6 +44,13 @@ pre-existing `slow`-marked Kilosort test resolve to `deselected` under one
 interpreter's collection and `skipped` under the other. Not a new finding;
 recorded here only so a reader does not mistake the differing counts for a
 divergence between interpreters.
+
+**After the whole-branch review's fix wave**, the same way: 3.11
+`.venv/bin/python -m pytest -q` → **1471 passed, 11 skipped, 1 deselected, 1
+xfailed** (335s); 3.13, in the same `venv_ci` Task 8 resolved (not
+re-resolved for the fix wave) → **1470 passed, 13 skipped, 1 xfailed**
+(303s). The four new tests on each side, nothing else moved; 1484 collected
+on each.
 
 ## The mutation battery: 13 mutations, 13 caught, 0 survived
 
@@ -138,16 +149,96 @@ misdescribed two others:
   — 4 more passes, 4 fewer failures, exactly the tests the teardown was meant
   to stop tripping.
 
+## What the whole-branch review changed
+
+The review ran over the whole branch (`87e7318..9c26398`) and verified each
+finding against the code; the controller's rulings are in the ledger's
+"Final" lines.
+
+- **Critical: a seventh condition, `timing_resolved`, of the safety kind**
+  (`archive/reclaim.py::reclaim_conditions`, directly after
+  `every_file_verified`). It passes exactly when a `TimingProvenance` row
+  exists. Without it, a forced reclaim before the timebase stages had run
+  let them compute on the absent directory: `timebase/extract.py::
+  find_recordings` returns `[]` for a missing folder by design ("device
+  absence never blocks"), so `SystemTimebase` would record
+  `fit_status='no_recording'` and `TimingProvenance` tier D — permanent,
+  silent, surviving rehydration. The preview already showed it: `[OVERRIDDEN
+  by force] not_tier_d -- no tier resolved`. Safety, not judgement, because
+  freeing then corrupts data, which the spec's §2 definition of judgement
+  excludes; `not_tier_d` stays judgement and unchanged. Cost: a session whose
+  timing never resolves can never be freed without a code change.
+- **Important: reclaim checks scratch content, not only sizes**
+  (`archive/scratch.py::free_session`). After the size check, still before
+  anything changes, it refuses unless the DONE markers on scratch list
+  exactly the digests recorded in `ArchiveVerification`, and unless every
+  scratch file no rig digest names (manifest, DONE markers, operator files)
+  hashes the same as its rebuild from the artifact. A same-size re-sent file
+  with an updated DONE marker was being freed, and rehydration would have
+  restored the old bytes. Every such refusal says to re-archive with `wlpp
+  archive` first. **Residual, stated:** a rig-checksummed file edited in
+  place on scratch *without* its DONE marker being updated is not detected —
+  the archive holds the rig's version, which is what rehydration restores,
+  and seeing the edit would mean hashing every scratch file.
+- **Minors taken:** the spec amendment's "exact string comparison" now says
+  that rehydrate compares strings and reclaim compares `Path` objects; the
+  peak-memory docstrings say "a few copies of one stored chunk"; this
+  handoff's branch counts are recomputed.
+
+| # | mutation | caught by | result |
+|---|---|---|---|
+| 14 | `reclaim_conditions`: `timing_resolved` gains `overridable=True` | `tests/archive/test_reclaim.py::test_a_force_does_not_free_a_session_whose_timing_has_not_run`, `::test_pins_condition_kinds_to_production`, `tests/cli/test_reclaim_and_rehydrate.py::test_a_force_does_not_free_a_session_whose_timing_has_not_run` | CAUGHT (all three) |
+| 15 | `reclaim_conditions`: `timing_resolved` passes (`len(tier_rows) == 1` → `True`) | the same two `..._whose_timing_has_not_run` tests, `test_no_timing_provenance_row_reports_no_tier_resolved` | CAUGHT (all three) |
+| 16 | `free_session`: `if listed != rig_digests:` → `if False:` | `test_reclaim_refuses_a_same_size_resent_file` | CAUGHT, on the refusal's wording: the unchecksummed-file hash check still refuses the session, naming the edited DONE marker (`bcam/DONE`) |
+| 17 | `free_session`: `if changed:` → `if False:` | `test_reclaim_refuses_a_same_size_edit_to_an_unchecksummed_file` | CAUGHT (reclaim returned 0) |
+| 18 | `free_session`: rows 16 and 17 together | `test_reclaim_refuses_a_same_size_resent_file` | CAUGHT (reclaim returned 0 — the defect as found) |
+
 ## Open decision for the requester
 
-A session forced out before all its stages have populated makes
-`daemon.run_once()` error on it two different ways: the event stage never
-touches DataJoint's job table, so it errors every pass and recovers by itself
-the moment the session is rehydrated; any stage registered after the session
-was freed (for example the next eye detector) instead reserves a job, errors
-it **once**, and is **not** retried even after rehydration until that job
-error is cleared by hand. **Whether the daemon should skip a currently-freed
-session is unresolved and not changed on this branch.**
+Corrected by the whole-branch review: this section said a session forced out
+before all its stages had populated makes `daemon.run_once()` *error*. For
+the timebase stages that was false — they would have written false rows,
+silently — and `timing_resolved` now means no session is freed before they
+ran on its real files. What a freed session meets now:
+
+- **The stages that read raw files afterwards** — eye calibration and
+  quality, validity, detection — open the ohDPI files named by the
+  session's `core.Segment` rows (calibration decodes the sync box log first)
+  and raise on a missing file, so a freed session gives them job errors, not
+  rows. An errored job-table key is **not** retried, even after
+  rehydration, until the job error is cleared by hand
+  (`daemon.py::reap_stale_jobs`).
+- **The event stage** (`daemon.py::_populate_event_stage`) keeps no job
+  table: for a session it has not yet built, it errors on every pass while
+  the session is freed and recovers by itself once it is rehydrated.
+- **`core.Segment`**, which re-scans a system with no aligned file on every
+  pass, finds nothing on a freed session and writes nothing.
+
+What stays open: a stage registered in future that treats a missing
+directory as absence, as the timebase stages do, would write false rows for
+a freed session (so would a `SystemTimebase` key whose job error is cleared
+by hand while its session is freed); and — the review's D5 — a later session
+landing at a freed session's recorded path would be read in its place by
+every stage that reads `Ingestion.session_dir`, and two sessions recorded at
+one path make `wlpp rehydrate` refuse as ambiguous. **Whether the daemon
+should skip currently freed sessions is unresolved and not changed on this
+branch.**
+
+## Parked follow-ups
+
+The review's Minors 1–6, none of which loses data. 1 and 2 first.
+
+1. The daily report's leftover sweep (`cli/report.py`) names only
+   `.archiving` directories, not `.reclaiming` or `.rehydrating` ones.
+2. A failure after a mutation has begun (the rename or removal in
+   `free_session`, a write in `rehydrate_session`) prints a traceback, not a
+   sentence or `MISMATCH` lines.
+3. `rehydrate_session`'s `shutil.rmtree(staging, ignore_errors=True)` can
+   fail silently while the CLI prints "nothing was left on scratch".
+4. An ambiguous rehydrate (two sessions recorded at one path) refuses with
+   no way forward.
+5. No `fsync` before the rehydrate commit.
+6. `wlpp hold` on a freed session prints a traceback.
 
 ## Next items — the two findings of spec §12
 

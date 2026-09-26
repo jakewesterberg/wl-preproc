@@ -27,23 +27,33 @@ before.
 >
 > 1. **Rehydration is BUILT and verified** on `spec/rehydration` (2026-09-26;
 >    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
->    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught): `wlpp
+>    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught; after the
+>    whole-branch review's fix wave, 1471 passed/11 skipped/1 deselected/1
+>    xfailed on 3.11 and 1470 passed/13 skipped/1 xfailed on 3.13): `wlpp
 >    rehydrate` restores a reclaimed session byte for byte to its recorded
 >    path, and `wlpp reclaim --no-dry-run --confirm <session> --nas-root
 >    <mount>` now deletes, behind a proof against the NAS copy. Reclaim also
->    refuses to free any file the archive does not hold as it is now. A
->    sixth condition, `canonical_nwb_present`, fails until Phase 3, so
->    **every real reclamation needs a recorded force until NWB export
->    exists**, and a session forced out before all its stages have
->    populated makes `daemon.run_once()` error on it two different ways:
->    the event stage never touches DataJoint's job table, so it errors
->    every pass and recovers by itself the moment the session is
->    rehydrated; any stage registered after the session was freed (for
->    example the next eye detector) instead reserves a job, errors it
->    **once**, and is **not** retried even after rehydration until that job
->    error is cleared by hand. Whether the daemon should skip a
->    currently-freed session is an **open decision for the requester**, not
->    changed on this branch. **Next in this line: a streaming archive
+>    refuses to free any file the archive does not hold as it is now,
+>    same-size changes included (the whole-branch review: DONE markers
+>    against the recorded digests, every unchecksummed file hashed against
+>    the archive; a rig-checksummed file edited in place without its marker
+>    updated is still not detected). A sixth condition,
+>    `canonical_nwb_present`, fails until Phase 3, so **every real
+>    reclamation needs a recorded force until NWB export exists**. A
+>    seventh, `timing_resolved`, is safety and no force clears it: a
+>    session is never freed before its timebase stages ran on its real
+>    files, because they read an absent directory as an absent device and
+>    would record a permanent tier D. On a freed session the stages that
+>    read raw files afterwards (eye calibration and quality, validity,
+>    detection) raise, so they give job errors, not rows, and an errored
+>    job key is **not** retried after rehydration until the error is
+>    cleared by hand; the event stage, for a session it has not yet built,
+>    errors every pass and recovers by itself once rehydrated. A stage
+>    added later that treats a missing directory as absence would write
+>    false rows, and a later session landing at a freed session's path
+>    would be read in its place, so whether the daemon should skip
+>    currently freed sessions is an **open decision for the requester**,
+>    not changed on this branch. **Next in this line: a streaming archive
 >    writer.**
 >    `store.write_store` reads each file whole into memory, and a
 >    two-hour Neuropixels AP file is ~166 GB, so no real session can be

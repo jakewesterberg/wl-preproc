@@ -75,14 +75,17 @@ status:
     written): `wlpp rehydrate` restores a reclaimed session byte for byte, and
     `wlpp reclaim --no-dry-run` deletes, run by a person, behind a proof
     against the NAS copy. A sixth condition, the canonical NWB, fails until
-    Phase 3, so every real reclamation needs a recorded force until then. A
-    session forced out before all its stages have populated makes the event
-    stage error every pass -- it reserves no job, so it recovers on its own
-    once rehydrated -- while any later-registered stage reserves a job,
-    errors it once, and stays errored after rehydration until that job
-    error is cleared by hand. Whether the daemon should instead skip a
-    currently-freed session is an OPEN DECISION for the requester, not
-    settled on this branch. Its spec names what is next
+    Phase 3, so every real reclamation needs a recorded force until then; a
+    seventh, `timing_resolved`, is never overridden, so no session is freed
+    before its timebase stages ran on its real files. On a freed session
+    the stages that read raw files raise -- job errors, not rows, and an
+    errored key stays errored after rehydration until cleared by hand --
+    and the event stage, for a session it has not built, errors each pass
+    until rehydrated; a future stage that treats a missing directory as
+    absence would write false rows.
+    Whether the daemon should skip currently freed sessions is an OPEN
+    DECISION for the requester, not settled on this branch. Its spec names
+    what is next
     in this line: the archive writer still reads each file whole into
     memory and a two-hour Neuropixels AP file is ~166 GB, so a STREAMING
     WRITER is due before January; (2) the three remaining
