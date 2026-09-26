@@ -252,11 +252,46 @@ def _ours(xy_px, px2deg, fs):
 
 
 def _oracle(remodnav, xy_px, px2deg, fs, n):
-    classifier = remodnav.EyegazeClassifier(px2deg=px2deg, sampling_rate=fs)
-    data = np.rec.fromarrays([xy_px[:, 0].copy(), xy_px[:, 1].copy()], names=["x", "y"])
+    """The oracle, on the coder's own positions, trimmed to the span between
+    its first and last present sample.
+
+    `remodnav` 1.1.2's `preproc` (`clf.py` 863) runs
+    `scipy.signal.savgol_filter` (`mode="interp"`, scipy's own default)
+    directly on the coder's raw positions. That mode's edge fit calls
+    `scipy.linalg.lstsq`, whose default `check_finite=True` -- present in
+    the scipy release this repository pins, `scipy>=1.17` -- raises the
+    moment a NaN falls inside its edge-fit window. The paper's own, far
+    older scipy let a NaN through there instead of raising. A real
+    recording's own first or last few samples are sometimes themselves
+    missing (dichotomised to NaN, exactly as the paper's `load_anderson`
+    does), which alone is enough to crash under the newer scipy.
+
+    The fix below changes only samples that were missing anyway: `[lo, hi)`
+    is the span from the first to the last sample whose position is
+    present, and only that span is handed to `preproc`/`__call__`; events
+    are painted back at `lo`'s own offset. Samples outside `[lo, hi)` stay
+    `0` (unlabelled) in the returned codes, exactly where the untrimmed
+    oracle's own missing-data handling would have left them anyway, since
+    `preproc` never assigns a label to a sample it never received.
+
+    **This does not guarantee a crash-free call.** A missing run entirely
+    inside `[lo, hi)` -- one whose own edges are present, but which sits
+    close enough to `lo` or `hi` to still fall inside `savgol_filter`'s
+    edge-fit window -- reaches `preproc` unchanged and can still raise. The
+    caller must expect that and must not paper over it by fabricating
+    samples the recording never had.
+    """
+    present = np.flatnonzero(~(np.isnan(xy_px[:, 0]) | np.isnan(xy_px[:, 1])))
     codes = np.zeros(n, dtype=int)
+    if present.size == 0:
+        return codes
+    lo, hi = int(present[0]), int(present[-1]) + 1
+    classifier = remodnav.EyegazeClassifier(px2deg=px2deg, sampling_rate=fs)
+    data = np.rec.fromarrays([xy_px[lo:hi, 0].copy(), xy_px[lo:hi, 1].copy()], names=["x", "y"])
     for event in classifier(classifier.preproc(data)):
-        codes[int(event["start_time"] * fs):int(event["end_time"] * fs)] = ORACLE_CODES[event["label"]]
+        start = lo + int(event["start_time"] * fs)
+        stop = lo + int(event["end_time"] * fs)
+        codes[start:stop] = ORACLE_CODES[event["label"]]
     return codes
 
 
@@ -265,24 +300,32 @@ def andersson():
     """Every `(stimulus, event)`: kappas of MN-RA, AL-RA, AL-MN (AL the
     oracle) and US-RA, US-MN (US this implementation).
 
-    **MN-RA, US-RA and US-MN are computed over every file, unconditionally.**
-    Neither the coders nor this implementation ever fails to produce labels,
-    so nothing should make their agreement depend on whether a third piece of
-    software, run only for AL, happens to run at all.
+    **AL-RA, AL-MN, US-RA and US-MN are computed over one shared file set**
+    -- exactly the files `_oracle` can produce labels for -- so ours and the
+    oracle are compared on identical data, never on whichever subset
+    happened to survive each independently. `_oracle` trims a recording's
+    own missing leading/trailing samples before calling `remodnav` 1.1.2's
+    `preproc` (see its docstring); that succeeds on 32 of the 34 files. The
+    remaining 2 -- both `UL31` -- have an interior missing run close enough
+    to an edge to still fall inside `savgol_filter`'s edge-fit window even
+    after trimming, and `_oracle` still raises `ValueError` for them.
+    Rather than fabricate samples the recording never had, both are dropped
+    from this shared set (recorded below and printed).
 
-    **AL-RA and AL-MN are computed only over the files `remodnav` 1.1.2 can
-    actually classify.** Installed against `scipy>=1.17` (this repository's
-    pin), its `preproc` runs `scipy.signal.savgol_filter` (`mode="interp"`,
-    its default) directly on the coder's raw positions. When a real
-    recording's own first or last few samples are themselves missing --
-    dichotomised to NaN exactly as the paper's `load_anderson` does -- that
-    NaN falls inside the filter's edge-fit window, and `scipy.linalg.lstsq`
-    (`check_finite=True` by default) raises `ValueError`. This is the
-    installed oracle failing outright on real data, not a harness bug: the
-    same file, same positions, crash every time, regardless of who calls
-    `preproc`. 9 of the 34 files fail this way (recorded below and in the
-    report) -- a finding for spec 5.3, not something to route around by
-    faking data at the edges the oracle itself never saw."""
+    **MN-RA is computed separately, over all 34 files.** It never touches
+    `remodnav` -- nothing about it can fail the way `_oracle` can -- and the
+    paper's own Table 3 MN-RA values are themselves computed over the full
+    file list. Confirmed empirically: dropping just the one `UL31` `dots`
+    file from MN-RA's own computation moves `(dots, Fix)` from 0.652 to
+    0.855 -- an order of magnitude past its own ±0.006 tolerance, on a pair
+    that has no oracle in it at all. Coupling MN-RA to AL's file set would
+    make it fail spuriously *because* the coder-only comparison was made to
+    depend on a third piece of software that has nothing to do with it --
+    the same category of bug the file's docstring already refuses for the
+    opposite reason (a crash in AL blocking MN-RA entirely, fixed in the
+    previous round). This keeps MN-RA on its own full corpus and unifies
+    only the pairs finding #2 was actually about: ours against the oracle.
+    """
     root = os.environ.get("WLPP_ANDERSSON_DATA")
     if not root:
         pytest.skip("WLPP_ANDERSSON_DATA is not set -- a local clone of "
@@ -292,46 +335,43 @@ def andersson():
     kappas = {}
     oracle_failures: list[tuple[str, str, str]] = []
     for stim, names in ANDERSSON_FILES.items():
-        columns = {"MN": [], "RA": [], "US": []}
-        oracle_columns = {"MN": [], "RA": [], "AL": []}
+        coder_columns = {"MN": [], "RA": []}
+        oracle_columns = {"MN": [], "RA": [], "AL": [], "US": []}
         for name in names:
             _xy_mn, mn, _p, _f = _load_andersson(root, stim, name.format("MN"))
             xy, ra, px2deg, fs = _load_andersson(root, stim, name.format("RA"))
-            us = _ours(xy, px2deg, fs)
             shorter = min(len(mn), len(ra))
-            mn_t, ra_t, us_t = (np.asarray(v)[:shorter] for v in (mn, ra, us))
-            for key, value in (("MN", mn_t), ("RA", ra_t), ("US", us_t)):
-                columns[key].append(value)
+            mn_t, ra_t = np.asarray(mn)[:shorter], np.asarray(ra)[:shorter]
+            coder_columns["MN"].append(mn_t)
+            coder_columns["RA"].append(ra_t)
             try:
                 al = _oracle(remodnav, xy, px2deg, fs, len(ra))
             except ValueError as exc:
                 oracle_failures.append((stim, name.format("RA"), str(exc)))
                 continue
-            for key, value in (("MN", mn_t), ("RA", ra_t), ("AL", np.asarray(al)[:shorter])):
-                oracle_columns[key].append(value)
-        arrays = {key: np.concatenate(parts) for key, parts in columns.items()}
-        everywhere = np.ones(arrays["MN"].size, dtype=bool)
-        oracle_arrays = ({key: np.concatenate(parts) for key, parts in oracle_columns.items()}
-                        if oracle_columns["AL"] else None)
-        oracle_everywhere = np.ones(oracle_arrays["MN"].size, dtype=bool) if oracle_arrays else None
+            us = _ours(xy, px2deg, fs)
+            for key, value in (("MN", mn_t), ("RA", ra_t), ("AL", al), ("US", us)):
+                oracle_columns[key].append(np.asarray(value)[:shorter])
+        coder_arrays = {key: np.concatenate(parts) for key, parts in coder_columns.items()}
+        oracle_arrays = {key: np.concatenate(parts) for key, parts in oracle_columns.items()}
+        coder_everywhere = np.ones(coder_arrays["MN"].size, dtype=bool)
+        oracle_everywhere = np.ones(oracle_arrays["MN"].size, dtype=bool)
         for event, code in EVENT_CODES.items():
-            binary = {key: value == code for key, value in arrays.items()}
-            row = {
-                "MN-RA": cohen_kappa(binary["MN"], binary["RA"], everywhere),
-                "US-RA": cohen_kappa(binary["US"], binary["RA"], everywhere),
-                "US-MN": cohen_kappa(binary["US"], binary["MN"], everywhere),
+            coder_binary = {key: value == code for key, value in coder_arrays.items()}
+            oracle_binary = {key: value == code for key, value in oracle_arrays.items()}
+            kappas[(stim, event)] = {
+                "MN-RA": cohen_kappa(coder_binary["MN"], coder_binary["RA"], coder_everywhere),
+                "AL-RA": cohen_kappa(oracle_binary["AL"], oracle_binary["RA"], oracle_everywhere),
+                "AL-MN": cohen_kappa(oracle_binary["AL"], oracle_binary["MN"], oracle_everywhere),
+                "US-RA": cohen_kappa(oracle_binary["US"], oracle_binary["RA"], oracle_everywhere),
+                "US-MN": cohen_kappa(oracle_binary["US"], oracle_binary["MN"], oracle_everywhere),
             }
-            if oracle_arrays is not None:
-                oracle_binary = {key: value == code for key, value in oracle_arrays.items()}
-                row["AL-RA"] = cohen_kappa(oracle_binary["AL"], oracle_binary["RA"], oracle_everywhere)
-                row["AL-MN"] = cohen_kappa(oracle_binary["AL"], oracle_binary["MN"], oracle_everywhere)
-            else:
-                row["AL-RA"] = row["AL-MN"] = float("nan")
-            kappas[(stim, event)] = row
     if oracle_failures:
         total = sum(len(v) for v in ANDERSSON_FILES.values())
-        print(f"\n  remodnav 1.1.2's preproc raised on {len(oracle_failures)}/{total} RA files "
-              "(scipy>=1.17 vs. a recording's own missing edge samples; AL-RA/AL-MN exclude these):")
+        print(f"\n  remodnav 1.1.2's preproc still raised on {len(oracle_failures)}/{total} RA files "
+              "after edge-trimming (an interior missing run close enough to an edge to still fall "
+              "inside savgol_filter's edge-fit window); dropped from AL/US's shared set, not fabricated "
+              "(MN-RA is unaffected -- it is computed over all 34 files):")
         for stim, fname, msg in oracle_failures:
             print(f"    {stim}/{fname}: {msg}")
     return kappas
