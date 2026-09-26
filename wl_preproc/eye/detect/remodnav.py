@@ -20,11 +20,14 @@ classification for dynamic stimulation. Behavior Research Methods, 53(1),
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.signal import butter, filtfilt
 
-from wl_preproc.eye.detect.labels import Label, Run
+from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.velocity import velocity
 
 #: statsmodels' `mad` normalisation, `scipy.stats.norm.ppf(0.75)` -- the
 #: constant `clf.py` 311 divides by (spec 1.1). The exact float statsmodels
@@ -354,3 +357,196 @@ def _saccades(signals: Signals, start: int, end: int, candidates: list[_Candidat
         if samples.max_saccades_per_sample and accepted / n > samples.max_saccades_per_sample:
             break
     return found
+
+
+#: `(positions (n, 2), fs_hz) -> speed`. Index k is the speed attributed to
+#: sample k; the result may have n entries (the shared estimator) or n - 1
+#: (the oracle's two-point difference, `clf.py` 784-790).
+Differentiate = Callable[[np.ndarray, float], np.ndarray]
+
+
+def shared_speed(positions: np.ndarray, fs_hz: float) -> np.ndarray:
+    """The shared estimator (`velocity.py`) as a speed -- the differentiator
+    production hands `classify` (spec 3)."""
+    v = velocity(positions, fs_hz)
+    return np.hypot(v[:, 0], v[:, 1])
+
+
+def _periods(events: list[Run], start: int, end: int) -> list[tuple[int, int]]:
+    """`clf.py` 514-579 (spec 1.5). The periods are:
+    - from `start` to the first saccade;
+    - from each saccade's end (or its PSO's, if it has one) to the next
+      saccade's start;
+    - from the last to `end`.
+
+    A zero-length period is skipped. None follows a saccade that ends exactly
+    at `end`."""
+    windows: list[tuple[int, int]] = []
+    previous_saccade: Run | None = None
+    previous_pso: Run | None = None
+    for event in sorted(events, key=lambda run: run.start):
+        if previous_saccade is None:
+            if event.label is not Label.SACCADE:
+                continue
+        elif previous_pso is None and event.label is Label.PSO:
+            previous_pso = event
+            continue
+        elif event.label is not Label.SACCADE:
+            continue
+        window_start = start if previous_saccade is None else (previous_pso or previous_saccade).stop
+        if window_start != event.start:
+            windows.append((window_start, event.start))
+        previous_saccade, previous_pso = event, None
+    if previous_saccade is not None and previous_saccade.stop == end:
+        return windows
+    tail = start if previous_saccade is None else (previous_pso or previous_saccade).stop
+    windows.append((tail, end))
+    return windows
+
+
+def _pieces(x: np.ndarray, start: int, end: int) -> list[tuple[int, int]]:
+    """`clf.py` 581-605: the maximal runs of present positions within
+    `[start, end)`. No event ever spans a gap."""
+    if end <= start:
+        return []
+    return [(start + int(a), start + int(b)) for a, b in true_runs(~np.isnan(x[start:end]))]
+
+
+def _piece_saccades(signals: Signals, start: int, end: int, samples: _Samples,
+                    params: RemodnavParams) -> list[Run]:
+    """`clf.py` 624-654 (spec 1.5).
+
+    A piece no longer than `2 * min_intersaccade + min_saccade + max_pso` is
+    not searched. Otherwise every saccade or PSO within `min_intersaccade` of
+    either edge is dropped, and a dropped saccade takes the PSO right behind
+    it along."""
+    if end - start <= 2 * samples.min_intersaccade + samples.min_saccade + samples.max_pso:
+        return []
+    kept: list[Run] = []
+    kill_pso = False
+    for event in _saccades(signals, start, end, None, None, samples, params):
+        if kill_pso:
+            kill_pso = False
+            if event.label is Label.PSO:
+                continue
+        if event.start - start < samples.min_intersaccade or end - event.stop < samples.min_intersaccade:
+            kill_pso = True
+            continue
+        kept.append(event)
+    return kept
+
+
+def _stretches(marked: np.ndarray, length: int, samples: _Samples) -> list[tuple[bool, int, int]]:
+    """`clf.py` 728-764 (spec 1.6): pursuit-or-fixation stretches covering
+    `[0, length)`, as `(pursuit, first, stop)`.
+
+    1. Stretches are built with an inclusive last index.
+    2. Any whose `last - first` is below its type's minimum is dropped.
+    3. Neighbours of one type merge.
+    4. Where the type changes, the boundary sits at `last + int(gap / 2)`.
+    5. The first starts at 0 and the last ends at `length`.
+    6. Nothing left means one fixation.
+    """
+    if marked.size == 0:
+        return [(False, 0, length)]
+    change = np.flatnonzero(np.diff(marked.astype(np.int8))) + 1
+    firsts = np.concatenate(([0], change))
+    lasts = np.concatenate((change - 1, [marked.size - 1]))
+    stretches = [
+        [bool(marked[first]), int(first), int(last)]
+        for first, last in zip(firsts, lasts, strict=True)
+        if last - first >= (samples.min_pursuit if marked[first] else samples.min_fixation)
+    ]
+    merged: list[list] = []
+    for index, stretch in enumerate(stretches):
+        if index == len(stretches) - 1:
+            merged.append(stretch)
+            break
+        following = stretches[index + 1]
+        if stretch[0] == following[0]:
+            following[1] = stretch[1]
+            continue
+        boundary = stretch[2] + int((following[1] - stretch[2]) / 2)
+        stretch[2] = boundary
+        following[1] = boundary
+        merged.append(stretch)
+    if not merged:
+        return [(False, 0, length)]
+    merged[0][1] = 0
+    merged[-1][2] = length
+    return [(pursuit, first, stop) for pursuit, first, stop in merged]
+
+
+def _fixation_or_pursuit(signals: Signals, start: int, end: int, fs_hz: float, samples: _Samples,
+                         params: RemodnavParams, differentiate: Differentiate) -> list[Run]:
+    """`clf.py` 672-782 (spec 1.6).
+
+    A piece shorter than `min_fixation` emits nothing; storage paints it
+    `fixation` anyway (spec 4). Otherwise:
+    1. Positions are low-passed zero-phase with a Butterworth filter and
+       Gustafsson initial conditions, then differentiated.
+    2. Runs above the pursuit threshold, largest first, get the on/offset
+       searches with that threshold.
+    3. Those long enough are marked.
+    4. `_stretches` tidies the result.
+    """
+    length = end - start
+    if length < samples.min_fixation:
+        return []
+    b, a = butter(params.lowpass_order, params.lowpass_cutoff_hz / (0.5 * fs_hz), btype="low", analog=False)
+    positions = np.column_stack((
+        filtfilt(b, a, signals.x[start:end], method="gust"),
+        filtfilt(b, a, signals.y[start:end], method="gust"),
+    ))
+    speed = differentiate(positions, fs_hz)
+    threshold = params.pursuit_velocity_deg_s
+    marked = np.zeros(speed.size, dtype=bool)
+    for candidate in sorted(_runs_above(speed, threshold), key=lambda c: -c.weight):
+        pursuit_start = _onset(speed, candidate.start, threshold)
+        pursuit_stop = _offset(speed, candidate.stop, threshold)
+        if pursuit_stop - pursuit_start < samples.min_pursuit:
+            continue
+        marked[pursuit_start:pursuit_stop] = True
+    return [
+        Run(start=start + first, stop=start + stop, label=Label.PURSUIT if pursuit else Label.FIXATION)
+        for pursuit, first, stop in _stretches(marked, length, samples)
+    ]
+
+
+def classify(signals: Signals, fs_hz: float, params: RemodnavParams,
+             differentiate: Differentiate) -> list[Run]:
+    """REMoDNaV over one eye's `signals`: runs sorted by start, pairwise
+    disjoint. Samples no run covers are ones the algorithm left unlabelled.
+
+    1. **The major pass** (spec 1.2): candidates are runs of candidate speed
+       above one recording-wide threshold, each with its own context
+       thresholds.
+    2. **Each period between major saccades**, split into pieces at missing
+       positions (spec 1.5):
+       - a piece with saccades of its own is re-divided at them, and the
+         parts are processed the same way;
+       - a piece without is fixation or pursuit (spec 1.6).
+
+    The oracle recurses; a work list gives the same result without Python's
+    recursion limit, because each piece is classified from its own samples
+    alone.
+    """
+    n = signals.speed.size
+    samples = _Samples.at(params, fs_hz)
+    events: list[Run] = []
+    overall = _thresholds(signals.candidate_speed, params)
+    if overall is not None:
+        events.extend(_saccades(signals, 0, n, _runs_above(signals.candidate_speed, overall.peak),
+                                samples.context, samples, params))
+    work = _periods(events, 0, n)
+    while work:
+        period_start, period_end = work.pop()
+        for piece_start, piece_end in _pieces(signals.x, period_start, period_end):
+            found = _piece_saccades(signals, piece_start, piece_end, samples, params)
+            if found:
+                events.extend(found)
+                work.extend(_periods(found, piece_start, piece_end))
+            else:
+                events.extend(_fixation_or_pursuit(signals, piece_start, piece_end, fs_hz,
+                                                   samples, params, differentiate))
+    return sorted(events, key=lambda run: run.start)

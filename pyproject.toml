@@ -5,6 +5,7 @@ description = "Automated post-session preprocessing pipeline for NHP systems neu
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
+    "scipy>=1.17",
     "pydantic>=2.6",
     "pyyaml>=6.0",
     # wl-sync is not on PyPI. A direct reference is deliberate: the sync box owns

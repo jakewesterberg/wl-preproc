@@ -14,19 +14,26 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from wl_preproc.eye.detect.labels import Label
+from wl_preproc.eye.detect.labels import Label, Run
 from wl_preproc.eye.detect.remodnav import (
     _MAD_C,
     DEFAULT_REMODNAV_PARAMS,
     Signals,
     _Samples,
     _context_window,
+    _fixation_or_pursuit,
     _mad,
     _offset,
     _onset,
+    _periods,
+    _pieces,
+    _piece_saccades,
     _runs_above,
     _saccades,
+    _stretches,
     _thresholds,
+    classify,
+    shared_speed,
 )
 
 
@@ -189,10 +196,13 @@ def test_onset_and_offset_match_the_oracle():
 
 
 def _pattern(n):
-    """A deterministic, non-constant baseline speed (1, 2, 3, 2, ...): median
-    2 and median |deviation| 0.5, so thresholds settle at 2 + 10 * 0.741 and
-    2 + 5 * 0.741. A constant baseline would empty the iteration (spec 1.1)."""
-    return np.resize(np.array([1.0, 2.0, 3.0, 2.0]), n)
+    """A deterministic, non-constant baseline speed (1, 2, 3, 4, 5, ...):
+    each value is 20% of samples, so the median is 3 and the median
+    |deviation| is 1, each with a 10-point margin no single bump can tip.
+    Thresholds settle at 3 + 10 / 0.6745 ~= 17.83 (peak) and
+    3 + 5 / 0.6745 ~= 10.41 (onset). A constant baseline would empty the
+    iteration (spec 1.1)."""
+    return np.resize(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), n)
 
 
 def _bump(speed, centre, peak, half_width):
@@ -233,16 +243,8 @@ def _piece_saccades_of(speed, params=DEFAULT_REMODNAV_PARAMS):
 
 
 def test_a_saccade_too_close_to_another_is_rejected():
-    # `_pattern`'s baseline sample count splits exactly 1500/1500 between the
-    # zero- and one-deviation classes over any 3000-sample stretch. A bump
-    # centred on an EVEN sample removes an unbalanced number of each class
-    # from that split (its 17-sample span is not a multiple of the pattern's
-    # period of 4) and tips `_thresholds`' iteration to a degenerate
-    # peak/onset of 1.0 -- measured for centre 1060, and for every even centre
-    # from 1050 to 1074 tried while diagnosing this. An odd centre keeps the
-    # split even and the thresholds at their expected 9.41/5.71.
     close = _bump(_bump(_pattern(3000), 1000, 300.0, 8), 1035, 250.0, 8)  # 70 ms apart, edges 18 samples
-    apart = _bump(_bump(_pattern(3000), 1000, 300.0, 8), 1061, 250.0, 8)  # 122 ms apart, edges 44 samples
+    apart = _bump(_bump(_pattern(3000), 1000, 300.0, 8), 1060, 250.0, 8)  # 120 ms apart, edges 44 samples
 
     assert [r.label for r in _piece_saccades_of(close)].count(Label.SACCADE) == 1
     assert [r.label for r in _piece_saccades_of(apart)].count(Label.SACCADE) == 2
@@ -252,11 +254,7 @@ def test_the_frequency_cap_stops_the_major_pass():
     """`clf.py` 508-512: stop once the count exceeds the cap times the
     duration. 0.5 Hz over 10 s is 5, so the sixth acceptance stops it."""
     speed = _pattern(5000)
-    # Odd centres, not `range(300, ...)`'s even ones: see the note above
-    # `test_a_saccade_too_close_to_another_is_rejected` -- an even centre
-    # here collapses `_thresholds` to a degenerate 1.0/1.0 for the same
-    # reason, merging every bump into one all-spanning candidate.
-    for centre in range(301, 5000, 450):
+    for centre in range(300, 5000, 450):
         _bump(speed, centre, 300.0, 8)
     params = replace(DEFAULT_REMODNAV_PARAMS, max_initial_saccade_freq_hz=0.5)
     samples = _Samples.at(params, 500.0)
@@ -356,3 +354,203 @@ def test_a_piece_search_matches_the_oracle(fs_hz, seed):
         assert [(r.start, r.stop, r.label) for r in ours] == [
             (e["start_time"], e["end_time"], _oracle_kind(e["label"])) for e in theirs
         ]
+
+
+# -- Spec 1.5: intersaccadic periods and pieces ---------------------------------
+
+
+def test_periods_run_from_each_saccade_or_its_pso_to_the_next_saccade():
+    events = [Run(10, 20, Label.SACCADE), Run(20, 25, Label.PSO), Run(50, 60, Label.SACCADE)]
+
+    assert _periods(events, 0, 100) == [(0, 10), (25, 50), (60, 100)]
+    assert _periods([Run(10, 20, Label.SACCADE), Run(90, 100, Label.SACCADE)], 0, 100) == [(0, 10), (20, 90)]
+    assert _periods([], 0, 100) == [(0, 100)]
+    assert _periods([Run(0, 20, Label.SACCADE)], 0, 100) == [(20, 100)]
+
+
+def test_pieces_split_at_missing_positions():
+    x = np.zeros(20)
+    x[5:8] = np.nan
+
+    assert _pieces(x, 0, 20) == [(0, 5), (8, 20)]
+    assert _pieces(x, 6, 6) == []
+
+
+def test_a_saccade_near_a_piece_edge_is_dropped_with_its_pso():
+    """`clf.py` 639-649: within `min_intersaccade` of either edge, rejected,
+    and the PSO that follows it goes too. Bump centres 25/41 (not the
+    original 30/46, which under `_pattern`'s new baseline finds the saccade
+    onset at sample 21 -- outside `min_intersaccade` (20) of the piece's
+    edge, so it survived unfiltered): measured onset 16, well inside 20."""
+    speed = _bump(_bump(_pattern(600), 25, 300.0, 8), 41, 60.0, 3)
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)
+
+    assert _piece_saccades(_signals(speed), 0, 600, samples, DEFAULT_REMODNAV_PARAMS) == []
+
+
+def test_a_piece_too_short_to_search_finds_no_saccade():
+    speed = _bump(_pattern(60), 30, 300.0, 8)
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)
+
+    assert _piece_saccades(_signals(speed), 0, 60, samples, DEFAULT_REMODNAV_PARAMS) == []
+
+
+def test_the_recursion_finds_a_small_saccade_the_recording_wide_threshold_misses():
+    """REMoDNaV's point (spec 1.5): a noisy stretch lifts the recording-wide
+    threshold above a small saccade, and the quiet piece between two large
+    ones finds it with a threshold of its own."""
+    rng = np.random.default_rng(5)
+    speed = _pattern(10_000)
+    speed[3500:] = rng.gamma(2.0, 15.0, 6500)
+    for centre, peak in [(1000, 400.0), (2000, 60.0), (3000, 400.0)]:
+        _bump(speed, centre, peak, 8)
+    signals = _signals(speed)
+    assert _thresholds(signals.candidate_speed, DEFAULT_REMODNAV_PARAMS).peak > 60.0  # the premise
+
+    runs = classify(signals, 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+    assert any(r.label is Label.SACCADE and r.start <= 2000 < r.stop for r in runs)
+
+
+# -- Spec 1.6: fixation or pursuit ---------------------------------------------
+
+
+def test_stretches_meet_at_the_midpoint_of_the_gap_between_them():
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)  # both minima 20
+    marked = np.zeros(100, dtype=bool)
+    marked[30:70] = True
+
+    assert _stretches(marked, 100, samples) == [(False, 0, 29), (True, 29, 69), (False, 69, 100)]
+
+
+def test_a_short_stretch_is_dropped_and_its_neighbours_merge():
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)
+    marked = np.zeros(100, dtype=bool)
+    marked[40:45] = True
+
+    assert _stretches(marked, 100, samples) == [(False, 0, 100)]
+
+
+def test_the_boundary_spans_two_dropped_stretches_of_opposite_type():
+    """Not in the brief verbatim: added because `_stretches meet at the
+    midpoint...`'s own fixture can never exercise `int(gap / 2)` for a gap
+    other than 1 -- raw stretches from one `np.diff` are always exactly
+    adjacent (`following[1] - stretch[2] == 1`, so `int(.../2)` is 0 either
+    way) unless a stretch between two survivors was dropped for being too
+    short. Dropping exactly one middle stretch still leaves same-type
+    neighbours (raw stretches strictly alternate), so this drops two in a
+    row -- one of each type -- to leave differently-typed survivors 11
+    samples apart. Measured: boundary 29 (24 + int(11 / 2)); the `-> 0`
+    mutation gives 24, which this catches and `test_stretches_meet_...`
+    (gap always 1 there) cannot."""
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)  # both minima 20
+    marked = np.zeros(65, dtype=bool)
+    marked[25:30] = True  # 5 samples: dropped (< 20)
+    marked[35:65] = True  # 30 samples: survives
+
+    assert _stretches(marked, 65, samples) == [(False, 0, 29), (True, 29, 65)]
+
+
+def test_a_slow_ramp_is_pursuit_and_stillness_is_fixation():
+    fs = 500.0
+    ramp = 10.0 * np.arange(500) / fs
+    x = np.concatenate([np.zeros(250), ramp, np.full(250, ramp[-1])])
+    x += np.random.default_rng(3).normal(0.0, 0.005, x.size)
+    signals = Signals(x=x, y=np.zeros_like(x), speed=np.zeros_like(x), candidate_speed=np.zeros_like(x))
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, fs)
+
+    runs = _fixation_or_pursuit(signals, 0, x.size, fs, samples, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+    pursuit = [r for r in runs if r.label is Label.PURSUIT]
+    covered = sum(max(0, min(r.stop, 750) - max(r.start, 250)) for r in pursuit)
+    assert covered >= 0.8 * 500
+    assert all(r.label is Label.FIXATION for r in runs if r.stop <= 200 or r.start >= 800)
+
+
+def test_a_piece_shorter_than_a_fixation_emits_nothing():
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0)
+    signals = _signals(_pattern(10))
+
+    assert _fixation_or_pursuit(signals, 0, 10, 500.0, samples, DEFAULT_REMODNAV_PARAMS, shared_speed) == []
+
+
+# Seed 7 at 1000 Hz fails this test's own premise, not the comparison: the
+# oracle's major pass swallows the whole planted pursuit ramp into one
+# SACC event (measured 8002-9503, almost exactly PURSUIT_S's 8000-9500),
+# so no intersaccadic window ever covers it and `chosen` falls back to the
+# recording's first two windows instead. That is the fixture's own RNG
+# draw, not a rule this implementation gets wrong -- most seeds in this
+# range hit the same swallow (measured over seeds 1-39; only 24, 26 and 37
+# keep the ramp separate). 24 does, and its comparison matches the oracle.
+@pytest.mark.parametrize("fs_hz, seed", [(500.0, 6), (1000.0, 24)])
+def test_fixation_or_pursuit_matches_the_oracle(fs_hz, seed):
+    from tests.eye.detect._remodnav_traces import (
+        PURSUIT_S, gaze_trace, intersaccadic_windows, oracle_run, signals_from_oracle, two_point_speed,
+    )
+
+    remodnav = pytest.importorskip("remodnav")
+    classifier, preprocessed, events = oracle_run(remodnav, gaze_trace(fs_hz, seed), fs_hz)
+    signals = signals_from_oracle(preprocessed)
+    samples = _Samples.at(DEFAULT_REMODNAV_PARAMS, fs_hz)
+    kinds = {"FIXA": Label.FIXATION, "PURS": Label.PURSUIT}
+    windows = intersaccadic_windows(events, fs_hz)
+    middle = int(round(sum(PURSUIT_S) / 2 * fs_hz))
+    chosen = [w for w in windows if w[0] <= middle < w[1]] + windows[:2]
+    assert chosen and chosen[0][0] <= middle < chosen[0][1]  # the pursuit is covered
+    for start, end in chosen:
+        ours = _fixation_or_pursuit(signals, start, end, fs_hz, samples, DEFAULT_REMODNAV_PARAMS,
+                                    two_point_speed)
+        theirs = list(classifier._fix_or_pursuit(preprocessed, start, end))
+
+        assert [(r.start, r.stop, r.label) for r in ours] == [
+            (e["start_time"], e["end_time"], kinds[e["label"]]) for e in theirs
+        ]
+
+
+# -- classify, and the Review Focus edge cases ---------------------------------
+
+
+def test_classify_returns_disjoint_sorted_runs_in_the_declared_vocabulary():
+    from tests.eye.detect._remodnav_traces import gaze_trace
+    from wl_preproc.eye.detect.velocity import velocity
+
+    xy = gaze_trace(500.0, 8)
+    v = velocity(xy, 500.0)
+    speed = np.hypot(v[:, 0], v[:, 1])
+    signals = Signals(x=xy[:, 0], y=xy[:, 1], speed=speed, candidate_speed=speed)
+
+    runs = classify(signals, 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+    assert {r.label for r in runs} <= {Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}
+    assert all(a.stop <= b.start for a, b in zip(runs, runs[1:]))
+
+
+def test_a_trace_shorter_than_every_window_classifies_without_error():
+    """Review Focus 2."""
+    for n in (1, 5, 30):
+        signals = _signals(_pattern(n))
+
+        runs = classify(signals, 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+        assert all(0 <= r.start < r.stop <= n for r in runs)
+
+
+def test_a_perfectly_still_trace_is_all_fixation():
+    """Review Focus 3: a synthetic hold has zero speed, so the median and MAD
+    are 0 -- no saccade may be invented."""
+    zeros = np.zeros(2000)
+    signals = Signals(x=zeros.copy(), y=zeros.copy(), speed=zeros.copy(), candidate_speed=zeros.copy())
+
+    runs = classify(signals, 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+    assert {r.label for r in runs} == {Label.FIXATION}
+
+
+def test_a_saccade_at_the_very_end_is_closed_there():
+    """Review Focus 5: still moving at the last sample."""
+    speed = _pattern(3000)
+    speed[-10:] += 300.0
+
+    runs = classify(_signals(speed), 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
+
+    assert all(r.stop <= 3000 for r in runs)

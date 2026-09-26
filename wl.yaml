@@ -357,6 +357,17 @@ third_party:
       direct grep of both files shows it was not. wlo stack reads
       third_party alone, so a workstation built from this file was missing
       software nearly every module in this package uses.
+  - name: scipy
+    constraint: ">=1.17"
+    why: >-
+      eye/detect/remodnav.py calls scipy.ndimage.median_filter,
+      scipy.signal.butter and scipy.signal.filtfilt(method='gust') -- the
+      functions REMoDNaV's own implementation calls for its candidate speed
+      and its 4 Hz pursuit low-pass (design spec
+      2026-09-26-remodnav-design.md section 7). Reimplementing Gustafsson's
+      initial conditions would be one more reimplementation to validate.
+      The floor is 1.17 because 1.17.1 is the oldest release the fidelity
+      check (spec section 5.1) has run against; nothing older is tested.
   - name: datajoint
     constraint: ">=2.3,<3"
     why: >-
