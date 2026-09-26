@@ -6,11 +6,21 @@ rather than that one does. Section 8.5 requires the gate be surfaced there
 "since an ungated session is what will eventually fill scratch", and only a
 named list makes that report actionable.
 
-**Incomplete today, and it says so.** The predicate can currently see only
-timing quality: tier says nothing about whether a sort is good, because section
-6.5's unit QC metrics are 2b-6 and unbuilt, and the canonical NWB is Phase 3.
-Both join this list when they land. Writing it as a growing list makes the
-current incompleteness visible instead of implying the rule is finished.
+**Two kinds of condition, and what a force overrides.** 2026-09-26 rehydration
+design, section 2. A SAFETY condition failing means the way back is not proven:
+deleting past it could lose data, and no human judgement makes that safe. A
+JUDGEMENT condition failing (`overridable=True`) means the session is not ready
+to be freed; freeing it anyway costs a rehydration later, never data, so a
+recorded `force` may override it. The archival design's section 5.3 promised "a
+force that overrides" and never said what; this is the answer.
+
+**Incomplete today, and it says so.** The predicate can see only timing quality
+of what a session produced: tier says nothing about whether a sort is good,
+because section 6.5's unit QC metrics are 2b-6 and unbuilt. The canonical NWB
+is Phase 3, and its condition is already here, failing, because the requester's
+position is that reclamation follows the NWB (rehydration design, section 0,
+ruling 3). Writing it as a growing list makes the current incompleteness
+visible instead of implying the rule is finished.
 """
 
 from __future__ import annotations
@@ -25,24 +35,42 @@ class Condition:
     name: str
     passed: bool
     detail: str
+    # False -- SAFETY -- by default, so a condition nobody classified fails
+    # closed: no force can override it.
+    overridable: bool = False
 
 
-def reclaimable(conditions: list[Condition]) -> bool:
-    """True only when every condition passes."""
-    return all(c.passed for c in conditions)
+@dataclass(frozen=True, slots=True)
+class Predicate:
+    conditions: tuple[Condition, ...]
+    # Whether the session's LATEST `ReclamationHold` verdict is `force`.
+    forced: bool
 
 
-def blocking(conditions: list[Condition]) -> list[str]:
-    """Every failing condition's name, in order -- not merely the first."""
-    return [c.name for c in conditions if not c.passed]
+def blocking(predicate: Predicate) -> list[str]:
+    """Every condition that actually blocks, in order -- not merely the first.
+
+    A failing safety condition always blocks. A failing judgement condition
+    blocks unless the session is forced."""
+    return [
+        c.name
+        for c in predicate.conditions
+        if not c.passed and not (c.overridable and predicate.forced)
+    ]
+
+
+def reclaimable(predicate: Predicate) -> bool:
+    """True when nothing blocks: every safety condition passes, and every
+    judgement condition passes or the session is forced."""
+    return not blocking(predicate)
 
 
 def reclaim_conditions(
     session_key: dict,
     expected_file_count: int,
     prefix: str = DEFAULT_PREFIX,
-) -> list[Condition]:
-    """The five conditions, each evaluated against recorded facts.
+) -> Predicate:
+    """The six conditions, each evaluated against recorded facts, and whether the session is forced.
 
     `expected_file_count` is how many files the session's DONE markers name.
     Passed in rather than counted here so this module reads no filesystem:
@@ -81,43 +109,64 @@ def reclaim_conditions(
         "verdict", order_by="held_at DESC", limit=1
     )
 
-    return [
-        Condition(
-            "artifact_present",
-            bool(artifact),
-            "" if artifact else "no ArchiveArtifact row",
+    forced = bool(len(holds)) and bool(holds[0] == "force")
+
+    return Predicate(
+        conditions=(
+            Condition(
+                "artifact_present",
+                bool(artifact),
+                "" if artifact else "no ArchiveArtifact row",
+            ),
+            Condition(
+                "every_file_verified",
+                len(matched) == expected_file_count and len(matched) > 0,
+                f"{len(matched)} of {expected_file_count} files verified",
+            ),
+            Condition(
+                "not_tier_d",
+                len(tier_rows) == 1 and tier_rows[0] != "D",
+                f"tier {tier_rows[0]}" if len(tier_rows) == 1 else "no tier resolved",
+                overridable=True,
+            ),
+            # Design spec section 5.2, from parent section 8.4's surviving clause:
+            # a queued re-sort keeps its fast copy. Both halves are unbuilt --
+            # paramset requests reach here in 2b-5; the warm tier has no query of
+            # its own yet, and no task named here commits to when it will (fix
+            # round: an earlier draft cited "the rehydration plan" as if that
+            # were a document -- checked docs/superpowers/specs/ and .../plans/
+            # directly, and no such document exists; the design spec treats
+            # rehydration as a supported PATH, section 3.3, not a named artifact
+            # -- corrected 2026-08-27, Task 10 review: this line said "section
+            # 8.4" before, the easy mix-up since 8.4 IS the correct citation two
+            # lines up for the paramset/warm-copy clause this comment opens
+            # with, but 8.4 never itself mentions rehydration at all)
+            # -- so this passes today and gains its query once each half does.
+            Condition(
+                "no_pending_paramset_or_warm_copy",
+                True,
+                "no paramset queue exists yet (2b-5); passes vacuously",
+                overridable=True,
+            ),
+            # Fails, unlike the vacuous condition above: the requester's
+            # position is that reclamation follows the canonical NWB
+            # (2026-09-26 rehydration design, section 0, ruling 3), so the
+            # absence of NWB export must block rather than wave through. It
+            # gains a real query when Phase 3 writes one.
+            Condition(
+                "canonical_nwb_present",
+                False,
+                "NWB export is not built (Phase 3)",
+                overridable=True,
+            ),
+            # Safety-kind: a hold must block. A force clears it by being the
+            # LATEST verdict -- `holds` above is ordered `held_at DESC` and
+            # limited to one row -- so "latest wins" needs nothing here.
+            Condition(
+                "no_hold",
+                not (len(holds) and holds[0] == "hold"),
+                "held" if len(holds) and holds[0] == "hold" else "",
+            ),
         ),
-        Condition(
-            "every_file_verified",
-            len(matched) == expected_file_count and len(matched) > 0,
-            f"{len(matched)} of {expected_file_count} files verified",
-        ),
-        Condition(
-            "not_tier_d",
-            len(tier_rows) == 1 and tier_rows[0] != "D",
-            f"tier {tier_rows[0]}" if len(tier_rows) == 1 else "no tier resolved",
-        ),
-        # Design spec section 5.2, from parent section 8.4's surviving clause:
-        # a queued re-sort keeps its fast copy. Both halves are unbuilt --
-        # paramset requests reach here in 2b-5; the warm tier has no query of
-        # its own yet, and no task named here commits to when it will (fix
-        # round: an earlier draft cited "the rehydration plan" as if that
-        # were a document -- checked docs/superpowers/specs/ and .../plans/
-        # directly, and no such document exists; the design spec treats
-        # rehydration as a supported PATH, section 3.3, not a named artifact
-        # -- corrected 2026-08-27, Task 10 review: this line said "section
-        # 8.4" before, the easy mix-up since 8.4 IS the correct citation two
-        # lines up for the paramset/warm-copy clause this comment opens
-        # with, but 8.4 never itself mentions rehydration at all)
-        # -- so this passes today and gains its query once each half does.
-        Condition(
-            "no_pending_paramset_or_warm_copy",
-            True,
-            "no paramset queue exists yet (2b-5); passes vacuously",
-        ),
-        Condition(
-            "no_hold",
-            not (len(holds) and holds[0] == "hold"),
-            "held" if len(holds) and holds[0] == "hold" else "",
-        ),
-    ]
+        forced=forced,
+    )

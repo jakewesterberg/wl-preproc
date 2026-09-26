@@ -400,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
         # and re-deriving the count a second way here risks silently
         # disagreeing with what `verify_store` itself checked against.
         expected_file_count = len(_expected_digests(session_dir))
-        conditions = archive_reclaim.reclaim_conditions(
+        predicate = archive_reclaim.reclaim_conditions(
             key, expected_file_count, prefix=args.prefix
         )
 
@@ -414,13 +414,21 @@ def main(argv: list[str] | None = None) -> int:
         # enough for `wlpp reclaim`'s own preview: a reader must be able to
         # tell "this passed" from "this was never evaluated", which only
         # printing every row can show.
-        for condition in conditions:
-            status = "OK" if condition.passed else "BLOCKED"
+        for condition in predicate.conditions:
+            if condition.passed:
+                status = "OK"
+            elif condition.overridable and predicate.forced:
+                # Failed, and a person overrode it on the record -- which is
+                # not the same thing as passing, so it must not print as OK
+                # (2026-09-26 rehydration design, section 2).
+                status = "OVERRIDDEN by force"
+            else:
+                status = "BLOCKED"
             detail = f" -- {condition.detail}" if condition.detail else ""
             print(f"  [{status}] {condition.name}{detail}")
 
         would_free = sum(p.stat().st_size for p in session_dir.rglob("*") if p.is_file())
-        verdict = "reclaimable" if archive_reclaim.reclaimable(conditions) else "NOT reclaimable"
+        verdict = "reclaimable" if archive_reclaim.reclaimable(predicate) else "NOT reclaimable"
         print(f"\n{verdict} -- would free {would_free} bytes from {session_dir} if it were.")
 
         if not args.no_dry_run:

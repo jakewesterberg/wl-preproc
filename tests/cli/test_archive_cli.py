@@ -590,6 +590,28 @@ def test_reclaim_prints_every_condition_not_just_the_blocked_ones(landed, prefix
 
     assert "artifact_present" in out
     assert "no_pending_paramset_or_warm_copy" in out
+    assert "canonical_nwb_present" in out
+
+
+def test_reclaim_preview_marks_a_forced_judgement_failure_overridden(landed, prefix, capsys):
+    """An operator must be able to tell "passed" from "failed, and a person
+    overrode it on the record" (2026-09-26 rehydration design, section 2)."""
+    session_dir, _key = landed("rclmc6")
+    nas_root = session_dir.parent.parent / "nas"
+    main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
+          "--host", "vault", "--share", "cold", "--prefix", prefix])
+    main(["hold", "--session", str(session_dir), "--verdict", "force", "--actor", "tester",
+          "--reason", "NWB export is not built yet", "--prefix", prefix])
+    capsys.readouterr()
+
+    main(["reclaim", "--session", str(session_dir), "--prefix", prefix])
+    out = capsys.readouterr().out
+
+    assert "[OVERRIDDEN by force] canonical_nwb_present" in out
+    # No TimingProvenance row, so not_tier_d fails too -- and is overridden.
+    assert "[OVERRIDDEN by force] not_tier_d" in out
+    assert "[OK] artifact_present" in out
+    assert "\nreclaimable --" in out
 
 
 # -- wlpp hold --------------------------------------------------------------
@@ -946,8 +968,30 @@ def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefi
         ]
     )
     _timing(key, prefix, tier="A")
+    # canonical_nwb_present fails for every session until Phase 3; only a
+    # recorded force makes one fully reclaimable today.
+    main(["hold", "--session", str(session_dir), "--verdict", "force", "--actor", "tester",
+          "--reason", "NWB export is not built yet", "--prefix", prefix])
 
     body = build_report(session_dir.parent, prefix=prefix)
 
     section = _section(body, "Archived sessions blocked from reclamation")
     assert key["subject"] not in section
+
+
+def test_report_names_the_missing_nwb_for_an_unforced_session(landed, prefix):
+    """Until Phase 3, every archived session still on scratch is blocked by
+    the NWB unless forced -- true, and the report must say so by name."""
+    session_dir, key = landed("rptnwb1")
+    nas_root = session_dir.parent.parent / "nas"
+    main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
+          "--host", "vault", "--share", "cold", "--prefix", prefix])
+    _timing(key, prefix, tier="A")
+
+    body = build_report(session_dir.parent, prefix=prefix)
+
+    section = _section(body, "Archived sessions blocked from reclamation")
+    line = [ln for ln in section.splitlines() if key["subject"] in ln]
+    assert len(line) == 1, section
+    assert "canonical_nwb_present" in line[0]
+    assert "not_tier_d" not in line[0]

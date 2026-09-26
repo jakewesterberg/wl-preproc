@@ -471,10 +471,10 @@ def _unreclaimed_sessions(
             # own "nothing to check" case (see its docstring), not a reason
             # to crash a daily report over one session.
             continue
-        conditions = archive_reclaim.reclaim_conditions(
+        predicate = archive_reclaim.reclaim_conditions(
             session_key, expected_file_count, prefix=prefix
         )
-        blocking = archive_reclaim.blocking(conditions)
+        blocking = archive_reclaim.blocking(predicate)
         if blocking:
             blocked.append({**session_key, "session_dir": session_dir, "blocking": blocking})
 
