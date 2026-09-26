@@ -252,40 +252,62 @@ def _ours(xy_px, px2deg, fs):
 
 
 def _oracle(remodnav, xy_px, px2deg, fs, n):
-    """The oracle, on the coder's own positions, trimmed to the span between
-    its first and last present sample.
+    """The oracle, on the coder's own positions, trimmed to the span whose
+    own leading and trailing `savgol_filter` edge windows are entirely
+    present.
 
     `remodnav` 1.1.2's `preproc` (`clf.py` 863) runs
     `scipy.signal.savgol_filter` (`mode="interp"`, scipy's own default)
     directly on the coder's raw positions. That mode's edge fit calls
     `scipy.linalg.lstsq`, whose default `check_finite=True` -- present in
     the scipy release this repository pins, `scipy>=1.17` -- raises the
-    moment a NaN falls inside its edge-fit window. The paper's own, far
-    older scipy let a NaN through there instead of raising. A real
-    recording's own first or last few samples are sometimes themselves
-    missing (dichotomised to NaN, exactly as the paper's `load_anderson`
-    does), which alone is enough to crash under the newer scipy.
+    moment a NaN falls inside the `w`-sample window its polynomial fit
+    reads at either edge (`w = int(0.019 * fs)`, `clf.py` 841's own
+    truncation of the 0.019 s default `savgol_length`; 9 at 500 Hz). The
+    paper's own, far older scipy let a NaN through there instead of
+    raising. A real recording's own first or last few samples, or an
+    interior run close enough to either true edge to still fall inside
+    that `w`-sample window, are sometimes themselves missing (dichotomised
+    to NaN, exactly as the paper's `load_anderson` does) -- alone enough to
+    crash under the newer scipy.
 
-    The fix below changes only samples that were missing anyway: `[lo, hi)`
-    is the span from the first to the last sample whose position is
-    present, and only that span is handed to `preproc`/`__call__`; events
-    are painted back at `lo`'s own offset. Samples outside `[lo, hi)` stay
-    `0` (unlabelled) in the returned codes, exactly where the untrimmed
-    oracle's own missing-data handling would have left them anyway, since
-    `preproc` never assigns a label to a sample it never received.
+    The fix below changes only samples whose own edge-fit window was
+    unusable anyway: `i` is the first index whose window `x[i:i+w]`,
+    `y[i:i+w]` is entirely present, and `j` the last index whose window
+    `x[j-w+1:j+1]`, `y[j-w+1:j+1]` is entirely present; only `[i, j+1)` is
+    handed to `preproc`/`__call__`, and events are painted back at `i`'s own
+    offset. Samples outside `[i, j+1)` stay `0` (unlabelled) in the
+    returned codes -- the same place the untrimmed oracle's own
+    missing-data handling would have left them, since `preproc` never
+    assigns a label to a sample it never received.
 
-    **This does not guarantee a crash-free call.** A missing run entirely
-    inside `[lo, hi)` -- one whose own edges are present, but which sits
-    close enough to `lo` or `hi` to still fall inside `savgol_filter`'s
-    edge-fit window -- reaches `preproc` unchanged and can still raise. The
-    caller must expect that and must not paper over it by fabricating
-    samples the recording never had.
+    **Measured out of suite** (a scratch venv with `remodnav`'s own
+    `scipy==1.13.1`, which never raises here regardless of trimming): this
+    window-wide trim, like the single-sample trim it replaces, changes
+    every `AL-RA`/`AL-MN` kappa by less than 0.001 relative to the
+    untrimmed computation on the same file. The trim's cost is a handful of
+    unlabelled samples per affected file -- not a change to the algorithm's
+    verdict on any sample it can actually see.
+
+    Still not a guarantee against every possible failure: if no `w`-wide
+    window is fully present anywhere in the recording, there is no `[i,
+    j+1)` to compute, and this returns all-unlabelled codes rather than
+    invent one. Any other exception from `preproc`/`__call__` is left to
+    propagate -- the caller must report it, not fabricate samples to make
+    it disappear.
     """
-    present = np.flatnonzero(~(np.isnan(xy_px[:, 0]) | np.isnan(xy_px[:, 1])))
+    bad = np.isnan(xy_px[:, 0]) | np.isnan(xy_px[:, 1])
     codes = np.zeros(n, dtype=int)
-    if present.size == 0:
+    m = bad.size
+    w = int(0.019 * fs)  # clf.py 841: savgol_length (0.019 s default) * sr, truncated
+    if w <= 0 or m < w:
         return codes
-    lo, hi = int(present[0]), int(present[-1]) + 1
+    counts = np.concatenate(([0], np.cumsum(bad.astype(np.int64))))
+    window_bad = counts[w:] - counts[:-w]  # window_bad[k] = bad[k:k + w].sum()
+    clean_starts = np.flatnonzero(window_bad == 0)
+    if clean_starts.size == 0:
+        return codes
+    lo, hi = int(clean_starts[0]), int(clean_starts[-1]) + w
     classifier = remodnav.EyegazeClassifier(px2deg=px2deg, sampling_rate=fs)
     data = np.rec.fromarrays([xy_px[lo:hi, 0].copy(), xy_px[lo:hi, 1].copy()], names=["x", "y"])
     for event in classifier(classifier.preproc(data)):
@@ -303,28 +325,40 @@ def andersson():
     **AL-RA, AL-MN, US-RA and US-MN are computed over one shared file set**
     -- exactly the files `_oracle` can produce labels for -- so ours and the
     oracle are compared on identical data, never on whichever subset
-    happened to survive each independently. `_oracle` trims a recording's
-    own missing leading/trailing samples before calling `remodnav` 1.1.2's
-    `preproc` (see its docstring); that succeeds on 32 of the 34 files. The
-    remaining 2 -- both `UL31` -- have an interior missing run close enough
-    to an edge to still fall inside `savgol_filter`'s edge-fit window even
-    after trimming, and `_oracle` still raises `ValueError` for them.
-    Rather than fabricate samples the recording never had, both are dropped
-    from this shared set (recorded below and printed).
+    happened to survive each independently. `_oracle`'s window-wide trim
+    (see its docstring) now succeeds on 33 of the 34 files -- up from 32
+    with round 1's single-sample trim. The remaining file,
+    `video/UL31_video_triple_jump_labelled_RA.mat`, still raises
+    `ValueError`: its 91-sample interior gap (`[1190,1269]` untouched;
+    `[2720,2810]`, 10 samples from the recording's own end) is longer than
+    `preproc`'s own `min_blink_duration` (`clf.py` 792-857, `int(0.02*fs)`
+    default, 10 samples at this file's 500 Hz), so `preproc` dilates it by
+    a further `dilate_nan` (`int(0.01*fs)`, 5 samples) on each side --
+    *inside* `preproc`, after `_oracle`'s own trim has already run and
+    using a mask `_oracle` cannot see -- before `savgol_filter` ever runs.
+    That extra, internal dilation shrinks this file's last clean run below
+    `savgol_filter`'s edge window (9 samples at 500 Hz), even though
+    `_oracle`'s own external, un-dilated check finds a clean run of exactly
+    that length. Rather than replicate `preproc`'s internal dilation logic
+    to predict this -- which would mean transcribing more of `clf.py`'s own
+    behaviour than the trim's edge-window contract needs -- or fabricate
+    samples this recording never had, this one file is dropped from the
+    shared set (recorded below and printed).
 
     **MN-RA is computed separately, over all 34 files.** It never touches
     `remodnav` -- nothing about it can fail the way `_oracle` can -- and the
     paper's own Table 3 MN-RA values are themselves computed over the full
-    file list. Confirmed empirically: dropping just the one `UL31` `dots`
-    file from MN-RA's own computation moves `(dots, Fix)` from 0.652 to
-    0.855 -- an order of magnitude past its own ±0.006 tolerance, on a pair
-    that has no oracle in it at all. Coupling MN-RA to AL's file set would
-    make it fail spuriously *because* the coder-only comparison was made to
-    depend on a third piece of software that has nothing to do with it --
-    the same category of bug the file's docstring already refuses for the
-    opposite reason (a crash in AL blocking MN-RA entirely, fixed in the
-    previous round). This keeps MN-RA on its own full corpus and unifies
-    only the pairs finding #2 was actually about: ours against the oracle.
+    file list. Confirmed empirically, for the one file the window-wide trim
+    still cannot save: dropping `UL31_video_triple_jump` from MN-RA's own
+    computation moves `(video, Fix)` from 0.6527 to 0.6374 -- past its own
+    ±0.006 tolerance (diff -0.0126), on a pair that has no oracle in it at
+    all. (Round 1 found the same effect, larger, from `UL31_trial1` in
+    `dots`; that file no longer needs excluding at all, since the
+    window-wide trim now succeeds on it.) Coupling MN-RA to AL's file set
+    would make it fail spuriously *because* the coder-only comparison was
+    made to depend on a third piece of software that has nothing to do
+    with it. This keeps MN-RA on its own full corpus and unifies only the
+    pairs finding #2 was actually about: ours against the oracle.
     """
     root = os.environ.get("WLPP_ANDERSSON_DATA")
     if not root:
@@ -369,9 +403,9 @@ def andersson():
     if oracle_failures:
         total = sum(len(v) for v in ANDERSSON_FILES.values())
         print(f"\n  remodnav 1.1.2's preproc still raised on {len(oracle_failures)}/{total} RA files "
-              "after edge-trimming (an interior missing run close enough to an edge to still fall "
-              "inside savgol_filter's edge-fit window); dropped from AL/US's shared set, not fabricated "
-              "(MN-RA is unaffected -- it is computed over all 34 files):")
+              "after the window-wide edge trim (preproc's own internal dilate_nan step widens an "
+              "interior gap past _oracle's own external, un-dilated check); dropped from AL/US's "
+              "shared set, not fabricated (MN-RA is unaffected -- it is computed over all 34 files):")
         for stim, fname, msg in oracle_failures:
             print(f"    {stim}/{fname}: {msg}")
     return kappas
