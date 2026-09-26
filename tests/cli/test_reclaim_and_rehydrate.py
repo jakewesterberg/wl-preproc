@@ -582,6 +582,28 @@ def test_rehydrate_refuses_when_there_is_no_room(landed, prefix, capsys):
     _nothing_restored(session_dir, key)
 
 
+def test_rehydrate_refuses_when_no_rig_digests_are_recorded(landed, prefix, capsys):
+    """Ruling, reviewer Minor 6: 'nothing to check a restore against' must
+    never read as proven -- the identical rule `verify.py::_expected_digests`
+    and `proof.py::prove_artifact` already apply at archive time and
+    preflight, now applied to rehydration's own post-preflight reference
+    digests too. `ArchiveVerification` rows are deleted directly rather than
+    reproduced through a session with no files: `_expected_digests` itself
+    already refuses to archive a session with no DONE marker entries, so an
+    empty `ArchiveVerification` set is only reachable by editing the
+    recorded rows, not by any real session shape."""
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhnodig", prefix)
+    (archive.ArchiveVerification & key).delete(prompt=False)
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "nothing to check a restore against" in capsys.readouterr().out
+    _nothing_restored(session_dir, key)
+
+
 def test_rehydrate_refuses_an_unrecorded_path(dj_conn, prefix, tmp_path, capsys):
     nowhere = tmp_path / "nowhere" / "2027-03-14_01"
 
@@ -603,6 +625,28 @@ def test_rehydrate_refuses_a_relative_recorded_path(landed, prefix, capsys):
 
     assert "is relative" in capsys.readouterr().out
     assert not os.path.lexists("rhrel-relative-root")
+
+
+def test_rehydrate_refuses_a_differently_cased_spelling_of_the_path(landed, prefix, capsys):
+    """MySQL's default server collation (utf8mb4_0900_ai_ci) matches
+    `session_dir` case- and accent-insensitively, so the query alone cannot
+    tell a differently spelled path from the recorded one -- confirmed
+    directly: `WHERE session_dir = '/SCRATCH/Root/2027-03-14_01'` returns the
+    stored row '/scratch/root/2027-03-14_01'. Session ids like
+    "2027-03-14_01" carry no letters, so upper-casing the NAME (the brief's
+    first-choice construction) changes nothing; swapcasing the PARENT path's
+    last component instead is guaranteed to differ in case from the recorded
+    path, since `landed`'s own scratch roots are named "scratch-<subject>",
+    all lowercase letters."""
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhcase", prefix)
+    variant = session_dir.parent.with_name(session_dir.parent.name.swapcase()) / session_dir.name
+    assert variant != session_dir
+    capsys.readouterr()
+
+    assert _rehydrate(variant, nas_root, prefix) == 1
+
+    assert "no landed session was recorded at" in capsys.readouterr().out
+    _nothing_restored(session_dir, key)
 
 
 def test_rehydrate_refuses_when_the_scratch_root_is_gone(landed, prefix, capsys):
@@ -650,6 +694,24 @@ def test_a_failure_part_way_through_leaves_nothing(landed, prefix):
 
     with patch.object(rehydrate_module, "_write", flaky):
         with pytest.raises(OSError, match="simulated write failure"):
+            _rehydrate(session_dir, nas_root, prefix)
+
+    _nothing_restored(session_dir, key)
+
+
+def test_a_failed_rename_leaves_no_rehydration_record(landed, prefix):
+    """Pins the one-transaction rule (2026-09-26 rehydration design, section
+    5): the `ScratchRehydration` insert and the rename that puts the session
+    back at its recorded path succeed or fail together, exactly like
+    `free_session`'s own reclaim-side transaction
+    (`test_a_failed_rename_rolls_back_the_record` above)."""
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhrenm2", prefix)
+
+    with patch(
+        "wl_preproc.archive.rehydrate.os.rename",
+        side_effect=OSError("simulated rename failure"),
+    ):
+        with pytest.raises(OSError):
             _rehydrate(session_dir, nas_root, prefix)
 
     _nothing_restored(session_dir, key)

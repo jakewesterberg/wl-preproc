@@ -71,6 +71,10 @@ def session_for_path(session_path: Path, *, prefix: str = DEFAULT_PREFIX) -> dic
 
     ingest.activate(prefix=prefix)
     rows = (ingest.Ingestion & {"session_dir": str(session_path)}).to_dicts()
+    # Exact, in Python: MySQL's `=` under the server's default collation
+    # (utf8mb4_0900_ai_ci) ignores case and accents, and a restore to a
+    # differently spelled path is not a restore to the recorded one.
+    rows = [row for row in rows if row["session_dir"] == str(session_path)]
     if not rows:
         raise Refused(
             f"no landed session was recorded at {session_path}; "
@@ -210,10 +214,21 @@ def rehydrate_session(
             f"restoring {need} bytes would leave {session_path.parent} below the scratch floor"
         )
     expected = recorded_digests(key, prefix=prefix)
+    if not expected:
+        raise Refused(
+            "no recorded rig digests for this session; nothing to check a "
+            "restore against is never proven"
+        )
 
     staging = staging_dir(session_path, REHYDRATING)
     target = staging / session_path.name
-    target.mkdir(parents=True)
+    # Two separate mkdirs, not `target.mkdir(parents=True)`: `parents=True`
+    # would silently recreate `session_path.parent` if it vanished between
+    # the `is_dir()` check above and here, exactly the thing that check
+    # exists to refuse rather than paper over (the same pattern
+    # `scratch.py::free_session` uses for its own staging directory).
+    staging.mkdir()
+    target.mkdir()
     restored = False
     try:
         written: dict[str, str] = {}
