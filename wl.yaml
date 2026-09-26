@@ -99,8 +99,8 @@ status:
     oracle) and Bayesian microsaccade detection, which matter here as SACCADE
     detectors because the requester has said glissades are peripheral;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
-    `eye/detect/labels.py` -- DONE 2026-09-26, one definition now; (4) measuring which of the 225/337 unmatched
-    saccades are real.
+    `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
+    (4) measuring which of the 225/337 unmatched saccades are real.
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised

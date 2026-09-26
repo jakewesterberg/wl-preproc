@@ -291,7 +291,9 @@ def test_the_null_fails_the_glissade_rate_check():
 #: file -- which imports nothing from `wl_preproc.schema`, because the 3.13
 #: cross-check runs `tests/eye` with no DataJoint -- can use the one definition
 #: the conjunction uses. It used to carry its own copy, with nothing able to
-#: catch the two drifting apart.
+#: catch the two drifting apart. One consequence: an unmapped label now raises
+#: the production `UnknownLabelKind` (a `ValueError`), not the copy's own
+#: `AssertionError` -- nothing in this file relies on either.
 _kind_of = kind_of
 
 

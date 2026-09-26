@@ -2337,7 +2337,7 @@ def test_a_detector_declaring_no_saccadic_label_raises_only_if_invoked():
     `_conjunction_label`'s own comment above this branch makes, for ANY
     detector reached through `EyeDetection.make()`'s real wiring:
     `_conjunction_runs` groups runs by each run's OWN label
-    (`_kind_of`), never by `detector.vocabulary`, and
+    (`labels.py::kind_of`), never by `detector.vocabulary`, and
     `registry.Detector.detect` refuses a run outside its detector's declared
     vocabulary -- so a detector with no saccadic label in its vocabulary can
     never produce a run for `_conjunction_runs` to route to this callable.

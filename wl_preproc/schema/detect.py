@@ -667,9 +667,10 @@ class EyeDetection(dj.Computed):
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
         stated nowhere else: no two different kinds ever share a label.**
-        `labels.py::KIND_OF` maps `saccade`/`microsaccade` to `"saccadic"` and every
-        other kind to its own single label (`pso` -> `pso`, `pursuit` ->
-        `pursuit`, `drift` -> `drift`), so the label sets the four kinds can
+        `labels.py::KIND_OF` maps `saccade`/`microsaccade` to
+        `"saccadic"` and every other kind to its own single label (`pso` ->
+        `pso`, `pursuit` -> `pursuit`, `drift` -> `drift`), so the label sets
+        the four kinds can
         produce -- `{saccade, microsaccade}`, `{pso}`, `{pursuit}`,
         `{drift}` -- are pairwise disjoint. Two runs from DIFFERENT
         kind-groups can therefore sit adjacent in `_conjunction_runs`'s
@@ -1064,10 +1065,10 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     (`_conjunction_runs`, design spec `2026-09-05-conjunction-shape-design.
     md`) removes the reason it existed.** Each conjunction kind now labels
     itself: `pso`, `pursuit` and `drift` each get their OWN kind, labelled
-    by neither eye's opinion nor by `classify` (`labels.py::KIND_OF`), and `fixation`
-    is not intersected at all, being the synthesized background rather than
-    a detector's finding (`labels.py::NOT_INTERSECTED`). None of the four blocked
-    detectors needs THIS function to say anything about `pso`, `pursuit`,
+    by neither eye's opinion nor by `classify` (`labels.py::KIND_OF`), and
+    `fixation` is not intersected at all, being the synthesized background
+    rather than a detector's finding (`labels.py::NOT_INTERSECTED`). None of
+    the four blocked detectors needs THIS function to say anything about `pso`, `pursuit`,
     `drift` or `fixation` any more -- only about the SACCADIC SLICE of its
     vocabulary, which is what `_AMPLITUDE_DERIVED_VOCABULARY`'s own comment
     and the code below this docstring now compute.
