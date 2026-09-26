@@ -274,10 +274,13 @@ design. Cost if wrong: a reviewer flags it.
      `_fix_or_pursuit`, plus `get_adaptive_saccade_velocity_velthresh`,
      `find_peaks`, `find_movement_onsetidx` and `find_movement_offsetidx`.
    - **What was updated:** `wl.yaml`'s `remodnav` `why` now says so.
-   - **What was not:** `pyproject.toml`'s comment above the `dev` extra
-     still gives the old reason. It is outside this task's files and is left
-     for the whole-branch review.
-   - **Still open:** whether to pin 1.1.2.
+   - **Resolved 2026-09-27, in the final-review fix wave:** `remodnav` is
+     pinned `==1.1.2` in `pyproject.toml`'s `dev` extra and in `wl.yaml`,
+     and both now give the reason.
+
+   *Until 2026-09-27 this said `pyproject.toml`'s comment still gave the
+   old reason and that whether to pin 1.1.2 was still open; true when
+   written.*
 
 ## What has NOT been measured
 
@@ -297,17 +300,23 @@ design. Cost if wrong: a reviewer flags it.
 
 ## Deferred, and NOT done
 
-These are for the whole-branch review. None is fixed on this branch.
+These are for the whole-branch review. The first two were fixed on this
+branch on 2026-09-27, in the final-review fix wave; the rest were not.
 
-- **Only the position mask is pinned at the `detect_remodnav` level.** The
-  primary-speed and candidate masks are not pinned: dropping either changes
-  the runs, and no test catches it. The Task 5 reviewer **recommended fixing
-  this before merge**, with an invariance test that perturbs gaze and
-  velocity at withheld samples and asserts identical output.
-- **`remodnav.py`'s `_candidate_speed` docstring carries a one-trace
-  "88 samples" figure.** The review measured 48 on another trace, and CI
-  runs scipy 1.18.1. The docstring should say "well past its own window" and
-  leave the number to the test's docstring.
+*Until 2026-09-27 this said none was fixed on this branch; true when
+written.*
+
+- **DONE 2026-09-27: only the position mask was pinned at the
+  `detect_remodnav` level.** The primary-speed and candidate masks were not
+  pinned: dropping either changed the runs, and no test caught it. The
+  Task 5 reviewer **recommended fixing this before merge**, with an
+  invariance test that perturbs gaze and velocity at withheld samples and
+  asserts identical output. `test_nothing_the_mask_withholds_changes_a_single_run`
+  now does, and each mask's removal fails it.
+- **DONE 2026-09-27: `remodnav.py`'s `_candidate_speed` docstring carried a
+  one-trace "88 samples" figure.** The review measured 48 on another trace,
+  and CI runs scipy 1.18.1. The docstring now says "well past its own
+  window", and the test's docstring keeps both numbers.
 - **Unused imports.** Task 6 flagged `math` and `Path` as unused in
   `test_remodnav_validation.py`. Task 7's harness now uses both, and a crude
   scan for Task 8 found no other unused import in the REMoDNaV files. Left
@@ -365,7 +374,9 @@ These are for the whole-branch review. None is fixed on this branch.
    The method has no maximum saccade duration to set, so any remedy — a
    second paramset, or a duration cap the method lacks — is a design
    decision, not tuning. Nothing is tuned now.
-5. **Whether to pin `remodnav` 1.1.2** as the dev oracle (finding 7).
+5. **DONE 2026-09-27: `remodnav` is pinned `==1.1.2`** as the dev oracle
+   (finding 7). *Until then this item asked whether to pin it; true when
+   written.*
 
 ## Read these, in this order
 

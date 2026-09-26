@@ -178,19 +178,38 @@ dependencies = [
 # BMD's own MATLAB references, which carry no licence and cannot fill this
 # role -- so it needs no vendoring and no credential.
 #
-# `>=1.1` floors at the first 1.x release; confirmed against PyPI's own
-# release metadata (0.1, 0.2, 0.3, 0.4, 1.0, 1.1, 1.1.1, 1.1.2 as of
-# 2026-09-06) rather than assumed. No ceiling: this repository calls only
-# `remodnav.EyegazeClassifier`'s constructor, `.preproc()` and `.__call__()`,
-# all present since at least 1.1, and the test that uses it tolerates
-# disagreement by design (it is an oracle, not a specification), so a future
-# 1.x or 2.x release changing its own thresholds is not this repository's
-# concern to pin against pre-emptively.
+# Since 2026-09-26 it is also REMoDNaV's oracle (design spec
+# `2026-09-26-remodnav-design.md` section 5), and that use needs one exact
+# release. Pinned `==1.1.2`, the release all of it was written and
+# certified against, because three things depend on that version:
+# - the tests call its private `EyegazeClassifier._detect_saccades` and
+#   `._fix_or_pursuit`, its `get_adaptive_saccade_velocity_velthresh`, and
+#   the module-level `find_peaks`, `find_movement_onsetidx` and
+#   `find_movement_offsetidx`, and require exact equality with them;
+# - `test_remodnav_validation.py::EXPECTED_ORACLE_FAILURES` depends on
+#   1.1.2's `preproc` crashing on exactly one diagnosed file, with that
+#   exact message;
+# - the Table 3 reproduction is certified for 1.1.2 only.
+# Every `clf.py` line cited in `eye/detect/remodnav.py` and its tests is a
+# 1.1.2 line. CI resolves this extra fresh, so under a range a new upstream
+# release would turn an unrelated PR red. Changing the oracle's version is a
+# deliberate re-validation, not a dependency bump.
+#
+# The pin does not protect against numpy removing `np.core`: `clf.py` 915
+# calls `np.core.records.fromarrays`, deprecated today.
+#
+# The Nystrom-Holmqvist check still calls only the constructor, `.preproc()`
+# and `.__call__()`, and tolerates disagreement by design (it is an oracle,
+# not a specification). PyPI's own release metadata listed 0.1, 0.2, 0.3,
+# 0.4, 1.0, 1.1, 1.1.1 and 1.1.2 on 2026-09-06.
+#
+# *Until 2026-09-27 this was `>=1.1` with no ceiling, reasoned from that
+# Nystrom-Holmqvist check alone; true when written.*
 dev = [
     "pytest>=8.0",
     "spikeinterface>=0.101",
     "testcontainers[mysql]>=4.15,<5",
-    "remodnav>=1.1",
+    "remodnav==1.1.2",
 ]
 
 [project.scripts]

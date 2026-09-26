@@ -428,7 +428,7 @@ third_party:
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
   - name: remodnav
-    constraint: ">=1.1"
+    constraint: "==1.1.2"
     why: >-
       The test-time ORACLE tests/eye/detect/test_nystrom_holmqvist_
       validation.py::test_remodnav_finds_a_comparable_number_of_saccades
@@ -437,9 +437,8 @@ third_party:
       and on PyPI, unlike Otero-Millan's and BMD's own MATLAB references,
       which carry no licence and cannot fill this role -- pyproject.toml's
       dev extra only, same bucket as spikeinterface above, never a runtime
-      dependency and never shipped. >=1.1 floors at the first 1.x release,
-      confirmed against PyPI's own release metadata (0.1, 0.2, 0.3, 0.4,
-      1.0, 1.1, 1.1.1, 1.1.2 as of 2026-09-06) rather than assumed.
+      dependency and never shipped. PyPI's own release metadata listed 0.1,
+      0.2, 0.3, 0.4, 1.0, 1.1, 1.1.1 and 1.1.2 on 2026-09-06.
 
       Since 2026-09-26 it is also REMoDNaV's own oracle, in three test
       modules (design spec 2026-09-26-remodnav-design.md section 5):
@@ -456,11 +455,27 @@ third_party:
 
       All of it was written against the installed 1.1.2.
 
-      No ceiling is set, but the old reason for having none no longer
-      holds. A release that changes any of that behaviour fails those
-      tests, in CI as well, where this range is resolved fresh. Whether to
-      pin 1.1.2 is an open decision, recorded in
-      docs/handoffs/2026-09-26-remodnav-built.md.
+      Pinned ==1.1.2 because three things depend on that exact release:
+      - the tests call its private _detect_saccades and _fix_or_pursuit and
+        require exact equality with them;
+      - test_remodnav_validation.py's EXPECTED_ORACLE_FAILURES depends on
+        1.1.2's preproc crashing on exactly one diagnosed file, with that
+        exact message;
+      - the reproduction of the paper's Table 3 is certified for 1.1.2
+        only.
+      Every clf.py line cited in eye/detect/remodnav.py and its tests is a
+      1.1.2 line as well. CI resolves the dev extra fresh, so under a range
+      a new upstream release would turn an unrelated PR red rather than
+      surface here. Changing the oracle's version is therefore a deliberate
+      re-validation, not a dependency bump: rerun the fidelity check and
+      both gated validations, and re-read every clf.py citation.
+
+      The pin does not protect against numpy removing np.core. clf.py:915
+      calls np.core.records.fromarrays, which numpy already deprecates, so
+      a numpy release that removes it breaks the oracle even under this pin.
+
+      *Until 2026-09-27 the constraint was >=1.1 with no ceiling, and this
+      said whether to pin 1.1.2 was an open decision; true when written.*
 
       *Until 2026-09-26 this said no ceiling was needed because the one
       test using remodnav tolerates disagreement and calls only the
