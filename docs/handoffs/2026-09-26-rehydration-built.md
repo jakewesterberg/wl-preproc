@@ -12,7 +12,10 @@ the residual the fix wave's re-review reproduced still open — `timing_resolved
 requires only a `TimingProvenance` row, so a failed or crashed per-system
 `SystemTimebase` key on a force-freed session can later write a permanent
 `no_recording`. Where this document says a session is never freed before its
-timebase stages ran on real files, read it as overclaiming until that is closed.*
+timebase stages ran on real files, read it as overclaiming until that is closed.
+Closed the same day by `fix/timing-resolved-every-system`: `timing_resolved`
+now also requires a `SystemTimebase` row for every `core.AcquisitionSystem`,
+and the wording holds.*
 
 ## The one-paragraph version
 
@@ -164,7 +167,8 @@ finding against the code; the controller's rulings are in the ledger's
 - **Critical: a seventh condition, `timing_resolved`, of the safety kind**
   (`archive/reclaim.py::reclaim_conditions`, directly after
   `every_file_verified`). It passes exactly when a `TimingProvenance` row
-  exists. Without it, a forced reclaim before the timebase stages had run
+  exists *(corrected after merge: and a `SystemTimebase` row exists for every
+  `core.AcquisitionSystem` — see the correction at the top)*. Without it, a forced reclaim before the timebase stages had run
   let them compute on the absent directory: `timebase/extract.py::
   find_recordings` returns `[]` for a missing folder by design ("device
   absence never blocks"), so `SystemTimebase` would record

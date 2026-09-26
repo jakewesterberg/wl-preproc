@@ -30,11 +30,13 @@ requester chose to merge the same day; true when written.*
 > **Otherwise, pick up in this order:**
 >
 > 1. **Rehydration is BUILT, verified and MERGED as `5cd0c79`** (2026-09-26,
->    from `spec/rehydration`, merged with one known residual: `timing_resolved`
->    requires only a `TimingProvenance` row, so a failed or crashed per-system
->    `SystemTimebase` key on a force-freed session can later write a permanent
->    `no_recording` — being closed next; the "never freed before its timebase
->    stages ran" wording below overclaims until it is;
+>    from `spec/rehydration`; the one residual it merged with — a
+>    `TimingProvenance` row alone did not prove every system's clock fit had
+>    landed, so a failed or crashed per-system `SystemTimebase` key on a
+>    force-freed session could later write a permanent `no_recording` — is
+>    closed by `fix/timing-resolved-every-system`, which makes
+>    `timing_resolved` also require a `SystemTimebase` row for every
+>    `core.AcquisitionSystem`;
 >    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
 >    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught; after the
 >    whole-branch review's fix wave, 1471 passed/11 skipped/1 deselected/1

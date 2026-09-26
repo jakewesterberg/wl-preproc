@@ -464,6 +464,79 @@ def test_a_force_does_not_free_a_session_whose_timing_has_not_run(session, prefi
     assert reclaimable(predicate) is False
 
 
+def _system(key, system: str, *, fitted: bool):
+    """An `AcquisitionSystem` row and, when `fitted`, the `SystemTimebase` row
+    its clock-fit stage writes. `fitted=False` is the state a failed or
+    crashed `SystemTimebase` key leaves: the device is known, its fit never
+    landed. A direct insert into the `dj.Computed` table for the reason
+    `_timing`'s docstring gives. `fit_status='no_recording'` because it is the
+    truth for a factory session, which has no files -- and because
+    `core.Segment.key_source` never reads such a row, a later module's
+    `daemon.run_once()` is not handed a Segment key to fail on (this file's
+    sessions have no `Ingestion` row to read a directory from)."""
+    from wl_preproc.schema import core, timebase
+
+    core.AcquisitionSystem.insert1({**key, "system": system})
+    if fitted:
+        timebase.SystemTimebase.insert1(
+            {
+                **key,
+                "system": system,
+                "fit_status": "no_recording",
+                "time_source": "barcode",
+                "n_barcodes_decoded": 0,
+                "n_barcodes_matched": 0,
+            },
+            allow_direct_insert=True,
+        )
+
+
+def test_a_system_without_a_clock_fit_blocks_even_with_a_tier(session, prefix):
+    """The residual the fix wave's re-review reproduced end to end.
+    `TimingProvenance.key_source` is `Session & Ingestion`, so its row -- tier
+    D -- is written even when one system's `SystemTimebase` key errored or its
+    worker crashed. A routine force clears `not_tier_d`; freed then, the
+    leftover key runs later (a job error cleared by hand, or
+    `daemon.reap_stale_jobs` re-pending a crashed reservation) on an absent
+    directory and records `no_recording` for a device that recorded --
+    permanent, surviving rehydration. So a `TimingProvenance` row alone does
+    not resolve timing; every system's clock fit must have landed."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmsys")
+    _archive_and_verify(key, n_files=1)
+    _timing(key, tier="D")
+    _system(key, "syncbox", fitted=True)
+    _system(key, "bcam", fitted=False)
+    _hold(key, verdict="force")
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    timing = _condition(predicate, "timing_resolved")
+    assert timing.passed is False
+    assert "bcam" in timing.detail
+    assert "syncbox" not in timing.detail
+    assert blocking(predicate) == ["timing_resolved"]
+    assert reclaimable(predicate) is False
+
+
+def test_every_system_fitted_resolves_timing(session, prefix):
+    """The other side: a `TimingProvenance` row plus a clock fit for every
+    system the session has -- fitted or not, since `SystemTimebase` writes a
+    row for every attempted system -- resolves timing."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmsyf")
+    _archive_and_verify(key, n_files=1)
+    _timing(key, tier="A")
+    _system(key, "syncbox", fitted=True)
+    _system(key, "bcam", fitted=True)
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert _condition(predicate, "timing_resolved").passed is True
+
+
 def test_zero_verifications_do_not_vacuously_pass_zero_expected_files(session, prefix):
     """`len(matched) == expected_file_count` alone would pass a session with
     NO archive activity whatsoever whenever a caller happens to pass

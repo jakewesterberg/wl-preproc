@@ -543,6 +543,21 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 >    and its bytes (`archive/verify.py::iter_reconstruct`). Still never a
 >    whole file.
 
+> **Amended 2026-09-26 again, after merge, by `fix/timing-resolved-every-system`.**
+> Item 4 was not enough, and the fix wave's own re-review reproduced why:
+> `TimingProvenance.key_source` is `Session & Ingestion`, so its row — tier D
+> — is written even when one system's `SystemTimebase` key failed or its
+> worker crashed. A force overrides `not_tier_d`, the session is freed, and
+> the leftover key runs later (a job error cleared by hand, or
+> `daemon.reap_stale_jobs` re-pending a crashed reservation) on the absent
+> directory, recording `no_recording` for a device that recorded. So
+> `timing_resolved` now also requires a `SystemTimebase` row for every
+> `core.AcquisitionSystem` of the session — `SystemTimebase` writes one for
+> every attempted system, fitted or not, so a missing row is exactly a fit
+> that failed, crashed or has not run. With that, item 3's first bullet
+> ("a session is never freed before its timebase stages ran on its real
+> files") holds.
+
 ## 12. Two findings outside this scope
 
 **Archiving a real session will run out of memory.** `store.write_store` reads

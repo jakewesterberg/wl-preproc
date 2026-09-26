@@ -18,7 +18,9 @@ then does not merely cost a rehydration: the timebase stages treat an absent
 directory as an absent device and would record the session as having no
 recordings, a permanent false row -- data corrupted, which section 2's definition
 of judgement excludes (the rehydration spec's amendment block, added by the
-whole-branch review).
+whole-branch review). "Computed" means every system's clock fit has landed, not
+merely the session-level `TimingProvenance` row, which is written even when one
+system's fit failed (the fix wave's re-review, reproduced end to end).
 
 **Incomplete today, and it says so.** The predicate can see only timing quality
 of what a session produced: tier says nothing about whether a sort is good,
@@ -92,9 +94,10 @@ def reclaim_conditions(
     time, because that very fix added lines above the target. A symbol
     survives edits above it; a line number cannot.)
     """
-    from wl_preproc.schema import archive, timebase
+    from wl_preproc.schema import archive, core, timebase
 
     archive.activate(prefix=prefix)
+    # Activates `core` too (`timebase.activate` -> `core.activate`).
     timebase.activate(prefix=prefix)
 
     artifact = archive.ArchiveArtifact & session_key
@@ -113,6 +116,13 @@ def reclaim_conditions(
     tier_rows = (timebase.TimingProvenance & session_key).to_arrays("tier")
     holds = (archive.ReclamationHold & session_key).to_arrays(
         "verdict", order_by="held_at DESC", limit=1
+    )
+    # Systems whose clock fit never landed: `SystemTimebase` writes a row for
+    # every attempted system, fitted or not (`schema/timebase.py::
+    # SystemTimebase.make`), so a system missing here is one whose key errored,
+    # crashed, or has not run yet.
+    unfitted = sorted(
+        ((core.AcquisitionSystem & session_key) - timebase.SystemTimebase).to_arrays("system")
     )
 
     forced = bool(len(holds)) and bool(holds[0] == "force")
@@ -134,19 +144,32 @@ def reclaim_conditions(
             # ("device absence never blocks"), so a timebase stage run on a
             # freed session writes `SystemTimebase.fit_status='no_recording'`
             # and `TimingProvenance.tier='D'` -- permanent, silent, and still
-            # there after rehydration. Requiring the `TimingProvenance` row
-            # (the daemon's LAST stage, `daemon.py::_computed_tables`) means
-            # a session is never freed before those stages ran on its real
-            # files. Same query as `not_tier_d` below, which stays judgement.
+            # there after rehydration. So timing is resolved only when the
+            # `TimingProvenance` row exists (the daemon's LAST stage,
+            # `daemon.py::_computed_tables`) AND every system's clock fit has
+            # landed: `TimingProvenance.key_source` is `Session & Ingestion`,
+            # so its row -- tier D -- is written even when one system's
+            # `SystemTimebase` key failed or crashed, and that leftover key
+            # would run later (a job error cleared by hand, or
+            # `daemon.reap_stale_jobs` re-pending a crashed reservation) on
+            # the absent directory. The tier half is the same query as
+            # `not_tier_d` below, which stays judgement.
             Condition(
                 "timing_resolved",
-                len(tier_rows) == 1,
+                len(tier_rows) == 1 and not unfitted,
                 ""
-                if len(tier_rows) == 1
+                if len(tier_rows) == 1 and not unfitted
                 else (
                     "no tier resolved: the timing stages have not run on this "
                     "session's files, and freeing it now would let them compute "
                     "on an absent directory"
+                    if len(tier_rows) != 1
+                    else (
+                        f"no clock fit for {', '.join(unfitted)}: its timing "
+                        "stage failed or has not run, and running it after the "
+                        "session is freed would record no recording for a "
+                        "device that recorded"
+                    )
                 ),
                 overridable=False,
             ),
