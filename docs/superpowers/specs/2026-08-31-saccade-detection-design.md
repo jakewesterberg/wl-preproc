@@ -270,6 +270,11 @@ seven, so a disagreement is never a disagreement about measurement.
 | Bayesian microsaccade detection | microsaccade / drift | reimplemented |
 | U'n'Eye | saccade | **vendored** (§8) |
 
+> *Amended 2026-09-26: REMoDNaV is registered — spec
+> `2026-09-26-remodnav-design.md`. Its fidelity check proves it labels every
+> sample as `remodnav` 1.1.2 does, given that package's own signals, on five
+> synthetic traces (500 Hz seeds 1–3, 1000 Hz seeds 4–5).*
+
 > **Corrected 2026-09-01, by reading the reference implementation.** This
 > table gave Otero-Millan `microsaccade` alone and called its source "ported
 > from a BSD-3 reference". Both were wrong, and the download settles it.
