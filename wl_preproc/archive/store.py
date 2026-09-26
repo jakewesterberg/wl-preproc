@@ -40,6 +40,11 @@ _CHUNK_SAMPLES = 1 << 20
 # `amplifier.dat` (2026-09-26 rehydration design, section 12).
 _VERBATIM_CHUNK_BYTES = 1 << 24
 
+# No stored chunk larger than this. Blosc refuses a buffer over 2 GiB, and a
+# stream chunk is rows x channels x 2 bytes: at 2**20 rows that limit is met
+# at 1024 channels. Neuropixels' 385 channels stay at the full 2**20 rows.
+_MAX_CHUNK_BYTES = 1 << 30
+
 
 @dataclass(frozen=True, slots=True)
 class StoreResult:
@@ -97,12 +102,42 @@ def manifest_digest(store_dir: Path, exclude: frozenset[str] = frozenset()) -> s
     return digest.hexdigest()
 
 
+def _stream_chunk_rows(n_channels: int) -> int:
+    """Rows per stored chunk: `_CHUNK_SAMPLES`, fewer only when a chunk that
+    tall would exceed `_MAX_CHUNK_BYTES`."""
+    return min(_CHUNK_SAMPLES, max(1, _MAX_CHUNK_BYTES // (n_channels * SAMPLE_DTYPE.itemsize)))
+
+
+def _read_exactly(handle, view: memoryview, path: Path) -> None:
+    """Fill `view` from `handle`, or raise: a file that ends early shrank
+    after it was sized, and storing the rest as the array's fill value would
+    record bytes it never had."""
+    got = 0
+    while got < view.nbytes:
+        n = handle.readinto(view[got:])
+        if not n:
+            raise OSError(f"{path} shrank while it was being archived")
+        got += n
+
+
+def _refuse_growth(handle, path: Path) -> None:
+    if handle.read(1):
+        raise OSError(f"{path} grew while it was being archived")
+
+
 def _write_stream(arrays, stream, compressor) -> None:
-    """One bulk stream, written one stored chunk of rows at a time from a
-    read-only memory map -- never the whole file in memory, which for a
-    two-hour Neuropixels 1.0 AP stream is ~166 GB. The chunk shape is the one
-    this writer always used; only how the bytes get there changed."""
-    rows = max(1, min(_CHUNK_SAMPLES, stream.n_samples))
+    """One bulk stream, read into one reused chunk-sized buffer and written a
+    stored chunk of rows at a time -- never the whole file, which for a
+    two-hour Neuropixels 1.0 AP stream is ~166 GB.
+
+    A plain read, not a memory map, and on purpose (found in review): a
+    memory-mapped read that faults -- an I/O error, or the file shrinking --
+    arrives as SIGBUS and kills the whole daemon past its per-session
+    `except Exception`, where a read raises `OSError`; and every mapped page
+    stays resident, so the process grew to the size of the file. The chunk
+    shape is the one this writer always used, except that a very wide stream
+    gets fewer rows (`_stream_chunk_rows`)."""
+    rows = max(1, min(_stream_chunk_rows(stream.n_channels), stream.n_samples))
     array = arrays.create_dataset(
         stream.path.name,
         shape=(stream.n_samples, stream.n_channels),
@@ -110,41 +145,43 @@ def _write_stream(arrays, stream, compressor) -> None:
         dtype=SAMPLE_DTYPE,
         compressor=compressor,
     )
-    if stream.n_samples == 0:
-        # `np.memmap` refuses an empty file; an empty array needs no chunks.
-        return
-    source = np.memmap(
-        stream.path,
-        dtype=SAMPLE_DTYPE,
-        mode="r",
-        shape=(stream.n_samples, stream.n_channels),
-    )
-    try:
+    # Reused for every chunk: zarr compresses and stores the block before
+    # the assignment returns.
+    buffer = np.empty((rows, stream.n_channels), dtype=SAMPLE_DTYPE)
+    with stream.path.open("rb", buffering=0) as handle:
         for start in range(0, stream.n_samples, rows):
-            array[start : start + rows] = source[start : start + rows]
-    finally:
-        del source
+            block = buffer[: min(rows, stream.n_samples - start)]
+            _read_exactly(handle, memoryview(block).cast("B"), stream.path)
+            array[start : start + len(block)] = block
+        _refuse_growth(handle, stream.path)
 
 
 def _write_verbatim(verbatim, path: Path, relative: str, compressor) -> None:
-    """One verbatim file as a 1-D byte array, read and written one
-    `_VERBATIM_CHUNK_BYTES` block at a time."""
+    """One verbatim file as a 1-D byte array, read into one reused
+    `_VERBATIM_CHUNK_BYTES` buffer and written a block at a time. The same
+    exact-length rule as `_write_stream`: a file that shrinks or grows while
+    it is being written is an error, never a padded or truncated copy."""
     size = path.stat().st_size
     step = max(1, min(_VERBATIM_CHUNK_BYTES, size))
     array = verbatim.create_dataset(
         relative, shape=(size,), chunks=(step,), dtype=np.uint8, compressor=compressor
     )
-    with path.open("rb") as handle:
+    buffer = np.empty(step, dtype=np.uint8)
+    with path.open("rb", buffering=0) as handle:
         for start in range(0, size, step):
-            block = handle.read(step)
-            array[start : start + len(block)] = np.frombuffer(block, dtype=np.uint8)
+            block = buffer[: min(step, size - start)]
+            _read_exactly(handle, memoryview(block), path)
+            array[start : start + len(block)] = block
+        _refuse_growth(handle, path)
 
 
 def write_store(
     session_dir: Path, out_dir: Path, codec_name: str = "zstd", clevel: int = 5
 ) -> StoreResult:
     """Compress `session_dir` into a Zarr store under `out_dir`, one stored
-    chunk at a time: peak memory is a few chunks, never a whole file
+    chunk at a time through one reused buffer per file: peak memory, heap and
+    resident, is a few chunk sizes -- about 2-3 GB for a 385-channel
+    Neuropixels stream at 2**20-row chunks -- never a whole file
     (`_write_stream`, `_write_verbatim`)."""
     store_path = out_dir / f"{session_dir.name}.zarr"
     out_dir.mkdir(parents=True, exist_ok=True)

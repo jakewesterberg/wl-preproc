@@ -98,13 +98,20 @@ def test_writing_a_store_never_holds_a_whole_file(tmp_path, monkeypatch):
     """A two-hour Neuropixels 1.0 AP file is ~166 GB. Chunk sizes are shrunk
     here so a ~20 MB stream and a ~20 MB verbatim file each span hundreds of
     chunks; the Python-heap peak while writing must stay within a few chunks,
-    which reading either file whole (`np.fromfile`, `read_bytes`) cannot."""
+    which reading either file whole (`np.fromfile`, `read_bytes`) cannot.
+
+    `manifest_digest` is stubbed out because its own 4 MiB read buffer
+    (`contracts/done.py::blake3_file`) would otherwise be most of the peak,
+    and a change to that unrelated buffer should not fail this test. What is
+    resident is not visible to `tracemalloc`; the writer reads through one
+    reused buffer rather than a memory map so that it is bounded too."""
     import tracemalloc
 
     from wl_preproc.archive import store
 
     monkeypatch.setattr(store, "_CHUNK_SAMPLES", 4096)
-    monkeypatch.setattr(store, "_VERBATIM_CHUNK_BYTES", 64 * 1024, raising=False)
+    monkeypatch.setattr(store, "_VERBATIM_CHUNK_BYTES", 64 * 1024)
+    monkeypatch.setattr(store, "manifest_digest", lambda path, exclude=frozenset(): "0" * 64)
     session = _big_session(
         tmp_path, n_samples=2_500_000, n_channels=4, verbatim_bytes=20_000_000
     )
@@ -116,7 +123,84 @@ def test_writing_a_store_never_holds_a_whole_file(tmp_path, monkeypatch):
     finally:
         tracemalloc.stop()
 
-    assert peak < 8 * _MIB, f"peak {peak / _MIB:.1f} MiB while writing 2 x ~20 MB files"
+    assert peak < 2 * _MIB, f"peak {peak / _MIB:.1f} MiB while writing 2 x ~20 MB files"
+
+
+def _stat_lying_about(monkeypatch, name, delta):
+    """Make `Path.stat()` report `name` as `delta` bytes larger than it is --
+    the state a file is in when it shrinks (delta > 0) or grows (delta < 0)
+    between the writer sizing it and reading it."""
+    import os
+    from pathlib import Path
+
+    real_stat = Path.stat
+
+    def stat(self, *args, **kwargs):
+        st = real_stat(self, *args, **kwargs)
+        if self.name != name:
+            return st
+        fields = list(st)
+        fields[6] = st.st_size + delta  # st_size
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(Path, "stat", stat)
+
+
+def test_a_verbatim_file_that_shrinks_mid_write_is_an_error_not_a_zero_filled_tail(
+    tmp_path, monkeypatch
+):
+    """Found in review: a file that shrank after being sized was stored with
+    its missing tail read back as zeros, silently -- bytes the file never had
+    -- and a file no DONE marker names is never checked against a rig digest."""
+    import pytest
+
+    session = tmp_path / "s"
+    session.mkdir()
+    (session / "notes.txt").write_bytes(b"x" * 300_001)
+    _stat_lying_about(monkeypatch, "notes.txt", +1000)
+
+    with pytest.raises(OSError, match="shrank"):
+        write_store(session, tmp_path / "out")
+
+
+def test_a_verbatim_file_that_grows_mid_write_is_an_error(tmp_path, monkeypatch):
+    import pytest
+
+    session = tmp_path / "s"
+    session.mkdir()
+    (session / "notes.txt").write_bytes(b"x" * 300_001)
+    _stat_lying_about(monkeypatch, "notes.txt", -1000)
+
+    with pytest.raises(OSError, match="grew"):
+        write_store(session, tmp_path / "out")
+
+
+def test_a_stream_that_shrinks_mid_write_is_an_error_not_a_crash(tmp_path, monkeypatch):
+    """Found in review: with a memory map, a stream that shrank (or an I/O
+    fault) killed the whole process with SIGBUS, past the daemon's
+    per-session `except Exception`. Reading through a buffer makes it an
+    ordinary `OSError`, caught per session."""
+    import pytest
+
+    session = _big_session(tmp_path, n_samples=10_000, n_channels=4, verbatim_bytes=10)
+    # Two whole samples more than the file holds, so the layout still divides.
+    _stat_lying_about(monkeypatch, "run_g0_t0.imec0.ap.bin", +2 * 4 * 2)
+
+    with pytest.raises(OSError, match="shrank"):
+        write_store(session, tmp_path / "out")
+
+
+def test_a_very_wide_stream_gets_shorter_chunks(monkeypatch):
+    """A chunk is rows x channels x 2 bytes, and Blosc refuses a buffer over
+    2 GiB: at 2**20 rows that is reached at 1024 channels. Rows are capped
+    so no chunk exceeds `_MAX_CHUNK_BYTES`; Neuropixels' 385 channels keep
+    the full 2**20."""
+    from wl_preproc.archive import store
+
+    assert store._stream_chunk_rows(385) == store._CHUNK_SAMPLES
+    wide = store._stream_chunk_rows(1024)
+    assert wide < store._CHUNK_SAMPLES
+    assert wide * 1024 * 2 <= store._MAX_CHUNK_BYTES
 
 
 def test_a_streamed_store_rebuilds_every_file_byte_for_byte(tmp_path, monkeypatch):
@@ -128,7 +212,7 @@ def test_a_streamed_store_rebuilds_every_file_byte_for_byte(tmp_path, monkeypatc
     from wl_preproc.archive.verify import verify_against
 
     monkeypatch.setattr(store, "_CHUNK_SAMPLES", 4096)
-    monkeypatch.setattr(store, "_VERBATIM_CHUNK_BYTES", 64 * 1024, raising=False)
+    monkeypatch.setattr(store, "_VERBATIM_CHUNK_BYTES", 64 * 1024)
     session = _big_session(tmp_path, n_samples=50_001, n_channels=3, verbatim_bytes=300_001)
 
     result = write_store(session, tmp_path / "out")

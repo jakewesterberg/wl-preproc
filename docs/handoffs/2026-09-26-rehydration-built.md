@@ -265,13 +265,14 @@ The review's Minors 1–6, none of which loses data. 1 and 2 first.
    Rehydration streams, but nothing can be rehydrated that could not first be
    archived, so a streaming archive writer is the natural next item, due
    before January.
-   *Resolved 2026-09-26: `store.write_store` now streams (`store.py::_write_stream` memory-maps each bulk stream and writes one stored chunk of rows at a time; `_write_verbatim` reads and writes every other file in 16 MiB blocks), so its peak memory is a few chunks, never a whole file.*
+   *Resolved 2026-09-26: `store.write_store` now streams (`store.py::_write_stream` reads each bulk stream through one reused chunk-sized buffer and writes one stored chunk of rows at a time; `_write_verbatim` does the same for every other file in 16 MiB blocks), so its peak memory, heap and resident, is a few chunk sizes -- about 2-3 GB for a 385-channel Neuropixels stream -- never a whole file. A plain read, not a memory map: review found that a faulting memory-mapped read kills the process with SIGBUS and that mapped pages stay resident. A file that shrinks or grows while it is being written raises `OSError` rather than being stored padded or cut, and a stream wider than 1024 channels gets shorter chunks so none exceeds Blosc's 2 GiB limit.*
 2. **`stim.dat` is not a rounding error.** The archival design treats
    everything but the bulk streams as "a rounding error against ~100 GB"
    and stores it verbatim, but Intan's own RHS format documentation
    describes `stim.dat` as one 16-bit word per channel per sample — the same
    size as `amplifier.dat`. On an RHS session this is bulk data stored as
-   bytes, met by the in-memory writer above at full size. It deserves its
+   bytes, met by the in-memory writer above at full size (*no longer: the
+   writer streams, see item 1*). It deserves its
    own amendment to the archival design, not a line here.
 
 ## Read these, in this order

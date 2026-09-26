@@ -70,11 +70,12 @@ requester chose to merge the same day; true when written.*
 >    it skipped (`freed_skipped`). *Until then this
 >    item described those as what a freed session meets, with the skip an
 >    open decision; true when written.* **The streaming archive writer is
->    built too (2026-09-26):** `store.write_store` memory-maps each bulk
->    stream and writes one stored chunk at a time, and every other file in
->    16 MiB blocks, so a real session can be archived without holding a
->    ~166 GB file in memory; it also no longer crashes on a stream with no
->    samples. *Until then this said the writer read each file whole and
+>    built too (2026-09-26):** `store.write_store` reads each bulk stream
+>    through one reused chunk-sized buffer and writes one stored chunk at a
+>    time, and every other file in 16 MiB blocks, so a real session can be
+>    archived in a few GB of memory, never a ~166 GB file; a file that
+>    changes size mid-write is an error, not a padded copy, and it no longer
+>    crashes on a stream with no samples or one wider than 1024 channels. *Until then this said the writer read each file whole and
 >    that no real session could be archived yet; true when written.* Still
 >    open in this line: the rehydration spec (§12) records that Intan's
 >    `stim.dat` is one uint16 per channel per sample, as large as
