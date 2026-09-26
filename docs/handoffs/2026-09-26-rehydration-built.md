@@ -269,7 +269,19 @@ transaction's COMMIT failing after the rename. `free_session` now moves the
 session back (the row rolled back, so it must not be freed with no record),
 and `rehydrate_session` raises `RestoredButUnrecorded` -- the verified files
 are in place, only the record failed -- which the CLI reports with the steps
-that get it recorded. 4–6 remain.*
+that get it recorded.*
+
+*4–6 DONE 2026-09-26 (`fix/parked-follow-ups-4-to-6`): an ambiguous
+rehydrate names every session recorded at the path, and `--subject` -- with
+`--session-datetime` for one subject recorded there twice -- chooses
+(`rehydrate.py::session_for_path`); every restored file is `fsync`ed, and the
+directory the session is renamed into is `fsync`ed before the rehydration is
+committed, so a failure of that flush is the restored-but-unrecorded case;
+and `wlpp hold` on a freed session finds it by the path ingest recorded, as
+`wlpp rehydrate` does, rather than crashing on the missing manifest. All six
+parked follow-ups are closed. The `fsync` is plain: on Linux, the only
+production target, that reaches the disk; on macOS it does not flush the
+drive's own cache (`F_FULLFSYNC` does), so a local crash test proves less.*
 
 ## Next items — the two findings of spec §12
 

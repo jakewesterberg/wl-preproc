@@ -982,3 +982,187 @@ def test_a_failure_creating_the_staged_session_leaves_no_leftover(landed, prefix
 
     assert "no staging directory is left over" in capsys.readouterr().out
     _nothing_restored(session_dir, key)
+
+
+# -- The rehydration handoff's parked follow-ups 4-6 ---------------------------
+
+
+def test_a_hold_can_be_recorded_on_a_freed_session(landed, prefix, capsys):
+    """Follow-up 6: `wlpp hold` read the session's key from its manifest, which
+    a freed session no longer has on scratch, and crashed. It now finds the
+    session by the path ingest recorded, as `wlpp rehydrate` does -- a hold or
+    force on a freed session is meaningful, since the latest verdict still
+    governs once it is rehydrated."""
+    from wl_preproc.schema import archive
+
+    session_dir, key, _nas_root, _ = _reclaimed(landed, "rhholdf", prefix)
+
+    code = main(["hold", "--session", str(session_dir), "--verdict", "hold",
+                 "--actor", "tester", "--reason", "keep it off scratch", "--prefix", prefix])
+
+    assert code == 0
+    # By its reason, not as "the latest": this file's `_verdict` stamps its
+    # force in 2027, later than the real now `wlpp hold` records.
+    rows = (archive.ReclamationHold & key & {"reason": "keep it off scratch"}).to_dicts()
+    assert [row["verdict"] for row in rows] == ["hold"]
+
+
+def test_one_subject_twice_at_one_path_is_chosen_by_session_datetime(
+    dj_conn, prefix, tmp_path, capsys
+):
+    """Review of follow-up 4: two sessions of ONE subject recorded at one path
+    (the same session id, landed and freed twice) are not told apart by
+    `--subject`, so the refusal names `--session-datetime` too, and that
+    chooses -- here through `wlpp hold`, whose freed-session path shares
+    `session_for_path` with `wlpp rehydrate`. An aware value, copied with its
+    offset, names the same session as the naive UTC one stored."""
+    from wl_preproc.schema import archive, ingest, pipeline
+
+    ingest.activate(prefix=prefix)
+    archive.activate(prefix=prefix)
+    subject = "rhtwice"
+    path = tmp_path / "gone" / "2027-03-14_01"
+    first = datetime.datetime(2027, 3, 14, 9, 0)
+    second = datetime.datetime(2027, 3, 15, 9, 0)
+    pipeline.subject.Subject.insert1(
+        {"subject": subject, "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+         "subject_description": ""},
+        skip_duplicates=True,
+    )
+    try:
+        for when in (first, second):
+            pipeline.Session.insert1({"subject": subject, "session_datetime": when})
+            ingest.Ingestion.insert1({
+                "subject": subject, "session_datetime": when,
+                "ingested_at": when, "session_dir": str(path), "integrity": "verified",
+                "topology": {}, "manifest_hash": "blake3:test",
+            })
+
+        def hold(*extra):
+            return main(["hold", "--session", str(path), "--verdict", "hold",
+                         "--actor", "tester", "--reason", "twice", "--prefix", prefix,
+                         "--subject", subject, *extra])
+
+        assert hold() == 1
+        refusal = _refusal(capsys.readouterr().out)
+        assert "2 landed sessions were recorded at" in refusal
+        assert "--session-datetime" in refusal
+
+        assert hold("--session-datetime", "2027-03-15T11:00:00+02:00") == 0
+        held = (archive.ReclamationHold & {"subject": subject, "reason": "twice"}).to_dicts()
+        assert [row["session_datetime"] for row in held] == [second]
+
+        assert hold("--session-datetime", "2027-03-16 09:00:00") == 1
+        assert "no landed session matching" in _refusal(capsys.readouterr().out)
+    finally:
+        (pipeline.Session & {"subject": subject}).delete(prompt=False)
+
+
+def test_a_hold_on_an_unrecorded_missing_path_is_refused(dj_conn, prefix, tmp_path, capsys):
+    code = main(["hold", "--session", str(tmp_path / "nowhere" / "2027-03-14_01"),
+                 "--verdict", "hold", "--actor", "tester", "--reason", "r", "--prefix", prefix])
+
+    assert code == 1
+    assert "no landed session was recorded at" in _refusal(capsys.readouterr().out)
+
+
+def test_every_restored_file_and_the_final_rename_are_flushed_to_disk(landed, prefix):
+    """Follow-up 5: the files and the directory entry the rename makes reach
+    the disk before the rehydration is recorded, so a power loss after the
+    commit cannot leave a session recorded as restored with truncated files."""
+    from wl_preproc.archive import rehydrate as rehydrate_module
+
+    session_dir, _key, nas_root, pristine = _reclaimed(landed, "rhfsync", prefix)
+    real_file, real_directory = rehydrate_module._fsync_file, rehydrate_module._fsync_directory
+    files, directories = [], []
+
+    def counting_file(handle):
+        files.append(handle.name)
+        return real_file(handle)
+
+    def counting_directory(path):
+        directories.append(path)
+        return real_directory(path)
+
+    # The module's two hooks, not `os.fsync`: that is one process-wide
+    # function, and patching it would count whatever else flushes meanwhile.
+    with (
+        patch.object(rehydrate_module, "_fsync_file", counting_file),
+        patch.object(rehydrate_module, "_fsync_directory", counting_directory),
+    ):
+        assert _rehydrate(session_dir, nas_root, prefix) == 0
+
+    assert len(files) == len(pristine)
+    assert directories == [session_dir.parent]
+
+
+def test_a_directory_flush_failing_after_the_rename_says_restored_but_not_recorded(
+    landed, prefix, capsys
+):
+    """The directory flush runs after the rename and before the commit, so its
+    failure is the commit-failure case: files in place, no row, reported as
+    exactly that."""
+    from wl_preproc.archive import rehydrate as rehydrate_module
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, pristine = _reclaimed(landed, "rhdirfs", prefix)
+    capsys.readouterr()
+
+    def failing(path):
+        raise OSError("simulated directory fsync failure")
+
+    with patch.object(rehydrate_module, "_fsync_directory", failing):
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert f"restored but NOT recorded: {session_dir}" in out
+    assert _files(session_dir) == pristine
+    assert len(archive.ScratchRehydration & key) == 0
+    assert not _staging(session_dir, ".rehydrating").exists()
+
+
+def test_two_sessions_recorded_at_one_path_are_named_and_chosen_by_subject(
+    landed, prefix, capsys
+):
+    """Follow-up 4. Freeing makes a recorded path reusable: here a second
+    session with the same id lands where a freed one was, and is freed too.
+    Rehydrating that path is then ambiguous; the refusal names both sessions
+    and `--subject` chooses."""
+    from wl_preproc.contracts.manifest import SessionManifest
+    from wl_preproc.contracts.paths import MANIFEST_FILENAME
+    from wl_preproc.ingest.landing import manifest_session_key
+    from wl_preproc.ingest.watcher import scan_once
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE
+    from wl_preproc.synth.session import generate_session
+
+    first_dir, _first_key, nas_root, first_files = _reclaimed(landed, "rhambA", prefix)
+    root = first_dir.parent
+    try:
+        second = CI_RECIPE.model_copy(update={"subject": "rhambB"})
+        generate_session(root, second)
+        scan_once(root, prefix=prefix)
+        second_key = manifest_session_key(SessionManifest.from_yaml(
+            (first_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
+        ))
+        assert second_key["subject"] == "rhambB"
+        _archive(first_dir, prefix)
+        _timing(second_key, prefix, tier="A")
+        _verdict(second_key, "force", hour=11, prefix=prefix)
+        assert _reclaim(first_dir, nas_root, prefix) == 0
+        capsys.readouterr()
+
+        assert _rehydrate(first_dir, nas_root, prefix) == 1
+
+        refusal = _refusal(capsys.readouterr().out)
+        assert "2 landed sessions were recorded at" in refusal
+        assert "rhambA" in refusal and "rhambB" in refusal
+        assert "--subject" in refusal
+
+        code = main(["rehydrate", "--session", str(first_dir), "--nas-root", str(nas_root),
+                     "--subject", "rhambA", "--prefix", prefix])
+
+        assert code == 0
+        assert _files(first_dir) == first_files
+    finally:
+        (pipeline.Session & {"subject": "rhambB"}).delete(prompt=False)

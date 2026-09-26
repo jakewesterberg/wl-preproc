@@ -21,6 +21,7 @@ definition, and it lives there.
 
 from __future__ import annotations
 
+import datetime
 import os
 import shutil
 from dataclasses import dataclass
@@ -75,11 +76,25 @@ class RestoredButUnrecorded(Exception):
         self.session_path = session_path
 
 
-def session_for_path(session_path: Path, *, prefix: str = DEFAULT_PREFIX) -> dict:
+def session_for_path(
+    session_path: Path,
+    *,
+    prefix: str = DEFAULT_PREFIX,
+    subject: str | None = None,
+    session_datetime: datetime.datetime | None = None,
+) -> dict:
     """The session whose `Ingestion.session_dir` is `session_path`, compared
     after `Path` normalisation, with no symlink or working-directory
     resolution -- the directory no longer exists, so its manifest cannot be
-    read the way `cli/main.py::_session_key_from_dir` reads it."""
+    read the way `cli/main.py::_session_key_from_dir` reads it.
+
+    Freeing makes a recorded path reusable, so two sessions CAN be recorded at
+    one path (a later session with the same id landing where a freed one
+    was). `subject` and, should one subject have two there, `session_datetime`
+    choose between them; without them the refusal names every candidate, so
+    there is always a way forward (the rehydration handoff's parked follow-up
+    4)."""
+    from wl_preproc.ingest.landing import to_naive_utc
     from wl_preproc.schema import ingest
 
     ingest.activate(prefix=prefix)
@@ -93,10 +108,25 @@ def session_for_path(session_path: Path, *, prefix: str = DEFAULT_PREFIX) -> dic
             f"no landed session was recorded at {session_path}; "
             "give the path exactly as ingest recorded it"
         )
+    candidates = rows
+    if subject is not None:
+        rows = [row for row in rows if row["subject"] == subject]
+    if session_datetime is not None:
+        # Stored naive UTC to the second; an aware value, or one copied with
+        # its offset, names the same session.
+        wanted = to_naive_utc(session_datetime)
+        rows = [row for row in rows if row["session_datetime"] == wanted]
+    if not rows:
+        raise Refused(
+            f"no landed session matching the given --subject/--session-datetime was "
+            f"recorded at {session_path}; recorded there: "
+            + ", ".join(f"{r['subject']} @ {r['session_datetime']}" for r in candidates)
+        )
     if len(rows) > 1:
         raise Refused(
-            f"{len(rows)} landed sessions were recorded at {session_path}; "
-            "which one to restore is ambiguous"
+            f"{len(rows)} landed sessions were recorded at {session_path} -- "
+            + ", ".join(f"{r['subject']} @ {r['session_datetime']}" for r in rows)
+            + "; pass --subject, and --session-datetime if one subject has two, to say which"
         )
     if not session_path.is_absolute():
         raise Refused(
@@ -127,7 +157,32 @@ def _write(store: Path, relative: str, target_root: Path) -> tuple[str, int]:
             out.write(block)
             digest.update(block)
             size += len(block)
+        # On disk before the rehydration is recorded, not merely in the page
+        # cache: a power loss after the commit must not leave a session
+        # recorded as restored with truncated files (the rehydration
+        # handoff's parked follow-up 5).
+        _fsync_file(out)
     return digest.hexdigest(), size
+
+
+# Plain `fsync`. On Linux -- the only production target (`wl.yaml`'s
+# `runs_on: [serv]`) -- that reaches the disk; on macOS it does not force the
+# drive's own write cache, which takes `fcntl(fd, F_FULLFSYNC)`, so a local
+# crash-recovery test there proves less than it appears to.
+def _fsync_file(handle) -> None:
+    """Flush one restored file to disk."""
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Make a rename into `path` durable: the new directory entry, not only
+    the files it names."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _check(
@@ -193,7 +248,12 @@ def _check(
 
 
 def rehydrate_session(
-    session_path: Path, nas_root: Path, *, prefix: str = DEFAULT_PREFIX
+    session_path: Path,
+    nas_root: Path,
+    *,
+    prefix: str = DEFAULT_PREFIX,
+    subject: str | None = None,
+    session_datetime: datetime.datetime | None = None,
 ) -> Rehydrated:
     """Restore the session recorded at `session_path` from its NAS artifact.
 
@@ -208,7 +268,9 @@ def rehydrate_session(
     from wl_preproc.schema import archive
 
     session_path = Path(session_path)
-    key = session_for_path(session_path, prefix=prefix)
+    key = session_for_path(
+        session_path, prefix=prefix, subject=subject, session_datetime=session_datetime
+    )
     if os.path.lexists(session_path):
         raise Refused(f"{session_path} already exists; rehydration never overwrites or merges")
     if not session_path.parent.is_dir():
@@ -277,6 +339,9 @@ def rehydrate_session(
                 )
                 os.rename(target, session_path)
                 moved = True
+                # Before the commit: the rename that puts the session at its
+                # path is on disk before the row that says it is there.
+                _fsync_directory(session_path.parent)
         except Exception as exc:
             if moved:
                 # The rename happened and the commit that followed it failed:

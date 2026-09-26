@@ -274,6 +274,13 @@ def main(argv: list[str] | None = None) -> int:
     hold_p.add_argument("--actor", required=True)
     hold_p.add_argument("--reason", required=True)
     hold_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # As for `rehydrate`: only when two landed sessions were recorded at one
+    # path, which can happen once one of them is freed.
+    hold_p.add_argument("--subject", default=None)
+    hold_p.add_argument(
+        "--session-datetime", default=None, type=datetime.datetime.fromisoformat,
+        help="with --subject, when one subject has two sessions at the path",
+    )
 
     rehydrate_p = subparsers.add_parser(
         "rehydrate", help="restore a reclaimed session from its NAS artifact"
@@ -284,6 +291,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     rehydrate_p.add_argument("--nas-root", required=True, type=Path)
     rehydrate_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+    # Only needed when two landed sessions were recorded at one path -- which
+    # freeing makes possible; the refusal names both when it is.
+    rehydrate_p.add_argument("--subject", default=None)
+    rehydrate_p.add_argument(
+        "--session-datetime", default=None, type=datetime.datetime.fromisoformat,
+        help="with --subject, when one subject has two sessions at the path",
+    )
 
     tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
     # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
@@ -528,7 +542,13 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.archive.scratch import Refused, scratch_state
 
         try:
-            outcome = rehydrate_session(Path(args.session), args.nas_root, prefix=args.prefix)
+            outcome = rehydrate_session(
+                Path(args.session),
+                args.nas_root,
+                prefix=args.prefix,
+                subject=args.subject,
+                session_datetime=args.session_datetime,
+            )
         except Refused as exc:
             print(f"refusing: {exc}")
             return 1
@@ -570,7 +590,27 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.schema import archive as archive_schema
 
         session_dir = Path(args.session)
-        key = _session_key_from_dir(session_dir)
+        if session_dir.is_dir():
+            key = _session_key_from_dir(session_dir)
+        else:
+            # A freed session has no manifest on scratch to read its key
+            # from, and a hold or force on one is meaningful: the latest
+            # verdict still governs after it is rehydrated. Found by the path
+            # ingest recorded, as `wlpp rehydrate` finds it (the rehydration
+            # handoff's parked follow-up 6).
+            from wl_preproc.archive.rehydrate import session_for_path
+            from wl_preproc.archive.scratch import Refused
+
+            try:
+                key = session_for_path(
+                    session_dir,
+                    prefix=args.prefix,
+                    subject=args.subject,
+                    session_datetime=args.session_datetime,
+                )
+            except Refused as exc:
+                print(f"refusing: {exc}")
+                return 1
         archive_schema.activate(prefix=args.prefix)
         held_at = landing.to_naive_utc(datetime.datetime.now(datetime.UTC))
         archive_schema.ReclamationHold.insert1(
