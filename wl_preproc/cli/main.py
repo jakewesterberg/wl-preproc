@@ -15,6 +15,7 @@ import argparse
 import datetime
 import json
 import os
+import traceback
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -404,7 +405,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "reclaim":
         from wl_preproc.archive import reclaim as archive_reclaim
-        from wl_preproc.archive.scratch import Refused, free_session, refuse_leftovers
+        from wl_preproc.archive.scratch import (
+            Refused,
+            free_session,
+            refuse_leftovers,
+            scratch_state,
+        )
         from wl_preproc.archive.verify import _expected_digests
 
         session_dir = Path(args.session)
@@ -497,6 +503,16 @@ def main(argv: list[str] | None = None) -> int:
         except Refused as exc:
             print(f"\nrefusing: {exc}")
             return 1
+        except Exception:
+            # Failed after the checks passed -- in the record-and-rename, or
+            # removing the staged copy. Say what is on disk now, then the
+            # details; never a bare traceback an operator has to decode.
+            print(
+                f"\nfailed part-way; the NAS copy was only read. {scratch_state(session_dir)} "
+                "Details follow."
+            )
+            traceback.print_exc()
+            return 1
         print(
             f"\nfreed {freed} bytes: {session_dir} is gone. "
             f"`wlpp rehydrate --session {session_dir} --nas-root <mount>` brings it back."
@@ -504,8 +520,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.group == "rehydrate":
-        from wl_preproc.archive.rehydrate import NotRestored, rehydrate_session
-        from wl_preproc.archive.scratch import Refused
+        from wl_preproc.archive.rehydrate import (
+            NotRestored,
+            RestoredButUnrecorded,
+            rehydrate_session,
+        )
+        from wl_preproc.archive.scratch import Refused, scratch_state
 
         try:
             outcome = rehydrate_session(Path(args.session), args.nas_root, prefix=args.prefix)
@@ -516,7 +536,31 @@ def main(argv: list[str] | None = None) -> int:
             # The same line `wlpp archive` prints per failing file.
             for verdict in exc.verdicts:
                 print(f"MISMATCH {verdict.relative_path}")
-            print("NOT restored -- the NAS artifact is untouched and nothing was left on scratch.")
+            # What is left on scratch is read from the disk, not assumed: the
+            # staging directory is removed with `ignore_errors=True`, which can
+            # fail silently.
+            print(
+                "NOT restored -- the NAS artifact is untouched. "
+                f"{scratch_state(Path(args.session))}"
+            )
+            return 1
+        except RestoredButUnrecorded as exc:
+            print(
+                f"restored but NOT recorded: {exc.session_path} holds the verified files, "
+                "but the `ScratchRehydration` row did not commit, so the daemon still "
+                "treats the session as freed and skips it. To record it: move that "
+                "directory OUT of the scratch root (inside it, the watcher would take it "
+                "for a new session), run `wlpp rehydrate` again, and delete the moved "
+                "copy once that reports success. Details follow."
+            )
+            traceback.print_exc()
+            return 1
+        except Exception:
+            print(
+                "failed part-way; the NAS artifact is untouched. "
+                f"{scratch_state(Path(args.session))} Details follow."
+            )
+            traceback.print_exc()
             return 1
         print(f"rehydrated: {outcome.session_dir} ({outcome.bytes_written} bytes)")
         return 0

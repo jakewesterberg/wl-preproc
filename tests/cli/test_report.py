@@ -880,6 +880,37 @@ def test_no_orphaned_archiving_directory_is_silent_in_the_disk_section(scanned):
     assert "orphaned `.archiving`" not in section
 
 
+def test_an_interrupted_staging_directory_is_named_in_the_disk_section(scanned):
+    """A `.reclaiming` or `.rehydrating` directory left by an interrupted
+    `wlpp reclaim` or `wlpp rehydrate` can hold a whole session, and both
+    commands refuse while it exists; the report names each one."""
+    root, prefix = scanned("stag1")
+    session_id = CI_RECIPE.session_id
+    reclaiming = root / f".{session_id}.reclaiming"
+    rehydrating = root / f".{session_id}-other.rehydrating"
+    dangling = root / f".{session_id}-third.reclaiming"
+    reclaiming.mkdir()
+    rehydrating.mkdir()
+    # A dangling symlink counts, as it does for `refuse_leftovers`.
+    dangling.symlink_to(root / "gone")
+
+    body = build_report(root, prefix=prefix)
+
+    section = _section(body, "Disk")
+    assert "3 interrupted reclaim/rehydrate staging directories" in section
+    assert str(reclaiming) in section
+    assert str(rehydrating) in section
+    assert str(dangling) in section
+
+
+def test_no_interrupted_staging_directory_is_silent_in_the_disk_section(scanned):
+    root, prefix = scanned("stag2")
+
+    body = build_report(root, prefix=prefix)
+
+    assert "interrupted reclaim/rehydrate staging" not in _section(body, "Disk")
+
+
 def test_no_nas_root_reports_not_checked_rather_than_a_fabricated_zero(scanned):
     """BLOCKING fix 2's own fail-closed contract, pinned directly (Task 10
     whole-branch review, final gate: "no test defended it" -- confirmed by
