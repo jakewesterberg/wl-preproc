@@ -71,8 +71,11 @@ status:
     The next session is hardware-free code development; ask whether that has
     changed before planning around it. Recommended order, with the reasoning
     in `docs/CHECKPOINT.md`'s own "Start here next session" header:
-    (1) REHYDRATION is BUILT on `spec/rehydration` (2026-09-26, not merged as
-    written): `wlpp rehydrate` restores a reclaimed session byte for byte, and
+    (1) REHYDRATION is BUILT and MERGED as `5cd0c79` (2026-09-26, from
+    `spec/rehydration`; one known residual being closed next: a failed or
+    crashed per-system timing key on a force-freed session can later write a
+    permanent `no_recording`): `wlpp rehydrate` restores a reclaimed session
+    byte for byte, and
     `wlpp reclaim --no-dry-run` deletes, run by a person, behind a proof
     against the NAS copy. A sixth condition, the canonical NWB, fails until
     Phase 3, so every real reclamation needs a recorded force until then; a

@@ -1,8 +1,12 @@
 # Where this build actually is
 
-**Last updated 2026-09-26**, describing branch `spec/rehydration` — NOT merged
-as written; the merge commit and CI run get recorded here once they exist, not
-before.
+**Last updated 2026-09-26**, describing `main` at `5cd0c79` — the merge commit
+for `spec/rehydration`, whose head `70cbdc5` has a byte-identical tree (1471
+passed on 3.11 against that tree). CI's result on it is recorded here only once
+read off the run, not before.
+
+*This header said "describing branch `spec/rehydration` — NOT merged" until the
+requester chose to merge the same day; true when written.*
 
 > ## Start here next session
 >
@@ -25,7 +29,12 @@ before.
 >
 > **Otherwise, pick up in this order:**
 >
-> 1. **Rehydration is BUILT and verified** on `spec/rehydration` (2026-09-26;
+> 1. **Rehydration is BUILT, verified and MERGED as `5cd0c79`** (2026-09-26,
+>    from `spec/rehydration`, merged with one known residual: `timing_resolved`
+>    requires only a `TimingProvenance` row, so a failed or crashed per-system
+>    `SystemTimebase` key on a force-freed session can later write a permanent
+>    `no_recording` — being closed next; the "never freed before its timebase
+>    stages ran" wording below overclaims until it is;
 >    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
 >    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught; after the
 >    whole-branch review's fix wave, 1471 passed/11 skipped/1 deselected/1

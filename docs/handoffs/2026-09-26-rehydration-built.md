@@ -7,6 +7,12 @@ wave's final commit (the one that wrote this sentence), the branch is
 commits included): 27 files changed, 6329 insertions, 299 deletions.
 **It is not merged** — integration is a decision for the requester
 (`superpowers:finishing-a-development-branch`), not made here.
+*Corrected 2026-09-26: the requester chose to merge; merged as `5cd0c79`, with
+the residual the fix wave's re-review reproduced still open — `timing_resolved`
+requires only a `TimingProvenance` row, so a failed or crashed per-system
+`SystemTimebase` key on a force-freed session can later write a permanent
+`no_recording`. Where this document says a session is never freed before its
+timebase stages ran on real files, read it as overclaiming until that is closed.*
 
 ## The one-paragraph version
 
