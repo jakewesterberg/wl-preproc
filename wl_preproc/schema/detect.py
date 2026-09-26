@@ -100,7 +100,13 @@ from pathlib import Path
 import datajoint as dj
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs, runs_from_labels
+from wl_preproc.eye.detect.labels import (
+    Label,
+    Run,
+    kind_of,
+    labels_from_runs,
+    runs_from_labels,
+)
 from wl_preproc.schema import DEFAULT_PREFIX, core, paramset, pipeline
 
 schema = dj.Schema()
@@ -661,7 +667,7 @@ class EyeDetection(dj.Computed):
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
         stated nowhere else: no two different kinds ever share a label.**
-        `_KIND_OF` maps `saccade`/`microsaccade` to `"saccadic"` and every
+        `labels.py::KIND_OF` maps `saccade`/`microsaccade` to `"saccadic"` and every
         other kind to its own single label (`pso` -> `pso`, `pursuit` ->
         `pursuit`, `drift` -> `drift`), so the label sets the four kinds can
         produce -- `{saccade, microsaccade}`, `{pso}`, `{pursuit}`,
@@ -854,70 +860,6 @@ def _overlapping(
 _AMPLITUDE_DERIVED_VOCABULARY = frozenset({Label.SACCADE, Label.MICROSACCADE})
 
 
-class UnknownLabelKind(ValueError):
-    """A label reached the conjunction with no kind assigned to it."""
-
-
-#: Which labels intersect with which. A conjunction run is the intersection of
-#: two runs of the SAME kind, and carries that kind's label (design spec
-#: `2026-09-05-conjunction-shape-design.md` section 1).
-#:
-#: **`saccade` and `microsaccade` share a kind**, because section 1 of the
-#: detection spec calls them "a split, not a ranking" -- one event
-#: distinguished only by size. They intersect together and the surviving span
-#: is labelled by `classify` on its OWN measured amplitude, which is what
-#: stage 1 already did and what keeps label and amplitude derived once, from
-#: one interval. Every other emitted label is its own kind and intersects only
-#: with itself, so a binocular glissade is stored as `pso` rather than folded
-#: into a saccade or dropped.
-_KIND_OF: dict[Label, str] = {
-    Label.SACCADE: "saccadic",
-    Label.MICROSACCADE: "saccadic",
-    # **Every non-saccadic kind's key IS its label's own value**, and
-    # `_conjunction_runs` relies on it: `Label(kind)` is how such a kind
-    # labels itself. Tested, not trusted -- see
-    # `test_a_single_label_kind_is_keyed_by_its_own_label_value`. "saccadic"
-    # is deliberately not a `Label`, because that kind has two of them and no
-    # single label could name it.
-    Label.PSO: Label.PSO.value,
-    Label.PURSUIT: Label.PURSUIT.value,
-    Label.DRIFT: Label.DRIFT.value,
-}
-
-#: Labels that are never intersected, and why -- listed rather than left as
-#: absences, so `_kind_of`'s guard can tell "deliberately excluded" from "a
-#: ninth label nobody mapped".
-#:
-#: `fixation` is the synthesized background: `_insert_trace` paints every
-#: sample no interval claimed, so a region survives as `fixation` whether an
-#: intersection painted it or the fill did. Intersecting it would run the
-#: nested loop over the largest runs in the trace for no observable difference
-#: (spec section 1.2). `blink` and `invalid` come from the validity mask,
-#: never from a detector, and are in no detector's vocabulary at all.
-_NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID})
-
-
-def _kind_of(label) -> str | None:
-    """`label`'s conjunction kind, or `None` if it is deliberately not
-    intersected.
-
-    Raises rather than returning `None` for an unmapped label. Design spec
-    section 1 declares all eight labels because the migration window closes
-    January 2027; this is what catches a ninth added without updating
-    `_KIND_OF`, which would otherwise vanish from every conjunction with
-    nothing to show for it."""
-    if label in _NOT_INTERSECTED:
-        return None
-    try:
-        return _KIND_OF[label]
-    except KeyError as exc:
-        raise UnknownLabelKind(
-            f"{label!r} has no conjunction kind. Every label is either in "
-            f"`_KIND_OF` or deliberately in `_NOT_INTERSECTED`; a new one is "
-            f"in neither until someone decides which it is"
-        ) from exc
-
-
 def _always(label: Label) -> Callable[[int, int], Label]:
     """A `label_for` answering one label whatever the span.
 
@@ -972,7 +914,7 @@ def _conjunction_runs(
     by_kind: dict[str, tuple[list[Run], list[Run]]] = {}
     for side, runs in ((0, left), (1, right)):
         for run in runs:
-            kind = _kind_of(run.label)
+            kind = kind_of(run.label)
             if kind is None:
                 continue
             by_kind.setdefault(kind, ([], []))[side].append(run)
@@ -1122,9 +1064,9 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     (`_conjunction_runs`, design spec `2026-09-05-conjunction-shape-design.
     md`) removes the reason it existed.** Each conjunction kind now labels
     itself: `pso`, `pursuit` and `drift` each get their OWN kind, labelled
-    by neither eye's opinion nor by `classify` (`_KIND_OF`), and `fixation`
+    by neither eye's opinion nor by `classify` (`labels.py::KIND_OF`), and `fixation`
     is not intersected at all, being the synthesized background rather than
-    a detector's finding (`_NOT_INTERSECTED`). None of the four blocked
+    a detector's finding (`labels.py::NOT_INTERSECTED`). None of the four blocked
     detectors needs THIS function to say anything about `pso`, `pursuit`,
     `drift` or `fixation` any more -- only about the SACCADIC SLICE of its
     vocabulary, which is what `_AMPLITUDE_DERIVED_VOCABULARY`'s own comment
@@ -1177,7 +1119,7 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
         # No saccadic label at all, so `_conjunction_runs` builds no saccadic
         # group and never calls this IN PRODUCTION -- but that guarantee is
         # not a property of this function or of `_conjunction_runs`'s
-        # grouping (`by_kind` keys off each RUN's own label via `_kind_of`,
+        # grouping (`by_kind` keys off each RUN's own label via `kind_of`,
         # never off `detector.vocabulary`). It holds because
         # `registry.Detector.detect` refuses any label outside
         # `detector.vocabulary`, so a run this detector actually produces can

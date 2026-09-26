@@ -85,7 +85,7 @@ from collections import Counter, namedtuple
 import numpy as np
 import pytest
 
-from wl_preproc.eye.detect.labels import Label
+from wl_preproc.eye.detect.labels import Label, kind_of
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS,
     detect_nystrom_holmqvist,
@@ -286,44 +286,13 @@ def test_the_null_fails_the_glissade_rate_check():
     )
 
 
-#: The conjunction's own kind mapping, RESTATED from `schema/detect.py`
-#: (`_KIND_OF`, `_NOT_INTERSECTED`) rather than imported, for this file's
-#: standing reason: it imports nothing from `wl_preproc.schema`, because the
-#: 3.13 cross-check runs `tests/eye` with `--noconftest` in a venv with no
-#: DataJoint (module docstring).
-#:
-#: **The drift risk is real and is named rather than left implicit.** Two
-#: definitions of one rule is how they come apart, and nothing here can catch
-#: it: a ninth label, or a remapped kind, would change the conjunction and
-#: leave this measurement quietly reporting the old rule's number. The durable
-#: fix is to move `_KIND_OF` into `eye/detect/labels.py`, which both sides can
-#: import -- it is vocabulary knowledge, not schema knowledge -- and that is
-#: recorded as a follow-up rather than done here, being a production change to
-#: the conjunction outside this measurement's scope.
-_NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID})
-_KIND_OF = {
-    Label.SACCADE: "saccadic",
-    Label.MICROSACCADE: "saccadic",
-    Label.PSO: Label.PSO.value,
-    Label.PURSUIT: Label.PURSUIT.value,
-    Label.DRIFT: Label.DRIFT.value,
-}
-
-
-def _kind_of(label):
-    """`label`'s conjunction kind, or `None` where the conjunction never
-    intersects it. Raises on an unmapped label for the same reason the
-    original does -- a ninth label must not vanish silently."""
-    if label in _NOT_INTERSECTED:
-        return None
-    try:
-        return _KIND_OF[label]
-    except KeyError as exc:
-        raise AssertionError(
-            f"{label!r} has no conjunction kind in this file's restated "
-            "`_KIND_OF`. `schema/detect.py` has probably gained one; this "
-            "copy must gain it too"
-        ) from exc
+#: The conjunction's own kind mapping, imported rather than restated: it moved
+#: out of `schema/detect.py` into `eye/detect/labels.py` on 2026-09-26, so this
+#: file -- which imports nothing from `wl_preproc.schema`, because the 3.13
+#: cross-check runs `tests/eye` with no DataJoint -- can use the one definition
+#: the conjunction uses. It used to carry its own copy, with nothing able to
+#: catch the two drifting apart.
+_kind_of = kind_of
 
 
 class _Agreement:
@@ -441,7 +410,7 @@ def _kind_agreement(own, other, floor: int) -> _Agreement:
     nothing from `wl_preproc.schema` (module docstring).
 
     **KIND, not label.** `saccade` and `microsaccade` are one kind to the
-    conjunction (`_KIND_OF`), so a left `saccade` over a right `microsaccade`
+    conjunction (`labels.py::KIND_OF`), so a left `saccade` over a right `microsaccade`
     is an AGREEMENT here exactly as it is there; and `fixation`/`blink`/
     `invalid` are dropped from both sides, since the conjunction never
     intersects them. An own-run overlapping only the other eye's `fixation`
@@ -665,7 +634,7 @@ def _agreeing_saccade_offset_differences(agreements) -> np.ndarray:
 
 
 def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
-    """`_KIND_OF` (`schema/detect.py`) maps both to `"saccadic"`, so the
+    """`KIND_OF` (`eye/detect/labels.py`) maps both to `"saccadic"`, so the
     conjunction intersects a left `saccade` with a right `microsaccade` and
     labels the result by amplitude. A statistic comparing raw labels would
     score that same stretch a KIND DISAGREEMENT and report a rate the
@@ -687,7 +656,7 @@ def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
 
 
 def test_the_agreement_statistic_ignores_the_labels_the_conjunction_never_intersects():
-    """`_NOT_INTERSECTED` is `{fixation, blink, invalid}` (`schema/detect.py`):
+    """`NOT_INTERSECTED` is `{fixation, blink, invalid}` (`eye/detect/labels.py`):
     `fixation` is the synthesized background `_insert_trace` paints, and
     `blink`/`invalid` come from the validity mask rather than from any
     detector.
@@ -1319,7 +1288,7 @@ def test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes():
 
 def test_the_expected_pair_shares_ignore_the_labels_the_conjunction_drops():
     """`fixation`/`blink`/`invalid` are not detected events and never reach
-    the conjunction (`_NOT_INTERSECTED`), so they must not enter either
+    the conjunction (`labels.py::NOT_INTERSECTED`), so they must not enter either
     marginal -- counting them would shrink every real kind's share and make
     the observed breakdown look inflated against chance across the board.
 

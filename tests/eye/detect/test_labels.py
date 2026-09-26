@@ -2,7 +2,16 @@ import numpy as np
 import pytest
 
 from wl_preproc.eye.detect.labels import (
-    Label, LabelledInterval, Run, TilingError, labels_from_runs, runs_from_labels,
+    KIND_OF,
+    NOT_INTERSECTED,
+    Label,
+    LabelledInterval,
+    Run,
+    TilingError,
+    UnknownLabelKind,
+    kind_of,
+    labels_from_runs,
+    runs_from_labels,
 )
 
 
@@ -116,3 +125,47 @@ def test_runs_round_trip_both_directions():
     recovered_runs = runs_from_labels(labels)
     # Confirm identity
     assert recovered_runs == original_runs
+
+
+# -- Conjunction kinds (moved here from tests/schema/test_detect_populate.py
+# with the map itself, 2026-09-26) -------------------------------------------
+
+
+def test_every_label_has_a_kind_or_is_deliberately_excluded():
+    """Design spec section 3.1's exhaustiveness guard. The label enum is
+    closed because the migration window shuts January 2027, so a ninth label
+    added without updating the kind map must fail loudly rather than be
+    silently dropped from every conjunction."""
+
+    assert set(KIND_OF) | NOT_INTERSECTED == set(Label)
+    assert not (set(KIND_OF) & NOT_INTERSECTED)
+
+    # saccade and microsaccade are ONE kind: design spec section 1 calls them
+    # "a split, not a ranking" -- the same event distinguished only by size.
+    assert kind_of(Label.SACCADE) == kind_of(Label.MICROSACCADE)
+    # Every other emitted label is its own kind.
+    assert len({kind_of(Label.PSO), kind_of(Label.PURSUIT),
+                kind_of(Label.DRIFT), kind_of(Label.SACCADE)}) == 4
+    # fixation is the synthesized background (spec section 1.2); blink and
+    # invalid come from the validity mask and are in no vocabulary.
+    for label in (Label.FIXATION, Label.BLINK, Label.INVALID):
+        assert kind_of(label) is None
+
+
+def test_a_single_label_kind_is_keyed_by_its_own_label_value():
+    """`_conjunction_runs` labels a non-saccadic kind with `Label(kind)`, so
+    the kind key and the label value must agree. A kind named anything else
+    would raise `ValueError` deep inside the grouping loop, for one detector,
+    only once a real recording produced that label."""
+
+    for label, kind in KIND_OF.items():
+        if kind != "saccadic":
+            assert Label(kind) is label, f"kind {kind!r} does not name {label!r}"
+
+
+def test_a_label_with_no_kind_raises():
+    """The guard has teeth: it is reachable if the enum grows and the map
+    does not."""
+
+    with pytest.raises(UnknownLabelKind, match="no conjunction kind"):
+        kind_of("nystagmus")
