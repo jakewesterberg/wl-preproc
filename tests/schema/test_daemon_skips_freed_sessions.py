@@ -5,7 +5,9 @@ freed (its latest `ScratchReclamation` is newer than its latest
 `ScratchRehydration`), `daemon.run_once()` does not attempt it at all -- no
 stage reads its absent directory, so nothing errors, nothing false is written,
 and a later session landing at the same path is never read in its place.
-Once it is rehydrated, the next pass picks it up with no manual step.
+Once it is rehydrated, the next pass does whatever it never attempted
+meanwhile (a key that had already failed before the freeing stays parked,
+as any failed key does, until cleared by hand).
 """
 
 from __future__ import annotations
@@ -119,11 +121,11 @@ def landed_ci(tmp_path, dj_conn, prefix):
 
     subjects = []
 
-    def _land(subject):
+    def _land(subject, recipe=CI_RECIPE):
         subjects.append(subject)
         root = tmp_path / f"scratch-{subject}"
         root.mkdir()
-        recipe = CI_RECIPE.model_copy(update={"subject": subject})
+        recipe = recipe.model_copy(update={"subject": subject})
         generate_session(root, recipe)
         session_dir = root / recipe.session_id
         scan_once(root, prefix=prefix)
@@ -169,3 +171,72 @@ def test_the_daemon_skips_a_freed_session_and_resumes_it_once_rehydrated(
     assert len(timebase.SystemTimebase & key) > 0
     assert len(timebase.TimingProvenance & key) == 1
     assert len(pipeline.event.BehaviorRecording & key) == 1
+
+
+def test_every_stage_skips_a_freed_eye_session_and_catches_up_like_a_control(
+    landed_ci, prefix, tmp_path
+):
+    """Every daemon stage, including the eye and detection stages whose keys
+    carry paramsets, on a session with an eye tracker: nothing is written for
+    the freed session while it is freed -- even for keys already QUEUED as
+    pending jobs before it was freed, which `reap_stale_jobs` can also
+    re-pend -- and after rehydration one pass leaves it with exactly the rows
+    an identical session that was never freed has."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import EYE_RECIPE
+
+    freed_dir, freed_key = landed_ci("dskeye", EYE_RECIPE)
+    _control_dir, control_key = landed_ci("dskctl", EYE_RECIPE)
+    pristine = tmp_path / "pristine"
+    shutil.copytree(freed_dir, pristine)
+
+    daemon.activate_all(prefix=prefix)
+    daemon.register_default_paramsets()
+    tables = daemon._computed_tables()
+    for table in tables:
+        table.jobs.refresh()  # queue whatever is due now, freed session included
+
+    _freed(freed_key, 10, prefix)
+    shutil.rmtree(freed_dir)
+
+    report = daemon.run_once(prefix=prefix)
+
+    assert report["freed_skipped"] >= 1
+    assert [e for e in report["errors"] if "dskeye" in e or "dskctl" in e] == []
+    assert len(pipeline.event.BehaviorRecording & freed_key) == 0
+    for table in tables:
+        assert len(table & freed_key) == 0, table.__name__
+
+    shutil.copytree(pristine, freed_dir)
+    _restored(freed_key, 11, prefix)
+
+    report = daemon.run_once(prefix=prefix)
+
+    assert [e for e in report["errors"] if "dskeye" in e or "dskctl" in e] == []
+    assert len(pipeline.event.BehaviorRecording & freed_key) == 1
+    counts = {t.__name__: (len(t & freed_key), len(t & control_key)) for t in tables}
+    assert all(freed == control for freed, control in counts.values()), counts
+    # Not vacuous: the eye stages did compute something on the control.
+    assert counts["EyeCalibration"][1] > 0, counts
+
+
+def test_the_archive_stage_skips_a_freed_session(monkeypatch, tmp_path):
+    """`free_session` requires an `ArchiveArtifact` row, so a freed session is
+    never in `_archive_stage_keys()` in the ordinary course; if that row were
+    deleted by hand, whatever sits at its recorded path must not be archived
+    under its key."""
+    import datetime as _dt
+
+    from wl_preproc import daemon
+
+    key = {"subject": "arcfree", "session_datetime": _dt.datetime(2027, 5, 1, 9, 0)}
+    calls = []
+    monkeypatch.setattr(daemon, "_archive_stage_keys", lambda: [key])
+    monkeypatch.setattr(daemon, "archive_session", lambda *a, **k: calls.append(a))
+
+    archived, errors = daemon._archive_stage(
+        tmp_path / "nas", "vault", "cold", prefix="unused_", freed=[key]
+    )
+
+    assert (archived, errors, calls) == (0, [], [])

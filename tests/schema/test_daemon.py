@@ -270,7 +270,10 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
     first = daemon_env.run_once(prefix=prefix)
     baseline = daemon_env.run_once(prefix=prefix)
 
-    assert set(baseline) == {"populated", "errors", "stale_jobs_reaped", "archived"}
+    assert set(baseline) == {
+        "populated", "errors", "stale_jobs_reaped", "archived", "freed_skipped"
+    }
+    assert isinstance(baseline["freed_skipped"], int)
     assert baseline["populated"] == first["populated"], (
         "the daemon does not reach a steady state: two consecutive idle passes "
         f"computed {first['populated']} then {baseline['populated']} keys"

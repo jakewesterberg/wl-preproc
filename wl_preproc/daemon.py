@@ -714,7 +714,7 @@ def _not_freed(table, freed: list[dict]) -> tuple:
     return (dj.Not(freed),)
 
 
-def _populate_event_stage(freed: list[dict] = ()) -> tuple[int, list[str]]:
+def _populate_event_stage(freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """Build the canonical trial list for each session still missing one.
 
     Returns `(sessions built, per-session failures)` -- the same two quantities
@@ -745,6 +745,7 @@ def _populate_event_stage(freed: list[dict] = ()) -> tuple[int, list[str]]:
     at this stage's scale, not a new one.
     """
     built, errors = 0, []
+    freed = freed or []
     # A freed session has no directory to decode; it is left for the pass
     # after it is rehydrated (see `run_once`).
     for key in (k for k in _event_stage_keys() if k not in freed):
@@ -805,7 +806,11 @@ def _archive_stage_keys() -> list[dict]:
 
 
 def _archive_stage(
-    nas_root: Path, host: str, share: str, prefix: str = DEFAULT_PREFIX
+    nas_root: Path,
+    host: str,
+    share: str,
+    prefix: str = DEFAULT_PREFIX,
+    freed: list[dict] | None = None,
 ) -> tuple[int, list[str]]:
     """Archive every verified, not-yet-archived session. Returns `(sessions
     archived, per-session failures)` -- the same two quantities
@@ -841,7 +846,12 @@ def _archive_stage(
     bookkeeping.
     """
     archived, errors = 0, []
-    for key in _archive_stage_keys():
+    freed = freed or []
+    # A freed session is never in `_archive_stage_keys()` in the ordinary
+    # course -- reclaiming requires its `ArchiveArtifact` row -- but if
+    # that row were deleted by hand, whatever now sits at its recorded path
+    # would be archived under its key. Skipped like every other stage.
+    for key in (k for k in _archive_stage_keys() if k not in freed):
         session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
         try:
             outcome = archive_session(
@@ -949,12 +959,18 @@ def run_once(
     from wl_preproc.archive.scratch import currently_freed
 
     freed = currently_freed(prefix=prefix)
+    freed_skipped = len(freed)
 
     built, event_errors = _populate_event_stage(freed)
     populated += built
     errors.extend(event_errors)
 
     for table in _computed_tables():
+        # Re-read before every stage, not once per pass: a pass can run for
+        # hours, and a `wlpp reclaim` committing part-way through must be
+        # seen by the next stage rather than the next pass. It is one small
+        # query per stage.
+        freed = currently_freed(prefix=prefix)
         try:
             result = table.populate(
                 *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
@@ -969,7 +985,9 @@ def run_once(
     if nas_root is None or host is None or share is None:
         archived = None
     else:
-        archived, archive_errors = _archive_stage(nas_root, host, share, prefix=prefix)
+        archived, archive_errors = _archive_stage(
+            nas_root, host, share, prefix=prefix, freed=currently_freed(prefix=prefix)
+        )
         errors.extend(archive_errors)
 
     return {
@@ -977,4 +995,7 @@ def run_once(
         "errors": errors,
         "stale_jobs_reaped": reaped,
         "archived": archived,
+        # How many sessions were freed, and so skipped, when the pass began --
+        # a count, so a skip never reads as an all-clear.
+        "freed_skipped": freed_skipped,
     }

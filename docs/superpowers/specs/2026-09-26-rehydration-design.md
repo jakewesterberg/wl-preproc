@@ -576,10 +576,21 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 > `dj.Not(freed)`. That restriction is sound only for a stage that keys its
 > work by session: every stage does today, which a test pins, and a stage
 > that did not would be left unrestricted rather than emptied
-> (`daemon.py::_not_freed`). A freed session therefore
-> meets none of item 3's consequences; the next pass after rehydration
-> computes whatever it missed. Two sessions recorded at one path still make
-> `wlpp rehydrate` refuse as ambiguous.
+> (`daemon.py::_not_freed`). The freed list is re-read before every stage,
+> so a reclamation committing part-way through a long pass is seen by the
+> next stage; the archive stage skips freed sessions too; and `run_once`
+> returns `freed_skipped`, so a skip never reads as an all-clear. A freed
+> session therefore meets none of item 3's consequences. Work the daemon
+> never attempted while the session was freed is done on the first pass
+> after rehydration. A key that had already FAILED before the freeing
+> stays parked, as any failed key does, until its job error is cleared by
+> hand -- with one exception that is a DataJoint side effect, not a
+> design: if a pass ran while the session was freed and that job row was
+> more than an hour old (`dj.config` `stale_timeout`), `populate`'s
+> stale-job cleanup, now restricted, deleted it and its diagnostics, and
+> the key is retried after rehydration.
+> Two sessions recorded at one path still make `wlpp rehydrate` refuse as
+> ambiguous.
 
 ## 12. Two findings outside this scope
 
