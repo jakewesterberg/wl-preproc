@@ -36,6 +36,8 @@ file, closing the chain rig -> landing -> archive with one hash.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,25 +84,94 @@ def _expected_digests(session_dir: Path) -> dict[str, str]:
     return digests
 
 
-def reconstruct(store_path: Path, relative_path: str) -> bytes:
-    """The original file's exact bytes, rebuilt from the artifact.
+def iter_reconstruct(store_path: Path, relative_path: str) -> Iterator[bytes]:
+    """The original file's exact bytes, rebuilt from the artifact one stored
+    chunk at a time.
+
+    Chunked because rehydration writes files of ~166 GB (a two-hour
+    Neuropixels 1.0 AP stream: 385 channels x 30 kHz x 7,200 s x 2 bytes)
+    and reclamation's proof hashes them, so holding one whole in memory is
+    not an option (2026-09-26 rehydration design, section 6). A `streams`
+    array yields one chunk of rows, every channel, at a time; a `verbatim`
+    array yields one chunk along its only axis.
 
     Checked against `streams` first, `verbatim` second: a compressed stream
-    and its verbatim counterpart never coexist for the same source path (
-    `store.write_store` puts every bulk-stream path in exactly one of the two
-    groups), so the order only matters as a lookup cost, not a correctness
-    choice.
+    and its verbatim counterpart never coexist for the same source path
+    (`store.write_store` puts every bulk-stream path in exactly one of the
+    two groups), so the order only matters as a lookup cost, not a
+    correctness choice.
+
+    A generator, so it raises lazily: a missing path's `KeyError` surfaces on
+    the first `next()`, not at the call. `verify_against` iterates inside its
+    own `try`, which is where that matters.
     """
     root = zarr.open(str(store_path), mode="r")
     arrays = root[ARRAY_GROUP]
     for name in arrays.array_keys():
-        if arrays[name].attrs.get("source") == relative_path:
-            return arrays[name][:].astype(SAMPLE_DTYPE).tobytes()
-    return bytes(root[VERBATIM_GROUP][relative_path][:])
+        array = arrays[name]
+        if array.attrs.get("source") == relative_path:
+            rows = array.chunks[0]
+            for start in range(0, array.shape[0], rows):
+                yield array[start : start + rows].astype(SAMPLE_DTYPE).tobytes()
+            return
+    array = root[VERBATIM_GROUP][relative_path]
+    step = array.chunks[0]
+    for start in range(0, array.shape[0], step):
+        yield array[start : start + step].tobytes()
 
 
-def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
-    """One verdict per file the DONE markers name.
+def reconstruct(store_path: Path, relative_path: str) -> bytes:
+    """The whole rebuilt file, in memory. For tests and small files: every
+    production caller streams through `iter_reconstruct` instead."""
+    return b"".join(iter_reconstruct(store_path, relative_path))
+
+
+def hash_reconstruction(store_path: Path, relative_path: str) -> str:
+    """blake3 of the rebuilt file, fed one chunk at a time."""
+    digest = _blake3.blake3()
+    for block in iter_reconstruct(store_path, relative_path):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _verbatim_arrays(store_path: Path) -> list[tuple[str, zarr.Array]]:
+    """`(path within the verbatim group, array)` for every verbatim file.
+
+    `visititems`, not `arrays(recurse=True)`: in zarr 2.18 the latter yields
+    each array's bare name ('DONE'), dropping the directories that tell three
+    systems' `DONE` markers apart -- confirmed against this venv's zarr
+    before relying on it."""
+    root = zarr.open(str(store_path), mode="r")
+    found: list[tuple[str, zarr.Array]] = []
+    root[VERBATIM_GROUP].visititems(
+        lambda name, obj: found.append((name, obj)) if isinstance(obj, zarr.Array) else None
+    )
+    return found
+
+
+def stored_paths(store_path: Path) -> list[str]:
+    """Every original relative path the artifact holds, sorted: each `streams`
+    array's `source` attribute, and each `verbatim` array's path within that
+    group. Rehydration writes exactly these files and no others."""
+    root = zarr.open(str(store_path), mode="r")
+    streams = [root[ARRAY_GROUP][name].attrs["source"] for name in root[ARRAY_GROUP].array_keys()]
+    return sorted(streams + [name for name, _ in _verbatim_arrays(store_path)])
+
+
+def stored_size(store_path: Path) -> int:
+    """Bytes the rebuilt files will occupy, from array shapes alone -- nothing
+    is decompressed. Stream arrays are sized as `SAMPLE_DTYPE`, because that
+    is what `iter_reconstruct` casts them to."""
+    root = zarr.open(str(store_path), mode="r")
+    streams = sum(
+        math.prod(root[ARRAY_GROUP][name].shape) * SAMPLE_DTYPE.itemsize
+        for name in root[ARRAY_GROUP].array_keys()
+    )
+    return streams + sum(array.shape[0] for _, array in _verbatim_arrays(store_path))
+
+
+def verify_against(store_path: Path, expected: dict[str, str]) -> list[FileVerdict]:
+    """One verdict per `(relative path -> expected blake3)` entry.
 
     A hash mismatch is reported, not raised: it is a fact about one file, and
     a caller comparing many files wants the whole report rather than the
@@ -109,19 +180,18 @@ def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
     function's docstring for why that case is fatal rather than an empty
     report.
 
-    `_blake3.blake3(rebuilt).hexdigest()` -- hashing the whole reconstructed
-    file in one call, rather than the chunked `Path.open("rb")` loop
-    `contracts.done.blake3_file` uses on a file already on disk -- is not a
-    second definition of this project's `blake3` field, only a second way of
+    Hashing is incremental -- `hash_reconstruction` feeds
+    `iter_reconstruct`'s chunks to one `blake3` object -- which is not a
+    second definition of this project's `blake3` field, only a chunked way of
     computing the one BLAKE3 defines: confirmed empirically (10,000,003
-    pseudorandom bytes, deliberately not a multiple of `blake3_file`'s
-    4 MiB chunk size) that a single-shot hash and a chunked-`update()` hash of
-    identical bytes agree. `blake3_file` itself is not called here because it
-    takes a `Path` on disk, and `reconstruct`'s result exists only in memory --
-    the whole point of comparing bytes rather than re-deriving a digest that
-    was itself computed from a file.
+    pseudorandom bytes, deliberately not a multiple of `blake3_file`'s 4 MiB
+    chunk size) that a single-shot hash and a chunked-`update()` hash of
+    identical bytes agree. `blake3_file` itself is not called, because it
+    takes a `Path` on disk and a reconstruction exists only as chunks in
+    flight -- the whole point of comparing bytes rather than re-deriving a
+    digest that was itself computed from a file.
 
-    `reconstruct` is allowed to raise, and this catches it -- broadly,
+    `iter_reconstruct` is allowed to raise, and this catches it -- broadly,
     deliberately, and the breadth is a decision made here, not a default left
     unexamined. Confirmed empirically against this exact zarr layout, in
     three separate checks: `test_a_corrupted_artifact_fails_verification`
@@ -141,7 +211,7 @@ def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
     cleanly as it looks. A fourth, unanticipated kind of damage raising a
     fourth exception type is exactly the case a narrow `except` would crash
     this whole function on: an uncaught exception anywhere in this loop
-    means `verify_store` never reaches `return verdicts` at all, so one
+    means `verify_against` never reaches `return verdicts` at all, so one
     file's corruption loses every verdict, including the ones already found
     to match -- worse than the thing this function exists to avoid. And from
     the caller's side, `reconstruct` raising and `reconstruct` returning the
@@ -169,13 +239,24 @@ def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
     silently.
     """
     verdicts = []
-    for relative_path, expected in sorted(_expected_digests(session_dir).items()):
+    for relative_path, digest in sorted(expected.items()):
         try:
-            rebuilt = reconstruct(store_path, relative_path)
-            actual = _blake3.blake3(rebuilt).hexdigest()
+            actual = hash_reconstruction(store_path, relative_path)
         except Exception as exc:
             actual = f"error reconstructing file: {type(exc).__name__}: {exc}"
-        verdicts.append(
-            FileVerdict(relative_path, expected, actual, actual == expected)
-        )
+        verdicts.append(FileVerdict(relative_path, digest, actual, actual == digest))
     return verdicts
+
+
+def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
+    """One verdict per file the session's DONE markers name.
+
+    `verify_against` with the markers on scratch as the reference, which at
+    archive time is exactly what they are: the rig's own digests. Reclamation's
+    proof and rehydration call `verify_against` directly, with the same digests
+    read back from `ArchiveVerification`, because by then there may be no
+    scratch copy to read markers from (2026-09-26 rehydration design, section
+    6). Raises `ValueError` when the markers name nothing -- see
+    `_expected_digests` for why that is fatal rather than an empty report.
+    """
+    return verify_against(store_path, _expected_digests(session_dir))
