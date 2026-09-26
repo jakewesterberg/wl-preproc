@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -207,6 +208,28 @@ ORACLE_TOLERANCE = 0.05
 #: Spec 5.3's prediction for ours against the oracle, on saccades.
 OURS_BELOW_ORACLE_AT_MOST = 0.05
 
+#: The only oracle failure `_oracle`'s window-wide trim is known not to
+#: fix, and exactly why: `remodnav` 1.1.2's `preproc` (`clf.py` 846-863)
+#: runs its own internal `dilate_nan` step -- widening any interior missing
+#: run longer than `min_blink_duration` (10 samples at 500 Hz) by a further
+#: `dilate_nan` (5 samples) on each side -- *inside* `preproc`, using a mask
+#: `_oracle`'s own external, un-dilated check cannot see, before
+#: `savgol_filter` ever runs. `video/UL31_video_triple_jump_labelled_RA.mat`
+#: has a 91-sample interior gap ending 10 samples before the recording's own
+#: end; `_oracle`'s check finds the trailing 9 samples clean, but `preproc`'s
+#: own dilation shrinks that to 4, below `savgol_filter`'s 9-sample edge
+#: window, so it still raises.
+#:
+#: `(stim, RA filename) -> expected message fragment`. This is the harness's
+#: OWN bound on its exclusion, checked by
+#: `test_the_oracle_fails_only_on_the_diagnosed_file`: a failure not in this
+#: mapping, or one of these that stops failing, must be loud, not silently
+#: folded into (or out of) the shared AL/US file set -- whether it is a
+#: `preproc` crash or `_oracle`'s own `_NoCleanEdgeWindow`.
+EXPECTED_ORACLE_FAILURES: dict[tuple[str, str], str] = {
+    ("video", "UL31_video_triple_jump_labelled_RA.mat"): "array must not contain infs or NaNs",
+}
+
 
 def test_the_null_random_labels_score_near_zero_kappa():
     rng = np.random.default_rng(14)
@@ -251,6 +274,16 @@ def _ours(xy_px, px2deg, fs):
     return codes
 
 
+class _NoCleanEdgeWindow(Exception):
+    """`_oracle` found no `w`-sample window anywhere in the recording free
+    of missing samples -- there is no `[i, j+1)` span to trim to. Raised
+    rather than silently returned as an all-`0` (unlabelled) array, so a
+    recording this degenerate is recorded exactly like a `preproc` crash
+    is, not folded silently into the shared file set. No file in this
+    dataset raises it today; `EXPECTED_ORACLE_FAILURES` has no entry for
+    it, so one doing so in the future fails loudly."""
+
+
 def _oracle(remodnav, xy_px, px2deg, fs, n):
     """The oracle, on the coder's own positions, trimmed to the span whose
     own leading and trailing `savgol_filter` edge windows are entirely
@@ -291,30 +324,56 @@ def _oracle(remodnav, xy_px, px2deg, fs, n):
 
     Still not a guarantee against every possible failure: if no `w`-wide
     window is fully present anywhere in the recording, there is no `[i,
-    j+1)` to compute, and this returns all-unlabelled codes rather than
-    invent one. Any other exception from `preproc`/`__call__` is left to
-    propagate -- the caller must report it, not fabricate samples to make
-    it disappear.
+    j+1)` to compute, and this raises `_NoCleanEdgeWindow` rather than
+    invent one or return all-unlabelled codes silently. Any other
+    exception from `preproc`/`__call__` -- most notably the `ValueError`
+    `preproc`'s own internal, further dilation can still cause even after
+    this trim (see the `andersson` fixture's docstring) -- is left to
+    propagate. Either way, the caller must report it (bounded by
+    `EXPECTED_ORACLE_FAILURES`), never fabricate samples to make it
+    disappear.
     """
     bad = np.isnan(xy_px[:, 0]) | np.isnan(xy_px[:, 1])
-    codes = np.zeros(n, dtype=int)
     m = bad.size
     w = int(0.019 * fs)  # clf.py 841: savgol_length (0.019 s default) * sr, truncated
     if w <= 0 or m < w:
-        return codes
+        raise _NoCleanEdgeWindow(f"recording has {m} samples, shorter than the {w}-sample edge window")
     counts = np.concatenate(([0], np.cumsum(bad.astype(np.int64))))
     window_bad = counts[w:] - counts[:-w]  # window_bad[k] = bad[k:k + w].sum()
     clean_starts = np.flatnonzero(window_bad == 0)
     if clean_starts.size == 0:
-        return codes
+        raise _NoCleanEdgeWindow(
+            "no window of savgol_filter's own edge-fit width is free of missing samples anywhere in this recording"
+        )
     lo, hi = int(clean_starts[0]), int(clean_starts[-1]) + w
     classifier = remodnav.EyegazeClassifier(px2deg=px2deg, sampling_rate=fs)
     data = np.rec.fromarrays([xy_px[lo:hi, 0].copy(), xy_px[lo:hi, 1].copy()], names=["x", "y"])
+    codes = np.zeros(n, dtype=int)
     for event in classifier(classifier.preproc(data)):
         start = lo + int(event["start_time"] * fs)
         stop = lo + int(event["end_time"] * fs)
         codes[start:stop] = ORACLE_CODES[event["label"]]
     return codes
+
+
+@dataclass(frozen=True, slots=True)
+class AnderssonResult:
+    """`andersson`'s return: every `(stimulus, event)` kappa row, plus
+    every oracle failure actually observed (`(stim, RA filename, message)`,
+    whichever of `ValueError` or `_NoCleanEdgeWindow` `_oracle` raised).
+    Kept separate from `kappas` rather than folded in as an extra key,
+    since `kappas`' keys are `(stim, event)` tuples that
+    `test_our_saccade_agreement_is_within_its_prediction_of_the_oracles`
+    sorts -- a stray string key there would break that sort, not merely
+    go unread.
+
+    `test_the_oracle_fails_only_on_the_diagnosed_file` checks
+    `oracle_failures` against `EXPECTED_ORACLE_FAILURES` exactly, so a new
+    or missing failure is loud, never silently absorbed into (or out of)
+    the shared AL/US file set the other three tests read `kappas` from."""
+
+    kappas: dict[tuple[str, str], dict[str, float]]
+    oracle_failures: tuple[tuple[str, str, str], ...]
 
 
 @pytest.fixture(scope="module")
@@ -329,21 +388,19 @@ def andersson():
     (see its docstring) now succeeds on 33 of the 34 files -- up from 32
     with round 1's single-sample trim. The remaining file,
     `video/UL31_video_triple_jump_labelled_RA.mat`, still raises
-    `ValueError`: its 91-sample interior gap (`[1190,1269]` untouched;
-    `[2720,2810]`, 10 samples from the recording's own end) is longer than
-    `preproc`'s own `min_blink_duration` (`clf.py` 792-857, `int(0.02*fs)`
-    default, 10 samples at this file's 500 Hz), so `preproc` dilates it by
-    a further `dilate_nan` (`int(0.01*fs)`, 5 samples) on each side --
-    *inside* `preproc`, after `_oracle`'s own trim has already run and
-    using a mask `_oracle` cannot see -- before `savgol_filter` ever runs.
-    That extra, internal dilation shrinks this file's last clean run below
-    `savgol_filter`'s edge window (9 samples at 500 Hz), even though
-    `_oracle`'s own external, un-dilated check finds a clean run of exactly
-    that length. Rather than replicate `preproc`'s internal dilation logic
-    to predict this -- which would mean transcribing more of `clf.py`'s own
+    `ValueError`; `EXPECTED_ORACLE_FAILURES` (bounding constant) and its own
+    comment give the precise mechanism (`preproc`'s internal `dilate_nan`
+    step widening this file's interior gap past what `_oracle`'s own
+    external, un-dilated check can see). Rather than replicate that internal
+    dilation logic to predict it -- transcribing more of `clf.py`'s own
     behaviour than the trim's edge-window contract needs -- or fabricate
     samples this recording never had, this one file is dropped from the
-    shared set (recorded below and printed).
+    shared set. **Every failure `_oracle` raises is recorded in
+    `AnderssonResult.oracle_failures`, checked exactly against
+    `EXPECTED_ORACLE_FAILURES` by `test_the_oracle_fails_only_on_the_diagnosed_file`,
+    and printed there under `capsys.disabled()`** -- nothing here decides
+    silently that a failure is the expected one; the dedicated test does,
+    every run, gated or not, `-s` or not.
 
     **MN-RA is computed separately, over all 34 files.** It never touches
     `remodnav` -- nothing about it can fail the way `_oracle` can -- and the
@@ -380,7 +437,7 @@ def andersson():
             coder_columns["RA"].append(ra_t)
             try:
                 al = _oracle(remodnav, xy, px2deg, fs, len(ra))
-            except ValueError as exc:
+            except (ValueError, _NoCleanEdgeWindow) as exc:
                 oracle_failures.append((stim, name.format("RA"), str(exc)))
                 continue
             us = _ours(xy, px2deg, fs)
@@ -400,20 +457,12 @@ def andersson():
                 "US-RA": cohen_kappa(oracle_binary["US"], oracle_binary["RA"], oracle_everywhere),
                 "US-MN": cohen_kappa(oracle_binary["US"], oracle_binary["MN"], oracle_everywhere),
             }
-    if oracle_failures:
-        total = sum(len(v) for v in ANDERSSON_FILES.values())
-        print(f"\n  remodnav 1.1.2's preproc still raised on {len(oracle_failures)}/{total} RA files "
-              "after the window-wide edge trim (preproc's own internal dilate_nan step widens an "
-              "interior gap past _oracle's own external, un-dilated check); dropped from AL/US's "
-              "shared set, not fabricated (MN-RA is unaffected -- it is computed over all 34 files):")
-        for stim, fname, msg in oracle_failures:
-            print(f"    {stim}/{fname}: {msg}")
-    return kappas
+    return AnderssonResult(kappas=kappas, oracle_failures=tuple(oracle_failures))
 
 
 def test_the_harness_reproduces_the_coders_own_agreement(andersson):
     for key, (mn_ra, _al_ra, _al_mn) in PAPER_TABLE_3.items():
-        assert andersson[key]["MN-RA"] == pytest.approx(mn_ra, abs=CODER_TOLERANCE), key
+        assert andersson.kappas[key]["MN-RA"] == pytest.approx(mn_ra, abs=CODER_TOLERANCE), key
 
 
 def test_the_harness_reproduces_the_oracles_agreement(andersson):
@@ -421,15 +470,44 @@ def test_the_harness_reproduces_the_oracles_agreement(andersson):
     installed oracle's behaviour differs from the paper's version. Stop and
     report; do not widen."""
     for key, (_mn_ra, al_ra, al_mn) in PAPER_TABLE_3.items():
-        assert andersson[key]["AL-RA"] == pytest.approx(al_ra, abs=ORACLE_TOLERANCE), key
-        assert andersson[key]["AL-MN"] == pytest.approx(al_mn, abs=ORACLE_TOLERANCE), key
+        assert andersson.kappas[key]["AL-RA"] == pytest.approx(al_ra, abs=ORACLE_TOLERANCE), key
+        assert andersson.kappas[key]["AL-MN"] == pytest.approx(al_mn, abs=ORACLE_TOLERANCE), key
+
+
+def test_the_oracle_fails_only_on_the_diagnosed_file(andersson, capsys):
+    """Bounds `_oracle`'s exclusion from the shared AL/US file set (spec
+    5.3): the files it actually fails on, and why, must be exactly
+    `EXPECTED_ORACLE_FAILURES` -- not whatever a future scipy, remodnav or
+    dataset change happens to produce. A new failure (a different file, or
+    the same file for a different reason) or a diagnosed one that stops
+    failing must fail this test loudly, rather than being silently folded
+    into (or out of) `kappas`.
+
+    Also carries the exclusion notice itself, printed under
+    `capsys.disabled()` so it is visible on every run -- gated or not,
+    `-s` or not -- unlike the fixture's own (silent-by-default) computation."""
+    actual = {(stim, fname): msg for stim, fname, msg in andersson.oracle_failures}
+    total = sum(len(v) for v in ANDERSSON_FILES.values())
+    with capsys.disabled():
+        if actual:
+            print(f"\n  oracle excluded from the shared AL/US file set ({len(actual)} of {total} RA files; "
+                  "MN-RA is unaffected -- it is computed over all 34 files):")
+            for (stim, fname), msg in actual.items():
+                print(f"    {stim}/{fname}: {msg}")
+        else:
+            print(f"\n  oracle excluded no files from the shared AL/US file set (all {total} RA files ran).")
+    assert actual.keys() == EXPECTED_ORACLE_FAILURES.keys(), (
+        "oracle failures do not match the diagnosed set", sorted(actual), sorted(EXPECTED_ORACLE_FAILURES)
+    )
+    for key, expected_fragment in EXPECTED_ORACLE_FAILURES.items():
+        assert expected_fragment in actual[key], (key, actual[key], expected_fragment)
 
 
 def test_our_saccade_agreement_is_within_its_prediction_of_the_oracles(andersson, capsys):
     with capsys.disabled():
-        for key, k in sorted(andersson.items()):
+        for key, k in sorted(andersson.kappas.items()):
             print(f"\n  {key}: " + ", ".join(f"{pair}={value:.3f}" for pair, value in k.items()))
     for stim in ANDERSSON_FILES:
-        k = andersson[(stim, "Sac")]
+        k = andersson.kappas[(stim, "Sac")]
         assert k["US-RA"] >= k["AL-RA"] - OURS_BELOW_ORACLE_AT_MOST, stim
         assert k["US-MN"] >= k["AL-MN"] - OURS_BELOW_ORACLE_AT_MOST, stim
