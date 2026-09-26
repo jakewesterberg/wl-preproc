@@ -1,13 +1,20 @@
 # Where this build actually is
 
-**Last updated 2026-09-26**, describing `main` at `141022b` — the merge commit
-for `fix/timing-resolved-every-system`, which closed the one residual
-`spec/rehydration` (merged as `5cd0c79`) carried. Its tree is byte-identical to
-the tested branch head `87cb276`: 1474 passed on 3.11 and 1473 on 3.13 against a
-freshly compiled resolution, 0 failed on both. CI read off the run for the
-rehydration merge's records commit `56be4f1`: green on both interpreters —
-`gh run view 36240348443`. CI on `141022b` and later is recorded here only once
-read, not before.
+**Last updated 2026-09-26**, describing `main` at `d4f390c` — the merge commit
+for `fix/parked-follow-ups-4-to-6`, the last of the archive line's work this
+day: rehydration (`5cd0c79`, residual closed by `141022b`), the daemon skipping
+freed sessions (`6ac0c9f`), the streaming archive writer (`47dbecf`), the kind
+map's move to `eye/detect/labels.py` (`fbfb19f`), the gap-aware branch's
+deferred minors and the stim.dat amendment (`8af4278`), operator messages after
+a failure (`439ceb4`), and the six parked rehydration follow-ups (`d4f390c`).
+`d4f390c`'s tree is byte-identical to the tested branch head `c99d74a`: 1501
+passed on 3.11 and 1500 on 3.13 against a freshly compiled resolution, 0 failed
+on both. CI read off `d4f390c` itself: green on both interpreters, and the
+manifest check green — `gh run view 36256864205`. CI on later heads is recorded
+here only once read, not before.
+
+*This header named `141022b`, with CI read for `56be4f1`, until the later
+merges above; true when written.*
 
 *This header said "describing branch `spec/rehydration` — NOT merged" until the
 requester chose to merge the same day; true when written.*
@@ -101,12 +108,17 @@ requester chose to merge the same day; true when written.*
 >    saccade cost. A measurement that refines a number already in hand, so it
 >    ranks below the code items.
 >
-> **Deferred minors from the gap-aware branch** are listed in
-> `handoffs/2026-09-19-gap-aware-barcode-extraction-built.md` and are not
-> worth a dedicated pass — let them ride with whatever next touches those
-> files. One is worth knowing because it is this repository's own rule
-> turned on itself: `eye/detect/validity.py` cites a "whole-branch review,
-> finding H2" and no document of that name exists anywhere under `docs/`.
+> **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
+> items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
+> in place of a "finding H2" no document named) and all six parked
+> rehydration follow-ups (the last three in `d4f390c`, which also gave
+> `wlpp rehydrate` and `wlpp hold` a `--session-datetime` for one subject
+> recorded twice at one path). One item remains open and is not a minor to
+> ride along: **the suite has no session-date allocator** (gap-aware
+> handoff, item 4), so a new database-backed test can collide with another
+> file's session; every new fixture so far has picked an unclaimed date by
+> hand. *Until then this paragraph listed the gap-aware minors as open;
+> true when written.*
 >
 > **A priority the code does not imply**, stated by the requester on
 > 2026-09-19: **glissades are peripheral.** Three recent rounds were
