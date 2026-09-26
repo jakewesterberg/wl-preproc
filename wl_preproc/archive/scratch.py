@@ -116,11 +116,11 @@ def free_session(
 
     from wl_preproc.archive import reclaim
     from wl_preproc.archive.proof import prove_artifact
-    from wl_preproc.archive.verify import _expected_digests
+    from wl_preproc.archive.verify import _expected_digests, stored_sizes
     from wl_preproc.schema import archive
 
     recorded = recorded_session_dir(key, prefix=prefix)
-    if str(Path(session_dir)) != recorded:
+    if Path(session_dir) != Path(recorded):
         raise Refused(
             f"{session_dir} is not this session's recorded directory {recorded}; "
             "rehydration restores to the recorded one, so only that copy may be freed"
@@ -140,6 +140,23 @@ def free_session(
     proof = prove_artifact(artifact, digest, recorded_digests(key, prefix=prefix))
     if not proof.passed:
         raise Refused(proof.reason)
+
+    # The scratch copy is only a cache if the archive holds all of it, as it
+    # is NOW. A file added or changed on scratch after archiving is not in
+    # the artifact, and freeing it would lose it (2026-09-26 rehydration
+    # design, section 4, amended by Task 5's review).
+    held = stored_sizes(artifact)
+    unarchived = sorted(
+        str(p.relative_to(session_dir))
+        for p in session_dir.rglob("*")
+        if p.is_file() and held.get(str(p.relative_to(session_dir))) != p.stat().st_size
+    )
+    if unarchived:
+        shown = ", ".join(unarchived[:5]) + (", ..." if len(unarchived) > 5 else "")
+        raise Refused(
+            f"{len(unarchived)} file(s) on scratch are not in the archive as they are "
+            f"now, so freeing would lose them: {shown}"
+        )
 
     bytes_freed = sum(p.stat().st_size for p in session_dir.rglob("*") if p.is_file())
     staging = staging_dir(session_dir, RECLAIMING)

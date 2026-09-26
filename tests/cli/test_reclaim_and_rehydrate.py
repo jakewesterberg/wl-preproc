@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import shutil
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,25 @@ def landed(landed, prefix):
     (the rule `tests/cli/test_consensus_report.py::_plant_pair` states: never
     leave a key a later module's `run_once()` fails on). Deleting the
     `pipeline.Session` row cascades to everything keyed on it.
+
+    **This is production behaviour too, not only test pollution** (Task 5
+    review, finding I3; controller ruling: record it here rather than change
+    the daemon). A session freed before every stage that will ever want it
+    has actually populated is this exact same state for real, not only under
+    this fixture's teardown. `daemon.run_once()` goes on sweeping it going
+    forward: the event stage never reserves a `~jobs` row at all
+    (`daemon.py::reap_stale_jobs`'s own docstring -- "it never calls
+    `.populate()`"), so it re-attempts and re-errors on the freed session
+    EVERY single pass, forever. Any OTHER, Computed/Imported stage that had
+    not yet run for this session when it was freed errors ONCE against the
+    now-missing files and lands at `status='error'` in its own `~jobs` table
+    -- and `_populate_distributed` draws only from `jobs.pending`
+    (`reap_stale_jobs`'s docstring again), so that key is not retried on any
+    later pass, including one after rehydration restores the files, until
+    someone clears that job error by hand. Deleting the row here is a choice
+    available to a test tearing down its own fixture; it is not available to
+    the real pipeline, which is exactly why it is written out here rather
+    than left for a future reader to discover the hard way.
     """
     from wl_preproc.schema import pipeline
 
@@ -267,6 +287,76 @@ def test_reclaim_refuses_a_leftover_staging_directory(landed, prefix, capsys):
     assert len(archive.ScratchReclamation & key) == 0
 
 
+def test_an_interrupted_removal_is_named_by_the_next_reclaim(landed, prefix, capsys):
+    """Fix round 1, finding 1. `os.rename` succeeds and the transaction
+    commits, but the final `shutil.rmtree` of the now-empty staging
+    directory fails -- an interrupted removal, not an interrupted commit.
+    The NEXT `wlpp reclaim` must name the leftover staging directory rather
+    than being masked by the `is_dir()` "already reclaimed?" guard, which
+    used to run first."""
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root = _ready(landed, "rhrmtree", prefix)
+
+    with patch(
+        "wl_preproc.archive.scratch.shutil.rmtree",
+        side_effect=OSError("simulated removal failure"),
+    ):
+        with pytest.raises(OSError):
+            _reclaim(session_dir, nas_root, prefix)
+
+    assert len(archive.ScratchReclamation & key) == 1
+    assert not session_dir.exists()
+    leftover = _staging(session_dir, ".reclaiming")
+    assert (leftover / session_dir.name).is_dir()
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+    assert str(leftover) in _refusal(capsys.readouterr().out)
+
+    shutil.rmtree(leftover)
+
+
+def test_reclaim_refuses_a_file_added_after_archiving(landed, prefix, capsys):
+    """Controller ruling, Task 5 review: the proof compares the NAS copy with
+    recorded values, never scratch with the NAS -- a file dropped onto
+    scratch after archiving would otherwise be deleted having never been
+    archived at all."""
+    session_dir, key, nas_root = _ready(landed, "rhlate", prefix)
+    (session_dir / "late-notes.txt").write_text("added after archiving\n")
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    refusal = _refusal(capsys.readouterr().out)
+    assert "late-notes.txt" in refusal
+    assert "not in the archive" in refusal
+    _untouched(session_dir, key, before)
+
+
+def test_reclaim_refuses_a_file_changed_after_archiving(landed, prefix, capsys):
+    """The same hole, reached by editing a file the archive already holds
+    rather than adding a new one. Built by hand rather than through `_ready`:
+    the extra file has to exist BEFORE `_archive` runs, so the archive's own
+    copy of it is the original, unedited bytes."""
+    session_dir, key = landed("rhedit")
+    (session_dir / "notes.txt").write_text("original\n")
+    nas_root = _archive(session_dir, prefix)
+    _verdict(key, "force", hour=11, prefix=prefix)
+    with (session_dir / "notes.txt").open("a") as handle:
+        handle.write("more\n")
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    refusal = _refusal(capsys.readouterr().out)
+    assert "notes.txt" in refusal
+    assert "not in the archive" in refusal
+    _untouched(session_dir, key, before)
+
+
 def test_reclaim_refuses_a_symlinked_spelling_of_the_session(landed, prefix, capsys):
     """Review Focus 1. Rehydration restores to the RECORDED path; freeing a
     copy reached another way would leave nothing to restore it to."""
@@ -322,6 +412,26 @@ def test_a_failed_record_leaves_the_session_where_it_was(landed, prefix):
         side_effect=RuntimeError("simulated insert failure"),
     ):
         with pytest.raises(RuntimeError, match="simulated insert failure"):
+            _reclaim(session_dir, nas_root, prefix)
+
+    _untouched(session_dir, key, before)
+
+
+def test_a_failed_rename_rolls_back_the_record(landed, prefix):
+    """The sibling this needs, and the one the test above cannot stand in
+    for: that test makes the INSERT fail, which would still pass even with
+    the transaction removed entirely, since the insert never reaches the
+    database either way. This makes the RENAME fail instead, after the
+    insert has already gone through -- only the transaction rolling that
+    insert back, on the rename's own failure, proves the guard."""
+    session_dir, key, nas_root = _ready(landed, "rhrenm", prefix)
+    before = _files(session_dir)
+
+    with patch(
+        "wl_preproc.archive.scratch.os.rename",
+        side_effect=OSError("simulated rename failure"),
+    ):
+        with pytest.raises(OSError):
             _reclaim(session_dir, nas_root, prefix)
 
     _untouched(session_dir, key, before)

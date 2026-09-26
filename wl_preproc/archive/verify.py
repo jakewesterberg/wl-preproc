@@ -158,16 +158,28 @@ def stored_paths(store_path: Path) -> list[str]:
     return sorted(streams + [name for name, _ in _verbatim_arrays(store_path)])
 
 
+def stored_sizes(store_path: Path) -> dict[str, int]:
+    """`{relative path: rebuilt size}` for every file the artifact holds, from
+    array shapes alone -- nothing is decompressed. Reclamation uses this to
+    refuse freeing a file the archive does not hold AS IT IS NOW
+    (`archive/scratch.py::free_session`): a file added to scratch after
+    archiving, or changed since, has no entry -- or a disagreeing one -- here."""
+    root = zarr.open(str(store_path), mode="r")
+    sizes = {
+        root[ARRAY_GROUP][name].attrs["source"]: (
+            math.prod(root[ARRAY_GROUP][name].shape) * SAMPLE_DTYPE.itemsize
+        )
+        for name in root[ARRAY_GROUP].array_keys()
+    }
+    sizes.update({name: array.shape[0] for name, array in _verbatim_arrays(store_path)})
+    return sizes
+
+
 def stored_size(store_path: Path) -> int:
     """Bytes the rebuilt files will occupy, from array shapes alone -- nothing
     is decompressed. Stream arrays are sized as `SAMPLE_DTYPE`, because that
-    is what `iter_reconstruct` casts them to."""
-    root = zarr.open(str(store_path), mode="r")
-    streams = sum(
-        math.prod(root[ARRAY_GROUP][name].shape) * SAMPLE_DTYPE.itemsize
-        for name in root[ARRAY_GROUP].array_keys()
-    )
-    return streams + sum(array.shape[0] for _, array in _verbatim_arrays(store_path))
+    is what `iter_reconstruct` casts them to. Sums `stored_sizes`."""
+    return sum(stored_sizes(store_path).values())
 
 
 def verify_against(store_path: Path, expected: dict[str, str]) -> list[FileVerdict]:

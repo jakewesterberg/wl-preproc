@@ -21,6 +21,7 @@ from wl_preproc.archive.verify import (
     reconstruct,
     stored_paths,
     stored_size,
+    stored_sizes,
     verify_against,
     verify_store,
 )
@@ -186,6 +187,16 @@ def test_stored_size_is_the_sessions_size_without_decompressing(tmp_path):
     assert stored_size(result.path) == sum(
         p.stat().st_size for p in session.rglob("*") if p.is_file()
     )
+
+
+def test_stored_sizes_names_every_file_with_its_size(tmp_path):
+    session, result = _archived(tmp_path)
+    expected = {
+        str(p.relative_to(session)): p.stat().st_size
+        for p in session.rglob("*")
+        if p.is_file()
+    }
+    assert stored_sizes(result.path) == expected
 
 
 def test_a_missing_path_is_a_verdict_not_a_crash(tmp_path):

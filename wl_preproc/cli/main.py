@@ -394,10 +394,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "reclaim":
         from wl_preproc.archive import reclaim as archive_reclaim
-        from wl_preproc.archive.scratch import Refused, free_session
+        from wl_preproc.archive.scratch import Refused, free_session, refuse_leftovers
         from wl_preproc.archive.verify import _expected_digests
 
         session_dir = Path(args.session)
+        # Checked BEFORE the `is_dir()` guard below, not after: an interrupted
+        # removal (a commit that then fails to `rmtree` the now-empty staging
+        # directory, or a rename that succeeds but the commit after it fails)
+        # leaves `session_dir` gone and a staging directory holding the
+        # session sitting right next to it. `is_dir()` alone cannot tell that
+        # apart from a CLEAN reclamation and would refuse with "already
+        # reclaimed?" -- true, but not the thing spec section 4 requires the
+        # next `wlpp reclaim` to name (Task 5 review, finding 1).
+        try:
+            refuse_leftovers(session_dir)
+        except Refused as exc:
+            print(f"refusing: {exc}")
+            return 1
         if not session_dir.is_dir():
             print(
                 f"refusing: {session_dir} is not a directory -- already reclaimed? "
