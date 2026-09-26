@@ -715,3 +715,30 @@ def test_a_failed_rename_leaves_no_rehydration_record(landed, prefix):
             _rehydrate(session_dir, nas_root, prefix)
 
     _nothing_restored(session_dir, key)
+
+
+def test_a_failure_creating_the_staged_session_leaves_no_leftover(landed, prefix):
+    """Round 2 review: `target.mkdir()` sits INSIDE the try/finally now, as
+    its first statement, not beside `staging.mkdir()` -- a fault creating it
+    must reach the existing cleanup, or the (empty) staging directory this
+    call itself created is left behind for `refuse_leftovers` to block every
+    later rehydrate of this session on, by hand."""
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhmkdir", prefix)
+    real = Path.mkdir
+
+    def flaky(self, *args, **kwargs):
+        # Only the staged session itself, never `staging.mkdir()` (whose own
+        # name is the `.<name>.rehydrating` directory, not `session_dir`'s
+        # name) and never any per-file directory `_write` creates under
+        # `target` (which this fault is never reached in time to exercise
+        # anyway, since `target.mkdir()` is the very first statement inside
+        # the try).
+        if self.parent.name.endswith(".rehydrating") and self.name == session_dir.name:
+            raise OSError("simulated mkdir failure")
+        return real(self, *args, **kwargs)
+
+    with patch.object(Path, "mkdir", autospec=True, side_effect=flaky):
+        with pytest.raises(OSError, match="simulated mkdir failure"):
+            _rehydrate(session_dir, nas_root, prefix)
+
+    _nothing_restored(session_dir, key)

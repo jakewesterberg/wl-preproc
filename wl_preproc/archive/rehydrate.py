@@ -222,15 +222,28 @@ def rehydrate_session(
 
     staging = staging_dir(session_path, REHYDRATING)
     target = staging / session_path.name
-    # Two separate mkdirs, not `target.mkdir(parents=True)`: `parents=True`
-    # would silently recreate `session_path.parent` if it vanished between
-    # the `is_dir()` check above and here, exactly the thing that check
-    # exists to refuse rather than paper over (the same pattern
-    # `scratch.py::free_session` uses for its own staging directory).
+    # `staging.mkdir()` stays OUTSIDE the try/finally below: if it raises (a
+    # race with another process, since `refuse_leftovers` above only checked
+    # a moment ago -- or any other fault), THIS call never created that
+    # directory, and must not be the one to remove it.
+    #
+    # `target.mkdir()` moved INSIDE the try, as its first statement, rather
+    # than sitting beside `staging.mkdir()` above (round 1 review, Minor 4,
+    # fixed a different bug at that same spot; round 2 review caught what
+    # that fix introduced): a fault creating it -- ENOSPC, a permission or
+    # quota fault, any filesystem error -- used to propagate before the try
+    # was ever entered, so the `finally`'s cleanup never ran and the now-
+    # empty staging directory THIS call DID create was left behind for
+    # `refuse_leftovers` to block every later rehydrate of this session on,
+    # by hand, forever. Deliberately still two separate mkdirs, not
+    # `target.mkdir(parents=True)`: `parents=True` would silently recreate
+    # `session_path.parent` if it vanished between the `is_dir()` check above
+    # and here, exactly what that check exists to refuse rather than paper
+    # over.
     staging.mkdir()
-    target.mkdir()
     restored = False
     try:
+        target.mkdir()
         written: dict[str, str] = {}
         total = 0
         # Exactly the files the artifact holds, and no others: nothing else
