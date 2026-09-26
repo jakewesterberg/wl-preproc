@@ -351,7 +351,9 @@ def _interrupted_staging_dirs(root: Path) -> list[Path]:
             continue
         for path in candidates:
             try:
-                if path.is_dir():
+                # A dangling symlink counts too, as it does for
+                # `archive/scratch.py::refuse_leftovers`, which refuses on it.
+                if path.is_dir() or path.is_symlink():
                     found.append(path)
             except OSError:
                 continue

@@ -264,7 +264,12 @@ checks passed prints a sentence saying what is on disk now
 (`archive/scratch.py::scratch_state`, read from the disk at that moment)
 before the traceback, and exits 1; and `NOT restored` reports a staging
 directory the cleanup could not remove rather than assuming it is gone.
-4–6 remain.*
+Review of that change found the one failure point no test reached: the
+transaction's COMMIT failing after the rename. `free_session` now moves the
+session back (the row rolled back, so it must not be freed with no record),
+and `rehydrate_session` raises `RestoredButUnrecorded` -- the verified files
+are in place, only the record failed -- which the CLI reports with the steps
+that get it recorded. 4–6 remain.*
 
 ## Next items — the two findings of spec §12
 

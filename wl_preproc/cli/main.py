@@ -520,7 +520,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.group == "rehydrate":
-        from wl_preproc.archive.rehydrate import NotRestored, rehydrate_session
+        from wl_preproc.archive.rehydrate import (
+            NotRestored,
+            RestoredButUnrecorded,
+            rehydrate_session,
+        )
         from wl_preproc.archive.scratch import Refused, scratch_state
 
         try:
@@ -539,6 +543,17 @@ def main(argv: list[str] | None = None) -> int:
                 "NOT restored -- the NAS artifact is untouched. "
                 f"{scratch_state(Path(args.session))}"
             )
+            return 1
+        except RestoredButUnrecorded as exc:
+            print(
+                f"restored but NOT recorded: {exc.session_path} holds the verified files, "
+                "but the `ScratchRehydration` row did not commit, so the daemon still "
+                "treats the session as freed and skips it. To record it: move that "
+                "directory OUT of the scratch root (inside it, the watcher would take it "
+                "for a new session), run `wlpp rehydrate` again, and delete the moved "
+                "copy once that reports success. Details follow."
+            )
+            traceback.print_exc()
             return 1
         except Exception:
             print(

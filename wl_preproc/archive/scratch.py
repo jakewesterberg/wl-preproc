@@ -267,6 +267,7 @@ def free_session(
     bytes_freed = sum(p.stat().st_size for p in session_dir.rglob("*") if p.is_file())
     staging = staging_dir(session_dir, RECLAIMING)
     staging.mkdir()
+    moved = False
     try:
         # One transaction: the row says the session is off its path, and the
         # rename is what takes it off. An insert that fails means no rename;
@@ -276,7 +277,20 @@ def free_session(
                 {**key, "reclaimed_at": now_utc(), "bytes_freed": bytes_freed}
             )
             os.rename(session_dir, staging / session_dir.name)
+            moved = True
     except BaseException:
+        if moved:
+            # The commit failed AFTER the rename, so the row rolled back while
+            # the session left its path. Put it back where every record says
+            # it still is -- otherwise it would be freed with no record, and
+            # the daemon, which skips only sessions recorded as freed, would
+            # go on reading its absent directory. Best effort: if this fails
+            # too, the session stays in the staging directory, which
+            # `scratch_state` then names.
+            try:
+                os.rename(staging / session_dir.name, session_dir)
+            except OSError:
+                pass
         # `rmdir` succeeds only on an empty directory -- that is, only when the
         # rename never happened. If it did and the commit then failed, the
         # session sits inside the staging directory, and this leaves it there

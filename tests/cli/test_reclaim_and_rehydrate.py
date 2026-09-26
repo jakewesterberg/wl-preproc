@@ -181,6 +181,24 @@ def _untouched(session_dir, key, before):
     assert not _staging(session_dir, ".reclaiming").exists()
 
 
+def _commit_fails_after_the_body():
+    """A context manager under which a transaction's COMMIT fails after its
+    body has run -- the rename done, the insert rolled back -- by having
+    `commit_transaction` roll back and raise, which is what a commit that
+    fails does. The cheaper substitutes (failing the insert, failing the
+    rename) never reach this point. Scoped to the call under test, not a
+    `monkeypatch`, so the fixture's own teardown commits normally."""
+    from datajoint.connection import Connection
+
+    real_cancel = Connection.cancel_transaction
+
+    def commit(self):
+        real_cancel(self)
+        raise RuntimeError("simulated commit failure")
+
+    return patch.object(Connection, "commit_transaction", commit)
+
+
 # -- wlpp reclaim --------------------------------------------------------------
 
 
@@ -576,6 +594,21 @@ def test_a_failed_rename_rolls_back_the_record(landed, prefix, capsys):
     _untouched(session_dir, key, before)
 
 
+def test_a_commit_failing_after_the_rename_puts_the_session_back(landed, prefix, capsys):
+    """The row rolled back while the session left its path: freed with no
+    record, which the daemon (skipping only sessions recorded as freed) would
+    then read. `free_session` moves it back, so disk and records agree."""
+    session_dir, key, nas_root = _ready(landed, "rhcmt1", prefix)
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    with _commit_fails_after_the_body():
+        assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    assert "is in place; no staging directory is left over" in capsys.readouterr().out
+    _untouched(session_dir, key, before)
+
+
 def test_the_daemon_never_frees_a_session():
     """Ruling 1: a person frees scratch, for now. A source scan in the shape
     of `tests/schema/test_guardrails.py`'s own, because the rule is about
@@ -853,8 +886,34 @@ def test_not_restored_names_a_partial_copy_the_cleanup_could_not_remove(
     assert "NOT restored" in out
     assert f"{leftover} is left over" in out
     assert "no staging directory is left over" not in out
+    # And nothing was restored or recorded: the failure is a check, before
+    # the transaction.
+    assert not os.path.lexists(session_dir)
+    assert len(archive.ScratchRehydration & key) == 0
 
     shutil.rmtree(leftover)
+
+
+def test_a_commit_failing_after_the_rename_says_restored_but_not_recorded(
+    landed, prefix, capsys
+):
+    """Every check passed and the files are in place; only the record failed.
+    Reported as exactly that -- not as a failed restore -- with the steps that
+    get it recorded."""
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, pristine = _reclaimed(landed, "rhcmt2", prefix)
+    capsys.readouterr()
+
+    with _commit_fails_after_the_body():
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert f"restored but NOT recorded: {session_dir}" in out
+    assert "move that directory OUT of the scratch root" in out
+    assert _files(session_dir) == pristine
+    assert len(archive.ScratchRehydration & key) == 0
+    assert not _staging(session_dir, ".rehydrating").exists()
 
 
 def test_a_failure_part_way_through_leaves_nothing(landed, prefix, capsys):

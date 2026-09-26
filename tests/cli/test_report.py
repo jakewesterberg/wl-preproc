@@ -888,15 +888,19 @@ def test_an_interrupted_staging_directory_is_named_in_the_disk_section(scanned):
     session_id = CI_RECIPE.session_id
     reclaiming = root / f".{session_id}.reclaiming"
     rehydrating = root / f".{session_id}-other.rehydrating"
+    dangling = root / f".{session_id}-third.reclaiming"
     reclaiming.mkdir()
     rehydrating.mkdir()
+    # A dangling symlink counts, as it does for `refuse_leftovers`.
+    dangling.symlink_to(root / "gone")
 
     body = build_report(root, prefix=prefix)
 
     section = _section(body, "Disk")
-    assert "2 interrupted reclaim/rehydrate staging directories" in section
+    assert "3 interrupted reclaim/rehydrate staging directories" in section
     assert str(reclaiming) in section
     assert str(rehydrating) in section
+    assert str(dangling) in section
 
 
 def test_no_interrupted_staging_directory_is_silent_in_the_disk_section(scanned):

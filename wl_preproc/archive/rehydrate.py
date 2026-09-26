@@ -54,12 +54,25 @@ class Rehydrated:
 
 
 class NotRestored(Exception):
-    """Every file was rebuilt, and at least one check failed. Nothing was left
-    on scratch; `verdicts` names what failed."""
+    """Every file was rebuilt, and at least one check failed. The staging copy
+    is removed, best effort -- `wlpp rehydrate` reports what the disk actually
+    holds (`archive/scratch.py::scratch_state`); `verdicts` names what failed."""
 
     def __init__(self, verdicts: list[FileVerdict]):
         super().__init__(f"{len(verdicts)} check(s) failed")
         self.verdicts = verdicts
+
+
+class RestoredButUnrecorded(Exception):
+    """Every check passed and the files were moved into place, but the
+    transaction's commit then failed, so no `ScratchRehydration` row exists:
+    the session is back on scratch while its records still say it is freed,
+    and the daemon keeps skipping it. Distinct from every other failure
+    because the data is not the problem -- the record is."""
+
+    def __init__(self, session_path: Path):
+        super().__init__(f"{session_path} is restored but its rehydration was not recorded")
+        self.session_path = session_path
 
 
 def session_for_path(session_path: Path, *, prefix: str = DEFAULT_PREFIX) -> dict:
@@ -256,11 +269,22 @@ def rehydrate_session(
         failures = [v for v in _check(target, key, expected, written) if not v.matched]
         if failures:
             raise NotRestored(failures)
-        with dj.conn().transaction:
-            archive.ScratchRehydration.insert1(
-                {**key, "rehydrated_at": now_utc(), "bytes_written": total}
-            )
-            os.rename(target, session_path)
+        moved = False
+        try:
+            with dj.conn().transaction:
+                archive.ScratchRehydration.insert1(
+                    {**key, "rehydrated_at": now_utc(), "bytes_written": total}
+                )
+                os.rename(target, session_path)
+                moved = True
+        except Exception as exc:
+            if moved:
+                # The rename happened and the commit that followed it failed:
+                # the verified files are in place, the row is not. The staging
+                # directory is empty now, so it is removed like on success.
+                restored = True
+                raise RestoredButUnrecorded(session_path) from exc
+            raise
         restored = True
     finally:
         if restored:
