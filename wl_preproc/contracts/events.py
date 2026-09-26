@@ -16,35 +16,35 @@ because its 16 digital inputs cannot fit 16 data lines plus strobe plus barcode.
 **Ownership splits on decodability versus meaning**, per wl-expcontroller's
 ADR-0007 (`docs/design/decisions/ADR-0007-event-vocabulary-ownership.md`,
 accepted 2026-08-31). If getting it wrong makes a recording UNDECODABLE it is
-this module's; if it makes the recording UNINTERPRETABLE it is `wl-mllib`'s:
+this module's; if it makes the recording UNINTERPRETABLE it is `wl-exptasks`':
 
     framing, escapes, checksum, payload word counts, DVA encoding   here
     Marker 1-255, session/block/trial structure                     here
-    TaskEvent 256-4095, lab-wide task-event semantics               wl-mllib
-    TaskTypeCode 100+, lab-defined task identities                  wl-mllib
-    task-specific / condition 4096-32767                            wl-mllib
+    TaskEvent 256-4095, lab-wide task-event semantics               wl-exptasks
+    TaskTypeCode 100+, lab-defined task identities                  wl-exptasks
+    task-specific / condition 4096-32767                            wl-exptasks
 
 That ADR was written because two manifests contradicted each other:
-`wl-mllib/wl.yaml` published `task-event-vocabulary` claiming "wl-preproc reads
+`wl-exptasks/wl.yaml` published `task-event-vocabulary` claiming "wl-preproc reads
 event handling from here rather than defining it", while this file was already
 a frozen interface defining it. `wlo validate` cannot catch that -- it checks
 that a published name resolves to exactly one publisher, not that a description
 is true -- so it was found by reading both repositories.
 
 **That clause is now settled: AGREED 2026-09-01.** `TaskEvent` 256-4095 is
-wl-mllib's to allocate. The four values already allocated here (256-259)
+wl-exptasks' to allocate. The four values already allocated here (256-259)
 transfer as ALREADY-ALLOCATED -- ownership moving is not permission to
 renumber, and renumbering would silently relabel every event in every prior
 recording. wl-expcontroller is therefore no longer confined to 4096-32767 on
 this repository's account.
 
-The enum below stays here because wl-mllib publishes `task-event-vocabulary`
+The enum below stays here because wl-exptasks publishes `task-event-vocabulary`
 as `stability: planned` and defines no `TaskEvent` in code, so this is the
 only implementation and this pipeline must decode those values today. It is a
-MIRROR of wl-mllib's allocation, not the source of truth -- the same shape
+MIRROR of wl-exptasks' allocation, not the source of truth -- the same shape
 `wl_expcontroller/encode.py` uses when it mirrors `PAYLOAD_WORD_COUNTS` rather
-than importing it. **New task events are requested in wl-mllib and never added
-here.** When wl-mllib ships a package this becomes a pinned dependency the way
+than importing it. **New task events are requested in wl-exptasks and never added
+here.** When wl-exptasks ships a package this becomes a pinned dependency the way
 `wl-sync` already is; `wl.yaml`'s `consumes` entry records the edge meanwhile.
 
 Consequences of the rule that bind this module either way: no value is ever
@@ -162,16 +162,16 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
 
 
 class TaskEvent(IntEnum):
-    """Task events. Range 256-4095. **Allocated in wl-mllib, mirrored here.**
+    """Task events. Range 256-4095. **Allocated in wl-exptasks, mirrored here.**
 
-    Do not add a value to this enum. The range is wl-mllib's to allocate
+    Do not add a value to this enum. The range is wl-exptasks' to allocate
     (wl-expcontroller ADR-0007, its pending clause agreed by this repository
     2026-09-01); a new task event is requested there and mirrored here once it
     exists. The four below predate the split and transfer as already-allocated
     -- **none of them is ever renumbered**, because a renumbering silently
     relabels every event in every recording already on disk.
 
-    Mirrored rather than imported because wl-mllib publishes this artifact as
+    Mirrored rather than imported because wl-exptasks publishes this artifact as
     `stability: planned` and has no package to import from yet; this pipeline
     still has to decode these values today. See the module docstring.
 
