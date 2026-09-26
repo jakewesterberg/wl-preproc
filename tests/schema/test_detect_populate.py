@@ -242,6 +242,11 @@ _PURSUIT_ONSET_OFFSET_S = 0.05
 _PURSUIT_DURATION_S = 2.9
 _PURSUIT_STEP_PX = 1218.0
 _PURSUIT_N_SUBSTEPS = 1450
+# The detection trial follows four calibration trials, and the ramp starts
+# `_PURSUIT_ONSET_OFFSET_S` into it. Module constants, so the builder and
+# the test that looks for the ramp read one value.
+_PURSUIT_N_CAL_TRIALS = 4
+_PURSUIT_ONSET_S = _PURSUIT_N_CAL_TRIALS * TRIAL_DURATION_S + _PURSUIT_ONSET_OFFSET_S
 
 
 def _land_calibrated_session(tmp_path_factory, *, dirname, session_id, subject,
@@ -369,10 +374,10 @@ def _build_pursuit_session(tmp_path_factory, *, dirname, session_id, subject, se
     eyes move by the same mechanism."""
     from wl_preproc.synth.recipe import EyeFixationSpec
 
-    n_cal_trials = 4
+    n_cal_trials = _PURSUIT_N_CAL_TRIALS
     n_trials = n_cal_trials + 1
     detect_trial_start = n_cal_trials * TRIAL_DURATION_S
-    onset_s = detect_trial_start + _PURSUIT_ONSET_OFFSET_S
+    onset_s = _PURSUIT_ONSET_S
     end_s = onset_s + _PURSUIT_DURATION_S
     arrived = (_PURSUIT_STEP_PX, 0.0)
     detect_fixations = [
@@ -3603,6 +3608,27 @@ def test_a_binocular_slow_ramp_produces_a_pursuit_conjunction_run(pursuit_sessio
     assert "pursuit" in labels, (
         "a slow ramp both eyes follow must produce a conjunction `pursuit` "
         f"run; stored labels were {labels}"
+    )
+
+    # Where, not only whether. The ramp's rows come from the constants that
+    # planted it; run indices are file rows, as the phantom and near-miss
+    # tests read them through `_first_row_at`. More than half the ramp, not
+    # merely touching it: with `pursuit` and `fixation` swapped in
+    # `_fixation_or_pursuit`, the hold before the ramp became a conjunction
+    # `pursuit` run reaching 25 rows into it, which an overlap check passes.
+    ramp_start = _first_row_at(_PURSUIT_ONSET_S)
+    ramp_stop = ramp_start + _PURSUIT_N_SUBSTEPS
+    pursuit = [
+        (r["run_start"], r["run_stop"])
+        for r in (
+            detect.EyeDetection.Run
+            & {**session_key, "trace": "conjunction", "label": "pursuit", **_detector("remodnav")}
+        ).to_dicts(order_by="run_index")
+    ]
+    on_ramp = sum(max(0, min(stop, ramp_stop) - max(start, ramp_start)) for start, stop in pursuit)
+    assert on_ramp > (ramp_stop - ramp_start) / 2, (
+        f"conjunction `pursuit` covers {on_ramp} of the ramp's {ramp_stop - ramp_start} "
+        f"rows [{ramp_start}, {ramp_stop}); its runs were {pursuit}"
     )
 
 
