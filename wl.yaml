@@ -90,9 +90,11 @@ status:
     a key that had already failed stays parked until cleared by hand. Its
     spec names
     what is next
-    in this line: the archive writer still reads each file whole into
-    memory and a two-hour Neuropixels AP file is ~166 GB, so a STREAMING
-    WRITER is due before January; (2) the three remaining
+    in this line: a STREAMING archive writer, BUILT 2026-09-26 --
+    `store.write_store` reads each file through one reused chunk-sized
+    buffer and writes one chunk at a time, so a ~166 GB AP file no longer
+    has to fit in memory; (2) the
+    three remaining
     hardware-free detectors, NSLR, REMoDNaV (the detector, not the PyPI test
     oracle) and Bayesian microsaccade detection, which matter here as SACCADE
     detectors because the requester has said glissades are peripheral;

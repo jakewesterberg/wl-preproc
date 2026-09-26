@@ -601,6 +601,12 @@ quantifies it: a two-hour Neuropixels 1.0 AP file is ~166 GB. Rehydration
 streams, but nothing can be rehydrated that could not first be archived, so a
 streaming writer is the natural next item and is due before January.
 
+> **Resolved 2026-09-26** (`feat/streaming-archive-writer`): `store.write_store` now streams (`store.py::_write_stream` reads each bulk stream through one reused chunk-sized buffer and writes one stored chunk of rows at a time; `_write_verbatim` does the same for every other file in 16 MiB blocks), so its peak memory, heap and resident, is a few chunk sizes -- about 2-3 GB for a 385-channel Neuropixels stream -- never a whole file. A plain read, not a memory map: review found that a faulting memory-mapped read kills the process with SIGBUS and that mapped pages stay resident. A file that shrinks or grows while it is being written raises `OSError` rather than being stored padded or cut, and a stream wider than 512 channels gets shorter chunks so none exceeds 1 GiB, half Blosc's 2 GiB limit.
+> A test pins it: with the chunk sizes shrunk, archiving a ~20 MB stream and a
+> ~20 MB verbatim file peaks at about 5 MiB of Python heap, against 43 MiB
+> before. `stim.dat` is now streamed like every other verbatim file; whether it
+> should be a compressed array instead is still the finding below.
+
 **`stim.dat` is not a rounding error.** The archival design treats everything
 but the bulk streams as *"a rounding error against ~100 GB"* (§1) and stores it
 verbatim. Intan's own *RHS Application Note: Data File Formats*, "One File Per
@@ -610,5 +616,6 @@ uint16 format"* — one 16-bit word per channel per sample, the same size as
 `amplifier.dat`. `dcamplifier.dat`, when saved, is the same shape. On an RHS
 session these are bulk data stored as bytes. Stimulation words are mostly zero
 and will compress well, so the storage cost may be small, but the in-memory
-writer above meets them at full size, and the claim in §1 is false as written.
+writer above meets them at full size (*no longer: it streams, see the resolution
+above*), and the claim in §1 is false as written.
 It deserves its own amendment, not a line here.
