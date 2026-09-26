@@ -25,7 +25,9 @@ before.
 >
 > **Otherwise, pick up in this order:**
 >
-> 1. **Rehydration is BUILT** on `spec/rehydration` (2026-09-26): `wlpp
+> 1. **Rehydration is BUILT and verified** on `spec/rehydration` (2026-09-26;
+>    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
+>    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught): `wlpp
 >    rehydrate` restores a reclaimed session byte for byte to its recorded
 >    path, and `wlpp reclaim --no-dry-run --confirm <session> --nas-root
 >    <mount>` now deletes, behind a proof against the NAS copy. Reclaim also
