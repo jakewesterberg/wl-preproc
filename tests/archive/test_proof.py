@@ -3,6 +3,8 @@ session is restored (2026-09-26 rehydration design, sections 3 and 5.2). No
 database: `prove_artifact` takes the recorded digest and the rig's digests as
 arguments."""
 
+from unittest import mock
+
 from wl_preproc.archive.proof import prove_artifact
 from wl_preproc.archive.stage import SENTINEL_NAME
 from wl_preproc.archive.store import manifest_digest, write_store
@@ -115,3 +117,25 @@ def test_nothing_to_rebuild_against_is_never_proven(tmp_path):
 
     assert not proof.passed
     assert "no recorded rig digests" in proof.reason
+
+
+def test_a_permission_fault_on_the_sentinel_is_refused_not_raised(tmp_path):
+    """Pins the OSError guard on sentinel is_file() probe."""
+    _session, artifact, digest = _published(tmp_path)
+
+    with mock.patch("pathlib.Path.is_file", side_effect=PermissionError(13, "Permission denied")):
+        proof = prove_artifact(artifact, digest, None)
+
+    assert not proof.passed
+    assert f"no completion sentinel at {artifact / SENTINEL_NAME}" in proof.reason
+
+
+def test_an_unreadable_artifact_is_refused_not_raised(tmp_path):
+    """Pins the OSError guard on manifest_digest() call."""
+    _session, artifact, digest = _published(tmp_path)
+
+    with mock.patch("wl_preproc.archive.proof.manifest_digest", side_effect=PermissionError(13, "Permission denied")):
+        proof = prove_artifact(artifact, digest, None)
+
+    assert not proof.passed
+    assert f"could not read {artifact}" in proof.reason
