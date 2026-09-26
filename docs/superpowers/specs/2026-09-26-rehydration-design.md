@@ -463,13 +463,17 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 >
 > 3. **An open decision for the requester, not changed on this branch.** A
 >    session freed before all its stages have populated makes
->    `daemon.run_once()` error on it — the event stage on every pass, and any
->    stage registered after the session was freed (for example the next eye
->    detector) once per freed session — with errored keys **not** retried
->    after rehydration until their job error is cleared by hand. Until Phase
->    3 every real reclamation needs a recorded force (§2), so this is
->    reachable only by a deliberate force. Whether the daemon should skip a
->    currently-freed session is the requester's call.
+>    `daemon.run_once()` error on it two different ways. The event stage
+>    (`_populate_event_stage`) never calls `.populate()` and reserves no
+>    DataJoint job, so it errors every pass while the session is freed and
+>    recovers by itself the moment the session is rehydrated. Any stage
+>    registered after the session was freed (for example the next eye
+>    detector) instead runs through `.populate(suppress_errors=True)`,
+>    which reserves a job and errors it **once**; that key is then **not**
+>    retried even after rehydration until the job error is cleared by hand.
+>    Until Phase 3 every real reclamation needs a recorded force (§2), so
+>    this is reachable only by a deliberate force. Whether the daemon should
+>    skip a currently-freed session is the requester's call.
 
 ## 12. Two findings outside this scope
 

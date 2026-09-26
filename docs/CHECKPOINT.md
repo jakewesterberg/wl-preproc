@@ -33,13 +33,16 @@ before.
 >    sixth condition, `canonical_nwb_present`, fails until Phase 3, so
 >    **every real reclamation needs a recorded force until NWB export
 >    exists**, and a session forced out before all its stages have
->    populated makes `daemon.run_once()` error on it — the event stage on
->    every pass, and any stage registered after the session was freed (for
->    example the next eye detector) once per freed session, with errored
->    keys **not** retried after rehydration until their job error is
->    cleared by hand. Whether the daemon should skip a currently-freed
->    session is an **open decision for the requester**, not changed on this
->    branch. **Next in this line: a streaming archive writer.**
+>    populated makes `daemon.run_once()` error on it two different ways:
+>    the event stage never touches DataJoint's job table, so it errors
+>    every pass and recovers by itself the moment the session is
+>    rehydrated; any stage registered after the session was freed (for
+>    example the next eye detector) instead reserves a job, errors it
+>    **once**, and is **not** retried even after rehydration until that job
+>    error is cleared by hand. Whether the daemon should skip a
+>    currently-freed session is an **open decision for the requester**, not
+>    changed on this branch. **Next in this line: a streaming archive
+>    writer.**
 >    `store.write_store` reads each file whole into memory, and a
 >    two-hour Neuropixels AP file is ~166 GB, so no real session can be
 >    archived yet. Due before January. Its spec (§12) also records that
@@ -455,6 +458,11 @@ decides when the scratch copy may be freed. **`wlpp reclaim` previews and delete
 deliberately: rehydration is what makes reclamation safe and it is not built. Ingest now
 refuses new sessions below the scratch floor `doctor.py` already owned.
 
+*Corrected 2026-09-26: true when written. Rehydration is now built on
+`spec/rehydration`, and `wlpp reclaim --no-dry-run --confirm <session>
+--nas-root <mount>` deletes, behind a proof against the NAS copy — see this
+file's own header.*
+
 **wl-preproc eye: reader, calibration, gaze** — merged 2026-08-31 (`e7c8ea4`).
 `wl_preproc/eye/`. Reads the real OpenIrisDPI format, fits a per-eye map over the
 dual-Purkinje vector, exposes canonical gaze as a **computation, never a stored array**.
@@ -862,6 +870,9 @@ remaining ones of that kind, each still simply unwritten. U'n'Eye is the first p
 this project that genuinely wants the GPU. Gap-aware extraction and rehydration are both
 hardware-free; the first of those is now built (item 5 above, unmerged), which leaves
 rehydration as the only hardware-free piece outstanding.
+
+*Corrected 2026-09-26: true when written. Rehydration is now built too, on
+`spec/rehydration` — see this file's own header and item 6 above.*
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
