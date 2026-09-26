@@ -1,9 +1,13 @@
 # Where this build actually is
 
-**Last updated 2026-09-26**, describing `main` at `5cd0c79` — the merge commit
-for `spec/rehydration`, whose head `70cbdc5` has a byte-identical tree (1471
-passed on 3.11 against that tree). CI's result on it is recorded here only once
-read off the run, not before.
+**Last updated 2026-09-26**, describing `main` at `141022b` — the merge commit
+for `fix/timing-resolved-every-system`, which closed the one residual
+`spec/rehydration` (merged as `5cd0c79`) carried. Its tree is byte-identical to
+the tested branch head `87cb276`: 1474 passed on 3.11 and 1473 on 3.13 against a
+freshly compiled resolution, 0 failed on both. CI read off the run for the
+rehydration merge's records commit `56be4f1`: green on both interpreters —
+`gh run view 36240348443`. CI on `141022b` and later is recorded here only once
+read, not before.
 
 *This header said "describing branch `spec/rehydration` — NOT merged" until the
 requester chose to merge the same day; true when written.*
