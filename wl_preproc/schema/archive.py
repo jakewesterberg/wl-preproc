@@ -1,6 +1,6 @@
 # wl_preproc/schema/archive.py
-"""Archival state: the artifact, its per-file verification, holds and
-reclamations.
+"""Archival state: the artifact, its per-file verification, holds,
+reclamations and rehydrations.
 
 **No status column anywhere.** Plan 10 section 1 forbids one and design spec
 section 8 gives the reason: a stored verdict is a second answer free to drift
@@ -79,11 +79,30 @@ class ReclamationHold(dj.Manual):
 @schema
 class ScratchReclamation(dj.Manual):
     definition = """
-    # What was freed, and when. Key: (subject, session_datetime).
+    # What was freed, and when. A HISTORY: a session freed, rehydrated and
+    # freed again has two rows (2026-09-26 rehydration design, section 7).
+    # Written in one transaction with the rename that takes the session off
+    # its path (`archive/scratch.py::free_session`).
+    # Key: (subject, session_datetime, reclaimed_at).
     -> pipeline.Session
-    ---
     reclaimed_at : datetime
+    ---
     bytes_freed  : bigint
+    """
+
+
+@schema
+class ScratchRehydration(dj.Manual):
+    definition = """
+    # A session restored from its NAS artifact to its recorded
+    # `Ingestion.session_dir` (2026-09-26 rehydration design, section 5).
+    # Written in one transaction with the rename that puts it there
+    # (`archive/rehydrate.py::rehydrate_session`).
+    # Key: (subject, session_datetime, rehydrated_at).
+    -> pipeline.Session
+    rehydrated_at : datetime
+    ---
+    bytes_written : bigint
     """
 
 
