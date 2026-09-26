@@ -75,7 +75,8 @@ requester chose to merge the same day; true when written.*
 >    time, and every other file in 16 MiB blocks, so a real session can be
 >    archived in a few GB of memory, never a ~166 GB file; a file that
 >    changes size mid-write is an error, not a padded copy, and it no longer
->    crashes on a stream with no samples or one wider than 1024 channels. *Until then this said the writer read each file whole and
+>    crashes on a stream with no samples, and a stream wider than 512
+>    channels gets shorter chunks. *Until then this said the writer read each file whole and
 >    that no real session could be archived yet; true when written.* Still
 >    open in this line: the rehydration spec (§12) records that Intan's
 >    `stim.dat` is one uint16 per channel per sample, as large as

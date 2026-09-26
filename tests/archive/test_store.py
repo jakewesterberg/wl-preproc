@@ -190,17 +190,22 @@ def test_a_stream_that_shrinks_mid_write_is_an_error_not_a_crash(tmp_path, monke
         write_store(session, tmp_path / "out")
 
 
-def test_a_very_wide_stream_gets_shorter_chunks(monkeypatch):
+def test_a_very_wide_stream_gets_shorter_chunks():
     """A chunk is rows x channels x 2 bytes, and Blosc refuses a buffer over
-    2 GiB: at 2**20 rows that is reached at 1024 channels. Rows are capped
-    so no chunk exceeds `_MAX_CHUNK_BYTES`; Neuropixels' 385 channels keep
-    the full 2**20."""
+    2**31 - 1 bytes: at 2**20 rows, 1024 channels is exactly 2**31. Rows are
+    capped so no chunk exceeds `_MAX_CHUNK_BYTES` (1 GiB, half the ceiling),
+    which is met above 512 channels; Neuropixels' 385 keep the full 2**20.
+    Asserted against Blosc's own limit, not only the module's constant, so a
+    wrong constant fails here."""
     from wl_preproc.archive import store
 
+    blosc_limit = 2**31 - 1
+    assert store._MAX_CHUNK_BYTES < blosc_limit
     assert store._stream_chunk_rows(385) == store._CHUNK_SAMPLES
-    wide = store._stream_chunk_rows(1024)
-    assert wide < store._CHUNK_SAMPLES
-    assert wide * 1024 * 2 <= store._MAX_CHUNK_BYTES
+    assert store._stream_chunk_rows(512) == store._CHUNK_SAMPLES
+    assert store._stream_chunk_rows(513) < store._CHUNK_SAMPLES
+    for channels in (513, 1024, 4096):
+        assert store._stream_chunk_rows(channels) * channels * 2 < blosc_limit
 
 
 def test_a_streamed_store_rebuilds_every_file_byte_for_byte(tmp_path, monkeypatch):

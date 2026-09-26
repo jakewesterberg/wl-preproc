@@ -40,9 +40,12 @@ _CHUNK_SAMPLES = 1 << 20
 # `amplifier.dat` (2026-09-26 rehydration design, section 12).
 _VERBATIM_CHUNK_BYTES = 1 << 24
 
-# No stored chunk larger than this. Blosc refuses a buffer over 2 GiB, and a
-# stream chunk is rows x channels x 2 bytes: at 2**20 rows that limit is met
-# at 1024 channels. Neuropixels' 385 channels stay at the full 2**20 rows.
+# No stored chunk larger than this: 1 GiB, half of Blosc's ceiling (a buffer
+# of 2**31 - 1 bytes), leaving room for its output buffer, which is the input
+# size plus a small header. A stream chunk is rows x channels x 2 bytes, so at
+# 2**20 rows the cap is met above 512 channels, and a wider stream gets fewer
+# rows; at 1024 channels an uncapped chunk would be 2**31 bytes, which Blosc
+# refuses outright. Neuropixels' 385 channels stay at the full 2**20 rows.
 _MAX_CHUNK_BYTES = 1 << 30
 
 
