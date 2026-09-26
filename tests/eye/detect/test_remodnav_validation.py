@@ -236,7 +236,8 @@ def test_the_null_random_labels_score_near_zero_kappa():
     coder = rng.random(50_000) < 0.3
     guess = rng.random(50_000) < 0.3
 
-    # Spec 5.3: random labels at the coders' own proportions score "kappa near zero".
+    # Spec 5.3's null: random labels score "kappa near zero". Both sides are
+    # drawn at a fixed 30%, not at the coders' own label proportions.
     assert abs(cohen_kappa(coder, guess, np.ones(coder.size, dtype=bool))) < 0.05
 
 

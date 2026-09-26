@@ -586,8 +586,8 @@ def _candidate_speed(gaze_deg: np.ndarray, usable: np.ndarray, fs_hz: float,
     Unusable positions are zeroed before filtering, since every speed they
     could reach is masked anyway. A NaN would not stay inside that reach:
     scipy's 1-D median filter keeps a running median, and a NaN in it
-    changes windows up to 88 samples past its own (measured on scipy 1.17.1;
-    `test_what_the_mask_withholds_never_reaches_the_candidate_speed_even_as_nan`)."""
+    changes samples well past its own window. The measurements are in
+    `test_what_the_mask_withholds_never_reaches_the_candidate_speed_even_as_nan`."""
     width = _odd_samples(params.median_filter_ms, fs_hz)
     withheld = np.where(usable[:, None], np.asarray(gaze_deg, dtype=float), 0.0)
     filtered = np.column_stack([median_filter(withheld[:, axis], size=width) for axis in (0, 1)])

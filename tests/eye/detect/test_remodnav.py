@@ -313,6 +313,29 @@ def test_a_long_wobble_is_cut_at_the_pso_window():
     assert all(p.stop - p.start <= _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0).max_pso for p in psos)
 
 
+def test_a_saccade_too_close_to_a_pso_is_rejected_though_clear_of_its_saccade():
+    """`clf.py` 469-474 and 501: an accepted PSO is marked as part of its
+    saccade, so the proximity rule measures from the PSO's end, not only
+    from the saccade's.
+
+    The second saccade starts 27 samples after the first one ends, clear of
+    it at 500 Hz's 20. It starts only 10 after that saccade's PSO ends. Its
+    bounds are read from the same trace without the wobble, where the first
+    saccade is the same run."""
+    min_intersaccade = _Samples.at(DEFAULT_REMODNAV_PARAMS, 500.0).min_intersaccade
+    first = _bump(_pattern(3000), 1000, 300.0, 8)
+    without_wobble = _piece_saccades_of(_bump(first.copy(), 1046, 250.0, 8))
+    with_wobble = _piece_saccades_of(_bump(_bump(first.copy(), 1020, 60.0, 6), 1046, 250.0, 8))
+
+    saccade, second = without_wobble
+    pso = next(r for r in with_wobble if r.label is Label.PSO)
+    assert with_wobble[0] == saccade and pso.start == saccade.stop
+    assert second.label is Label.SACCADE and second.start - saccade.stop >= min_intersaccade
+    assert second.start - pso.stop < min_intersaccade
+
+    assert [r.label for r in with_wobble] == [Label.SACCADE, Label.PSO]
+
+
 def _oracle_kind(label):
     return {"SACC": Label.SACCADE, "HPSO": Label.PSO, "LPSO": Label.PSO}[label]
 
@@ -599,9 +622,11 @@ def test_what_the_mask_withholds_never_reaches_the_candidate_speed_even_as_nan()
     """Spec 3 item 2's "blink positions never reach the candidate speed",
     for a withheld position that is NaN as well as one that is finite.
     scipy's 1-D median filter keeps a running median, and a NaN inside it
-    corrupts windows well past its own: a 100-sample NaN block changed 76
-    filtered samples, up to 88 past the block's end, at width 25 (measured on
-    scipy 1.17.1 before `_candidate_speed` replaced withheld positions)."""
+    corrupts windows well past its own. Measured at width 25, on two traces,
+    before `_candidate_speed` replaced withheld positions:
+    - in white noise, a 100-sample NaN block changed 76 filtered samples, up
+      to 88 past the block's end (scipy 1.17.1);
+    - on another trace, the Task 5 review measured up to 48 past it."""
     from tests.eye.detect._remodnav_traces import gaze_trace
 
     finite = np.nan_to_num(gaze_trace(500.0, 9)[:2000])
@@ -621,23 +646,77 @@ def _available(usable):
     return np.array([None if ok else Label.INVALID for ok in usable], dtype=object)
 
 
-@pytest.mark.parametrize("unusable_fraction", [0.1, 0.9])
-def test_no_run_contains_an_unusable_sample(unusable_fraction):
-    """Review Focus 1: lost tracking in blocks, up to 90% of the recording."""
+def _withheld_in_blocks(seed, unusable_fraction):
+    """`gaze_trace(500, seed)` with its gap withheld, and more withheld in
+    random 20-400-sample blocks until `unusable_fraction` is. Returns
+    finite gaze (NaN positions zeroed) and the usable mask."""
     from tests.eye.detect._remodnav_traces import gaze_trace
-    from wl_preproc.eye.detect.velocity import velocity
 
-    rng = np.random.default_rng(10)
-    gaze = gaze_trace(500.0, 10)
+    rng = np.random.default_rng(seed)
+    gaze = gaze_trace(500.0, seed)
     usable = ~np.isnan(gaze[:, 0])
     while (~usable).mean() < unusable_fraction:
         start = int(rng.integers(0, gaze.shape[0]))
         usable[start:start + int(rng.integers(20, 400))] = False
-    gaze = np.nan_to_num(gaze)
+    return np.nan_to_num(gaze), usable
+
+
+@pytest.mark.parametrize("unusable_fraction", [0.1, 0.9])
+def test_no_run_contains_an_unusable_sample(unusable_fraction):
+    """Review Focus 1: lost tracking in blocks, up to 90% of the recording.
+    `assert runs` keeps the containment check from passing on nothing; at
+    0.9 the usable pieces left still carry runs."""
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, usable = _withheld_in_blocks(10, unusable_fraction)
 
     runs = detect_remodnav(gaze, velocity(gaze, 500.0), _available(usable), 500.0, DEFAULT_REMODNAV_PARAMS)
 
+    assert runs
     assert all(usable[r.start:r.stop].all() for r in runs)
+
+
+def test_nothing_the_mask_withholds_changes_a_single_run():
+    """Spec 3 item 4: the validity mask is the only noise definition. So
+    changing only the withheld rows' positions and velocities must leave
+    every run as it was.
+
+    `detect_remodnav` masks twice, and this pins both masks. The velocity
+    change catches an unmasked primary speed; the position change catches a
+    candidate speed computed as if every sample were usable. Containment
+    (the test above) holds under either defect, so it cannot see them.
+
+    **The sizes are the test.**
+    - Withheld speeds are set to 5-100 deg/s. That is below the threshold
+      iteration's 300 deg/s start, so an unmasked one enters the iteration's
+      first pass.
+    - A +-1e3 change is weaker. The iteration drops speeds above its start,
+      so such a change never reaches a threshold. The final review found it
+      missed an unmasked primary speed. Measured here, it changes no run of
+      `_withheld_in_blocks(12, 0.1)` or `(12, 0.2)`.
+    - Withheld positions move 0.05 deg each, in a random direction."""
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze, usable = _withheld_in_blocks(10, 0.2)
+    v = velocity(gaze, 500.0)
+    withheld = ~usable
+    rng = np.random.default_rng(11)
+    count = int(withheld.sum())
+
+    def direction():
+        angle = rng.uniform(0.0, 2.0 * np.pi, count)
+        return np.column_stack([np.cos(angle), np.sin(angle)])
+
+    moved_v = v.copy()
+    moved_v[withheld] = rng.uniform(5.0, 100.0, count)[:, None] * direction()
+    moved_gaze = gaze.copy()
+    moved_gaze[withheld] += 0.05 * direction()
+
+    runs = detect_remodnav(gaze, v, _available(usable), 500.0, DEFAULT_REMODNAV_PARAMS)
+    moved = detect_remodnav(moved_gaze, moved_v, _available(usable), 500.0, DEFAULT_REMODNAV_PARAMS)
+
+    assert runs
+    assert moved == runs
 
 
 def test_an_all_unusable_trace_yields_nothing():
