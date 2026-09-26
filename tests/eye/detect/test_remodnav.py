@@ -20,9 +20,12 @@ from wl_preproc.eye.detect.remodnav import (
     DEFAULT_REMODNAV_PARAMS,
     Signals,
     _Samples,
+    _candidate_speed,
     _context_window,
+    _dilate,
     _fixation_or_pursuit,
     _mad,
+    _odd_samples,
     _offset,
     _onset,
     _periods,
@@ -33,6 +36,7 @@ from wl_preproc.eye.detect.remodnav import (
     _stretches,
     _thresholds,
     classify,
+    detect_remodnav,
     shared_speed,
 )
 
@@ -554,3 +558,104 @@ def test_a_saccade_at_the_very_end_is_closed_there():
     runs = classify(_signals(speed), 500.0, DEFAULT_REMODNAV_PARAMS, shared_speed)
 
     assert all(r.stop <= 3000 for r in runs)
+
+
+# -- Spec 3: the production signals, and the registered detector ---------------
+
+
+def test_the_median_window_is_odd():
+    assert (_odd_samples(50.0, 500.0), _odd_samples(50.0, 1000.0), _odd_samples(50.0, 498.55)) == (25, 51, 25)
+
+
+def test_dilation_reaches_both_ways_at_any_length():
+    mask = np.zeros(10, dtype=bool)
+    mask[5] = True
+
+    assert np.flatnonzero(_dilate(mask, 2)).tolist() == [3, 4, 5, 6, 7]
+    assert _dilate(np.array([True]), 50).tolist() == [True]
+
+
+def test_the_candidate_speed_is_missing_within_reach_of_an_unusable_sample():
+    """Spec 3 item 2: a filtered sample whose window touches an unusable one
+    is unusable, and so is any speed the shared estimator's +-2 reach draws
+    from one. At 500 Hz the window is 25, so the reach is 12 + 2 = 14."""
+    from scipy.ndimage import median_filter
+
+    from tests.eye.detect._remodnav_traces import gaze_trace
+
+    gaze = np.nan_to_num(gaze_trace(500.0, 9)[:400])
+    usable = np.ones(400, dtype=bool)
+    usable[200] = False
+
+    candidate = _candidate_speed(gaze, usable, 500.0, DEFAULT_REMODNAV_PARAMS)
+
+    assert np.isnan(candidate[186:215]).all()
+    assert not np.isnan(candidate[[185, 215]]).any()
+    filtered = np.column_stack([median_filter(gaze[:, k], size=25) for k in (0, 1)])
+    assert np.array_equal(candidate[20:180], shared_speed(filtered, 500.0)[20:180])
+
+
+def test_what_the_mask_withholds_never_reaches_the_candidate_speed_even_as_nan():
+    """Spec 3 item 2's "blink positions never reach the candidate speed",
+    for a withheld position that is NaN as well as one that is finite.
+    scipy's 1-D median filter keeps a running median, and a NaN inside it
+    corrupts windows well past its own: a 100-sample NaN block changed 76
+    filtered samples, up to 88 past the block's end, at width 25 (measured on
+    scipy 1.17.1 before `_candidate_speed` replaced withheld positions)."""
+    from tests.eye.detect._remodnav_traces import gaze_trace
+
+    finite = np.nan_to_num(gaze_trace(500.0, 9)[:2000])
+    usable = np.ones(2000, dtype=bool)
+    usable[1200:1300] = False
+    missing = finite.copy()
+    missing[1200:1300] = np.nan
+
+    assert np.array_equal(
+        _candidate_speed(missing, usable, 500.0, DEFAULT_REMODNAV_PARAMS),
+        _candidate_speed(finite, usable, 500.0, DEFAULT_REMODNAV_PARAMS),
+        equal_nan=True,
+    )
+
+
+def _available(usable):
+    return np.array([None if ok else Label.INVALID for ok in usable], dtype=object)
+
+
+@pytest.mark.parametrize("unusable_fraction", [0.1, 0.9])
+def test_no_run_contains_an_unusable_sample(unusable_fraction):
+    """Review Focus 1: lost tracking in blocks, up to 90% of the recording."""
+    from tests.eye.detect._remodnav_traces import gaze_trace
+    from wl_preproc.eye.detect.velocity import velocity
+
+    rng = np.random.default_rng(10)
+    gaze = gaze_trace(500.0, 10)
+    usable = ~np.isnan(gaze[:, 0])
+    while (~usable).mean() < unusable_fraction:
+        start = int(rng.integers(0, gaze.shape[0]))
+        usable[start:start + int(rng.integers(20, 400))] = False
+    gaze = np.nan_to_num(gaze)
+
+    runs = detect_remodnav(gaze, velocity(gaze, 500.0), _available(usable), 500.0, DEFAULT_REMODNAV_PARAMS)
+
+    assert all(usable[r.start:r.stop].all() for r in runs)
+
+
+def test_an_all_unusable_trace_yields_nothing():
+    gaze = np.zeros((500, 2))
+
+    assert detect_remodnav(gaze, gaze.copy(), _available(np.zeros(500, dtype=bool)), 500.0,
+                           DEFAULT_REMODNAV_PARAMS) == []
+
+
+def test_the_detector_runs_at_the_rigs_real_rate():
+    """Review Focus 4: 498.55 Hz, the reference recording's measured rate."""
+    from tests.eye.detect._remodnav_traces import gaze_trace
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze = gaze_trace(498.55, 11)
+    usable = ~np.isnan(gaze[:, 0])
+    gaze = np.nan_to_num(gaze)
+
+    runs = detect_remodnav(gaze, velocity(gaze, 498.55), _available(usable), 498.55, DEFAULT_REMODNAV_PARAMS)
+
+    assert {Label.SACCADE, Label.FIXATION} <= {r.label for r in runs}

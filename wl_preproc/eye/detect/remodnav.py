@@ -24,10 +24,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import median_filter
 from scipy.signal import butter, filtfilt
 
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
-from wl_preproc.eye.detect.velocity import velocity
+from wl_preproc.eye.detect.velocity import _HALF_WINDOW, velocity
 
 #: statsmodels' `mad` normalisation, `scipy.stats.norm.ppf(0.75)` -- the
 #: constant `clf.py` 311 divides by (spec 1.1). The exact float statsmodels
@@ -550,3 +551,76 @@ def classify(signals: Signals, fs_hz: float, params: RemodnavParams,
                 events.extend(_fixation_or_pursuit(signals, piece_start, piece_end, fs_hz,
                                                    samples, params, differentiate))
     return sorted(events, key=lambda run: run.start)
+
+
+def _odd_samples(ms: float, fs_hz: float) -> int:
+    """A duration in samples, plus one if even, so a filter of that width is
+    centred (spec 3 item 2): 25 at 500 Hz, 51 at 1000 Hz."""
+    count = max(int(round(ms * fs_hz / 1000.0)), 1)
+    return count if count % 2 else count + 1
+
+
+def _dilate(mask: np.ndarray, reach: int) -> np.ndarray:
+    """True wherever a True in `mask` lies within `reach` samples. Uses
+    cumulative sums, so it holds at any length -- `np.convolve(mode="same")`
+    returns the kernel's length when the kernel is the longer of the two."""
+    if reach <= 0 or not mask.any():
+        return mask.copy()
+    counts = np.concatenate(([0], np.cumsum(mask.astype(np.int64))))
+    index = np.arange(mask.size)
+    lo = np.clip(index - reach, 0, mask.size)
+    hi = np.clip(index + reach + 1, 0, mask.size)
+    return (counts[hi] - counts[lo]) > 0
+
+
+def _candidate_speed(gaze_deg: np.ndarray, usable: np.ndarray, fs_hz: float,
+                     params: RemodnavParams) -> np.ndarray:
+    """Spec 3 item 2: the shared estimator's speed of 50 ms median-filtered
+    positions -- the oracle's `med_vel` (`clf.py` 869-883), with the shared
+    differentiator in place of its two-point difference.
+
+    Missing wherever the filter's window, or the estimator's +-2 reach,
+    touches an unusable sample. That replaces the oracle's median filter over
+    NaN positions.
+
+    Unusable positions are zeroed before filtering, since every speed they
+    could reach is masked anyway. A NaN would not stay inside that reach:
+    scipy's 1-D median filter keeps a running median, and a NaN in it
+    changes windows up to 88 samples past its own (measured on scipy 1.17.1;
+    `test_what_the_mask_withholds_never_reaches_the_candidate_speed_even_as_nan`)."""
+    width = _odd_samples(params.median_filter_ms, fs_hz)
+    withheld = np.where(usable[:, None], np.asarray(gaze_deg, dtype=float), 0.0)
+    filtered = np.column_stack([median_filter(withheld[:, axis], size=width) for axis in (0, 1)])
+    speed = shared_speed(filtered, fs_hz)
+    return np.where(_dilate(~usable, width // 2 + _HALF_WINDOW), np.nan, speed)
+
+
+def detect_remodnav(
+    gaze_deg: np.ndarray,
+    velocity_deg_s: np.ndarray,
+    available: np.ndarray,
+    fs_hz: float,
+    params: RemodnavParams,
+) -> list[Run]:
+    """REMoDNaV, as the registered `DetectFn`: labelled half-open intervals.
+
+    **The validity mask is the only noise definition** (spec 3 item 4). A
+    sample the mask withholds (`entry is not None`) reaches `classify` as
+    missing -- position, primary speed and candidate speed all NaN. The
+    method's own handling of lost data then does the rest.
+
+    The primary speed is the shared estimator's; the candidate speed is its
+    speed of median-filtered positions. Both follow spec 3. Its saccadic
+    slice is `{saccade}`, so conjunction runs take `_conjunction_label`'s
+    degenerate branch, as Nystrom-Holmqvist's do (spec 4).
+    """
+    usable = np.array([entry is None for entry in available], dtype=bool)
+    if not usable.any():
+        return []
+    signals = Signals(
+        x=np.where(usable, gaze_deg[:, 0], np.nan),
+        y=np.where(usable, gaze_deg[:, 1], np.nan),
+        speed=np.where(usable, np.hypot(velocity_deg_s[:, 0], velocity_deg_s[:, 1]), np.nan),
+        candidate_speed=_candidate_speed(gaze_deg, usable, fs_hz, params),
+    )
+    return classify(signals, fs_hz, params, shared_speed)

@@ -205,70 +205,61 @@ _GLISSADE_GAP_SAMPLES = 10
 _WOBBLE_STEP_PX = 250.0
 _WOBBLE_N_SUBSTEPS = 8
 
+# The pursuit: a slow ramp both eyes follow. `_PURSUIT_STEP_PX` over
+# `_PURSUIT_DURATION_S` is 420 px/s -- 2.1 deg/s at `CAL_SCALE`, just above
+# REMoDNaV's 2 deg/s pursuit threshold. One `EyeFixationSpec` per frame
+# (`_PURSUIT_N_SUBSTEPS` = 2.9 s x 500 Hz), so the ramp is as smooth as the
+# file's frame rate allows. It fills the detection trial but for 25 frames of
+# hold at each end.
+#
+# **Slow and long, because a faster ramp is saccades to REMoDNaV here.** The
+# major saccades are found against one recording-wide threshold on the
+# candidate speed (REMoDNaV spec 3 item 2), and the holds set it: on a hold
+# the 50 ms median filter suppresses the 0.03 deg per-eye jitter
+# (`P1_JITTER_STD_PX` x `CAL_SCALE`). A ramp is monotone, so the filter
+# passes that jitter through, and each crossing becomes a 5-12-sample
+# saccade -- REMoDNaV has no maximum saccade duration. The plan's first
+# choice, 5 deg/s over 1.5 s, measured on seeds 621-640: thresholds of
+# 6.2-6.8 deg/s against ramp candidate peaks of 11-16, 10-18 saccades inside
+# the ramp in all 40 eyes, pursuit on 0-38% of it, and no binocular pursuit
+# at all on 17 of the 20 seeds. The `remodnav` 1.1.2 oracle, on its own
+# preprocessing, chopped those ramps the same way. A slower ramp passes less
+# jitter; a longer one is more of the recording, and lifts the threshold.
+#
+# Verified directly against `velocity` and `detect_remodnav` before this
+# fixture was built (plan Task 5 Step 5), on the real generated session --
+# `generate_session` with this recipe, both eyes' Purkinje vectors x
+# `CAL_SCALE`, the real validity mask, all 7800 samples. Seeds 621-640: the
+# ramp's candidate speed reaches at most 1.13x its eye's threshold, for at
+# most 2 samples, and never becomes a saccade; every eye's pursuit covers
+# 96-98% of the ramp, and the two eyes' pursuit overlaps on 94-98% of it.
+# **The margin is narrow.** Over seeds 621-720, 7 of 200 eyes carry one or
+# two 5-7-sample saccades inside the ramp (pursuit still 90-99%, and never
+# both eyes of one seed, so every seed keeps binocular pursuit). At 2.2
+# deg/s seed 639's left eye does so within 621-640, and a 2.5 s ramp loses
+# at least one eye there at every speed tried (2.05-2.4 deg/s).
+_PURSUIT_ONSET_OFFSET_S = 0.05
+_PURSUIT_DURATION_S = 2.9
+_PURSUIT_STEP_PX = 1218.0
+_PURSUIT_N_SUBSTEPS = 1450
 
-def _build_glissade_session(
-    tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
-):
-    """A single saccade followed by a genuine, genuinely binocular
-    post-saccadic wobble -- the one shape `stepped_session`'s own hard-stop
-    ramps cannot produce (see `_WOBBLE_STEP_PX`'s own comment).
 
-    Calibration is `_build_stepped_session`'s own approach, unchanged: four
-    trials of natural, untouched two-frequency drift, fitted afterward. Only
-    the detection trial differs: one ramp, one quiet gap, one wobble out and
-    back, one trailing hold -- built from `EyeFixationSpec`s exactly like
-    `_build_stepped_session`'s own three-transition trial, so both eyes move
-    together by the same mechanism (`write_ohdpi`'s own derivation of the
-    right eye from the left -- a constant offset on top of the same
-    `rot_x_left` signal every `EyeFixationSpec` writes into).
-
-    A separate session rather than a fourth event appended to
-    `stepped_session`, for the same reason `near_miss_session`'s own
-    docstring gives: several of that fixture's tests assert its planted-event
-    COUNT by name, and this fixture's whole subject -- whether the real
-    detector's conjunction ever carries a real `pso` -- is a different
-    table's behaviour entirely.
-
-    Returns `session_key`.
-    """
+def _land_calibrated_session(tmp_path_factory, *, dirname, session_id, subject,
+                             session_datetime, seed, n_cal_trials, detect_fixations):
+    """The part of every detection fixture after its detection trial is
+    drawn: the recipe (`n_cal_trials` calibration trials plus one detection
+    trial), generation, landing, the timebase and segment, and the
+    calibration fixations `_expected_raw_points` fits. Moved out of
+    `_build_glissade_session` unchanged when `_build_pursuit_session` became
+    its second user. Returns `session_key`."""
     from wl_preproc.contracts.events import TaskTypeCode
     from wl_preproc.schema import core, timebase
-    from wl_preproc.synth.ohdpi import OHDPI_FPS
-    from wl_preproc.synth.recipe import BlockSpec, EyeFixationSpec, MontageSpec, SessionRecipe
+    from wl_preproc.synth.recipe import BlockSpec, MontageSpec, SessionRecipe
     from wl_preproc.synth.session import generate_session
 
     from tests.schema.test_eye_populate import _expected_raw_points, _land, _write_fixations
 
-    n_cal_trials = 4
     n_trials = n_cal_trials + 1
-    detect_trial_start = n_cal_trials * TRIAL_DURATION_S
-
-    onset_s = detect_trial_start + _GLISSADE_ONSET_OFFSET_S
-    settled = (_GLISSADE_SACCADE_STEP_PX, 0.0)
-    wobbled = (_GLISSADE_SACCADE_STEP_PX + _WOBBLE_STEP_PX, 0.0)
-
-    ramp_end_s = onset_s + _GLISSADE_SACCADE_DURATION_S
-    gap_end_s = ramp_end_s + _GLISSADE_GAP_SAMPLES / OHDPI_FPS
-    wobble_half_dur_s = _WOBBLE_N_SUBSTEPS / OHDPI_FPS
-    rise_end_s = gap_end_s + wobble_half_dur_s
-    fall_end_s = rise_end_s + wobble_half_dur_s
-
-    # Hold, ramp (the saccade), hold (the gap), ramp out and ramp back (the
-    # wobble/glissade), hold -- CONTIGUOUS throughout, exactly
-    # `_build_stepped_session`'s own reasoning for why a detection region is
-    # built from back-to-back `EyeFixationSpec` entries rather than isolated
-    # ones (this module's own docstring).
-    detect_fixations = [
-        EyeFixationSpec(start_s=detect_trial_start, end_s=onset_s, x_px=0.0, y_px=0.0),
-        *_ramp_fixations(onset_s, (0.0, 0.0), settled, _GLISSADE_SACCADE_DURATION_S,
-                          _GLISSADE_SACCADE_N_SUBSTEPS),
-        EyeFixationSpec(start_s=ramp_end_s, end_s=gap_end_s, x_px=settled[0], y_px=0.0),
-        *_ramp_fixations(gap_end_s, settled, wobbled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
-        *_ramp_fixations(rise_end_s, wobbled, settled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
-        EyeFixationSpec(start_s=fall_end_s, end_s=n_trials * TRIAL_DURATION_S,
-                         x_px=settled[0], y_px=0.0),
-    ]
-
     recipe = SessionRecipe(
         session_id=session_id,
         subject=subject,
@@ -303,6 +294,97 @@ def _build_glissade_session(
     _write_fixations(session_dir, recipe, truth, list(zip(window_starts, targets, strict=True)))
 
     return session_key
+
+
+def _build_glissade_session(
+    tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
+):
+    """A single saccade followed by a genuine, genuinely binocular
+    post-saccadic wobble -- the one shape `stepped_session`'s own hard-stop
+    ramps cannot produce (see `_WOBBLE_STEP_PX`'s own comment).
+
+    Calibration is `_build_stepped_session`'s own approach, unchanged: four
+    trials of natural, untouched two-frequency drift, fitted afterward. Only
+    the detection trial differs: one ramp, one quiet gap, one wobble out and
+    back, one trailing hold -- built from `EyeFixationSpec`s exactly like
+    `_build_stepped_session`'s own three-transition trial, so both eyes move
+    together by the same mechanism (`write_ohdpi`'s own derivation of the
+    right eye from the left -- a constant offset on top of the same
+    `rot_x_left` signal every `EyeFixationSpec` writes into).
+
+    A separate session rather than a fourth event appended to
+    `stepped_session`, for the same reason `near_miss_session`'s own
+    docstring gives: several of that fixture's tests assert its planted-event
+    COUNT by name, and this fixture's whole subject -- whether the real
+    detector's conjunction ever carries a real `pso` -- is a different
+    table's behaviour entirely.
+
+    Returns `session_key`.
+    """
+    from wl_preproc.synth.ohdpi import OHDPI_FPS
+    from wl_preproc.synth.recipe import EyeFixationSpec
+
+    n_cal_trials = 4
+    n_trials = n_cal_trials + 1
+    detect_trial_start = n_cal_trials * TRIAL_DURATION_S
+
+    onset_s = detect_trial_start + _GLISSADE_ONSET_OFFSET_S
+    settled = (_GLISSADE_SACCADE_STEP_PX, 0.0)
+    wobbled = (_GLISSADE_SACCADE_STEP_PX + _WOBBLE_STEP_PX, 0.0)
+
+    ramp_end_s = onset_s + _GLISSADE_SACCADE_DURATION_S
+    gap_end_s = ramp_end_s + _GLISSADE_GAP_SAMPLES / OHDPI_FPS
+    wobble_half_dur_s = _WOBBLE_N_SUBSTEPS / OHDPI_FPS
+    rise_end_s = gap_end_s + wobble_half_dur_s
+    fall_end_s = rise_end_s + wobble_half_dur_s
+
+    # Hold, ramp (the saccade), hold (the gap), ramp out and ramp back (the
+    # wobble/glissade), hold -- CONTIGUOUS throughout, exactly
+    # `_build_stepped_session`'s own reasoning for why a detection region is
+    # built from back-to-back `EyeFixationSpec` entries rather than isolated
+    # ones (this module's own docstring).
+    detect_fixations = [
+        EyeFixationSpec(start_s=detect_trial_start, end_s=onset_s, x_px=0.0, y_px=0.0),
+        *_ramp_fixations(onset_s, (0.0, 0.0), settled, _GLISSADE_SACCADE_DURATION_S,
+                          _GLISSADE_SACCADE_N_SUBSTEPS),
+        EyeFixationSpec(start_s=ramp_end_s, end_s=gap_end_s, x_px=settled[0], y_px=0.0),
+        *_ramp_fixations(gap_end_s, settled, wobbled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
+        *_ramp_fixations(rise_end_s, wobbled, settled, wobble_half_dur_s, _WOBBLE_N_SUBSTEPS),
+        EyeFixationSpec(start_s=fall_end_s, end_s=n_trials * TRIAL_DURATION_S,
+                         x_px=settled[0], y_px=0.0),
+    ]
+
+    return _land_calibrated_session(
+        tmp_path_factory, dirname=dirname, session_id=session_id, subject=subject,
+        session_datetime=session_datetime, seed=seed, n_cal_trials=n_cal_trials,
+        detect_fixations=detect_fixations,
+    )
+
+
+def _build_pursuit_session(tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed):
+    """A hold, a slow ramp both eyes follow, a hold -- the one shape no other
+    fixture here has, and the one REMoDNaV's `pursuit` needs. Built exactly
+    like `_build_glissade_session`: four calibration trials of natural drift,
+    then the detection trial from back-to-back `EyeFixationSpec`s, so both
+    eyes move by the same mechanism."""
+    from wl_preproc.synth.recipe import EyeFixationSpec
+
+    n_cal_trials = 4
+    n_trials = n_cal_trials + 1
+    detect_trial_start = n_cal_trials * TRIAL_DURATION_S
+    onset_s = detect_trial_start + _PURSUIT_ONSET_OFFSET_S
+    end_s = onset_s + _PURSUIT_DURATION_S
+    arrived = (_PURSUIT_STEP_PX, 0.0)
+    detect_fixations = [
+        EyeFixationSpec(start_s=detect_trial_start, end_s=onset_s, x_px=0.0, y_px=0.0),
+        *_ramp_fixations(onset_s, (0.0, 0.0), arrived, _PURSUIT_DURATION_S, _PURSUIT_N_SUBSTEPS),
+        EyeFixationSpec(start_s=end_s, end_s=n_trials * TRIAL_DURATION_S, x_px=arrived[0], y_px=0.0),
+    ]
+    return _land_calibrated_session(
+        tmp_path_factory, dirname=dirname, session_id=session_id, subject=subject,
+        session_datetime=session_datetime, seed=seed, n_cal_trials=n_cal_trials,
+        detect_fixations=detect_fixations,
+    )
 
 
 def _first_row_at(onset_s: float) -> int:
@@ -631,6 +713,21 @@ def glissade_session(daemon_module, prefix, tmp_path_factory):
         session_datetime=datetime.datetime(2027, 6, 7, 9, 0), seed=607,
     )
 
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report
+
+
+@pytest.fixture(scope="module")
+def pursuit_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_pursuit_session`, with the daemon run immediately after. The
+    date, subject and seed were checked unclaimed (the suite has no session
+    date allocator -- gap-aware handoff, item 4)."""
+    session_key = _build_pursuit_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` -- exactly 8.
+        dirname="detectpursuit", session_id="2027-06-21_01", subject="detpurs1",
+        session_datetime=datetime.datetime(2027, 6, 21, 9, 0), seed=621,
+    )
     report = daemon_module.run_once(prefix=prefix)
     return session_key, report
 
@@ -3482,6 +3579,30 @@ def test_a_real_saccade_and_glissade_produce_a_binocular_pso_conjunction_run(
     assert "pso" in labels, (
         "a saccade followed by a genuine binocular wobble must produce a "
         f"conjunction `pso` run; stored labels were {labels}"
+    )
+
+
+def test_a_binocular_slow_ramp_produces_a_pursuit_conjunction_run(pursuit_session, prefix):
+    """The first `pursuit` in production (REMoDNaV spec section 4): on a
+    fixture where both eyes follow a slow ramp, the real detector's own
+    conjunction carries `pursuit`. Through `daemon.run_once()`, as every test
+    in this file is."""
+    from wl_preproc import daemon
+    from wl_preproc.schema import detect
+
+    session_key, _report = pursuit_session
+
+    daemon.run_once(prefix=prefix)
+
+    labels = set(
+        (
+            detect.EyeDetection.Run
+            & {**session_key, "trace": "conjunction", **_detector("remodnav")}
+        ).to_arrays("label")
+    )
+    assert "pursuit" in labels, (
+        "a slow ramp both eyes follow must produce a conjunction `pursuit` "
+        f"run; stored labels were {labels}"
     )
 
 
