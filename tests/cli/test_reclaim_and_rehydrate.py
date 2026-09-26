@@ -103,16 +103,27 @@ def _verdict(key, verdict, *, hour, prefix):
     })
 
 
-def _timing(key, prefix, *, tier: str):
-    """A `TimingProvenance` row pinning `tier`. Mirrors `tests/cli/
-    test_archive_cli.py::_timing` (and, through it, `tests/archive/
-    test_reclaim.py::_timing`, whose docstring says why a direct insert into
-    this `dj.Computed` table is an established pattern here). Landing alone
-    never populates it, and without it the safety condition
-    `timing_resolved` blocks every reclamation, forced or not."""
-    from wl_preproc.schema import timebase
+def _timing(key, prefix, *, tier: str, unfitted=()):
+    """A `TimingProvenance` row pinning `tier`, and a `SystemTimebase` clock
+    fit for every `core.AcquisitionSystem` the session landed with except those
+    named in `unfitted`. Mirrors `tests/cli/test_archive_cli.py::_timing` (and,
+    through it, `tests/archive/test_reclaim.py::_timing`, whose docstring says
+    why a direct insert into a `dj.Computed` table is an established pattern
+    here). Landing alone never populates either, and without both the safety
+    condition `timing_resolved` blocks every reclamation, forced or not: a
+    system with no fit is one whose timing stage failed or has not run, and
+    running it after the session is freed would record `no_recording` for a
+    device that recorded."""
+    from wl_preproc.schema import core, timebase
 
     timebase.activate(prefix=prefix)
+    # The real clock-fit stage, not a planted row -- see
+    # `tests/cli/test_archive_cli.py::_timing` for why a planted "fitted" row
+    # is a key a later `daemon.run_once()` fails on.
+    for system in (core.AcquisitionSystem & key).to_arrays("system"):
+        if system in unfitted:
+            continue
+        timebase.SystemTimebase.populate({**key, "system": system})
     timebase.TimingProvenance.insert1(
         {
             **key,
@@ -175,9 +186,10 @@ def _refusal(out):
 def _ready(landed, subject, prefix):
     """Landed, archived, timed and forced: everything a real reclamation
     needs before Phase 3, when `canonical_nwb_present` fails for every
-    session. The tier-A `TimingProvenance` row stands in for the timing
-    stages having run on the session's real files, which `timing_resolved`
-    requires and no force overrides."""
+    session. The tier-A `TimingProvenance` row and a clock fit for every
+    system (`_timing`) stand in for the timing stages having run on the
+    session's real files, which `timing_resolved` requires and no force
+    overrides."""
     session_dir, key = landed(subject)
     nas_root = _archive(session_dir, prefix)
     _timing(key, prefix, tier="A")
@@ -269,6 +281,27 @@ def test_a_force_does_not_free_a_session_whose_timing_has_not_run(landed, prefix
     refusal = _refusal(capsys.readouterr().out)
     assert "timing_resolved" in refusal
     assert "not_tier_d" not in refusal  # overridden by the force; safety is what blocks
+    _untouched(session_dir, key, before)
+
+
+def test_a_force_does_not_free_a_session_with_an_unfitted_system(landed, prefix, capsys):
+    """The residual the fix wave's re-review reproduced through the CLI: a
+    `TimingProvenance` row -- written even when one system's clock-fit key
+    failed or crashed -- is not enough. `bcam` has no `SystemTimebase` row
+    here; freeing the session would let that key run later on an absent
+    directory and record `no_recording` for a camera that recorded."""
+    session_dir, key = landed("rhunfit")
+    nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="D", unfitted=("bcam",))
+    _verdict(key, "force", hour=11, prefix=prefix)
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert _refusal(out) == "refusing: blocked on: timing_resolved"
+    assert "bcam" in out  # the preview names the system with no fit
     _untouched(session_dir, key, before)
 
 

@@ -751,13 +751,22 @@ def test_tape_manifest_lists_a_verified_session_and_excludes_an_unverified_one(l
 
 
 def _timing(key, prefix, *, tier: str):
-    """A `TimingProvenance` row pinning `tier`. Mirrors `tests/archive/
-    test_reclaim.py`'s own `_timing` helper -- see its docstring for why a
-    direct insert into this `dj.Computed` table is an established pattern in
-    this codebase, not a novelty."""
-    from wl_preproc.schema import timebase
+    """A `TimingProvenance` row pinning `tier`, and a `SystemTimebase` clock
+    fit for every `core.AcquisitionSystem` the session landed with -- together
+    what the safety condition `timing_resolved` requires. Mirrors
+    `tests/archive/test_reclaim.py`'s own `_timing` helper -- see its docstring
+    for why a direct insert into a `dj.Computed` table is an established
+    pattern in this codebase, not a novelty."""
+    from wl_preproc.schema import core, timebase
 
     timebase.activate(prefix=prefix)
+    # The real clock-fit stage, not a planted row: these sessions persist in
+    # the shared database, and `core.Segment.key_source` reads every fit not
+    # marked `no_recording`, so a planted "fitted" row would hand a later
+    # module's `daemon.run_once()` a Segment key built on a fit that never
+    # happened.
+    for system in (core.AcquisitionSystem & key).to_arrays("system"):
+        timebase.SystemTimebase.populate({**key, "system": system})
     timebase.TimingProvenance.insert1(
         {
             **key,
