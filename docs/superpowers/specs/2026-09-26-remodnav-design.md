@@ -591,6 +591,17 @@ Nothing else is claimed as a reason for it here.
    exactly this on static images — "a substantial confusion of fixation and
    pursuit for the static images" — and §6 records its remedy. The answer
    decides which paramset the daemon runs.
+
+   **Answered by the requester on 2026-09-26: "Not yet, maybe later."** No
+   current task moves a target, but a future one might. So:
+   - **The daemon runs the §6 defaults, with pursuit on.** Nothing a future
+     task produces is lost to a paramset that could not say `pursuit`.
+   - **A `pursuit` label on a current task's session is suspect.** It is far
+     more likely to be a fixation or drift that the 2 °/s threshold caught,
+     item 2's open question, than a pursuit.
+   - **No pursuit-disabled paramset is registered now.** It is the §6
+     remedy to reach for if suspect `pursuit` labels start costing something
+     downstream.
 2. **Macaque drift against a 2 °/s threshold.** The threshold is set "higher
    than natural ocular drift velocities during fixations", citing Goltz et
    al. (1997) and Cherici et al. (2012). Whether macaque fixational drift on
