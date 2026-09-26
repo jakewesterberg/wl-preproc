@@ -120,10 +120,29 @@ def reclaim_conditions(
     # Systems whose clock fit never landed: `SystemTimebase` writes a row for
     # every attempted system, fitted or not (`schema/timebase.py::
     # SystemTimebase.make`), so a system missing here is one whose key errored,
-    # crashed, or has not run yet.
+    # crashed, or has not run yet. It can never block a session forever:
+    # `ingest/landing.py::land_session` writes a session's `AcquisitionSystem`
+    # rows in the same call as its `Ingestion` row, and `SystemTimebase.
+    # key_source` is exactly `AcquisitionSystem & Ingestion`, so every system
+    # here is one that stage will attempt -- and `archive/scratch.py::
+    # free_session` refuses a session with no `Ingestion` row before this
+    # predicate matters. `core.Segment` and `core.RejectedSegment` need no
+    # such guard: on an absent directory `core.Segment.make` inserts nothing
+    # and leaves its key outstanding, retried after rehydration -- a cost,
+    # never the permanent false row `SystemTimebase` writes.
     unfitted = sorted(
         ((core.AcquisitionSystem & session_key) - timebase.SystemTimebase).to_arrays("system")
     )
+    timing_gaps = []
+    if len(tier_rows) != 1:
+        timing_gaps.append(
+            "no tier resolved: the timing stages have not run on this session's files"
+        )
+    if unfitted:
+        timing_gaps.append(
+            f"no clock fit for {', '.join(unfitted)}: the timing stage failed or has "
+            f"not run for {'it' if len(unfitted) == 1 else 'them'}"
+        )
 
     forced = bool(len(holds)) and bool(holds[0] == "force")
 
@@ -156,20 +175,14 @@ def reclaim_conditions(
             # `not_tier_d` below, which stays judgement.
             Condition(
                 "timing_resolved",
-                len(tier_rows) == 1 and not unfitted,
-                ""
-                if len(tier_rows) == 1 and not unfitted
-                else (
-                    "no tier resolved: the timing stages have not run on this "
-                    "session's files, and freeing it now would let them compute "
-                    "on an absent directory"
-                    if len(tier_rows) != 1
-                    else (
-                        f"no clock fit for {', '.join(unfitted)}: its timing "
-                        "stage failed or has not run, and running it after the "
-                        "session is freed would record no recording for a "
-                        "device that recorded"
-                    )
+                not timing_gaps,
+                "; ".join(timing_gaps)
+                + (
+                    "; freeing it now would let them compute on an absent "
+                    "directory and record devices that recorded as having "
+                    "recorded nothing"
+                    if timing_gaps
+                    else ""
                 ),
                 overridable=False,
             ),

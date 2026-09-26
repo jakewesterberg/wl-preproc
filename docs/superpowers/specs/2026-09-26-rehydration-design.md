@@ -556,7 +556,13 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
 > every attempted system, fitted or not, so a missing row is exactly a fit
 > that failed, crashed or has not run. With that, item 3's first bullet
 > ("a session is never freed before its timebase stages ran on its real
-> files") holds.
+> files") holds. It cannot block a session forever: `land_session` writes a
+> session's `AcquisitionSystem` rows with its `Ingestion` row, and
+> `SystemTimebase.key_source` is `AcquisitionSystem & Ingestion`. "Timebase
+> stages" here means `SystemTimebase` and `TimingProvenance`; `core.Segment`
+> and `core.RejectedSegment` need no such guard, because on an absent
+> directory `core.Segment.make` inserts nothing and leaves its key
+> outstanding — retried after rehydration, a cost and never a false row.
 
 ## 12. Two findings outside this scope
 

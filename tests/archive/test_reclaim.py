@@ -464,9 +464,9 @@ def test_a_force_does_not_free_a_session_whose_timing_has_not_run(session, prefi
     assert reclaimable(predicate) is False
 
 
-def _system(key, system: str, *, fitted: bool):
-    """An `AcquisitionSystem` row and, when `fitted`, the `SystemTimebase` row
-    its clock-fit stage writes. `fitted=False` is the state a failed or
+def _system(key, system: str, *, fit_row: bool):
+    """An `AcquisitionSystem` row and, when `fit_row`, the `SystemTimebase` row
+    its clock-fit stage writes. `fit_row=False` is the state a failed or
     crashed `SystemTimebase` key leaves: the device is known, its fit never
     landed. A direct insert into the `dj.Computed` table for the reason
     `_timing`'s docstring gives. `fit_status='no_recording'` because it is the
@@ -477,7 +477,7 @@ def _system(key, system: str, *, fitted: bool):
     from wl_preproc.schema import core, timebase
 
     core.AcquisitionSystem.insert1({**key, "system": system})
-    if fitted:
+    if fit_row:
         timebase.SystemTimebase.insert1(
             {
                 **key,
@@ -506,8 +506,8 @@ def test_a_system_without_a_clock_fit_blocks_even_with_a_tier(session, prefix):
     key = session("rclmsys")
     _archive_and_verify(key, n_files=1)
     _timing(key, tier="D")
-    _system(key, "syncbox", fitted=True)
-    _system(key, "bcam", fitted=False)
+    _system(key, "syncbox", fit_row=True)
+    _system(key, "bcam", fit_row=False)
     _hold(key, verdict="force")
 
     predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
@@ -520,6 +520,23 @@ def test_a_system_without_a_clock_fit_blocks_even_with_a_tier(session, prefix):
     assert reclaimable(predicate) is False
 
 
+def test_no_tier_and_an_unfitted_system_are_both_named(session, prefix):
+    """Early in a session's life both gaps coexist; the detail names both, so
+    an operator does not fix one and meet the other on the next attempt."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmsyb")
+    _archive_and_verify(key, n_files=1)
+    _system(key, "bcam", fit_row=False)
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    timing = _condition(predicate, "timing_resolved")
+    assert timing.passed is False
+    assert timing.detail.startswith("no tier resolved: the timing stages have not run")
+    assert "no clock fit for bcam" in timing.detail
+
+
 def test_every_system_fitted_resolves_timing(session, prefix):
     """The other side: a `TimingProvenance` row plus a clock fit for every
     system the session has -- fitted or not, since `SystemTimebase` writes a
@@ -529,8 +546,8 @@ def test_every_system_fitted_resolves_timing(session, prefix):
     key = session("rclmsyf")
     _archive_and_verify(key, n_files=1)
     _timing(key, tier="A")
-    _system(key, "syncbox", fitted=True)
-    _system(key, "bcam", fitted=True)
+    _system(key, "syncbox", fit_row=True)
+    _system(key, "bcam", fit_row=True)
 
     predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
 
