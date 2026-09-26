@@ -1,7 +1,8 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (session close)**, describing `main` at `13dc4d0`.
-CI green on both interpreters — `gh run view 35467153322`.
+**Last updated 2026-09-26**, describing branch `spec/rehydration` — NOT merged
+as written; the merge commit and CI run get recorded here once they exist, not
+before.
 
 > ## Start here next session
 >
@@ -24,10 +25,42 @@ CI green on both interpreters — `gh run view 35467153322`.
 >
 > **Otherwise, pick up in this order:**
 >
-> 1. **Rehydration** (item 6 below). The last unbuilt piece with operational
->    rather than analytical consequences: it turns `wlpp reclaim` from a
->    preview into real disk-freeing. Small, hardware-free, reuses
->    `archive/verify.py`'s existing reconstruction.
+> 1. **Rehydration is BUILT and verified** on `spec/rehydration` (2026-09-26;
+>    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
+>    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught; after the
+>    whole-branch review's fix wave, 1471 passed/11 skipped/1 deselected/1
+>    xfailed on 3.11 and 1470 passed/13 skipped/1 xfailed on 3.13): `wlpp
+>    rehydrate` restores a reclaimed session byte for byte to its recorded
+>    path, and `wlpp reclaim --no-dry-run --confirm <session> --nas-root
+>    <mount>` now deletes, behind a proof against the NAS copy. Reclaim also
+>    refuses to free any file the archive does not hold as it is now,
+>    same-size changes included (the whole-branch review: DONE markers
+>    against the recorded digests, every unchecksummed file hashed against
+>    the archive; a rig-checksummed file edited in place without its marker
+>    updated is still not detected). A sixth condition,
+>    `canonical_nwb_present`, fails until Phase 3, so **every real
+>    reclamation needs a recorded force until NWB export exists**. A
+>    seventh, `timing_resolved`, is safety and no force clears it: a
+>    session is never freed before its timebase stages ran on its real
+>    files, because they read an absent directory as an absent device and
+>    would record a permanent tier D. On a freed session the stages that
+>    read raw files afterwards (eye calibration and quality, validity,
+>    detection) raise, so they give job errors, not rows, and an errored
+>    job key is **not** retried after rehydration until the error is
+>    cleared by hand; the event stage, for a session it has not yet built,
+>    errors every pass and recovers by itself once rehydrated. A stage
+>    added later that treats a missing directory as absence would write
+>    false rows, and a later session landing at a freed session's path
+>    would be read in its place, so whether the daemon should skip
+>    currently freed sessions is an **open decision for the requester**,
+>    not changed on this branch. **Next in this line: a streaming archive
+>    writer.**
+>    `store.write_store` reads each file whole into memory, and a
+>    two-hour Neuropixels AP file is ~166 GB, so no real session can be
+>    archived yet. Due before January. Its spec (§12) also records that
+>    Intan's `stim.dat` is one uint16 per channel per sample, as large as
+>    `amplifier.dat`, not the rounding error the archival design calls it;
+>    that deserves its own amendment.
 > 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
 >    microsaccade detection.** Real code, hardware-free, and they matter as
 >    SACCADE detectors — see the priority note below about glissades. U'n'Eye
@@ -437,6 +470,11 @@ decides when the scratch copy may be freed. **`wlpp reclaim` previews and delete
 deliberately: rehydration is what makes reclamation safe and it is not built. Ingest now
 refuses new sessions below the scratch floor `doctor.py` already owned.
 
+*Corrected 2026-09-26: true when written. Rehydration is now built on
+`spec/rehydration`, and `wlpp reclaim --no-dry-run --confirm <session>
+--nas-root <mount>` deletes, behind a proof against the NAS copy — see this
+file's own header.*
+
 **wl-preproc eye: reader, calibration, gaze** — merged 2026-08-31 (`e7c8ea4`).
 `wl_preproc/eye/`. Reads the real OpenIrisDPI format, fits a per-eye map over the
 dual-Purkinje vector, exposes canonical gaze as a **computation, never a stored array**.
@@ -823,12 +861,9 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    never exercised any of this. See the header — that recording carries no decodable
    barcode at all, which is a larger problem than this item. Detection spec §2 carries the
    full chain.
-6. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
-   reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
-   Worth doing before the hardware lands. **This is the recommended next
-   piece of work as of 2026-09-19** — see this file's own header, which
-   records that the rig and the compute machine are both unavailable and
-   that the next session is hardware-free code development.
+6. **Rehydration** — BUILT 2026-09-26 on `spec/rehydration`; see this file's
+   header. Spec `2026-09-26-rehydration-design.md`, plan
+   `plans/2026-09-26-rehydration.md`.
 7. **The eye subsystem's two open decisions are both settled.** The calibration-block
    marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits
@@ -847,6 +882,9 @@ remaining ones of that kind, each still simply unwritten. U'n'Eye is the first p
 this project that genuinely wants the GPU. Gap-aware extraction and rehydration are both
 hardware-free; the first of those is now built (item 5 above, unmerged), which leaves
 rehydration as the only hardware-free piece outstanding.
+
+*Corrected 2026-09-26: true when written. Rehydration is now built too, on
+`spec/rehydration` — see this file's own header and item 6 above.*
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief

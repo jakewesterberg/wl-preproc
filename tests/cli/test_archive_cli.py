@@ -37,59 +37,13 @@ from wl_preproc.archive.verify import _expected_digests
 from wl_preproc.cli.main import main
 from wl_preproc.cli.report import build_report
 from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
-from wl_preproc.ingest.watcher import scan_once
-from wl_preproc.synth.recipe import CI_RECIPE
-from wl_preproc.synth.session import generate_session
 
 
 def test_every_new_command_is_reachable(capsys):
     assert main(["--help"]) == 0
     helptext = capsys.readouterr().out
-    for command in ("archive", "reclaim", "hold", "tape-manifest"):
+    for command in ("archive", "reclaim", "hold", "tape-manifest", "rehydrate"):
         assert command in helptext, command
-
-
-@pytest.fixture
-def landed(tmp_path, dj_conn, prefix):
-    """Factory: a real CI_RECIPE-shaped session, landed via real `scan_once`
-    under a caller-chosen subject. Returns `(session_dir, key)`.
-
-    `dj_conn`/`prefix` are session-scoped (`tests/conftest.py`) and shared by
-    the whole suite, so CI_RECIPE's own fixed `subject="pico"` would collide
-    with another test's row under the identical key -- `tests/cli/
-    test_report.py`'s own `scanned` fixture documents the same trap and the
-    same fix: every caller below names its own subject.
-    """
-
-    def _land(subject: str):
-        # A root PER SUBJECT, not one shared `tmp_path / "scratch"`:
-        # CI_RECIPE's `session_id` ("2027-03-14_01") is constant regardless
-        # of subject, so a test landing two sessions (`test_tape_manifest_
-        # lists_a_verified_session_and_excludes_an_unverified_one`) under one
-        # shared root would have its second `generate_session` call
-        # overwrite the first session's directory in place -- found by
-        # running this fixture with a shared root: the second landed
-        # session's manifest silently replaced the first's on disk, and the
-        # `archive` command run against the first session's own `session_dir`
-        # then archived the SECOND session's data under the first's path.
-        root = tmp_path / f"scratch-{subject}"
-        root.mkdir(exist_ok=True)
-        recipe = CI_RECIPE.model_copy(update={"subject": subject})
-        generate_session(root, recipe)
-        session_dir = root / recipe.session_id
-        scan_once(root, prefix=prefix)
-
-        from wl_preproc.contracts.manifest import SessionManifest
-        from wl_preproc.contracts.paths import MANIFEST_FILENAME
-        from wl_preproc.ingest.landing import manifest_session_key
-
-        manifest = SessionManifest.from_yaml(
-            (session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
-        )
-        key = manifest_session_key(manifest)
-        return session_dir, key
-
-    return _land
 
 
 def _corrupt_a_done_marker(session_dir):
@@ -544,38 +498,6 @@ def test_reclaim_refuses_a_mismatched_confirmation(landed, prefix, capsys):
     assert "refusing" in out
 
 
-def test_reclaim_never_frees_even_when_confirmed(landed, prefix, capsys):
-    """Controller ruling A: reclaim previews and deletes nothing in this
-    build -- deliberately, because rehydration is not in this plan. This is
-    the test that would fail if a future edit wired a real delete back in:
-    the session directory must still exist, and no `ScratchReclamation` row
-    may appear, even down the --no-dry-run --confirm path."""
-    from wl_preproc.schema import archive
-
-    session_dir, key = landed("rclmc4")
-
-    code = main(
-        [
-            "reclaim",
-            "--session",
-            str(session_dir),
-            "--no-dry-run",
-            "--confirm",
-            str(session_dir),
-            "--prefix",
-            prefix,
-        ]
-    )
-    out = capsys.readouterr().out.lower()
-
-    assert code == 0
-    assert session_dir.exists()
-    assert len(archive.ScratchReclamation & key) == 0
-    assert "refusing" not in out
-    # Ruling A: "say why -- that rehydration lands first."
-    assert "rehydration" in out
-
-
 def test_reclaim_prints_every_condition_not_just_the_blocked_ones(landed, prefix, capsys):
     """Design spec section 5.2: a NAMED LIST, not a verdict. A session with
     no archive at all blocks on `artifact_present` -- but
@@ -590,6 +512,35 @@ def test_reclaim_prints_every_condition_not_just_the_blocked_ones(landed, prefix
 
     assert "artifact_present" in out
     assert "no_pending_paramset_or_warm_copy" in out
+    assert "canonical_nwb_present" in out
+
+
+def test_reclaim_preview_marks_a_forced_judgement_failure_overridden(landed, prefix, capsys):
+    """An operator must be able to tell "passed" from "failed, and a person
+    overrode it on the record" (2026-09-26 rehydration design, section 2).
+
+    A tier-D `TimingProvenance` row, not none: with no row at all the safety
+    condition `timing_resolved` fails and no force clears it (the
+    whole-branch review's Critical finding), so the preview would be NOT
+    reclaimable for a reason this test is not about."""
+    session_dir, key = landed("rclmc6")
+    nas_root = session_dir.parent.parent / "nas"
+    main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
+          "--host", "vault", "--share", "cold", "--prefix", prefix])
+    _timing(key, prefix, tier="D")
+    main(["hold", "--session", str(session_dir), "--verdict", "force", "--actor", "tester",
+          "--reason", "NWB export is not built yet", "--prefix", prefix])
+    capsys.readouterr()
+
+    main(["reclaim", "--session", str(session_dir), "--prefix", prefix])
+    out = capsys.readouterr().out
+
+    assert "[OVERRIDDEN by force] canonical_nwb_present" in out
+    # Tier D, so not_tier_d fails too -- and is overridden.
+    assert "[OVERRIDDEN by force] not_tier_d -- tier D" in out
+    assert "[OK] timing_resolved" in out
+    assert "[OK] artifact_present" in out
+    assert "\nreclaimable --" in out
 
 
 # -- wlpp hold --------------------------------------------------------------
@@ -897,8 +848,8 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
     not been populated yet, is a real reachable state (`TimingProvenance.
     key_source` is sessions with an `Ingestion` row, populated separately --
     `tests/archive/test_reclaim.py::test_no_timing_provenance_row_reports_
-    no_tier_resolved`). It must block on `not_tier_d`, named, not merely
-    vanish or block on something else."""
+    no_tier_resolved`). It must block on `not_tier_d` and on
+    `timing_resolved`, named, not merely vanish or block on something else."""
     session_dir, key = landed("rptub1")
     nas_root = session_dir.parent.parent / "nas"
     main(
@@ -917,7 +868,8 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
         ]
     )
     # Deliberately no _timing() call: TimingProvenance stays empty for this
-    # session, so not_tier_d is the one condition that cannot pass.
+    # session, so neither timing condition can pass (canonical_nwb_present
+    # fails too, as it does for every unforced session until Phase 3).
 
     body = build_report(session_dir.parent, prefix=prefix)
 
@@ -925,6 +877,7 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
     line = [ln for ln in section.splitlines() if key["subject"] in ln]
     assert len(line) == 1, section
     assert "not_tier_d" in line[0]
+    assert "timing_resolved" in line[0]
 
 
 def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefix):
@@ -946,8 +899,30 @@ def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefi
         ]
     )
     _timing(key, prefix, tier="A")
+    # canonical_nwb_present fails for every session until Phase 3; only a
+    # recorded force makes one fully reclaimable today.
+    main(["hold", "--session", str(session_dir), "--verdict", "force", "--actor", "tester",
+          "--reason", "NWB export is not built yet", "--prefix", prefix])
 
     body = build_report(session_dir.parent, prefix=prefix)
 
     section = _section(body, "Archived sessions blocked from reclamation")
     assert key["subject"] not in section
+
+
+def test_report_names_the_missing_nwb_for_an_unforced_session(landed, prefix):
+    """Until Phase 3, every archived session still on scratch is blocked by
+    the NWB unless forced -- true, and the report must say so by name."""
+    session_dir, key = landed("rptnwb1")
+    nas_root = session_dir.parent.parent / "nas"
+    main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
+          "--host", "vault", "--share", "cold", "--prefix", prefix])
+    _timing(key, prefix, tier="A")
+
+    body = build_report(session_dir.parent, prefix=prefix)
+
+    section = _section(body, "Archived sessions blocked from reclamation")
+    line = [ln for ln in section.splitlines() if key["subject"] in ln]
+    assert len(line) == 1, section
+    assert "canonical_nwb_present" in line[0]
+    assert "not_tier_d" not in line[0]

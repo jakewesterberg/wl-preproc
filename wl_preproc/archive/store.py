@@ -43,7 +43,7 @@ class StoreResult:
     manifest_digest: str
 
 
-def manifest_digest(store_dir: Path) -> str:
+def manifest_digest(store_dir: Path, exclude: frozenset[str] = frozenset()) -> str:
     """blake3 over the sorted `(relative path, blake3)` pairs of every file.
 
     A directory tree has no single hash, and a digest over concatenated bytes
@@ -68,12 +68,24 @@ def manifest_digest(store_dir: Path) -> str:
     throughput on a ~360 GB session for a property nothing in this design
     consumes (tried in an earlier version of this function; reverted per
     design spec section 10 item 4).
+
+    **`exclude` names relative paths to leave out**, and exists for one: the
+    completion sentinel. `archive/stage.py::archive_session` confirms this
+    digest and only THEN writes the sentinel, so a published artifact always
+    holds one file the recorded digest never covered
+    (`tests/cli/test_archive_cli.py::_digest_of_published_content` found this
+    first). Re-checking a published artifact against its recorded digest --
+    `archive/proof.py` -- therefore passes `exclude={SENTINEL_NAME}`. Empty
+    by default, which is exactly the old behaviour.
     """
     import blake3 as _blake3
 
     digest = _blake3.blake3()
     for path in sorted(p for p in store_dir.rglob("*") if p.is_file()):
-        digest.update(str(path.relative_to(store_dir)).encode("utf-8"))
+        relative = str(path.relative_to(store_dir))
+        if relative in exclude:
+            continue
+        digest.update(relative.encode("utf-8"))
         digest.update(blake3_file(path).encode("ascii"))
     return digest.hexdigest()
 

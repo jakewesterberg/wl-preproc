@@ -10,12 +10,22 @@ suite rather than for the one file. The brief named this `test_verify.py`; see
 reason.
 """
 
+import blake3
 import numpy as np
 import pytest
 import zarr
 
+from wl_preproc.archive.verify import (
+    hash_reconstruction,
+    iter_reconstruct,
+    reconstruct,
+    stored_paths,
+    stored_size,
+    stored_sizes,
+    verify_against,
+    verify_store,
+)
 from wl_preproc.archive.store import write_store
-from wl_preproc.archive.verify import reconstruct, verify_store
 from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 from wl_preproc.synth.recipe import CI_RECIPE
 from wl_preproc.synth.session import generate_session
@@ -121,3 +131,79 @@ def test_a_missing_done_marker_entry_is_an_error_not_a_pass(tmp_path):
         marker.unlink()
     with pytest.raises(ValueError):
         verify_store(result.path, session)
+
+
+def _hand_built_store(path):
+    """A store whose chunking the test controls: `write_store` leaves verbatim
+    chunking to zarr, so the only way to make a verbatim file span several
+    chunks, with a partial last one, is to write the store by hand."""
+    root = zarr.open(str(path), mode="w")
+    data = np.arange(10 * 3, dtype="<i2").reshape(10, 3)
+    streams = root.create_group("streams")
+    streams.create_dataset("x.ap.bin", data=data, chunks=(3, 3))
+    streams["x.ap.bin"].attrs["source"] = "sys/x.ap.bin"
+    text = b"abcdefghijklmnopqrstuvwxyz0123456789"  # 36 bytes
+    verbatim = root.create_group("verbatim")
+    verbatim.create_dataset("sys/notes.txt", data=np.frombuffer(text, dtype=np.uint8), chunks=(7,))
+    verbatim.create_dataset("empty.txt", data=np.frombuffer(b"", dtype=np.uint8))
+    return data.tobytes(), text
+
+
+def test_a_stream_rebuilds_chunk_by_chunk_including_a_final_partial_chunk(tmp_path):
+    stream_bytes, _ = _hand_built_store(tmp_path / "s.zarr")
+    blocks = list(iter_reconstruct(tmp_path / "s.zarr", "sys/x.ap.bin"))
+    assert len(blocks) == 4  # 10 rows in chunks of 3: 3 + 3 + 3 + 1
+    assert b"".join(blocks) == stream_bytes
+
+
+def test_a_verbatim_file_rebuilds_chunk_by_chunk(tmp_path):
+    _, text = _hand_built_store(tmp_path / "s.zarr")
+    blocks = list(iter_reconstruct(tmp_path / "s.zarr", "sys/notes.txt"))
+    assert len(blocks) == 6  # 36 bytes in chunks of 7: five whole, one of 1
+    assert b"".join(blocks) == text
+
+
+def test_a_zero_length_file_rebuilds_to_zero_bytes(tmp_path):
+    _hand_built_store(tmp_path / "s.zarr")
+    assert reconstruct(tmp_path / "s.zarr", "empty.txt") == b""
+
+
+def test_the_chunked_hash_equals_blake3_of_the_whole_file(tmp_path):
+    session, result = _archived(tmp_path)
+    for path in sorted(p for p in session.rglob("*") if p.is_file()):
+        relative = str(path.relative_to(session))
+        whole = blake3.blake3(path.read_bytes()).hexdigest()
+        assert hash_reconstruction(result.path, relative) == whole, relative
+
+
+def test_stored_paths_lists_every_file_the_session_had(tmp_path):
+    session, result = _archived(tmp_path)
+    expected = sorted(str(p.relative_to(session)) for p in session.rglob("*") if p.is_file())
+    assert stored_paths(result.path) == expected
+
+
+def test_stored_size_is_the_sessions_size_without_decompressing(tmp_path):
+    session, result = _archived(tmp_path)
+    assert stored_size(result.path) == sum(
+        p.stat().st_size for p in session.rglob("*") if p.is_file()
+    )
+
+
+def test_stored_sizes_names_every_file_with_its_size(tmp_path):
+    session, result = _archived(tmp_path)
+    expected = {
+        str(p.relative_to(session)): p.stat().st_size
+        for p in session.rglob("*")
+        if p.is_file()
+    }
+    assert stored_sizes(result.path) == expected
+
+
+def test_a_missing_path_is_a_verdict_not_a_crash(tmp_path):
+    """`iter_reconstruct` is a generator and raises lazily; `verify_against`
+    must iterate inside its own `try`, or this escapes as a `KeyError`."""
+    _session, result = _archived(tmp_path)
+    verdicts = verify_against(result.path, {"no/such/file": "0" * 64})
+    assert len(verdicts) == 1
+    assert not verdicts[0].matched
+    assert "error reconstructing file: KeyError" in verdicts[0].actual

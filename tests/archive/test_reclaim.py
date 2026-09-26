@@ -1,15 +1,15 @@
 """The reclamation predicate: a named list of conditions, not a verdict.
 
-The first three tests below build `Condition` lists by hand from
-`CONDITION_NAMES`, kept from the original brief because they pin
-`reclaimable`/`blocking`'s own contract cheaply -- in particular that
-`blocking` names EVERY failure, not just the first. But none of the three
-ever imports `reclaim_conditions`, so on their own they cannot tell a correct
-predicate apart from one that returns four conditions, or the right five
-under different names, or the right five in the wrong order (Controller
-ruling B). Every test from `test_pins_condition_names_and_order_to_production`
-onward inserts real rows and calls `reclaim_conditions` itself, which is what
-makes the first three mean anything at all.
+The hand-built tests below pin `reclaimable`/`blocking`'s own contract
+cheaply: that `blocking` names EVERY failure, not just the first, and that a
+force clears judgement failures and never safety ones (2026-09-26 rehydration
+design, section 2). But none of them imports `reclaim_conditions`, so on their
+own they cannot tell a correct predicate apart from one that returns the
+wrong names, the wrong order, or the wrong kinds (Controller ruling B).
+`test_pins_condition_names_and_order_to_production` and
+`test_pins_condition_kinds_to_production` insert real rows and call
+`reclaim_conditions` itself, which is what makes the hand-built ones mean
+anything at all.
 """
 
 from __future__ import annotations
@@ -18,42 +18,72 @@ import datetime
 
 import pytest
 
-from wl_preproc.archive.reclaim import Condition, blocking, reclaimable
+from wl_preproc.archive.reclaim import Condition, Predicate, blocking, reclaimable
 
 CONDITION_NAMES = (
     "artifact_present",
     "every_file_verified",
+    "timing_resolved",
     "not_tier_d",
     "no_pending_paramset_or_warm_copy",
+    "canonical_nwb_present",
     "no_hold",
 )
 
+# The judgement conditions -- the ones a force may override. Pinned to
+# production by `test_pins_condition_kinds_to_production`, so the hand-built
+# predicates below cannot drift from what `reclaim_conditions` returns.
+OVERRIDABLE = frozenset(
+    {"not_tier_d", "no_pending_paramset_or_warm_copy", "canonical_nwb_present"}
+)
 
-def _all_passing():
-    return [Condition(n, True, "") for n in CONDITION_NAMES]
+
+def _failing(names=frozenset(), *, forced=False):
+    """Every condition, passing unless named in `names`, each carrying its
+    production kind."""
+    return Predicate(
+        tuple(
+            Condition(n, n not in names, "", overridable=n in OVERRIDABLE)
+            for n in CONDITION_NAMES
+        ),
+        forced=forced,
+    )
 
 
 def test_all_conditions_passing_is_reclaimable():
-    assert reclaimable(_all_passing()) is True
+    assert reclaimable(_failing()) is True
 
 
-def test_each_condition_blocks_on_its_own():
-    """Five conditions, five cases. A condition that never fires alone is
-    indistinguishable from one that cannot fire at all."""
-    for index, name in enumerate(CONDITION_NAMES):
-        conditions = _all_passing()
-        conditions[index] = Condition(name, False, "failed for the test")
-        assert reclaimable(conditions) is False, name
-        assert blocking(conditions) == [name]
+def test_each_condition_blocks_on_its_own_unless_forced_and_overridable():
+    """Seven conditions, each failing alone, forced and not: fourteen cases. A
+    condition that never fires alone is indistinguishable from one that
+    cannot fire at all, and a force that clears the wrong kind is the one
+    mistake this design exists to rule out."""
+    for name in CONDITION_NAMES:
+        for forced in (False, True):
+            predicate = _failing({name}, forced=forced)
+            expected = [] if (forced and name in OVERRIDABLE) else [name]
+            assert blocking(predicate) == expected, (name, forced)
+            assert reclaimable(predicate) is (not expected), (name, forced)
 
 
 def test_blocking_names_every_failure_not_just_the_first():
     """The daily report says WHICH condition blocks a session; naming only the
     first would send someone to fix one of several."""
-    conditions = _all_passing()
-    conditions[0] = Condition(CONDITION_NAMES[0], False, "")
-    conditions[2] = Condition(CONDITION_NAMES[2], False, "")
-    assert blocking(conditions) == [CONDITION_NAMES[0], CONDITION_NAMES[2]]
+    predicate = _failing({CONDITION_NAMES[0], CONDITION_NAMES[2]})
+    assert blocking(predicate) == [CONDITION_NAMES[0], CONDITION_NAMES[2]]
+
+
+def test_a_force_never_clears_a_safety_failure_beside_a_judgement_one():
+    predicate = _failing({"artifact_present", "canonical_nwb_present"}, forced=True)
+    assert blocking(predicate) == ["artifact_present"]
+    assert reclaimable(predicate) is False
+
+
+def test_an_unclassified_condition_is_safety_by_default():
+    """A condition someone adds without stating its kind must fail closed:
+    no force can clear it."""
+    assert Condition("anything", False, "").overridable is False
 
 
 # -- Below: real rows, real `reclaim_conditions` calls (Controller ruling B).
@@ -103,12 +133,12 @@ def session(dj_conn, prefix):
     return _make
 
 
-def _condition(conditions, name):
+def _condition(predicate, name):
     """The one condition named `name`, so an assertion about a single
     condition cannot be satisfied by a different one that happens to share
     its `.passed` value (same shape as `tests/cli/test_report.py`'s own
     `_line_for`)."""
-    matches = [c for c in conditions if c.name == name]
+    matches = [c for c in predicate.conditions if c.name == name]
     assert len(matches) == 1, f"expected exactly one condition named {name!r}, got {matches}"
     return matches[0]
 
@@ -212,15 +242,16 @@ def _timing(key, *, tier: str):
     )
 
 
-def _hold(key, *, verdict: str):
+def _hold(key, *, verdict: str, hour: int = 11):
     """A `ReclamationHold` row -- "the ONLY place a person appears in this
-    subsystem" (`archive.py`'s own docstring on the table)."""
+    subsystem" (`archive.py`'s own docstring on the table). `hour` orders
+    several verdicts for one session: the predicate reads only the latest."""
     from wl_preproc.schema import archive
 
     archive.ReclamationHold.insert1(
         {
             **key,
-            "held_at": datetime.datetime(2027, 5, 1, 11, 0),
+            "held_at": datetime.datetime(2027, 5, 1, hour, 0),
             "actor": "reviewer",
             "verdict": verdict,
             "reason": "test probe",
@@ -229,20 +260,21 @@ def _hold(key, *, verdict: str):
 
 
 def test_pins_condition_names_and_order_to_production(session, prefix):
-    """A session set up to pass every condition returns conditions whose
-    `.name`s equal `CONDITION_NAMES`, in that order -- the test that makes
-    the three hand-built tests above mean something (Controller ruling B
-    item 1)."""
+    """A session set up to pass every condition that CAN pass today returns
+    conditions whose `.name`s equal `CONDITION_NAMES`, in that order -- and
+    is blocked by `canonical_nwb_present` alone, because NWB export does not
+    exist yet (2026-09-26 rehydration design, section 0 ruling 3)."""
     from wl_preproc.archive.reclaim import reclaim_conditions
 
     key = session("rclmall")
     _archive_and_verify(key, n_files=2)
     _timing(key, tier="A")
 
-    conditions = reclaim_conditions(key, expected_file_count=2, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=2, prefix=prefix)
 
-    assert [c.name for c in conditions] == list(CONDITION_NAMES)
-    assert reclaimable(conditions) is True
+    assert [c.name for c in predicate.conditions] == list(CONDITION_NAMES)
+    assert predicate.forced is False
+    assert blocking(predicate) == ["canonical_nwb_present"]
 
 
 def test_tier_d_blocks_reclaim_from_a_real_row(session, prefix):
@@ -257,10 +289,10 @@ def test_tier_d_blocks_reclaim_from_a_real_row(session, prefix):
     _archive_and_verify(key, n_files=1)
     _timing(key, tier="D")
 
-    conditions = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
 
-    assert blocking(conditions) == ["not_tier_d"]
-    assert _condition(conditions, "not_tier_d").detail == "tier D"
+    assert blocking(predicate) == ["not_tier_d", "canonical_nwb_present"]
+    assert _condition(predicate, "not_tier_d").detail == "tier D"
 
 
 def test_a_hold_blocks_reclaim_from_a_real_row(session, prefix):
@@ -286,41 +318,107 @@ def test_a_hold_blocks_reclaim_from_a_real_row(session, prefix):
     _timing(key, tier="A")
     _hold(key, verdict="hold")
 
-    conditions = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
 
-    assert blocking(conditions) == ["no_hold"]
-    assert _condition(conditions, "no_hold").detail == "held"
+    assert blocking(predicate) == ["canonical_nwb_present", "no_hold"]
+    assert _condition(predicate, "no_hold").detail == "held"
 
 
-def test_a_force_verdict_does_not_block_reclaim(session, prefix):
-    """`ReclamationHold.verdict` has a second value, `'force'`
-    (`schema/archive.py:74`'s own comment: "a human blocking OR FORCING
-    reclamation" -- both verbs, one enum). Until this test (reviewer
-    finding, fix round) nothing exercised `'force'` against a real row:
-    every other test here either inserts no `ReclamationHold` row at all or
-    inserts `'hold'`, so `holds[0] == "hold"` reading `False` for a genuine
-    `'force'` row -- not only for an absent one -- was reasoned about but
-    never checked.
+def test_pins_condition_kinds_to_production(session, prefix):
+    """Which conditions a force may override is decided in production, not in
+    this file's `OVERRIDABLE` -- this is what keeps the two equal."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
 
-    Scoped to exactly what `no_hold` itself does, no further: this condition
-    only asks whether the most recent verdict is `'hold'`, so within it
-    `'force'` reads the same as no row at all. It does NOT make `'force'`
-    override any of the other four conditions -- `reclaimable()` is `all()`
-    over the whole list, so a `'force'` row next to a real tier-D row would
-    still leave the session unreclaimable overall; that composition is a
-    different claim this test does not make and does not need a
-    `_timing(tier="D")` session to avoid implying."""
+    key = session("rclmknd")
+
+    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
+
+    assert {c.name for c in predicate.conditions if c.overridable} == OVERRIDABLE
+    # Named on its own as well: "timing not yet computed" was reclassified
+    # from judgement to safety by the whole-branch review, and the set
+    # comparison above would read the same if the condition vanished.
+    assert _condition(predicate, "timing_resolved").overridable is False
+
+
+def test_canonical_nwb_present_fails_until_phase_3(session, prefix):
+    """Ruling 3: reclamation follows the canonical NWB, and NWB export is not
+    built. Pinned on the detail string, so that wiring the real query in
+    Phase 3 breaks this test -- the reminder to update what a reader of the
+    report sees."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmnwb")
+
+    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
+
+    nwb = _condition(predicate, "canonical_nwb_present")
+    assert nwb.passed is False
+    assert nwb.overridable is True
+    assert nwb.detail == "NWB export is not built (Phase 3)"
+
+
+def test_a_force_overrides_tier_d_and_the_missing_nwb(session, prefix):
+    """The archival design's section 5.3 promised "a force that overrides"
+    and never said what. Ruling 4: judgement conditions."""
     from wl_preproc.archive.reclaim import reclaim_conditions
 
     key = session("rclmfrc")
     _archive_and_verify(key, n_files=1)
+    _timing(key, tier="D")
+    _hold(key, verdict="force")
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert predicate.forced is True
+    assert _condition(predicate, "no_hold").passed is True
+    assert blocking(predicate) == []
+    assert reclaimable(predicate) is True
+
+
+def test_a_force_does_not_override_a_missing_artifact(session, prefix):
+    """Ruling 4's other half: a force changes whether a session is READY,
+    never whether its archive exists."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmfna")
     _timing(key, tier="A")
     _hold(key, verdict="force")
 
-    conditions = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
 
-    assert _condition(conditions, "no_hold").passed is True
-    assert "no_hold" not in blocking(conditions)
+    assert blocking(predicate) == ["artifact_present", "every_file_verified"]
+    assert reclaimable(predicate) is False
+
+
+def test_a_hold_after_a_force_blocks(session, prefix):
+    """Latest verdict wins, in both directions."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmhaf")
+    _archive_and_verify(key, n_files=1)
+    _timing(key, tier="A")
+    _hold(key, verdict="force", hour=11)
+    _hold(key, verdict="hold", hour=12)
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert predicate.forced is False
+    assert blocking(predicate) == ["canonical_nwb_present", "no_hold"]
+
+
+def test_a_force_after_a_hold_clears_it(session, prefix):
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmfah")
+    _archive_and_verify(key, n_files=1)
+    _timing(key, tier="A")
+    _hold(key, verdict="hold", hour=11)
+    _hold(key, verdict="force", hour=12)
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert predicate.forced is True
+    assert reclaimable(predicate) is True
 
 
 def test_no_timing_provenance_row_reports_no_tier_resolved(session, prefix):
@@ -328,18 +426,42 @@ def test_no_timing_provenance_row_reports_no_tier_resolved(session, prefix):
     real, reachable production state (`TimingProvenance.key_source` is
     sessions with an `Ingestion` row, populated separately) -- `not_tier_d`
     must fail rather than default to passing on absence (Controller ruling D
-    item 1). Cheap deliberately: no archive or verification rows either,
-    since this test's only claim is about the tier condition's own detail
-    string on a bare session."""
+    item 1), and so must `timing_resolved`, the safety condition added for
+    the same absence by the whole-branch review. Cheap deliberately: no
+    archive or verification rows either, since this test's only claims are
+    about the two timing conditions' own detail strings on a bare session."""
     from wl_preproc.archive.reclaim import reclaim_conditions
 
     key = session("rclmnt")
 
-    conditions = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
 
-    not_tier_d = _condition(conditions, "not_tier_d")
+    not_tier_d = _condition(predicate, "not_tier_d")
     assert not_tier_d.passed is False
     assert not_tier_d.detail == "no tier resolved"
+    timing = _condition(predicate, "timing_resolved")
+    assert timing.passed is False
+    assert timing.detail.startswith("no tier resolved: the timing stages have not run")
+
+
+def test_a_force_does_not_free_a_session_whose_timing_has_not_run(session, prefix):
+    """The whole-branch review's Critical finding. A timebase stage run on a
+    freed session sees no directory, reads that as "no recording"
+    (`timebase/extract.py::find_recordings`), and writes a permanent tier D --
+    so "timing not yet computed" is safety, and a force must not clear it,
+    even though it clears `not_tier_d`'s failure on the identical absence
+    beside it, and the missing NWB."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmntf")
+    _archive_and_verify(key, n_files=1)
+    _hold(key, verdict="force")
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert predicate.forced is True
+    assert blocking(predicate) == ["timing_resolved"]
+    assert reclaimable(predicate) is False
 
 
 def test_zero_verifications_do_not_vacuously_pass_zero_expected_files(session, prefix):
@@ -353,9 +475,9 @@ def test_zero_verifications_do_not_vacuously_pass_zero_expected_files(session, p
 
     key = session("rclmzv")
 
-    conditions = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
 
-    assert _condition(conditions, "every_file_verified").passed is False
+    assert _condition(predicate, "every_file_verified").passed is False
 
 
 def test_the_vacuous_condition_says_so_in_its_own_detail(session, prefix):
@@ -371,8 +493,8 @@ def test_the_vacuous_condition_says_so_in_its_own_detail(session, prefix):
 
     key = session("rclmvac")
 
-    conditions = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
+    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
 
-    paramset = _condition(conditions, "no_pending_paramset_or_warm_copy")
+    paramset = _condition(predicate, "no_pending_paramset_or_warm_copy")
     assert paramset.passed is True
     assert "vacuous" in paramset.detail

@@ -71,9 +71,24 @@ status:
     The next session is hardware-free code development; ask whether that has
     changed before planning around it. Recommended order, with the reasoning
     in `docs/CHECKPOINT.md`'s own "Start here next session" header:
-    (1) REHYDRATION -- decompress-to-scratch, which turns `wlpp reclaim` from
-    a preview into real disk-freeing and is the last unbuilt piece with
-    operational rather than analytical consequences; (2) the three remaining
+    (1) REHYDRATION is BUILT on `spec/rehydration` (2026-09-26, not merged as
+    written): `wlpp rehydrate` restores a reclaimed session byte for byte, and
+    `wlpp reclaim --no-dry-run` deletes, run by a person, behind a proof
+    against the NAS copy. A sixth condition, the canonical NWB, fails until
+    Phase 3, so every real reclamation needs a recorded force until then; a
+    seventh, `timing_resolved`, is never overridden, so no session is freed
+    before its timebase stages ran on its real files. On a freed session
+    the stages that read raw files raise -- job errors, not rows, and an
+    errored key stays errored after rehydration until cleared by hand --
+    and the event stage, for a session it has not built, errors each pass
+    until rehydrated; a future stage that treats a missing directory as
+    absence would write false rows.
+    Whether the daemon should skip currently freed sessions is an OPEN
+    DECISION for the requester, not settled on this branch. Its spec names
+    what is next
+    in this line: the archive writer still reads each file whole into
+    memory and a two-hour Neuropixels AP file is ~166 GB, so a STREAMING
+    WRITER is due before January; (2) the three remaining
     hardware-free detectors, NSLR, REMoDNaV (the detector, not the PyPI test
     oracle) and Bayesian microsaccade detection, which matter here as SACCADE
     detectors because the requester has said glissades are peripheral;
@@ -269,8 +284,9 @@ status:
     Everything before this remains as it was: 2b-2's back half is gated on
     2b-1, the container seam, still hardware-blocked. Gap-aware barcode
     extraction (which validity criterion 4 was blocked on) is now BUILT on
-    an unmerged branch -- see `phase` above -- which leaves rehydration as
-    the only hardware-free piece outstanding.
+    an unmerged branch -- see `phase` above -- which left rehydration as
+    the only hardware-free piece outstanding; that is now built too
+    (2026-09-26).
 
     **The whole-branch review ran, and its fix wave is `84247d1`.** Eight
     mutation-testing gaps in the adaptive offset threshold (seven new tests

@@ -39,6 +39,19 @@ def scratch_headroom(path: str = "/") -> tuple[int, bool]:
     return free_gib, free_gib >= _MIN_SCRATCH_FREE_GIB
 
 
+def headroom_after(path: str, extra_bytes: int) -> bool:
+    """Whether writing `extra_bytes` more at `path` still leaves the floor
+    `scratch_headroom` enforces clear.
+
+    Rehydration asks this before restoring a session, so that restoring one
+    can never push scratch below the line the watcher refuses new sessions at
+    (2026-09-26 rehydration design, section 5.2). Beside `scratch_headroom`,
+    not in `archive/`, so the floor keeps exactly one definition.
+    """
+    free = shutil.disk_usage(path).free
+    return (free - extra_bytes) // 2**30 >= _MIN_SCRATCH_FREE_GIB
+
+
 def run_checks() -> list[str]:
     """Run each check, print a line per check, and return the failures."""
     failures: list[str] = []
