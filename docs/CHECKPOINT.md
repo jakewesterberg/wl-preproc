@@ -87,9 +87,13 @@ requester chose to merge the same day; true when written.*
 >    microsaccade detection.** Real code, hardware-free, and they matter as
 >    SACCADE detectors — see the priority note below about glissades. U'n'Eye
 >    is the fourth and wants the GPU, so it stays blocked.
-> 3. **Move `_KIND_OF` from `schema/detect.py` to `eye/detect/labels.py`.**
->    Roughly half an hour; kills a duplicate that now has four consumers and
->    nothing that can catch the copies drifting.
+> 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to
+>    `eye/detect/labels.py`** as `KIND_OF`, `NOT_INTERSECTED`, `kind_of` and
+>    `UnknownLabelKind`. The conjunction and the eye-validation tests now use
+>    one definition; the restated copy in `tests/eye/detect/
+>    test_nystrom_holmqvist_validation.py` is gone, and the kind-map tests
+>    moved to `tests/eye/detect/test_labels.py`, so the 3.13 cross-check
+>    (no DataJoint) runs them too.
 > 4. **Which of the 225/337 unmatched saccades are real.** One eye detects a
 >    saccade the other misses entirely — essentially the whole 4.6–6.9%
 >    saccade cost. A measurement that refines a number already in hand, so it

@@ -43,6 +43,82 @@ class Label(StrEnum):
 # consumer and no defensible general meaning.
 
 
+# -- Conjunction kinds -------------------------------------------------------
+#
+# Which labels the binocular conjunction (`schema/detect.py::
+# _conjunction_runs`) intersects with which. Here, not in `schema/detect.py`,
+# because it is vocabulary knowledge, not schema knowledge -- and because
+# `tests/eye/` imports nothing from `wl_preproc.schema` (the 3.13 cross-check
+# runs it with no DataJoint), so while this lived in the schema module that
+# suite had to restate it, two definitions of one rule with nothing able to
+# catch them drifting apart (moved 2026-09-26; CHECKPOINT's "what is next").
+
+
+class UnknownLabelKind(ValueError):
+    """A label reached the conjunction with no kind assigned to it."""
+
+
+#: Which labels intersect with which. A conjunction run is the intersection of
+#: two runs of the SAME kind, and carries that kind's label (design spec
+#: `2026-09-05-conjunction-shape-design.md` section 1).
+#:
+#: **`saccade` and `microsaccade` share a kind**, because section 1 of the
+#: detection spec calls them "a split, not a ranking" -- one event
+#: distinguished only by size. They intersect together and the surviving span
+#: is labelled by `classify` on its OWN measured amplitude, which is what
+#: stage 1 already did and what keeps label and amplitude derived once, from
+#: one interval. Every other emitted label is its own kind and intersects only
+#: with itself, so a binocular glissade is stored as `pso` rather than folded
+#: into a saccade or dropped.
+KIND_OF: dict[Label, str] = {
+    Label.SACCADE: "saccadic",
+    Label.MICROSACCADE: "saccadic",
+    # **Every non-saccadic kind's key IS its label's own value**, and
+    # `schema/detect.py::_conjunction_runs` relies on it: `Label(kind)` is
+    # how such a kind labels itself. Tested, not trusted -- see
+    # `tests/eye/detect/test_labels.py::
+    # test_a_single_label_kind_is_keyed_by_its_own_label_value`. "saccadic"
+    # is deliberately not a `Label`, because that kind has two of them and no
+    # single label could name it.
+    Label.PSO: Label.PSO.value,
+    Label.PURSUIT: Label.PURSUIT.value,
+    Label.DRIFT: Label.DRIFT.value,
+}
+
+#: Labels that are never intersected, and why -- listed rather than left as
+#: absences, so `kind_of`'s guard can tell "deliberately excluded" from "a
+#: ninth label nobody mapped".
+#:
+#: `fixation` is the synthesized background: `schema/detect.py::_insert_trace` paints every
+#: sample no interval claimed, so a region survives as `fixation` whether an
+#: intersection painted it or the fill did. Intersecting it would run the
+#: nested loop over the largest runs in the trace for no observable difference
+#: (spec section 1.2). `blink` and `invalid` come from the validity mask,
+#: never from a detector, and are in no detector's vocabulary at all.
+NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID})
+
+
+def kind_of(label) -> str | None:
+    """`label`'s conjunction kind, or `None` if it is deliberately not
+    intersected.
+
+    Raises rather than returning `None` for an unmapped label. Design spec
+    section 1 declares all eight labels because the migration window closes
+    January 2027; this is what catches a ninth added without updating
+    `KIND_OF`, which would otherwise vanish from every conjunction with
+    nothing to show for it."""
+    if label in NOT_INTERSECTED:
+        return None
+    try:
+        return KIND_OF[label]
+    except KeyError as exc:
+        raise UnknownLabelKind(
+            f"{label!r} has no conjunction kind. Every label is either in "
+            f"`KIND_OF` or deliberately in `NOT_INTERSECTED`; a new one is "
+            f"in neither until someone decides which it is"
+        ) from exc
+
+
 class TilingError(ValueError):
     """Runs do not tile the sample range exactly."""
 
