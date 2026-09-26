@@ -1,7 +1,8 @@
 # Where this build actually is
 
-**Last updated 2026-09-19 (session close)**, describing `main` at `13dc4d0`.
-CI green on both interpreters — `gh run view 35467153322`.
+**Last updated 2026-09-26**, describing branch `spec/rehydration` — NOT merged
+as written; the merge commit and CI run get recorded here once they exist, not
+before.
 
 > ## Start here next session
 >
@@ -24,10 +25,27 @@ CI green on both interpreters — `gh run view 35467153322`.
 >
 > **Otherwise, pick up in this order:**
 >
-> 1. **Rehydration** (item 6 below). The last unbuilt piece with operational
->    rather than analytical consequences: it turns `wlpp reclaim` from a
->    preview into real disk-freeing. Small, hardware-free, reuses
->    `archive/verify.py`'s existing reconstruction.
+> 1. **Rehydration is BUILT** on `spec/rehydration` (2026-09-26): `wlpp
+>    rehydrate` restores a reclaimed session byte for byte to its recorded
+>    path, and `wlpp reclaim --no-dry-run --confirm <session> --nas-root
+>    <mount>` now deletes, behind a proof against the NAS copy. Reclaim also
+>    refuses to free any file the archive does not hold as it is now. A
+>    sixth condition, `canonical_nwb_present`, fails until Phase 3, so
+>    **every real reclamation needs a recorded force until NWB export
+>    exists**, and a session forced out before all its stages have
+>    populated makes `daemon.run_once()` error on it — the event stage on
+>    every pass, and any stage registered after the session was freed (for
+>    example the next eye detector) once per freed session, with errored
+>    keys **not** retried after rehydration until their job error is
+>    cleared by hand. Whether the daemon should skip a currently-freed
+>    session is an **open decision for the requester**, not changed on this
+>    branch. **Next in this line: a streaming archive writer.**
+>    `store.write_store` reads each file whole into memory, and a
+>    two-hour Neuropixels AP file is ~166 GB, so no real session can be
+>    archived yet. Due before January. Its spec (§12) also records that
+>    Intan's `stim.dat` is one uint16 per channel per sample, as large as
+>    `amplifier.dat`, not the rounding error the archival design calls it;
+>    that deserves its own amendment.
 > 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
 >    microsaccade detection.** Real code, hardware-free, and they matter as
 >    SACCADE detectors — see the priority note below about glissades. U'n'Eye
@@ -823,12 +841,9 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    never exercised any of this. See the header — that recording carries no decodable
    barcode at all, which is a larger problem than this item. Detection spec §2 carries the
    full chain.
-6. **Rehydration** — decompress-to-scratch. Small, reuses `archive/verify.py`'s existing
-   reconstruction, and it is what turns `wlpp reclaim` from a preview into real disk-freeing.
-   Worth doing before the hardware lands. **This is the recommended next
-   piece of work as of 2026-09-19** — see this file's own header, which
-   records that the rig and the compute machine are both unavailable and
-   that the next session is hardware-free code development.
+6. **Rehydration** — BUILT 2026-09-26 on `spec/rehydration`; see this file's
+   header. Spec `2026-09-26-rehydration-design.md`, plan
+   `plans/2026-09-26-rehydration.md`.
 7. **The eye subsystem's two open decisions are both settled.** The calibration-block
    marker (2026-08-31): both a reserved `TaskTypeCode` and a `CALIBRATION_START`/`END`
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits

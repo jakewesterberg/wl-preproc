@@ -441,6 +441,36 @@ No dependency changes, so `wl.yaml`'s `third_party` is untouched.
   (archival handoff, deferred item 3). Still unchecked; a wrong mount fails
   closed at §3 check 1 or 2.
 
+> **Amended 2026-09-26 by task review, before merge.** Three things task
+> review found that the sections above do not know:
+>
+> 1. **Reclaim refuses unless every file on scratch is held by the archive at
+>    the same size** (`archive/scratch.py::free_session`, using
+>    `archive/verify.py::stored_sizes`). §3's proof compares the NAS copy
+>    against the recorded digests; it never compared scratch against the NAS,
+>    so a file added to or changed on scratch after archiving would have been
+>    deleted without ever being archived. §4's steps gain this refusal
+>    directly after the proof (step 5), before the record-and-rename step.
+>
+> 2. **Rehydrate matches `--session` against `Ingestion.session_dir` exactly,
+>    in Python** (`archive/rehydrate.py::session_for_path`). MySQL 8's default
+>    collation (`utf8mb4_0900_ai_ci`) makes `=` ignore case and accents, so a
+>    differently spelled path was being restored to the caller's own spelling
+>    rather than the recorded one. §4 step 2 and §5.1's matching against
+>    `Ingestion.session_dir`, both described above as compared "after `Path`
+>    normalisation," are now an exact string comparison done in Python, not a
+>    comparison left to the database.
+>
+> 3. **An open decision for the requester, not changed on this branch.** A
+>    session freed before all its stages have populated makes
+>    `daemon.run_once()` error on it — the event stage on every pass, and any
+>    stage registered after the session was freed (for example the next eye
+>    detector) once per freed session — with errored keys **not** retried
+>    after rehydration until their job error is cleared by hand. Until Phase
+>    3 every real reclamation needs a recorded force (§2), so this is
+>    reachable only by a deliberate force. Whether the daemon should skip a
+>    currently-freed session is the requester's call.
+
 ## 12. Two findings outside this scope
 
 **Archiving a real session will run out of memory.** `store.write_store` reads

@@ -352,6 +352,8 @@ the canonical NWB is Phase 3. Both join the list when they land. Writing it as a
 growing list of named conditions makes the current incompleteness visible rather
 than implying the rule is finished.
 
+> **Amended 2026-09-26 by the rehydration design** (`2026-09-26-rehydration-design.md`, §2–§3). A sixth condition, `canonical_nwb_present`, joins the list now rather than when Phase 3 lands, and **fails** until NWB export exists. That is the requester's position that reclamation follows the canonical NWB, which none of the five conditions above enforced. The conditions are now of two kinds: **safety** (1, 2 and the hold), whose failure means the way back is not proven, and **judgement** (3, 4 and the NWB), whose failure means the session is not ready. Condition 1 as implemented reads a row, not the NAS. Deletion is therefore preceded by a proof that reads the NAS copy itself (sentinel present, manifest digest unchanged, every rig-checksummed file rebuilt to its digest), and no force can skip it.
+
 ### 5.3 The human role inverts
 
 Not a verdict that unblocks — a **hold** that blocks, and a **force** that
@@ -361,6 +363,8 @@ specifies and wl.works uses for every other judgment.
 The default becomes *proceed unless held* rather than *wait unless approved*,
 which removes the researcher-on-holiday failure while keeping a way to stop
 reclamation on a session somebody is actively suspicious of.
+
+> **Amended 2026-09-26 by the rehydration design** (§0 ruling 4, §2). What a force overrides, which this section left unstated: the judgement conditions, never the safety ones. A session is reclaimable when every safety condition passes and either every judgement condition passes or its latest `ReclamationHold` verdict is `force`. Until Phase 3, a force is the only way any session is freed. A person frees scratch, with `wlpp reclaim --no-dry-run --confirm <session> --nas-root <mount>`; the daemon never does (ruling 1).
 
 ---
 
