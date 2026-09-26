@@ -494,6 +494,12 @@ of it is testable today with no hardware and no real recording.
    fixture, whose largest array is ~4.7 MB; a real ~100 GB session needs
    streaming. Named here rather than built into a task whose contract is "write
    the store".
+
+   > **Resolved 2026-09-26** (`feat/streaming-archive-writer`): `store.write_store` now streams (`store.py::_write_stream` memory-maps each bulk stream and writes one stored chunk of rows at a time; `_write_verbatim` reads and writes every other file in 16 MiB blocks), so its peak memory is a few chunks, never a whole file.
+   > The stream chunk shape is unchanged; verbatim files now get an explicit
+   > chunk size instead of zarr's automatic one, which only new archives carry
+   > and every reader already handles. The same change fixed a crash this item
+   > did not name: a bulk stream with no samples raised `ZeroDivisionError`.
 6. **Whether archival needs IO throttling** (§3.1). It runs immediately after
    ingest, and once sorting exists the two are this box's heavy IO stages
    competing on the same device. Deferred deliberately: the thing to measure

@@ -601,6 +601,12 @@ quantifies it: a two-hour Neuropixels 1.0 AP file is ~166 GB. Rehydration
 streams, but nothing can be rehydrated that could not first be archived, so a
 streaming writer is the natural next item and is due before January.
 
+> **Resolved 2026-09-26** (`feat/streaming-archive-writer`): `store.write_store` now streams (`store.py::_write_stream` memory-maps each bulk stream and writes one stored chunk of rows at a time; `_write_verbatim` reads and writes every other file in 16 MiB blocks), so its peak memory is a few chunks, never a whole file.
+> A test pins it: with the chunk sizes shrunk, archiving a ~20 MB stream and a
+> ~20 MB verbatim file peaks at about 5 MiB of Python heap, against 43 MiB
+> before. `stim.dat` is now streamed like every other verbatim file; whether it
+> should be a compressed array instead is still the finding below.
+
 **`stim.dat` is not a rounding error.** The archival design treats everything
 but the bulk streams as *"a rounding error against ~100 GB"* (§1) and stores it
 verbatim. Intan's own *RHS Application Note: Data File Formats*, "One File Per

@@ -69,14 +69,18 @@ requester chose to merge the same day; true when written.*
 >    DataJoint side-effect exception). `run_once` reports how many sessions
 >    it skipped (`freed_skipped`). *Until then this
 >    item described those as what a freed session meets, with the skip an
->    open decision; true when written.* **Next in this line: a streaming
->    archive writer.**
->    `store.write_store` reads each file whole into memory, and a
->    two-hour Neuropixels AP file is ~166 GB, so no real session can be
->    archived yet. Due before January. Its spec (§12) also records that
->    Intan's `stim.dat` is one uint16 per channel per sample, as large as
+>    open decision; true when written.* **The streaming archive writer is
+>    built too (2026-09-26):** `store.write_store` memory-maps each bulk
+>    stream and writes one stored chunk at a time, and every other file in
+>    16 MiB blocks, so a real session can be archived without holding a
+>    ~166 GB file in memory; it also no longer crashes on a stream with no
+>    samples. *Until then this said the writer read each file whole and
+>    that no real session could be archived yet; true when written.* Still
+>    open in this line: the rehydration spec (§12) records that Intan's
+>    `stim.dat` is one uint16 per channel per sample, as large as
 >    `amplifier.dat`, not the rounding error the archival design calls it;
->    that deserves its own amendment.
+>    it is streamed now, but whether it should be a compressed array
+>    deserves its own amendment.
 > 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
 >    microsaccade detection.** Real code, hardware-free, and they matter as
 >    SACCADE detectors — see the priority note below about glissades. U'n'Eye

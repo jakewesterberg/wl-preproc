@@ -33,6 +33,13 @@ VERBATIM_GROUP = "verbatim"
 # redundancy.
 _CHUNK_SAMPLES = 1 << 20
 
+# Verbatim files are stored as 1-D byte arrays in chunks of this many bytes,
+# written one chunk at a time. Explicit rather than zarr's automatic choice,
+# because that choice was only ever made for an array already in memory --
+# and Intan's `stim.dat` is one uint16 per channel per sample, as large as
+# `amplifier.dat` (2026-09-26 rehydration design, section 12).
+_VERBATIM_CHUNK_BYTES = 1 << 24
+
 
 @dataclass(frozen=True, slots=True)
 class StoreResult:
@@ -90,10 +97,55 @@ def manifest_digest(store_dir: Path, exclude: frozenset[str] = frozenset()) -> s
     return digest.hexdigest()
 
 
+def _write_stream(arrays, stream, compressor) -> None:
+    """One bulk stream, written one stored chunk of rows at a time from a
+    read-only memory map -- never the whole file in memory, which for a
+    two-hour Neuropixels 1.0 AP stream is ~166 GB. The chunk shape is the one
+    this writer always used; only how the bytes get there changed."""
+    rows = max(1, min(_CHUNK_SAMPLES, stream.n_samples))
+    array = arrays.create_dataset(
+        stream.path.name,
+        shape=(stream.n_samples, stream.n_channels),
+        chunks=(rows, stream.n_channels),
+        dtype=SAMPLE_DTYPE,
+        compressor=compressor,
+    )
+    if stream.n_samples == 0:
+        # `np.memmap` refuses an empty file; an empty array needs no chunks.
+        return
+    source = np.memmap(
+        stream.path,
+        dtype=SAMPLE_DTYPE,
+        mode="r",
+        shape=(stream.n_samples, stream.n_channels),
+    )
+    try:
+        for start in range(0, stream.n_samples, rows):
+            array[start : start + rows] = source[start : start + rows]
+    finally:
+        del source
+
+
+def _write_verbatim(verbatim, path: Path, relative: str, compressor) -> None:
+    """One verbatim file as a 1-D byte array, read and written one
+    `_VERBATIM_CHUNK_BYTES` block at a time."""
+    size = path.stat().st_size
+    step = max(1, min(_VERBATIM_CHUNK_BYTES, size))
+    array = verbatim.create_dataset(
+        relative, shape=(size,), chunks=(step,), dtype=np.uint8, compressor=compressor
+    )
+    with path.open("rb") as handle:
+        for start in range(0, size, step):
+            block = handle.read(step)
+            array[start : start + len(block)] = np.frombuffer(block, dtype=np.uint8)
+
+
 def write_store(
     session_dir: Path, out_dir: Path, codec_name: str = "zstd", clevel: int = 5
 ) -> StoreResult:
-    """Compress `session_dir` into a Zarr store under `out_dir`."""
+    """Compress `session_dir` into a Zarr store under `out_dir`, one stored
+    chunk at a time: peak memory is a few chunks, never a whole file
+    (`_write_stream`, `_write_verbatim`)."""
     store_path = out_dir / f"{session_dir.name}.zarr"
     out_dir.mkdir(parents=True, exist_ok=True)
     root = zarr.open(str(store_path), mode="w")
@@ -105,15 +157,7 @@ def write_store(
     stream_paths = {s.path for s in streams}
     arrays = root.create_group(ARRAY_GROUP)
     for stream in streams:
-        data = np.fromfile(stream.path, dtype=SAMPLE_DTYPE).reshape(
-            stream.n_samples, stream.n_channels
-        )
-        arrays.create_dataset(
-            stream.path.name,
-            data=data,
-            chunks=(min(_CHUNK_SAMPLES, stream.n_samples), stream.n_channels),
-            compressor=compressor,
-        )
+        _write_stream(arrays, stream, compressor)
         # The relative path is stored so verification can find the original
         # again without re-deriving where a stream sat in the tree.
         arrays[stream.path.name].attrs["source"] = str(
@@ -124,10 +168,7 @@ def write_store(
     for path in sorted(p for p in session_dir.rglob("*") if p.is_file()):
         if path in stream_paths:
             continue
-        raw = np.frombuffer(path.read_bytes(), dtype=np.uint8)
-        verbatim.create_dataset(
-            str(path.relative_to(session_dir)), data=raw, compressor=compressor
-        )
+        _write_verbatim(verbatim, path, str(path.relative_to(session_dir)), compressor)
 
     compressed = sum(p.stat().st_size for p in store_path.rglob("*") if p.is_file())
     return StoreResult(

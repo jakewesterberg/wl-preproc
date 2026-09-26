@@ -265,6 +265,7 @@ The review's Minors 1–6, none of which loses data. 1 and 2 first.
    Rehydration streams, but nothing can be rehydrated that could not first be
    archived, so a streaming archive writer is the natural next item, due
    before January.
+   *Resolved 2026-09-26: `store.write_store` now streams (`store.py::_write_stream` memory-maps each bulk stream and writes one stored chunk of rows at a time; `_write_verbatim` reads and writes every other file in 16 MiB blocks), so its peak memory is a few chunks, never a whole file.*
 2. **`stim.dat` is not a rounding error.** The archival design treats
    everything but the bulk streams as "a rounding error against ~100 GB"
    and stores it verbatim, but Intan's own RHS format documentation
