@@ -12,7 +12,13 @@ deleting past it could lose data, and no human judgement makes that safe. A
 JUDGEMENT condition failing (`overridable=True`) means the session is not ready
 to be freed; freeing it anyway costs a rehydration later, never data, so a
 recorded `force` may override it. The archival design's section 5.3 promised "a
-force that overrides" and never said what; this is the answer.
+force that overrides" and never said what; this is the answer. "Timing not yet
+computed" (`timing_resolved`) is SAFETY, not judgement, because freeing a session
+then does not merely cost a rehydration: the timebase stages treat an absent
+directory as an absent device and would record the session as having no
+recordings, a permanent false row -- data corrupted, which section 2's definition
+of judgement excludes (the rehydration spec's amendment block, added by the
+whole-branch review).
 
 **Incomplete today, and it says so.** The predicate can see only timing quality
 of what a session produced: tier says nothing about whether a sort is good,
@@ -70,7 +76,7 @@ def reclaim_conditions(
     expected_file_count: int,
     prefix: str = DEFAULT_PREFIX,
 ) -> Predicate:
-    """The six conditions, each evaluated against recorded facts, and whether the session is forced.
+    """The seven conditions, evaluated against recorded facts, and whether the session is forced.
 
     `expected_file_count` is how many files the session's DONE markers name.
     Passed in rather than counted here so this module reads no filesystem:
@@ -122,6 +128,27 @@ def reclaim_conditions(
                 "every_file_verified",
                 len(matched) == expected_file_count and len(matched) > 0,
                 f"{len(matched)} of {expected_file_count} files verified",
+            ),
+            # Safety-kind, so no force clears it. `timebase/extract.py::
+            # find_recordings` returns `[]` for a missing directory by design
+            # ("device absence never blocks"), so a timebase stage run on a
+            # freed session writes `SystemTimebase.fit_status='no_recording'`
+            # and `TimingProvenance.tier='D'` -- permanent, silent, and still
+            # there after rehydration. Requiring the `TimingProvenance` row
+            # (the daemon's LAST stage, `daemon.py::_computed_tables`) means
+            # a session is never freed before those stages ran on its real
+            # files. Same query as `not_tier_d` below, which stays judgement.
+            Condition(
+                "timing_resolved",
+                len(tier_rows) == 1,
+                ""
+                if len(tier_rows) == 1
+                else (
+                    "no tier resolved: the timing stages have not run on this "
+                    "session's files, and freeing it now would let them compute "
+                    "on an absent directory"
+                ),
+                overridable=False,
             ),
             Condition(
                 "not_tier_d",

@@ -93,7 +93,9 @@ def iter_reconstruct(store_path: Path, relative_path: str) -> Iterator[bytes]:
     and reclamation's proof hashes them, so holding one whole in memory is
     not an option (2026-09-26 rehydration design, section 6). A `streams`
     array yields one chunk of rows, every channel, at a time; a `verbatim`
-    array yields one chunk along its only axis.
+    array yields one chunk along its only axis. Peak memory is therefore a
+    few copies of one stored chunk, not one: the block as read, its
+    `SAMPLE_DTYPE` cast (a stream only; `astype` copies), and its bytes.
 
     Checked against `streams` first, `verbatim` second: a compressed stream
     and its verbatim counterpart never coexist for the same source path
@@ -163,7 +165,9 @@ def stored_sizes(store_path: Path) -> dict[str, int]:
     array shapes alone -- nothing is decompressed. Reclamation uses this to
     refuse freeing a file the archive does not hold AS IT IS NOW
     (`archive/scratch.py::free_session`): a file added to scratch after
-    archiving, or changed since, has no entry -- or a disagreeing one -- here."""
+    archiving, or whose length changed since, has no entry -- or a
+    disagreeing one -- here. A same-size change agrees on size; `free_session`
+    checks content after this, cheapest first."""
     root = zarr.open(str(store_path), mode="r")
     sizes = {
         root[ARRAY_GROUP][name].attrs["source"]: (

@@ -23,6 +23,7 @@ from wl_preproc.archive.reclaim import Condition, Predicate, blocking, reclaimab
 CONDITION_NAMES = (
     "artifact_present",
     "every_file_verified",
+    "timing_resolved",
     "not_tier_d",
     "no_pending_paramset_or_warm_copy",
     "canonical_nwb_present",
@@ -54,7 +55,7 @@ def test_all_conditions_passing_is_reclaimable():
 
 
 def test_each_condition_blocks_on_its_own_unless_forced_and_overridable():
-    """Six conditions, each failing alone, forced and not: twelve cases. A
+    """Seven conditions, each failing alone, forced and not: fourteen cases. A
     condition that never fires alone is indistinguishable from one that
     cannot fire at all, and a force that clears the wrong kind is the one
     mistake this design exists to rule out."""
@@ -333,6 +334,10 @@ def test_pins_condition_kinds_to_production(session, prefix):
     predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
 
     assert {c.name for c in predicate.conditions if c.overridable} == OVERRIDABLE
+    # Named on its own as well: "timing not yet computed" was reclassified
+    # from judgement to safety by the whole-branch review, and the set
+    # comparison above would read the same if the condition vanished.
+    assert _condition(predicate, "timing_resolved").overridable is False
 
 
 def test_canonical_nwb_present_fails_until_phase_3(session, prefix):
@@ -421,9 +426,10 @@ def test_no_timing_provenance_row_reports_no_tier_resolved(session, prefix):
     real, reachable production state (`TimingProvenance.key_source` is
     sessions with an `Ingestion` row, populated separately) -- `not_tier_d`
     must fail rather than default to passing on absence (Controller ruling D
-    item 1). Cheap deliberately: no archive or verification rows either,
-    since this test's only claim is about the tier condition's own detail
-    string on a bare session."""
+    item 1), and so must `timing_resolved`, the safety condition added for
+    the same absence by the whole-branch review. Cheap deliberately: no
+    archive or verification rows either, since this test's only claims are
+    about the two timing conditions' own detail strings on a bare session."""
     from wl_preproc.archive.reclaim import reclaim_conditions
 
     key = session("rclmnt")
@@ -433,6 +439,29 @@ def test_no_timing_provenance_row_reports_no_tier_resolved(session, prefix):
     not_tier_d = _condition(predicate, "not_tier_d")
     assert not_tier_d.passed is False
     assert not_tier_d.detail == "no tier resolved"
+    timing = _condition(predicate, "timing_resolved")
+    assert timing.passed is False
+    assert timing.detail.startswith("no tier resolved: the timing stages have not run")
+
+
+def test_a_force_does_not_free_a_session_whose_timing_has_not_run(session, prefix):
+    """The whole-branch review's Critical finding. A timebase stage run on a
+    freed session sees no directory, reads that as "no recording"
+    (`timebase/extract.py::find_recordings`), and writes a permanent tier D --
+    so "timing not yet computed" is safety, and a force must not clear it,
+    even though it clears `not_tier_d`'s failure on the identical absence
+    beside it, and the missing NWB."""
+    from wl_preproc.archive.reclaim import reclaim_conditions
+
+    key = session("rclmntf")
+    _archive_and_verify(key, n_files=1)
+    _hold(key, verdict="force")
+
+    predicate = reclaim_conditions(key, expected_file_count=1, prefix=prefix)
+
+    assert predicate.forced is True
+    assert blocking(predicate) == ["timing_resolved"]
+    assert reclaimable(predicate) is False
 
 
 def test_zero_verifications_do_not_vacuously_pass_zero_expected_files(session, prefix):

@@ -89,6 +89,35 @@ def _verdict(key, verdict, *, hour, prefix):
     })
 
 
+def _timing(key, prefix, *, tier: str):
+    """A `TimingProvenance` row pinning `tier`. Mirrors `tests/cli/
+    test_archive_cli.py::_timing` (and, through it, `tests/archive/
+    test_reclaim.py::_timing`, whose docstring says why a direct insert into
+    this `dj.Computed` table is an established pattern here). Landing alone
+    never populates it, and without it the safety condition
+    `timing_resolved` blocks every reclamation, forced or not."""
+    from wl_preproc.schema import timebase
+
+    timebase.activate(prefix=prefix)
+    timebase.TimingProvenance.insert1(
+        {
+            **key,
+            "tier": tier,
+            "n_barcodes_emitted": 100,
+            "n_systems_aligned": 1,
+            "n_segments": 1,
+            "n_rejected_segments": 0,
+            "worst_residual_us": 1.0,
+            "worst_drift_ppm": 0.5,
+            "pending_inputs": "",
+            "n_full_code_records": 1,
+            "n_strobe_witnesses": 0,
+            "decode_errors": 0,
+        },
+        allow_direct_insert=True,
+    )
+
+
 def _reclaim(session_dir, nas_root, prefix):
     return main(["reclaim", "--session", str(session_dir), "--no-dry-run",
                  "--confirm", str(session_dir), "--nas-root", str(nas_root), "--prefix", prefix])
@@ -130,10 +159,14 @@ def _refusal(out):
 
 
 def _ready(landed, subject, prefix):
-    """Landed, archived and forced: everything a real reclamation needs
-    before Phase 3, when `canonical_nwb_present` fails for every session."""
+    """Landed, archived, timed and forced: everything a real reclamation
+    needs before Phase 3, when `canonical_nwb_present` fails for every
+    session. The tier-A `TimingProvenance` row stands in for the timing
+    stages having run on the session's real files, which `timing_resolved`
+    requires and no force overrides."""
     session_dir, key = landed(subject)
     nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="A")
     _verdict(key, "force", hour=11, prefix=prefix)
     return session_dir, key, nas_root
 
@@ -180,14 +213,14 @@ def test_reclaim_without_nas_root_refuses_and_frees_nothing(landed, prefix, caps
 def test_reclaim_refuses_an_unforced_session_blocked_on_the_nwb(landed, prefix, capsys):
     session_dir, key = landed("rhnwb")
     nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="A")
     before = _files(session_dir)
     capsys.readouterr()
 
     assert _reclaim(session_dir, nas_root, prefix) == 1
 
     refusal = _refusal(capsys.readouterr().out)
-    assert refusal.startswith("refusing: blocked on:")
-    assert "canonical_nwb_present" in refusal
+    assert refusal == "refusing: blocked on: canonical_nwb_present"
     _untouched(session_dir, key, before)
 
 
@@ -202,6 +235,26 @@ def test_a_force_does_not_free_a_session_with_no_artifact(landed, prefix, capsys
     refusal = _refusal(capsys.readouterr().out)
     assert "artifact_present" in refusal
     assert "every_file_verified" in refusal
+    _untouched(session_dir, key, before)
+
+
+def test_a_force_does_not_free_a_session_whose_timing_has_not_run(landed, prefix, capsys):
+    """The whole-branch review's Critical finding, through the CLI. Landed,
+    archived and forced, but no `TimingProvenance` row: freeing it now would
+    let the timebase stages compute on an absent directory, which they read
+    as "no recording" and record as a permanent tier D. A force overrides
+    judgement, and this is not judgement."""
+    session_dir, key = landed("rhnotime")
+    nas_root = _archive(session_dir, prefix)
+    _verdict(key, "force", hour=11, prefix=prefix)
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    refusal = _refusal(capsys.readouterr().out)
+    assert "timing_resolved" in refusal
+    assert "not_tier_d" not in refusal  # overridden by the force; safety is what blocks
     _untouched(session_dir, key, before)
 
 
@@ -332,6 +385,7 @@ def test_reclaim_refuses_a_file_added_after_archiving(landed, prefix, capsys):
     refusal = _refusal(capsys.readouterr().out)
     assert "late-notes.txt" in refusal
     assert "not in the archive" in refusal
+    assert "re-archive with `wlpp archive` first" in refusal
     _untouched(session_dir, key, before)
 
 
@@ -343,6 +397,7 @@ def test_reclaim_refuses_a_file_changed_after_archiving(landed, prefix, capsys):
     session_dir, key = landed("rhedit")
     (session_dir / "notes.txt").write_text("original\n")
     nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="A")
     _verdict(key, "force", hour=11, prefix=prefix)
     with (session_dir / "notes.txt").open("a") as handle:
         handle.write("more\n")
@@ -354,6 +409,62 @@ def test_reclaim_refuses_a_file_changed_after_archiving(landed, prefix, capsys):
     refusal = _refusal(capsys.readouterr().out)
     assert "notes.txt" in refusal
     assert "not in the archive" in refusal
+    _untouched(session_dir, key, before)
+
+
+def test_reclaim_refuses_a_same_size_resent_file(landed, prefix, capsys):
+    """Whole-branch review, finding I1. A rig-checksummed file re-sent at the
+    same size, with its DONE marker updated to the new digest: the size
+    check cannot see it, and the proof rebuilds the archive to the digests
+    recorded at archive time, which the archive still matches. Freeing it
+    would make rehydration restore the OLD bytes. The markers on scratch no
+    longer list what was recorded, and that is what refuses."""
+    from wl_preproc.archive.verify import _expected_digests
+    from wl_preproc.contracts.done import blake3_file
+    from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
+
+    session_dir, key, nas_root = _ready(landed, "rhresnd", prefix)
+    relative, old = sorted(_expected_digests(session_dir).items())[0]
+    victim = session_dir / relative
+    data = bytearray(victim.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    victim.write_bytes(bytes(data))
+    new = blake3_file(victim)
+    markers = [m for m in session_dir.rglob(DONE_MARKER_FILENAME) if old in m.read_text()]
+    assert len(markers) == 1
+    markers[0].write_text(markers[0].read_text().replace(old, new))
+    assert len(new) == len(old)  # so the marker keeps its size too
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    refusal = _refusal(capsys.readouterr().out)
+    assert "DONE markers on scratch no longer list what was archived" in refusal
+    assert "re-archive with `wlpp archive` first" in refusal
+    _untouched(session_dir, key, before)
+
+
+def test_reclaim_refuses_a_same_size_edit_to_an_unchecksummed_file(landed, prefix, capsys):
+    """Whole-branch review, finding I1's other half. A file no DONE marker
+    names -- so the proof never rebuilt it -- overwritten after archiving
+    with different bytes of the same length. Only hashing it against the
+    archive's copy can see that."""
+    session_dir, key = landed("rhsame")
+    (session_dir / "notes.txt").write_text("original\n")
+    nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="A")
+    _verdict(key, "force", hour=11, prefix=prefix)
+    (session_dir / "notes.txt").write_text("ORIGINAL\n")
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _reclaim(session_dir, nas_root, prefix) == 1
+
+    refusal = _refusal(capsys.readouterr().out)
+    assert "notes.txt" in refusal
+    assert "differ from the archive's copy" in refusal
+    assert "re-archive with `wlpp archive` first" in refusal
     _untouched(session_dir, key, before)
 
 
@@ -476,6 +587,7 @@ def test_a_session_survives_reclaim_and_rehydrate_byte_for_byte(landed, prefix):
     (session_dir / "operator-notes.txt").write_text("probe 2 drifted at 01:12\n", encoding="utf-8")
     pristine = _files(session_dir)
     nas_root = _archive(session_dir, prefix)
+    _timing(key, prefix, tier="A")
     _verdict(key, "force", hour=11, prefix=prefix)
 
     assert _reclaim(session_dir, nas_root, prefix) == 0

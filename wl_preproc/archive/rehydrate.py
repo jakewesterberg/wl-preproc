@@ -95,7 +95,9 @@ def session_for_path(session_path: Path, *, prefix: str = DEFAULT_PREFIX) -> dic
 
 def _write(store: Path, relative: str, target_root: Path) -> tuple[str, int]:
     """Rebuild one file under `target_root`, hashing as it is written.
-    Returns `(blake3 hex, bytes written)`. Peak memory is one stored chunk."""
+    Returns `(blake3 hex, bytes written)`. Peak memory is a few copies of one
+    stored chunk (the block, its dtype cast and its bytes -- see
+    `verify.iter_reconstruct`), never the whole file."""
     import blake3 as _blake3
 
     destination = target_root / relative

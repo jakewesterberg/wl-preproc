@@ -517,11 +517,17 @@ def test_reclaim_prints_every_condition_not_just_the_blocked_ones(landed, prefix
 
 def test_reclaim_preview_marks_a_forced_judgement_failure_overridden(landed, prefix, capsys):
     """An operator must be able to tell "passed" from "failed, and a person
-    overrode it on the record" (2026-09-26 rehydration design, section 2)."""
-    session_dir, _key = landed("rclmc6")
+    overrode it on the record" (2026-09-26 rehydration design, section 2).
+
+    A tier-D `TimingProvenance` row, not none: with no row at all the safety
+    condition `timing_resolved` fails and no force clears it (the
+    whole-branch review's Critical finding), so the preview would be NOT
+    reclaimable for a reason this test is not about."""
+    session_dir, key = landed("rclmc6")
     nas_root = session_dir.parent.parent / "nas"
     main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
           "--host", "vault", "--share", "cold", "--prefix", prefix])
+    _timing(key, prefix, tier="D")
     main(["hold", "--session", str(session_dir), "--verdict", "force", "--actor", "tester",
           "--reason", "NWB export is not built yet", "--prefix", prefix])
     capsys.readouterr()
@@ -530,8 +536,9 @@ def test_reclaim_preview_marks_a_forced_judgement_failure_overridden(landed, pre
     out = capsys.readouterr().out
 
     assert "[OVERRIDDEN by force] canonical_nwb_present" in out
-    # No TimingProvenance row, so not_tier_d fails too -- and is overridden.
-    assert "[OVERRIDDEN by force] not_tier_d" in out
+    # Tier D, so not_tier_d fails too -- and is overridden.
+    assert "[OVERRIDDEN by force] not_tier_d -- tier D" in out
+    assert "[OK] timing_resolved" in out
     assert "[OK] artifact_present" in out
     assert "\nreclaimable --" in out
 
@@ -841,8 +848,8 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
     not been populated yet, is a real reachable state (`TimingProvenance.
     key_source` is sessions with an `Ingestion` row, populated separately --
     `tests/archive/test_reclaim.py::test_no_timing_provenance_row_reports_
-    no_tier_resolved`). It must block on `not_tier_d`, named, not merely
-    vanish or block on something else."""
+    no_tier_resolved`). It must block on `not_tier_d` and on
+    `timing_resolved`, named, not merely vanish or block on something else."""
     session_dir, key = landed("rptub1")
     nas_root = session_dir.parent.parent / "nas"
     main(
@@ -861,7 +868,8 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
         ]
     )
     # Deliberately no _timing() call: TimingProvenance stays empty for this
-    # session, so not_tier_d is the one condition that cannot pass.
+    # session, so neither timing condition can pass (canonical_nwb_present
+    # fails too, as it does for every unforced session until Phase 3).
 
     body = build_report(session_dir.parent, prefix=prefix)
 
@@ -869,6 +877,7 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
     line = [ln for ln in section.splitlines() if key["subject"] in ln]
     assert len(line) == 1, section
     assert "not_tier_d" in line[0]
+    assert "timing_resolved" in line[0]
 
 
 def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefix):
