@@ -779,7 +779,7 @@ def test_the_detector_emits_saccade_pso_and_fixation():
     this trace's own quiet Brownian background, and `np.gradient`'s CENTRAL
     difference at the ramp-to-bump boundary averages the ramp's last sample
     with the bump's first rise, landing that one boundary sample at ~15
-    deg/s -- above the 3.6 deg/s peak threshold, so `_true_runs` never sees a
+    deg/s -- above the 3.6 deg/s peak threshold, so `true_runs` never sees a
     dip and treats the whole ramp-plus-bump stretch as ONE peak-run. Given
     that single peak-run, `_saccade_bounds`' own forward offset search starts
     searching from the far side of the bump and walks past its actual decay,
@@ -792,7 +792,7 @@ def test_the_detector_emits_saccade_pso_and_fixation():
     with nothing but quiet background to average, landing genuinely near
     baseline (verified directly: under 2 deg/s, comfortably below the
     ~3.6 deg/s adaptive threshold this trace produces) rather than blended
-    into the bump's rise. That gap is what lets `_true_runs` split the ramp
+    into the bump's rise. That gap is what lets `true_runs` split the ramp
     and the bump into two peak-runs, so the saccade's own offset search stops
     at the ramp's true end and `_glissade_bounds` gets a genuine excursion
     to find afterward. Confirmed directly against the shipped implementation
@@ -864,7 +864,7 @@ def test_a_zero_converged_peak_threshold_returns_no_runs():
 def test_the_returned_runs_are_sorted_by_start():
     """`return sorted(runs, key=lambda run: run.start)` (line 599) -- without
     it, the returned list is in ASSEMBLY order, not chronological order.
-    `runs` collects every `saccade`/`pso` in the order `_true_runs` finds
+    `runs` collects every `saccade`/`pso` in the order `true_runs` finds
     their peaks (left to right), then every `fixation` in a SEPARATE,
     subsequent loop -- so a LEADING fixation (covering the quiet stretch
     before the first saccade, starting at or near sample 0) is appended
@@ -924,7 +924,7 @@ def test_no_run_overlaps_another():
 
     The fixture below adds a SECOND saccade starting only one sample after
     the first one's ramp ends (`600 + 12 + 1`). Verified directly: this
-    produces two `_true_runs` peak segments, and the second's own onset
+    produces two `true_runs` peak segments, and the second's own onset
     search walks backward through the one-sample gap (too brief to read as
     a local minimum below the onset threshold) all the way to the SAME true
     onset the first saccade already found -- `_saccade_bounds` returns
@@ -1163,7 +1163,7 @@ def test_an_acceleration_spike_above_the_physiological_limit_is_excluded():
     500 Hz) leaves the SPIKE SAMPLE ITSELF with both neighbours back at
     baseline -- its own acceleration is therefore small (verified directly:
     22 deg/sec^2, nowhere near the limit) even though its speed alone would
-    exceed the adaptive peak threshold and seed its own `_true_runs`
+    exceed the adaptive peak threshold and seed its own `true_runs`
     peak-run, and `_saccade_bounds`' onset/offset search reads raw
     `speed_deg_s` directly (`detect_nystrom_holmqvist`'s own docstring: the
     rejection narrows `usable`, which Task 2-4's pure search functions do
@@ -1296,7 +1296,7 @@ def test_a_recomputed_glissade_does_not_duplicate_an_already_claimed_one():
     conceptual event being processed twice. A saccade's triangular
     velocity profile occasionally has its own apex replaced by a shallow
     dip -- sensor noise, or (as here) constructed directly -- low enough to
-    fall below the adaptive peak threshold and split one `_true_runs`
+    fall below the adaptive peak threshold and split one `true_runs`
     peak-run into two, but neither shallow enough nor shaped as a genuine
     local minimum for either half's own `_saccade_bounds` search to stop
     there: both searches walk through the dip and land on the SAME true

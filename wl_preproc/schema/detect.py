@@ -639,7 +639,7 @@ class EyeDetection(dj.Computed):
         detector made while labelling it.
 
         Two of the three registered detectors make that second measurement
-        redundant on their own: `engbert_kliegl.py::_true_runs` only ever
+        redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
         neither claims, and `runs_from_labels` can therefore never merge two
@@ -763,7 +763,7 @@ def _overlapping(
     first leaves every returned span separated from the next by at least one
     sample, so `runs_from_labels` cannot merge any of them and the span
     labelled here is exactly the run measured there. Today's one detector
-    already supplies that separation (`engbert_kliegl.py::_true_runs`
+    already supplies that separation (`labels.py::true_runs`
     returns maximal runs, and intersecting two separated families keeps them
     separated), but `registry.py::DetectFn`'s contract does not require it,
     and agreement between a stored label and a stored amplitude must not

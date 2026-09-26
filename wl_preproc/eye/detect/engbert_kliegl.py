@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Run
+from wl_preproc.eye.detect.labels import Run, true_runs
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
 # lambda = 6 and a 6-sample minimum (12 ms at 500 Hz) are the paper's own
@@ -131,13 +131,6 @@ def detect_engbert_kliegl(
             stop=stop,
             label=classify(amplitude(gaze_deg, start, stop), params.microsaccade_max_deg),
         )
-        for start, stop in _true_runs(outside)
+        for start, stop in true_runs(outside)
         if stop - start >= params.min_duration_samples
     ]
-
-
-def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
-    """Maximal `True` stretches as half-open intervals."""
-    padded = np.concatenate(([False], mask, [False]))
-    edges = np.diff(padded.astype(np.int8))
-    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))

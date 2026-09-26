@@ -169,3 +169,14 @@ def test_a_label_with_no_kind_raises():
 
     with pytest.raises(UnknownLabelKind, match="no conjunction kind"):
         kind_of("nystagmus")
+
+
+def test_true_runs_are_maximal_half_open_stretches():
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import true_runs
+
+    mask = np.array([False, True, True, False, True, False, True, True])
+
+    assert [(int(a), int(b)) for a, b in true_runs(mask)] == [(1, 3), (4, 5), (6, 8)]
+    assert true_runs(np.zeros(4, dtype=bool)) == []

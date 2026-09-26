@@ -40,7 +40,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Label, Run
+from wl_preproc.eye.detect.labels import Label, Run, true_runs
 from wl_preproc.eye.detect.measure import amplitude
 
 
@@ -533,7 +533,7 @@ def detect_nystrom_holmqvist(
     # it overlaps, rather than being dropped.** This implementation's first
     # version dropped the later candidate outright, and review found that
     # rule wrong in a way worse than undercounting. A saccade's own peak
-    # occasionally splits into two `_true_runs` peak-runs -- sensor noise,
+    # occasionally splits into two `true_runs` peak-runs -- sensor noise,
     # or Table 2's own max-velocity/acceleration rejection excluding one
     # sample from a real saccade's crest -- and the two candidates'
     # independent onset/offset searches then return OVERLAPPING spans:
@@ -574,7 +574,7 @@ def detect_nystrom_holmqvist(
     # event erased and replaced with a fabricated period of stillness.
     runs: list[Run] = []
     claimed = np.zeros(speed.size, dtype=bool)
-    for peak_start, peak_stop in _true_runs((speed > thresholds.peak_deg_s) & usable):
+    for peak_start, peak_stop in true_runs((speed > thresholds.peak_deg_s) & usable):
         bounds = _saccade_bounds(speed, peak_start, peak_stop, thresholds, fs_hz, params)
         if bounds is None:
             continue
@@ -596,7 +596,7 @@ def detect_nystrom_holmqvist(
         # rules out a DIFFERENT event colliding here -- but it missed the
         # SAME saccade being processed twice: a triangular velocity profile
         # occasionally has its own apex replaced by a shallow dip (sensor
-        # noise) that splits one `_true_runs` peak-run into two without
+        # noise) that splits one `true_runs` peak-run into two without
         # either half's own `_saccade_bounds` search reading the dip as a
         # genuine local minimum, so both halves resolve to the IDENTICAL
         # `(onset, offset, offset_threshold)`. The saccade side of this is
@@ -627,21 +627,11 @@ def detect_nystrom_holmqvist(
     # return would count every sub-tau_min leftover as its own fixation and
     # bias that measurement low.
     min_fixation = max(int(round(params.min_fixation_duration_ms * fs_hz / 1000.0)), 1)
-    for start, stop in _true_runs(~claimed & usable):
+    for start, stop in true_runs(~claimed & usable):
         if stop - start >= min_fixation:
             runs.append(Run(start=start, stop=stop, label=Label.FIXATION))
 
     return sorted(runs, key=lambda run: run.start)
-
-
-def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
-    """Maximal `True` stretches as half-open intervals. Same shape as
-    `engbert_kliegl.py`'s own private helper; duplicated rather than shared
-    because that one is private to its module and this detector's is the
-    second use, not yet a third."""
-    padded = np.concatenate(([False], mask, [False]))
-    edges = np.diff(padded.astype(np.int8))
-    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
 
 
 def _merged_bounds(runs: list[Run], onset: int, offset: int) -> tuple[int, int]:
