@@ -1007,6 +1007,57 @@ def test_a_hold_can_be_recorded_on_a_freed_session(landed, prefix, capsys):
     assert [row["verdict"] for row in rows] == ["hold"]
 
 
+def test_one_subject_twice_at_one_path_is_chosen_by_session_datetime(
+    dj_conn, prefix, tmp_path, capsys
+):
+    """Review of follow-up 4: two sessions of ONE subject recorded at one path
+    (the same session id, landed and freed twice) are not told apart by
+    `--subject`, so the refusal names `--session-datetime` too, and that
+    chooses -- here through `wlpp hold`, whose freed-session path shares
+    `session_for_path` with `wlpp rehydrate`. An aware value, copied with its
+    offset, names the same session as the naive UTC one stored."""
+    from wl_preproc.schema import archive, ingest, pipeline
+
+    ingest.activate(prefix=prefix)
+    archive.activate(prefix=prefix)
+    subject = "rhtwice"
+    path = tmp_path / "gone" / "2027-03-14_01"
+    first = datetime.datetime(2027, 3, 14, 9, 0)
+    second = datetime.datetime(2027, 3, 15, 9, 0)
+    pipeline.subject.Subject.insert1(
+        {"subject": subject, "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+         "subject_description": ""},
+        skip_duplicates=True,
+    )
+    try:
+        for when in (first, second):
+            pipeline.Session.insert1({"subject": subject, "session_datetime": when})
+            ingest.Ingestion.insert1({
+                "subject": subject, "session_datetime": when,
+                "ingested_at": when, "session_dir": str(path), "integrity": "verified",
+                "topology": {}, "manifest_hash": "blake3:test",
+            })
+
+        def hold(*extra):
+            return main(["hold", "--session", str(path), "--verdict", "hold",
+                         "--actor", "tester", "--reason", "twice", "--prefix", prefix,
+                         "--subject", subject, *extra])
+
+        assert hold() == 1
+        refusal = _refusal(capsys.readouterr().out)
+        assert "2 landed sessions were recorded at" in refusal
+        assert "--session-datetime" in refusal
+
+        assert hold("--session-datetime", "2027-03-15T11:00:00+02:00") == 0
+        held = (archive.ReclamationHold & {"subject": subject, "reason": "twice"}).to_dicts()
+        assert [row["session_datetime"] for row in held] == [second]
+
+        assert hold("--session-datetime", "2027-03-16 09:00:00") == 1
+        assert "no landed session matching" in _refusal(capsys.readouterr().out)
+    finally:
+        (pipeline.Session & {"subject": subject}).delete(prompt=False)
+
+
 def test_a_hold_on_an_unrecorded_missing_path_is_refused(dj_conn, prefix, tmp_path, capsys):
     code = main(["hold", "--session", str(tmp_path / "nowhere" / "2027-03-14_01"),
                  "--verdict", "hold", "--actor", "tester", "--reason", "r", "--prefix", prefix])
@@ -1019,23 +1070,55 @@ def test_every_restored_file_and_the_final_rename_are_flushed_to_disk(landed, pr
     """Follow-up 5: the files and the directory entry the rename makes reach
     the disk before the rehydration is recorded, so a power loss after the
     commit cannot leave a session recorded as restored with truncated files."""
-    import os as _os
-
     from wl_preproc.archive import rehydrate as rehydrate_module
 
     session_dir, _key, nas_root, pristine = _reclaimed(landed, "rhfsync", prefix)
-    real_fsync = _os.fsync
-    calls = []
+    real_file, real_directory = rehydrate_module._fsync_file, rehydrate_module._fsync_directory
+    files, directories = [], []
 
-    def counting_fsync(fd):
-        calls.append(fd)
-        return real_fsync(fd)
+    def counting_file(handle):
+        files.append(handle.name)
+        return real_file(handle)
 
-    with patch.object(rehydrate_module.os, "fsync", counting_fsync):
+    def counting_directory(path):
+        directories.append(path)
+        return real_directory(path)
+
+    # The module's two hooks, not `os.fsync`: that is one process-wide
+    # function, and patching it would count whatever else flushes meanwhile.
+    with (
+        patch.object(rehydrate_module, "_fsync_file", counting_file),
+        patch.object(rehydrate_module, "_fsync_directory", counting_directory),
+    ):
         assert _rehydrate(session_dir, nas_root, prefix) == 0
 
-    # One per restored file, plus the directory the session was renamed into.
-    assert len(calls) == len(pristine) + 1
+    assert len(files) == len(pristine)
+    assert directories == [session_dir.parent]
+
+
+def test_a_directory_flush_failing_after_the_rename_says_restored_but_not_recorded(
+    landed, prefix, capsys
+):
+    """The directory flush runs after the rename and before the commit, so its
+    failure is the commit-failure case: files in place, no row, reported as
+    exactly that."""
+    from wl_preproc.archive import rehydrate as rehydrate_module
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, pristine = _reclaimed(landed, "rhdirfs", prefix)
+    capsys.readouterr()
+
+    def failing(path):
+        raise OSError("simulated directory fsync failure")
+
+    with patch.object(rehydrate_module, "_fsync_directory", failing):
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert f"restored but NOT recorded: {session_dir}" in out
+    assert _files(session_dir) == pristine
+    assert len(archive.ScratchRehydration & key) == 0
+    assert not _staging(session_dir, ".rehydrating").exists()
 
 
 def test_two_sessions_recorded_at_one_path_are_named_and_chosen_by_subject(
