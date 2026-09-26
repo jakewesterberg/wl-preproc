@@ -274,6 +274,16 @@ def main(argv: list[str] | None = None) -> int:
     hold_p.add_argument("--reason", required=True)
     hold_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    rehydrate_p = subparsers.add_parser(
+        "rehydrate", help="restore a reclaimed session from its NAS artifact"
+    )
+    rehydrate_p.add_argument(
+        "--session", required=True,
+        help="the session directory, exactly as ingest recorded it",
+    )
+    rehydrate_p.add_argument("--nas-root", required=True, type=Path)
+    rehydrate_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
     # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
     # in the `tape-manifest` dispatch branch with no `add_argument` for it
@@ -491,6 +501,24 @@ def main(argv: list[str] | None = None) -> int:
             f"\nfreed {freed} bytes: {session_dir} is gone. "
             f"`wlpp rehydrate --session {session_dir} --nas-root <mount>` brings it back."
         )
+        return 0
+
+    if args.group == "rehydrate":
+        from wl_preproc.archive.rehydrate import NotRestored, rehydrate_session
+        from wl_preproc.archive.scratch import Refused
+
+        try:
+            outcome = rehydrate_session(Path(args.session), args.nas_root, prefix=args.prefix)
+        except Refused as exc:
+            print(f"refusing: {exc}")
+            return 1
+        except NotRestored as exc:
+            # The same line `wlpp archive` prints per failing file.
+            for verdict in exc.verdicts:
+                print(f"MISMATCH {verdict.relative_path}")
+            print("NOT restored -- the NAS artifact is untouched and nothing was left on scratch.")
+            return 1
+        print(f"rehydrated: {outcome.session_dir} ({outcome.bytes_written} bytes)")
         return 0
 
     if args.group == "hold":

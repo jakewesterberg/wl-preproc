@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from testcontainers.community.mysql import MySqlContainer
 
+from wl_preproc.archive import rehydrate
 from wl_preproc.ingest import watcher
 from wl_preproc.schema._compat import apply_datajoint_compat
 
@@ -71,10 +72,20 @@ def _healthy_scratch_by_default(request, monkeypatch):
     test marked X" from inside a fixture; checked before patching, not
     after, so an opted-out test never sees the mock at all, not even
     briefly.
+
+    Also patches `wl_preproc.archive.rehydrate.headroom_after` -- again the
+    name as bound where it is READ -- for the identical reason: rehydration
+    refuses to restore a session that would push scratch below the floor
+    (2026-09-26 rehydration design, section 5.2), and on this machine the
+    real disk is already below it. `tests/cli/test_reclaim_and_rehydrate.py::
+    test_rehydrate_refuses_when_there_is_no_room` re-patches it to `False`
+    inside its own body; `doctor.headroom_after` itself is left alone, and
+    `tests/archive/test_rehydrate.py` tests it directly.
     """
     if "real_scratch" in request.keywords:
         return
     monkeypatch.setattr(watcher, "scratch_headroom", lambda path: (4000, True))
+    monkeypatch.setattr(rehydrate, "headroom_after", lambda path, extra_bytes: True)
 
 
 @pytest.fixture(scope="session")

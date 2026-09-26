@@ -446,3 +446,210 @@ def test_the_daemon_never_frees_a_session():
     source = Path(daemon.__file__).read_text(encoding="utf-8")
     assert "free_session" not in source
     assert "archive.scratch" not in source
+
+
+# -- wlpp rehydrate ------------------------------------------------------------
+
+
+def _reclaimed(landed, subject, prefix):
+    session_dir, key, nas_root = _ready(landed, subject, prefix)
+    pristine = _files(session_dir)
+    assert _reclaim(session_dir, nas_root, prefix) == 0
+    return session_dir, key, nas_root, pristine
+
+
+def _nothing_restored(session_dir, key):
+    from wl_preproc.schema import archive
+
+    assert not os.path.lexists(session_dir)
+    assert not _staging(session_dir, ".rehydrating").exists()
+    assert len(archive.ScratchRehydration & key) == 0
+
+
+def test_a_session_survives_reclaim_and_rehydrate_byte_for_byte(landed, prefix):
+    from wl_preproc.ingest.watcher import Outcome, scan_once
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed("rhround")
+    # Review Focus 3: a file no DONE marker names, beyond the manifest and
+    # the markers. Archived verbatim; only the manifest digest proves it.
+    (session_dir / "operator-notes.txt").write_text("probe 2 drifted at 01:12\n", encoding="utf-8")
+    pristine = _files(session_dir)
+    nas_root = _archive(session_dir, prefix)
+    _verdict(key, "force", hour=11, prefix=prefix)
+
+    assert _reclaim(session_dir, nas_root, prefix) == 0
+    assert not session_dir.exists()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 0
+
+    assert _files(session_dir) == pristine
+    rows = (archive.ScratchRehydration & key).to_dicts()
+    assert [r["bytes_written"] for r in rows] == [sum(len(b) for b in pristine.values())]
+    assert not _staging(session_dir, ".rehydrating").exists()
+    # The watcher sees the manifest it landed, and does nothing.
+    # `outcomes` is keyed by `str(session_dir)` (`ingest/watcher.py::scan_once`
+    # -- confirmed against every other passing use of this dict in the suite,
+    # e.g. `tests/cli/test_report.py`'s own `session_dir = str(root / ...)`),
+    # never by the `Path` `landed` returns: a `Path` key can never equal a
+    # `str` key (different hash, `PurePath.__eq__` returns `NotImplemented`
+    # for a non-`PurePath`), so indexing with the bare `Path` here raises
+    # `KeyError` unconditionally -- confirmed empirically -- regardless of
+    # whether the watcher actually saw the session. This is a bug in the
+    # lookup, not in `rehydrate_session` or the watcher.
+    assert scan_once(session_dir.parent, prefix=prefix).outcomes[str(session_dir)] is Outcome.ALREADY
+
+    time.sleep(1.1)  # `reclaimed_at` is a whole-second datetime, and MySQL rounds
+    assert _reclaim(session_dir, nas_root, prefix) == 0
+    assert len(archive.ScratchReclamation & key) == 2
+
+
+def test_rehydrate_refuses_an_existing_destination(landed, prefix, capsys):
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root = _ready(landed, "rhexist", prefix)
+    before = _files(session_dir)
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "already exists" in capsys.readouterr().out
+    assert _files(session_dir) == before
+    assert len(archive.ScratchRehydration & key) == 0
+
+
+def test_rehydrate_refuses_a_leftover_staging_directory(landed, prefix, capsys):
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhleft2", prefix)
+    _staging(session_dir, ".reclaiming").mkdir()
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "left over" in capsys.readouterr().out
+    assert not session_dir.exists()
+    assert len(archive.ScratchRehydration & key) == 0
+
+
+def test_rehydrate_refuses_a_nas_copy_that_changed_before_writing_anything(landed, prefix, capsys):
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhchg2", prefix)
+    _corrupt_a_chunk(_published(nas_root, key, session_dir))
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "has changed since it was archived" in capsys.readouterr().out
+    _nothing_restored(session_dir, key)
+
+
+def test_rehydrate_refuses_a_missing_nas_mount_and_names_the_path(landed, prefix, capsys):
+    """Review Focus 2."""
+    session_dir, key, _nas_root, _ = _reclaimed(landed, "rhmount", prefix)
+    missing = session_dir.parent.parent / "not-mounted"
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, missing, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert "no completion sentinel at" in out
+    assert str(missing) in out
+    _nothing_restored(session_dir, key)
+
+
+def test_rehydrate_names_the_full_path_when_nas_root_is_one_level_too_deep(landed, prefix, capsys):
+    """Review Focus 5: the subject directory given as the share root doubles
+    the subject in the path; the operator must be able to see that."""
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhdeep", prefix)
+    too_deep = nas_root / key["subject"]
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, too_deep, prefix) == 1
+
+    doubled = too_deep / key["subject"] / f"{session_dir.name}.zarr"
+    assert str(doubled) in capsys.readouterr().out
+    _nothing_restored(session_dir, key)
+
+
+def test_rehydrate_refuses_when_there_is_no_room(landed, prefix, capsys):
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhroom", prefix)
+    capsys.readouterr()
+
+    with patch("wl_preproc.archive.rehydrate.headroom_after", return_value=False):
+        assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "below the scratch floor" in capsys.readouterr().out
+    _nothing_restored(session_dir, key)
+
+
+def test_rehydrate_refuses_an_unrecorded_path(dj_conn, prefix, tmp_path, capsys):
+    nowhere = tmp_path / "nowhere" / "2027-03-14_01"
+
+    assert _rehydrate(nowhere, tmp_path / "nas", prefix) == 1
+
+    assert "no landed session was recorded at" in capsys.readouterr().out
+    assert not (tmp_path / "nowhere").exists()
+
+
+def test_rehydrate_refuses_a_relative_recorded_path(landed, prefix, capsys):
+    from wl_preproc.schema import ingest
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhrel", prefix)
+    relative = "rhrel-relative-root/2027-03-14_01"
+    ingest.Ingestion.update1({**key, "session_dir": relative})
+    capsys.readouterr()
+
+    assert _rehydrate(relative, nas_root, prefix) == 1
+
+    assert "is relative" in capsys.readouterr().out
+    assert not os.path.lexists("rhrel-relative-root")
+
+
+def test_rehydrate_refuses_when_the_scratch_root_is_gone(landed, prefix, capsys):
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhgone", prefix)
+    root = session_dir.parent
+    root.rename(root.with_name(root.name + "-moved"))
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    assert "does not exist" in capsys.readouterr().out
+    assert not root.exists()  # not silently recreated
+
+
+def test_a_rebuilt_file_that_disagrees_with_the_rig_is_not_restored(landed, prefix, capsys):
+    from wl_preproc.schema import archive
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhmism", prefix)
+    row = (archive.ArchiveVerification & key).to_dicts()[0]
+    archive.ArchiveVerification.update1({
+        **key, "relative_path": row["relative_path"], "expected_blake3": "0" * 64,
+    })
+    capsys.readouterr()
+
+    assert _rehydrate(session_dir, nas_root, prefix) == 1
+
+    out = capsys.readouterr().out
+    assert f"MISMATCH {row['relative_path']}" in out
+    assert "NOT restored" in out
+    _nothing_restored(session_dir, key)
+
+
+def test_a_failure_part_way_through_leaves_nothing(landed, prefix):
+    from wl_preproc.archive import rehydrate as rehydrate_module
+
+    session_dir, key, nas_root, _ = _reclaimed(landed, "rhpart", prefix)
+    real = rehydrate_module._write
+    calls = []
+
+    def flaky(store, relative, target_root):
+        calls.append(relative)
+        if len(calls) == 3:
+            raise OSError("simulated write failure")
+        return real(store, relative, target_root)
+
+    with patch.object(rehydrate_module, "_write", flaky):
+        with pytest.raises(OSError, match="simulated write failure"):
+            _rehydrate(session_dir, nas_root, prefix)
+
+    _nothing_restored(session_dir, key)

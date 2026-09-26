@@ -42,7 +42,7 @@ from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
 def test_every_new_command_is_reachable(capsys):
     assert main(["--help"]) == 0
     helptext = capsys.readouterr().out
-    for command in ("archive", "reclaim", "hold", "tape-manifest"):
+    for command in ("archive", "reclaim", "hold", "tape-manifest", "rehydrate"):
         assert command in helptext, command
 
 
