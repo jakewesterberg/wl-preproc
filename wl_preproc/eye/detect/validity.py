@@ -1,4 +1,10 @@
-"""The validity mask -- OpenIrisDPI's own five criteria.
+"""The validity mask -- OpenIrisDPI's own five criteria, plus one guard.
+
+The guard is `non_finite`: a sample whose gaze, velocity or quality flag is
+not a finite number. It is not one of OpenIrisDPI's criteria but a
+data-integrity check, added 2026-09-27 -- a NaN compares false against every
+threshold the five apply, so until then a sample with no gaze at all was
+offered to every detector as usable (found by NSLR's final review).
 
 **None of them involves a detector** (design spec section 2), which is why
 this is its own module and, downstream, its own table with its own paramset:
@@ -92,10 +98,11 @@ class ValidityMask:
     said only that something did.
 
     `fractions` is keyed by CRITERION name (`blink`, `out_of_region`,
-    `too_fast`, `frame_gap`, `short_epoch`), never by `EyeValidity` column
-    name: this module states criteria, the schema states columns. Those keys
-    are exactly the column suffixes, which is what lets `EyeValidity.make()`
-    spread all five in ONE line instead of writing out five. Five columns
+    `too_fast`, `frame_gap`, `short_epoch`, `non_finite`), never by
+    `EyeValidity` column name: this module states criteria, the schema states
+    columns. Those keys are exactly the column suffixes, which is what lets
+    `EyeValidity.make()` spread them all in ONE line instead of writing each
+    out. (Five until 2026-09-27, when `non_finite` joined.) Columns
     fed by hand from one place is precisely the shape a copy-paste error
     survives in -- every column still looks populated, so nothing downstream
     reads wrong, and no test that only checks for a number notices.
@@ -107,16 +114,16 @@ class ValidityMask:
 
     - They OVERLAP. One sample can be both `out_of_region` and `too_fast`,
       and the mask keeps no record of which criterion "got there first"
-      because no such record would mean anything. Summing all five can
+      because no such record would mean anything. Summing them all can
       therefore exceed 1.0, and can exceed the fraction of samples the mask
       actually rejects.
     - They are counted at two DIFFERENT stages, deliberately. `blink`,
-      `out_of_region`, `too_fast` and `frame_gap` are counted BEFORE
-      `_dilate` grows every rejected region: the halo dilation adds belongs
-      to no one criterion, and attributing it to whichever criterion it
-      happens to surround would be an invention. `short_epoch` can only be
-      counted after, because dilation is what creates most of the short
-      epochs it drops. So the five can sum BELOW the rejected fraction too.
+      `out_of_region`, `too_fast`, `frame_gap` and `non_finite` are counted
+      BEFORE `_dilate` grows every rejected region: the halo dilation adds
+      belongs to no one criterion, and attributing it to whichever criterion
+      it happens to surround would be an invention. `short_epoch` can only
+      be counted after, because dilation is what creates most of the short
+      epochs it drops. So they can sum BELOW the rejected fraction too.
     """
 
     labels: np.ndarray
@@ -197,7 +204,25 @@ def validity_labels(
     for gap in frame_gaps:
         across_gap[max(gap.row + 1 - _HALF_WINDOW, 0) : min(gap.row + _HALF_WINDOW + 1, n)] = True
 
-    unusable = blink | outside | too_fast | across_gap
+    # **The guard, and the one criterion not from OpenIrisDPI's notebook.**
+    # Every comparison above is false for a NaN: `abs(NaN) > half-width`,
+    # `hypot(NaN, 0) > ceiling` and `NaN < 100` all say "fine", so a sample
+    # with no gaze, no speed or no quality flag was offered to every detector
+    # as usable. Velocity is tested here too, not left to `_dilate` below:
+    # one NaN gaze sample spoils every velocity estimate within
+    # `_HALF_WINDOW` of it, and a paramset may set `dilate_samples` below
+    # that. `inf` gaze was already out of region and still is; the raw
+    # counts overlap by design (see `ValidityMask`).
+    #
+    # A missing quality flag is `invalid`, not `blink`: `blink` means the
+    # tracker DECLARED a failure, and a missing flag declares nothing.
+    non_finite = (
+        ~np.isfinite(gaze_deg).all(axis=1)
+        | ~np.isfinite(velocity_deg_s).all(axis=1)
+        | ~np.isfinite(data_quality)
+    )
+
+    unusable = blink | outside | too_fast | across_gap | non_finite
     unusable = _dilate(unusable, params.dilate_samples)
     # Bound to a name rather than folded straight into `unusable`, because
     # `_short_valid_epochs`' own docstring says it is returned as its own
@@ -238,6 +263,7 @@ def validity_labels(
             "too_fast": _fraction(too_fast),
             "frame_gap": _fraction(across_gap),
             "short_epoch": _fraction(short_epoch),
+            "non_finite": _fraction(non_finite),
         },
     )
 

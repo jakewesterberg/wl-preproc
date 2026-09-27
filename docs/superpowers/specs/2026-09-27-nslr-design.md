@@ -213,6 +213,11 @@ linear interpolation, and its classification benchmark does not say. Here:
   every detector under an unchanged paramset. That is an open item for the
   requester (§8 item 6).*
 
+  *Resolved 2026-09-27, the same day: the shared mask now withholds
+  non-finite gaze, velocity and quality itself (parent spec §2, the sixth
+  criterion), so the mask never offers such a sample to NSLR. NSLR's own
+  guard stays, as a second line of defence.*
+
 **Time.** Within a piece, `t = sample index / fs_hz`. The reference takes
 timestamps; this pipeline's samples are uniform.
 
@@ -716,6 +721,14 @@ verbatim from `nslr_hmm.py` 39–42.
    run, so `_insert_trace`'s fill stores it as `fixation`, and it may merge
    into the fixation runs either side of it. That is latent for the same
    reason.
+
+   *Resolved 2026-09-27: the requester chose this as the next item. The
+   shared mask gained a sixth criterion, `non_finite` (parent spec §2), which
+   withholds a sample whose gaze, velocity or quality flag is not finite, for
+   every detector. No stored validity row existed outside test databases, so
+   no paramset versioning was needed. The mask no longer offers such a
+   sample, so the `fixation` fill above cannot reach one. This item stays as
+   the record of what was open.*
 
 ## 9. Out of scope
 

@@ -144,15 +144,17 @@ class EyeValidity(dj.Computed):
     status : enum('computed','refused')
     n_samples=null : int unsigned
     # Per-criterion bookkeeping, so a mask that rejects most of a session says
-    # WHICH criterion did it rather than only that something did. The five
-    # match OpenIrisDPI's own five (design spec section 2): eye open, gaze
-    # within a plausible region, plausible speed, no frame discontinuity, and
-    # short surviving epochs dropped.
+    # WHICH criterion did it rather than only that something did. The first
+    # five match OpenIrisDPI's own five (design spec section 2): eye open,
+    # gaze within a plausible region, plausible speed, no frame
+    # discontinuity, and short surviving epochs dropped. The sixth,
+    # `non_finite`, is a data-integrity guard added 2026-09-27: a gaze,
+    # velocity or quality value that is not a finite number.
     #
     # RAW per-criterion counts over all `n_samples`, never apportioned
     # shares: one sample can be rejected by two criteria at once, so these
-    # five can sum ABOVE the fraction of samples the mask actually rejects
-    # -- and the first four are counted before dilation grows each rejected
+    # can sum ABOVE the fraction of samples the mask actually rejects -- and
+    # all but `short_epoch` are counted before dilation grows each rejected
     # region, so they can sum BELOW it too. `eye/detect/validity.py::
     # ValidityMask` states both in full. `NULL` on a refused row, which has
     # no mask at all, and only there.
@@ -161,6 +163,7 @@ class EyeValidity(dj.Computed):
     frac_too_fast=null      : double
     frac_frame_gap=null     : double
     frac_short_epoch=null   : double
+    frac_non_finite=null    : double
     reason='' : varchar(255)
     """
 
@@ -300,8 +303,9 @@ class EyeValidity(dj.Computed):
             runs = runs_from_labels(np.where(labels == None, Label.FIXATION, labels))  # noqa: E711
             self.insert1({
                 **row, "status": "computed", "n_samples": len(labels),
-                # All five of design spec section 7's "per-criterion
-                # rejected fractions". Four of them were `None` here, under
+                # Every one of design spec section 7's "per-criterion
+                # rejected fractions" (five, and six since `non_finite`
+                # joined on 2026-09-27). Four were `None` here, under
                 # a comment claiming `validity_labels` folded them into one
                 # combined mask before returning and so made them "not
                 # separately recoverable" -- true of the RETURN SHAPE, never
