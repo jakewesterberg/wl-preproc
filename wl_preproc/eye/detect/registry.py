@@ -198,8 +198,10 @@ DETECTORS: dict[str, Detector] = {
     # conjunction. Its saccadic slice is `{saccade}`, as Nystrom-Holmqvist's
     # is, so `_conjunction_label` takes the degenerate branch. Durations are
     # in milliseconds, so `_min_duration_samples` gives this conjunction the
-    # same one-sample floor it gives Nystrom-Holmqvist's -- recorded in the
-    # spec, deliberately not changed here.
+    # same one-sample floor it gives Nystrom-Holmqvist's and Otero-Millan's
+    # -- recorded in the spec, deliberately not changed here. (Otero-Millan
+    # was added 2026-09-27: its params declare no `min_duration_samples`
+    # either; this comment named only Nystrom-Holmqvist until then.)
     "remodnav": Detector(
         name="remodnav",
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
@@ -211,10 +213,13 @@ DETECTORS: dict[str, Detector] = {
     # classifies whole segments. Its saccadic slice is `{saccade}`, so
     # `_conjunction_label` takes the degenerate branch. It has no minimum
     # duration, so `_min_duration_samples` gives its conjunction the one-sample
-    # floor it already gives Nystrom-Holmqvist and REMoDNaV -- recorded in the
-    # spec, deliberately not changed here. It is not used below 1 deg (design
-    # spec section 4), because its published, human-fitted classifier calls
-    # slow sub-degree movements fixation.
+    # floor it already gives Nystrom-Holmqvist, REMoDNaV and Otero-Millan --
+    # recorded in the spec, deliberately not changed here. (Otero-Millan was
+    # added 2026-09-27; this comment omitted it until then.) The measurement
+    # floor below keeps NSLR's own brief conjunction runs unmeasured, but does
+    # not change which runs the conjunction admits. It is not used below
+    # 1 deg (design spec section 4), because its published, human-fitted
+    # classifier calls slow sub-degree movements fixation.
     #
     # Its runs meet at shared knots, so a saccade run ends one sample before
     # the eye lands: `runs_end_before_landing` has its per-eye saccade rows

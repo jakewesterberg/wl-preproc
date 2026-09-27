@@ -370,7 +370,9 @@ status:
   # 2026-09-19, which `main` had by then moved eleven commits past. Was
   # `f5fb642` (the gap-aware merge) until 2026-09-27, by which time the archive
   # line's merges and then REMoDNaV's (`cef2ce4`) had landed; true when written.
-  describes: cef2ce4
+  # Was `cef2ce4` until NSLR's merge `c7903dd` on 2026-09-27, by which time the
+  # wl-exptasks rename merge (`86ce4cc`) had also landed; true when written.
+  describes: c7903dd
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

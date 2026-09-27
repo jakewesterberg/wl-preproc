@@ -26,7 +26,12 @@
 - **Last updated by the conjunction round's records commit.** Task 7 wrote
   this handoff (records only); the final fix wave and its conjunction round
   corrected it (below).
-- **NOT merged and NOT pushed.** `origin` has no `spec/nslr` ref.
+- **Merged and pushed 2026-09-27 as `c7903dd`**, the requester's choice. Its
+  tree is byte-identical to the tested head `71a3bcc`; CI on `c7903dd` is green
+  on both interpreters and the manifest check (run `36325492781`).
+
+  *This said "NOT merged and NOT pushed. `origin` has no `spec/nslr` ref." until
+  the merge; true when written.*
 - **Whole-branch reviewed, and fixed.** Tasks 1–6 each passed their own
   review (Task 4 twice, after the requester's ruling). The final
   whole-branch review found one Critical defect, two Important ones (the
@@ -564,10 +569,15 @@ The list as it stood before the fix wave:
 
 ## What is next
 
-1. **This branch.** The conjunction round's re-review comes first, then the
-   requester's merge decision. At merge, `docs/CHECKPOINT.md`'s header and
-   `wl.yaml`'s `status.describes` are re-pointed with CI read off the merge
-   — neither is touched here.
+1. **This branch is merged** (`c7903dd`, 2026-09-27). The conjunction round's
+   re-review approved it; `docs/CHECKPOINT.md`'s header and `wl.yaml`'s
+   `status.describes` now name `c7903dd`, with CI read off it. The last parked
+   minor, comment-only, landed with that re-pointing: `registry.py`'s
+   REMoDNaV and NSLR entries now name Otero-Millan among the detectors
+   sharing the one-sample conjunction floor.
+
+   *This item said the conjunction round's re-review and the merge decision
+   came next until the merge; true when written.*
 
    *Until the fix wave this said "The whole-branch review comes first"; it
    has happened. Until the conjunction round it said the fix wave's scoped
