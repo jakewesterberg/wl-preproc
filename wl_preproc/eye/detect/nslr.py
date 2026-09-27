@@ -24,6 +24,8 @@ from dataclasses import dataclass
 
 import numba
 import numpy as np
+import scipy.interpolate
+import scipy.stats
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,3 +385,154 @@ def continuous_fit(ts: np.ndarray, xy: np.ndarray, splits: list[int]) -> list[np
         endpoint = g * endpoint + b
         ends.append(endpoint)
     return ends[::-1]
+
+
+@dataclass(frozen=True, slots=True)
+class PieceFit:
+    """One piece's segmentation: `splits`, the endpoint `times` (`ts` at
+    each split, the last at the final sample -- `slow_nslr.py` 151-156), and
+    the fitted `endpoints`."""
+
+    splits: list[int]
+    times: np.ndarray
+    endpoints: list[np.ndarray]
+
+
+@dataclass(frozen=True, slots=True)
+class NoiseFit:
+    """Every piece's fit from the last pass, the pooled noise, the pass
+    count, and whether `max_noise_passes` stopped the loop (spec 1.4, 6)."""
+
+    pieces: list[PieceFit]
+    noise: np.ndarray
+    passes: int
+    capped: bool
+
+
+def fit_pieces(pieces: list[tuple[np.ndarray, np.ndarray]], params: NslrParams) -> NoiseFit:
+    """`fit_gaze`, `slow_nslr.py` 174-191, over pieces (spec 1.4, 3).
+    1. The noise starts at the pooled positions' standard deviation per axis.
+    2. Each pass adds the structural error, segments and fits every piece,
+       and sets the noise to the pooled residuals' standard deviation.
+    3. It stops when a noise pair recurs exactly, or at `max_noise_passes`,
+       keeping that pass.
+
+    With one piece this is the reference, operation for operation."""
+    noise = np.std(np.concatenate([xy for _, xy in pieces]), axis=0)
+    seen = {tuple(noise)}
+    structural = np.ones(noise.shape) * params.structural_error_deg
+    passes = 0
+    while True:
+        noise += structural
+        split = split_prior(np.mean(noise), params)
+        fits: list[PieceFit] = []
+        residuals = []
+        for ts, xy in pieces:
+            splits = segment(ts, xy, noise, split)
+            ends = continuous_fit(ts, xy, splits)
+            at = list(splits)
+            at[-1] -= 1
+            times = ts[at]
+            fits.append(PieceFit(splits=splits, times=times, endpoints=ends))
+            residuals.append(scipy.interpolate.interp1d(times, ends, fill_value="extrapolate", axis=0)(ts) - xy)
+        passes += 1
+        noise = np.std(np.concatenate(residuals), axis=0)
+        if tuple(noise) in seen:
+            return NoiseFit(pieces=fits, noise=noise, passes=passes, capped=False)
+        if passes >= params.max_noise_passes:
+            return NoiseFit(pieces=fits, noise=noise, passes=passes, capped=True)
+        seen.add(tuple(noise))
+
+
+def _fisher(cos: float) -> float:
+    """`nslr_hmm.py` 305-306: scale off exactly +-1, then Fisher-transform."""
+    cos *= 1 - 1e-6
+    return np.arctanh(cos)
+
+
+def features(piece: PieceFit) -> list[tuple[float, float]]:
+    """`nslr_hmm.py` 292-311 (spec 1.5): each segment's `log10` speed (clipped
+    at 1e-6) and its Fisher-transformed turn from the previous segment. The
+    arrays have the reference's shapes, so every value is its value. The
+    previous direction starts at (0, 0), and a NaN turn becomes 0."""
+    previous = np.array([0.0, 0.0])
+    out: list[tuple[float, float]] = []
+    for k in range(len(piece.times) - 1):
+        duration = np.diff((piece.times[k], piece.times[k + 1])).item()
+        speed = np.diff((piece.endpoints[k], piece.endpoints[k + 1]), axis=0) / duration
+        velocity = float(np.linalg.norm(speed))
+        # A still segment's direction is 0/0. The NaN is the reference's
+        # value; only numpy's warning about it is silenced.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            direction = speed / velocity
+            turn = _fisher(np.dot(direction, previous.T).item())
+        if turn != turn:
+            turn = 0.0
+        out.append((np.log10(np.clip(velocity, 1e-6, None)), turn))
+        previous = direction
+    return out
+
+
+def transition_matrix() -> np.ndarray:
+    """`nslr_hmm.py` 53-62 (spec 1.6), rows and columns in state order
+    fixation, saccade, PSO, pursuit. The paper's stated model, not an
+    estimate:
+    - equal weights, except fixation->PSO, PSO->saccade and pursuit->PSO are
+      forbidden;
+    - fixation<->pursuit carries half weight;
+    - rows are normalised."""
+    weights = np.ones((4, 4))
+    weights[0, 2] = 0
+    weights[2, 1] = 0
+    weights[3, 2] = 0
+    weights[3, 0] = 0.5
+    weights[0, 3] = 0.5
+    for row in range(4):
+        weights[row] /= np.sum(weights[row])
+    return weights
+
+
+def _log10_clipped(values):
+    return np.log10(np.clip(values, 1e-6, None))
+
+
+def _later_emission(emission: np.ndarray) -> np.ndarray:
+    """`nslr_hmm.py` 79: every emission after the first is normalised."""
+    return emission / np.sum(emission)
+
+
+def decode(feats: list[tuple[float, float]], params: NslrParams) -> list[int]:
+    """`nslr_hmm.py` 36-93, 313-323 (spec 1.6): the Viterbi path over one
+    piece's segments, in `log10`.
+    - The emissions are bivariate Gaussians with the params' means and
+      diagonal variances, in state order fixation, saccade, PSO, pursuit.
+    - The start is uniform.
+    - The first emission is used as it is; later ones are normalised."""
+    blocks = [
+        (params.fixation_log_speed_mean, params.fixation_turn_mean,
+         params.fixation_log_speed_var, params.fixation_turn_var),
+        (params.saccade_log_speed_mean, params.saccade_turn_mean,
+         params.saccade_log_speed_var, params.saccade_turn_var),
+        (params.pso_log_speed_mean, params.pso_turn_mean,
+         params.pso_log_speed_var, params.pso_turn_var),
+        (params.pursuit_log_speed_mean, params.pursuit_turn_mean,
+         params.pursuit_log_speed_var, params.pursuit_turn_var),
+    ]
+    dists = [scipy.stats.multivariate_normal([m1, m2], [[v1, 0.0], [0.0, v2]]) for m1, m2, v1, v2 in blocks]
+    emissions = [np.array([d.pdf(f) for d in dists]).T for f in feats]
+    start = np.ones(4)
+    start /= np.sum(start)
+    log_transitions = _log10_clipped(transition_matrix())
+    probs = _log10_clipped(emissions[0]) + _log10_clipped(start)
+    back = []
+    for emission in emissions[1:]:
+        emission = _later_emission(emission)
+        candidates = log_transitions + probs[:, None]
+        best = np.argmax(candidates, axis=0)
+        probs = _log10_clipped(emission) + candidates[best, np.arange(4)]
+        back.append(best)
+    path = [int(np.argmax(probs))]
+    while back:
+        path.append(int(back.pop()[path[-1]]))
+    path.reverse()
+    return path
