@@ -609,7 +609,7 @@ def classify(pieces_xy: list[np.ndarray], fs_hz: float, params: NslrParams) -> l
         warnings.warn(
             f"NSLR's noise estimate did not repeat within max_noise_passes="
             f"{params.max_noise_passes}; the last of its {fit.passes} passes is kept "
-            f"(noise {fit.noise.tolist()} deg)",
+            f"(that pass's residual noise, {fit.noise.tolist()} deg)",
             RuntimeWarning,
             stacklevel=2,
         )
