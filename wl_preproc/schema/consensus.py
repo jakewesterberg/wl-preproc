@@ -156,6 +156,12 @@ def _scored_in(
     test_the_disjoint_pair_section_six_point_one_records_is_refused_not_mis_scored`
     is that measurement, executably.
 
+    *Corrected 2026-09-27: BMD as built declares `{saccade, microsaccade,
+    drift}` (BMD design spec section 4), so it and U'n'Eye now share
+    `saccade` and are no longer the disjoint pair. The test builds its two
+    vocabularies literally, so it still pins the guard, and the flaw in the
+    argument above stands for any pair whose declarations are disjoint.*
+
     Vectorised over the eight declared labels rather than over samples: the
     reference recording is 1,177,799 samples and this runs four times per pair
     per trace (two sides, two `pso_as` values).
