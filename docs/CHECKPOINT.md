@@ -1,14 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-09-27**, describing `main` at `4dbbaa3` — the merge commit
-for `fix/validity-non-finite`: the validity mask's sixth criterion,
-`non_finite`, which withholds a sample whose gaze, velocity or quality flag is
-not a finite number, for every detector (parent spec
-`superpowers/specs/2026-08-31-saccade-detection-design.md` §2). `4dbbaa3`'s
-tree is byte-identical to the tested branch head `2ef608f`: 1620 passed on
-3.11 and 1619 on 3.13, 0 failed on both. CI read off `4dbbaa3` itself: green
-on both interpreters, and the manifest check green — `gh run view
-36329654715`. CI on later heads is recorded here only once read, not before.
+**Last updated 2026-09-28**, describing `main` at `3312725`. That commit
+follows `cfd6765`, the merge of `spec/bmd`: Bayesian microsaccade detection,
+the sixth registered detector (design spec
+`superpowers/specs/2026-09-27-bmd-design.md`). `3312725` fixes the test
+harness after CI's first run on `cfd6765` failed three fidelity tests (below,
+"Start here" item 2). CI read off `3312725` itself: green on both
+interpreters, 1713 passed on each with 30 skipped, 0 failed, and the manifest
+check green — `gh run view 36354069223`. Locally, with the reference
+recording as well, 1714 passed on 3.11 and 1713 on 3.13. CI on later heads is
+recorded here only once read, not before.
+
+*This header named `4dbbaa3` — the validity fix's merge, 1620 passed on 3.11
+and 1619 on 3.13, CI `36329654715` — until BMD's merge; true when written.*
 
 *This header named `c7903dd` — NSLR-HMM's merge, the fifth registered
 detector, 1642 passed on 3.11 and 1641 on 3.13, CI `36325492781` — until the
@@ -102,8 +106,8 @@ requester chose to merge the same day; true when written.*
 >    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
 >    storing either as a typed array is the change if a real one costs real
 >    space.
-> 2. **Bayesian microsaccade detection is BUILT on `spec/bmd` (2026-09-27),
->    NOT merged as written** (below). Next, the requester's choice of
+> 2. **Bayesian microsaccade detection is BUILT and MERGED** (`cfd6765`,
+>    pushed 2026-09-27; CI green from `3312725`; below). Next, the requester's choice of
 >    2026-09-27: store each saccade and microsaccade row's direction and its
 >    start and end gaze positions, for every detector, on its own branch
 >    (BMD spec §9). U'n'Eye is the remaining unwritten detector; it wants the
@@ -255,7 +259,8 @@ requester chose to merge the same day; true when written.*
 >    and what is still deferred.
 >
 >    **Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
->    (2026-09-27), NOT merged as written.** It is the sixth registered
+>    (2026-09-27), NOT merged as written.** *Merged and pushed the same day
+>    as `cfd6765`; CI green from `3312725`.* It is the sixth registered
 >    detector: a hidden semi-Markov model of fixation, sampled by
 >    Metropolis–Hastings (Mihali, van Opheusden & Ma 2017). The requester has
 >    the authors' permission to use their C++ for testing; it is built by the

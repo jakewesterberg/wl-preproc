@@ -100,7 +100,8 @@ status:
     other detector's stored rows are unchanged.
 
     Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
-    (2026-09-27, NOT merged as written). It is the sixth registered
+    (2026-09-27, NOT merged as written; merged and pushed as `cfd6765` the
+    same day, CI green from `3312725`). It is the sixth registered
     detector: a hidden semi-Markov model of fixation, sampled by
     Metropolis-Hastings. Design spec `2026-09-27-bmd-design.md`; handoff
     `docs/handoffs/2026-09-27-bmd-built.md`. Held change point for change
@@ -150,8 +151,8 @@ status:
     the requester has said glissades are peripheral. REMoDNaV and NSLR, the
     other two that item named, are BUILT -- REMoDNaV on `spec/remodnav`
     (2026-09-26) and NSLR on `spec/nslr` (2026-09-27), NOT merged as written;
-    see `phase`. *Superseded 2026-09-27: BMD is BUILT on `spec/bmd`, NOT
-    merged as written; see `phase`.* Three no-duration or millisecond-based detectors now
+    see `phase`. *Superseded 2026-09-27: BMD is BUILT and MERGED
+    (`cfd6765`); see `phase`.* Three no-duration or millisecond-based detectors now
     inherit the conjunction's one-sample duration floor, which is a
     cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
@@ -255,7 +256,7 @@ status:
 
     U'n'Eye is the one detector still unwritten; its obstacles remain
     `torch`, vendoring and a GPU. `registry.py::DETECTORS` registers SIX on
-    `spec/bmd`: Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV,
+    `main` (since `cfd6765`): Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV,
     NSLR and Bayesian microsaccade detection. Four of the seven detectors
     specified in design spec §3.1 take the degenerate saccadic-slice branch
     and never reach `classify` -- Engbert-Kliegl, Otero-Millan and BMD
@@ -395,8 +396,10 @@ status:
   # Was `cef2ce4` until NSLR's merge `c7903dd` on 2026-09-27, by which time the
   # wl-exptasks rename merge (`86ce4cc`) had also landed; true when written.
   # Was `c7903dd` until the validity fix's merge `4dbbaa3` the same day; true
+  # when written. Was `4dbbaa3` until BMD's merge `cfd6765` and its CI fix
+  # `3312725` (2026-09-27/28; CI green on `3312725`, run 36354069223); true
   # when written.
-  describes: 4dbbaa3
+  describes: 3312725
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
