@@ -218,9 +218,9 @@ DETECTORS: dict[str, Detector] = {
     #
     # Its runs meet at shared knots, so a saccade run ends one sample before
     # the eye lands: `runs_end_before_landing` has its per-eye saccade rows
-    # measured up to the landing sample. Runs under its paramset's
-    # `min_measured_saccade_ms` are stored unmeasured. Both are the
-    # requester's decision of 2026-09-27 (design spec section 4).
+    # measured up to the landing sample. Saccade runs under its paramset's
+    # `min_measured_saccade_ms` are stored unmeasured, on every trace. Both
+    # are the requester's decisions of 2026-09-27 (design spec section 4).
     "nslr": Detector(
         name="nslr",
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),

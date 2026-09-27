@@ -398,11 +398,12 @@ class EyeDetection(dj.Computed):
         run_stop  : int unsigned
         label     : enum({_LABEL_ENUM})
         # A saccade or microsaccade run IS an event, so it carries its own
-        # measurements; every other label leaves them NULL. So does a per-eye
-        # saccade run too brief for its detector's paramset to measure
-        # (NSLR's `min_measured_saccade_ms`; `_insert_trace`). `reliability` is
-        # Otero-Millan's per-detection index, null for every detector that has
-        # none -- declared now because the migration window closes January.
+        # measurements; every other label leaves them NULL. So does a saccade
+        # run too brief for its detector's paramset to measure (NSLR's
+        # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
+        # `reliability` is Otero-Millan's per-detection index, null for every
+        # detector that has none -- declared now because the migration window
+        # closes January.
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double
         reliability=null         : double
@@ -643,29 +644,40 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        **How a per-eye event run is measured is its detector's declared
-        rule** (`measure.py::measure_event_run`; the requester's decision of
+        **How an event run is measured is its detector's declared rule**
+        (`measure.py::measure_event_run`; the requester's decisions of
         2026-09-27, NSLR design spec section 4). For every detector but NSLR
-        that rule is `measure`, unchanged. NSLR's runs end one sample before
-        the eye lands (`registry.Detector.runs_end_before_landing`), so each
-        of its saccade runs is measured up to the landing sample. A run
-        shorter than its paramset's `min_measured_saccade_ms` is stored with
-        both measurements NULL, and a NULL here means "too brief to
-        measure", never zero. Before that decision `measure` read an
-        `L`-sample NSLR run `1/L` short, and a one-sample run as exactly 0.0
-        deg. On the reference recording that was 542 left-eye and 666
-        right-eye rows, at a median peak velocity of 234 deg/s on the left.
+        that rule is `measure`, unchanged, on every trace. NSLR's runs end one
+        sample before the eye lands
+        (`registry.Detector.runs_end_before_landing`), so each of its
+        per-eye saccade runs is measured up to the landing sample. An NSLR
+        saccade run shorter than its paramset's `min_measured_saccade_ms`,
+        on any trace, is stored with both measurements NULL, and a NULL here means "too brief to measure",
+        never zero. Before that decision `measure` missed the last step of
+        every NSLR saccade run, and read a one-sample run as exactly 0.0 deg.
+        On the reference recording that was 542 left-eye and 666 right-eye
+        rows, at a median peak velocity of 234 deg/s on the left.
 
-        **The conjunction keeps `measure`, whatever the detector.** Its runs
-        are intersections of the two eyes' spans, not one detector's runs, so
-        neither rule describes them. The requester's decision covers per-eye
-        rows, and the conjunction's duration floor is out of scope (NSLR
-        design spec sections 8.4 and 9). `_overlapping`'s floor guarantees
-        `stop > start` here, not a nonzero amplitude. So a detector with a
-        one-sample floor, NSLR among them, can still store a one-sample
-        conjunction saccade at 0.0 deg, as it did before. Measured on the
-        reference recording (the NSLR final fix wave, 2026-09-27): 219 of
-        NSLR's 3,230 conjunction saccade rows, at a median 150 deg/s.
+        **The conjunction takes the floor, not the landing rule.** Its runs
+        are intersections of the two eyes' spans, not one detector's runs,
+        so a conjunction span does not end on an NSLR knot and the landing
+        rule is off here. The floor applies, by the requester's second
+        decision of 2026-09-27: an NSLR conjunction saccade run shorter than
+        `min_measured_saccade_ms` is stored with both measurements NULL, and
+        a longer one keeps `measure`. The floor was needed here too.
+        `_overlapping`'s own floor guarantees only `stop > start`, not a
+        nonzero amplitude, and NSLR's is one sample. Before that decision,
+        219 of NSLR's 3,230 conjunction saccade rows on the reference
+        recording were stored at 0.0 deg, at a median 150 deg/s. Every other
+        detector declares no floor, so its conjunction keeps `measure`
+        exactly. Whether a conjunction needs a minimum event duration at all
+        is still open (NSLR design spec section 8.4).
+
+        *Until the conjunction round of 2026-09-27 this paragraph said the
+        conjunction keeps `measure` whatever the detector, so that NSLR's
+        could still store one-sample saccades at 0.0 deg, open for the
+        requester. Superseded by the requester's decision that day; true
+        when written.*
 
         Four of the five registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
@@ -751,15 +763,15 @@ class EyeDetection(dj.Computed):
         """
         from wl_preproc.eye.detect.measure import measure_event_run
 
-        if trace == "conjunction":
-            # Per-eye traces only: see this docstring's conjunction paragraph.
-            runs_end_before_landing, min_measured_ms = False, None
-        else:
-            runs_end_before_landing = detector.runs_end_before_landing
-            # Read the way `_min_duration_samples` reads a detector's params:
-            # a field only NSLR's params declare, so every other detector
-            # has no floor.
-            min_measured_ms = getattr(detector_params, "min_measured_saccade_ms", None)
+        # The landing rule is per-eye only: a conjunction span is an
+        # intersection and does not end on a detector's knot. The floor
+        # applies to every trace (see this docstring's conjunction
+        # paragraph).
+        runs_end_before_landing = detector.runs_end_before_landing and trace != "conjunction"
+        # Read the way `_min_duration_samples` reads a detector's params: a
+        # field only NSLR's params declare, so every other detector has no
+        # floor on any trace.
+        min_measured_ms = getattr(detector_params, "min_measured_saccade_ms", None)
 
         reliability_by_span = {
             (interval.start, interval.stop): interval.reliability for interval in intervals

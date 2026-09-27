@@ -39,11 +39,11 @@ class NslrParams:
       cap.
     - `min_measured_saccade_ms` is this pipeline's measurement rule, not the
       reference's, and the detector never reads it.
-      `schema/detect.py::_insert_trace` stores a per-eye saccade run shorter
-      than this with no amplitude or peak velocity (the requester's decision
-      of 2026-09-27, spec section 4). It is here, in the paramset, because
-      it changes stored values, and the paramset hash is what addresses
-      them.
+      `schema/detect.py::_insert_trace` stores a saccade run shorter than
+      this, per-eye or conjunction, with no amplitude or peak velocity (the
+      requester's decisions of 2026-09-27, spec section 4). It is here, in
+      the paramset, because it changes stored values, and the paramset hash
+      is what addresses them.
     - The sixteen emission fields are `nslr_hmm.py` 39-42's published means
       and diagonal variances, fitted on the Andersson et al. (2017) human-coded
       data. `turn` is the Fisher-transformed cosine between successive
