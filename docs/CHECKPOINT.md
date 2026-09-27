@@ -233,6 +233,14 @@ requester chose to merge the same day; true when written.*
 >        rows are unchanged. The shared-mask item stays open, and so does
 >        whether a conjunction needs a minimum event duration at all.*
 >
+>        *The shared-mask half is resolved too, 2026-09-27 (true when
+>        written): the requester chose it next, and the mask gained a sixth
+>        criterion, `non_finite` (parent spec §2), which withholds a sample
+>        whose gaze, velocity or quality flag is not finite, for every
+>        detector, with its own `frac_non_finite` column. The reference
+>        recording has no such value, so its mask is unchanged. Whether a
+>        conjunction needs a minimum event duration stays open.*
+>
 >    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
 >    and what is still deferred.
 > 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to

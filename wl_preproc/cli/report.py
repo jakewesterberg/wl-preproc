@@ -682,15 +682,16 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     already, for `_unreclaimed_sessions`/`_verified_archives`.
 
     **`EyeValidity.Run` rows, not `EyeValidity`'s own master rows -- and
-    that stays true now that all five master fractions are populated.** The
-    five `frac_*` columns are RAW PER-CRITERION counts (`eye/detect/
-    validity.py::ValidityMask`): they overlap, and the first four are taken
-    before dilation grows each rejected region, so they sum to the fraction
+    that stays true now that every master fraction is populated.** The
+    `frac_*` columns (five, six since `non_finite` joined on 2026-09-27) are
+    RAW PER-CRITERION counts (`eye/detect/validity.py::ValidityMask`): they
+    overlap, and all but `short_epoch` are taken before dilation grows each
+    rejected region, so they sum to the fraction
     of samples the mask rejected from neither direction. What
     `_unusable_fractions` below reports is a different quantity entirely --
     the fraction of samples carrying each STORED LABEL, where `invalid` is
     every criterion, plus the dilation halo, plus the dropped short epochs,
-    collapsed into one verdict. No arithmetic on the five columns produces
+    collapsed into one verdict. No arithmetic on those columns produces
     it. The stored runs are the exact per-sample verdicts `EyeValidity.
     make()` wrote, and they remain its only honest source.
 
@@ -761,10 +762,11 @@ def _unusable_fractions(label_totals: list[dict]) -> dict[str, float]:
     (`_DETECTION_LOWER_BOUND_NOTE`), never the whole truth.** `validity_
     labels`' five criteria (design spec section 2) are OpenIrisDPI's own
     signal-quality checks -- did the tracker itself report trouble, did gaze
-    leave a plausible screen region, and so on. None of them asks whether a
-    SURVIVING sample is actually correct, so a sample the tracker
-    mis-measured but never flagged reads as usable here exactly as a
-    genuinely good one does.
+    leave a plausible screen region, and so on -- and its sixth, added
+    2026-09-27, only asks whether a value is a finite number. None of them
+    asks whether a SURVIVING sample is actually correct, so a sample the
+    tracker mis-measured but never flagged reads as usable here exactly as
+    a genuinely good one does.
 
     **The running total this used to be, ALONE, is not what design spec
     section 9 asks for (finding M7).** That section wants "the fraction of

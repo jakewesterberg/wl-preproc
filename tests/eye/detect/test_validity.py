@@ -70,6 +70,63 @@ def test_a_frame_gap_invalidates_the_samples_either_side_of_it():
     assert labels[7] is None and labels[12] is None
 
 
+def test_a_sample_whose_gaze_is_missing_is_invalid():
+    """The sixth criterion, a data-integrity guard rather than one of
+    OpenIrisDPI's own five. A NaN compares false against every threshold, so
+    `abs(NaN) > half-width` never rejected it and a sample with no gaze at
+    all was offered to every detector as usable."""
+    gaze, vel, quality, gaps = _clean(10)
+    gaze[4] = [np.nan, 0.0]
+    gaze[6] = [0.0, np.nan]
+
+    labels = validity_labels(gaze, vel, quality, gaps, _QUIET).labels
+
+    assert labels[4] is Label.INVALID and labels[6] is Label.INVALID
+    assert labels[5] is None
+
+
+def test_a_sample_whose_speed_is_missing_is_invalid():
+    gaze, vel, quality, gaps = _clean(10)
+    vel[5] = [np.nan, 0.0]
+
+    assert validity_labels(gaze, vel, quality, gaps, _QUIET).labels[5] is Label.INVALID
+
+
+def test_a_missing_quality_flag_is_invalid_not_blink():
+    """`NaN < 100` is false, so a missing flag was never a blink -- and it
+    must not become one now: `blink` means the tracker DECLARED a failure,
+    and a missing flag declares nothing. It is withheld as `invalid`."""
+    gaze, vel, quality, gaps = _clean(10)
+    quality[5] = np.nan
+
+    labels = validity_labels(gaze, vel, quality, gaps, _QUIET).labels
+
+    assert labels[5] is Label.INVALID
+    assert labels[4] is None and labels[6] is None
+
+
+def test_one_missing_gaze_sample_also_withholds_the_speeds_it_spoiled():
+    """Through the real estimator, with no dilation: one NaN gaze sample
+    makes the velocity NaN wherever the 5-point window reaches it -- two
+    samples either side, though not the sample itself, whose own estimate
+    skips its centre -- and every one of those samples is withheld by this
+    criterion itself, not left to `dilate_samples`, which a paramset may set
+    below `_HALF_WINDOW`."""
+    from wl_preproc.eye.detect.velocity import velocity
+
+    gaze = np.zeros((30, 2))
+    gaze[15] = [np.nan, np.nan]
+    vel = velocity(gaze, FS_HZ)
+    quality = np.full(30, 100.0)
+
+    labels = validity_labels(gaze, vel, quality, (), _QUIET).labels
+
+    spoiled = [i for i in range(30) if not np.isfinite(vel[i]).all()]
+    assert spoiled == [13, 14, 16, 17]
+    assert all(labels[i] is Label.INVALID for i in [13, 14, 15, 16, 17])
+    assert labels[12] is None and labels[18] is None
+
+
 def test_blink_wins_over_invalid_when_a_sample_qualifies_for_both():
     """Precedence, enforced where the labels are assigned rather than trusted
     to a downstream reader."""
@@ -177,20 +234,22 @@ def test_a_short_valid_epoch_at_the_end_of_the_recording_is_dropped():
 
 
 def _fractions(gaze, vel, quality, gaps, params):
-    """Just the five per-criterion fractions, keyed by criterion name."""
+    """Just the per-criterion fractions, keyed by criterion name."""
     return validity_labels(gaze, vel, quality, gaps, params).fractions
 
 
-_CRITERIA = ("blink", "out_of_region", "too_fast", "frame_gap", "short_epoch")
+_CRITERIA = ("blink", "out_of_region", "too_fast", "frame_gap", "short_epoch", "non_finite")
 
 
-def test_the_mask_reports_a_fraction_for_every_one_of_the_five_criteria():
+def test_the_mask_reports_a_fraction_for_every_criterion():
     """Design spec section 7 asks `EyeValidity` for "per-criterion rejected
     fractions", plural. Four of the five were hardcoded `None` at the schema
-    for want of a return value that existed all along (finding M6).
+    for want of a return value that existed all along (finding M6). There
+    are six criteria since 2026-09-27: `non_finite` joined OpenIrisDPI's
+    five (this test was named for "the five criteria" until then).
 
     Pins the KEY SET exactly, not merely that some keys are present: the
-    schema builds its five column names as `frac_` + these names, in one
+    schema builds its column names as `frac_` + these names, in one
     spread, so a criterion silently renamed here would be an insert-time
     failure there and a criterion silently dropped would be a column that
     goes back to `NULL` with nothing else complaining.
@@ -201,9 +260,10 @@ def test_the_mask_reports_a_fraction_for_every_one_of_the_five_criteria():
 
 
 def _only(criterion: str, fractions: dict) -> None:
-    """`criterion` rejected something and the other four rejected nothing.
+    """`criterion` rejected something and every other criterion rejected
+    nothing.
 
-    The negative half is the whole point. Five fractions fed from one place
+    The negative half is the whole point. Six fractions fed from one place
     is the classic shape for a copy-paste error that no test catches,
     because every column still looks populated -- so each criterion below is
     exercised ALONE, and every other criterion is asserted to be exactly
@@ -263,6 +323,23 @@ def test_only_the_frame_gap_fraction_moves_when_a_frame_is_missing():
     assert fractions["frame_gap"] == 4 / 25
 
 
+def test_only_the_non_finite_fraction_moves_when_a_value_is_missing():
+    """Missing values planted alone -- a gaze, a speed and a quality flag,
+    each in its own sample -- and counted once each. The region and speed
+    criteria stay at zero: a missing value is not a position outside the
+    screen or a speed above the ceiling, and the bookkeeping must not say it
+    was."""
+    gaze, vel, quality, gaps = _clean(20)
+    gaze[3] = [np.nan, 0.0]
+    vel[9] = [0.0, np.nan]
+    quality[14] = np.nan
+
+    fractions = _fractions(gaze, vel, quality, gaps, _QUIET)
+
+    _only("non_finite", fractions)
+    assert fractions["non_finite"] == 3 / 20
+
+
 def test_only_the_short_epoch_fraction_moves_when_a_surviving_epoch_is_too_short():
     """The one criterion that cannot be planted alone, and the docstring says
     so rather than the assertion quietly weakening.
@@ -286,6 +363,7 @@ def test_only_the_short_epoch_fraction_moves_when_a_surviving_epoch_is_too_short
     assert fractions["out_of_region"] == 0.0
     assert fractions["too_fast"] == 0.0
     assert fractions["frame_gap"] == 0.0
+    assert fractions["non_finite"] == 0.0
 
 
 def test_the_fractions_are_raw_per_criterion_counts_and_may_sum_above_one():

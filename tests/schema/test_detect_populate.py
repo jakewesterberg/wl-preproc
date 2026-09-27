@@ -681,6 +681,55 @@ def stepped_session(daemon_module, prefix, tmp_path_factory):
     return session_key, report, planted_onsets
 
 
+#: Where `missing_gaze_session` plants its one missing value: half a second
+#: into the detection trial's first hold, clear of every calibration window
+#: (trials 0-3) and of every planted step (+1.0 s onward).
+_MISSING_GAZE_ONSET_S = 4 * TRIAL_DURATION_S + 0.5
+
+
+def _inject_missing_left_gaze(session_dir) -> None:
+    """One `NaN` in `LeftCR4X`, one row, leaving every `Right*` column
+    untouched -- so the right eye is this fixture's own control.
+    `test_eye_populate.py::lossy_quality_session`'s technique again: split the
+    affected line by column, replace one field, rewrite. `read_columns` parses
+    `NaN` as a missing value, so the left eye's gaze is NaN on exactly that
+    row and its velocity is NaN two rows either side."""
+    from wl_preproc.synth.ohdpi import HEADER
+
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    header_line, data_lines = lines[0], lines[1:]
+    row = _first_row_at(_MISSING_GAZE_ONSET_S)
+    fields = data_lines[row].split(" ")
+    fields[HEADER.index("LeftCR4X")] = "NaN"
+    data_lines[row] = " ".join(fields)
+    ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def missing_gaze_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_stepped_session`'s own construction with one missing left-eye
+    gaze value planted (`_inject_missing_left_gaze`), and the daemon run
+    immediately after. A separate session, for `near_miss_session`'s reason:
+    `stepped_session`'s tests count exactly what it plants.
+
+    Date, subject and seed checked unclaimed across `tests/` on 2026-09-27.
+    Returns `(session_key, report, missing_row)`, where `missing_row` is the
+    stored-trace row the missing value lands on."""
+    from tests.schema.test_eye_populate import _rows_for_times
+
+    session_key, segment, _onset_times = _build_stepped_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` -- exactly 8.
+        dirname="detectnan", session_id="2027-06-22_01", subject="detnanl1",
+        session_datetime=datetime.datetime(2027, 6, 22, 9, 0), seed=622,
+        after_generate=_inject_missing_left_gaze,
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    (missing_row,) = _rows_for_times(session_key, segment, [_MISSING_GAZE_ONSET_S])
+    return session_key, report, missing_row
+
+
 @pytest.fixture(scope="module")
 def near_miss_session(daemon_module, prefix, tmp_path_factory):
     """`_build_stepped_session`'s own construction with the near-miss pair
@@ -1110,7 +1159,7 @@ def test_the_runs_tile_the_whole_trace(stepped_session):
 
 _VALIDITY_FRACTION_COLUMNS = (
     "frac_blink", "frac_out_of_region", "frac_too_fast",
-    "frac_frame_gap", "frac_short_epoch",
+    "frac_frame_gap", "frac_short_epoch", "frac_non_finite",
 )
 
 
@@ -1162,6 +1211,48 @@ def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
         assert row["status"] == "refused"
         for column in _VALIDITY_FRACTION_COLUMNS:
             assert row[column] is None, f"{eye_value}: refused row has {column} populated"
+
+
+def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_session):
+    """The sixth validity criterion through a real database (added
+    2026-09-27). One `NaN` in the left eye's recording: that sample and the
+    four velocity estimates it spoils are `non_finite`, the left row's
+    `frac_non_finite` counts exactly those five, the stored mask withholds the
+    sample, and the right eye -- untouched -- counts nothing. Before the
+    criterion, `abs(NaN) > half-width` was false and the sample was offered to
+    every detector as usable."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, missing_row = missing_gaze_session
+
+    left = (detect.EyeValidity & {**session_key, "eye": "left"}).fetch1()
+    right = (detect.EyeValidity & {**session_key, "eye": "right"}).fetch1()
+    assert left["status"] == right["status"] == "computed"
+    assert left["frac_non_finite"] == pytest.approx(5 / left["n_samples"])
+    assert right["frac_non_finite"] == 0.0
+
+    (covering,) = (
+        detect.EyeValidity.Run & {**session_key, "eye": "left"}
+        & f"run_start <= {missing_row}" & f"run_stop > {missing_row}"
+    ).to_dicts()
+    assert covering["label"] == "invalid"
+
+
+def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
+    """The point of withholding it: every registered detector's stored run
+    over the missing sample, on the left trace and in the conjunction, is the
+    mask's own `invalid` -- no detector was handed the sample to label."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, missing_row = missing_gaze_session
+    for name in _detector_names():
+        for trace in ("left", "conjunction"):
+            (covering,) = (
+                detect.EyeDetection.Run
+                & {**session_key, "trace": trace, **_detector(name)}
+                & f"run_start <= {missing_row}" & f"run_stop > {missing_row}"
+            ).to_dicts()
+            assert covering["label"] == "invalid", (name, trace, covering["label"])
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):

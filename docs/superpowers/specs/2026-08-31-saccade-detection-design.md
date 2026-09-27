@@ -161,6 +161,27 @@ would have nothing on file to test this criterion against.
 Criterion 2's "plausible region" and criterion 3's speed ceiling are rig
 parameters with no measured value yet; §11 records that.
 
+**Added 2026-09-27: a sixth criterion, `non_finite`, which is not one of
+OpenIrisDPI's five but a data-integrity guard.** A sample whose gaze, velocity
+or quality flag is not a finite number is `invalid`.
+- **Why it was needed.** Each of the five compares a value against a
+  threshold, and a NaN compares false against all of them. Until this date a
+  sample with no gaze at all was offered to every detector as usable. NSLR's
+  final whole-branch review found it (NSLR spec §8 item 6).
+- **Velocity is tested directly.** One NaN gaze sample spoils the velocity
+  estimate two samples either side, and `dilate_samples` may be set below
+  that.
+- **A missing quality flag is `invalid`, not `blink`.** A blink is a failure
+  the tracker declared, and a missing flag declares nothing.
+- **It has its own column**, `EyeValidity.frac_non_finite`, so the
+  bookkeeping does not blame region or speed for a missing value.
+- **No versioning was needed.** No validity row existed outside test databases
+  (the requester, 2026-09-27), so the criterion was added without a new
+  paramset.
+- **It changes nothing on the lab's data so far.** The reference recording has
+  no non-finite gaze, velocity or quality value in either eye (measured
+  2026-09-27), so its mask is unchanged.
+
 ---
 
 ## 2.5 Post-saccadic oscillation is not an edge case on this instrument
