@@ -313,6 +313,11 @@ requester chose to merge the same day; true when written.*
 >        copies from Engbert–Kliegl*, which the two agree on by construction.
 >      - *BMD runs on every session*, as registered; to be revisited once the
 >        compute machine exists.
+>    - **CI's first run on GitHub** (`36350804753`, on `cfd6765`) failed three
+>      fidelity tests. The authors' code reads past a vector's end, which
+>      behaves differently under Linux's allocator, and glibc prints a NaN as
+>      `-nan`. Both are fixed in the test harness, and proven on x86-64 Linux
+>      in a container (spec §1.10 item 2).
 >
 >    `docs/handoffs/2026-09-27-bmd-built.md` has the account, every ruling
 >    and what is still deferred.

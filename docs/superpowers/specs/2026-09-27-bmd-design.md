@@ -234,6 +234,18 @@ and each is recorded here.
    matched.** It reads a stale or uninitialized vector element. On a real
    state sequence that is either equal to the last change point or outside the
    last run, and it never changes the residual.
+
+   *Corrected 2026-09-27, by CI's first run on x86-64 Linux: "never" held on
+   macOS only.* `t01[n]` lies past the vector's end. Under Linux's allocator
+   that memory sometimes equals a sample index in the last run, and the
+   reference then bends the residual's last slope; under macOS's it never
+   did. On two of the fidelity seeds (1 kHz seed 12, 500 Hz seed 22) the
+   Linux build's noise estimate then departed from the macOS build's at
+   iteration 4, while this implementation matched macOS on both platforms. It
+   is undefined behaviour, not the authors' algorithm. So the test build
+   guards the read (`i < t01.size()`, §2), which makes "never matched" true on
+   every platform. That is what the authors' stored example and this
+   implementation both require.
 3. **The speed parameters' first values come from an unseeded generator** at
    its default seed (§1.3).
 4. **A run always starts and ends in state 1** (§1.7).
@@ -270,7 +282,15 @@ and each is recorded here.
   - λ0, λ1 and the σ caps (§3.3) are compile-time constants;
   - the arrays get one element of 0 before and after, so the two reads in
     §1.10 item 1 are defined and return what they already return;
-  - the settings' `long double` becomes `double` (below).
+  - the settings' `long double` becomes `double` (below);
+  - the residual's `C.t01[i]==t` is guarded by `i < t01.size()`, so its read
+    past the last change point is defined and never matches (§1.10 item 2;
+    added 2026-09-27, after CI's first Linux run).
+
+  *Also added then: the tests read a printed `-nan` from the reference as
+  `nan`. A NaN's sign carries no value; x86's default NaN has its sign bit set
+  and glibc prints it, while macOS does not. The still stretch's log posterior
+  is NaN, and that was the whole of its difference on Linux.*
 - The authors' own example files are read by path from that checkout.
 
 **Their example data is itself a test.** A second, build-free check compares

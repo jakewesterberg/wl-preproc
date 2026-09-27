@@ -13,12 +13,22 @@ and patches the copies, by pattern, never by carrying their text:
 - lambda0, lambda1 and the two sigma caps are compile-time constants;
 - `x` and `zf` get one element of 0 on each side, so the two reads past
   their ends (spec 1.10 item 1) are defined, and return the 0 they already
-  return.
+  return;
+- `get_residual`'s `C.t01[i]==t` is guarded by `i < t01.size()`, so its read
+  one past the change points (spec 1.10 item 2) is defined and never matches.
+  Unguarded, it reads past the vector's end, and under Linux's allocator that
+  memory sometimes equals a sample index. Under macOS's it never did, which
+  is what the authors' stored example and this implementation both require. Found
+  2026-09-27 by CI's first run on x86-64 Linux.
 
 One more patch makes the settings' `long double` a `double`: the precision
 the authors' stored example was produced with, on every platform (spec
 1.10 item 5). It builds with clang against libc++, the random-number library
 that example was produced with (spec 2).
+
+`run` reads a printed `-nan` as `nan`. A NaN's sign carries no value; x86's
+default NaN has its sign bit set and glibc prints it, while macOS prints
+`nan`.
 """
 
 from __future__ import annotations
@@ -82,6 +92,7 @@ _PATCHES_CPP = [
      r"\1if (sgi > 0 && sigma > BMD_SIGMA0_MAX) continue;\n        \2"),
     (r"\b(x|zf)\[(0|1)\]=new double\[T\];", r"\1[\2]=new double[T+2]()+1;"),
     (r"delete (x|zf)\[(0|1)\];", ""),
+    (r"if\(C\.t01\[i\]==t\)", "if(i<(int)C.t01.size() && C.t01[i]==t)"),
 ]
 
 
@@ -133,7 +144,10 @@ def run(exe: Path, x: np.ndarray, seed: int, workdir: Path) -> tuple[list[str], 
     subprocess.run([str(exe), str(trace), str(checkout() / "integral_table.txt"), str(params),
                     str(changepoints)], check=True, capture_output=True,
                    env={**os.environ, "BMD_SEED": str(seed)})
-    return params.read_text().splitlines(), changepoints.read_text().splitlines()
+    def lines(path: Path) -> list[str]:
+        return [line.replace("-nan", "nan") for line in path.read_text().splitlines()]
+
+    return lines(params), lines(changepoints)
 
 
 def formatted(record, stretch: int = 0) -> tuple[list[str], list[str]]:
