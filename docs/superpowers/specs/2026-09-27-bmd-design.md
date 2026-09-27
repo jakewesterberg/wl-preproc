@@ -238,7 +238,8 @@ and each is recorded here.
    its default seed (§1.3).
 4. **A run always starts and ends in state 1** (§1.7).
 5. **`long double` is `double`** on the platform that reproduces the authors'
-   files. §5.1's CI build forces the same with `-mlong-double-64`.
+   files. The test build patches the settings' `long double` to `double`
+   (§2), so every platform reproduces them.
 6. **The table's interpolation is not bilinear** (`bmd.cpp` 60–61). The
    corners (αᵢ, dⱼ₊₁) and (αᵢ₊₁, dⱼ) carry each other's weights. Measured
    2026-09-27 against a true bilinear, over the cells BMD reads:
@@ -268,7 +269,8 @@ and each is recorded here.
   - the seed is read from the environment, never the clock;
   - λ0, λ1 and the σ caps (§3.3) are compile-time constants;
   - the arrays get one element of 0 before and after, so the two reads in
-    §1.10 item 1 are defined and return what they already return.
+    §1.10 item 1 are defined and return what they already return;
+  - the settings' `long double` becomes `double` (below).
 - The authors' own example files are read by path from that checkout.
 
 **Their example data is itself a test.** A second, build-free check compares
@@ -278,10 +280,21 @@ this implementation against the authors' stored `changepoints1.txt` and
 **Why build, rather than use the committed `bmd` binary:** that binary is
 x86_64 macOS only. This machine has no Rosetta, and CI runs Linux.
 
-**Why libc++ and `-mlong-double-64` in CI:** the stored example was produced
-by a libc++ build with a 64-bit `long double`. A default Linux build uses
-libstdc++'s distributions and 80-bit `long double`, so its random stream would
-differ.
+**Why libc++, and `double` for `long double`:** the stored example was
+produced by a libc++ build with a 64-bit `long double`. A default Linux build
+uses libstdc++'s distributions and 80-bit `long double`, so its random stream
+would differ.
+
+*This first said CI would force the 64-bit `long double` with clang's
+`-mlong-double-64`. Corrected 2026-09-27, before any CI ran. On x86-64 that
+flag changes the compiler's type, but glibc's `logl`, `powl` and `lgammal`
+are built for the 80-bit one. Every maths call the source makes on a setting
+would then hand the library a value it misreads. This was reasoned, not
+observed; the patch avoids the question. Patching the source's six
+`long double` settings to `double` means the same thing, with no mismatch. Measured the same day: built on x86-64 Ubuntu
+24.04 with apt's clang 18, libc++ and Boost, the patched reference matched
+this implementation exactly on the authors' example, on 1 kHz and 500 Hz
+simulations, and on repeated positions.*
 
 ---
 
