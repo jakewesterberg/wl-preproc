@@ -536,3 +536,25 @@ def decode(feats: list[tuple[float, float]], params: NslrParams) -> list[int]:
         path.append(int(back.pop()[path[-1]]))
     path.reverse()
     return path
+
+
+def classify(pieces_xy: list[np.ndarray], fs_hz: float, params: NslrParams) -> list[np.ndarray]:
+    """Every piece's per-sample states, 0 fixation, 1 saccade, 2 PSO and 3
+    pursuit (spec 1, 3).
+    - The noise is estimated once over all the pieces.
+    - Each piece is decoded on its own, from its own first segment.
+    - Every sample takes its segment's state.
+
+    Within a piece, `t = index / fs_hz`. Each piece needs at least two
+    samples; `detect_nslr` passes no shorter one."""
+    if not pieces_xy:
+        return []
+    fit = fit_pieces([(np.arange(len(xy)) / fs_hz, xy) for xy in pieces_xy], params)
+    out = []
+    for piece in fit.pieces:
+        path = decode(features(piece), params)
+        states = np.empty(piece.splits[-1], np.int64)
+        for k, state in enumerate(path):
+            states[piece.splits[k]:piece.splits[k + 1]] = state
+        out.append(states)
+    return out
