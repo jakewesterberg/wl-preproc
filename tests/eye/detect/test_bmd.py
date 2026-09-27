@@ -206,11 +206,15 @@ def test_nothing_usable_is_no_runs():
     assert bmd.detect_bmd(x, velocity(x, FS), np.full(len(x), Label.INVALID, dtype=object), FS, LIGHT) == []
 
 
-def test_a_perfectly_still_trace_is_labelled_without_error():
-    """Review Focus: zero variance -- no rescale, no error, no saccade."""
-    x = np.zeros((1000, 2))
-    runs = bmd.detect_bmd(x, np.zeros_like(x), _open(1000), FS, LIGHT)
-    assert Label.SACCADE not in {r.label for r in runs}
+@pytest.mark.parametrize("position", [(0.0, 0.0), (3.2, -1.7)])
+def test_a_perfectly_still_trace_is_labelled_without_error(position):
+    """Review Focus: zero variance -- no rescale, no error, all drift. At the
+    production sampler settings: the first re-estimate's motor noise is then
+    exactly 0, and its log must be the C library's -inf, not Python's
+    `ValueError` (final review C1, 2026-09-27)."""
+    x = np.tile(np.array(position), (1000, 1))
+    runs = bmd.detect_bmd(x, np.zeros_like(x), _open(1000), FS, bmd.DEFAULT_BMD_PARAMS)
+    assert [(r.start, r.stop, r.label) for r in runs] == [(0, 1000, Label.DRIFT)]
 
 
 def test_the_detector_runs_at_the_rigs_real_rate():

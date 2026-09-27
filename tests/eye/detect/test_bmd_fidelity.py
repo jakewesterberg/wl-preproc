@@ -104,3 +104,17 @@ def test_exactly_repeated_positions_match_the_reference(tmp_path):
     x[2_000:3_500] = x[2_000]
     exe = ref.binary(lambda0=0.004, lambda1=0.1)
     assert _ours(x, seed=13) == ref.run(exe, x, 13, tmp_path)
+
+
+def test_a_perfectly_still_stretch_matches_the_reference(tmp_path):
+    """A still stretch, as `detect_bmd` prepares one at 500 Hz with the
+    caps, drives the motor noise to exactly 0 at its first re-estimate. The
+    reference takes C's log(0) = -inf and carries on; the port
+    must too, where Python's `math.log` raises (final review C1,
+    2026-09-27)."""
+    fs = 500.0
+    x = np.full((1_000, 2), bmd.ORIGIN_EPSILON_DEG)
+    seed = bmd.DEFAULT_BMD_PARAMS.seed
+    exe = ref.binary(lambda0=4.0 / fs, lambda1=100.0 / fs, sigma0_cap=1.3 / fs, sigma1_cap=100.0 / fs)
+    ours = _ours(x, seed=seed, fs_hz=fs, drift_cap=1.3 / fs, microsaccade_cap=100.0 / fs)
+    assert ours == ref.run(exe, x, seed, tmp_path)

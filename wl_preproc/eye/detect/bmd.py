@@ -58,6 +58,16 @@ def _tgamma(x: float) -> float:
     return _libm.tgamma(x)
 
 
+def _log(x: float) -> float:
+    """The C library's `log`, as the reference calls it: `math.log` for a
+    positive argument, and C's -inf at 0 and NaN below it where Python's
+    raises (spec 1.10 item 7). A still stretch drives the motor noise to
+    exactly 0 (final review C1, 2026-09-27)."""
+    if x > 0.0:
+        return math.log(x)
+    return -math.inf if x == 0.0 else math.nan
+
+
 @dataclass(frozen=True, slots=True)
 class BmdParams:
     """Spec section 6. The rates are per second and the speed caps in deg/s;
@@ -118,8 +128,8 @@ def _theta(d1: float, s0: float, s1: float, sz: float, sx: float, lam0: float, l
 def _set_up(th: np.ndarray, d1: float, s1: float) -> None:
     """`params::set_d_sigma_up` (`bmd.cpp` 153-157)."""
     th[D1], th[S1] = d1, s1
-    th[CUP] = ((1.0 - 0.5 * (d1 + 1)) * LN2 - (d1 + 1) * math.log(s1) - _lgamma(0.5 * (d1 + 1))
-               + 2.0 * (d1 + 1.0) * math.log(th[SZ]))
+    th[CUP] = ((1.0 - 0.5 * (d1 + 1)) * LN2 - (d1 + 1) * _log(s1) - _lgamma(0.5 * (d1 + 1))
+               + 2.0 * (d1 + 1.0) * _log(th[SZ]))
     th[G1U], th[G3U] = _tgamma(0.5 * (d1 + 1.0)), _tgamma(0.5 * (d1 + 3.0))
 
 
@@ -127,8 +137,8 @@ def _set_down(th: np.ndarray, s0: float) -> None:
     """`params::set_sigma_down` (`bmd.cpp` 159-162)."""
     d0 = th[D0]
     th[S0] = s0
-    th[CDOWN] = ((1.0 - 0.5 * (d0 + 1)) * LN2 - (d0 + 1) * math.log(s0) - _lgamma(0.5 * (d0 + 1))
-                 + 2.0 * (d0 + 1.0) * math.log(th[SZ]))
+    th[CDOWN] = ((1.0 - 0.5 * (d0 + 1)) * LN2 - (d0 + 1) * _log(s0) - _lgamma(0.5 * (d0 + 1))
+                 + 2.0 * (d0 + 1.0) * _log(th[SZ]))
     th[G1D], th[G3D] = _tgamma(0.5 * (d0 + 1.0)), _tgamma(0.5 * (d0 + 3.0))
 
 
@@ -137,7 +147,7 @@ def _set_sigmaz(th: np.ndarray, sz: float) -> None:
     th[SZ] = sz
     _set_up(th, th[D1], th[S1])
     _set_down(th, th[S0])
-    th[PREF] = LN2PI + 2.0 * math.log(sz)
+    th[PREF] = LN2PI + 2.0 * _log(sz)
 
 
 # ------------------------------------------------------------- likelihood
