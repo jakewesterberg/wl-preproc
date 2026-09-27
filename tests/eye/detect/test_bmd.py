@@ -117,21 +117,114 @@ def test_the_end_runs_are_never_detections():
 # -- section 3.2: pooling --------------------------------------------------------
 
 
-def test_pooled_noise_is_one_estimate_over_every_stretch():
-    """The lag sums pool, so two stretches estimate differently from either
-    alone; one stretch is `bmd.cpp`'s estimate (held exactly by
-    `test_bmd_fidelity.py`)."""
-    x = [bmd.to_origin(_drifting_trace(1.0, s)) for s in (7, 8)]
-    xs = np.ascontiguousarray(np.concatenate([p.T for p in x], axis=1))
-    lengths = np.array([len(p) for p in x])
-    offsets = np.array([0, lengths[0]])
-    starts = []
-    for s in range(2):
+def _pooled_block(seed):
+    """Three stretches of BMD's own model, prepared as `run_block` prepares
+    them, with two kept samples per stretch: the starting state, and the
+    state after three sweeps."""
+    from wl_preproc.eye.detect import bmd_rng
+
+    pieces = [bmd.to_origin(simulate(n, lambda0=0.004, lambda1=0.1, sigma0=0.0003, sigma1=0.03, d1=4.4,
+                                     sigmaz=0.002, sigmax=0.01, seed=seed + k)[0])
+              for k, n in enumerate((400, 700, 550))]
+    x = np.ascontiguousarray(np.concatenate([p.T for p in pieces], axis=1))
+    lengths = np.array([len(p) for p in pieces], np.int64)
+    offsets = np.concatenate(([0], np.cumsum(lengths)[:-1])).astype(np.int64)
+    table = compute_table()
+    th = bmd._theta(2.5, 0.001, 0.02, 0.003, 0.01, 0.004, 0.1)
+    z = np.empty_like(x)
+    sdz2 = np.array([bmd._smooth(x, z, offsets[s], lengths[s], th[bmd.SZ], th[bmd.SX]) for s in range(3)])
+    gen = bmd_rng.new_generator(seed)
+    kept = [[], []]
+    for s in range(3):
         t01, t10 = np.zeros(lengths[s] + 2, np.int64), np.zeros(lengths[s] + 2, np.int64)
-        starts.append((t01, t10, bmd._start(xs, offsets[s], lengths[s], t01, t10)))
-    pooled = bmd._noise(xs, offsets, lengths, [starts])
-    alone = [bmd._noise(xs, offsets[s:s + 1], lengths[s:s + 1], [[starts[s]]]) for s in range(2)]
-    assert pooled not in alone
+        count = bmd._start(x, offsets[s], lengths[s], t01, t10)
+        kept[0].append((t01[:count[0]].copy(), t10[:count[0]].copy(), count.copy()))
+        for _ in range(3):
+            bmd._sweep(gen, t01, t10, count, th, z, offsets[s], lengths[s], table.values, table.alpha_lower,
+                       table.alpha_upper, table.n_d)
+        kept[1].append((t01[:count[0]].copy(), t10[:count[0]].copy(), count.copy()))
+    return x, lengths, offsets, table, th, z, sdz2, kept
+
+
+def _padded(kept):
+    width = max(int(c[0]) for sample in kept for _, _, c in sample)
+    t01s = np.zeros((len(kept), 3, width), np.int64)
+    t10s = np.zeros((len(kept), 3, width), np.int64)
+    ns = np.zeros((len(kept), 3), np.int64)
+    for j, sample in enumerate(kept):
+        for s, (t01, t10, count) in enumerate(sample):
+            n = int(count[0])
+            t01s[j, s, :n], t10s[j, s, :n], ns[j, s] = t01, t10, n
+    return t01s, t10s, ns
+
+
+def test_pooled_noise_sums_every_stretchs_lag_sums_before_the_fit():
+    """Spec 5.2: the pooled estimate is the reference's fit to the lag sums
+    and pair counts summed over the stretches. One stretch's lag sums are the
+    reference's (held exactly by `test_bmd_fidelity.py`). The fit is restated
+    here from `bmd.cpp` 748-760."""
+    x, lengths, offsets, *_, kept = _pooled_block(31)
+    got = bmd._noise(x, offsets, lengths, kept)
+    sz_est, sx_est = [], []
+    for sample in kept:
+        sums, pairs = np.zeros(20), np.zeros(20, np.int64)
+        for s, (t01, t10, count) in enumerate(sample):
+            own_sums, own_pairs = np.zeros(20), np.zeros(20, np.int64)
+            bmd._lag_sums(x, offsets[s], lengths[s], t01, t10, count[0], own_sums, own_pairs)
+            sums += own_sums
+            pairs += own_pairs
+        lags = np.arange(1, 20)
+        c = sums[1:] / pairs[1:]
+        slope = ((lags * c).mean() - c.mean() * 10.0) / (20 * 39 / 6.0 - 100.0)
+        intercept = c.mean() - slope * 10.0
+        sz_est.append(math.sqrt(slope / 2.0))
+        sx_est.append(math.sqrt(max(0.00001, intercept) / 4.0))
+    half = len(kept) // 2
+    assert got == pytest.approx((sorted(sz_est)[half], sorted(sx_est)[half]), rel=1e-9)
+
+
+def test_the_pooled_speed_grid_search_maximises_the_posterior_summed_over_stretches():
+    """Spec 5.2: for each kept sample, `_grid_up`'s choice is the first grid
+    point that maximises the log posterior summed over every stretch, each
+    point's settings made by `_set_up` (the reference's
+    `set_d_sigma_up`)."""
+    _, _, offsets, table, th, z, sdz2, kept = _pooled_block(32)
+    t01s, t10s, ns = _padded(kept)
+    lgamma_d = np.array([bmd._lgamma(0.5 * (d + 1)) for d in bmd._D_GRID])
+    g1_d = np.array([bmd._tgamma(0.5 * (d + 1.0)) for d in bmd._D_GRID])
+    g3_d = np.array([bmd._tgamma(0.5 * (d + 3.0)) for d in bmd._D_GRID])
+    best_s, best_d = bmd._grid_up(t01s, t10s, ns, th, z, offsets, sdz2, table.values, table.alpha_lower,
+                                  table.alpha_upper, table.n_d, bmd._D_GRID, lgamma_d, g1_d, g3_d, bmd._S_GRID,
+                                  np.inf)
+    for j in range(len(kept)):
+        totals = np.empty((100, 100))
+        for di, d in enumerate(bmd._D_GRID):
+            for sgi, sigma in enumerate(bmd._S_GRID):
+                t = th.copy()
+                bmd._set_up(t, d, sigma)
+                totals[di, sgi] = sum(
+                    bmd._logpost(t01s[j, s], t10s[j, s], ns[j, s], t, z, offsets[s], sdz2[s], table.values,
+                                 table.alpha_lower, table.alpha_upper, table.n_d) for s in range(3))
+        di, sgi = np.unravel_index(int(np.argmax(totals)), totals.shape)
+        assert (best_d[j], best_s[j]) == (bmd._D_GRID[di], bmd._S_GRID[sgi]), j
+
+
+def test_the_pooled_drift_grid_search_maximises_the_posterior_summed_over_stretches():
+    """Spec 5.2, as above, for `_grid_down` and `_set_down`."""
+    _, _, offsets, table, th, z, sdz2, kept = _pooled_block(33)
+    t01s, t10s, ns = _padded(kept)
+    best_s0 = bmd._grid_down(t01s, t10s, ns, th, z, offsets, sdz2, table.values, table.alpha_lower,
+                             table.alpha_upper, table.n_d, bmd._lgamma(0.5 * (th[bmd.D0] + 1)), bmd._S_GRID,
+                             np.inf)
+    for j in range(len(kept)):
+        totals = np.empty(100)
+        for sgi, sigma in enumerate(bmd._S_GRID):
+            t = th.copy()
+            bmd._set_down(t, sigma)
+            totals[sgi] = sum(
+                bmd._logpost(t01s[j, s], t10s[j, s], ns[j, s], t, z, offsets[s], sdz2[s], table.values,
+                             table.alpha_lower, table.alpha_upper, table.n_d) for s in range(3))
+        assert best_s0[j] == bmd._S_GRID[int(np.argmax(totals))], j
 
 
 def test_a_block_run_alone_with_its_seed_gives_the_same_labels():
