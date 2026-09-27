@@ -335,15 +335,37 @@ is gated on `WLPP_NSLR_REFERENCE`, which CI sets, and it skips without it.
   samples in the reference recording is classified by both ours and the
   reference. The labels must be identical. The p99→15° scale is REMoDNaV's §5.2
   scale.
+
+  *Measured 2026-09-27 (Task 5): identical, both eyes, both interpreters. Each
+  eye found a clean 5,000-sample stretch on the first attempt, and ours agreed
+  with the reference sample for sample on both, on Python 3.11 with numpy
+  2.4.6 and on 3.13 with numpy 2.5.3.*
 - **Runtime, measured.** Each eye over the full recording (1,177,799 samples).
   The prediction from the design's prototype: the compiled segmenter took
   0.15–0.39 s per pass over 59,970 samples. With 5–6 passes plus the
   per-segment numpy stages, that is about a minute per eye. It is recorded, not
   gated.
+
+  *Measured 2026-09-27 (Task 5): 38.3 s left (15,034 runs), 33.3 s right
+  (13,904 runs) — faster than the roughly-a-minute prediction, identical to
+  the reported precision on both interpreters.*
 - **Agreement with the registered detectors, reported.** Saccade counts and
   sample-level kappa against REMoDNaV and Nyström–Holmqvist on REMoDNaV's
   120,000-sample slice. These are recorded, not gated: there is no oracle for
   what they should be.
+
+  *Measured 2026-09-27 (Task 5), over each eye's first 120,000 samples:*
+
+  | | left | right |
+  |---|---|---|
+  | nslr saccades | 505 | 478 |
+  | vs remodnav: saccades / kappa | 519 / 0.453 | 488 / 0.421 |
+  | vs nystrom_holmqvist: saccades / kappa | 568 / 0.364 | 569 / 0.315 |
+
+  *NSLR finds fewer saccades than either registered detector on this slice,
+  and agrees with REMoDNaV more than with Nyström–Holmqvist — consistent with
+  §4's "not used below 1°": a detector that calls slow sub-degree movements
+  fixation finds fewer, smaller saccades than one that does not.*
 
 ### 5.3 The paper's human coders (gated on `WLPP_ANDERSSON_DATA`)
 
@@ -366,6 +388,20 @@ The steps:
 2. **Then ours is compared** with the "NSLR-HMM" column within ±0.05: saccade
    0.82, fixation 0.51, smooth pursuit 0.42, PSO 0.53.
 3. **Nulls:** random labels at a fixed proportion must score kappa near zero.
+
+**Measured 2026-09-27 (Task 6), pooled over the 34 "data used in the article"
+files** — that file set reproduced both bands directly, so the harness never
+needed the dataset's full annotated set:
+
+| | saccade | fixation | pursuit | PSO |
+|---|---|---|---|---|
+| coders (paper) | 0.898 (0.90) | 0.813 (0.81) | 0.791 (0.79) | 0.733 (0.73) |
+| nslr (paper) | 0.826 (0.82) | 0.535 (0.51) | 0.460 (0.42) | 0.556 (0.53) |
+
+Both bands held on both interpreters: the coders' reproduction within ±0.01
+(largest diff 0.003, on fixation) and NSLR's within ±0.05 (largest diff 0.040,
+on pursuit — the tightest band, as predicted during design). The null passed:
+random labels scored kappa near zero.
 
 **This check is in-sample, and says so.** The HMM's emissions were estimated
 from this same labelled data (`nslr_hmm.py` 37; paper, "For NSLR, the feature
@@ -516,6 +552,10 @@ verbatim from `nslr_hmm.py` 39–42.
    minutes per eye for a two-hour session: some 94 hypotheses stay alive per
    sample, not a handful. Given the corrected number, the requester chose numba
    on 2026-09-27. The first choice was true when written.*
+
+   *Measured 2026-09-27 (Task 5), on the full 1,177,799-sample reference
+   recording: 38.3 s left, 33.3 s right, identical on both interpreters —
+   faster than the "about a minute per eye" prediction above.*
 3. **Pursuit on the current tasks** (§4): suspect until a task moves a target.
 4. **The one-sample conjunction floor**, now shared by three detectors.
 5. **Exact-float termination across platforms.** §1.4's stopping rule is exact,

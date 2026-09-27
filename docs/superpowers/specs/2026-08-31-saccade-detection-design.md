@@ -275,6 +275,9 @@ seven, so a disagreement is never a disagreement about measurement.
 > sample as `remodnav` 1.1.2 does, given that package's own signals, on five
 > synthetic traces (500 Hz seeds 1–3, 1000 Hz seeds 4–5).*
 
+> *Amended 2026-09-27: NSLR is registered — spec
+> `2026-09-27-nslr-design.md`.*
+
 > **Corrected 2026-09-01, by reading the reference implementation.** This
 > table gave Otero-Millan `microsaccade` alone and called its source "ported
 > from a BSD-3 reference". Both were wrong, and the download settles it.
@@ -367,6 +370,19 @@ no licence question in any code that runs (NSLR's classification half is
 AGPL-3.0 and its segmentation half declares no licence — reimplementing
 dissolves that entirely); and no dependency on repositories last touched in
 2019 and 2020.
+
+> **Corrected 2026-09-27, by reading both repositories' own `LICENSE` files
+> and PyPI's release metadata (design spec `2026-09-27-nslr-design.md`
+> §0).** This paragraph said NSLR's "segmentation half declares no licence."
+> Both halves are AGPL-3.0: `gitlab.com/nslr/nslr`'s and
+> `gitlab.com/nslr/nslr-hmm`'s `LICENSE` files are each the GNU Affero
+> General Public License, version 3, and `slow_nslr.py` itself opens
+> "Released under AGPL-3.0". PyPI's `nslr` 0.0.5 does leave its licence field
+> empty — its `PKG-INFO` prints `License: UNKNOWN` and `setup.py`'s `setup()`
+> call sets no `license` key — which is plausibly what this paragraph read.
+> Reimplementing still dissolves the question, as the sentence above argues;
+> what it dissolves is a real AGPL-3.0 obligation on both halves, not a
+> licence-free one on either.
 
 **The risk it carries is specific and must be designed against: a buggy
 reimplementation is indistinguishable from a genuine detector disagreement.**

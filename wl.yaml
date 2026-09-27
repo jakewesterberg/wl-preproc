@@ -76,6 +76,22 @@ status:
     its saccade kappa against the oracle is 0.764 (left) and 0.724 (right).
     Against the paper's human coders, the harness first reproduces Table 3,
     and ours is at or above the oracle on every saccade cell.
+
+    NSLR-HMM is BUILT on `spec/nslr` (2026-09-27, NOT merged as written). It
+    is the fifth registered detector, and the only one that never
+    differentiates -- it fits gaze as a continuous chain of straight
+    segments and classifies whole segments, rather than thresholding a
+    velocity signal. Design spec `2026-09-27-nslr-design.md`; handoff
+    `docs/handoffs/2026-09-27-nslr-built.md`. Reproduced operation for
+    operation against the authors' own `nslr`/`nslr-hmm`, it matches their
+    labels exactly at every stage on synthetic traces, and on each eye's
+    first 5,000-sample gap-free stretch of the reference recording; the full
+    recording classifies in 38.3 s (left) / 33.3 s (right) per eye. Against
+    the paper's human coders, pooled over the 34 article files, the harness
+    first reproduces Table 1's Human column and then NSLR's own column, both
+    within their stated bands. The requester ruled on 2026-09-27 that NSLR is
+    not used below about 1 degree -- it calls a planted 0.75-degree/16 ms
+    step fixation, exactly as the authors' own code does on the same trace.
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -104,13 +120,14 @@ status:
     in this line: a STREAMING archive writer, BUILT 2026-09-26 --
     `store.write_store` reads each file through one reused chunk-sized
     buffer and writes one chunk at a time, so a ~166 GB AP file no longer
-    has to fit in memory; (2) the two remaining hardware-free detectors,
-    NSLR and Bayesian microsaccade detection, which matter here as SACCADE
-    detectors because the requester has said glissades are peripheral.
-    REMoDNaV, the third that item named, is BUILT on `spec/remodnav`
-    (2026-09-26, NOT merged as written; see `phase`). Two millisecond-based
-    detectors now inherit the conjunction's one-sample duration floor, which
-    is a cross-detector decision still open;
+    has to fit in memory; (2) the remaining hardware-free detector, Bayesian
+    microsaccade detection, which matters here as a SACCADE detector because
+    the requester has said glissades are peripheral. REMoDNaV and NSLR, the
+    other two that item named, are BUILT -- REMoDNaV on `spec/remodnav`
+    (2026-09-26) and NSLR on `spec/nslr` (2026-09-27), NOT merged as written;
+    see `phase`. Three no-duration or millisecond-based detectors now
+    inherit the conjunction's one-sample duration floor, which is a
+    cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
     `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
     (4) measuring which of the 225/337 unmatched saccades are real.
@@ -210,17 +227,18 @@ status:
     (`test_the_run_count_measured_against_the_reference_recording`) is
     env-gated and skipped by default.
 
-    NSLR and Bayesian microsaccade detection are still simply unwritten,
-    same as U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
-    instead. `registry.py::DETECTORS` registers FOUR on `spec/remodnav`:
-    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist and REMoDNaV. Five of
-    the seven detectors specified in design spec §3.1 take the degenerate
-    saccadic-slice branch and never reach `classify` -- only Engbert-Kliegl
-    and Otero-Millan declare both sides of the amplitude cut.
-    Nystrom-Holmqvist and REMoDNaV are two of the five degenerate ones for
-    real, not hypothetically, and `pursuit` is now a PRODUCED label, by
-    REMoDNaV. *This paragraph named REMoDNaV as unwritten and said THREE
-    were registered until 2026-09-26; true when written.*
+    Bayesian microsaccade detection is still simply unwritten, same as
+    U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
+    instead. `registry.py::DETECTORS` registers FIVE on `spec/nslr`:
+    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV and NSLR. Five
+    of the seven detectors specified in design spec §3.1 take the
+    degenerate saccadic-slice branch and never reach `classify` -- only
+    Engbert-Kliegl and Otero-Millan declare both sides of the amplitude cut.
+    Nystrom-Holmqvist, REMoDNaV and NSLR are three of the five degenerate
+    ones for real, not hypothetically, and `pursuit` is now a PRODUCED
+    label, by REMoDNaV. *This paragraph named REMoDNaV as unwritten and said
+    THREE were registered until 2026-09-26, and named NSLR as unwritten and
+    said FOUR were registered until 2026-09-27; true when written.*
 
     Two corrections to what this field said before Nystrom-Holmqvist
     existed (docs/handoffs/2026-09-05-nystrom-holmqvist-built.md has the
