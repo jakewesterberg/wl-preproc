@@ -286,3 +286,36 @@ def test_header_matches_the_real_fixtures_first_line():
         fixture_header = handle.readline().rstrip("\n")
 
     assert " ".join(HEADER) == fixture_header
+
+
+def _emit_with(tmp_path, name, **update):
+    recipe = RECIPES["eye"].model_copy(update=update)
+    truth = build_timeline(recipe)
+    directory = tmp_path / name
+    directory.mkdir()
+    return write_ohdpi(directory, recipe, truth)
+
+
+def test_fixational_drift_is_off_by_default_and_changes_nothing(tmp_path):
+    """Zero drift writes the file byte for byte as before the option existed:
+    the walk draws from its own stream, and only when asked."""
+    default = _emit_with(tmp_path, "default")
+    explicit = _emit_with(tmp_path, "explicit", fixational_drift_px_per_sqrt_frame=0.0)
+    assert default.read_bytes() == explicit.read_bytes()
+
+
+def test_fixational_drift_is_one_random_walk_shared_by_both_eyes(tmp_path):
+    """With drift, the Purkinje vector differs from the still file by a
+    random walk whose steps have the stated standard deviation, identical in
+    both eyes (design spec `2026-09-27-bmd-design.md` section 5.1)."""
+    from wl_preproc.eye.gaze import purkinje_vector
+    from wl_preproc.synth.ohdpi import FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME
+
+    still = _emit_with(tmp_path, "still")
+    drifting = _emit_with(tmp_path, "drifting",
+                          fixational_drift_px_per_sqrt_frame=FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME)
+    walks = {eye: purkinje_vector(drifting, eye) - purkinje_vector(still, eye) for eye in ("Left", "Right")}
+    assert np.allclose(walks["Left"], walks["Right"], atol=1e-3)
+    steps = np.diff(walks["Left"], axis=0)
+    assert np.std(steps) == pytest.approx(FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME, rel=0.05)
+    assert FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME == 0.4 * 6.0

@@ -162,6 +162,17 @@ class SessionRecipe(BaseModel):
     # signal is unchanged; see `EyeFixationSpec` for why a calibration fixture
     # needs it and free viewing cannot substitute.
     eye_fixations: tuple[EyeFixationSpec, ...] = ()
+    # **Fixational drift across the whole session, per frame**: the standard
+    # deviation of one step of a random walk added to the eye's rotation term,
+    # holds and free signal alike. Zero -- the default -- keeps every existing
+    # fixture byte-identical. Detection fixtures set it to `synth/ohdpi.py::
+    # FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME`, measured from the reference
+    # recording: no real eye holds still between movements, a detector that
+    # models drift (BMD, design spec `2026-09-27-bmd-design.md`) splits one
+    # movement into several on an eye that does, and a real eye drifts the
+    # same way through a whole session, so the drift is not confined to the
+    # detection trial.
+    fixational_drift_px_per_sqrt_frame: float = 0.0
 
     # Which ROW indices `write_ohdpi` omits from the eye recording, leaving the
     # camera's frame-number sequence with a hole where they were. Empty by
