@@ -167,6 +167,13 @@ requester chose to merge the same day; true when written.*
 >      Nyström–Holmqvist's 568 / 569 (kappa 0.364 / 0.315) — fewer and lower
 >      kappa than either, consistent with treating slow sub-degree movement
 >      as fixation.
+>
+>      *Corrected by the final whole-branch review: "fewer" is true of that
+>      120,000-sample slice and false over the whole recording. Over all
+>      1,177,799 samples NSLR stores more saccade rows than either: 5,786
+>      left / 5,216 right, against REMoDNaV's 4,814 / 4,493 and
+>      Nyström–Holmqvist's 5,009 / 5,123. 55% of its left-eye saccade rows
+>      and 64% of its right-eye rows are shorter than 10 ms.*
 >    - **Against the paper's human coders** (Andersson et al. 2017), pooled
 >      over the 34 "data used in the article" files: the harness first
 >      reproduces Table 1's Human column (saccade 0.898/0.90, fixation
@@ -186,6 +193,26 @@ requester chose to merge the same day; true when written.*
 >      This raises the value of Bayesian microsaccade detection (item 2
 >      above): it is the one method the parent spec's §3.1 table built for
 >      exactly this sub-1° regime.
+>    - **The final whole-branch review's fix wave (2026-09-27).**
+>      - *The requester's decision on what an NSLR saccade row measures.*
+>        NSLR's runs end one sample before the eye lands, so the shared
+>        `measure` read every NSLR saccade row short, and a one-sample run
+>        as exactly 0.0° (542 left / 666 right on the reference recording).
+>        Now, for its per-eye saccade runs only, a run of 10 ms or more is
+>        measured to where the eye lands, and a briefer one is stored with
+>        no amplitude or peak velocity. After the fix, 3,186 left / 3,355
+>        right rows are stored unmeasured. The landing rule is declared on
+>        NSLR's registry entry and the 10 ms floor in its paramset
+>        (`min_measured_saccade_ms`). Every other detector's stored rows
+>        are unchanged, shown by test and by a before/after dump.
+>      - *Non-finite gaze.* One NaN made NSLR's pooled noise NaN for the
+>        whole eye. `detect_nslr` now withholds non-finite gaze, and a
+>        capped noise estimate warns.
+>      - *Open for the requester, recorded and not changed:* the shared
+>        validity mask passes NaN as usable for every detector (NSLR spec
+>        §8 item 6); and NSLR's conjunction, which the decision does not
+>        cover, still stores 219 one-sample saccade rows at 0.0° on the
+>        reference recording (NSLR spec §8 item 4).
 >
 >    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
 >    and what is still deferred.

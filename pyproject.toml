@@ -6,6 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.17",
+    # NSLR's compiled segmentation loop (eye/detect/nslr.py). numba 0.67
+    # itself declares numpy<2.6,>=1.22, so numpy is capped below 2.6 wherever
+    # numba is -- a ceiling numba imposes, not restated on numpy's line
+    # above. A numpy release past 2.5 waits on a numba release admitting it.
     "numba>=0.67",
     "pydantic>=2.6",
     "pyyaml>=6.0",

@@ -663,9 +663,11 @@ class EyeDetection(dj.Computed):
         design spec sections 8.4 and 9). `_overlapping`'s floor guarantees
         `stop > start` here, not a nonzero amplitude. So a detector with a
         one-sample floor, NSLR among them, can still store a one-sample
-        conjunction saccade at 0.0 deg, as it did before.
+        conjunction saccade at 0.0 deg, as it did before. Measured on the
+        reference recording (the NSLR final fix wave, 2026-09-27): 219 of
+        NSLR's 3,230 conjunction saccade rows, at a median 150 deg/s.
 
-        Three of the four registered detectors make that second measurement
+        Four of the five registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
@@ -674,10 +676,18 @@ class EyeDetection(dj.Computed):
         the `pso` after it are adjacent, as Nystrom-Holmqvist's are, but its
         proximity rule means it never emits two adjacent runs with the same
         label, so `runs_from_labels` never merges two of its intervals
-        either.
+        either. NSLR's runs within a piece are adjacent too, but
+        `detect_nslr` merges consecutive segments that share a state before
+        returning, and two pieces are always separated by at least one
+        sample no run claims, so it never emits two adjacent runs with the
+        same label either.
 
         *Until 2026-09-27 this said "Two of the three registered detectors"
         and did not mention REMoDNaV; true when written.*
+
+        *Until NSLR's final fix wave (2026-09-27) this said "Three of the
+        four registered detectors" and did not mention NSLR; true when
+        written.*
 
         **The remaining one does not, and this is no longer a hypothetical
         about some future detector -- it is true of Nystrom-Holmqvist today.**
@@ -689,7 +699,7 @@ class EyeDetection(dj.Computed):
         (`run.start < offset and onset < run.stop`, both strict), so both
         survive as separate, touching runs carrying the SAME label. Nothing
         in `registry.py::DetectFn`'s own contract requires ANY detector --
-        registered or still unwritten (NSLR, BMD, U'n'Eye) -- to
+        registered or still unwritten (BMD, U'n'Eye) -- to
         leave such a gap, and if two adjacent intervals ever DO carry the
         same label, `runs_from_labels` merges them into one run whose real
         `[start, stop)` matches neither original interval. Measuring the
@@ -700,6 +710,10 @@ class EyeDetection(dj.Computed):
 
         *Until 2026-09-27 this said "The third does not" and listed REMoDNaV
         as still unwritten; true when written.*
+
+        *Until NSLR's final fix wave (2026-09-27) this listed NSLR as still
+        unwritten; true when written, before NSLR was registered on
+        `spec/nslr`.*
 
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
@@ -942,14 +956,18 @@ def _conjunction_runs(
     label, which is correct only while every emitted label is the same kind
     of thing -- true of Engbert-Kliegl and Otero-Millan, and false for
     Nystrom-Holmqvist (registered 2026-09-06), for REMoDNaV (registered
-    2026-09-26) and for the two detectors still BLOCKED (unwritten): NSLR
-    and BMD. Nystrom-Holmqvist, NSLR and REMoDNaV all emit `pso` and
-    `fixation` alongside `saccade`; BMD emits `drift` instead of `pso`.
-    `fixation` TILES the recording, so an ungrouped intersection would have
-    crossed a left fixation with a right saccade and kept it.
+    2026-09-26), for NSLR (registered 2026-09-27, on `spec/nslr`) and for
+    the one detector still BLOCKED (unwritten): BMD. Nystrom-Holmqvist, NSLR
+    and REMoDNaV all emit `pso` and `fixation` alongside `saccade`; BMD
+    emits `drift` instead of `pso`. `fixation` TILES the recording, so an
+    ungrouped intersection would have crossed a left fixation with a right
+    saccade and kept it.
 
     *Until 2026-09-27 this listed REMoDNaV among three detectors still
     BLOCKED (unwritten); true when written.*
+
+    *Until NSLR's final fix wave (2026-09-27) this listed NSLR as still
+    BLOCKED (unwritten); true when written, before NSLR was registered.*
 
     **Grouping first also makes the loop cheaper -- though no longer for
     every registered detector.** `_overlapping` is `O(|left| x |right|)`;

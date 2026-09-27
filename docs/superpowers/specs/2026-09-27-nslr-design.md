@@ -202,6 +202,16 @@ linear interpolation, and its classification benchmark does not say. Here:
   restarts at `(0, 0)` at each piece's start.
 - **Short pieces.** A piece shorter than 2 samples is left unlabelled, since
   the segmenter needs two.
+- **Non-finite gaze.** A sample whose gaze is NaN or infinite is withheld
+  from the pieces too, even where the mask offers it.
+
+  *Added 2026-09-27, in the final fix wave (the final review's finding I1).
+  The shared mask passes NaN as usable. With the noise pooled over every
+  piece, one NaN made the noise NaN for the whole eye. The loop then ran to
+  `max_noise_passes`, and pieces holding no NaN were relabelled. The shared
+  mask itself is unchanged: changing it would change stored validity for
+  every detector under an unchanged paramset. That is an open item for the
+  requester (§8 item 6).*
 
 **Time.** Within a piece, `t = sample index / fs_hz`. The reference takes
 timestamps; this pipeline's samples are uniform.
@@ -253,6 +263,76 @@ row. The reference's classes map as:
 
   *What the shared test does.* The planted-step invariant holds NSLR to the
   steps of 1° or more, and pins the miss.
+- **Measured only at 10 ms or more, and to where the eye lands.** The
+  requester decided this on 2026-09-27, after the final whole-branch review.
+
+  *The defect.* `_insert_trace` measured every saccade run with
+  `measure.py::measure`, whose amplitude is `gaze[stop-1] - gaze[start]`.
+  NSLR's run for segment k is `[J[k], J[k+1])`, and the eye lands at
+  `J[k+1]`, the next run's first sample. So `measure` missed the last step
+  of every NSLR saccade: a fraction 1/L of a run L samples long, and all of
+  it when L = 1. On the full reference recording, 542 of 5,786 left-eye rows
+  and 666 of 5,216 right-eye rows were stored at exactly 0.0°, at a median
+  peak velocity of 234 °/s on the left. REMoDNaV and Nyström–Holmqvist store
+  no saccade run shorter than 5 samples.
+
+  *The decision.* NSLR's saccade labels stay exactly as the published model
+  gives them. For its per-eye saccade runs only:
+  - **A run lasting 10 ms or more is measured up to where the eye lands.**
+    The amplitude is `gaze[stop] - gaze[start]`, and the peak velocity is
+    taken over `[start, stop]` inclusive. This applies when `stop` is an
+    interior knot: `stop < n`, the mask offered it, and its gaze is finite.
+    Otherwise the run ends at its piece's last sample, which is its own
+    landing knot, and it is measured as before.
+  - **A briefer run is stored with `amplitude_deg` and
+    `peak_velocity_deg_s` both NULL.** Here NULL means "too brief to
+    measure", never zero.
+
+  At 498.55 Hz this blanks runs of 4 samples or fewer and measures runs of
+  5 or more. The requester's reason: an NSLR saccade under 10 ms is below
+  the 1° scope above, because a real saccade of 1° or more lasts well over
+  10 ms. Blanking it keeps main-sequence fits to measurable events.
+  Measuring to the landing sample stops the remaining sizes from reading
+  short.
+
+  *Where the two rules live* (the controller's ruling).
+  - The landing rule is structural: it is how NSLR's runs meet. It is
+    declared on NSLR's registry entry, `Detector.runs_end_before_landing`,
+    which is off for every other detector.
+  - The 10 ms floor is a tunable that changes stored values, so it is a
+    paramset field, `min_measured_saccade_ms` (§6), in the hash that
+    addresses those values.
+
+  `measure.py::measure_event_run` applies both, and `_insert_trace` reaches
+  them through `EyeDetection.make()`.
+
+  *Per-eye traces only.* The conjunction keeps `measure`. Its runs are
+  intersections of the two eyes' spans, not NSLR's own runs, and its
+  duration floor is out of scope (§8 item 4, §9). `_overlapping`'s floor
+  guarantees `stop > start` there, not a nonzero amplitude. So NSLR's
+  conjunction still stores one-sample saccade rows at 0.0°: 219 of 3,230 on
+  the reference recording (§8 item 4).
+
+  *Measured after the fix* (the final fix wave, 2026-09-27; the full
+  reference recording at the p99→15° scale):
+
+  | | left | right |
+  |---|---|---|
+  | NSLR saccade rows | 5,786 | 5,216 |
+  | stored unmeasured (under 10 ms) | 3,186 (55.1%) | 3,355 (64.3%) |
+  | measured to the landing sample | 2,355 | 1,640 |
+  | measured at the piece's own last knot | 245 | 221 |
+  | measured at exactly 0.0° | 7 | 3 |
+
+  Those 10 rows at exactly 0.0° are not lost landings. Each lasts 10 ms or
+  more, and the gaze at its end is exactly the gaze at its start: an
+  out-and-back on quantized data. On the same recording REMoDNaV stores 19
+  saccade rows at exactly 0.0° and Nyström–Holmqvist 5, under `measure` as
+  before.
+
+  Every other detector's stored rows are unchanged. On all six detection
+  fixtures, a full-precision dump of every stored run row, before and after,
+  differs only in NSLR's per-eye saccade rows.
 
 ### 4.1 Where it lives
 
@@ -367,6 +447,15 @@ is gated on `WLPP_NSLR_REFERENCE`, which CI sets, and it skips without it.
   §4's "not used below 1°": a detector that calls slow sub-degree movements
   fixation finds fewer, smaller saccades than one that does not.*
 
+  *Corrected 2026-09-27, after the final whole-branch review. The reading
+  above is true of the 120,000-sample slice it describes, and false over
+  the whole recording. Over all 1,177,799 samples NSLR stores more saccade
+  rows than either registered detector: 5,786 left and 5,216 right, against
+  REMoDNaV's 4,814 and 4,493 and Nyström–Holmqvist's 5,009 and 5,123. 55%
+  of NSLR's left-eye saccade rows and 64% of its right-eye rows are shorter
+  than 10 ms. Those are the rows §4's measurement rule now stores
+  unmeasured. The rule changes no label, so these counts stand.*
+
 ### 5.3 The paper's human coders (gated on `WLPP_ANDERSSON_DATA`)
 
 The paper's Table 1 is the target, **computed the paper's way**, which differs
@@ -428,6 +517,12 @@ check that fails it:
    - the stopping rule;
    - the guard (§6's `max_noise_passes`), with the pass count reported;
    - pooling across pieces.
+
+   *Added 2026-09-27, in the final fix wave. The pooling test now pins the
+   pooling itself: the returned noise must be exactly the standard deviation
+   of every piece's residuals concatenated, and must differ from each piece
+   fitted alone. A per-piece `fit_pieces` fails it. "Reported" now also
+   means a `RuntimeWarning` from `classify` (§6).*
 5. **Features:** the `log10` clip, the Fisher transform, zero-speed segments,
    and the reset at each piece's start.
 6. **The HMM:**
@@ -454,6 +549,7 @@ Scalar fields only, so a paramset stores and restores them without nesting.
 | `slow_phase_duration_ms` | 300.0 | `slow_nslr.py` 160 (0.3 s) |
 | `slow_phase_speed_deg_s` | 5.0 | `slow_nslr.py` 161 |
 | `max_noise_passes` | 50 | not in the reference — a guard (below) |
+| `min_measured_saccade_ms` | 10.0 | not in the reference — this pipeline's measurement rule (below; §4) |
 | `fixation_log_speed_mean`, `…_var`, `fixation_turn_mean`, `…_var` | the published values | `nslr_hmm.py` 39 |
 | `saccade_…` (the same four) | the published values | `nslr_hmm.py` 40 |
 | `pso_…` (the same four) | the published values | `nslr_hmm.py` 41 |
@@ -471,6 +567,16 @@ verbatim from `nslr_hmm.py` 39–42.
   and keeps the last pass, as REMoDNaV's iteration cap does. The reference has
   no cap, so hitting it is reported (§5.4 item 4). A detector that silently
   never terminated would stall the daemon.
+
+  *Added 2026-09-27, in the final fix wave (finding I1): "reported" is now a
+  `RuntimeWarning` from `classify`, naming the pass count. Until then
+  `classify` discarded `NoiseFit.capped`, and the only report was the unit
+  test reading it. The last pass is still kept.*
+- **`min_measured_saccade_ms` is this pipeline's, not the reference's.** The
+  detector never reads it. `_insert_trace` does: a per-eye saccade run
+  shorter than it is stored with no amplitude or peak velocity (§4, the
+  requester's decision of 2026-09-27). It is in the paramset because it
+  changes stored values, and the paramset hash is what addresses them.
 - **Nothing is tuned.** The emission parameters were fitted on human data.
   Re-estimating them for macaques would be a new paramset with its reason, and
   it is out of scope (§9).
@@ -558,16 +664,37 @@ verbatim from `nslr_hmm.py` 39–42.
    faster than the "about a minute per eye" prediction above.*
 3. **Pursuit on the current tasks** (§4): suspect until a task moves a target.
 4. **The one-sample conjunction floor**, now shared by three detectors.
+
+   *Measured 2026-09-27, in the final fix wave: on the reference recording,
+   219 of NSLR's 3,230 conjunction saccade rows are one sample long, and are
+   stored at 0.0° with a median peak velocity of 150 °/s. §4's measurement
+   rule covers per-eye rows only, so it does not reach them.*
 5. **Exact-float termination across platforms.** §1.4's stopping rule is exact,
    so a platform whose `log` differs by an ULP could take a different number of
    passes. Fidelity is proved on CI's platform and this machine's; the guard
    bounds the worst case.
+6. **The shared mask passes NaN as usable, for every detector.**
+   `validity.py` tests `abs(gaze) > half-width`, which is false for NaN, so
+   a NaN gaze sample is offered to every detector. `inf` is withheld. The
+   velocity estimate within two samples of a NaN is NaN too, and the speed
+   criterion passes it for the same reason. NSLR now withholds non-finite
+   gaze itself (§3). For every other detector nothing changed, because
+   changing the mask would change stored validity under an unchanged
+   paramset. The requester's to decide.
+
+   The reference recording has no non-finite gaze at a sample the mask
+   offers (measured in the final fix wave), so this is latent on the data
+   this lab has.
 
 ## 9. Out of scope
 
 - Bayesian microsaccade detection and U'n'Eye.
 - HMM re-estimation, and any tuning for macaque data.
 - Compiling the inner loop.
+
+  *Corrected 2026-09-27: the inner loop is compiled, with numba — the
+  requester's choice on 2026-09-27 (§4.1, §7, §8 item 2). This line predates
+  that choice and was not updated with it; true when written.*
 - The conjunction's duration floor.
 
 ## 10. References

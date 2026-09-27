@@ -1246,7 +1246,19 @@ def test_no_saccade_row_is_stored_at_zero_amplitude_with_a_nonzero_peak_velocity
     On the conjunction trace this is a property of the fixture, not a rule:
     every intersection here is long. A detector with a one-sample
     conjunction floor, NSLR among them, can still store a one-sample
-    conjunction saccade at 0.0 deg (`_insert_trace`'s docstring)."""
+    conjunction saccade at 0.0 deg (`_insert_trace`'s docstring).
+
+    **It is a property of this fixture on the per-eye traces too, not a
+    law of real data.** Measured on the full reference recording after the
+    fix (the NSLR final fix wave, 2026-09-27):
+    - NSLR still stores 10 measured rows at exactly 0.0 deg, 7 left and 3
+      right. Each lasts 10 ms or more, and the gaze at its end is exactly
+      the gaze at its start: an out-and-back on quantized data, whose
+      endpoint-to-endpoint amplitude really is zero. None is a lost landing.
+    - REMoDNaV stores 19 saccade rows at exactly 0.0 deg (left) and
+      Nystrom-Holmqvist 5 (4 left, 1 right), under `measure` exactly as
+      before.
+    - NSLR's conjunction stores 219 one-sample saccade rows at 0.0 deg."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
