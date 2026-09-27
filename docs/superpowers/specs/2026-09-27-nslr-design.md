@@ -236,6 +236,23 @@ row. The reference's classes map as:
   2026-09-26 that no current task moves a target. The paper names
   fixation-versus-pursuit as "the majority of total classification
   disagreement".
+- **Not used below 1°.** The requester decided this on 2026-09-27.
+
+  *What the shared fixture showed.* On `stepped_session`, NSLR finds the 2.5°
+  and 3.25° steps and calls the 0.75° step fixation.
+  - It does segment that step, exactly: 18 ms.
+  - The step's mean speed, about 42 °/s, is 2.5 standard deviations below the
+    published saccade class (log10 speed 2.33, standard deviation 0.28). It is
+    just as far above fixation.
+  - Fixation→PSO is forbidden, so the step cannot be PSO either.
+  - The authors' own code gives identical labels on the same traces.
+
+  *Why "below 1°".* The limit is speed, not amplitude, but small saccades are
+  slow in any primate. So in practice NSLR is not relied on for movements under
+  about 1°. This agrees with §1.4.
+
+  *What the shared test does.* The planted-step invariant holds NSLR to the
+  steps of 1° or more, and pins the miss.
 
 ### 4.1 Where it lives
 
@@ -471,10 +488,25 @@ verbatim from `nslr_hmm.py` 39–42.
 
 1. **Human priors on macaque data.** The split prior's 3° saccade, 0.3 s slow
    phase and 5 °/s slow-phase speed, and every HMM emission parameter, come
-   from human data. The paper itself names the fixation/pursuit overlap. The
-   reference offers re-estimation (Baum–Welch, and a robust Viterbi variant);
-   whether to run it on this lab's data is the obvious next question. It is
-   out of scope here.
+   from human data. The paper itself names the fixation/pursuit overlap.
+
+   **Unsupervised re-estimation is not the route.** The reference ships
+   Baum–Welch and a robust Viterbi variant. But the paper reports that such
+   re-estimation "tended to converge to rather bad solutions", and the
+   reference's own demo calls it "not recommended for real data analysis".
+
+   **The route that follows the authors is supervised.** Their parameters came
+   from segments labelled by human coders: each class's sample mean and
+   variance.
+   - Hand-label macaque recordings.
+   - Recompute the 16 emission values the same way.
+   - Register them as a second parameter set beside the published one.
+
+   The requester noted on 2026-09-27, when deciding §4's "not used below 1°", that NSLR
+   may need this. It needs labelled monkey data, and it is out of scope here.
+
+   *This item first said only that the reference offers re-estimation. It
+   omitted its authors' warnings against it.*
 2. **Runtime.** With the compiled loop, predicted at about a minute per eye
    for the 39-minute reference recording (§5.2 measures it).
 
