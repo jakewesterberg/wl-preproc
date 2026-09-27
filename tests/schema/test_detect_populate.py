@@ -1179,11 +1179,13 @@ def test_bmd_finds_every_planted_step_on_a_drifting_eye(drifting_stepped_session
 
 def test_bmd_microsaccades_are_measured_from_take_off(stepped_session):
     """The requester's decision of 2026-09-27 (design spec
-    `2026-09-27-bmd-design.md` section 3.5): a BMD microsaccade run
-    `[start, stop)` on an eye's own trace is measured over `[start - 1,
-    stop)` -- its take-off sample -- when that sample exists, was offered
-    and is finite. Its saccade rows are Engbert-Kliegl's and are measured as
-    `measure` measures them."""
+    `2026-09-27-bmd-design.md` section 3.5): BMD's own event `[start,
+    stop)` on an eye's own trace is measured over `[start - 1, stop)` -- its
+    take-off sample -- when that sample exists, was offered and is finite.
+    Its own events carry their mean P as reliability, whether stored as
+    `microsaccade` or, at the cut or above, as `saccade` (final review I1).
+    The saccades it copies from Engbert-Kliegl carry none and are measured
+    as `measure` measures them."""
     from wl_preproc.eye.detect.measure import measure
     from wl_preproc.schema import detect
 
@@ -1194,14 +1196,15 @@ def test_bmd_microsaccades_are_measured_from_take_off(stepped_session):
         where = {**session_key, "trace": trace, **_detector("bmd")}
         for run in (detect.EyeDetection.Run & where).to_dicts():
             start, stop = run["run_start"], run["run_stop"]
-            if run["label"] == "saccade":
+            if run["label"] not in ("saccade", "microsaccade"):
+                continue
+            if run["reliability"] is None:  # a saccade copied from Engbert-Kliegl
+                assert run["label"] == "saccade", (trace, start, stop)
                 expected = measure(gaze, v, start, stop, fs_hz)
-            elif run["label"] == "microsaccade":
+            else:  # BMD's own event, either side of the cut (final review I1)
                 takeoff = start >= 1 and offered[start - 1] is None and bool(np.isfinite(gaze[start - 1]).all())
                 expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz)
                 checked += 1
-            else:
-                continue
             assert run["amplitude_deg"] == expected.amplitude_deg, (trace, start, stop)
             assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (trace, start, stop)
     assert checked, "the fixture must give BMD at least one microsaccade to measure"
@@ -1586,8 +1589,8 @@ def test_every_other_detectors_measurements_are_unchanged(stepped_session):
             for run in (detect.EyeDetection.Run & where).to_dicts():
                 if run["label"] not in ("saccade", "microsaccade"):
                     continue
-                if name == "bmd" and trace != "conjunction" and run["label"] == "microsaccade":
-                    continue  # measured from take-off: `test_bmd_microsaccades_are_measured_from_take_off`
+                if name == "bmd" and trace != "conjunction" and run["reliability"] is not None:
+                    continue  # BMD's own events, measured from take-off: `test_bmd_microsaccades_are_measured_from_take_off`
                 if (name == "nslr" and (run["run_stop"] - run["run_start"]) / fs_hz
                         < _NSLR_MIN_MEASURED_SACCADE_MS / 1000.0):
                     assert run["amplitude_deg"] is None, (name, trace)
@@ -4292,3 +4295,24 @@ def test_the_shared_threshold_still_wins_over_a_detectors_own_field():
         )
     finally:
         del DETECTORS["tries_to_shadow"]
+
+
+def test_bmds_own_events_are_measured_from_take_off_and_its_copied_saccades_are_not():
+    """The requester's decisions of 2026-09-27 (BMD design spec section 3.5;
+    final review I1). BMD's own events carry their mean P as reliability,
+    whether stored as `microsaccade` or, at the amplitude cut or above, as
+    `saccade`; each is measured from its take-off sample on an eye's own
+    trace. The saccades it copies from Engbert-Kliegl carry no reliability
+    and are measured as `measure` measures them. No other detector, and no
+    conjunction, uses the rule."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _measured_from_takeoff
+
+    bmd, ek = get_detector("bmd"), get_detector("engbert_kliegl")
+    assert _measured_from_takeoff(bmd, "left", Label.MICROSACCADE, 0.8)
+    assert _measured_from_takeoff(bmd, "right", Label.SACCADE, 0.9)
+    assert not _measured_from_takeoff(bmd, "left", Label.SACCADE, None)
+    assert not _measured_from_takeoff(bmd, "conjunction", Label.MICROSACCADE, None)
+    assert not _measured_from_takeoff(bmd, "conjunction", Label.SACCADE, 0.9)
+    assert not _measured_from_takeoff(ek, "left", Label.MICROSACCADE, None)

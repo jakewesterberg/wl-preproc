@@ -171,3 +171,30 @@ def test_the_papers_simulated_data_claim_holds(capsys):
             print(f"\n  sigma_x {sigmax}: hit/false-alarm BMD {hit_bmd:.3f}/{found_bmd[state == 0].mean():.4f}, "
                   f"EK {hit_ek:.3f}/{found_ek[state == 0].mean():.4f}")
         assert hit_bmd > hit_ek
+
+
+@pytest.mark.parametrize("eye", ["left", "right"])
+def test_bmds_own_events_on_the_recording_are_split_at_the_cut(recording, eye, capsys):
+    """The requester's decision of 2026-09-27 (final review I1). Before it,
+    about 1 in 10 of BMD's `microsaccade` runs over the first 120,000
+    samples were 1 deg or more, up to 7.7 deg: movements the Engbert-Kliegl
+    gate missed. Each of BMD's own events is now `microsaccade` below
+    `microsaccade_max_deg` and `saccade` at or above it, by the amplitude
+    stored for it, measured from its take-off sample."""
+    from wl_preproc.eye.detect.measure import measure_event_run
+
+    rec, eyes = recording
+    gaze, v, mask = (a[:COMPARISON_SAMPLES] for a in eyes[eye])
+    runs = bmd.detect_bmd(gaze, v, mask, rec.fs_hz, bmd.DEFAULT_BMD_PARAMS)
+    cut = bmd.DEFAULT_BMD_PARAMS.microsaccade_max_deg
+    sizes = {Label.MICROSACCADE: [], Label.SACCADE: []}
+    for r in runs:
+        if r.reliability is not None:
+            sizes[r.label].append(measure_event_run(
+                gaze, v, mask, r.start, r.stop, rec.fs_hz, runs_end_before_landing=False,
+                min_measured_ms=None, runs_start_after_takeoff=True).amplitude_deg)
+    with capsys.disabled():
+        print(f"\n  {eye}: BMD's own events over {COMPARISON_SAMPLES} samples: "
+              f"{len(sizes[Label.MICROSACCADE])} microsaccades, {len(sizes[Label.SACCADE])} saccades")
+    assert sizes[Label.MICROSACCADE] and max(sizes[Label.MICROSACCADE]) < cut
+    assert all(a >= cut for a in sizes[Label.SACCADE])

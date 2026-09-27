@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -35,7 +36,7 @@ from wl_preproc.eye.detect import bmd_rng
 from wl_preproc.eye.detect.bmd_table import LogATable, compute_table, lookup
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
-from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
+from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, classify, measure_event_run
 
 LN2PI = 1.83787706641  # `bmd.cpp` 13, the reference's own rounded constant
 LN2 = 0.69314718056  # `bmd.cpp` 14
@@ -781,6 +782,20 @@ def to_origin(piece: np.ndarray) -> np.ndarray:
     return piece - (piece[0] - ORIGIN_EPSILON_DEG)
 
 
+def _by_size(run: Run, gaze: np.ndarray, velocity_deg_s: np.ndarray, available: np.ndarray, fs_hz: float,
+             microsaccade_max_deg: float) -> Run:
+    """The requester's decision of 2026-09-27 (final review I1): BMD's own
+    event is split by size, as every other detector's is. Its amplitude is
+    the one stored for it, measured from its take-off sample (spec 3.5), and
+    `classify` names it `saccade` at or above `microsaccade_max_deg`. It
+    keeps its mean P as reliability, which is what marks it as BMD's own
+    rather than a copied Engbert-Kliegl saccade (`_insert_trace`)."""
+    amplitude = measure_event_run(gaze, velocity_deg_s, available, run.start, run.stop, fs_hz,
+                                  runs_end_before_landing=False, min_measured_ms=None,
+                                  runs_start_after_takeoff=True).amplitude_deg
+    return dataclasses.replace(run, label=classify(amplitude, microsaccade_max_deg))
+
+
 def _labelled(probability: np.ndarray, offset: int, threshold: float) -> list[Run]:
     """P >= threshold is `microsaccade`, carrying its mean P; the rest `drift`."""
     fast = probability >= threshold
@@ -809,7 +824,11 @@ def detect_bmd(
     3. Stretches are pooled into blocks of about `block_s`; each block is
        rescaled to isotropic noise, each stretch shifted to the origin, and
        run with block b's seed, `seed + b`.
-    4. P(microsaccade) >= `threshold` is `microsaccade`, the rest `drift`.
+    4. P(microsaccade) >= `threshold` is BMD's own event, the rest `drift`.
+       An event is `saccade` when its amplitude, measured from its take-off
+       sample, reaches `microsaccade_max_deg`, and `microsaccade` below it
+       (`_by_size`; the requester's decision of 2026-09-27). BMD's own events
+       carry their mean P as reliability; the copied saccades carry none.
 
     Runs are half-open and sorted."""
     gaze = np.asarray(gaze_deg, dtype=float)
@@ -844,5 +863,8 @@ def detect_bmd(
             iterations=params.iterations,
         )
         for (a, _e), probability in zip(group, result.probability):
-            runs.extend(_labelled(probability, a, params.threshold))
+            for run in _labelled(probability, a, params.threshold):
+                if run.label is Label.MICROSACCADE:
+                    run = _by_size(run, gaze, velocity_deg_s, available, fs_hz, params.microsaccade_max_deg)
+                runs.append(run)
     return sorted(runs, key=lambda r: r.start)

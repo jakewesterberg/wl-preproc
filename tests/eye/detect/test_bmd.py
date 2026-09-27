@@ -338,3 +338,37 @@ def test_simulated_microsaccades_are_recovered():
         if r.label in (Label.MICROSACCADE, Label.SACCADE):
             found[r.start:r.stop] = True
     assert found[state == 1].mean() > 0.5
+
+
+def test_a_bmd_event_of_the_cut_or_more_is_a_saccade(monkeypatch):
+    """The requester's decision of 2026-09-27 (final review I1): BMD's own
+    events are split by size, as every other detector's are. One whose
+    amplitude, measured from its take-off sample as it is stored (spec 3.5),
+    reaches `microsaccade_max_deg` is `saccade`; below it, `microsaccade`.
+    Either keeps its mean P as reliability. The gate and the sampler are
+    replaced, so only the split is under test. The third event reaches the
+    cut only when its take-off step is counted."""
+    n = 1000
+    x = np.zeros((n, 2))
+    x[200:206, 0] += np.linspace(0.1, 0.5, 6)
+    x[206:, 0] += 0.5
+    x[600:606, 0] += np.linspace(0.25, 1.5, 6)
+    x[606:, 0] += 1.5
+    x[800:806, 0] += np.linspace(0.6, 1.1, 6)
+    x[806:, 0] += 1.1
+    events = [(200, 206), (600, 606), (800, 806)]
+
+    def fake_block(stretches, **_):
+        p = np.zeros(len(stretches[0]))
+        for a, b in events:
+            p[a:b] = 1.0
+        return bmd.BlockResult(probability=[p], record=None)
+
+    monkeypatch.setattr(bmd, "detect_engbert_kliegl", lambda *a, **k: [])
+    monkeypatch.setattr(bmd, "run_block", fake_block)
+    runs = bmd.detect_bmd(x, velocity(x, FS), _open(n), FS, LIGHT)
+
+    events_found = [(r.start, r.stop, r.label, r.reliability) for r in runs if r.label is not Label.DRIFT]
+    assert events_found == [(200, 206, Label.MICROSACCADE, 1.0), (600, 606, Label.SACCADE, 1.0),
+                            (800, 806, Label.SACCADE, 1.0)]
+    assert np.hypot(*(x[805] - x[800])) < 1.0 <= np.hypot(*(x[805] - x[799]))
