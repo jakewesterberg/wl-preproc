@@ -871,7 +871,10 @@ EK↔U'n'Eye row needs, and the reason vocabulary is already in the key.
 > saccades as its own. So an Engbert–Kliegl `saccade` is now in BMD's
 > declaration, and the EK↔BMD row is no longer a microsaccade-scale score
 > alone. Its agreement on `saccade` is total by construction and says
-> nothing; its agreement on `microsaccade` is genuine. The same change means
+> nothing; its agreement on `microsaccade` is genuine. So the requester chose
+> the same day to leave the copied saccades out of that pair: every sample
+> Engbert–Kliegl stored as `saccade` is excluded from EK↔BMD agreement (BMD
+> spec §4, amended). The same change means
 > BMD and U'n'Eye now share `saccade`, so that pair no longer illustrates
 > the disjoint-declarations gap below. The gap in the rule stands for any
 > pair that is disjoint.*
@@ -1442,8 +1445,8 @@ else supplies.
    plan must measure total runtime before this is a nightly stage rather than
    an on-demand one.
 
-   *Amended 2026-09-27: BMD took 261–266 s (left) and 280–363 s (right)
-   per eye on the 39-minute reference recording, over two runs: 13 to 18
+   *Amended 2026-09-27: BMD took 261–308 s (left) and 280–363 s (right)
+   per eye on the 39-minute reference recording, over three runs: 13 to 18
    minutes per eye for a two-hour session (spec `2026-09-27-bmd-design.md`
    §5.4).*
 7. **Fine-tuning U'n'Eye** on hand-labelled lab data is post-January, per

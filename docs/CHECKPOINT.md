@@ -280,11 +280,12 @@ requester chose to merge the same day; true when written.*
 >        pooled per 1-minute block;
 >      - its microsaccades are measured from their take-off sample, on each
 >        eye's own trace.
->    - **The reference recording** (p99→15° scale): 261–266 s left /
->      280–363 s right for the whole recording, over two runs; 13 to 18
+>    - **The reference recording** (p99→15° scale): 261–308 s left /
+>      280–363 s right for the whole recording, over three runs; 13 to 18
 >      minutes per eye for a two-hour session. Over the first 120,000
->      samples, 1.35 / 1.43 microsaccades per second, and microsaccade kappa
->      against Engbert–Kliegl 0.569 on both eyes; identical in both runs.
+>      samples, after the size split below: 1.24 / 1.25 microsaccades per
+>      second, and microsaccade kappa against Engbert–Kliegl 0.522 / 0.512.
+>      Before it, 1.35 / 1.43 and 0.569 on both eyes.
 >    - **The paper's claim** on its own simulated data holds: at measurement
 >      noise 0.06, BMD's hit rate is 0.979 against Engbert–Kliegl's 0.103.
 >    - **A drifting synthetic eye, for BMD only (the requester's choice).**
@@ -297,6 +298,21 @@ requester chose to merge the same day; true when written.*
 >      about 40 microsaccades on one eye; on pure synthetic drift, none. Its
 >      rate on the real recording is within its band. So the five existing
 >      detectors keep the still sessions.
+>    - **The final whole-branch review, and the requester's three decisions
+>      (2026-09-27).**
+>      - *Fixed:* a perfectly still trace raised an error at the production
+>        settings (the motor noise reached exactly 0, and the port took
+>        Python's `log` where the reference takes C's). Spec §5.2's pooled
+>        grid-search check was missing; it is now held to a direct
+>        computation. Comments in `schema/detect.py` still called BMD
+>        unwritten.
+>      - *BMD's own events are split by size:* about 1 in 10 of its
+>        "microsaccades" on the recording were 1° or more, up to 7.7°. They
+>        are now stored as saccades, as every other detector would.
+>      - *The Engbert–Kliegl↔BMD agreement leaves out the saccades BMD
+>        copies from Engbert–Kliegl*, which the two agree on by construction.
+>      - *BMD runs on every session*, as registered; to be revisited once the
+>        compute machine exists.
 >
 >    `docs/handoffs/2026-09-27-bmd-built.md` has the account, every ruling
 >    and what is still deferred.

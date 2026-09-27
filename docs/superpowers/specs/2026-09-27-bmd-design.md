@@ -400,6 +400,23 @@ fit put σ0 at 0.25 °/sample, a drift speed of over 100 °/s.
   the rest are `drift`.
 - **Reliability.** A microsaccade run carries the mean of P over the run as its
   `reliability`. Drift and saccade runs carry none.
+
+**Amended 2026-09-27, after the final whole-branch review (its I1): BMD's own
+events are split by size.** On the reference recording about 1 in 10 of BMD's
+`microsaccade` runs were 1° or more, up to 7.7°: movements the EK gate missed.
+Every other detector splits `saccade` from `microsaccade` by size.
+**The requester chose to store them as saccades:**
+- a P ≥ 0.5 run is BMD's own event;
+- it is `saccade` when its amplitude, measured from its take-off sample as it
+  is stored (§3.5), reaches `microsaccade_max_deg` (1.0°), and `microsaccade`
+  below it;
+- every own event, either side of the cut, carries its mean P as
+  `reliability`. The saccades copied from EK carry none, and that is what tells
+  the two apart in storage.
+
+Measured over the first 120,000 samples: left eye 295 microsaccades and 30 own
+saccades, where there had been 325 microsaccades; right eye 302 and 43, where
+there had been 345.
 - **Seeds.** The run seed is a paramset field, so a given paramset on a given
   recording always gives the same labels.
 
@@ -416,6 +433,9 @@ and every run misses its take-off step. This is NSLR's defect at the other end
 - with it, per-eye microsaccade rows are measured over [start−1, stop) when
   sample start−1 is in the same stretch;
 - BMD's saccade rows are EK's and are measured as EK's;
+  *amended 2026-09-27 (§3.4's size split): BMD's own saccades are measured from
+  take-off too; only the copied EK saccades are measured as EK's
+  (`schema/detect.py::_measured_from_takeoff`);*
 - the conjunction keeps the shared measurement, since a conjunction span does
   not start on a BMD change point (NSLR spec §4's reasoning for its landing
   rule).
@@ -438,6 +458,15 @@ and every run misses its take-off step. This is NSLR's defect at the other end
   spec §8 item 4).
 - **Consensus.** EK↔BMD agreement on `saccade` is total by construction, and
   on `microsaccade` it is genuine. The rows record this.
+
+  *Amended 2026-09-27, after the final whole-branch review (its I4): nothing
+  in the stored rows or the report said so. **The requester chose to leave the
+  copied saccades out.** A `Detector` now declares whose saccades it copies
+  (`copies_saccades_from`, BMD: `engbert_kliegl`), and `DetectorAgreement`
+  leaves out of that pair every sample the source stored as `saccade`, on
+  every trace. The pair is scored on what BMD finds itself. A test pins BMD's
+  gate at EK's registered defaults, the condition that makes the exclusion
+  exact.*
 - **Provisional.** BMD's rows stay marked provisional until a calibrated
   session exists (parent §3.2). The fidelity check proves the reimplementation
   is right; it cannot prove the model fits monkey data.
@@ -597,6 +626,11 @@ right on the same machine, with identical rates and κ. Runtime varies from
 run to run: 13 to 18 minutes per eye for a two-hour session across the two
 runs. The rates and κ are exact, so only time moved.*
 
+*Re-measured again after §3.4's size split (the requester, 2026-09-27): 308 s
+and 327 s; 1.24 and 1.25 microsaccades per second; microsaccade κ against EK
+0.522 and 0.512. The rates and κ fell because BMD's own events of 1° or more
+are now saccades, and so no longer count as microsaccades.*
+
 ### 5.5 The paper's simulated-data claims (recorded)
 
 On simulated data at the paper's parameters (σ0 = 0.3 °/s, d1 = 4.4, σ1 = 30
@@ -684,6 +718,10 @@ settings.
    - **The decision.** Whether BMD runs nightly or only on demand is the
      requester's, once this implementation's runtime is measured.
 
+   *Decided 2026-09-27, after the final whole-branch review (its I3): BMD runs
+   on every session, as registered, to be revisited once the compute machine
+   exists.*
+
    *Measured 2026-09-27, with the grid search in parallel: 261 s and 280 s per
    eye on the 39-minute reference recording (§5.4). That is about 14 minutes
    per eye for a two-hour session. A second run the same day took 266 s and
@@ -712,6 +750,11 @@ settings.
 9. **Small steps can still split on a drifting eye.** Drift reduces BMD's
    splitting of a small step; it does not remove it. On one drifting seed the
    0.75° step came back as three detections.
+10. **BMD's copied saccades in its other pairs.** Only the EK↔BMD pair leaves
+    them out (§4, amended). Against Otero-Millan, Nyström–Holmqvist, REMoDNaV
+    or NSLR, BMD's copied saccades still count, so those pairs' saccade
+    agreement is really EK's against that detector. Whether to leave them out
+    there too is the requester's.
 
 ## 9. Out of scope
 

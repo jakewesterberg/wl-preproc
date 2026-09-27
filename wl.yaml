@@ -109,8 +109,14 @@ status:
     removed first and stored as BMD's `saccade`; BMD analyses the fixation
     stretches between them with settings pooled per 1-minute block, and its
     microsaccades are measured from their take-off sample -- the requester's
-    decisions of 2026-09-27. The full reference recording took 261-266 s
-    (left) / 280-363 s (right) per eye over two runs.
+    decisions of 2026-09-27. The full reference recording took 261-308 s
+    (left) / 280-363 s (right) per eye over three runs. After the final
+    whole-branch review, three more decisions of the requester's that day:
+    BMD's own events of 1 degree or more are stored as saccades, as every
+    other detector splits them; the Engbert-Kliegl/BMD agreement leaves out
+    the saccades BMD copies from Engbert-Kliegl; and BMD runs on every
+    session. Its fix pass also made a perfectly still trace take C's log of a
+    zero noise instead of raising.
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
