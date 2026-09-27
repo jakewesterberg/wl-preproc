@@ -36,6 +36,7 @@ from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
 )
 from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS, detect_otero_millan
+from wl_preproc.eye.detect.remodnav import DEFAULT_REMODNAV_PARAMS, detect_remodnav
 
 
 class DetectorNotRegistered(KeyError):
@@ -181,6 +182,20 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION}),
         run=detect_nystrom_holmqvist,
         defaults=DEFAULT_NH_PARAMS,
+    ),
+    # **The first registered detector to declare `pursuit`** (design spec
+    # `2026-09-26-remodnav-design.md` section 4). `KIND_OF` gives `pursuit`
+    # its own kind, so a stretch both eyes call pursuit survives into the
+    # conjunction. Its saccadic slice is `{saccade}`, as Nystrom-Holmqvist's
+    # is, so `_conjunction_label` takes the degenerate branch. Durations are
+    # in milliseconds, so `_min_duration_samples` gives this conjunction the
+    # same one-sample floor it gives Nystrom-Holmqvist's -- recorded in the
+    # spec, deliberately not changed here.
+    "remodnav": Detector(
+        name="remodnav",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
+        run=detect_remodnav,
+        defaults=DEFAULT_REMODNAV_PARAMS,
     ),
 }
 

@@ -877,7 +877,7 @@ def test_neither_registered_detector_can_produce_a_merged_run():
     is what this asserts instead of pretending otherwise. A merge needs two
     adjacent intervals carrying the same label with no sample between them, and
     both detectors guarantee a gap: `otero_millan._merge` coalesces touching
-    spans before returning, and `engbert_kliegl._true_runs` returns maximal
+    spans before returning, and `labels.true_runs` returns maximal
     True runs, which are separated by at least one False sample by
     construction. The previous version of this test built a literal dict and
     asserted a miss on it -- it exercised `dict.get`, not `_insert_trace`, while

@@ -209,3 +209,17 @@ def labels_from_runs(runs: list[Run], n_samples: int) -> np.ndarray:
     if cursor != n_samples:
         raise TilingError(f"runs end at {cursor}, which does not reach {n_samples}")
     return out
+
+
+def true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Maximal `True` stretches of a boolean array, as half-open `(start,
+    stop)` pairs.
+
+    Moved here from `engbert_kliegl.py` and `nystrom_holmqvist.py`, which
+    each carried a private copy -- the second saying it was "duplicated
+    rather than shared because that one is private to its module and this
+    detector's is the second use, not yet a third". REMoDNaV is the third
+    (design spec `2026-09-26-remodnav-design.md`)."""
+    padded = np.concatenate(([False], mask, [False]))
+    edges = np.diff(padded.astype(np.int8))
+    return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))

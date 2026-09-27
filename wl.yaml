@@ -65,6 +65,17 @@ status:
     left behind by that correction, which is the fifth instance of this
     repository's recurring lesson that a status sentence is only true of the
     commit it names.*
+
+    REMoDNaV is BUILT on `spec/remodnav` (2026-09-26, NOT merged as written).
+    It is the fourth registered detector, and the first real producer of
+    `pursuit`, stored binocularly through `daemon.run_once()`. Design spec
+    `2026-09-26-remodnav-design.md`; handoff
+    `docs/handoffs/2026-09-26-remodnav-built.md`. Given remodnav 1.1.2's own
+    signals, it labels every sample as that package does in five synthetic
+    cases. End to end on the reference recording's leading 120,000 samples,
+    its saccade kappa against the oracle is 0.764 (left) and 0.724 (right).
+    Against the paper's human coders, the harness first reproduces Table 3,
+    and ours is at or above the oracle on every saccade cell.
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -93,11 +104,13 @@ status:
     in this line: a STREAMING archive writer, BUILT 2026-09-26 --
     `store.write_store` reads each file through one reused chunk-sized
     buffer and writes one chunk at a time, so a ~166 GB AP file no longer
-    has to fit in memory; (2) the
-    three remaining
-    hardware-free detectors, NSLR, REMoDNaV (the detector, not the PyPI test
-    oracle) and Bayesian microsaccade detection, which matter here as SACCADE
-    detectors because the requester has said glissades are peripheral;
+    has to fit in memory; (2) the two remaining hardware-free detectors,
+    NSLR and Bayesian microsaccade detection, which matter here as SACCADE
+    detectors because the requester has said glissades are peripheral.
+    REMoDNaV, the third that item named, is BUILT on `spec/remodnav`
+    (2026-09-26, NOT merged as written; see `phase`). Two millisecond-based
+    detectors now inherit the conjunction's one-sample duration floor, which
+    is a cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
     `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
     (4) measuring which of the 225/337 unmatched saccades are real.
@@ -197,16 +210,17 @@ status:
     (`test_the_run_count_measured_against_the_reference_recording`) is
     env-gated and skipped by default.
 
-    NSLR, REMoDNaV and Bayesian microsaccade detection are still simply
-    unwritten, same as U'n'Eye, whose own obstacles remain `torch`,
-    vendoring and a GPU instead. `registry.py::DETECTORS` registers
-    THREE today -- Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist,
-    corrected from the "only Engbert-Kliegl and Otero-Millan" this
-    field said before. Five of the seven detectors specified in design
-    spec §3.1 take the degenerate saccadic-slice branch and never reach
-    `classify` -- only Engbert-Kliegl and Otero-Millan declare both
-    sides of the amplitude cut; Nystrom-Holmqvist is now one of the five
-    degenerate ones for real, not hypothetically.
+    NSLR and Bayesian microsaccade detection are still simply unwritten,
+    same as U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
+    instead. `registry.py::DETECTORS` registers FOUR on `spec/remodnav`:
+    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist and REMoDNaV. Five of
+    the seven detectors specified in design spec §3.1 take the degenerate
+    saccadic-slice branch and never reach `classify` -- only Engbert-Kliegl
+    and Otero-Millan declare both sides of the amplitude cut.
+    Nystrom-Holmqvist and REMoDNaV are two of the five degenerate ones for
+    real, not hypothetically, and `pursuit` is now a PRODUCED label, by
+    REMoDNaV. *This paragraph named REMoDNaV as unwritten and said THREE
+    were registered until 2026-09-26; true when written.*
 
     Two corrections to what this field said before Nystrom-Holmqvist
     existed (docs/handoffs/2026-09-05-nystrom-holmqvist-built.md has the
@@ -357,6 +371,17 @@ third_party:
       direct grep of both files shows it was not. wlo stack reads
       third_party alone, so a workstation built from this file was missing
       software nearly every module in this package uses.
+  - name: scipy
+    constraint: ">=1.17"
+    why: >-
+      eye/detect/remodnav.py calls scipy.ndimage.median_filter,
+      scipy.signal.butter and scipy.signal.filtfilt(method='gust') -- the
+      functions REMoDNaV's own implementation calls for its candidate speed
+      and its 4 Hz pursuit low-pass (design spec
+      2026-09-26-remodnav-design.md section 7). Reimplementing Gustafsson's
+      initial conditions would be one more reimplementation to validate.
+      The floor is 1.17 because 1.17.1 is the oldest release the fidelity
+      check (spec section 5.1) has run against; nothing older is tested.
   - name: datajoint
     constraint: ">=2.3,<3"
     why: >-
@@ -403,7 +428,7 @@ third_party:
       The format oracle for the synthetic generator: the test that matters is
       whether the reader the pipeline will actually use can open what we wrote.
   - name: remodnav
-    constraint: ">=1.1"
+    constraint: "==1.1.2"
     why: >-
       The test-time ORACLE tests/eye/detect/test_nystrom_holmqvist_
       validation.py::test_remodnav_finds_a_comparable_number_of_saccades
@@ -412,13 +437,50 @@ third_party:
       and on PyPI, unlike Otero-Millan's and BMD's own MATLAB references,
       which carry no licence and cannot fill this role -- pyproject.toml's
       dev extra only, same bucket as spikeinterface above, never a runtime
-      dependency and never shipped. >=1.1 floors at the first 1.x release,
-      confirmed against PyPI's own release metadata (0.1, 0.2, 0.3, 0.4,
-      1.0, 1.1, 1.1.1, 1.1.2 as of 2026-09-06) rather than assumed; no
-      ceiling, since the test tolerates disagreement by design (it checks a
-      comparable saccade count, not exact agreement) and pins against only
-      the classifier's constructor, preproc() and __call__(), all present
-      since at least 1.1.
+      dependency and never shipped. PyPI's own release metadata listed 0.1,
+      0.2, 0.3, 0.4, 1.0, 1.1, 1.1.1 and 1.1.2 on 2026-09-06.
+
+      Since 2026-09-26 it is also REMoDNaV's own oracle, in three test
+      modules (design spec 2026-09-26-remodnav-design.md section 5):
+      - tests/eye/detect/test_remodnav_fidelity.py requires this package's
+        REMoDNaV to label every sample exactly as remodnav does, given
+        remodnav's own preprocessed signals;
+      - tests/eye/detect/test_remodnav_validation.py compares the two end
+        to end, on the reference recording and against the Andersson et
+        al. (2017) human coders;
+      - tests/eye/detect/test_remodnav.py also calls EyegazeClassifier's
+        private _detect_saccades and _fix_or_pursuit, its
+        get_adaptive_saccade_velocity_velthresh, and the module-level
+        find_peaks, find_movement_onsetidx and find_movement_offsetidx.
+
+      All of it was written against the installed 1.1.2.
+
+      Pinned ==1.1.2 because three things depend on that exact release:
+      - the tests call its private _detect_saccades and _fix_or_pursuit and
+        require exact equality with them;
+      - test_remodnav_validation.py's EXPECTED_ORACLE_FAILURES depends on
+        1.1.2's preproc crashing on exactly one diagnosed file, with that
+        exact message;
+      - the reproduction of the paper's Table 3 is certified for 1.1.2
+        only.
+      Every clf.py line cited in eye/detect/remodnav.py and its tests is a
+      1.1.2 line as well. CI resolves the dev extra fresh, so under a range
+      a new upstream release would turn an unrelated PR red rather than
+      surface here. Changing the oracle's version is therefore a deliberate
+      re-validation, not a dependency bump: rerun the fidelity check and
+      both gated validations, and re-read every clf.py citation.
+
+      The pin does not protect against numpy removing np.core. clf.py:915
+      calls np.core.records.fromarrays, which numpy already deprecates, so
+      a numpy release that removes it breaks the oracle even under this pin.
+
+      *Until 2026-09-27 the constraint was >=1.1 with no ceiling, and this
+      said whether to pin 1.1.2 was an open decision; true when written.*
+
+      *Until 2026-09-26 this said no ceiling was needed because the one
+      test using remodnav tolerates disagreement and calls only the
+      classifier's constructor, preproc() and __call__(); true when
+      written.*
   - name: zarr
     constraint: ">=2,<3"
     why: >-

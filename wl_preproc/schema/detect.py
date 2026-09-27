@@ -638,15 +638,22 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        Two of the three registered detectors make that second measurement
-        redundant on their own: `engbert_kliegl.py::_true_runs` only ever
+        Three of the four registered detectors make that second measurement
+        redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
         neither claims, and `runs_from_labels` can therefore never merge two
-        of THEIR call's own intervals into one run.
+        of THEIR call's own intervals into one run. REMoDNaV's saccade and
+        the `pso` after it are adjacent, as Nystrom-Holmqvist's are, but its
+        proximity rule means it never emits two adjacent runs with the same
+        label, so `runs_from_labels` never merges two of its intervals
+        either.
 
-        **The third does not, and this is no longer a hypothetical about
-        some future detector -- it is true of Nystrom-Holmqvist today.**
+        *Until 2026-09-27 this said "Two of the three registered detectors"
+        and did not mention REMoDNaV; true when written.*
+
+        **The remaining one does not, and this is no longer a hypothetical
+        about some future detector -- it is true of Nystrom-Holmqvist today.**
         `nystrom_holmqvist.py::_glissade_bounds` returns `(saccade_offset,
         stop)` for its glissade, so a saccade and the `pso` that follows it
         are ADJACENT with no gap between them; and two SACCADE candidates
@@ -655,7 +662,7 @@ class EyeDetection(dj.Computed):
         (`run.start < offset and onset < run.stop`, both strict), so both
         survive as separate, touching runs carrying the SAME label. Nothing
         in `registry.py::DetectFn`'s own contract requires ANY detector --
-        registered or still unwritten (NSLR, REMoDNaV, BMD, U'n'Eye) -- to
+        registered or still unwritten (NSLR, BMD, U'n'Eye) -- to
         leave such a gap, and if two adjacent intervals ever DO carry the
         same label, `runs_from_labels` merges them into one run whose real
         `[start, stop)` matches neither original interval. Measuring the
@@ -663,6 +670,9 @@ class EyeDetection(dj.Computed):
         the stored measurement correct regardless of whether that gap holds
         -- for Nystrom-Holmqvist, that is not insurance against a future
         case, it is load-bearing today.
+
+        *Until 2026-09-27 this said "The third does not" and listed REMoDNaV
+        as still unwritten; true when written.*
 
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
@@ -763,7 +773,7 @@ def _overlapping(
     first leaves every returned span separated from the next by at least one
     sample, so `runs_from_labels` cannot merge any of them and the span
     labelled here is exactly the run measured there. Today's one detector
-    already supplies that separation (`engbert_kliegl.py::_true_runs`
+    already supplies that separation (`labels.py::true_runs`
     returns maximal runs, and intersecting two separated families keeps them
     separated), but `registry.py::DetectFn`'s contract does not require it,
     and agreement between a stored label and a stored amplitude must not
@@ -889,12 +899,15 @@ def _conjunction_runs(
     traces.** `_overlapping` intersects on time alone and never reads a
     label, which is correct only while every emitted label is the same kind
     of thing -- true of Engbert-Kliegl and Otero-Millan, and false for
-    Nystrom-Holmqvist (registered 2026-09-06) and for the three detectors
-    still BLOCKED (unwritten): NSLR, REMoDNaV and BMD. Nystrom-Holmqvist,
-    NSLR and REMoDNaV all emit `pso` and `fixation` alongside `saccade`; BMD
-    emits `drift` instead of `pso`. `fixation` TILES the recording, so an
-    ungrouped intersection would have crossed a left fixation with a right
-    saccade and kept it.
+    Nystrom-Holmqvist (registered 2026-09-06), for REMoDNaV (registered
+    2026-09-26) and for the two detectors still BLOCKED (unwritten): NSLR
+    and BMD. Nystrom-Holmqvist, NSLR and REMoDNaV all emit `pso` and
+    `fixation` alongside `saccade`; BMD emits `drift` instead of `pso`.
+    `fixation` TILES the recording, so an ungrouped intersection would have
+    crossed a left fixation with a right saccade and kept it.
+
+    *Until 2026-09-27 this listed REMoDNaV among three detectors still
+    BLOCKED (unwritten); true when written.*
 
     **Grouping first also makes the loop cheaper -- though no longer for
     every registered detector.** `_overlapping` is `O(|left| x |right|)`;
@@ -1068,10 +1081,14 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     by neither eye's opinion nor by `classify` (`labels.py::KIND_OF`), and
     `fixation` is not intersected at all, being the synthesized background
     rather than a detector's finding (`labels.py::NOT_INTERSECTED`). None of
-    the four blocked detectors needs THIS function to say anything about `pso`, `pursuit`,
-    `drift` or `fixation` any more -- only about the SACCADIC SLICE of its
-    vocabulary, which is what `_AMPLITUDE_DERIVED_VOCABULARY`'s own comment
-    and the code below this docstring now compute.
+    the four detectors it blocked needs THIS function to say anything about
+    `pso`, `pursuit`, `drift` or `fixation` any more -- only about the
+    SACCADIC SLICE of its vocabulary, which is what
+    `_AMPLITUDE_DERIVED_VOCABULARY`'s own comment and the code below this
+    docstring now compute.
+
+    *Until 2026-09-27 this said "the four blocked detectors"; true when
+    written, before Nystrom-Holmqvist and REMoDNaV were registered.*
 
     **A vocabulary whose saccadic slice is EMPTY -- no `saccade`, no
     `microsaccade` at all -- still cannot answer the amplitude question, but

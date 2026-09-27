@@ -175,3 +175,15 @@ def test_nystrom_holmqvist_is_registered_with_its_vocabulary_and_defaults():
         {Label.SACCADE, Label.PSO, Label.FIXATION}
     )
     assert isinstance(detector.defaults, NystromHolmqvistParams)
+
+
+def test_remodnav_is_registered_with_its_vocabulary_and_defaults():
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.eye.detect.remodnav import DEFAULT_REMODNAV_PARAMS, RemodnavParams
+
+    detector = get_detector("remodnav")
+
+    assert detector.vocabulary == frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT})
+    assert isinstance(detector.defaults, RemodnavParams)
+    assert detector.defaults == DEFAULT_REMODNAV_PARAMS

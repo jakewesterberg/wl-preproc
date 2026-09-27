@@ -92,10 +92,55 @@ requester chose to merge the same day; true when written.*
 >    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
 >    storing either as a typed array is the change if a real one costs real
 >    space.
-> 2. **NSLR, REMoDNaV (the detector, not the PyPI oracle), and Bayesian
->    microsaccade detection.** Real code, hardware-free, and they matter as
->    SACCADE detectors — see the priority note below about glissades. U'n'Eye
->    is the fourth and wants the GPU, so it stays blocked.
+> 2. **NSLR and Bayesian microsaccade detection.** Real code, hardware-free,
+>    and they matter as SACCADE detectors — see the priority note below about
+>    glissades. U'n'Eye is the third unwritten detector; it wants the GPU, so
+>    it stays blocked. The conjunction's one-sample duration floor is now
+>    inherited by two millisecond-based detectors, Nyström–Holmqvist and
+>    REMoDNaV. It is a cross-detector decision, still open.
+>
+>    **REMoDNaV is BUILT on `spec/remodnav` (2026-09-26), NOT merged as
+>    written.** It is the fourth registered detector, and the first real
+>    producer of `pursuit`, stored binocularly through `daemon.run_once()`
+>    (`test_a_binocular_slow_ramp_produces_a_pursuit_conjunction_run`). What
+>    it measured:
+>    - **Fidelity.** Given the oracle's own signals, it labels every sample
+>      as `remodnav` 1.1.2 does in all five synthetic cases (500 Hz seeds
+>      1–3, 1000 Hz seeds 4–5), and both nulls fail that check.
+>    - **End to end on the reference recording** (leading 120,000-sample
+>      slice, p99→15° scale, 498.55 Hz, scipy 1.17.1; ours on the shared
+>      estimator and mask, the oracle on its own preprocessing):
+>      - saccades 519 vs the oracle's 574 (left) and 488 vs 565 (right);
+>      - kappa left / right: saccade 0.764 / 0.724, PSO 0.391 / 0.438,
+>        fixation 0.823 / 0.816, pursuit 0.267 / −0.008;
+>      - the whole recording, 1,177,799 samples per eye, classifies in
+>        2.5 s / 2.6 s.
+>    - **Against the paper's human coders** (Andersson et al. 2017):
+>      - the harness reproduces the coders' own Table 3 agreement within
+>        ±0.006 on all 9 cells, over 34 files;
+>      - it reproduces the oracle's within ±0.05 on all 18 cells, over 33
+>        files, and within 0.005 out of suite on scipy 1.13.1, over all 34;
+>      - ours is at or above the oracle on every saccade cell.
+>
+>      One file is excluded because the installed oracle cannot run it on
+>      scipy ≥ 1.17. The exclusion is bounded by a test and diagnosed.
+>    - **A finding about the paper.** It says it applied the Zemblys et al.
+>      (2018) label correction; the script that computed its Table 3 never
+>      loads it.
+>    - **All-detector invariants held with no ruling needed**: planted onsets
+>      are within 1 sample, and the consensus suite now runs C(4,2) = 6
+>      pairs.
+>    - **A finding that bears on macaque data.** REMoDNaV reads a moderate
+>      pursuit as trains of short saccades when holds dominate a recording,
+>      and the oracle does the same (spec §8 item 6). So the pursuit fixture
+>      runs at 2.1 °/s, 5% above the pursuit threshold, a narrow margin.
+>
+>    `docs/handoffs/2026-09-26-remodnav-built.md` has the account, the four
+>    rulings and what is still deferred.
+>
+>    *Until then this item named NSLR, REMoDNaV (the detector, not the PyPI
+>    oracle) and Bayesian microsaccade detection as unwritten; true when
+>    written.*
 > 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to
 >    `eye/detect/labels.py`** as `KIND_OF`, `NOT_INTERSECTED`, `kind_of` and
 >    `UnknownLabelKind`. The conjunction and the eye-validation tests now use
@@ -698,6 +743,10 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    both sides of the amplitude cut and reach `classify`; Nystrom-Holmqvist
    is now one of the five degenerate ones for real, not hypothetically.
 
+   *Corrected 2026-09-26: true when written. REMoDNaV is now the fourth
+   registered detector, on `spec/remodnav`, and a second degenerate one for
+   real — see "Start here" item 2.*
+
    Also stage 2B, unchanged by any of the above: the N-way `blended_agreement`,
    saccade vigor and the main-sequence fits (which need an amplitude floor
    AND a duration ceiling — 18–20% of accepted events sit below the floor
@@ -925,6 +974,9 @@ rehydration as the only hardware-free piece outstanding.
 
 *Corrected 2026-09-26: true when written. Rehydration is now built too, on
 `spec/rehydration` — see this file's own header and item 6 above.*
+
+*Corrected 2026-09-26 again: REMoDNaV is built too, on `spec/remodnav`, which
+leaves NSLR and BMD — see "Start here" item 2.*
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief
