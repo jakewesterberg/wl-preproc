@@ -204,7 +204,9 @@ DETECTORS: dict[str, Detector] = {
     # `_conjunction_label` takes the degenerate branch. It has no minimum
     # duration, so `_min_duration_samples` gives its conjunction the one-sample
     # floor it already gives Nystrom-Holmqvist and REMoDNaV -- recorded in the
-    # spec, deliberately not changed here.
+    # spec, deliberately not changed here. It is not used below 1 deg (design
+    # spec section 4), because its published, human-fitted classifier calls
+    # slow sub-degree movements fixation.
     "nslr": Detector(
         name="nslr",
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),

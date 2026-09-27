@@ -119,6 +119,13 @@ _N_SUBSTEPS = (16, 8, 16)
 # short trailing hold rather than running past the trial boundary.
 _ONSET_OFFSETS_S = (1.0, 1.9, 2.9)
 
+# Detectors not used below 1 deg (design spec `2026-09-27-nslr-design.md`
+# section 4's "Not used below 1 deg" bullet). NSLR's published, human-fitted
+# classifier calls `stepped_session`'s own 0.75 deg step `fixation`,
+# identically in the authors' own code -- the requester's decision on
+# 2026-09-27, after seeing that finding.
+_NOT_USED_BELOW_1_DEG = frozenset({"nslr"})
+
 # A step in the RIGHT eye's own raw trace ALONE, edited directly into the
 # generated file after the fact (`test_eye_populate.py::lossy_quality_
 # session`'s own technique -- split each affected line by column, replace
@@ -1009,23 +1016,47 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
 
     **Asserted for EVERY registered detector, not just the baseline.** The
     fixture's ground truth is a property of the session, not of a method, so
-    a detector that cannot find three planted steps in an otherwise-still
-    trace is broken whichever one it is -- and this is the cheapest place a
-    new detector's reimplementation defect surfaces as a defect rather than
-    as design spec section 3.2's "genuine detector disagreement".
+    every detector is held to the planted steps it is used for; a detector
+    declared not used below 1 deg is held to the larger steps, and its miss of
+    the smaller one is asserted, so a change either way fails -- and this is
+    the cheapest place a new detector's reimplementation defect surfaces as a
+    defect rather than as design spec section 3.2's "genuine detector
+    disagreement".
     """
     from wl_preproc.schema import detect
 
     session_key, _report, planted_onsets = stepped_session
+    amplitudes_deg = [abs(step) * CAL_SCALE for step in _STEPS_PX]
+    assert any(amplitude_deg < 1.0 for amplitude_deg in amplitudes_deg), (
+        "the fixture must still plant at least one sub-degree step, or the "
+        "below-1-deg miss this test asserts for excluded detectors is vacuous"
+    )
+
     for name in _detector_names():
         runs = (
             detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
         ).to_dicts(order_by="run_index")
         onsets = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
 
-        assert len(onsets) == len(planted_onsets), name
-        for got, want in zip(onsets, planted_onsets, strict=True):
-            assert abs(got - want) <= 5, name
+        if name in _NOT_USED_BELOW_1_DEG:
+            held_onsets = [
+                onset for onset, amplitude_deg in zip(planted_onsets, amplitudes_deg, strict=True)
+                if amplitude_deg >= 1.0
+            ]
+            missed_onsets = [
+                onset for onset, amplitude_deg in zip(planted_onsets, amplitudes_deg, strict=True)
+                if amplitude_deg < 1.0
+            ]
+
+            assert len(onsets) == len(held_onsets), name
+            for got, want in zip(onsets, held_onsets, strict=True):
+                assert abs(got - want) <= 5, name
+            for missed in missed_onsets:
+                assert not any(abs(got - missed) <= 5 for got in onsets), name
+        else:
+            assert len(onsets) == len(planted_onsets), name
+            for got, want in zip(onsets, planted_onsets, strict=True):
+                assert abs(got - want) <= 5, name
 
 
 def test_the_baseline_detector_finds_the_planted_steps(stepped_session):
