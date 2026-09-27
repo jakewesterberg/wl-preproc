@@ -32,6 +32,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, LabelledInterval
+from wl_preproc.eye.detect.nslr import DEFAULT_NSLR_PARAMS, detect_nslr
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
 )
@@ -196,6 +197,19 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
         run=detect_remodnav,
         defaults=DEFAULT_REMODNAV_PARAMS,
+    ),
+    # **NSLR-HMM** (design spec `2026-09-27-nslr-design.md`). It never
+    # differentiates: it fits the position signal with straight segments and
+    # classifies whole segments. Its saccadic slice is `{saccade}`, so
+    # `_conjunction_label` takes the degenerate branch. It has no minimum
+    # duration, so `_min_duration_samples` gives its conjunction the one-sample
+    # floor it already gives Nystrom-Holmqvist and REMoDNaV -- recorded in the
+    # spec, deliberately not changed here.
+    "nslr": Detector(
+        name="nslr",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
+        run=detect_nslr,
+        defaults=DEFAULT_NSLR_PARAMS,
     ),
 }
 

@@ -195,3 +195,73 @@ def test_a_zero_speed_segment_turns_to_zero():
     assert f[0][1] == 0.0                      # no previous direction
     assert f[1][0] == np.log10(1e-6)           # zero speed, clipped
     assert f[1][1] == 0.0 and f[2][1] == 0.0   # NaN direction, then NaN cosine
+
+
+# -- Spec 3: pieces, and the registered detector -------------------------------------
+
+
+def _available(usable):
+    from wl_preproc.eye.detect.labels import Label
+
+    return np.array([None if ok else Label.INVALID for ok in usable], dtype=object)
+
+
+@pytest.mark.parametrize("unusable_fraction", [0.1, 0.9])
+def test_no_run_contains_an_unusable_sample(unusable_fraction):
+    """Review Focus 1."""
+    from wl_preproc.eye.detect.nslr import detect_nslr
+
+    rng = np.random.default_rng(10)
+    gaze = gaze_trace(500.0, 10, duration_s=8.0)
+    usable = ~np.isnan(gaze[:, 0])
+    while (~usable).mean() < unusable_fraction:
+        s = int(rng.integers(0, len(gaze)))
+        usable[s:s + int(rng.integers(20, 300))] = False
+    gaze = np.nan_to_num(gaze)
+
+    runs = detect_nslr(gaze, np.zeros_like(gaze), _available(usable), 500.0, DEFAULT_NSLR_PARAMS)
+
+    assert runs
+    assert all(usable[r.start:r.stop].all() for r in runs)
+    assert all(a.stop <= b.start for a, b in zip(runs, runs[1:]))
+
+
+def test_pieces_of_one_two_and_zero_samples():
+    """Review Focus 2: a one-sample piece is unlabelled, a two-sample piece is
+    labelled, and no usable sample at all is no runs."""
+    from wl_preproc.eye.detect.nslr import detect_nslr
+
+    gaze = np.zeros((7, 2))
+    gaze[:, 0] = [0.0, 1.0, 0.0, 2.0, 2.1, 0.0, 0.0]
+    usable = np.array([False, True, False, True, True, False, False])
+
+    runs = detect_nslr(gaze, np.zeros_like(gaze), _available(usable), 500.0, DEFAULT_NSLR_PARAMS)
+
+    covered = {i for r in runs for i in range(r.start, r.stop)}
+    assert covered == {3, 4}
+    assert detect_nslr(gaze, np.zeros_like(gaze), _available(np.zeros(7, bool)), 500.0,
+                       DEFAULT_NSLR_PARAMS) == []
+
+
+def test_the_shared_velocity_is_ignored():
+    """Spec 3: NSLR never differentiates, so the velocity argument changes nothing."""
+    from wl_preproc.eye.detect.nslr import detect_nslr
+
+    gaze = np.nan_to_num(gaze_trace(500.0, 11, duration_s=4.0))
+    usable = np.ones(len(gaze), bool)
+    a = detect_nslr(gaze, np.zeros_like(gaze), _available(usable), 500.0, DEFAULT_NSLR_PARAMS)
+    b = detect_nslr(gaze, np.full_like(gaze, 123.0), _available(usable), 500.0, DEFAULT_NSLR_PARAMS)
+    assert a == b
+
+
+def test_the_detector_runs_at_the_rigs_real_rate():
+    """Review Focus 4."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nslr import detect_nslr
+
+    gaze = gaze_trace(498.55, 12, duration_s=6.0)
+    usable = ~np.isnan(gaze[:, 0])
+    runs = detect_nslr(np.nan_to_num(gaze), np.zeros_like(gaze), _available(usable), 498.55,
+                       DEFAULT_NSLR_PARAMS)
+    assert {r.label for r in runs} <= {Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}
+    assert Label.SACCADE in {r.label for r in runs}

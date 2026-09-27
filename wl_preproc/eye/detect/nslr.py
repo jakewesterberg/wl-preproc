@@ -27,6 +27,8 @@ import numpy as np
 import scipy.interpolate
 import scipy.stats
 
+from wl_preproc.eye.detect.labels import Label, Run, true_runs
+
 
 @dataclass(frozen=True, slots=True)
 class NslrParams:
@@ -558,3 +560,41 @@ def classify(pieces_xy: list[np.ndarray], fs_hz: float, params: NslrParams) -> l
             states[piece.splits[k]:piece.splits[k + 1]] = state
         out.append(states)
     return out
+
+
+#: The states' labels, in `decode`'s order (spec 4).
+_STATE_LABELS = (Label.FIXATION, Label.SACCADE, Label.PSO, Label.PURSUIT)
+
+
+def detect_nslr(
+    gaze_deg: np.ndarray,
+    velocity_deg_s: np.ndarray,
+    available: np.ndarray,
+    fs_hz: float,
+    params: NslrParams,
+) -> list[Run]:
+    """NSLR-HMM, as the registered `DetectFn`: maximal runs of one label,
+    half-open, sorted (spec 3, 4).
+
+    - **The mask splits pieces.** Every maximal stretch of samples the
+      validity mask offers (`entry is None`) is a piece. No segment spans a
+      gap. A one-sample piece is left unlabelled.
+    - **The velocity is ignored.** NSLR never differentiates; a segment's
+      slope is its velocity. The argument exists because every `DetectFn` has
+      it.
+    - **The conjunction.** The saccadic slice is `{saccade}`, so conjunction
+      runs take `_conjunction_label`'s degenerate branch, and there is no
+      minimum duration (spec 4)."""
+    usable = np.array([entry is None for entry in available], dtype=bool)
+    spans = [(int(a), int(b)) for a, b in true_runs(usable) if b - a >= 2]
+    per_piece = classify([np.asarray(gaze_deg[a:b], dtype=float) for a, b in spans], fs_hz, params)
+    runs: list[Run] = []
+    for (offset, _stop), states in zip(spans, per_piece):
+        change = np.flatnonzero(np.diff(states)) + 1
+        starts = np.concatenate(([0], change))
+        stops = np.concatenate((change, [len(states)]))
+        runs.extend(
+            Run(start=offset + int(s), stop=offset + int(e), label=_STATE_LABELS[int(states[s])])
+            for s, e in zip(starts, stops)
+        )
+    return runs
