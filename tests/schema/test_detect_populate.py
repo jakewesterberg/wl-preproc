@@ -1167,18 +1167,204 @@ def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
     """A saccade or microsaccade run IS an event and carries its own
     measurements; every other label leaves them NULL (design spec section 5).
-    Asserted per detector so a failure names which one wrote the odd row."""
+    Asserted per detector so a failure names which one wrote the odd row.
+
+    **Except a per-eye saccade run its detector's params declare too brief to
+    measure**, which carries neither: NSLR's `min_measured_saccade_ms`, the
+    requester's decision of 2026-09-27 (design spec
+    `2026-09-27-nslr-design.md` section 4). No other detector declares a
+    floor, so for every other detector, and on every conjunction trace, a
+    saccade run still carries both. Every trace, not `left` alone: the
+    fixture's one brief NSLR saccade is in the RIGHT eye
+    (`test_nslr_saccade_rows_under_10_ms_carry_no_measurement`)."""
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema import detect
+    from wl_preproc.schema.detect import _eye_detection_params
+
+    session_key, _report, _ = stepped_session
+    fs_hz = _stored_inputs(session_key, "left")[3]
+    for name in _detector_names():
+        floor_ms = _eye_detection_params(DETECTORS[name]).get("min_measured_saccade_ms")
+        for trace in ("left", "right", "conjunction"):
+            where = {**session_key, "trace": trace, **_detector(name)}
+            for run in (detect.EyeDetection.Run & where).to_dicts():
+                length_s = (run["run_stop"] - run["run_start"]) / fs_hz
+                too_brief = (trace != "conjunction" and floor_ms is not None
+                             and length_s < floor_ms / 1000.0)
+                if run["label"] in ("saccade", "microsaccade") and not too_brief:
+                    assert run["amplitude_deg"] is not None, (name, trace)
+                    assert run["peak_velocity_deg_s"] is not None, (name, trace)
+                else:
+                    assert run["amplitude_deg"] is None, (name, trace)
+                    assert run["peak_velocity_deg_s"] is None, (name, trace)
+
+
+def _stored_inputs(session_key, eye_value):
+    """What `EyeDetection.make()` measured one eye's runs on, rebuilt the way
+    it builds them: `(gaze, velocity, offered, fs_hz)`. The gaze goes through
+    that eye's STORED calibration, so a test can recompute a stored
+    measurement from the very numbers it was computed from."""
+    from pathlib import Path
+
+    from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs
+    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.gaze import gaze_trace
+    from wl_preproc.eye.ohdpi import read_ohdpi
+    from wl_preproc.schema import core, detect, ingest
+    from wl_preproc.schema import eye as eye_schema
+
+    session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+    path = session_dir / "ohdpi" / segment["file_path"]
+    fs_hz = read_ohdpi(path).fs_hz
+    map_ = eye_schema._map_from_row(
+        (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()
+    )
+    gaze = gaze_trace(path, {"left": "Left", "right": "Right"}[eye_value], map_)
+    available = labels_from_runs(
+        [Run(r["run_start"], r["run_stop"], Label(r["label"]))
+         for r in (detect.EyeValidity.Run & {**session_key, "eye": eye_value}).to_dicts(
+             order_by="run_index")],
+        len(gaze),
+    )
+    offered = np.where(available == Label.FIXATION, None, available)
+    return gaze, velocity(gaze, fs_hz), offered, fs_hz
+
+
+def test_no_saccade_row_is_stored_at_zero_amplitude_with_a_nonzero_peak_velocity(stepped_session):
+    """The final review's check (b), for every detector and every trace. A
+    0.0 deg row moving at hundreds of deg/s is not a measurement: it is the
+    point `_overlapping`'s docstring calls maximally damaging to design spec
+    section 6.5's main-sequence fit.
+
+    NSLR wrote exactly such rows before the requester's decision of
+    2026-09-27: `measure` stops one sample before an NSLR run's landing, so a
+    one-sample run read 0.0. This fixture has one, the RIGHT eye's
+    single-sample saccade at the phantom step's onset, stored at 0.0 deg and
+    341 deg/s before the fix. It is now NULL (too brief to measure).
+
+    On the conjunction trace this is a property of the fixture, not a rule:
+    every intersection here is long. A detector with a one-sample
+    conjunction floor, NSLR among them, can still store a one-sample
+    conjunction saccade at 0.0 deg (`_insert_trace`'s docstring)."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
+    seen = 0
     for name in _detector_names():
-        where = {**session_key, "trace": "left", **_detector(name)}
+        for trace in ("left", "right", "conjunction"):
+            where = {**session_key, "trace": trace, **_detector(name)}
+            for run in (detect.EyeDetection.Run & where).to_dicts():
+                if run["label"] not in ("saccade", "microsaccade"):
+                    continue
+                seen += 1
+                assert not (run["amplitude_deg"] == 0.0 and run["peak_velocity_deg_s"]), (
+                    name, trace, run["run_start"], run["run_stop"], run["peak_velocity_deg_s"]
+                )
+    assert seen
+
+
+#: The requester's decision of 2026-09-27 (NSLR design spec section 4): an
+#: NSLR saccade run under 10 ms is stored unmeasured. Stated here rather than
+#: read back from the paramset, so a paramset that drifted from the decision
+#: fails the assertions below rather than moving them.
+_NSLR_MIN_MEASURED_SACCADE_MS = 10.0
+
+
+def test_nslr_saccade_rows_under_10_ms_carry_no_measurement(stepped_session):
+    """Every NSLR per-eye saccade row shorter than 10 ms has both
+    measurements NULL, and every row of 10 ms or more has both set.
+
+    Not vacuous: the fixture has both kinds, asserted below. The RIGHT eye's
+    phantom step (`_inject_right_eye_only_step`) overwrites the raw column
+    with an absolute value, so NSLR sees a one-sample jump at its onset and
+    calls it a saccade; the planted 2.5 and 3.25 deg steps are 16- and
+    17-sample runs in both eyes."""
+    from wl_preproc.schema import detect
+    from wl_preproc.schema import paramset
+
+    session_key, _report, _ = stepped_session
+    fs_hz = _stored_inputs(session_key, "left")[3]
+    brief, long_ = [], []
+    for trace in ("left", "right"):
+        where = {**session_key, "trace": trace, **_detector("nslr")}
         for run in (detect.EyeDetection.Run & where).to_dicts():
-            if run["label"] in ("saccade", "microsaccade"):
-                assert run["amplitude_deg"] is not None, name
-                assert run["peak_velocity_deg_s"] is not None, name
-            else:
-                assert run["amplitude_deg"] is None, name
+            if run["label"] != "saccade":
+                continue
+            length_s = (run["run_stop"] - run["run_start"]) / fs_hz
+            (brief if length_s < _NSLR_MIN_MEASURED_SACCADE_MS / 1000.0 else long_).append(run)
+
+    assert brief and long_, "the fixture must hold both brief and long NSLR saccade rows"
+    for run in brief:
+        assert run["amplitude_deg"] is None, run
+        assert run["peak_velocity_deg_s"] is None, run
+    for run in long_:
+        assert run["amplitude_deg"] is not None, run
+        assert run["peak_velocity_deg_s"] is not None, run
+
+    # The floor is in the paramset the rows are addressed by.
+    stored = (paramset.ParamSet & {"paramset_type": "eye_detection",
+                                   **_detector("nslr")}).fetch1("params")
+    assert stored["min_measured_saccade_ms"] == _NSLR_MIN_MEASURED_SACCADE_MS
+
+
+def test_nslr_measures_each_planted_step_to_where_the_eye_lands(stepped_session):
+    """The stored amplitude of each planted step's NSLR saccade run is
+    `hypot(gaze[stop] - gaze[start])`, the landing sample included, and its
+    peak velocity is over `[start, stop]` inclusive. NSLR's run `k` is
+    `[J[k], J[k+1])` and the eye lands at `J[k+1]`, the next run's first
+    sample, so `measure`'s `gaze[stop - 1]` read every such run short (the
+    requester's decision of 2026-09-27, NSLR design spec section 4). Asserted
+    against the endpoint-exclusive value too, so turning the landing rule
+    off fails here."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, planted_onsets = stepped_session
+    held = [onset for onset, step in zip(planted_onsets, _STEPS_PX, strict=True)
+            if abs(step) * CAL_SCALE >= 1.0]
+    for trace in ("left", "right"):
+        gaze, v, offered, _fs_hz = _stored_inputs(session_key, trace)
+        where = {**session_key, "trace": trace, **_detector("nslr")}
+        runs = [r for r in (detect.EyeDetection.Run & where).to_dicts(order_by="run_index")
+                if r["label"] == "saccade"
+                and any(abs(r["run_start"] - onset) <= 5 for onset in held)]
+        assert len(runs) == len(held) == 2, trace
+
+        for run in runs:
+            start, stop = run["run_start"], run["run_stop"]
+            assert stop < len(gaze) and offered[stop] is None, "the landing must be interior"
+            speed = np.hypot(v[start:stop + 1, 0], v[start:stop + 1, 1])
+            assert run["amplitude_deg"] == _hypot(gaze[stop] - gaze[start]), (trace, start)
+            assert run["peak_velocity_deg_s"] == float(speed.max()), (trace, start)
+            assert run["amplitude_deg"] != _hypot(gaze[stop - 1] - gaze[start]), (trace, start)
+
+
+def test_every_other_detectors_measurements_are_unchanged(stepped_session):
+    """The requester's decision is NSLR's alone. Every other detector's
+    stored saccade rows, on every trace, are still exactly `measure` over the
+    run's own `[start, stop)`, and so is NSLR's conjunction, which keeps its
+    handling (`_insert_trace`'s docstring). The conjunction is measured on
+    the LEFT eye's gaze, as `make()` measures it."""
+    from wl_preproc.eye.detect.measure import measure
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    inputs = {eye: _stored_inputs(session_key, eye) for eye in ("left", "right")}
+    checked = 0
+    for name in _detector_names():
+        for trace in ("left", "right", "conjunction"):
+            if name == "nslr" and trace != "conjunction":
+                continue
+            gaze, v, _offered, fs_hz = inputs["left" if trace == "conjunction" else trace]
+            where = {**session_key, "trace": trace, **_detector(name)}
+            for run in (detect.EyeDetection.Run & where).to_dicts():
+                if run["label"] not in ("saccade", "microsaccade"):
+                    continue
+                expected = measure(gaze, v, run["run_start"], run["run_stop"], fs_hz)
+                assert run["amplitude_deg"] == expected.amplitude_deg, (name, trace)
+                assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (name, trace)
+                checked += 1
+    assert checked
 
 
 def test_reliability_survives_the_run_re_derivation(stepped_session):
@@ -2133,20 +2319,28 @@ class _CapturedInserts:
         self.master.append(row)
 
 
-def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0):
-    """`EyeDetection._insert_trace` over a flat trace and a fully-available
-    mask, returning `(master_row, run_rows)`."""
+def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0, *, detector_name="engbert_kliegl",
+                      trace="left", gaze=None, v=None, offered=None):
+    """`EyeDetection._insert_trace` over a ramp and a fully-available mask
+    unless given others, as `detector_name` at its default params, returning
+    `(master_row, run_rows)`."""
+    from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.schema import detect as detect_schema
 
-    gaze = np.zeros((n_samples, 2))
-    gaze[:, 0] = np.linspace(0.0, 4.0, n_samples)  # a real, measurable ramp
-    v = np.zeros((n_samples, 2))
-    v[:, 0] = 100.0
-    offered = np.full(n_samples, None, dtype=object)
+    if gaze is None:
+        gaze = np.zeros((n_samples, 2))
+        gaze[:, 0] = np.linspace(0.0, 4.0, n_samples)  # a real, measurable ramp
+    if v is None:
+        v = np.zeros((n_samples, 2))
+        v[:, 0] = 100.0
+    if offered is None:
+        offered = np.full(n_samples, None, dtype=object)
+    detector = get_detector(detector_name)
 
     sink = _CapturedInserts()
     detect_schema.EyeDetection._insert_trace(
-        sink, {"subject": "s"}, "left", gaze, v, offered, intervals, fs_hz
+        sink, {"subject": "s"}, trace, gaze, v, offered, intervals, fs_hz,
+        detector, detector.defaults,
     )
     (master,) = sink.master
     return master, sink.rows
@@ -2195,6 +2389,67 @@ def test_insert_trace_measures_only_the_event_labels():
     assert by_label["pso"]["amplitude_deg"] is None
     assert by_label["saccade"]["amplitude_deg"] is not None
     assert by_label["fixation"]["amplitude_deg"] is None
+
+
+def _event_rows(rows):
+    return {(row["run_start"], row["run_stop"]): row for row in rows
+            if row["label"] in ("saccade", "microsaccade")}
+
+
+def _hypot(displacement):
+    return float(np.hypot(displacement[0], displacement[1]))
+
+
+def test_insert_trace_applies_nslrs_measurement_rule_to_its_per_eye_traces_only():
+    """The requester's decision of 2026-09-27 (design spec
+    `2026-09-27-nslr-design.md` section 4), through the real `_insert_trace`:
+    an NSLR per-eye saccade run of 10 ms or more is measured up to where the
+    eye lands, and a briefer one is stored with both measurements NULL. The
+    conjunction keeps `measure`, and so does every other detector, on every
+    trace."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.measure import measure
+
+    n_samples = 200
+    gaze = _ramp_gaze(n_samples, 0.1)
+    gaze[:, 1] = 0.01 * np.arange(n_samples) ** 1.5
+    v = np.zeros((n_samples, 2))
+    v[:, 0] = np.arange(n_samples)  # rising, so the peak is always a run's last sample
+    brief, long_ = (20, 22), (60, 80)  # 4 ms and 40 ms at 500 Hz
+    intervals = [Run(*brief, Label.SACCADE), Run(*long_, Label.SACCADE)]
+
+    _master, rows = _run_insert_trace(intervals, detector_name="nslr", gaze=gaze, v=v)
+    stored = _event_rows(rows)
+    assert stored[brief]["amplitude_deg"] is None
+    assert stored[brief]["peak_velocity_deg_s"] is None
+    assert stored[long_]["amplitude_deg"] == _hypot(gaze[80] - gaze[60])
+    assert stored[long_]["peak_velocity_deg_s"] == float(np.hypot(*v[80]))
+
+    for detector_name, trace in (("nslr", "conjunction"), ("engbert_kliegl", "left"),
+                                 ("remodnav", "right"), ("nystrom_holmqvist", "conjunction")):
+        _master, rows = _run_insert_trace(intervals, detector_name=detector_name, trace=trace,
+                                          gaze=gaze, v=v)
+        for (start, stop), row in _event_rows(rows).items():
+            expected = measure(gaze, v, start, stop, 500.0)
+            assert row["amplitude_deg"] == expected.amplitude_deg, (detector_name, trace)
+            assert row["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (detector_name, trace)
+
+
+def test_nslr_declares_its_measurement_rule_and_no_other_detector_does():
+    """The landing rule is structural, so it is on the registry entry; the
+    10 ms floor changes stored values, so it is in the paramset whose hash
+    addresses them (the controller's ruling on the requester's decision)."""
+    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.schema.detect import _eye_detection_params
+
+    for name, detector in DETECTORS.items():
+        params = _eye_detection_params(detector)
+        if name == "nslr":
+            assert detector.runs_end_before_landing
+            assert params["min_measured_saccade_ms"] == 10.0
+        else:
+            assert not detector.runs_end_before_landing, name
+            assert "min_measured_saccade_ms" not in params, name
 
 
 def _ramp_gaze(n_samples, deg_per_sample):
@@ -2295,8 +2550,10 @@ def test_the_conjunction_label_matches_the_amplitude_that_gets_stored():
     )
 
     sink = _CapturedInserts()
+    detector = get_detector("engbert_kliegl")
     detect_schema.EyeDetection._insert_trace(
-        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0
+        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0,
+        detector, detector.defaults,
     )
     events = [row for row in sink.rows if row["label"] in ("saccade", "microsaccade")]
 
@@ -2349,8 +2606,10 @@ def test_two_touching_intersections_become_one_conjunction_event():
     assert spans == [Run(100, 140, Label.SACCADE)]
 
     sink = _CapturedInserts()
+    detector = get_detector("engbert_kliegl")
     detect_schema.EyeDetection._insert_trace(
-        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0
+        sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0,
+        detector, detector.defaults,
     )
     (event,) = [row for row in sink.rows if row["label"] != "fixation"]
     assert (event["run_start"], event["run_stop"]) == (100, 140)

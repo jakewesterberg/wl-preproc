@@ -398,7 +398,9 @@ class EyeDetection(dj.Computed):
         run_stop  : int unsigned
         label     : enum({_LABEL_ENUM})
         # A saccade or microsaccade run IS an event, so it carries its own
-        # measurements; every other label leaves them NULL. `reliability` is
+        # measurements; every other label leaves them NULL. So does a per-eye
+        # saccade run too brief for its detector's paramset to measure
+        # (NSLR's `min_measured_saccade_ms`; `_insert_trace`). `reliability` is
         # Otero-Millan's per-detection index, null for every detector that has
         # none -- declared now because the migration window closes January.
         amplitude_deg=null       : double
@@ -534,7 +536,8 @@ class EyeDetection(dj.Computed):
                               "reason": refused_reason[eye_value]})
             else:
                 gaze, v, offered = per_eye[eye_value]
-                self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz)
+                self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz,
+                                   detector, detector_params)
 
         if refused_reason:
             # The conjunction gets a REFUSED ROW here, never an absent one --
@@ -615,9 +618,11 @@ class EyeDetection(dj.Computed):
                 _min_duration_samples(detector_params),
                 _conjunction_label(detector, params, gaze),
             )
-            self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz)
+            self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz,
+                               detector, detector_params)
 
-    def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz) -> None:
+    def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
+                      detector, detector_params) -> None:
         """One trace's master row and its runs.
 
         **This method assigns no labels of its own.** Each interval arrives
@@ -637,6 +642,28 @@ class EyeDetection(dj.Computed):
         encode-then-label -- then measures every event run over its own
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
+
+        **How a per-eye event run is measured is its detector's declared
+        rule** (`measure.py::measure_event_run`; the requester's decision of
+        2026-09-27, NSLR design spec section 4). For every detector but NSLR
+        that rule is `measure`, unchanged. NSLR's runs end one sample before
+        the eye lands (`registry.Detector.runs_end_before_landing`), so each
+        of its saccade runs is measured up to the landing sample. A run
+        shorter than its paramset's `min_measured_saccade_ms` is stored with
+        both measurements NULL, and a NULL here means "too brief to
+        measure", never zero. Before that decision `measure` read an
+        `L`-sample NSLR run `1/L` short, and a one-sample run as exactly 0.0
+        deg. On the reference recording that was 542 left-eye and 666
+        right-eye rows, at a median peak velocity of 234 deg/s on the left.
+
+        **The conjunction keeps `measure`, whatever the detector.** Its runs
+        are intersections of the two eyes' spans, not one detector's runs, so
+        neither rule describes them. The requester's decision covers per-eye
+        rows, and the conjunction's duration floor is out of scope (NSLR
+        design spec sections 8.4 and 9). `_overlapping`'s floor guarantees
+        `stop > start` here, not a nonzero amplitude. So a detector with a
+        one-sample floor, NSLR among them, can still store a one-sample
+        conjunction saccade at 0.0 deg, as it did before.
 
         Three of the four registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
@@ -708,7 +735,17 @@ class EyeDetection(dj.Computed):
         gets `None` throughout for the same reason it gets its label derived
         rather than checked: no detector produced it.
         """
-        from wl_preproc.eye.detect.measure import measure
+        from wl_preproc.eye.detect.measure import measure_event_run
+
+        if trace == "conjunction":
+            # Per-eye traces only: see this docstring's conjunction paragraph.
+            runs_end_before_landing, min_measured_ms = False, None
+        else:
+            runs_end_before_landing = detector.runs_end_before_landing
+            # Read the way `_min_duration_samples` reads a detector's params:
+            # a field only NSLR's params declare, so every other detector
+            # has no floor.
+            min_measured_ms = getattr(detector_params, "min_measured_saccade_ms", None)
 
         reliability_by_span = {
             (interval.start, interval.stop): interval.reliability for interval in intervals
@@ -731,9 +768,14 @@ class EyeDetection(dj.Computed):
         def _run_row(index: int, run: Run) -> dict:
             amplitude_deg = peak_velocity_deg_s = None
             if run.label in (Label.SACCADE, Label.MICROSACCADE):
-                measurement = measure(gaze, v, run.start, run.stop, fs_hz)
-                amplitude_deg = measurement.amplitude_deg
-                peak_velocity_deg_s = measurement.peak_velocity_deg_s
+                measurement = measure_event_run(
+                    gaze, v, offered, run.start, run.stop, fs_hz,
+                    runs_end_before_landing=runs_end_before_landing,
+                    min_measured_ms=min_measured_ms,
+                )
+                if measurement is not None:
+                    amplitude_deg = measurement.amplitude_deg
+                    peak_velocity_deg_s = measurement.peak_velocity_deg_s
             return {
                 **row, "run_index": index, "run_start": run.start, "run_stop": run.stop,
                 "label": run.label.value, "amplitude_deg": amplitude_deg,

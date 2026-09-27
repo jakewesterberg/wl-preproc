@@ -36,6 +36,13 @@ class NslrParams:
     - The first four are `slow_nslr.py`'s defaults (158-161, 174).
     - `max_noise_passes` is this implementation's guard; the reference has no
       cap.
+    - `min_measured_saccade_ms` is this pipeline's measurement rule, not the
+      reference's, and the detector never reads it.
+      `schema/detect.py::_insert_trace` stores a per-eye saccade run shorter
+      than this with no amplitude or peak velocity (the requester's decision
+      of 2026-09-27, spec section 4). It is here, in the paramset, because
+      it changes stored values, and the paramset hash is what addresses
+      them.
     - The sixteen emission fields are `nslr_hmm.py` 39-42's published means
       and diagonal variances, fitted on the Andersson et al. (2017) human-coded
       data. `turn` is the Fisher-transformed cosine between successive
@@ -49,6 +56,7 @@ class NslrParams:
     slow_phase_duration_ms: float
     slow_phase_speed_deg_s: float
     max_noise_passes: int
+    min_measured_saccade_ms: float
     fixation_log_speed_mean: float
     fixation_turn_mean: float
     fixation_log_speed_var: float
@@ -73,6 +81,9 @@ DEFAULT_NSLR_PARAMS = NslrParams(
     slow_phase_duration_ms=300.0,
     slow_phase_speed_deg_s=5.0,
     max_noise_passes=50,  # this implementation's guard -- the reference has none
+    # This pipeline's measurement rule, not the reference's: a saccade run
+    # under 10 ms is stored unmeasured (the requester's decision, spec 4).
+    min_measured_saccade_ms=10.0,
     fixation_log_speed_mean=0.6039844795867605,
     fixation_turn_mean=-0.7788440631929878,
     fixation_log_speed_var=0.1651734722683456,
