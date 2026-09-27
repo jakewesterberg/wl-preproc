@@ -1359,7 +1359,7 @@ defensible call, but it is a reversal rather than a gap.
 Spec §13 carries the full list. None now gate other work — these are named because each
 leaves something behind that does:
 
-- **ANSWERED 2026-09-01: we agree.** `TaskEvent` 256–4095 is wl-mllib's to allocate; our
+- **ANSWERED 2026-09-01: we agree.** `TaskEvent` 256–4095 is wl-exptasks' to allocate; our
   256–259 transfer as **already-allocated** (ownership moving is not permission to
   renumber — that would silently relabel every event in every recording on disk).
   wl-expcontroller is no longer confined to 4096–32767 on our account. Recorded in
@@ -1367,10 +1367,10 @@ leaves something behind that does:
   someone adding a value would be standing, and as a `consumes: task-event-vocabulary`
   edge in `wl.yaml`.
 
-  **The enum stays here, as a mirror.** wl-mllib publishes `task-event-vocabulary` as
+  **The enum stays here, as a mirror.** wl-exptasks publishes `task-event-vocabulary` as
   `stability: planned` and defines no `TaskEvent` in code, so ours is the only
   implementation and this pipeline must decode those values today. Same shape as
-  wl-expcontroller mirroring `PAYLOAD_WORD_COUNTS`. When wl-mllib ships a package this
+  wl-expcontroller mirroring `PAYLOAD_WORD_COUNTS`. When wl-exptasks ships a package this
   becomes a pinned `requires` edge the way wl-sync is. Until then the risk is real and
   named: two places could disagree, and only convention stops them.
 
@@ -1379,13 +1379,13 @@ leaves something behind that does:
   pending wl-preproc"*. The rule — ownership splits on
   **decodability versus meaning**, so framing/escapes/checksum/payload-counts/DVA and
   `Marker` 1–255 are ours while `TaskEvent`, `TaskTypeCode` and the task-specific range are
-  wl-mllib's — is accepted and is now recorded in `contracts/events.py`'s own docstring
-  (`bfdfd7f`). **The unsettled clause: moving `TaskEvent` 256–4095 to wl-mllib needs our
+  wl-exptasks' — is accepted and is now recorded in `contracts/events.py`'s own docstring
+  (`bfdfd7f`). **The unsettled clause: moving `TaskEvent` 256–4095 to wl-exptasks needs our
   agreement, because we allocated 256–259 into it and ownership moving is explicitly not
   permission to renumber.** Until we answer, wl-expcontroller allocates only in
   4096–32767, whose ownership is undisputed, so a decline costs them no rework.
 
-  That ADR exists because two manifests contradicted each other: `wl-mllib/wl.yaml`
+  That ADR exists because two manifests contradicted each other: `wl-exptasks/wl.yaml`
   published `task-event-vocabulary` claiming *"wl-preproc reads event handling from here
   rather than defining it"*, while `contracts/events.py` was already the frozen interface
   defining it. **`wlo validate` cannot catch that** — it checks that a published name

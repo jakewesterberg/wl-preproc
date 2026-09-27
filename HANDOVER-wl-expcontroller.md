@@ -7,7 +7,7 @@
 Five asks and two offers. **Two of the asks block real things**; the rest are cheap.
 
 Written after reading this repository's source rather than its manifest — which mattered, because
-`wl-mllib`'s manifest claimed the event vocabulary was unallocated and wl-expcontroller came
+`wl-exptasks`' manifest claimed the event vocabulary was unallocated and wl-expcontroller came
 within one spec of building a second codec beside the frozen one here.
 
 ---
@@ -61,25 +61,25 @@ reuses the shape `TRIAL_NUMBER` and `CONDITION` already have.
 
 ## Ask 3 — record the ownership split, because two manifests contradict
 
-`wl-mllib/wl.yaml` published `task-event-vocabulary` and said *"Nothing is allocated yet"* and
+`wl-exptasks/wl.yaml` published `task-event-vocabulary` and said *"Nothing is allocated yet"* and
 that *"wl-preproc reads event handling from here rather than defining it."* Both false.
 `wlo validate` cannot catch it: it checks that a published name resolves to one publisher, never
 that a description is true.
 
 **Ruling taken (wl-expcontroller ADR-0007), splitting on decodability versus meaning** — if
-getting it wrong makes a recording *undecodable* it is yours; if *uninterpretable*, `wl-mllib`'s:
+getting it wrong makes a recording *undecodable* it is yours; if *uninterpretable*, `wl-exptasks`':
 
 | Range | Owner |
 |---|---|
 | Framing, escapes, checksum, payload counts, DVA encoding | **wl-preproc** |
 | `Marker` 1–255 | **wl-preproc** |
-| `TaskEvent` 256–4095 | **wl-mllib** |
-| `TaskTypeCode` 100+, and 4096–32767 | **wl-mllib** |
+| `TaskEvent` 256–4095 | **wl-exptasks** |
+| `TaskTypeCode` 100+, and 4096–32767 | **wl-exptasks** |
 
 **Nothing moves and nothing is renumbered.** Your `TaskEvent` 256–259 transfer as
 already-allocated; your own warning about renumbering silently relabelling prior recordings
 applies in full. The ask is only that the split be **stated in `TaskEvent`'s docstring**, so the
-next person to add a code knows which repo allocates it. `wl-mllib`'s manifest is already
+next person to add a code knows which repo allocates it. `wl-exptasks`' manifest is already
 corrected.
 
 **If you would rather keep 256–4095, say so** and ours go in 4096–32767. The layering matters more
