@@ -1,11 +1,18 @@
 # NSLR-HMM is written, tested and registered, and measured against its authors' code and the paper's coders
 
 **Built 2026-09-27 on `spec/nslr`.**
-- **Branch:** fifteen commits past `main` at `86ce4cc`
-  (`git log --oneline main..HEAD`), counting the spec (`e8cec1f`, `1af89b3`),
-  the plan (`8749d0e`, `56f0dd0`, `91b7f77`), five task commits (`ad266d7`
-  through `4ce4ad0`, plus the requester's own spec correction `cc0a669`), two
-  more task commits (`08c75c9`, `cde2acd`) and this records commit.
+- **Branch:** this commit and the fifteen before it, past `main` at
+  `86ce4cc` (`git log --oneline 86ce4cc..HEAD`, sixteen total). In `git log`
+  order (most recent first): this fix-round update; the Task 7 records
+  commit (`a539b7b`: the measurements, the licence correction, this
+  handoff); the human-coder harness (`cde2acd`); real-data measurement
+  (`08c75c9`); the planted-step invariant, holding NSLR to steps at or
+  above 1° (`4ce4ad0`); the requester's spec correction after that finding
+  (`cc0a669`); registration (`93ef359`); the normalisation null
+  (`099d949`); fidelity nulls (`467d3a1`); pooled noise, features and
+  decode (`0c921d4`); segmentation and the continuous fit, numba added
+  (`ad266d7`); the plan (`91b7f77`, `56f0dd0`, `8749d0e`); the spec
+  (`1af89b3`, `e8cec1f`).
 - **Documents:** design spec
   `docs/superpowers/specs/2026-09-27-nslr-design.md`; plan at
   `docs/superpowers/plans/2026-09-27-nslr.md` (path recorded in
@@ -69,17 +76,17 @@ outside it, exactly as the reference computes them, and passed in.
 
 **Along the way:**
 - `numba>=0.67` became a runtime dependency (Task 1), bringing llvmlite.
-  **numba's own ceiling matters beyond this branch**: it declares
-  `numpy<2.6,>=1.22`, so this pipeline's numpy is now capped wherever numba
-  is, and a numpy release past that waits on numba — recorded in `wl.yaml`'s
-  `why`.
+  **numba's own ceiling matters beyond this branch**: its own metadata
+  declares `numpy<2.6,>=1.22`, so this pipeline's numpy is now capped
+  wherever numba is, and a numpy release past that waits on numba —
+  `wl.yaml`'s `why` records the ceiling, `numpy<2.6`.
 - **Two numpy adapters let the AGPL-3.0 reference run on current numpy**
   (spec §2, §7), applied to the loaded `nslr_hmm` module only, never to numpy
   itself: `float()` on a one-element array, which numpy 2.4 rejects with
-  `TypeError` (the reference calls it at `nslr_hmm.py` 297, 299, 301 —
-  parked minor (a), below), becomes `.item()`; and `np.row_stack`, which
-  numpy 2.5 removed, becomes `np.vstack`, identical for the single array it
-  is given. Neither changes any arithmetic. Both are exercised: Task 1's
+  `TypeError` (the reference calls it at `nslr_hmm.py` 298, 300 and 302),
+  becomes `.item()`; and `np.row_stack`, which numpy 2.5 removed, becomes
+  `np.vstack`, identical for the single array it is given. Neither changes
+  any arithmetic. Both are exercised: Task 1's
   segmentation and continuous-fit fidelity tests (12 cases) ran against the
   reference on 3.13 with numpy 2.5.3 — none skipped — as well as on 3.11
   with numpy 2.4.6.
@@ -192,7 +199,7 @@ movements under about 1°, and note it may need retuning.**
 
 ## The rulings made during execution, and what each costs if wrong
 
-Two, both recorded in the ledger
+Three, all recorded in the ledger
 (`.superpowers/sdd/2026-09-27-nslr/progress.md`).
 
 1. **Task 2's commit trailer names "Claude Sonnet 5" — the implementer's own
@@ -220,6 +227,16 @@ Two, both recorded in the ledger
    - **Cost if wrong:** a null that proves less than it claims — caught at
      re-review, which is what happened: fix round 1 re-pinned it and 203 of
      1,500 samples differ under the broken variant, on both interpreters.
+3. **Parked minor (a) is withdrawn.** Task 1's reviewer had flagged
+   `nslr_hmm.py`'s `float()` calls as being at lines 297, 299 and 301 in the
+   pinned checkout, against 298, 300 and 302 cited by spec §2 and
+   `_nslr_reference.py`.
+   - **The ruling:** withdrawn, after this task's own grep of the pinned
+     checkout (`$SCRATCH/nslr-hmm` at `3598fee`) confirmed the calls sit at
+     298, 300 and 302 — the citation was right all along; the reviewer
+     misread the lines.
+   - **Cost if wrong:** one docstring cites lines one off from the pinned
+     checkout, which is cosmetic.
 
 **Three further notes, briefly**, not rulings:
 - **Task 1's mutation rows 3–4 (the `>=` comparisons at the winner and the
@@ -276,16 +293,12 @@ Two, both recorded in the ledger
 
 ## Deferred, and NOT done
 
-**Parked minors (a)–(i), open at the time of writing** — the ledger's own
-list, carried here for the final fix wave:
+**Parked minor (a) is withdrawn** (see the rulings above) — a reviewer
+misreading, not a real citation error. **Minors (b)–(i), open at the time
+of writing** — the ledger's own list, carried here for the final fix wave:
 
-- **(a)** `tests/eye/detect/_nslr_reference.py` (or its docstring/comments,
-  Task 1) cites `nslr_hmm.py` lines 298, 300, 302 for the three `float()`
-  calls the numpy adapter targets; the pinned checkout has them at 297, 299,
-  301.
 - **(b)** `test_nslr.py` imports `gaze_trace` unused until Task 4's tests
-  landed (preflight-known; likely resolved in practice by Task 4's own
-  additions, but not confirmed closed in the ledger).
+  landed (preflight-known).
 - **(c)** `features`'s `np.errstate` also ignores `divide`, where the
   comment names only the `0/0` case — narrow to `invalid="ignore"` alone if
   `divide` is never actually hit.

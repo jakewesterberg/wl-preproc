@@ -95,7 +95,9 @@ requester chose to merge the same day; true when written.*
 >    space.
 > 2. **Bayesian microsaccade detection.** Real code, hardware-free, and it
 >    matters as a SACCADE detector — see the priority note below about
->    glissades. U'n'Eye is the remaining unwritten detector; it wants the GPU,
+>    glissades. It is also the one method in the parent spec's §3.1 table
+>    built for the sub-1° regime NSLR now explicitly does not cover (below).
+>    U'n'Eye is the remaining unwritten detector; it wants the GPU,
 >    so it stays blocked. The conjunction's one-sample duration floor is now
 >    inherited by three millisecond- or no-duration detectors, Nyström–
 >    Holmqvist, REMoDNaV and NSLR. It is a cross-detector decision, still open.
@@ -181,6 +183,9 @@ requester chose to merge the same day; true when written.*
 >      reimplementation defect. `_NOT_USED_BELOW_1_DEG` in
 >      `tests/schema/test_detect_populate.py` names it; a supervised refit on
 >      hand-labelled monkey data is the route past it, out of scope here.
+>      This raises the value of Bayesian microsaccade detection (item 2
+>      above): it is the one method the parent spec's §3.1 table built for
+>      exactly this sub-1° regime.
 >
 >    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
 >    and what is still deferred.
