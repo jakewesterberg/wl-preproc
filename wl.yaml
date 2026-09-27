@@ -372,7 +372,9 @@ status:
   # line's merges and then REMoDNaV's (`cef2ce4`) had landed; true when written.
   # Was `cef2ce4` until NSLR's merge `c7903dd` on 2026-09-27, by which time the
   # wl-exptasks rename merge (`86ce4cc`) had also landed; true when written.
-  describes: c7903dd
+  # Was `c7903dd` until the validity fix's merge `4dbbaa3` the same day; true
+  # when written.
+  describes: 4dbbaa3
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

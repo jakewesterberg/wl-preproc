@@ -1,16 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-09-27**, describing `main` at `c7903dd` — the merge commit
-for `spec/nslr`: NSLR-HMM, the fifth registered eye-movement detector, held
-sample-for-sample to its authors' own code (23 commits, spec
-`superpowers/specs/2026-09-27-nslr-design.md`, handoff
-`handoffs/2026-09-27-nslr-built.md`). `c7903dd`'s tree is byte-identical to
-the tested branch head `71a3bcc`: 1642 passed on 3.11 and 1641 on 3.13, 0
-failed on both. A freshly compiled 3.13 resolution differed from the tested
-one only in `wrapt` (2.4.1 → 2.5.0, transitive via `deprecated` and
-`formulaic`); CI ran on it. CI read off `c7903dd` itself: green on both
-interpreters, and the manifest check green — `gh run view 36325492781`. CI on
-later heads is recorded here only once read, not before.
+**Last updated 2026-09-27**, describing `main` at `4dbbaa3` — the merge commit
+for `fix/validity-non-finite`: the validity mask's sixth criterion,
+`non_finite`, which withholds a sample whose gaze, velocity or quality flag is
+not a finite number, for every detector (parent spec
+`superpowers/specs/2026-08-31-saccade-detection-design.md` §2). `4dbbaa3`'s
+tree is byte-identical to the tested branch head `2ef608f`: 1620 passed on
+3.11 and 1619 on 3.13, 0 failed on both. CI read off `4dbbaa3` itself: green
+on both interpreters, and the manifest check green — `gh run view
+36329654715`. CI on later heads is recorded here only once read, not before.
+
+*This header named `c7903dd` — NSLR-HMM's merge, the fifth registered
+detector, 1642 passed on 3.11 and 1641 on 3.13, CI `36325492781` — until the
+validity fix merged the same day; true when written.*
 
 *This header named `cef2ce4` — REMoDNaV's merge, 1572 passed on 3.11 and 1571
 on 3.13, CI `36296476263` — until the NSLR merge. `main` had by then moved to
