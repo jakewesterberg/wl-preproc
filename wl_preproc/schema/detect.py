@@ -772,6 +772,10 @@ class EyeDetection(dj.Computed):
         # applies to every trace (see this docstring's conjunction
         # paragraph).
         runs_end_before_landing = detector.runs_end_before_landing and trace != "conjunction"
+        # BMD's take-off rule, per eye only for the same reason (design spec
+        # `2026-09-27-bmd-design.md` section 3.5), and for its microsaccade
+        # runs only: its saccade runs are Engbert-Kliegl's.
+        runs_start_after_takeoff = detector.runs_start_after_takeoff and trace != "conjunction"
         # Read the way `_min_duration_samples` reads a detector's params: a
         # field only NSLR's params declare, so every other detector has no
         # floor on any trace.
@@ -802,6 +806,8 @@ class EyeDetection(dj.Computed):
                     gaze, v, offered, run.start, run.stop, fs_hz,
                     runs_end_before_landing=runs_end_before_landing,
                     min_measured_ms=min_measured_ms,
+                    runs_start_after_takeoff=(runs_start_after_takeoff
+                                              and run.label is Label.MICROSACCADE),
                 )
                 if measurement is not None:
                     amplitude_deg = measurement.amplitude_deg

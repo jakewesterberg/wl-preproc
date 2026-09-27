@@ -113,6 +113,7 @@ def measure_event_run(
     *,
     runs_end_before_landing: bool,
     min_measured_ms: float | None,
+    runs_start_after_takeoff: bool = False,
 ) -> Measurement | None:
     """One stored event run's measurement under its detector's declared rule,
     or `None` -- stored as NULL -- for a run too brief to measure.
@@ -146,23 +147,42 @@ def measure_event_run(
     fs_hz`, is not measured: the requester's decision of 2026-09-27 (design
     spec section 4). `None` means no floor.
 
-    `duration_s` is the run's own, `(stop - start) / fs_hz`, under either
+    **`runs_start_after_takeoff`** is BMD's, declared on its `registry.Detector`
+    entry and passed for its microsaccade runs only. BMD's state-1 run
+    `[t1, t2)` carries the eye from sample `t1 - 1` (design spec
+    `2026-09-27-bmd-design.md` section 3.5), so such a run is measured from
+    that take-off sample -- amplitude `gaze[stop - 1] - gaze[start - 1]`, peak
+    velocity over `[start - 1, stop)` -- when `start - 1` exists, the mask
+    offered it, and its gaze is finite. Otherwise it is measured as `measure`
+    measures it. The requester's decision of 2026-09-27.
+
+    `duration_s` is the run's own, `(stop - start) / fs_hz`, under every
     rule."""
     if min_measured_ms is not None and (stop - start) / fs_hz < min_measured_ms / 1000.0:
         return None
+    lo, hi = start, stop
     if (
         runs_end_before_landing
         and stop < gaze_deg.shape[0]
         and offered[stop] is None
         and bool(np.isfinite(gaze_deg[stop]).all())
     ):
-        landed = measure(gaze_deg, velocity_deg_s, start, stop + 1, fs_hz)
-        return Measurement(
-            amplitude_deg=landed.amplitude_deg,
-            peak_velocity_deg_s=landed.peak_velocity_deg_s,
-            duration_s=float(stop - start) / fs_hz,
-        )
-    return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz)
+        hi = stop + 1
+    if (
+        runs_start_after_takeoff
+        and start >= 1
+        and offered[start - 1] is None
+        and bool(np.isfinite(gaze_deg[start - 1]).all())
+    ):
+        lo = start - 1
+    if (lo, hi) == (start, stop):
+        return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz)
+    widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz)
+    return Measurement(
+        amplitude_deg=widened.amplitude_deg,
+        peak_velocity_deg_s=widened.peak_velocity_deg_s,
+        duration_s=float(stop - start) / fs_hz,
+    )
 
 
 def classify(amplitude_deg: float, microsaccade_max_deg: float) -> Label:

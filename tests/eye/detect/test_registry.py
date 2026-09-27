@@ -199,3 +199,17 @@ def test_nslr_is_registered_with_its_vocabulary_and_defaults():
     assert detector.vocabulary == frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT})
     assert isinstance(detector.defaults, NslrParams)
     assert detector.defaults == DEFAULT_NSLR_PARAMS
+
+
+def test_bmd_is_registered_with_its_vocabulary_defaults_and_take_off_rule():
+    from wl_preproc.eye.detect.bmd import DEFAULT_BMD_PARAMS, BmdParams
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS, get_detector
+
+    detector = get_detector("bmd")
+
+    assert detector.vocabulary == frozenset({Label.SACCADE, Label.MICROSACCADE, Label.DRIFT})
+    assert isinstance(detector.defaults, BmdParams)
+    assert detector.defaults == DEFAULT_BMD_PARAMS
+    assert detector.runs_start_after_takeoff
+    assert [name for name, d in DETECTORS.items() if d.runs_start_after_takeoff] == ["bmd"]
