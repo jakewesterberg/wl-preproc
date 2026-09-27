@@ -166,6 +166,20 @@ Two points outside the algorithm matter here:
   module, and `setup.py` raises `BuildFailed`. The C++ does not build with
   current compilers either: its bundled Eigen 3.3.4 fails under this machine's
   clang, with `-std=c++14` too. §7 follows from this.
+- **The reference no longer runs unmodified on current numpy.** Found while
+  proving the design's prototype.
+  - `nslr_hmm.py` 298, 300 and 302 call `float()` on one-element arrays, which
+    numpy 2.4 rejects with a `TypeError`.
+  - Its Viterbi (`nslr_hmm.py` 80) calls `np.row_stack`, which numpy 2.5
+    removed. CI's Python 3.13 resolution now has numpy 2.5.3.
+
+  The test loader supplies both (§7), and neither changes any arithmetic.
+  `float` becomes the array's single element, which is what older numpy's
+  `float()` returned. `row_stack` becomes `np.vstack`, identical for the single
+  array it is given. With both in place, a prototype of this design matched
+  the reference exactly — split indices, endpoints, features and every
+  sample's label — on three synthetic traces, on Python 3.11 with numpy 2.4.6
+  and on 3.13 with numpy 2.5.3.
 
 ## 3. Inputs: what is shared, and what does not apply
 
@@ -242,15 +256,33 @@ row. The reference's classes map as:
   `detect_nslr` builds pieces from the mask, runs them, and returns runs.
 - **Arithmetic mirrors the reference.** §1.4's stopping rule compares floats
   exactly, so a result one ULP off can change the pass count and, with it, the
-  segmentation. The inner loop may use Python scalars for speed, but it
-  performs the reference's operations in the reference's order:
-  - `2*σ**2`, not `2*σ*σ`;
-  - the same `log` and `sqrt` calls;
+  segmentation. So the implementation performs the reference's operations in
+  the reference's order:
+  - every `v**2` written as `v*v` — numpy's square, which is what the
+    reference's arrays compute;
   - the same accumulation order;
-  - scipy's `interp1d` for the residuals, as `Segmentation.__call__` uses.
+  - scipy's `interp1d` for the residuals, as `Segmentation.__call__` uses;
+  - numpy with the reference's shapes for the features and the decode.
 
   §5.1 is what proves it. Any residual difference is explained or fixed, never
   tolerated.
+- **The segmentation loop is compiled with numba** (§7; the requester's choice
+  on 2026-09-27):
+  - it is `@numba.njit` without `fastmath`, so nothing is reassociated or fused;
+  - live hypotheses are held in preallocated arrays, compacted in order on
+    pruning, so "the first maximum" means what it means in the reference's
+    list;
+  - parents are an array from each hypothesis's start index to its parent's.
+
+  **No transcendental function runs inside compiled code.** The likelihood
+  constant `Σ log(1/(√(2π)σ))` and the split prior's value for each sample's
+  `dt` are computed outside, in numpy, exactly as the reference computes them,
+  and passed in, because a compiled `log` need not agree with numpy's to the
+  last bit. The compiled loop sees only `+ − × ÷` and comparisons.
+
+  A prototype of this loop produced split indices identical to a
+  reference-exact pure-Python one on four traces, the longest 59,970 samples.
+  It was 50–75 times faster.
 - **Nothing is copied from the reference.** It is AGPL, and this
   implementation follows its behaviour, not its text. The segmentation
   hypothesis loop, like REMoDNaV's two-line on/offset loops, can only be
@@ -287,9 +319,10 @@ is gated on `WLPP_NSLR_REFERENCE`, which CI sets, and it skips without it.
   reference. The labels must be identical. The p99→15° scale is REMoDNaV's §5.2
   scale.
 - **Runtime, measured.** Each eye over the full recording (1,177,799 samples).
-  The prediction from design, 30 µs per sample per pass times 5–6 passes, is
-  about 3–4 minutes per eye. It is recorded, not gated. §8 item 2 says what
-  would change the decision.
+  The prediction from the design's prototype: the compiled segmenter took
+  0.15–0.39 s per pass over 59,970 samples. With 5–6 passes plus the
+  per-segment numpy stages, that is about a minute per eye. It is recorded, not
+  gated.
 - **Agreement with the registered detectors, reported.** Saccade counts and
   sample-level kappa against REMoDNaV and Nyström–Holmqvist on REMoDNaV's
   120,000-sample slice. These are recorded, not gated: there is no oracle for
@@ -391,10 +424,21 @@ verbatim from `nslr_hmm.py` 39–42.
 
 ## 7. Dependencies
 
-**Runtime: nothing new.** `numpy` and `scipy` are already runtime
-dependencies. `scipy.interpolate.interp1d` and `scipy.stats.multivariate_normal`
-are what the reference uses, and this implementation uses them too, for §4.1's
-arithmetic.
+**Runtime: numba, and nothing else new.**
+- **numba.** It becomes a runtime dependency, which brings llvmlite with it
+  (§4.1; the requester's choice on 2026-09-27).
+  - **The floor.** `numba>=0.67`: 0.67.0 is the version the design's prototype
+    ran on, with Python 3.11 and numpy 2.4.6, and with Python 3.13 and numpy
+    2.5.3.
+  - **Wheels.** 0.67.0 and llvmlite 0.49.0 publish wheels for CPython 3.11 and
+    3.13 on macOS arm64 and Linux x86_64.
+  - **Its own ceiling.** numba declares `numpy<2.6,>=1.22`, so this pipeline's
+    numpy is capped wherever numba is, and a numpy release beyond that waits
+    on numba. `wl.yaml`'s `why` says so.
+- **numpy and scipy** are already runtime dependencies.
+  `scipy.interpolate.interp1d` and `scipy.stats.multivariate_normal` are what
+  the reference uses, and this implementation uses them too, for §4.1's
+  arithmetic.
 
 **Test time: the two AGPL-3.0 references, fetched, never installed.**
 - **Why not install.** `nslr` cannot be installed as a package here: its C++
@@ -404,7 +448,10 @@ arithmetic.
   `gitlab.com/nslr/nslr-hmm` at `3598fee`, and sets `WLPP_NSLR_REFERENCE` to
   their parent directory. A test helper loads `nslr/nslr/slow_nslr.py` by path
   and registers it as the module `nslr`, so that `nslr_hmm.py`'s `import nslr`
-  resolves to it. Then it loads `nslr_hmm.py`.
+  resolves to it. Then it loads `nslr_hmm.py`, and applies §2's two numpy
+  adapters to that module alone: a `float` that takes a one-element array's
+  element, and an `np` whose `row_stack` is `np.vstack`. numpy itself is never
+  patched.
 - **Where they live.** Locally, the checkouts live outside the repository.
   Nothing from them is committed.
 - **The fork.** `github.com/pupil-labs/nslr-hmm`'s `nslr_hmm.py` is
@@ -412,6 +459,8 @@ arithmetic.
   source is the same code. GitLab is the authors'.
 
 **Consequences:**
+- `pyproject.toml`'s runtime dependencies gain `numba>=0.67`, with `wl.yaml`'s
+  `third_party` entry and its `why`;
 - `.github/workflows/` gains the clone step;
 - `wl.yaml`'s `third_party` gains `nslr` and `nslr-hmm`, test-time only, with
   their `why`: AGPL-3.0, test-only by the requester's decision, the pinned
@@ -426,10 +475,15 @@ arithmetic.
    reference offers re-estimation (Baum–Welch, and a robust Viterbi variant);
    whether to run it on this lab's data is the obvious next question. It is
    out of scope here.
-2. **Runtime.** About 10 minutes per eye for a two-hour session, predicted.
-   **The requester chose this on 2026-09-27**, over compiling the loop with
-   numba, "if the nightly run later proves too slow". §5.2 measures it. Parent
-   §11 item 6's nightly budget is where it is decided.
+2. **Runtime.** With the compiled loop, predicted at about a minute per eye
+   for the 39-minute reference recording (§5.2 measures it).
+
+   *This item first said plain Python, at a predicted 10 minutes per eye for a
+   two-hour session. That prediction came from a quick test on unrealistically
+   simple data. Measured on realistic synthetic data, plain Python was about 25
+   minutes per eye for a two-hour session: some 94 hypotheses stay alive per
+   sample, not a handful. Given the corrected number, the requester chose numba
+   on 2026-09-27. The first choice was true when written.*
 3. **Pursuit on the current tasks** (§4): suspect until a task moves a target.
 4. **The one-sample conjunction floor**, now shared by three detectors.
 5. **Exact-float termination across platforms.** §1.4's stopping rule is exact,
