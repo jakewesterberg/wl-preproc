@@ -148,7 +148,9 @@ def measure_event_run(
     spec section 4). `None` means no floor.
 
     **`runs_start_after_takeoff`** is BMD's, declared on its `registry.Detector`
-    entry and passed for its microsaccade runs only. BMD's state-1 run
+    entry and passed for its own events only, `microsaccade` or `saccade`,
+    never the saccades it copies from Engbert-Kliegl
+    (`schema/detect.py::_measured_from_takeoff`). BMD's state-1 run
     `[t1, t2)` carries the eye from sample `t1 - 1` (design spec
     `2026-09-27-bmd-design.md` section 3.5), so such a run is measured from
     that take-off sample -- amplitude `gaze[stop - 1] - gaze[start - 1]`, peak

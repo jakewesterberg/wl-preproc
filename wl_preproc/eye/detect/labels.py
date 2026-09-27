@@ -133,7 +133,7 @@ class Run:
     stop: int
     label: Label
     #: Otero-Millan's per-detection silhouette (design spec section 5), or,
-    #: on a Bayesian microsaccade detection `microsaccade` run, its mean
+    #: on an event Bayesian microsaccade detection found itself, its mean
     #: posterior probability of a microsaccade (0.5 to 1; BMD design spec
     #: section 3.4) -- a different quantity on a different scale. `None` for
     #: every other detector and for every run this subsystem reconstructs

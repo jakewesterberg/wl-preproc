@@ -17,8 +17,11 @@ nothing of it is copied here (spec preamble, section 2).
 - Engbert-Kliegl's saccades are removed first and stored as BMD's `saccade`.
 - BMD analyses the fixation stretches between them.
 - Its settings are pooled over blocks of about a minute of stretches.
-- Samples whose probability of a microsaccade is at least 0.5 are
-  `microsaccade`, and the rest of each stretch is `drift`.
+- Samples whose probability of a microsaccade is at least 0.5 are BMD's own
+  events, and the rest of each stretch is `drift`. An own event is `saccade`
+  when its amplitude, measured from its take-off sample, reaches
+  `microsaccade_max_deg`, and `microsaccade` below it (the requester's
+  decision of 2026-09-27).
 """
 
 from __future__ import annotations

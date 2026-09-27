@@ -405,8 +405,8 @@ class EyeDetection(dj.Computed):
         # measurements; every other label leaves them NULL. So does a saccade
         # run too brief for its detector's paramset to measure (NSLR's
         # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
-        # `reliability` is Otero-Millan's per-detection index, and for a
-        # Bayesian microsaccade detection `microsaccade` run its mean
+        # `reliability` is Otero-Millan's per-detection index, and for an
+        # event Bayesian microsaccade detection found itself its mean
         # posterior probability of a microsaccade (0.5 to 1; BMD design spec
         # section 3.4) -- a different quantity on a different scale. Null for
         # every detector that has neither -- declared now because the
@@ -656,11 +656,12 @@ class EyeDetection(dj.Computed):
         2026-09-27, NSLR design spec section 4). For every detector but NSLR
         and BMD that rule is `measure`, unchanged, on every trace. BMD's
         runs start one sample after the eye takes off
-        (`registry.Detector.runs_start_after_takeoff`), so each of its
-        per-eye `microsaccade` runs is measured from that take-off sample
-        (BMD design spec section 3.5); its `saccade` runs are
-        Engbert-Kliegl's and are measured as `measure` measures them. *Until
-        2026-09-27 this said "every detector but NSLR"; true when written.*
+        (`registry.Detector.runs_start_after_takeoff`), so each of its own
+        per-eye events, `microsaccade` or `saccade`, is measured from that
+        take-off sample (BMD design spec section 3.5); the saccades it copies
+        from Engbert-Kliegl are measured as `measure` measures them
+        (`_measured_from_takeoff`). *Until 2026-09-27 this said "every
+        detector but NSLR"; true when written.*
         NSLR's runs end one
         sample before the eye lands
         (`registry.Detector.runs_end_before_landing`), so each of its
@@ -707,10 +708,12 @@ class EyeDetection(dj.Computed):
         returning, and two pieces are always separated by at least one
         sample no run claims, so it never emits two adjacent runs with the
         same label either. BMD's runs within a fixation stretch come from
-        `true_runs`, so they are maximal; two stretches are always separated
-        by at least one sample that is a gate saccade or unclaimed; and its
-        saccades are Engbert-Kliegl's. So BMD never emits two adjacent runs
-        with the same label either.
+        `true_runs`, so they are maximal, and every own event is bordered by
+        `drift`: each chain's first and last runs, which are excluded from
+        the probability, always cover a stretch's first and last samples.
+        Two stretches are always separated by at least one sample that is a
+        copied Engbert-Kliegl saccade or unclaimed. So BMD never emits two
+        adjacent runs with the same label either.
 
         *Until BMD was registered (2026-09-27, `spec/bmd`) this said "Four of
         the five registered detectors" and did not mention BMD; true when

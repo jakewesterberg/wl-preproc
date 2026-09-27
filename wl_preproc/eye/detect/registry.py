@@ -121,8 +121,8 @@ class Detector:
     # a paramset. Off by default, so every other detector is unchanged.
     runs_end_before_landing: bool = False
     # **True when this detector's runs start one sample after the eye takes
-    # off**, so `_insert_trace` measures each per-eye microsaccade run from
-    # its take-off sample. BMD's is: its state-1 run `[t1, t2)` carries the
+    # off**, so `_insert_trace` measures each of its own per-eye events from
+    # its take-off sample (`schema/detect.py::_measured_from_takeoff`). BMD's is: its state-1 run `[t1, t2)` carries the
     # eye from sample `t1 - 1` to `t2 - 1` (design spec
     # `2026-09-27-bmd-design.md` section 3.5). The requester's decision of
     # 2026-09-27. Off by default, so every other detector is unchanged.
@@ -253,13 +253,16 @@ DETECTORS: dict[str, Detector] = {
     # `2026-09-27-bmd-design.md`). A hidden semi-Markov model of fixation,
     # held sample for sample to its authors' C++. Engbert-Kliegl's saccades,
     # run with BMD's own `gate_*` settings, are removed first and stored as
-    # BMD's `saccade`, so EK and BMD agree on `saccade` by construction
-    # (spec section 3.1). It declares both halves of the amplitude split, so
-    # its conjunction's saccadic label is `classify`, as for Engbert-Kliegl.
-    # Its paramset has no `min_duration_samples`, so `_min_duration_samples`
-    # gives its conjunction the one-sample floor. Its microsaccades are
-    # measured from their take-off sample (`runs_start_after_takeoff`,
-    # spec section 3.5).
+    # BMD's `saccade`, so EK and BMD agree on those by construction (spec
+    # section 3.1), and consensus leaves them out of that pair
+    # (`copies_saccades_from`). Its own events are split by size, `saccade`
+    # at `microsaccade_max_deg` or more, and carry their mean posterior as
+    # reliability (the requester's decisions of 2026-09-27). It declares
+    # both halves of the amplitude split, so its conjunction's saccadic
+    # label is `classify`, as for Engbert-Kliegl. Its paramset has no
+    # `min_duration_samples`, so `_min_duration_samples` gives its
+    # conjunction the one-sample floor. Its own events are measured from
+    # their take-off sample (`runs_start_after_takeoff`, spec section 3.5).
     "bmd": Detector(
         name="bmd",
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE, Label.DRIFT}),
