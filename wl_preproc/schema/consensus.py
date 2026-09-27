@@ -398,6 +398,7 @@ class DetectorAgreement(dj.Computed):
 
         labels: dict[str, np.ndarray] = {}
         vocabularies: dict[str, frozenset[Label]] = {}
+        names: dict[str, str] = {}
         for side in ("a", "b"):
             detection_key = {**shared_key, "paramset_idx": key[f"paramset_{side}"]}
             n_samples = int(
@@ -426,12 +427,26 @@ class DetectorAgreement(dj.Computed):
             # that cannot express one, and scoring it as though it had would
             # make one session's vocabulary depend on that session's data.
             vocabularies[side] = get_detector(params["detector"]).vocabulary
+            names[side] = params["detector"]
+
+        # **A pair where one side copies the other's saccades is scored
+        # without them** (`registry.Detector.copies_saccades_from`; the
+        # requester's decision of 2026-09-27, BMD design spec section 4).
+        # BMD stores Engbert-Kliegl's saccades as its own, so the two agree on
+        # them by construction and that agreement says nothing about BMD.
+        # Every sample the source stored as `saccade` is excluded, like a
+        # `blink`, on every trace: a copy leaves no per-run mark on the
+        # conjunction, but the source's own label marks it everywhere.
+        copied = np.zeros(len(labels["a"]), dtype=bool)
+        for side, other in (("a", "b"), ("b", "a")):
+            if get_detector(names[side]).copies_saccades_from == names[other]:
+                copied |= labels[other] == Label.SACCADE
 
         rows = []
         for pso_as in PSO_AS_VALUES:
             mask = comparison_mask(
                 labels["a"], labels["b"], vocabularies["a"], vocabularies["b"], pso_as
-            )
+            ) & ~copied
             vocabulary = shared_vocabulary(vocabularies["a"], vocabularies["b"], pso_as)
             scored = {
                 side: _scored_in(labels[side], vocabulary, pso_as, mask)

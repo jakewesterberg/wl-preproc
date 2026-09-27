@@ -127,6 +127,14 @@ class Detector:
     # `2026-09-27-bmd-design.md` section 3.5). The requester's decision of
     # 2026-09-27. Off by default, so every other detector is unchanged.
     runs_start_after_takeoff: bool = False
+    # **The registered detector whose saccades this one copies**, if any.
+    # BMD's gate runs Engbert-Kliegl at its registered defaults and stores
+    # those saccades as its own, so the two agree on them by construction.
+    # `schema/consensus.py::DetectorAgreement` therefore leaves out of that
+    # pair every sample the source detector stored as `saccade`: the
+    # requester's decision of 2026-09-27 (BMD design spec section 4, final
+    # review I4). None for every other detector.
+    copies_saccades_from: str | None = None
 
     def detect(
         self,
@@ -258,6 +266,7 @@ DETECTORS: dict[str, Detector] = {
         run=detect_bmd,
         defaults=DEFAULT_BMD_PARAMS,
         runs_start_after_takeoff=True,
+        copies_saccades_from="engbert_kliegl",
     ),
 }
 
