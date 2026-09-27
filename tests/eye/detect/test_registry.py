@@ -187,3 +187,15 @@ def test_remodnav_is_registered_with_its_vocabulary_and_defaults():
     assert detector.vocabulary == frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT})
     assert isinstance(detector.defaults, RemodnavParams)
     assert detector.defaults == DEFAULT_REMODNAV_PARAMS
+
+
+def test_nslr_is_registered_with_its_vocabulary_and_defaults():
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.nslr import DEFAULT_NSLR_PARAMS, NslrParams
+    from wl_preproc.eye.detect.registry import get_detector
+
+    detector = get_detector("nslr")
+
+    assert detector.vocabulary == frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT})
+    assert isinstance(detector.defaults, NslrParams)
+    assert detector.defaults == DEFAULT_NSLR_PARAMS

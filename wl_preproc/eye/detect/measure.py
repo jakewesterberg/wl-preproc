@@ -103,6 +103,68 @@ def measure(
     )
 
 
+def measure_event_run(
+    gaze_deg: np.ndarray,
+    velocity_deg_s: np.ndarray,
+    offered: np.ndarray,
+    start: int,
+    stop: int,
+    fs_hz: float,
+    *,
+    runs_end_before_landing: bool,
+    min_measured_ms: float | None,
+) -> Measurement | None:
+    """One stored event run's measurement under its detector's declared rule,
+    or `None` -- stored as NULL -- for a run too brief to measure.
+
+    `offered` is the validity mask: `None` where a detector may label a
+    sample. `stop` is exclusive, matching `Run`.
+
+    **With neither rule declared this is exactly `measure`.** Every
+    registered detector but NSLR declares neither, so their stored rows are
+    unchanged.
+
+    **`runs_end_before_landing`** is a property of how a detector's runs
+    meet, declared on its `registry.Detector` entry. NSLR's segment `k` is
+    `[J[k], J[k+1])`, and the eye lands at knot `J[k+1]`, the next run's
+    first sample (design spec `2026-09-27-nslr-design.md` section 4). So
+    `measure`'s `gaze[stop - 1] - gaze[start]` would miss the last step: a
+    fraction `1/L` of an `L`-sample run, and all of it when `L` is 1. Such a
+    run is measured up to where the eye lands instead -- amplitude
+    `gaze[stop] - gaze[start]`, peak velocity over `[start, stop]` inclusive
+    -- when `stop` is an interior knot:
+    - `stop < n`;
+    - the mask offered it (`offered[stop] is None`);
+    - `gaze[stop]` is finite.
+
+    Otherwise the run already ends at its piece's last sample, which is its
+    own landing knot (`nslr.py::fit_pieces` places the last knot there), and
+    it is measured as `measure` measures it.
+
+    **`min_measured_ms`** is a paramset value (NSLR's
+    `min_measured_saccade_ms`). A run lasting less, `(stop - start) /
+    fs_hz`, is not measured: the requester's decision of 2026-09-27 (design
+    spec section 4). `None` means no floor.
+
+    `duration_s` is the run's own, `(stop - start) / fs_hz`, under either
+    rule."""
+    if min_measured_ms is not None and (stop - start) / fs_hz < min_measured_ms / 1000.0:
+        return None
+    if (
+        runs_end_before_landing
+        and stop < gaze_deg.shape[0]
+        and offered[stop] is None
+        and bool(np.isfinite(gaze_deg[stop]).all())
+    ):
+        landed = measure(gaze_deg, velocity_deg_s, start, stop + 1, fs_hz)
+        return Measurement(
+            amplitude_deg=landed.amplitude_deg,
+            peak_velocity_deg_s=landed.peak_velocity_deg_s,
+            duration_s=float(stop - start) / fs_hz,
+        )
+    return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz)
+
+
 def classify(amplitude_deg: float, microsaccade_max_deg: float) -> Label:
     """`saccade` at or above the threshold, `microsaccade` below it.
 

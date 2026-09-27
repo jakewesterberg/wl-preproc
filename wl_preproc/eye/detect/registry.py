@@ -32,6 +32,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, LabelledInterval
+from wl_preproc.eye.detect.nslr import DEFAULT_NSLR_PARAMS, detect_nslr
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
 )
@@ -110,6 +111,14 @@ class Detector:
     # Missing now raises `TypeError` at construction, at import, naming the
     # detector -- which is where it is cheapest to read.
     defaults: Any
+    # **True when this detector's runs end one sample before the eye lands**,
+    # so `schema/detect.py::_insert_trace` measures each per-eye saccade run
+    # up to its landing sample (`measure.py::measure_event_run`). NSLR's is:
+    # its segment `k` is `[J[k], J[k+1])`, and the landing knot `J[k+1]` is
+    # the next run's first sample (design spec `2026-09-27-nslr-design.md`
+    # section 4). Structural, not tunable, so it is declared here and not in
+    # a paramset. Off by default, so every other detector is unchanged.
+    runs_end_before_landing: bool = False
 
     def detect(
         self,
@@ -196,6 +205,28 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
         run=detect_remodnav,
         defaults=DEFAULT_REMODNAV_PARAMS,
+    ),
+    # **NSLR-HMM** (design spec `2026-09-27-nslr-design.md`). It never
+    # differentiates: it fits the position signal with straight segments and
+    # classifies whole segments. Its saccadic slice is `{saccade}`, so
+    # `_conjunction_label` takes the degenerate branch. It has no minimum
+    # duration, so `_min_duration_samples` gives its conjunction the one-sample
+    # floor it already gives Nystrom-Holmqvist and REMoDNaV -- recorded in the
+    # spec, deliberately not changed here. It is not used below 1 deg (design
+    # spec section 4), because its published, human-fitted classifier calls
+    # slow sub-degree movements fixation.
+    #
+    # Its runs meet at shared knots, so a saccade run ends one sample before
+    # the eye lands: `runs_end_before_landing` has its per-eye saccade rows
+    # measured up to the landing sample. Saccade runs under its paramset's
+    # `min_measured_saccade_ms` are stored unmeasured, on every trace. Both
+    # are the requester's decisions of 2026-09-27 (design spec section 4).
+    "nslr": Detector(
+        name="nslr",
+        vocabulary=frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}),
+        run=detect_nslr,
+        defaults=DEFAULT_NSLR_PARAMS,
+        runs_end_before_landing=True,
     ),
 }
 

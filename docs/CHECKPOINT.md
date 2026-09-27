@@ -93,12 +93,22 @@ requester chose to merge the same day; true when written.*
 >    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
 >    storing either as a typed array is the change if a real one costs real
 >    space.
-> 2. **NSLR and Bayesian microsaccade detection.** Real code, hardware-free,
->    and they matter as SACCADE detectors — see the priority note below about
->    glissades. U'n'Eye is the third unwritten detector; it wants the GPU, so
->    it stays blocked. The conjunction's one-sample duration floor is now
->    inherited by two millisecond-based detectors, Nyström–Holmqvist and
->    REMoDNaV. It is a cross-detector decision, still open.
+> 2. **Bayesian microsaccade detection.** Real code, hardware-free, and it
+>    matters as a SACCADE detector — see the priority note below about
+>    glissades. It is also the one method in the parent spec's §3.1 table
+>    built for the sub-1° regime NSLR now explicitly does not cover (below).
+>    U'n'Eye is the remaining unwritten detector; it wants the GPU,
+>    so it stays blocked. The conjunction's one-sample duration floor is now
+>    inherited by three millisecond- or no-duration detectors, Nyström–
+>    Holmqvist, REMoDNaV and NSLR. It is a cross-detector decision, still open.
+>    *Measured 2026-09-27 (the NSLR conjunction round): Otero-Millan's
+>    conjunction floor is one sample too, since its params declare no
+>    `min_duration_samples`. So the floor is shared by four detectors, not
+>    three.*
+>
+>    *Until 2026-09-27 this item also named NSLR here, alongside Bayesian
+>    microsaccade detection, gave U'n'Eye as the third unwritten detector, and
+>    named the floor as inherited by two detectors; true when written.*
 >
 >    **REMoDNaV is BUILT on `spec/remodnav` (2026-09-26), NOT merged as
 >    written.** It is the fourth registered detector, and the first real
@@ -142,6 +152,82 @@ requester chose to merge the same day; true when written.*
 >    *Until then this item named NSLR, REMoDNaV (the detector, not the PyPI
 >    oracle) and Bayesian microsaccade detection as unwritten; true when
 >    written.*
+>
+>    **NSLR-HMM is BUILT on `spec/nslr` (2026-09-27), NOT merged as written.**
+>    It is the fifth registered detector, and the only one that never
+>    differentiates: it fits gaze as a continuous chain of straight segments
+>    and classifies whole segments, rather than thresholding a velocity
+>    signal. What it measured:
+>    - **Fidelity.** Reproduced operation for operation against the authors'
+>      own `nslr`/`nslr-hmm` (numba-compiled, no `fastmath`), it matches
+>      their split indices, endpoints, features, Viterbi paths and every
+>      sample's label exactly on synthetic traces, on both interpreters.
+>    - **End to end on the reference recording.** Each eye's first
+>      5,000-sample gap-free stretch classifies identically to the
+>      reference, both eyes, both interpreters. The full recording
+>      (1,177,799 samples) classifies in 38.3 s (left) / 33.3 s (right) per
+>      eye. Over the first 120,000 samples: 505 saccades left / 478 right,
+>      against REMoDNaV's 519 / 488 (saccade kappa 0.453 / 0.421) and
+>      Nyström–Holmqvist's 568 / 569 (kappa 0.364 / 0.315) — fewer and lower
+>      kappa than either, consistent with treating slow sub-degree movement
+>      as fixation.
+>
+>      *Corrected 2026-09-27, by the final whole-branch review: "fewer" is
+>      true of that 120,000-sample slice and false over the whole
+>      recording. Over all 1,177,799 samples NSLR stores more saccade rows
+>      than either: 5,786 left / 5,216 right, against REMoDNaV's 4,814 /
+>      4,493 and Nyström–Holmqvist's 5,009 / 5,123. 55% of its left-eye
+>      saccade rows and 64% of its right-eye rows are shorter than 10 ms.*
+>    - **Against the paper's human coders** (Andersson et al. 2017), pooled
+>      over the 34 "data used in the article" files: the harness first
+>      reproduces Table 1's Human column (saccade 0.898/0.90, fixation
+>      0.813/0.81, pursuit 0.791/0.79, PSO 0.733/0.73) and then NSLR's own
+>      column (0.826/0.82, 0.535/0.51, 0.460/0.42, 0.556/0.53) — both within
+>      their stated bands, identical on both interpreters.
+>    - **The requester's ruling (2026-09-27): keep NSLR as published, do not
+>      use it for movements under about 1°, and note it may need retuning.**
+>      On the shared stepped-session fixture NSLR segments the planted
+>      0.75°/16 ms step exactly (18 ms) and calls it fixation — at ~42°/s,
+>      2.5 sd below the published saccade class and forbidden from PSO by the
+>      transition structure. The authors' own reference gives identical
+>      labels on the same trace: the published model's limit, not a
+>      reimplementation defect. `_NOT_USED_BELOW_1_DEG` in
+>      `tests/schema/test_detect_populate.py` names it; a supervised refit on
+>      hand-labelled monkey data is the route past it, out of scope here.
+>      This raises the value of Bayesian microsaccade detection (item 2
+>      above): it is the one method the parent spec's §3.1 table built for
+>      exactly this sub-1° regime.
+>    - **The final whole-branch review's fix wave (2026-09-27).**
+>      - *The requester's decision on what an NSLR saccade row measures.*
+>        NSLR's runs end one sample before the eye lands, so the shared
+>        `measure` missed the last step of every NSLR saccade row, and read
+>        a one-sample run as exactly 0.0° (542 left / 666 right on the
+>        reference recording).
+>        Now, for its per-eye saccade runs only, a run of 10 ms or more is
+>        measured to where the eye lands, and a briefer one is stored with
+>        no amplitude or peak velocity. After the fix, 3,186 left / 3,355
+>        right rows are stored unmeasured. The landing rule is declared on
+>        NSLR's registry entry and the 10 ms floor in its paramset
+>        (`min_measured_saccade_ms`). Every other detector's stored rows
+>        are unchanged, shown by test and by a before/after dump.
+>      - *Non-finite gaze.* One NaN made NSLR's pooled noise NaN for the
+>        whole eye. `detect_nslr` now withholds non-finite gaze, and a
+>        capped noise estimate warns.
+>      - *Open for the requester, recorded and not changed:* the shared
+>        validity mask passes NaN as usable for every detector (NSLR spec
+>        §8 item 6); and NSLR's conjunction, which the decision does not
+>        cover, still stores 219 one-sample saccade rows at 0.0° on the
+>        reference recording (NSLR spec §8 item 4).
+>
+>        *The conjunction half is superseded 2026-09-27, the same day (true
+>        when written): the requester applied the 10 ms floor to NSLR's
+>        conjunction too. 2,023 of its 3,230 conjunction saccade rows are
+>        now stored unmeasured, and none is at 0.0°. Every other detector's
+>        rows are unchanged. The shared-mask item stays open, and so does
+>        whether a conjunction needs a minimum event duration at all.*
+>
+>    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
+>    and what is still deferred.
 > 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to
 >    `eye/detect/labels.py`** as `KIND_OF`, `NOT_INTERSECTED`, `kind_of` and
 >    `UnknownLabelKind`. The conjunction and the eye-validation tests now use
@@ -978,6 +1064,10 @@ rehydration as the only hardware-free piece outstanding.
 
 *Corrected 2026-09-26 again: REMoDNaV is built too, on `spec/remodnav`, which
 leaves NSLR and BMD — see "Start here" item 2.*
+
+*Corrected 2026-09-27: NSLR is built too, on `spec/nslr`, which leaves
+Bayesian microsaccade detection as the only remaining hardware-free detector
+— see "Start here" item 2.*
 
 **Phase 2a is merged** (`056ee57`, follow-ups `068c8b0`), so item 1 as this section stood on
 2026-08-22 — *"resolve `element-array-ephys` #230 here"* — is **closed, and not the way the brief

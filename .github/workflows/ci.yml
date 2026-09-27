@@ -31,6 +31,19 @@ jobs:
         # wl-sync resolves from its public git URL declared in pyproject.
         run: pip install -e ".[dev]"
 
+      - name: Fetch the NSLR reference (test-time only, AGPL-3.0, never installed)
+        # Design spec 2026-09-27-nslr-design.md section 7: the authors' own
+        # pure-Python NSLR and NSLR-HMM, at pinned commits, loaded by path by
+        # tests/eye/detect/_nslr_reference.py. The requester approved test-only
+        # use on 2026-09-27; nothing here is installed or shipped.
+        run: |
+          ref="$RUNNER_TEMP/nslr-ref"
+          git clone -q https://gitlab.com/nslr/nslr.git "$ref/nslr"
+          git -C "$ref/nslr" checkout -q 67d03f8c4a922a5a7cad9f8378caf8ba8161ee45
+          git clone -q https://gitlab.com/nslr/nslr-hmm.git "$ref/nslr-hmm"
+          git -C "$ref/nslr-hmm" checkout -q 3598fee3c5def6734ef6c085e44356fedafaf727
+          echo "WLPP_NSLR_REFERENCE=$ref" >> "$GITHUB_ENV"
+
       - name: Assert the contracts came from wl-sync, not a local copy
         # The sync box owns session identity and the log format. If either is
         # ever vendored into this repo, there are two definitions free to drift

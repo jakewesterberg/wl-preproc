@@ -258,6 +258,19 @@ disagreement attributable to a method rather than to a smoothing window.
 peak velocity and duration are computed once, downstream, identically for all
 seven, so a disagreement is never a disagreement about measurement.
 
+> *Amended 2026-09-27 (the requester's decision, design spec
+> `2026-09-27-nslr-design.md` §4).* Shared code still measures every
+> detector's intervals, but no longer identically for NSLR's per-eye
+> saccade runs. NSLR's runs end one sample before the eye lands, so each is
+> measured up to its landing sample. A run under 10 ms is stored with no
+> amplitude or peak velocity. The landing rule is declared on the detector's
+> registry entry and the floor in its paramset;
+> `eye/detect/measure.py::measure_event_run` applies both. Every other
+> detector, and every conjunction trace, is measured exactly as before.
+> *Corrected 2026-09-27, the same day: by the requester's second decision
+> NSLR's conjunction takes its 10 ms floor too, though not its landing
+> rule. Every other detector's traces are measured exactly as before.*
+
 ### 3.1 Seven detectors, and what each can say
 
 | Detector | Vocabulary it can emit | Source |
@@ -274,6 +287,9 @@ seven, so a disagreement is never a disagreement about measurement.
 > `2026-09-26-remodnav-design.md`. Its fidelity check proves it labels every
 > sample as `remodnav` 1.1.2 does, given that package's own signals, on five
 > synthetic traces (500 Hz seeds 1–3, 1000 Hz seeds 4–5).*
+
+> *Amended 2026-09-27: NSLR is registered — spec
+> `2026-09-27-nslr-design.md`.*
 
 > **Corrected 2026-09-01, by reading the reference implementation.** This
 > table gave Otero-Millan `microsaccade` alone and called its source "ported
@@ -367,6 +383,19 @@ no licence question in any code that runs (NSLR's classification half is
 AGPL-3.0 and its segmentation half declares no licence — reimplementing
 dissolves that entirely); and no dependency on repositories last touched in
 2019 and 2020.
+
+> **Corrected 2026-09-27, by reading both repositories' own `LICENSE` files
+> and PyPI's release metadata (design spec `2026-09-27-nslr-design.md`, its
+> preamble, before §0).** This paragraph said NSLR's "segmentation half
+> declares no licence." Both halves are AGPL-3.0: `gitlab.com/nslr/nslr`'s and
+> `gitlab.com/nslr/nslr-hmm`'s `LICENSE` files are each the GNU Affero
+> General Public License, version 3, and `slow_nslr.py` itself opens
+> "Released under AGPL-3.0". PyPI's `nslr` 0.0.5 does leave its licence field
+> empty — its `PKG-INFO` prints `License: UNKNOWN` and `setup.py`'s `setup()`
+> call sets no `license` key — which is plausibly what this paragraph read.
+> Reimplementing still dissolves the question, as the sentence above argues;
+> what it dissolves is a real AGPL-3.0 obligation on both halves, not a
+> licence-free one on either.
 
 **The risk it carries is specific and must be designed against: a buggy
 reimplementation is indistinguishable from a genuine detector disagreement.**
@@ -496,7 +525,9 @@ each of which is why this beats a blob:
 
 And a run of a `saccade` or `microsaccade` label **is** an event, so the run
 row carries `amplitude_deg`, `peak_velocity_deg_s` and a nullable
-`reliability` (Otero-Millan's; null for the other two). The runs table is
+`reliability` (Otero-Millan's; null for the other two). *(Amended 2026-09-27:
+except an NSLR saccade run under 10 ms, per-eye or conjunction, which
+carries neither measurement; see §3's amendment.)* The runs table is
 therefore strictly more informative than the per-sample trace it encodes, not
 a lossy substitute for it.
 

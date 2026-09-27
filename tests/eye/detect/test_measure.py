@@ -3,7 +3,7 @@ import pytest
 
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.measure import (
-    MICROSACCADE_MAX_DEG, classify, measure,
+    MICROSACCADE_MAX_DEG, classify, measure, measure_event_run,
 )
 
 
@@ -70,3 +70,109 @@ def test_measure_requires_stop_greater_than_start():
         measure(np.zeros((5, 2)), np.zeros((5, 2)), start=2, stop=2, fs_hz=500.0)
     with pytest.raises(ValueError, match="stop > start.*start=5.*stop=3"):
         measure(np.zeros((5, 2)), np.zeros((5, 2)), start=5, stop=3, fs_hz=500.0)
+
+
+# -- `measure_event_run`: a detector's declared measurement rule ------------------
+#
+# The requester's decision of 2026-09-27 (design spec `2026-09-27-nslr-design.md`
+# section 4): NSLR's per-eye saccade runs are measured up to where the eye lands,
+# and one under 10 ms is stored unmeasured. Every other detector declares
+# neither rule, and is measured exactly as `measure` measures it.
+
+
+def _walk(n=40):
+    """Gaze that moves every sample, differently on each axis, so any two
+    samples' displacement tells which two they were."""
+    return np.column_stack([0.5 * np.arange(n), 0.25 * np.arange(n) ** 1.5])
+
+
+def _offered(n, withheld=()):
+    offered = np.full(n, None, dtype=object)
+    for index in withheld:
+        offered[index] = Label.INVALID
+    return offered
+
+
+def _speeds(n=40):
+    velocity = np.zeros((n, 2))
+    velocity[:, 0] = 100.0
+    return velocity
+
+
+@pytest.mark.parametrize("start, stop", [(0, 1), (3, 4), (5, 12), (10, 40), (0, 40)])
+def test_with_no_rule_declared_a_run_is_measured_as_measure_measures_it(start, stop):
+    """Every detector but NSLR: its stored rows must not move."""
+    gaze = _walk()
+    velocity = np.random.default_rng(7).normal(0.0, 50.0, gaze.shape)
+
+    got = measure_event_run(gaze, velocity, _offered(40), start, stop, 500.0,
+                            runs_end_before_landing=False, min_measured_ms=None)
+
+    assert got == measure(gaze, velocity, start, stop, 500.0)
+
+
+def test_a_run_ending_before_its_landing_is_measured_to_the_landing_sample():
+    """Amplitude to `gaze[stop]`, peak velocity over `[start, stop]`
+    inclusive, and not a sample further."""
+    gaze = _walk()
+    velocity = _speeds()
+    velocity[16] = [300.0, 0.0]   # the landing sample: inside
+    velocity[17] = [900.0, 0.0]   # the sample after it: outside
+
+    got = measure_event_run(gaze, velocity, _offered(40), 10, 16, 500.0,
+                            runs_end_before_landing=True, min_measured_ms=None)
+
+    displacement = gaze[16] - gaze[10]
+    assert got.amplitude_deg == float(np.hypot(displacement[0], displacement[1]))
+    assert got.amplitude_deg != measure(gaze, velocity, 10, 16, 500.0).amplitude_deg
+    assert got.peak_velocity_deg_s == 300.0
+    assert got.duration_s == 6 / 500.0
+
+
+def test_a_one_sample_run_reads_its_whole_step_rather_than_zero():
+    """C1's worst case: `measure` reads a one-sample run as exactly 0.0."""
+    gaze = _walk()
+
+    got = measure_event_run(gaze, _speeds(), _offered(40), 10, 11, 500.0,
+                            runs_end_before_landing=True, min_measured_ms=None)
+
+    assert measure(gaze, _speeds(), 10, 11, 500.0).amplitude_deg == 0.0
+    displacement = gaze[11] - gaze[10]
+    assert got.amplitude_deg == float(np.hypot(displacement[0], displacement[1])) > 0.0
+
+
+@pytest.mark.parametrize("case", ["stop is the last sample", "stop is withheld", "stop is not finite"])
+def test_the_landing_sample_is_used_only_at_an_interior_knot(case):
+    """Otherwise the run ends at its piece's last sample, which is its own
+    landing knot, and it is measured as `measure` measures it."""
+    gaze = _walk()
+    offered = _offered(40)
+    start, stop = 30, 36
+    if case == "stop is the last sample":
+        start, stop = 34, 40
+    elif case == "stop is withheld":
+        offered[stop] = Label.BLINK
+    else:
+        gaze[stop, 1] = np.nan
+
+    got = measure_event_run(gaze, _speeds(), offered, start, stop, 500.0,
+                            runs_end_before_landing=True, min_measured_ms=None)
+
+    assert got == measure(gaze, _speeds(), start, stop, 500.0)
+
+
+@pytest.mark.parametrize("landing", [True, False])
+@pytest.mark.parametrize("fs_hz, measured_from", [(498.55, 5), (500.0, 5), (1000.0, 10)])
+def test_a_run_shorter_than_the_floor_is_not_measured(landing, fs_hz, measured_from):
+    """10 ms or more is measured, `(stop - start) / fs_hz >= 0.010`. At the
+    rig's 498.55 Hz that blanks runs of 4 samples or fewer (8.0 ms) and
+    measures 5 or more (10.03 ms); at 500 Hz, 5 samples is exactly 10 ms, and
+    measured."""
+    gaze = _walk()
+    for length in range(1, 13):
+        got = measure_event_run(gaze, _speeds(), _offered(40), 10, 10 + length, fs_hz,
+                                runs_end_before_landing=landing, min_measured_ms=10.0)
+        if length < measured_from:
+            assert got is None, length
+        else:
+            assert got is not None and got.amplitude_deg > 0.0, length

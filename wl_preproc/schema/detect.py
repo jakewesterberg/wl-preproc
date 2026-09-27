@@ -398,9 +398,12 @@ class EyeDetection(dj.Computed):
         run_stop  : int unsigned
         label     : enum({_LABEL_ENUM})
         # A saccade or microsaccade run IS an event, so it carries its own
-        # measurements; every other label leaves them NULL. `reliability` is
-        # Otero-Millan's per-detection index, null for every detector that has
-        # none -- declared now because the migration window closes January.
+        # measurements; every other label leaves them NULL. So does a saccade
+        # run too brief for its detector's paramset to measure (NSLR's
+        # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
+        # `reliability` is Otero-Millan's per-detection index, null for every
+        # detector that has none -- declared now because the migration window
+        # closes January.
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double
         reliability=null         : double
@@ -534,7 +537,8 @@ class EyeDetection(dj.Computed):
                               "reason": refused_reason[eye_value]})
             else:
                 gaze, v, offered = per_eye[eye_value]
-                self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz)
+                self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz,
+                                   detector, detector_params)
 
         if refused_reason:
             # The conjunction gets a REFUSED ROW here, never an absent one --
@@ -615,9 +619,11 @@ class EyeDetection(dj.Computed):
                 _min_duration_samples(detector_params),
                 _conjunction_label(detector, params, gaze),
             )
-            self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz)
+            self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz,
+                               detector, detector_params)
 
-    def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz) -> None:
+    def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
+                      detector, detector_params) -> None:
         """One trace's master row and its runs.
 
         **This method assigns no labels of its own.** Each interval arrives
@@ -638,7 +644,42 @@ class EyeDetection(dj.Computed):
         final `[start, stop)`, rather than reusing whichever measurement the
         detector made while labelling it.
 
-        Three of the four registered detectors make that second measurement
+        **How an event run is measured is its detector's declared rule**
+        (`measure.py::measure_event_run`; the requester's decisions of
+        2026-09-27, NSLR design spec section 4). For every detector but NSLR
+        that rule is `measure`, unchanged, on every trace. NSLR's runs end one
+        sample before the eye lands
+        (`registry.Detector.runs_end_before_landing`), so each of its
+        per-eye saccade runs is measured up to the landing sample. An NSLR
+        saccade run shorter than its paramset's `min_measured_saccade_ms`,
+        on any trace, is stored with both measurements NULL, and a NULL here means "too brief to measure",
+        never zero. Before that decision `measure` missed the last step of
+        every NSLR saccade run, and read a one-sample run as exactly 0.0 deg.
+        On the reference recording that was 542 left-eye and 666 right-eye
+        rows, at a median peak velocity of 234 deg/s on the left.
+
+        **The conjunction takes the floor, not the landing rule.** Its runs
+        are intersections of the two eyes' spans, not one detector's runs,
+        so a conjunction span does not end on an NSLR knot and the landing
+        rule is off here. The floor applies, by the requester's second
+        decision of 2026-09-27: an NSLR conjunction saccade run shorter than
+        `min_measured_saccade_ms` is stored with both measurements NULL, and
+        a longer one keeps `measure`. The floor was needed here too.
+        `_overlapping`'s own floor guarantees only `stop > start`, not a
+        nonzero amplitude, and NSLR's is one sample. Before that decision,
+        219 of NSLR's 3,230 conjunction saccade rows on the reference
+        recording were stored at 0.0 deg, at a median 150 deg/s. Every other
+        detector declares no floor, so its conjunction keeps `measure`
+        exactly. Whether a conjunction needs a minimum event duration at all
+        is still open (NSLR design spec section 8.4).
+
+        *Until the conjunction round of 2026-09-27 this paragraph said the
+        conjunction keeps `measure` whatever the detector, so that NSLR's
+        could still store one-sample saccades at 0.0 deg, open for the
+        requester. Superseded by the requester's decision that day; true
+        when written.*
+
+        Four of the five registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
@@ -647,10 +688,18 @@ class EyeDetection(dj.Computed):
         the `pso` after it are adjacent, as Nystrom-Holmqvist's are, but its
         proximity rule means it never emits two adjacent runs with the same
         label, so `runs_from_labels` never merges two of its intervals
-        either.
+        either. NSLR's runs within a piece are adjacent too, but
+        `detect_nslr` merges consecutive segments that share a state before
+        returning, and two pieces are always separated by at least one
+        sample no run claims, so it never emits two adjacent runs with the
+        same label either.
 
         *Until 2026-09-27 this said "Two of the three registered detectors"
         and did not mention REMoDNaV; true when written.*
+
+        *Until NSLR's final fix wave (2026-09-27) this said "Three of the
+        four registered detectors" and did not mention NSLR; true when
+        written.*
 
         **The remaining one does not, and this is no longer a hypothetical
         about some future detector -- it is true of Nystrom-Holmqvist today.**
@@ -662,7 +711,7 @@ class EyeDetection(dj.Computed):
         (`run.start < offset and onset < run.stop`, both strict), so both
         survive as separate, touching runs carrying the SAME label. Nothing
         in `registry.py::DetectFn`'s own contract requires ANY detector --
-        registered or still unwritten (NSLR, BMD, U'n'Eye) -- to
+        registered or still unwritten (BMD, U'n'Eye) -- to
         leave such a gap, and if two adjacent intervals ever DO carry the
         same label, `runs_from_labels` merges them into one run whose real
         `[start, stop)` matches neither original interval. Measuring the
@@ -673,6 +722,10 @@ class EyeDetection(dj.Computed):
 
         *Until 2026-09-27 this said "The third does not" and listed REMoDNaV
         as still unwritten; true when written.*
+
+        *Until NSLR's final fix wave (2026-09-27) this listed NSLR as still
+        unwritten; true when written, before NSLR was registered on
+        `spec/nslr`.*
 
         **For `conjunction` that gap is guaranteed rather than inherited, and
         it now holds WITHIN a kind by construction and ACROSS kinds by a fact
@@ -708,7 +761,17 @@ class EyeDetection(dj.Computed):
         gets `None` throughout for the same reason it gets its label derived
         rather than checked: no detector produced it.
         """
-        from wl_preproc.eye.detect.measure import measure
+        from wl_preproc.eye.detect.measure import measure_event_run
+
+        # The landing rule is per-eye only: a conjunction span is an
+        # intersection and does not end on a detector's knot. The floor
+        # applies to every trace (see this docstring's conjunction
+        # paragraph).
+        runs_end_before_landing = detector.runs_end_before_landing and trace != "conjunction"
+        # Read the way `_min_duration_samples` reads a detector's params: a
+        # field only NSLR's params declare, so every other detector has no
+        # floor on any trace.
+        min_measured_ms = getattr(detector_params, "min_measured_saccade_ms", None)
 
         reliability_by_span = {
             (interval.start, interval.stop): interval.reliability for interval in intervals
@@ -731,9 +794,14 @@ class EyeDetection(dj.Computed):
         def _run_row(index: int, run: Run) -> dict:
             amplitude_deg = peak_velocity_deg_s = None
             if run.label in (Label.SACCADE, Label.MICROSACCADE):
-                measurement = measure(gaze, v, run.start, run.stop, fs_hz)
-                amplitude_deg = measurement.amplitude_deg
-                peak_velocity_deg_s = measurement.peak_velocity_deg_s
+                measurement = measure_event_run(
+                    gaze, v, offered, run.start, run.stop, fs_hz,
+                    runs_end_before_landing=runs_end_before_landing,
+                    min_measured_ms=min_measured_ms,
+                )
+                if measurement is not None:
+                    amplitude_deg = measurement.amplitude_deg
+                    peak_velocity_deg_s = measurement.peak_velocity_deg_s
             return {
                 **row, "run_index": index, "run_start": run.start, "run_stop": run.stop,
                 "label": run.label.value, "amplitude_deg": amplitude_deg,
@@ -900,14 +968,18 @@ def _conjunction_runs(
     label, which is correct only while every emitted label is the same kind
     of thing -- true of Engbert-Kliegl and Otero-Millan, and false for
     Nystrom-Holmqvist (registered 2026-09-06), for REMoDNaV (registered
-    2026-09-26) and for the two detectors still BLOCKED (unwritten): NSLR
-    and BMD. Nystrom-Holmqvist, NSLR and REMoDNaV all emit `pso` and
-    `fixation` alongside `saccade`; BMD emits `drift` instead of `pso`.
-    `fixation` TILES the recording, so an ungrouped intersection would have
-    crossed a left fixation with a right saccade and kept it.
+    2026-09-26), for NSLR (registered 2026-09-27, on `spec/nslr`) and for
+    the one detector still BLOCKED (unwritten): BMD. Nystrom-Holmqvist, NSLR
+    and REMoDNaV all emit `pso` and `fixation` alongside `saccade`; BMD
+    emits `drift` instead of `pso`. `fixation` TILES the recording, so an
+    ungrouped intersection would have crossed a left fixation with a right
+    saccade and kept it.
 
     *Until 2026-09-27 this listed REMoDNaV among three detectors still
     BLOCKED (unwritten); true when written.*
+
+    *Until NSLR's final fix wave (2026-09-27) this listed NSLR as still
+    BLOCKED (unwritten); true when written, before NSLR was registered.*
 
     **Grouping first also makes the loop cheaper -- though no longer for
     every registered detector.** `_overlapping` is `O(|left| x |right|)`;

@@ -76,6 +76,28 @@ status:
     its saccade kappa against the oracle is 0.764 (left) and 0.724 (right).
     Against the paper's human coders, the harness first reproduces Table 3,
     and ours is at or above the oracle on every saccade cell.
+
+    NSLR-HMM is BUILT on `spec/nslr` (2026-09-27, NOT merged as written). It
+    is the fifth registered detector, and the only one that never
+    differentiates -- it fits gaze as a continuous chain of straight
+    segments and classifies whole segments, rather than thresholding a
+    velocity signal. Design spec `2026-09-27-nslr-design.md`; handoff
+    `docs/handoffs/2026-09-27-nslr-built.md`. Reproduced operation for
+    operation against the authors' own `nslr`/`nslr-hmm`, it matches their
+    labels exactly at every stage on synthetic traces, and on each eye's
+    first 5,000-sample gap-free stretch of the reference recording; the full
+    recording classifies in 38.3 s (left) / 33.3 s (right) per eye. Against
+    the paper's human coders, pooled over the 34 article files, the harness
+    first reproduces Table 1's Human column and then NSLR's own column, both
+    within their stated bands. The requester ruled on 2026-09-27 that NSLR is
+    not used below about 1 degree -- it calls a planted 0.75-degree/16 ms
+    step fixation, exactly as the authors' own code does on the same trace.
+    The whole-branch review's fix wave (2026-09-27, the requester's
+    decisions): NSLR's per-eye saccade rows are measured to where the eye
+    lands, and an NSLR saccade run under 10 ms, per-eye or conjunction, is
+    stored unmeasured; NSLR withholds
+    non-finite gaze, and warns when its noise estimate is capped. Every
+    other detector's stored rows are unchanged.
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -104,13 +126,14 @@ status:
     in this line: a STREAMING archive writer, BUILT 2026-09-26 --
     `store.write_store` reads each file through one reused chunk-sized
     buffer and writes one chunk at a time, so a ~166 GB AP file no longer
-    has to fit in memory; (2) the two remaining hardware-free detectors,
-    NSLR and Bayesian microsaccade detection, which matter here as SACCADE
-    detectors because the requester has said glissades are peripheral.
-    REMoDNaV, the third that item named, is BUILT on `spec/remodnav`
-    (2026-09-26, NOT merged as written; see `phase`). Two millisecond-based
-    detectors now inherit the conjunction's one-sample duration floor, which
-    is a cross-detector decision still open;
+    has to fit in memory; (2) the remaining hardware-free detector, Bayesian
+    microsaccade detection, which matters here as a SACCADE detector because
+    the requester has said glissades are peripheral. REMoDNaV and NSLR, the
+    other two that item named, are BUILT -- REMoDNaV on `spec/remodnav`
+    (2026-09-26) and NSLR on `spec/nslr` (2026-09-27), NOT merged as written;
+    see `phase`. Three no-duration or millisecond-based detectors now
+    inherit the conjunction's one-sample duration floor, which is a
+    cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
     `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
     (4) measuring which of the 225/337 unmatched saccades are real.
@@ -210,17 +233,20 @@ status:
     (`test_the_run_count_measured_against_the_reference_recording`) is
     env-gated and skipped by default.
 
-    NSLR and Bayesian microsaccade detection are still simply unwritten,
-    same as U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
-    instead. `registry.py::DETECTORS` registers FOUR on `spec/remodnav`:
-    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist and REMoDNaV. Five of
-    the seven detectors specified in design spec §3.1 take the degenerate
-    saccadic-slice branch and never reach `classify` -- only Engbert-Kliegl
-    and Otero-Millan declare both sides of the amplitude cut.
-    Nystrom-Holmqvist and REMoDNaV are two of the five degenerate ones for
-    real, not hypothetically, and `pursuit` is now a PRODUCED label, by
-    REMoDNaV. *This paragraph named REMoDNaV as unwritten and said THREE
-    were registered until 2026-09-26; true when written.*
+    Bayesian microsaccade detection is still simply unwritten, same as
+    U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
+    instead. `registry.py::DETECTORS` registers FIVE on `spec/nslr`:
+    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV and NSLR. Five
+    of the seven detectors specified in design spec §3.1 take the
+    degenerate saccadic-slice branch and never reach `classify` -- only
+    Engbert-Kliegl and Otero-Millan declare both sides of the amplitude cut.
+    Nystrom-Holmqvist, REMoDNaV and NSLR are three of the five degenerate
+    ones for real, not hypothetically, and `pursuit` is now a PRODUCED
+    label, by REMoDNaV. *This paragraph named REMoDNaV as unwritten and said
+    THREE were registered until 2026-09-26; true when written.*
+
+    *Corrected 2026-09-27: this paragraph also named NSLR as unwritten and
+    said FOUR were registered; true when written.*
 
     Two corrections to what this field said before Nystrom-Holmqvist
     existed (docs/handoffs/2026-09-05-nystrom-holmqvist-built.md has the
@@ -372,7 +398,11 @@ third_party:
       was already declared here, and a review repeated the error, but a
       direct grep of both files shows it was not. wlo stack reads
       third_party alone, so a workstation built from this file was missing
-      software nearly every module in this package uses.
+      software nearly every module in this package uses. Capped below 2.6
+      wherever numba is installed, which is everywhere this package is
+      (numba below): numba 0.67 declares numpy<2.6,>=1.22, so a numpy
+      release past 2.5 waits on a numba release that admits it. The ceiling
+      is numba's, and this constraint does not restate it.
   - name: scipy
     constraint: ">=1.17"
     why: >-
@@ -384,6 +414,17 @@ third_party:
       initial conditions would be one more reimplementation to validate.
       The floor is 1.17 because 1.17.1 is the oldest release the fidelity
       check (spec section 5.1) has run against; nothing older is tested.
+  - name: numba
+    constraint: ">=0.67"
+    why: >-
+      eye/detect/nslr.py compiles NSLR's segmentation loop with numba.njit
+      (no fastmath) -- the requester's choice on 2026-09-27 after plain
+      Python measured about 25 minutes per eye for a two-hour session (design
+      spec 2026-09-27-nslr-design.md section 4.1, section 7). Brings
+      llvmlite. The floor 0.67.0 is the version the design's prototype ran
+      on (Python 3.11 with numpy 2.4.6; 3.13 with numpy 2.5.3). numba
+      declares numpy<2.6, so this pipeline's numpy is capped wherever numba
+      is; a numpy release beyond that waits on numba.
   - name: datajoint
     constraint: ">=2.3,<3"
     why: >-
@@ -499,6 +540,33 @@ third_party:
       spikeinterface ever drops or relaxes that pin, this repository would
       break with nothing on record saying it needed zarr at all, and wlo
       stack would build a workstation missing software this package uses.
+  - name: nslr
+    pinned_at: 67d03f8c4a922a5a7cad9f8378caf8ba8161ee45
+    why: >-
+      Test-time only, AGPL-3.0, test-only by the requester's decision of
+      2026-09-27. Pinned at gitlab.com/nslr/nslr commit
+      67d03f8c4a922a5a7cad9f8378caf8ba8161ee45 (pinned_at repeats it, but
+      wlo stack does not read that key). tests/eye/detect/_nslr_reference.py
+      loads nslr/slow_nslr.py by path from the checkout
+      .github/workflows/ci.yml fetches at that commit; never installed as a
+      package. The GitLab package's C++ does not build with current
+      compilers and it has no pure-Python fallback; PyPI's nslr 0.0.5 has a
+      root-intercept defect (design spec 2026-09-27-nslr-design.md section
+      2, section 7).
+  - name: nslr-hmm
+    pinned_at: 3598fee3c5def6734ef6c085e44356fedafaf727
+    why: >-
+      Test-time only, AGPL-3.0, test-only by the requester's decision of
+      2026-09-27. Pinned at gitlab.com/nslr/nslr-hmm commit
+      3598fee3c5def6734ef6c085e44356fedafaf727 (pinned_at repeats it, but
+      wlo stack does not read that key). tests/eye/detect/_nslr_reference.py
+      loads nslr_hmm.py by path from the checkout .github/workflows/ci.yml
+      fetches at that commit; never installed as a package. Same reasoning
+      as nslr above (design spec 2026-09-27-nslr-design.md section 2,
+      section 7): its
+      companion, the GitLab nslr package's C++, does not build with current
+      compilers and has no pure-Python fallback, and PyPI's nslr 0.0.5 has a
+      root-intercept defect.
   - name: numcodecs
     constraint: ">=0.10,<0.16"
     why: >-
