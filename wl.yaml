@@ -341,8 +341,10 @@ status:
   # unmerged -- correct then, per the field's own definition, but a branch sha
   # does not survive a rebase or a squash-merge and is not a reference anyone
   # else can resolve. A merge commit on `main` is. Was `ea08678` before
-  # 2026-09-19, which `main` had by then moved eleven commits past.
-  describes: f5fb642
+  # 2026-09-19, which `main` had by then moved eleven commits past. Was
+  # `f5fb642` (the gap-aware merge) until 2026-09-27, by which time the archive
+  # line's merges and then REMoDNaV's (`cef2ce4`) had landed; true when written.
+  describes: cef2ce4
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

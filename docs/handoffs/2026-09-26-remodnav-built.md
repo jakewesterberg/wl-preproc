@@ -335,8 +335,11 @@ written.*
   - the suites' warning count is unexplained;
   - the reference recording's velocity and mask are computed whole and then
     sliced;
-  - `_oracle` takes a redundant `n`, and `mn_t`/`ra_t` are sliced twice;
-  - `pyproject.toml`'s stale `remodnav` comment (finding 7).
+  - `_oracle` takes a redundant `n`, and `mn_t`/`ra_t` are sliced twice.
+
+  *This list also named `pyproject.toml`'s stale `remodnav` comment (finding
+  7) until the final-review fix wave rewrote it with the `==1.1.2` pin
+  (`09afd87`); true when written.*
 
 ## What is unaffected
 

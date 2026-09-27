@@ -1,17 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-09-26**, describing `main` at `d4f390c` — the merge commit
-for `fix/parked-follow-ups-4-to-6`, the last of the archive line's work this
-day: rehydration (`5cd0c79`, residual closed by `141022b`), the daemon skipping
-freed sessions (`6ac0c9f`), the streaming archive writer (`47dbecf`), the kind
-map's move to `eye/detect/labels.py` (`fbfb19f`), the gap-aware branch's
-deferred minors and the stim.dat amendment (`8af4278`), operator messages after
-a failure (`439ceb4`), and the six parked rehydration follow-ups (`d4f390c`).
-`d4f390c`'s tree is byte-identical to the tested branch head `c99d74a`: 1501
-passed on 3.11 and 1500 on 3.13 against a freshly compiled resolution, 0 failed
-on both. CI read off `d4f390c` itself: green on both interpreters, and the
-manifest check green — `gh run view 36256864205`. CI on later heads is recorded
-here only once read, not before.
+**Last updated 2026-09-27**, describing `main` at `cef2ce4` — the merge commit
+for `spec/remodnav`: REMoDNaV, the fourth registered eye-movement detector and
+the first that stores `pursuit` (18 commits, spec
+`superpowers/specs/2026-09-26-remodnav-design.md`, handoff
+`handoffs/2026-09-26-remodnav-built.md`). `cef2ce4`'s tree is byte-identical to
+the tested branch head `09afd87`: 1572 passed on 3.11 and 1571 on 3.13 against
+a freshly compiled resolution, 0 failed on both. CI read off `cef2ce4` itself:
+green on both interpreters, and the manifest check green — `gh run view
+36296476263`. CI on later heads is recorded here only once read, not before.
+
+*This header named `d4f390c` — the archive line's last merge, 1501 passed on
+3.11 and 1500 on 3.13, CI `36256864205` — until the REMoDNaV merge; true when
+written.*
 
 *This header named `141022b`, with CI read for `56be4f1`, until the later
 merges above; true when written.*
