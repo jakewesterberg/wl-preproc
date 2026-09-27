@@ -101,6 +101,10 @@ requester chose to merge the same day; true when written.*
 >    so it stays blocked. The conjunction's one-sample duration floor is now
 >    inherited by three millisecond- or no-duration detectors, Nyström–
 >    Holmqvist, REMoDNaV and NSLR. It is a cross-detector decision, still open.
+>    *Measured 2026-09-27 (the NSLR conjunction round): Otero-Millan's
+>    conjunction floor is one sample too, since its params declare no
+>    `min_duration_samples`. So the floor is shared by four detectors, not
+>    three.*
 >
 >    *Until 2026-09-27 this item also named NSLR here, alongside Bayesian
 >    microsaccade detection, gave U'n'Eye as the third unwritten detector, and
@@ -168,12 +172,12 @@ requester chose to merge the same day; true when written.*
 >      kappa than either, consistent with treating slow sub-degree movement
 >      as fixation.
 >
->      *Corrected by the final whole-branch review: "fewer" is true of that
->      120,000-sample slice and false over the whole recording. Over all
->      1,177,799 samples NSLR stores more saccade rows than either: 5,786
->      left / 5,216 right, against REMoDNaV's 4,814 / 4,493 and
->      Nyström–Holmqvist's 5,009 / 5,123. 55% of its left-eye saccade rows
->      and 64% of its right-eye rows are shorter than 10 ms.*
+>      *Corrected 2026-09-27, by the final whole-branch review: "fewer" is
+>      true of that 120,000-sample slice and false over the whole
+>      recording. Over all 1,177,799 samples NSLR stores more saccade rows
+>      than either: 5,786 left / 5,216 right, against REMoDNaV's 4,814 /
+>      4,493 and Nyström–Holmqvist's 5,009 / 5,123. 55% of its left-eye
+>      saccade rows and 64% of its right-eye rows are shorter than 10 ms.*
 >    - **Against the paper's human coders** (Andersson et al. 2017), pooled
 >      over the 34 "data used in the article" files: the harness first
 >      reproduces Table 1's Human column (saccade 0.898/0.90, fixation
@@ -196,8 +200,9 @@ requester chose to merge the same day; true when written.*
 >    - **The final whole-branch review's fix wave (2026-09-27).**
 >      - *The requester's decision on what an NSLR saccade row measures.*
 >        NSLR's runs end one sample before the eye lands, so the shared
->        `measure` read every NSLR saccade row short, and a one-sample run
->        as exactly 0.0° (542 left / 666 right on the reference recording).
+>        `measure` missed the last step of every NSLR saccade row, and read
+>        a one-sample run as exactly 0.0° (542 left / 666 right on the
+>        reference recording).
 >        Now, for its per-eye saccade runs only, a run of 10 ms or more is
 >        measured to where the eye lands, and a briefer one is stored with
 >        no amplitude or peak velocity. After the fix, 3,186 left / 3,355
@@ -213,6 +218,13 @@ requester chose to merge the same day; true when written.*
 >        §8 item 6); and NSLR's conjunction, which the decision does not
 >        cover, still stores 219 one-sample saccade rows at 0.0° on the
 >        reference recording (NSLR spec §8 item 4).
+>
+>        *The conjunction half is superseded 2026-09-27, the same day (true
+>        when written): the requester applied the 10 ms floor to NSLR's
+>        conjunction too. 2,023 of its 3,230 conjunction saccade rows are
+>        now stored unmeasured, and none is at 0.0°. Every other detector's
+>        rows are unchanged. The shared-mask item stays open, and so does
+>        whether a conjunction needs a minimum event duration at all.*
 >
 >    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
 >    and what is still deferred.

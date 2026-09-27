@@ -313,6 +313,18 @@ row. The reference's classes map as:
   conjunction still stores one-sample saccade rows at 0.0°: 219 of 3,230 on
   the reference recording (§8 item 4).
 
+  *Superseded 2026-09-27, the same day, by the requester's second decision:
+  the 10 ms floor applies to NSLR's conjunction too. An NSLR conjunction
+  saccade row under 10 ms is stored with both measurements NULL, and a
+  longer one keeps the shared endpoint-exclusive `measure`. The landing
+  rule stays off for the conjunction, because a conjunction span does not
+  end on an NSLR knot. Measured after it, on the full reference recording:
+  2,023 of NSLR's 3,230 conjunction saccade rows are stored unmeasured, and
+  none is at 0.0°. Every other detector's conjunction is unchanged, and
+  still holds rows at exactly 0.0°: Engbert–Kliegl 12, Otero-Millan 11,
+  REMoDNaV 9 and Nyström–Holmqvist 4. All but one of those 36 have a
+  nonzero peak velocity.*
+
   *Measured after the fix* (the final fix wave, 2026-09-27; the full
   reference recording at the p99→15° scale):
 
@@ -573,9 +585,10 @@ verbatim from `nslr_hmm.py` 39–42.
   `classify` discarded `NoiseFit.capped`, and the only report was the unit
   test reading it. The last pass is still kept.*
 - **`min_measured_saccade_ms` is this pipeline's, not the reference's.** The
-  detector never reads it. `_insert_trace` does: a per-eye saccade run
-  shorter than it is stored with no amplitude or peak velocity (§4, the
-  requester's decision of 2026-09-27). It is in the paramset because it
+  detector never reads it. `_insert_trace` does: a saccade run shorter than
+  it is stored with no amplitude or peak velocity (§4, the requester's
+  decisions of 2026-09-27). That holds on the per-eye traces and, since the
+  second decision that day, on NSLR's conjunction too. It is in the paramset because it
   changes stored values, and the paramset hash is what addresses them.
 - **Nothing is tuned.** The emission parameters were fitted on human data.
   Re-estimating them for macaques would be a new paramset with its reason, and
@@ -669,6 +682,19 @@ verbatim from `nslr_hmm.py` 39–42.
    219 of NSLR's 3,230 conjunction saccade rows are one sample long, and are
    stored at 0.0° with a median peak velocity of 150 °/s. §4's measurement
    rule covers per-eye rows only, so it does not reach them.*
+
+   *Resolved 2026-09-27, the same day, and the sentence above superseded
+   (true when written): the requester applied the 10 ms floor to NSLR's
+   conjunction too (§4). Those 219 rows, and every other NSLR conjunction
+   saccade under 10 ms, 2,023 of 3,230 in all, are now stored unmeasured,
+   and none is at 0.0°.*
+
+   *Still open: whether a conjunction needs a minimum event duration at
+   all. That question is not NSLR's alone. Otero-Millan's conjunction floor
+   is one sample too, because its params declare no
+   `min_duration_samples`, and 7 of its 3,888 conjunction rows on the
+   reference recording are one sample long. So "three detectors" above
+   undercounts by one (measured in the conjunction round, 2026-09-27).*
 5. **Exact-float termination across platforms.** §1.4's stopping rule is exact,
    so a platform whose `log` differs by an ULP could take a different number of
    passes. Fidelity is proved on CI's platform and this machine's; the guard
@@ -685,6 +711,11 @@ verbatim from `nslr_hmm.py` 39–42.
    The reference recording has no non-finite gaze at a sample the mask
    offers (measured in the final fix wave), so this is latent on the data
    this lab has.
+
+   A NaN sample that NSLR withholds but the mask offers is claimed by no
+   run, so `_insert_trace`'s fill stores it as `fixation`, and it may merge
+   into the fixation runs either side of it. That is latent for the same
+   reason.
 
 ## 9. Out of scope
 

@@ -1,10 +1,11 @@
 # NSLR-HMM is written, tested and registered, and measured against its authors' code and the paper's coders
 
 **Built 2026-09-27 on `spec/nslr`.**
-- **Branch:** this commit and the twenty before it, past `main` at
-  `86ce4cc` (`git log --oneline 86ce4cc..HEAD`, twenty-one total). In
-  `git log` order (most recent first): this records commit for the final
-  fix wave; the capped-warning wording (`8e3e784`); the test and code
+- **Branch:** this commit and the twenty-two before it, past `main` at
+  `86ce4cc` (`git log --oneline 86ce4cc..HEAD`, twenty-three total). In
+  `git log` order (most recent first): this records commit for the
+  conjunction round; the conjunction floor (`ca0a74b`); the final fix
+  wave's records (`0912164`); the capped-warning wording (`8e3e784`); the test and code
   minors and `continuous_fit`'s rename (`4663caf`); non-finite gaze and the
   capped warning (`992aba5`); NSLR's measurement rule (`4483cc9`); the Task
   7 fix-round update (`d57f12b`); the Task 7 records
@@ -22,30 +23,39 @@
   `docs/superpowers/plans/2026-09-27-nslr.md` (path recorded in
   `.superpowers/sdd/2026-09-27-nslr/plan-path`), seven tasks. The per-task
   reports and the ledger are in `.superpowers/sdd/2026-09-27-nslr/`.
-- **Last updated by the final fix wave's records commit.** Task 7 wrote this
-  handoff (records only); the fix wave corrected it (below).
+- **Last updated by the conjunction round's records commit.** Task 7 wrote
+  this handoff (records only); the final fix wave and its conjunction round
+  corrected it (below).
 - **NOT merged and NOT pushed.** `origin` has no `spec/nslr` ref.
 - **Whole-branch reviewed, and fixed.** Tasks 1–6 each passed their own
   review (Task 4 twice, after the requester's ruling). The final
   whole-branch review found one Critical defect, two Important ones (the
   second is parked minor (d)) and five minors that no task review could
-  see; the final fix wave implements all of them, with the requester's decision on the Critical one (see "The final
-  whole-branch review, and its fix wave"). A scoped re-review of the fix
-  wave comes next.
+  see. The final fix wave implements all of them, with the requester's
+  decision on the Critical one (see "The final whole-branch review, and its
+  fix wave"). Its scoped re-review approved it with residuals: a second
+  requester decision, on NSLR's conjunction, and five wording slips. The
+  conjunction round fixes both.
+
+  *Until the conjunction round this said "A scoped re-review of the fix
+  wave comes next"; true when written.*
 
   *Until the fix wave this said "Not whole-branch reviewed"; true when
   written.*
 
 **Suite, at this commit** (run from the repo root with `-p no:cacheprovider`,
 `__pycache__` cleared, `PYTHONDONTWRITEBYTECODE=1`):
-- **3.11** (`.venv`, `WLPP_NSLR_REFERENCE=$SCRATCH`): 1641 passed, 21 skipped,
+- **3.11** (`.venv`, `WLPP_NSLR_REFERENCE=$SCRATCH`): 1642 passed, 21 skipped,
   1 deselected, 1 xfailed, 0 failed.
-- **3.13** (the scratch `venv_ci`, no `WLPP_NSLR_REFERENCE`): 1611
+- **3.13** (the scratch `venv_ci`, no `WLPP_NSLR_REFERENCE`): 1612
   passed, 52 skipped, 1 xfailed, 0 failed.
 - **The gated NSLR files on 3.13** (`WLPP_NSLR_REFERENCE=$SCRATCH`):
   `test_nslr.py`, `test_nslr_fidelity.py` and `test_nslr_validation.py`: 46
   passed, 4 skipped, 0 failed. The four skips are the OpenIris and
   Andersson gates; nothing gated on the reference skipped.
+
+*The final fix wave's own records commit (`0912164`) recorded 1641 and 1611
+passed here; the conjunction round added one test.*
 
 Neither the OpenIris recording nor the Andersson dataset is set in these
 runs, so those gated checks skip; their numbers are the ones recorded
@@ -164,8 +174,8 @@ turn feature) each fail the check, as they must.
   REMoDNaV than with Nyström–Holmqvist — the expected shape for a detector
   that treats slow sub-degree movement as fixation, not a defect.
 
-  *Corrected by the final whole-branch review: that reading is true of the
-  120,000-sample slice above and false over the whole recording. Over all
+  *Corrected 2026-09-27, by the final whole-branch review: that reading is
+  true of the 120,000-sample slice above and false over the whole recording. Over all
   1,177,799 samples NSLR stores more saccade rows than either registered
   detector: 5,786 left and 5,216 right, against REMoDNaV's 4,814 and 4,493
   and Nyström–Holmqvist's 5,009 and 5,123. 55% of its left-eye saccade rows
@@ -293,14 +303,17 @@ The final review (opus, range `91b7f77..d57f12b`) found one Critical defect,
 two Important ones (I1 below, and the parked minor (d)) and five minors
 (M1–M5), and triaged the parked minors. The
 requester decided the Critical one; the controller ruled on the rest. All
-of it is in `4483cc9`, `992aba5`, `4663caf`, `8e3e784` and this commit.
+of it is in `4483cc9`, `992aba5`, `4663caf`, `8e3e784` and `0912164`. A
+second decision by the requester the same day, extending the 10 ms floor
+to NSLR's conjunction, is in `ca0a74b` and this commit (the conjunction
+round, below).
 
 **C1 (Critical): what an NSLR saccade row's measurement means.**
 - **The defect.** `_insert_trace` measured every saccade run with
   `measure`, whose amplitude is `gaze[stop-1] - gaze[start]`. NSLR's run k
   is `[J[k], J[k+1])`, and the eye lands at `J[k+1]`, the next run's first
-  sample. So every NSLR saccade row read 1/L short, and a one-sample run
-  read exactly 0.0°. On the full reference recording 542 left-eye and 666
+  sample. So `measure` missed the last step of every NSLR saccade row, and
+  read a one-sample run as exactly 0.0°. On the full reference recording 542 left-eye and 666
   right-eye rows were stored at 0.0°, at a median 234 °/s on the left.
 - **The requester's decision (2026-09-27).** NSLR's labels stay as the
   published model gives them. For its per-eye saccade runs only, a run of
@@ -313,10 +326,15 @@ of it is in `4483cc9`, `992aba5`, `4663caf`, `8e3e784` and this commit.
 - **Where the two rules live (the controller's ruling).** The landing rule
   is structural: `registry.Detector.runs_end_before_landing`, true for NSLR
   and off for every other detector. The floor changes stored values, so it
-  is a paramset field, `NslrParams.min_measured_saccade_ms = 10.0`, in the
-  hash. `measure.py::measure_event_run` is the pure rule, and
+  is a paramset field, `NslrParams.min_measured_saccade_ms`, set to 10.0 in
+  `DEFAULT_NSLR_PARAMS` (the field itself has no default), in the hash. `measure.py::measure_event_run` is the pure rule, and
   `_insert_trace` now receives the detector and its params from `make()`.
 - **Per-eye traces only.** The conjunction keeps `measure`.
+
+  *Superseded 2026-09-27, the same day, by the requester's second decision:
+  the 10 ms floor applies to NSLR's conjunction too, and the landing rule
+  stays off there, because a conjunction span does not end on an NSLR knot.
+  A longer NSLR conjunction row keeps `measure`.*
 - **Measured after the fix** (full reference recording):
 
   | | left | right |
@@ -342,6 +360,17 @@ of it is in `4483cc9`, `992aba5`, `4663caf`, `8e3e784` and this commit.
   median 150 °/s. `_overlapping`'s floor guarantees `stop > start`, not a
   nonzero amplitude. That is the conjunction's duration floor, out of scope
   here and open for the requester (spec §8 item 4).
+
+  *Resolved 2026-09-27, the same day (the conjunction round), and the item
+  above superseded, true when written.* After the requester's second
+  decision, 2,023 of NSLR's 3,230 conjunction saccade rows are stored
+  unmeasured, and none is at 0.0°. A full-precision dump of every stored
+  run row (five detectors, three traces, six fixtures) is identical before
+  and after that round. No fixture has an NSLR conjunction saccade under
+  10 ms, so the conjunction floor is pinned without MySQL, through the real
+  `_insert_trace`. Every other detector's conjunction is unchanged, and on
+  the reference recording it still holds 36 rows at exactly 0.0°:
+  Engbert–Kliegl 12, Otero-Millan 11, REMoDNaV 9 and Nyström–Holmqvist 4.
 - **Downstream.** No production code reads `amplitude_deg` or
   `peak_velocity_deg_s` yet. `schema/consensus.py` reads only a run's
   bounds and label, and `cli/report.py` only the master rows' counts.
@@ -364,21 +393,54 @@ non-finite gaze at a sample the mask offers.
 they stand. M2 put the pinned commits and numba's numpy ceiling into
 `wl.yaml` and `pyproject.toml`. M3 corrected three stale docstrings in
 `schema/detect.py`. M4 corrected spec §9 and the parent spec's citation.
-M5 rewrote `continuous_fit` in Thomas-algorithm terms, so it no longer
-keeps the AGPL reference's identifiers or control flow. It is
-byte-identical to the previous version on 3,012 segmentations, on both
-interpreters, and the gated fidelity tests pass.
+M5 renamed `continuous_fit`'s locals in Thomas-algorithm terms, so it no
+longer keeps the AGPL reference's identifiers. Its control flow stays
+parallel to the reference's, because bit-exactness needs the same
+operations in the same order. It is byte-identical to the previous version
+on 3,012 segmentations, on both interpreters, and the gated fidelity tests
+pass.
 
 **The records.** The "fewer saccades" reading is corrected where it stood
 (spec §5.2, this handoff, CHECKPOINT): it holds on the 120,000-sample slice
 only.
 
+**The conjunction round (2026-09-27).** The fix wave's scoped re-review
+approved it with residuals.
+- **The requester's second decision.** NSLR's 10 ms floor applies to its
+  conjunction trace too. An NSLR conjunction saccade row under 10 ms is
+  stored with both measurements NULL, and a longer one keeps `measure`. The
+  landing rule stays off there.
+- **Measured on the reference recording:** 2,023 of NSLR's 3,230
+  conjunction saccade rows are now unmeasured, and none is at 0.0°. Every
+  other detector's conjunction is unchanged, and still holds 36 rows at
+  exactly 0.0°: Engbert–Kliegl 12, Otero-Millan 11, REMoDNaV 9 and
+  Nyström–Holmqvist 4.
+- **Every other detector's rows are unchanged.** A full-precision dump of
+  every stored run row (five detectors, three traces, six fixtures) is
+  identical before and after the round.
+- **How it is pinned.** No fixture has an NSLR conjunction saccade under
+  10 ms, so the floor is pinned through the real `_insert_trace` without
+  MySQL, and turning it off for the conjunction alone fails that test.
+- **Still open:** whether a conjunction needs a minimum event duration at
+  all. It is shared by four detectors, not three: Otero-Millan's floor is
+  one sample too (spec §8 item 4).
+- **Five wording slips corrected in this handoff:**
+  - the "stored measurements" invariant, whose contract changed;
+  - "read 1/L short", which became "missed the last step": 5 of the 18
+    re-measured fixture rows got smaller;
+  - the undated "fewer saccades" corrections, now dated;
+  - M5 changed identifiers, not control flow;
+  - `min_measured_saccade_ms` has no class default.
+
 ## Findings
 
 1. **All-detector invariants held, with one known risk that fired and was
    resolved above.** Every other all-detector invariant in
-   `tests/schema/test_detect_populate.py` (planted onsets, tiling, stored
-   measurements, the conjunction, the run-count bound) passed unmodified.
+   `tests/schema/test_detect_populate.py` (planted onsets, tiling, the
+   conjunction, the run-count bound) passed unmodified. The invariant on
+   stored measurements passed too, and its contract then changed in the fix
+   wave: an NSLR saccade run under 10 ms carries no measurement
+   (`test_saccade_runs_carry_measurements_and_others_do_not`).
    Separately, NSLR's own Review Focus unit tests pass:
    `tests/eye/detect/test_nslr.py` checks that no run contains an unusable
    sample, that pieces of one, two and zero samples are handled, that the
@@ -502,13 +564,15 @@ The list as it stood before the fix wave:
 
 ## What is next
 
-1. **This branch.** The fix wave's scoped re-review comes first, then the
+1. **This branch.** The conjunction round's re-review comes first, then the
    requester's merge decision. At merge, `docs/CHECKPOINT.md`'s header and
    `wl.yaml`'s `status.describes` are re-pointed with CI read off the merge
    — neither is touched here.
 
    *Until the fix wave this said "The whole-branch review comes first"; it
-   has happened.*
+   has happened. Until the conjunction round it said the fix wave's scoped
+   re-review came first; that has happened too, and approved the wave with
+   the residuals this round fixed.*
 2. **Two open items for the requester**, recorded and not changed here:
    - **The shared mask passes NaN as usable, for every detector** (spec §8
      item 6). NSLR now withholds non-finite gaze itself; every other
@@ -518,6 +582,12 @@ The list as it stood before the fix wave:
      219 of 3,230 on the reference recording, at a median 150 °/s (spec §8
      item 4). The requester's measurement decision covers per-eye rows only,
      and the conjunction's duration floor is out of scope.
+
+     *Resolved 2026-09-27, the same day, and superseded (true when
+     written): the requester applied the 10 ms floor to NSLR's conjunction
+     too. None of its conjunction rows is at 0.0° now. Whether a
+     conjunction needs a minimum event duration at all is still open (item
+     4 below).*
 3. **Bayesian microsaccade detection is now the only remaining
    hardware-free detector.** It matters doubly now: it is a saccade
    detector, and — per the ruling above — it is built to cover exactly the
@@ -531,6 +601,14 @@ The list as it stood before the fix wave:
    state durations in milliseconds; NSLR states none at all. All three
    admit a one-sample binocular event under today's floor. Still a
    cross-detector decision, out of scope on this branch.
+
+   *Corrected 2026-09-27 (the conjunction round): four detectors, not
+   three. Otero-Millan's params declare no `min_duration_samples` either,
+   and 7 of its 3,888 conjunction rows on the reference recording are one
+   sample long. NSLR's conjunction now takes its 10 ms measurement floor,
+   so none of NSLR's one-sample conjunction events carries a measurement;
+   whether a conjunction needs a minimum event duration at all is still
+   open.*
 5. **A supervised emission refit for macaque data**, needing hand-labelled
    monkey recordings this lab does not yet have (spec §8 item 1). Not
    started.

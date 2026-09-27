@@ -93,8 +93,9 @@ status:
     not used below about 1 degree -- it calls a planted 0.75-degree/16 ms
     step fixation, exactly as the authors' own code does on the same trace.
     The whole-branch review's fix wave (2026-09-27, the requester's
-    decision): NSLR's per-eye saccade rows are measured to where the eye
-    lands, and a run under 10 ms is stored unmeasured; NSLR withholds
+    decisions): NSLR's per-eye saccade rows are measured to where the eye
+    lands, and an NSLR saccade run under 10 ms, per-eye or conjunction, is
+    stored unmeasured; NSLR withholds
     non-finite gaze, and warns when its noise estimate is capped. Every
     other detector's stored rows are unchanged.
   next: >-

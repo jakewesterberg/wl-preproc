@@ -267,6 +267,9 @@ seven, so a disagreement is never a disagreement about measurement.
 > registry entry and the floor in its paramset;
 > `eye/detect/measure.py::measure_event_run` applies both. Every other
 > detector, and every conjunction trace, is measured exactly as before.
+> *Corrected 2026-09-27, the same day: by the requester's second decision
+> NSLR's conjunction takes its 10 ms floor too, though not its landing
+> rule. Every other detector's traces are measured exactly as before.*
 
 ### 3.1 Seven detectors, and what each can say
 
@@ -523,8 +526,8 @@ each of which is why this beats a blob:
 And a run of a `saccade` or `microsaccade` label **is** an event, so the run
 row carries `amplitude_deg`, `peak_velocity_deg_s` and a nullable
 `reliability` (Otero-Millan's; null for the other two). *(Amended 2026-09-27:
-except an NSLR per-eye saccade run under 10 ms, which carries neither
-measurement; see §3's amendment.)* The runs table is
+except an NSLR saccade run under 10 ms, per-eye or conjunction, which
+carries neither measurement; see §3's amendment.)* The runs table is
 therefore strictly more informative than the per-sample trace it encodes, not
 a lossy substitute for it.
 
