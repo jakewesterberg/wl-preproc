@@ -388,6 +388,7 @@ def test_n_samples_compared_counts_what_neither_side_called_blink_or_invalid(
     never defined to answer.
     """
     from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.schema import consensus, detect
 
     session_key, _report = agreement_session
@@ -412,10 +413,17 @@ def test_n_samples_compared_counts_what_neither_side_called_blink_or_invalid(
         index_to_name = _index_to_name()
         for row in rows:
             name_a, name_b = index_to_name[row["paramset_a"]], index_to_name[row["paramset_b"]]
+            # A pair where one side copies the other's saccades also leaves
+            # out the source's saccade samples (final review I4):
+            # `test_the_pair_whose_saccades_are_copied_is_scored_without_them`.
+            source = {name_a: name_b, name_b: name_a}
+            copied_from = next((source[n] for n in (name_a, name_b)
+                                if get_detector(n).copies_saccades_from == source[n]), None)
             expected = sum(
                 1
                 for a, b in zip(arrays[name_a], arrays[name_b], strict=True)
                 if a not in excluded and b not in excluded
+                and (copied_from is None or (a if copied_from == name_a else b) is not Label.SACCADE)
             )
             assert 0 < expected < n_samples, (
                 f"{trace} ({name_a}, {name_b}): the planted blink did not reach "
@@ -1055,3 +1063,27 @@ def test_a_real_wlpp_daemon_pass_writes_agreement_rows_registering_nothing_itsel
         "DetectorAgreement is not a daemon stage, or it runs before the "
         "detections it compares"
     )
+
+
+def test_the_pair_whose_saccades_are_copied_is_scored_without_them(agreement_session):
+    """The requester's decision of 2026-09-27 (BMD design spec section 4;
+    final review I4). BMD's saccades are Engbert-Kliegl's, copied by its
+    gate, so the two agree on them by construction and that agreement says
+    nothing. The Engbert-Kliegl/BMD rows leave out every sample where
+    Engbert-Kliegl stored `saccade`, on every trace, and score the pair on
+    what BMD finds itself. Non-vacuous: Engbert-Kliegl stores saccades on
+    each trace here, so the count must drop."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema import consensus
+
+    session_key, _report = agreement_session
+    excluded = {Label.BLINK, Label.INVALID}
+    for trace in ("left", "right", "conjunction"):
+        arrays = _label_arrays(session_key, trace)
+        pairs = list(zip(arrays["engbert_kliegl"], arrays["bmd"], strict=True))
+        with_saccades = sum(1 for a, b in pairs if a not in excluded and b not in excluded)
+        expected = sum(1 for a, b in pairs if a not in excluded and b not in excluded and a is not Label.SACCADE)
+        assert expected < with_saccades, trace
+        rows = (consensus.DetectorAgreement
+                & {**session_key, "trace": trace, **_pair("engbert_kliegl", "bmd")}).to_dicts()
+        assert rows and {row["n_samples_compared"] for row in rows} == {expected}, trace

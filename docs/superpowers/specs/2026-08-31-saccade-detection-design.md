@@ -312,6 +312,12 @@ seven, so a disagreement is never a disagreement about measurement.
 > *Amended 2026-09-27: NSLR is registered — spec
 > `2026-09-27-nslr-design.md`.*
 
+> *Amended 2026-09-27: Bayesian microsaccade detection is registered — spec
+> `2026-09-27-bmd-design.md`. Its vocabulary is `saccade / microsaccade /
+> drift`, not the `microsaccade / drift` this table gives it: BMD analyses
+> only the fixation stretches between Engbert–Kliegl's saccades, and stores
+> those saccades as its own `saccade` (BMD spec §3.1, §4).*
+
 > **Corrected 2026-09-01, by reading the reference implementation.** This
 > table gave Otero-Millan `microsaccade` alone and called its source "ported
 > from a BSD-3 reference". Both were wrong, and the download settles it.
@@ -446,6 +452,15 @@ surface. Mitigation is not optional:
 - **BMD has no usable oracle** — its reference is C++ and unlicensed — so it
   is validated against the paper's own simulated-data claims instead, and its
   rows are marked provisional until it is.
+
+  > *Superseded for BMD, 2026-09-27 (spec `2026-09-27-bmd-design.md`,
+  > preamble and §5.1).* The requester has the authors' permission to use
+  > their code and data for testing. The tests build their C++ and hold this
+  > implementation to it change point for change point. So BMD now has an
+  > exact oracle, and nothing of the authors' is committed or shipped. **Its
+  > rows stay provisional on the other ground**: an exact reimplementation
+  > cannot show that the model fits monkey data, and only a calibrated
+  > session can (BMD spec §4).
 
   > **Added 2026-09-02: Otero-Millan's rows are provisional on the same
   > terms, and this is not a suspicion about the reimplementation.** It was
@@ -850,6 +865,19 @@ U'n'Eye expresses a microsaccade more coarsely; BMD cannot express a large
 saccade at all. The EK↔BMD row is therefore a microsaccade-scale score and
 records its vocabulary as such — a fact any reader comparing it against an
 EK↔U'n'Eye row needs, and the reason vocabulary is already in the key.
+
+> *Amended 2026-09-27 (spec `2026-09-27-bmd-design.md` §4): BMD as built
+> declares `{saccade, microsaccade, drift}`, because it stores Engbert–Kliegl's
+> saccades as its own. So an Engbert–Kliegl `saccade` is now in BMD's
+> declaration, and the EK↔BMD row is no longer a microsaccade-scale score
+> alone. Its agreement on `saccade` is total by construction and says
+> nothing; its agreement on `microsaccade` is genuine. So the requester chose
+> the same day to leave the copied saccades out of that pair: every sample
+> Engbert–Kliegl stored as `saccade` is excluded from EK↔BMD agreement (BMD
+> spec §4, amended). The same change means
+> BMD and U'n'Eye now share `saccade`, so that pair no longer illustrates
+> the disjoint-declarations gap below. The gap in the rule stands for any
+> pair that is disjoint.*
 
 `fixation` is implicitly a member of every vocabulary — it is what a sample is
 when no detector claims it — so it is never what makes a sample incomparable.
@@ -1416,6 +1444,11 @@ else supplies.
    three conjunctions, over a 1.18M-sample recording, on every session. The
    plan must measure total runtime before this is a nightly stage rather than
    an on-demand one.
+
+   *Amended 2026-09-27: BMD took 261–308 s (left) and 280–363 s (right)
+   per eye on the 39-minute reference recording, over three runs: 13 to 18
+   minutes per eye for a two-hour session (spec `2026-09-27-bmd-design.md`
+   §5.4).*
 7. **Fine-tuning U'n'Eye** on hand-labelled lab data is post-January, per
    parent §7.2. Until then its rows are provisional and the pairwise design
    is what keeps that from contaminating the readable metrics.

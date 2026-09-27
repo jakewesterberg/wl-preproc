@@ -44,6 +44,23 @@ jobs:
           git -C "$ref/nslr-hmm" checkout -q 3598fee3c5def6734ef6c085e44356fedafaf727
           echo "WLPP_NSLR_REFERENCE=$ref" >> "$GITHUB_ENV"
 
+      - name: Fetch the BMD reference and its build tools (test-time only, no licence, used under its authors' permission)
+        # Design spec 2026-09-27-bmd-design.md sections 2 and 7: the authors'
+        # C++ at a pinned commit, patched by pattern, built and run by
+        # tests/eye/detect/_bmd_reference.py. clang against libc++, because
+        # the authors' stored example's random stream is libc++'s; Boost for
+        # the headers bmd.cpp includes. The requester stated on 2026-09-27
+        # that the authors permit its use for testing; nothing here is
+        # installed or shipped. Proven 2026-09-27 in an x86-64 Ubuntu 24.04
+        # container with exactly these packages.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang libc++-dev libc++abi-dev libboost-dev
+          ref="$RUNNER_TEMP/bmd-ref"
+          git clone -q https://github.com/basvanopheusden/BMD.git "$ref"
+          git -C "$ref" checkout -q 1fab6355e57d6a7410c743ca2790d3efd502981a
+          echo "WLPP_BMD_REFERENCE=$ref" >> "$GITHUB_ENV"
+
       - name: Assert the contracts came from wl-sync, not a local copy
         # The sync box owns session identity and the log format. If either is
         # ever vendored into this repo, there are two definitions free to drift

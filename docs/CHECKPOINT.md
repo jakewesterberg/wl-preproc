@@ -102,18 +102,26 @@ requester chose to merge the same day; true when written.*
 >    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
 >    storing either as a typed array is the change if a real one costs real
 >    space.
-> 2. **Bayesian microsaccade detection.** Real code, hardware-free, and it
->    matters as a SACCADE detector — see the priority note below about
->    glissades. It is also the one method in the parent spec's §3.1 table
->    built for the sub-1° regime NSLR now explicitly does not cover (below).
->    U'n'Eye is the remaining unwritten detector; it wants the GPU,
->    so it stays blocked. The conjunction's one-sample duration floor is now
+> 2. **Bayesian microsaccade detection is BUILT on `spec/bmd` (2026-09-27),
+>    NOT merged as written** (below). Next, the requester's choice of
+>    2026-09-27: store each saccade and microsaccade row's direction and its
+>    start and end gaze positions, for every detector, on its own branch
+>    (BMD spec §9). U'n'Eye is the remaining unwritten detector; it wants the
+>    GPU, so it stays blocked.
+>
+>    *Until 2026-09-27 this item opened "Bayesian microsaccade detection.
+>    Real code, hardware-free, and it matters as a SACCADE detector", as the
+>    one method built for the sub-1° regime NSLR does not cover; true when
+>    written.*
+>
+>    Still open: the conjunction's one-sample duration floor is now
 >    inherited by three millisecond- or no-duration detectors, Nyström–
 >    Holmqvist, REMoDNaV and NSLR. It is a cross-detector decision, still open.
 >    *Measured 2026-09-27 (the NSLR conjunction round): Otero-Millan's
 >    conjunction floor is one sample too, since its params declare no
 >    `min_duration_samples`. So the floor is shared by four detectors, not
->    three.*
+>    three.* *BMD's conjunction has the one-sample floor too (BMD spec §4 and
+>    §8 item 8), so five detectors now share it.*
 >
 >    *Until 2026-09-27 this item also named NSLR here, alongside Bayesian
 >    microsaccade detection, gave U'n'Eye as the third unwritten detector, and
@@ -244,6 +252,69 @@ requester chose to merge the same day; true when written.*
 >        conjunction needs a minimum event duration stays open.*
 >
 >    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
+>    and what is still deferred.
+>
+>    **Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
+>    (2026-09-27), NOT merged as written.** It is the sixth registered
+>    detector: a hidden semi-Markov model of fixation, sampled by
+>    Metropolis–Hastings (Mihali, van Opheusden & Ma 2017). The requester has
+>    the authors' permission to use their C++ for testing; it is built by the
+>    tests and never committed or shipped. What it measured:
+>    - **Fidelity.** Every change point of every sample, and the settings at
+>      every iteration, match the authors' stored example and a patched build
+>      of their code:
+>      - 1 kHz and 500 Hz simulations, the latter with the speed caps;
+>      - exactly repeated positions;
+>      - a 5,000-sample stretch of each eye of the reference recording, at
+>        498.55 Hz.
+>
+>      Two nulls fail the check. Both halves of CI's comparison were proven
+>      on x86-64 Ubuntu before CI ran.
+>    - **Its own table.** The likelihood's table of log A is computed here
+>      from its formula, not taken from the authors; BMD's probabilities are
+>      identical either way.
+>    - **In the pipeline** (the requester's design):
+>      - Engbert–Kliegl's saccades are removed first and stored as BMD's
+>        `saccade`;
+>      - BMD analyses the fixation stretches between them, with settings
+>        pooled per 1-minute block;
+>      - its microsaccades are measured from their take-off sample, on each
+>        eye's own trace.
+>    - **The reference recording** (p99→15° scale): 261–308 s left /
+>      280–363 s right for the whole recording, over three runs; 13 to 18
+>      minutes per eye for a two-hour session. Over the first 120,000
+>      samples, after the size split below: 1.24 / 1.25 microsaccades per
+>      second, and microsaccade kappa against Engbert–Kliegl 0.522 / 0.512.
+>      Before it, 1.35 / 1.43 and 0.569 on both eyes.
+>    - **The paper's claim** on its own simulated data holds: at measurement
+>      noise 0.06, BMD's hit rate is 0.979 against Engbert–Kliegl's 0.103.
+>    - **A drifting synthetic eye, for BMD only (the requester's choice).**
+>      On the still synthetic eye every other detector is held to, BMD split
+>      a 0.75° step into three. So it is held to the planted steps on a copy
+>      of the stepped session with the reference recording's drift. It
+>      finds every step, with one extra detection in 15.6 s.
+>    - **A finding about Otero-Millan, unexplained** (BMD spec §8 item 7).
+>      Given the same drift over the whole session, Otero-Millan reported
+>      about 40 microsaccades on one eye; on pure synthetic drift, none. Its
+>      rate on the real recording is within its band. So the five existing
+>      detectors keep the still sessions.
+>    - **The final whole-branch review, and the requester's three decisions
+>      (2026-09-27).**
+>      - *Fixed:* a perfectly still trace raised an error at the production
+>        settings (the motor noise reached exactly 0, and the port took
+>        Python's `log` where the reference takes C's). Spec §5.2's pooled
+>        grid-search check was missing; it is now held to a direct
+>        computation. Comments in `schema/detect.py` still called BMD
+>        unwritten.
+>      - *BMD's own events are split by size:* about 1 in 10 of its
+>        "microsaccades" on the recording were 1° or more, up to 7.7°. They
+>        are now stored as saccades, as every other detector would.
+>      - *The Engbert–Kliegl↔BMD agreement leaves out the saccades BMD
+>        copies from Engbert–Kliegl*, which the two agree on by construction.
+>      - *BMD runs on every session*, as registered; to be revisited once the
+>        compute machine exists.
+>
+>    `docs/handoffs/2026-09-27-bmd-built.md` has the account, every ruling
 >    and what is still deferred.
 > 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to
 >    `eye/detect/labels.py`** as `KIND_OF`, `NOT_INTERSECTED`, `kind_of` and

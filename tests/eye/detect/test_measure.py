@@ -176,3 +176,59 @@ def test_a_run_shorter_than_the_floor_is_not_measured(landing, fs_hz, measured_f
             assert got is None, length
         else:
             assert got is not None and got.amplitude_deg > 0.0, length
+
+
+# The requester's decision of 2026-09-27 (design spec `2026-09-27-bmd-design.md`
+# section 3.5): BMD's per-eye microsaccade runs start one sample after the eye
+# takes off, and are measured from that take-off sample.
+
+
+def test_a_run_starting_after_its_takeoff_is_measured_from_the_takeoff_sample():
+    """Amplitude from `gaze[start - 1]`, peak velocity over `[start - 1,
+    stop)`, and not a sample earlier. The duration is the run's own."""
+    gaze = _walk()
+    velocity = _speeds()
+    velocity[9] = [300.0, 0.0]   # the take-off sample: inside
+    velocity[8] = [900.0, 0.0]   # the sample before it: outside
+
+    got = measure_event_run(gaze, velocity, _offered(40), 10, 16, 500.0,
+                            runs_end_before_landing=False, min_measured_ms=None,
+                            runs_start_after_takeoff=True)
+
+    displacement = gaze[15] - gaze[9]
+    assert got.amplitude_deg == float(np.hypot(displacement[0], displacement[1]))
+    assert got.amplitude_deg != measure(gaze, velocity, 10, 16, 500.0).amplitude_deg
+    assert got.peak_velocity_deg_s == 300.0
+    assert got.duration_s == 6 / 500.0
+
+
+def test_a_one_sample_run_reads_its_take_off_step_rather_than_zero():
+    gaze = _walk()
+
+    got = measure_event_run(gaze, _speeds(), _offered(40), 10, 11, 500.0,
+                            runs_end_before_landing=False, min_measured_ms=None,
+                            runs_start_after_takeoff=True)
+
+    assert measure(gaze, _speeds(), 10, 11, 500.0).amplitude_deg == 0.0
+    displacement = gaze[10] - gaze[9]
+    assert got.amplitude_deg == float(np.hypot(displacement[0], displacement[1])) > 0.0
+
+
+@pytest.mark.parametrize("case", ["start is the first sample", "start - 1 is withheld", "start - 1 is not finite"])
+def test_the_takeoff_sample_is_used_only_when_it_was_offered(case):
+    """Otherwise the run is measured as `measure` measures it."""
+    gaze = _walk()
+    offered = _offered(40)
+    start, stop = 10, 16
+    if case == "start is the first sample":
+        start, stop = 0, 6
+    elif case == "start - 1 is withheld":
+        offered[start - 1] = Label.BLINK
+    else:
+        gaze[start - 1, 0] = np.nan
+
+    got = measure_event_run(gaze, _speeds(), offered, start, stop, 500.0,
+                            runs_end_before_landing=False, min_measured_ms=None,
+                            runs_start_after_takeoff=True)
+
+    assert got == measure(gaze, _speeds(), start, stop, 500.0)

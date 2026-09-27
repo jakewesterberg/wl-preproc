@@ -160,6 +160,17 @@ RIGHT_EYE_ROTATION_OFFSET_PX = 6.0
 # avoiding equality.
 P1_JITTER_STD_PX = 6.0
 
+# **Fixational drift for detection fixtures: 0.4 x the measurement noise per
+# frame.** Measured 2026-09-27 on the reference recording
+# (`OpenIris-2024Jul31-114628`), in raw P1 - P4 pixels. BMD's own noise
+# estimate (design spec `2026-09-27-bmd-design.md` section 1.4) was run over
+# the stretches between Engbert-Kliegl's events in three 60 s windows (0 s,
+# 601 s, 1404 s) of each eye: motor noise (drift) 0.05-0.06 px per
+# sqrt(frame) against measurement noise 0.12-0.13 px. That is a ratio of
+# 0.38-0.46, identical across windows and eyes. A fixture whose measurement
+# noise is `P1_JITTER_STD_PX` gets 0.4 of it as drift.
+FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME = 0.4 * P1_JITTER_STD_PX
+
 # `Int0` = 12 with bit 0 carrying the barcode, matching the reference
 # recording's {12, 13} (bits 2 and 3 constant-high, bit 1 always low). The
 # constant-high bits are reproduced, not just the toggling one, because a
@@ -318,6 +329,18 @@ def write_ohdpi(
         # negligible against the tens of pixels a target constellation spans.
         rot_x_left[start_frame:stop_frame] = fixation.x_px + rng.normal(0, 0.5, held)
         rot_y_left[start_frame:stop_frame] = fixation.y_px + rng.normal(0, 0.5, held)
+
+    # **Fixational drift** (`SessionRecipe.fixational_drift_px_per_sqrt_frame`):
+    # one random walk over the whole session, added after the holds are
+    # written, so a hold drifts the way the free signal does and the walk is
+    # continuous through every hold and ramp. Drawn from its own stream, keyed
+    # on the recipe's seed, so a recipe without drift is byte-identical to
+    # before this existed.
+    if recipe.fixational_drift_px_per_sqrt_frame > 0.0:
+        drift_rng = np.random.default_rng([recipe.seed, 0xD21F7])
+        walk = np.cumsum(drift_rng.normal(0, recipe.fixational_drift_px_per_sqrt_frame, (2, n)), axis=1)
+        rot_x_left += walk[0]
+        rot_y_left += walk[1]
 
     rot_x_right = rot_x_left + RIGHT_EYE_ROTATION_OFFSET_PX
     rot_y_right = rot_y_left + RIGHT_EYE_ROTATION_OFFSET_PX

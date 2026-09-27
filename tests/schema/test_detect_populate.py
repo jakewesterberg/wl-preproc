@@ -126,6 +126,18 @@ _ONSET_OFFSETS_S = (1.0, 1.9, 2.9)
 # 2026-09-27, after seeing that finding.
 _NOT_USED_BELOW_1_DEG = frozenset({"nslr"})
 
+# Detectors held to the planted steps on a DRIFTING eye instead of this
+# module's still one (`drifting_stepped_session`,
+# `test_bmd_finds_every_planted_step_on_a_drifting_eye`). BMD's model assumes
+# the eye drifts between movements, as every real eye does, and on a
+# perfectly still one it splits a movement into several; with the reference
+# recording's drift it finds each planted step at its time. The requester
+# chose on 2026-09-27 to give BMD its own drifting check and leave the five
+# other detectors on the still sessions, unchanged (design spec
+# `2026-09-27-bmd-design.md` section 5.1). Its correctness against its
+# authors' code is proven exactly, elsewhere.
+_HELD_ON_A_DRIFTING_EYE = frozenset({"bmd"})
+
 # A step in the RIGHT eye's own raw trace ALONE, edited directly into the
 # generated file after the fact (`test_eye_populate.py::lossy_quality_
 # session`'s own technique -- split each affected line by column, replace
@@ -537,7 +549,7 @@ def daemon_module(dj_conn, prefix):
 
 def _build_stepped_session(
     tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
-    after_generate=None,
+    after_generate=None, fixational_drift_px_per_sqrt_frame=0.0,
 ):
     """The construction behind `stepped_session`, and -- without
     `after_generate` -- behind the mixed-eye fixtures below (`left_refused_
@@ -628,6 +640,7 @@ def _build_stepped_session(
         ap_sample_rate_hz=30_000.0,
         seed=seed,
         eye_fixations=tuple(detect_fixations),
+        fixational_drift_px_per_sqrt_frame=fixational_drift_px_per_sqrt_frame,
     )
 
     root = tmp_path_factory.mktemp(dirname)
@@ -728,6 +741,29 @@ def missing_gaze_session(daemon_module, prefix, tmp_path_factory):
     report = daemon_module.run_once(prefix=prefix)
     (missing_row,) = _rows_for_times(session_key, segment, [_MISSING_GAZE_ONSET_S])
     return session_key, report, missing_row
+
+
+@pytest.fixture(scope="module")
+def drifting_stepped_session(daemon_module, prefix, tmp_path_factory):
+    """`stepped_session`'s construction, with the reference recording's
+    fixational drift over the whole session
+    (`synth/ohdpi.py::FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME`) and no phantom.
+    Where the detectors in `_HELD_ON_A_DRIFTING_EYE` are held to the planted
+    steps. Date, subject and seed checked unclaimed across `tests/` on
+    2026-09-27. Returns `(session_key, report, planted_onsets)`."""
+    from tests.schema.test_eye_populate import _rows_for_times
+    from wl_preproc.synth.ohdpi import FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME
+
+    session_key, segment, onset_times = _build_stepped_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` -- exactly 8.
+        dirname="detectdrift", session_id="2027-06-23_01", subject="detdrft1",
+        session_datetime=datetime.datetime(2027, 6, 23, 9, 0), seed=623,
+        fixational_drift_px_per_sqrt_frame=FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME,
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    planted_onsets = _rows_for_times(session_key, segment, onset_times)
+    return session_key, report, planted_onsets
 
 
 @pytest.fixture(scope="module")
@@ -991,8 +1027,11 @@ def test_the_next_full_pass_then_computes_both_eyes(out_of_order_session):
     # Not merely "a row exists": the same planted-onset round trip
     # `stepped_session` asserts, so a session that recovered from the
     # out-of-order state is proven to have detected the real events rather
-    # than to have written an empty success.
+    # than to have written an empty success. A detector held on a drifting
+    # eye instead (`_HELD_ON_A_DRIFTING_EYE`) is not held to this still one.
     for name in _detector_names():
+        if name in _HELD_ON_A_DRIFTING_EYE:
+            continue
         runs = (
             detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
         ).to_dicts(order_by="run_index")
@@ -1070,7 +1109,8 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
     the smaller one is asserted, so a change either way fails -- and this is
     the cheapest place a new detector's reimplementation defect surfaces as a
     defect rather than as design spec section 3.2's "genuine detector
-    disagreement".
+    disagreement". A detector whose model assumes a drifting eye is held to
+    the same steps on one instead (`_HELD_ON_A_DRIFTING_EYE`).
     """
     from wl_preproc.schema import detect
 
@@ -1081,7 +1121,10 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
         "below-1-deg miss this test asserts for excluded detectors is vacuous"
     )
 
+    assert _HELD_ON_A_DRIFTING_EYE <= set(_detector_names())
     for name in _detector_names():
+        if name in _HELD_ON_A_DRIFTING_EYE:
+            continue  # held on a drifting eye instead, below
         runs = (
             detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
         ).to_dicts(order_by="run_index")
@@ -1106,6 +1149,65 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
             assert len(onsets) == len(planted_onsets), name
             for got, want in zip(onsets, planted_onsets, strict=True):
                 assert abs(got - want) <= 5, name
+
+
+def test_bmd_finds_every_planted_step_on_a_drifting_eye(drifting_stepped_session, capsys):
+    """`test_a_planted_step_is_detected_at_its_planted_time` for the
+    detectors in `_HELD_ON_A_DRIFTING_EYE`, on a drifting eye. Every planted
+    step has a detected onset within 5 samples. Detections at no planted step
+    are counted and printed, not failed: the requester's decision of
+    2026-09-27. On realistic drift BMD's false alarms were measured at about
+    one a minute at most (design spec `2026-09-27-bmd-design.md` section
+    5.1)."""
+    from wl_preproc.schema import detect
+    from wl_preproc.synth.ohdpi import FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME
+
+    assert FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME > 0.0, "the drifting session must drift"
+    session_key, _report, planted_onsets = drifting_stepped_session
+    for name in sorted(_HELD_ON_A_DRIFTING_EYE):
+        runs = (
+            detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
+        ).to_dicts(order_by="run_index")
+        onsets = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+        for want in planted_onsets:
+            assert any(abs(got - want) <= 5 for got in onsets), (name, want, onsets)
+        extra = [got for got in onsets if not any(abs(got - want) <= 5 for want in planted_onsets)]
+        with capsys.disabled():
+            print(f"\n  {name}: {len(extra)} detection(s) at no planted step, "
+                  f"over {len(runs) and runs[-1]['run_stop']} samples: {extra}")
+
+
+def test_bmd_microsaccades_are_measured_from_take_off(stepped_session):
+    """The requester's decision of 2026-09-27 (design spec
+    `2026-09-27-bmd-design.md` section 3.5): BMD's own event `[start,
+    stop)` on an eye's own trace is measured over `[start - 1, stop)` -- its
+    take-off sample -- when that sample exists, was offered and is finite.
+    Its own events carry their mean P as reliability, whether stored as
+    `microsaccade` or, at the cut or above, as `saccade` (final review I1).
+    The saccades it copies from Engbert-Kliegl carry none and are measured
+    as `measure` measures them."""
+    from wl_preproc.eye.detect.measure import measure
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    checked = 0
+    for trace in ("left", "right"):
+        gaze, v, offered, fs_hz = _stored_inputs(session_key, trace)
+        where = {**session_key, "trace": trace, **_detector("bmd")}
+        for run in (detect.EyeDetection.Run & where).to_dicts():
+            start, stop = run["run_start"], run["run_stop"]
+            if run["label"] not in ("saccade", "microsaccade"):
+                continue
+            if run["reliability"] is None:  # a saccade copied from Engbert-Kliegl
+                assert run["label"] == "saccade", (trace, start, stop)
+                expected = measure(gaze, v, start, stop, fs_hz)
+            else:  # BMD's own event, either side of the cut (final review I1)
+                takeoff = start >= 1 and offered[start - 1] is None and bool(np.isfinite(gaze[start - 1]).all())
+                expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz)
+                checked += 1
+            assert run["amplitude_deg"] == expected.amplitude_deg, (trace, start, stop)
+            assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (trace, start, stop)
+    assert checked, "the fixture must give BMD at least one microsaccade to measure"
 
 
 def test_the_baseline_detector_finds_the_planted_steps(stepped_session):
@@ -1487,6 +1589,8 @@ def test_every_other_detectors_measurements_are_unchanged(stepped_session):
             for run in (detect.EyeDetection.Run & where).to_dicts():
                 if run["label"] not in ("saccade", "microsaccade"):
                     continue
+                if name == "bmd" and trace != "conjunction" and run["reliability"] is not None:
+                    continue  # BMD's own events, measured from take-off: `test_bmd_microsaccades_are_measured_from_take_off`
                 if (name == "nslr" and (run["run_stop"] - run["run_start"]) / fs_hz
                         < _NSLR_MIN_MEASURED_SACCADE_MS / 1000.0):
                     assert run["amplitude_deg"] is None, (name, trace)
@@ -4191,3 +4295,24 @@ def test_the_shared_threshold_still_wins_over_a_detectors_own_field():
         )
     finally:
         del DETECTORS["tries_to_shadow"]
+
+
+def test_bmds_own_events_are_measured_from_take_off_and_its_copied_saccades_are_not():
+    """The requester's decisions of 2026-09-27 (BMD design spec section 3.5;
+    final review I1). BMD's own events carry their mean P as reliability,
+    whether stored as `microsaccade` or, at the amplitude cut or above, as
+    `saccade`; each is measured from its take-off sample on an eye's own
+    trace. The saccades it copies from Engbert-Kliegl carry no reliability
+    and are measured as `measure` measures them. No other detector, and no
+    conjunction, uses the rule."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _measured_from_takeoff
+
+    bmd, ek = get_detector("bmd"), get_detector("engbert_kliegl")
+    assert _measured_from_takeoff(bmd, "left", Label.MICROSACCADE, 0.8)
+    assert _measured_from_takeoff(bmd, "right", Label.SACCADE, 0.9)
+    assert not _measured_from_takeoff(bmd, "left", Label.SACCADE, None)
+    assert not _measured_from_takeoff(bmd, "conjunction", Label.MICROSACCADE, None)
+    assert not _measured_from_takeoff(bmd, "conjunction", Label.SACCADE, 0.9)
+    assert not _measured_from_takeoff(ek, "left", Label.MICROSACCADE, None)

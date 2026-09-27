@@ -405,9 +405,12 @@ class EyeDetection(dj.Computed):
         # measurements; every other label leaves them NULL. So does a saccade
         # run too brief for its detector's paramset to measure (NSLR's
         # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
-        # `reliability` is Otero-Millan's per-detection index, null for every
-        # detector that has none -- declared now because the migration window
-        # closes January.
+        # `reliability` is Otero-Millan's per-detection index, and for an
+        # event Bayesian microsaccade detection found itself its mean
+        # posterior probability of a microsaccade (0.5 to 1; BMD design spec
+        # section 3.4) -- a different quantity on a different scale. Null for
+        # every detector that has neither -- declared now because the
+        # migration window closes January.
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double
         reliability=null         : double
@@ -651,7 +654,15 @@ class EyeDetection(dj.Computed):
         **How an event run is measured is its detector's declared rule**
         (`measure.py::measure_event_run`; the requester's decisions of
         2026-09-27, NSLR design spec section 4). For every detector but NSLR
-        that rule is `measure`, unchanged, on every trace. NSLR's runs end one
+        and BMD that rule is `measure`, unchanged, on every trace. BMD's
+        runs start one sample after the eye takes off
+        (`registry.Detector.runs_start_after_takeoff`), so each of its own
+        per-eye events, `microsaccade` or `saccade`, is measured from that
+        take-off sample (BMD design spec section 3.5); the saccades it copies
+        from Engbert-Kliegl are measured as `measure` measures them
+        (`_measured_from_takeoff`). *Until 2026-09-27 this said "every
+        detector but NSLR"; true when written.*
+        NSLR's runs end one
         sample before the eye lands
         (`registry.Detector.runs_end_before_landing`), so each of its
         per-eye saccade runs is measured up to the landing sample. An NSLR
@@ -683,7 +694,7 @@ class EyeDetection(dj.Computed):
         requester. Superseded by the requester's decision that day; true
         when written.*
 
-        Four of the five registered detectors make that second measurement
+        Five of the six registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
@@ -696,7 +707,17 @@ class EyeDetection(dj.Computed):
         `detect_nslr` merges consecutive segments that share a state before
         returning, and two pieces are always separated by at least one
         sample no run claims, so it never emits two adjacent runs with the
-        same label either.
+        same label either. BMD's runs within a fixation stretch come from
+        `true_runs`, so they are maximal, and every own event is bordered by
+        `drift`: each chain's first and last runs, which are excluded from
+        the probability, always cover a stretch's first and last samples.
+        Two stretches are always separated by at least one sample that is a
+        copied Engbert-Kliegl saccade or unclaimed. So BMD never emits two
+        adjacent runs with the same label either.
+
+        *Until BMD was registered (2026-09-27, `spec/bmd`) this said "Four of
+        the five registered detectors" and did not mention BMD; true when
+        written.*
 
         *Until 2026-09-27 this said "Two of the three registered detectors"
         and did not mention REMoDNaV; true when written.*
@@ -715,7 +736,7 @@ class EyeDetection(dj.Computed):
         (`run.start < offset and onset < run.stop`, both strict), so both
         survive as separate, touching runs carrying the SAME label. Nothing
         in `registry.py::DetectFn`'s own contract requires ANY detector --
-        registered or still unwritten (BMD, U'n'Eye) -- to
+        registered or still unwritten (U'n'Eye; BMD until 2026-09-27) -- to
         leave such a gap, and if two adjacent intervals ever DO carry the
         same label, `runs_from_labels` merges them into one run whose real
         `[start, stop)` matches neither original interval. Measuring the
@@ -802,6 +823,9 @@ class EyeDetection(dj.Computed):
                     gaze, v, offered, run.start, run.stop, fs_hz,
                     runs_end_before_landing=runs_end_before_landing,
                     min_measured_ms=min_measured_ms,
+                    runs_start_after_takeoff=_measured_from_takeoff(
+                        detector, trace, run.label, reliability_by_span.get((run.start, run.stop))
+                    ),
                 )
                 if measurement is not None:
                     amplitude_deg = measurement.amplitude_deg
@@ -814,6 +838,25 @@ class EyeDetection(dj.Computed):
             }
 
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
+
+
+def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:
+    """Whether a stored run is measured from its take-off sample: BMD's
+    take-off rule (design spec `2026-09-27-bmd-design.md` section 3.5), per
+    eye only for the same reason as NSLR's landing rule.
+
+    It applies to BMD's OWN events, `microsaccade` or, at the amplitude cut
+    or above, `saccade` (the requester's decision of 2026-09-27, final
+    review I1). They are the ones carrying a reliability, their mean
+    posterior probability (`bmd.py::_by_size`). The saccades BMD copies from
+    Engbert-Kliegl carry none and are measured as `measure` measures them.
+    *Until then it applied to `microsaccade` runs only; true when written.*"""
+    return (
+        detector.runs_start_after_takeoff
+        and trace != "conjunction"
+        and label in (Label.SACCADE, Label.MICROSACCADE)
+        and reliability is not None
+    )
 
 
 def _overlapping(
@@ -926,14 +969,18 @@ def _overlapping(
 # surviving half-split example.
 #
 # **The SACCADIC SLICE of a vocabulary decides the label, and a slice of size
-# one is a DEGENERATE split.** U'n'Eye (`{saccade}`), Bayesian microsaccade
-# detection (`{microsaccade, drift}`) and the three `pso`-capable detectors
-# each declare one side of the cut and cannot emit the other, so `classify` --
-# which answers both sides for any detector -- would put a word in their
-# mouths that `registry.Detector.detect` refuses from the detector itself.
-# Five of the seven land there; only Engbert-Kliegl and Otero-Millan declare
-# both sides. See `_conjunction_label`, which reads this set rather than
-# restating it.
+# one is a DEGENERATE split.** U'n'Eye (`{saccade}`) and the three
+# `pso`-capable detectors each declare one side of the cut and cannot emit
+# the other, so `classify` -- which answers both sides for any detector --
+# would put a word in their mouths that `registry.Detector.detect` refuses
+# from the detector itself. Four of the seven land there; Engbert-Kliegl,
+# Otero-Millan and Bayesian microsaccade detection declare both sides. See
+# `_conjunction_label`, which reads this set rather than restating it.
+#
+# *Until 2026-09-27 this gave BMD as `{microsaccade, drift}`, one of five on
+# the degenerate branch. BMD as built declares `{saccade, microsaccade,
+# drift}`, because it stores Engbert-Kliegl's saccades as its own (BMD
+# design spec section 4); true when written.*
 #
 # **This set is no longer a gate on whether a conjunction can be built at
 # all.** It was, until 2026-09-05: a vocabulary that was not a subset raised,
@@ -973,7 +1020,8 @@ def _conjunction_runs(
     of thing -- true of Engbert-Kliegl and Otero-Millan, and false for
     Nystrom-Holmqvist (registered 2026-09-06), for REMoDNaV (registered
     2026-09-26), for NSLR (registered 2026-09-27, on `spec/nslr`) and for
-    the one detector still BLOCKED (unwritten): BMD. Nystrom-Holmqvist, NSLR
+    BMD (registered 2026-09-27, on `spec/bmd`; until then this called it
+    the one detector still BLOCKED, unwritten). Nystrom-Holmqvist, NSLR
     and REMoDNaV all emit `pso` and `fixation` alongside `saccade`; BMD
     emits `drift` instead of `pso`. `fixation` TILES the recording, so an
     ungrouped intersection would have crossed a left fixation with a right
@@ -1094,10 +1142,11 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     2026-09-01.** It is not one -- it declares the whole split, so `classify`
     is called for its conjunctions and both answers are in vocabulary. The
     guard still matters for U'n'Eye and, since 2026-09-05's SACCADIC SLICE
-    generalization, for BMD's `{microsaccade, drift}` and the three
-    `pso`-capable detectors as well -- all four reach THIS branch,
-    degenerately, because none of them declares both `saccade` and
-    `microsaccade`:
+    generalization, for the three `pso`-capable detectors as well -- all
+    three reach THIS branch, degenerately, because none of them declares
+    both `saccade` and `microsaccade`. (*Until 2026-09-27 this also named
+    BMD's `{microsaccade, drift}`; BMD as built declares both sides and
+    reaches `classify`. True when written.*)
 
     - `registry.Detector.detect` refuses exactly that label from the
       detector itself, and its own docstring is why -- the declaration is
@@ -1197,16 +1246,20 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
             "such a detector. Declare what it emits before asking for its conjunction"
         )
     # The SACCADIC SLICE, not the whole vocabulary. Nystrom-Holmqvist
-    # declares `{saccade, pso, fixation}` and Bayesian microsaccade detection
-    # `{microsaccade, drift}`; neither is size one, and both make only half
-    # the amplitude cut. Testing the whole vocabulary -- which is what stage 1
-    # did, correctly, when the whole vocabulary WAS the cut -- would send both
-    # to `classify` and put a label in each one's mouth that
-    # `registry.Detector.detect` refuses from the detector itself.
+    # declares `{saccade, pso, fixation}`: not size one, yet it makes only
+    # half the amplitude cut. Testing the whole vocabulary -- which is what
+    # stage 1 did, correctly, when the whole vocabulary WAS the cut -- would
+    # send it to `classify` and put a label in its mouth that
+    # `registry.Detector.detect` refuses from the detector itself. (*Until
+    # 2026-09-27 this also gave Bayesian microsaccade detection as
+    # `{microsaccade, drift}`; as built it declares both halves of the cut.
+    # True when written.*)
     #
-    # Five of the seven detectors land here and only Engbert-Kliegl and
-    # Otero-Millan reach `classify`. The degenerate branch arrived as a
-    # fix-round finding about U'n'Eye and is now the majority path.
+    # Four of the seven detectors land here; Engbert-Kliegl, Otero-Millan
+    # and Bayesian microsaccade detection reach `classify`. The degenerate
+    # branch arrived as a fix-round finding about U'n'Eye and is now the
+    # majority path. *Until 2026-09-27 this said "Five of the seven" and left
+    # BMD out of those reaching `classify`; true when written.*
     saccadic = detector.vocabulary & _AMPLITUDE_DERIVED_VOCABULARY
 
     if not saccadic:

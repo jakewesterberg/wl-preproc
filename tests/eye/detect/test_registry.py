@@ -199,3 +199,35 @@ def test_nslr_is_registered_with_its_vocabulary_and_defaults():
     assert detector.vocabulary == frozenset({Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT})
     assert isinstance(detector.defaults, NslrParams)
     assert detector.defaults == DEFAULT_NSLR_PARAMS
+
+
+def test_bmd_is_registered_with_its_vocabulary_defaults_and_take_off_rule():
+    from wl_preproc.eye.detect.bmd import DEFAULT_BMD_PARAMS, BmdParams
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import DETECTORS, get_detector
+
+    detector = get_detector("bmd")
+
+    assert detector.vocabulary == frozenset({Label.SACCADE, Label.MICROSACCADE, Label.DRIFT})
+    assert isinstance(detector.defaults, BmdParams)
+    assert detector.defaults == DEFAULT_BMD_PARAMS
+    assert detector.runs_start_after_takeoff
+    assert [name for name, d in DETECTORS.items() if d.runs_start_after_takeoff] == ["bmd"]
+
+
+def test_bmd_declares_its_saccades_are_engbert_kliegls_and_its_gate_runs_at_ek_defaults():
+    """The requester's decision of 2026-09-27 (final review I4): consensus
+    leaves out of the Engbert-Kliegl/BMD pair every sample where
+    Engbert-Kliegl stored a saccade, because BMD's are copies of those. That
+    is exact only while BMD's gate runs Engbert-Kliegl at the settings
+    Engbert-Kliegl is registered with, so this pins both."""
+    from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
+    from wl_preproc.eye.detect.registry import DETECTORS, get_detector
+
+    bmd = get_detector("bmd")
+    assert bmd.copies_saccades_from == "engbert_kliegl"
+    assert [name for name, d in DETECTORS.items() if d.copies_saccades_from] == ["bmd"]
+    gate = EngbertKlieglParams(lambda_=bmd.defaults.gate_lambda,
+                               min_duration_samples=bmd.defaults.gate_min_duration_samples,
+                               microsaccade_max_deg=bmd.defaults.microsaccade_max_deg)
+    assert gate == get_detector("engbert_kliegl").defaults
