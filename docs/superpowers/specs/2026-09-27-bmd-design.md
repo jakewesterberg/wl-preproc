@@ -239,6 +239,21 @@ and each is recorded here.
 4. **A run always starts and ends in state 1** (§1.7).
 5. **`long double` is `double`** on the platform that reproduces the authors'
    files. §5.1's CI build forces the same with `-mlong-double-64`.
+6. **The table's interpolation is not bilinear** (`bmd.cpp` 60–61). The
+   corners (αᵢ, dⱼ₊₁) and (αᵢ₊₁, dⱼ) carry each other's weights. Measured
+   2026-09-27 against a true bilinear, over the cells BMD reads:
+   - median 0.017 in log A, maximum 1.2, the largest at small α, where large
+     microsaccade segments land;
+   - near d = 1, the drift column, at most 0.0065.
+
+   Every published result was computed this way, and the fidelity check
+   requires it. It is recorded as an open question (§8).
+7. **A division by zero is IEEE, not an error.** A run whose smoothed
+   displacement is exactly 0 divides by zero in the likelihood, and C++
+   carries on with infinities and NaNs. The port is compiled with numba's
+   numpy error model, never its Python one, which would raise. This was found
+   on the reference recording's right eye, where the tracker repeats a
+   position long enough for the smoother to reach an exact fixed point.
 
 ---
 
@@ -416,9 +431,13 @@ and every run misses its take-off step. This is NSLR's defect at the other end
 
 ### 4.1 Where it lives
 
-- **`wl_preproc/eye/detect/bmd.py`.** The random-number layer, the smoother,
-  the likelihood, the numba-compiled sampler and grid search, the pooling, and
-  `detect_bmd`, the registered `DetectFn`.
+- **`wl_preproc/eye/detect/bmd_rng.py`.** The random-number layer: libc++'s
+  `mt19937_64` and the four distributions the reference draws from, compiled.
+  *Split from `bmd.py` on 2026-09-27, while building: it is pinned against
+  libc++ on its own (§5.6), and nothing in it knows about eyes.*
+- **`wl_preproc/eye/detect/bmd.py`.** The smoother, the likelihood, the
+  numba-compiled sampler and grid search, the pooling, and `detect_bmd`, the
+  registered `DetectFn`.
   - Registry key `bmd`.
   - No transcendental function is added inside the compiled loops beyond
     `log`, `exp` and `pow`. Those are the platform's own libm calls, which are
@@ -441,9 +460,16 @@ and every run misses its take-off step. This is NSLR's defect at the other end
 
 **Nulls first.** Each of these deliberately broken implementations must fail
 the check before it counts:
-- libstdc++'s `generate_canonical` in place of libc++'s;
-- no smoothing (z = x);
-- the Hastings term dropped.
+- chains seeded with the run seed itself, not with one draw from it;
+- the speed settings started from the run's generator, not from the `params`
+  object's own unseeded one.
+
+*This list first named libstdc++'s `generate_canonical`, no smoothing, and a
+dropped Hastings term. Those live inside compiled code, which a test cannot
+substitute. The two above live in the Python that orchestrates it, and a
+wrong random stream or a wrong start breaks every sample after it. The
+repository's own random-number tests pin each distribution against libc++
+separately (§5.6).*
 
 **Exact, sample for sample.** Comparisons are exact, never within a tolerance.
 Each takes the authors' table injected:
@@ -454,7 +480,42 @@ Each takes the authors' table injected:
    several seeds. The data come from this repository's own simulator of the
    §1.1 model, not the authors' MATLAB.
 3. **Real stretches, against the reference build.** Gap-free stretches of the
-   lab's reference recording (gated on `WLPP_OHDPI_REFERENCE`).
+   lab's reference recording (gated on `WLPP_OHDPI_REFERENCE`), at the rig's
+   498.55 Hz with the caps.
+4. **Exactly repeated positions** (§1.10 item 7), against the reference build.
+
+**The planted steps, on a drifting eye (the requester, 2026-09-27).** On the
+still synthetic sessions every other detector is held to, BMD split the
+0.75° planted step into three microsaccades and added a spurious one.
+
+The cause is the fixture, not BMD. Between steps the synthetic eye is
+perfectly still, and BMD's model assumes a drifting eye, as every real one is.
+Measured on standalone traces with 0.03° measurement noise:
+- with no drift, BMD found exactly the planted step in 3 of 8;
+- with the reference recording's drift, in 8 of 8, as Engbert–Kliegl did in
+  both.
+
+Giving every session realistic drift broke two checks for existing
+detectors:
+- Otero-Millan fired about 40 times on one eye;
+- a consensus test built on the glissade session failed.
+
+**The requester chose to give BMD its own drifting check:**
+- the five existing detectors keep the still sessions, unchanged;
+- BMD is held to the planted steps on a drifting copy of the stepped
+  session, and every planted step must be found within 5 samples;
+- its detections at no planted step are counted and printed, not failed.
+
+On pure synthetic drift over 60 s its false alarms were 0–1 a minute. On the
+drifting stepped session it made one extra detection in 15.6 s.
+
+**The drift is the reference recording's own.** BMD's noise estimate over
+the reference recording's fixation stretches gave motor noise 0.05–0.06 px
+per √frame against measurement noise 0.12–0.13 px, in three windows of each
+eye. That is a ratio of about 0.4, applied to the fixture's own noise:
+`synth/ohdpi.py::FIXATIONAL_DRIFT_PX_PER_SQRT_FRAME` = 0.4 × 6 = 2.4 px per
+√frame. It is a new `SessionRecipe` field, `fixational_drift_px_per_sqrt_frame`,
+defaulting to 0. Every existing fixture is byte-identical.
 
 **Measured during design (throwaway prototype):**
 - identical to the authors' stored files on their example;
@@ -477,18 +538,26 @@ per stretch fails.
 
 Blocks: the block boundaries follow §3.2's rule, including the remainder
 joining the block before it, and block b's generator is seeded with `seed +
-b`. Running blocks in parallel gives labels identical to running them in
-order.
+b`. A block run on its own with its seed gives the labels it gets inside
+`detect_bmd`. That independence is what would let blocks run in parallel;
+this build runs them in order, and parallelises the grid search instead.
 
 ### 5.3 This implementation's table against the authors'
 
 This measures the largest |Δ log A| over the grid, and the cutoffs. It then
 runs §5.1's cases with this implementation's table in place of the authors':
-- **The labels must agree** to within a stated fraction of samples. MCMC
-  divergence after a small table difference is expected, so this is a
-  statistical agreement, not an identity.
-- **The bound is set from measurement during the build**, the way NSLR's
-  Table 1 band was, and recorded.
+- **The labels must agree** on at least 99.9% of samples, on a gap-free
+  stretch of each eye of the reference recording.
+
+**Measured 2026-09-27.**
+- **The table itself.** Median |Δ log A| is 3.4e-7. Where BMD reads, 99.999%
+  of cells are identical once this table is printed at the authors' seven
+  significant digits. The cutoffs are the same grid points for every column
+  from d = 0.99. One cell in use, (523, 612), is wrong in the authors' file
+  by 0.0103; quadrature agrees with this table there.
+- **The output.** With this table in place of the authors', the
+  probabilities were **identical** at every sample on the authors' example
+  and on a lab stretch.
 
 ### 5.4 Real data (gated on `WLPP_OHDPI_REFERENCE`; recorded, not gated)
 
@@ -501,26 +570,50 @@ On the lab's reference recording, per eye, this records:
 The recording is uncalibrated (a p99→15° scale), so these numbers describe the
 pipeline, not the eye.
 
+**Measured 2026-09-27, the full recording (1,177,799 samples):**
+
+| | Runtime | Microsaccades (first 120,000 samples) | Microsaccade κ vs EK |
+|---|---|---|---|
+| Left eye | 261 s | 1.35/s | 0.569 |
+| Right eye | 280 s | 1.43/s | 0.569 |
+
+That is about 14 minutes per eye for a two-hour session.
+
 ### 5.5 The paper's simulated-data claims (recorded)
 
 On simulated data at the paper's parameters (σ0 = 0.3 °/s, d1 = 4.4, σ1 = 30
-°/s; T = 60,000 at 1 kHz; a grid of motor and measurement noise), this records
-BMD's hit and false-alarm rates beside this repository's EK. The paper reports
-these as figures, not numbers, so they are recorded, not gated.
+°/s; 20,000 samples at 1 kHz), this records BMD's hit and false-alarm rates
+beside this repository's EK. The paper reports these as figures, so only the
+direction of its headline claim is gated: at high measurement noise, BMD's hit
+rate exceeds EK's.
+
+Measured 2026-09-27, with motor noise 0.003:
+
+| Measurement noise | BMD hit | EK hit |
+|---|---|---|
+| 0.03 | 0.995 | 0.766 |
+| 0.06 | 0.979 | 0.103 |
+
+At 0.01 both are near 0.99. The README gives 0.01° as BMD's floor, and below
+it BMD's hit rate falls: 0.68 at 0.005.
 
 ### 5.6 Unit tests
 
 - The generator: `mt19937_64` against the standard's 10,000th output.
 - Each distribution: against its libc++ algorithm on known draws.
-- The smoother: against a direct steady-state computation.
-- The table lookup: its interpolation, both asymptotic branches, and the
-  cutoffs.
-- The likelihood: one run against a direct evaluation.
-- Each move type: its Hastings term against a direct count of forward and
-  reverse proposals.
-- `detect_bmd`: the gate, the stretches, the minimum length, the end runs
-  excluded, the threshold, and the reliability.
+- The table: against adaptive quadrature at six cells; the cutoffs against
+  the paper's criterion; the lookup's crosswise interpolation and both
+  asymptotic branches.
+- `detect_bmd`: the gate, the stretches, the minimum length, the blocks and
+  their seeds, the isotropy rescale, the origin, the end runs excluded, the
+  threshold, and the reliability.
 - The all-detector invariants in `tests/schema/`.
+
+*This list first also named the smoother, the likelihood and each move's
+Hastings term, each against a direct computation. They are held by §5.1
+instead (2026-09-27). §5.1 compares every change point of every sample, so an
+error in any of the three fails it. A second transcription of the same
+reference, written to check the first, would share its misreadings.*
 
 ---
 
@@ -566,13 +659,16 @@ settings.
 ## 8. Open questions
 
 1. **Runtime.** The reference ran at roughly real time on the lab's
-   recording: 2 minutes of one eye took 57–145 s depending on the caps. That
-   would be about an hour per eye for a two-hour session.
+   recording: 2 minutes of one eye took 57–145 s depending on the caps.
    - **Speed-ups that keep exactness.** The grid search dominates, and its 40
      samples are independent. Blocks are independent too (§3.2). Both
      parallelise across cores without changing a single result.
    - **The decision.** Whether BMD runs nightly or only on demand is the
      requester's, once this implementation's runtime is measured.
+
+   *Measured 2026-09-27, with the grid search in parallel: 261 s and 280 s per
+   eye on the 39-minute reference recording (§5.4). That is about 14 minutes
+   per eye for a two-hour session.*
 2. *Per eye or per block: decided at spec review, per 1-minute block (§3.2).*
 3. **Stretch length and saccade tails.** `min_stretch_ms` has no measured
    basis. Nothing pads EK's saccades, so a post-saccadic oscillation just after
@@ -582,6 +678,21 @@ settings.
 5. **A calibrated session**, which is what would lift the provisional marking
    (parent §3.2). It would also give degrees for which the §3.3 caps mean what
    the authors meant.
+6. **The reference's interpolation** (§1.10 item 6). Should BMD ever
+   interpolate its table correctly, as a second parameter set beside the
+   faithful one? That would trade exactness against the authors' code for a
+   likelihood without the defect.
+7. **Otero-Millan and a drifting eye** (§5.1). On a synthetic session with the
+   reference recording's drift it reported about 40 microsaccades on one eye.
+   On pure synthetic drift it reported none, and on the real recording its
+   microsaccade rate is within its band. Why is unmeasured. This is a finding
+   about an existing detector, recorded here because this work found it.
+8. **BMD's one-sample conjunction rows.** On the drifting session one BMD
+   conjunction microsaccade was one sample long, and so stored at 0.0°: the
+   shared one-sample floor (NSLR spec §8 item 4), now met by BMD too.
+9. **Small steps can still split on a drifting eye.** Drift reduces BMD's
+   splitting of a small step; it does not remove it. On one drifting seed the
+   0.75° step came back as three detections.
 
 ## 9. Out of scope
 
@@ -590,6 +701,9 @@ settings.
 - The paper's binocular extension (Discussion).
 - Any tuning for macaque data.
 - U'n'Eye.
+- Storing each event's direction and start/end positions. The requester chose
+  on 2026-09-27 to add these for every detector right after BMD, on their
+  own branch.
 
 ## 10. References
 
