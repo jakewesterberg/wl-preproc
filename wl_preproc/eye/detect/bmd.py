@@ -32,7 +32,10 @@ import numba
 import numpy as np
 
 from wl_preproc.eye.detect import bmd_rng
-from wl_preproc.eye.detect.bmd_table import LogATable, lookup
+from wl_preproc.eye.detect.bmd_table import LogATable, compute_table, lookup
+from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams, detect_engbert_kliegl
+from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
 
 LN2PI = 1.83787706641  # `bmd.cpp` 13, the reference's own rounded constant
 LN2 = 0.69314718056  # `bmd.cpp` 14
@@ -54,6 +57,50 @@ def _lgamma(x: float) -> float:
 def _tgamma(x: float) -> float:
     return _libm.tgamma(x)
 
+
+@dataclass(frozen=True, slots=True)
+class BmdParams:
+    """Spec section 6. The rates are per second and the speed caps in deg/s;
+    both are converted to the reference's per-sample units at the recording's
+    rate (spec 3.3).
+
+    `gate_*` are Engbert-Kliegl's own settings for the saccade gate, named so
+    that `schema/detect.py::_min_duration_samples` does not read the gate's
+    minimum as BMD's conjunction floor (spec 4). `microsaccade_max_deg` is the
+    shared amplitude cut, declared here because the gate splits by amplitude
+    (`engbert_kliegl.py`'s own comment on that field)."""
+
+    seed: int
+    drift_rate_per_s: float
+    microsaccade_rate_per_s: float
+    drift_scale_cap_deg_s: float
+    microsaccade_scale_cap_deg_s: float
+    burn_in_sweeps: int
+    samples: int
+    iterations: int
+    threshold: float
+    min_stretch_ms: float
+    block_s: float
+    gate_lambda: float
+    gate_min_duration_samples: int
+    microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+
+
+DEFAULT_BMD_PARAMS = BmdParams(
+    seed=1473448196,  # the authors' stored example's seed
+    drift_rate_per_s=4.0,  # `bmd.h` 28: lambda0 = 0.004 per sample at 1 kHz
+    microsaccade_rate_per_s=100.0,  # `bmd.h` 28: lambda1 = 0.1 at 1 kHz
+    drift_scale_cap_deg_s=1.3,  # README, "Additional assumptions"
+    microsaccade_scale_cap_deg_s=100.0,  # README, "Additional assumptions"
+    burn_in_sweeps=40,  # `bmd.cpp` 786
+    samples=40,  # `bmd.cpp` 787
+    iterations=6,  # `bmd.cpp` 784
+    threshold=0.5,  # `BMD_vis.m` 67
+    min_stretch_ms=200.0,  # this implementation's; no measured basis
+    block_s=60.0,  # the paper's "blocks of ~1 min"
+    gate_lambda=6.0,  # Engbert-Kliegl's own defaults
+    gate_min_duration_samples=6,
+)
 
 # ------------------------------------------------------------------ theta
 # The settings, as one float array the compiled code reads by index.
@@ -677,3 +724,115 @@ def run_block(
         probability.append(hits / samples)
     return BlockResult(probability=probability,
                        record=BlockRecord(settings=settings, samples=all_samples) if record else None)
+
+
+# ------------------------------------------------------------- the pipeline
+def fixation_stretches(usable: np.ndarray, gate: np.ndarray, min_samples: int) -> list[tuple[int, int]]:
+    """Maximal runs of usable samples no gate saccade covers, at least
+    `min_samples` long (spec 3.2)."""
+    return [(int(a), int(b)) for a, b in true_runs(usable & ~gate) if b - a >= min_samples]
+
+
+def blocks(stretches: list[tuple[int, int]], block_samples: int) -> list[list[tuple[int, int]]]:
+    """Stretches in time order, grouped into blocks of at least
+    `block_samples` samples. A final remainder shorter than half a block joins
+    the block before it (spec 3.2)."""
+    out: list[list[tuple[int, int]]] = []
+    current: list[tuple[int, int]] = []
+    total = 0
+    for stretch in stretches:
+        current.append(stretch)
+        total += stretch[1] - stretch[0]
+        if total >= block_samples:
+            out.append(current)
+            current, total = [], 0
+    if current:
+        if out and total < block_samples / 2:
+            out[-1].extend(current)
+        else:
+            out.append(current)
+    return out
+
+
+def isotropy_ratio(pieces: list[np.ndarray]) -> float:
+    """`preprocess_data.m` 13-20, pooled over a block: the horizontal noise
+    over the vertical, each the root median squared second difference. A
+    still axis (ratio undefined) is left unscaled."""
+    ax = np.concatenate([np.diff(p[:, 0], 2) for p in pieces])
+    ay = np.concatenate([np.diff(p[:, 1], 2) for p in pieces])
+    sx = math.sqrt(float(np.median(ax * ax))) if ax.size else 0.0
+    sy = math.sqrt(float(np.median(ay * ay))) if ay.size else 0.0
+    return sx / sy if sx > 0.0 and sy > 0.0 else 1.0
+
+
+def to_origin(piece: np.ndarray) -> np.ndarray:
+    """The paper's shift (Preprocessing): the position before the first
+    sample, x0 = x1 - epsilon, becomes the origin (spec 1.2)."""
+    return piece - (piece[0] - ORIGIN_EPSILON_DEG)
+
+
+def _labelled(probability: np.ndarray, offset: int, threshold: float) -> list[Run]:
+    """P >= threshold is `microsaccade`, carrying its mean P; the rest `drift`."""
+    fast = probability >= threshold
+    runs = []
+    for a, b in true_runs(fast):
+        runs.append(Run(start=offset + int(a), stop=offset + int(b), label=Label.MICROSACCADE,
+                        reliability=float(probability[a:b].mean())))
+    for a, b in true_runs(~fast):
+        runs.append(Run(start=offset + int(a), stop=offset + int(b), label=Label.DRIFT))
+    return runs
+
+
+def detect_bmd(
+    gaze_deg: np.ndarray,
+    velocity_deg_s: np.ndarray,
+    available: np.ndarray,
+    fs_hz: float,
+    params: BmdParams,
+) -> list[Run]:
+    """BMD as the registered `DetectFn` (spec 3, 4).
+
+    1. Engbert-Kliegl, with BMD's own `gate_*` settings, finds the saccades;
+       they are stored as BMD's `saccade`.
+    2. The usable stretches between them are BMD's to analyse; shorter than
+       `min_stretch_ms`, they are left unclaimed.
+    3. Stretches are pooled into blocks of about `block_s`; each block is
+       rescaled to isotropic noise, each stretch shifted to the origin, and
+       run with block b's seed, `seed + b`.
+    4. P(microsaccade) >= `threshold` is `microsaccade`, the rest `drift`.
+
+    Runs are half-open and sorted."""
+    gaze = np.asarray(gaze_deg, dtype=float)
+    usable = np.array([entry is None for entry in available], dtype=bool) & np.isfinite(gaze).all(axis=1)
+    gate_params = EngbertKlieglParams(lambda_=params.gate_lambda,
+                                      min_duration_samples=params.gate_min_duration_samples,
+                                      microsaccade_max_deg=params.microsaccade_max_deg)
+    saccades = [r for r in detect_engbert_kliegl(gaze, velocity_deg_s, available, fs_hz, gate_params)
+                if r.label is Label.SACCADE]
+    gate = np.zeros(len(gaze), dtype=bool)
+    for r in saccades:
+        gate[r.start:r.stop] = True
+    runs: list[Run] = [Run(start=r.start, stop=r.stop, label=Label.SACCADE) for r in saccades]
+
+    min_samples = max(4, math.ceil(params.min_stretch_ms * fs_hz / 1000.0))
+    stretches = fixation_stretches(usable, gate, min_samples)
+    table = compute_table()
+    for b, group in enumerate(blocks(stretches, math.ceil(params.block_s * fs_hz))):
+        pieces = [gaze[a:e] for a, e in group]
+        ratio = isotropy_ratio(pieces)
+        prepared = [to_origin(p * np.array([1.0, ratio])) for p in pieces]
+        result = run_block(
+            prepared,
+            drift_rate=params.drift_rate_per_s / fs_hz,
+            microsaccade_rate=params.microsaccade_rate_per_s / fs_hz,
+            drift_cap=params.drift_scale_cap_deg_s / fs_hz,
+            microsaccade_cap=params.microsaccade_scale_cap_deg_s / fs_hz,
+            seed=params.seed + b,
+            table=table,
+            burn_in=params.burn_in_sweeps,
+            samples=params.samples,
+            iterations=params.iterations,
+        )
+        for (a, _e), probability in zip(group, result.probability):
+            runs.extend(_labelled(probability, a, params.threshold))
+    return sorted(runs, key=lambda r: r.start)
