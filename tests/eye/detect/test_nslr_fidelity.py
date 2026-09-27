@@ -40,8 +40,14 @@ def test_the_null_no_greedy_continuity_fails_the_check(monkeypatch):
 
 
 def test_the_null_no_emission_normalisation_fails_the_check(monkeypatch):
+    """Dividing a step's emissions by their sum shifts every candidate
+    equally in log10, so skipping it only changes the path where the 1e-6
+    clip bites unevenly across states. Seed 4 never exercises that; seed 12
+    does (measured while fixing this null: Task 2's mutation of
+    `_later_emission` diverges from the reference at segment 22 on this
+    seed)."""
     monkeypatch.setattr(module, "_later_emission", lambda e: e)
-    ours, theirs = _both(500.0, 4)
+    ours, theirs = _both(500.0, 12)
     assert (ours != theirs).any()
 
 
