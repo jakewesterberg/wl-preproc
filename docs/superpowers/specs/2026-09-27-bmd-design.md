@@ -592,6 +592,11 @@ pipeline, not the eye.
 
 That is about 14 minutes per eye for a two-hour session.
 
+*Re-measured the same day, when the plan was executed: 266 s left and 363 s
+right on the same machine, with identical rates and κ. Runtime varies from
+run to run: 13 to 18 minutes per eye for a two-hour session across the two
+runs. The rates and κ are exact, so only time moved.*
+
 ### 5.5 The paper's simulated-data claims (recorded)
 
 On simulated data at the paper's parameters (σ0 = 0.3 °/s, d1 = 4.4, σ1 = 30
@@ -681,7 +686,8 @@ settings.
 
    *Measured 2026-09-27, with the grid search in parallel: 261 s and 280 s per
    eye on the 39-minute reference recording (§5.4). That is about 14 minutes
-   per eye for a two-hour session.*
+   per eye for a two-hour session. A second run the same day took 266 s and
+   363 s, so 13 to 18 minutes per eye.*
 2. *Per eye or per block: decided at spec review, per 1-minute block (§3.2).*
 3. **Stretch length and saccade tails.** `min_stretch_ms` has no measured
    basis. Nothing pads EK's saccades, so a post-saccadic oscillation just after

@@ -98,6 +98,19 @@ status:
     stored unmeasured; NSLR withholds
     non-finite gaze, and warns when its noise estimate is capped. Every
     other detector's stored rows are unchanged.
+
+    Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
+    (2026-09-27, NOT merged as written). It is the sixth registered
+    detector: a hidden semi-Markov model of fixation, sampled by
+    Metropolis-Hastings. Design spec `2026-09-27-bmd-design.md`; handoff
+    `docs/handoffs/2026-09-27-bmd-built.md`. Held change point for change
+    point to its authors' C++, which the tests build under the authors'
+    permission (see `third_party` below). Engbert-Kliegl's saccades are
+    removed first and stored as BMD's `saccade`; BMD analyses the fixation
+    stretches between them with settings pooled per 1-minute block, and its
+    microsaccades are measured from their take-off sample -- the requester's
+    decisions of 2026-09-27. The full reference recording took 261-266 s
+    (left) / 280-363 s (right) per eye over two runs.
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -131,7 +144,8 @@ status:
     the requester has said glissades are peripheral. REMoDNaV and NSLR, the
     other two that item named, are BUILT -- REMoDNaV on `spec/remodnav`
     (2026-09-26) and NSLR on `spec/nslr` (2026-09-27), NOT merged as written;
-    see `phase`. Three no-duration or millisecond-based detectors now
+    see `phase`. *Superseded 2026-09-27: BMD is BUILT on `spec/bmd`, NOT
+    merged as written; see `phase`.* Three no-duration or millisecond-based detectors now
     inherit the conjunction's one-sample duration floor, which is a
     cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
@@ -233,16 +247,18 @@ status:
     (`test_the_run_count_measured_against_the_reference_recording`) is
     env-gated and skipped by default.
 
-    Bayesian microsaccade detection is still simply unwritten, same as
-    U'n'Eye, whose own obstacles remain `torch`, vendoring and a GPU
-    instead. `registry.py::DETECTORS` registers FIVE on `spec/nslr`:
-    Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV and NSLR. Five
-    of the seven detectors specified in design spec §3.1 take the
-    degenerate saccadic-slice branch and never reach `classify` -- only
-    Engbert-Kliegl and Otero-Millan declare both sides of the amplitude cut.
-    Nystrom-Holmqvist, REMoDNaV and NSLR are three of the five degenerate
-    ones for real, not hypothetically, and `pursuit` is now a PRODUCED
-    label, by REMoDNaV. *This paragraph named REMoDNaV as unwritten and said
+    U'n'Eye is the one detector still unwritten; its obstacles remain
+    `torch`, vendoring and a GPU. `registry.py::DETECTORS` registers SIX on
+    `spec/bmd`: Engbert-Kliegl, Otero-Millan, Nystrom-Holmqvist, REMoDNaV,
+    NSLR and Bayesian microsaccade detection. Four of the seven detectors
+    specified in design spec §3.1 take the degenerate saccadic-slice branch
+    and never reach `classify` -- Engbert-Kliegl, Otero-Millan and BMD
+    declare both sides of the amplitude cut. Nystrom-Holmqvist, REMoDNaV
+    and NSLR are three of the four degenerate ones for real, not
+    hypothetically; `pursuit` is a PRODUCED label, by REMoDNaV, and `drift`
+    now is too, by BMD. *Corrected 2026-09-27: this paragraph said BMD was
+    unwritten, that FIVE were registered, and that five of the seven take
+    the degenerate branch; true when written.* *This paragraph named REMoDNaV as unwritten and said
     THREE were registered until 2026-09-26; true when written.*
 
     *Corrected 2026-09-27: this paragraph also named NSLR as unwritten and
