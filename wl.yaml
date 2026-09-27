@@ -571,6 +571,20 @@ third_party:
       companion, the GitLab nslr package's C++, does not build with current
       compilers and has no pure-Python fallback, and PyPI's nslr 0.0.5 has a
       root-intercept defect.
+  - name: bmd
+    pinned_at: 1fab6355e57d6a7410c743ca2790d3efd502981a
+    why: >-
+      Test-time only. The repository has no licence file; the requester
+      stated on 2026-09-27 that its authors permit its use for testing.
+      Pinned at github.com/basvanopheusden/BMD commit
+      1fab6355e57d6a7410c743ca2790d3efd502981a (pinned_at repeats it, but
+      wlo stack does not read that key). tests/eye/detect/_bmd_reference.py
+      reads the authors' stored example and table by path from the checkout
+      .github/workflows/ci.yml fetches at that commit, and builds bmd.cpp,
+      patched by pattern, with clang against libc++ and the Boost headers,
+      which CI installs. Never installed as a package; nothing of it is
+      committed. libc++ because the stored example's random stream is
+      libc++'s (design spec 2026-09-27-bmd-design.md sections 2 and 7).
   - name: numcodecs
     constraint: ">=0.10,<0.16"
     why: >-
