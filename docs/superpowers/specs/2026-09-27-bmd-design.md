@@ -287,7 +287,7 @@ fixation stretches, found by removing Engbert–Kliegl's saccades.**
   saccades. On `saccade`, agreement between EK and BMD is total by
   construction, and the consensus tables must say so (§4).
 
-### 3.2 Fixation stretches, pooled per eye (the requester, 2026-09-27)
+### 3.2 Fixation stretches, pooled per block (the requester, 2026-09-27)
 
 **A fixation stretch** is a maximal run of samples that the validity mask
 offers and that no gate saccade covers. Stretches shorter than
@@ -296,9 +296,22 @@ the pipeline stores them as `fixation`. The default has no measured basis; it
 is a starting point.
 
 **The settings are pooled; each stretch has its own state sequence.** The
-requester chose to estimate σz, σx, d1, σ0 and σ1 once per eye, from all
-stretches together, and then sample each stretch's state sequence with the
-shared settings. The probe that led to this ran on 2 minutes of the lab's
+requester chose to estimate σz, σx, d1, σ0 and σ1 from stretches together, and
+then sample each stretch's state sequence with the shared settings. The pool is
+a **block of about 1 minute of fixation data**, which is the paper's own unit
+("blocks of ∼1 min, which we process independently").
+- **Building blocks.** Stretches are taken in time order. A block closes once
+  its stretches total at least `block_s` (default 60 s) of samples. A final
+  remainder shorter than half a block joins the block before it. An eye with
+  less than one block's worth of fixation data is one block.
+- **Seeds.** Block b's run generator is seeded with the paramset's `seed + b`.
+  Blocks are independent, so they may run in parallel without changing any
+  result.
+
+*Decided at spec review, 2026-09-27. The design approved earlier the same day
+said "once per eye"; the requester chose the paper's 1-minute blocks instead,
+because they follow slow changes in tracker noise across a session and they
+parallelise.* The probe that led to this ran on 2 minutes of the lab's
 recording with the reference itself:
 - **Whole recording, saccades included, settings capped (§3.3).** 92 events
   between saccades. σ0 sat at its floor. Only 46% of EK's saccade samples
@@ -307,13 +320,13 @@ recording with the reference itself:
   samples) uncapped, and 244 with stretches of at least 1 s and the caps.
 - **Engbert–Kliegl**, for comparison, found 146 microsaccades.
 
-**How pooling works, stage by stage:**
+**How pooling works within a block, stage by stage:**
 1. **Isotropy rescale (§1.2).** The medians are taken over every stretch's
    second differences together.
 2. **The origin shift (§1.2).** Applied per stretch.
 3. **Initialization (§1.3).** The speed parameters' draws happen once. Each
    stretch gets its own initial state sequence and its own chain. The chains'
-   generators are seeded in stretch order, one draw each from the eye's
+   generators are seeded in stretch order, one draw each from the block's
    generator.
 4. **Noise (§1.4).** Each lag's mean squared difference is summed over every
    stretch, and divided by the total pair count across stretches.
@@ -324,7 +337,8 @@ recording with the reference itself:
    over stretches, in stretch order, of each stretch's j-th sample. Then as
    §1.8.
 
-**With one stretch, every stage is `bmd.cpp`'s**, and §5.1 checks exactly that.
+**With one stretch in block 0, every stage is `bmd.cpp`'s**, and §5.1 checks
+exactly that.
 
 ### 3.3 Two adaptations, both parameters
 
@@ -361,7 +375,7 @@ fit put σ0 at 0.25 °/sample, a drift speed of over 100 °/s.
 - **Seeds.** The run seed is a paramset field, so a given paramset on a given
   recording always gives the same labels.
 
-### 3.5 Measurement, proposed for the requester to confirm
+### 3.5 Measurement from the take-off sample (the requester, 2026-09-27)
 
 `measure` reads a run's amplitude as `gaze[stop−1] − gaze[start]`. **BMD's own
 geometry is different: a state-1 run [t1, t2) moves the eye from t1−1 to
@@ -369,14 +383,14 @@ t2−1** (§1.6). Measured the shared way, a one-sample BMD microsaccade reads 0
 and every run misses its take-off step. This is NSLR's defect at the other end
 (NSLR spec §4).
 
-The proposal:
-- declare a `Detector` field, `runs_start_after_takeoff`, true for BMD alone;
+**The requester's decision, at spec review:**
+- a `Detector` field, `runs_start_after_takeoff`, is true for BMD alone;
 - with it, per-eye microsaccade rows are measured over [start−1, stop) when
   sample start−1 is in the same stretch;
-- BMD's saccade rows are EK's and are measured as EK's.
-
-This follows the requester's NSLR decision in spirit. It is not decided until
-the spec is approved.
+- BMD's saccade rows are EK's and are measured as EK's;
+- the conjunction keeps the shared measurement, since a conjunction span does
+  not start on a BMD change point (NSLR spec §4's reasoning for its landing
+  rule).
 
 ---
 
@@ -456,10 +470,15 @@ Timings on this machine:
 
 ### 5.2 Pooling (unit)
 
-With one stretch, pooled equals the reference, and §5.1 covers that. With
-several stretches, the pooled noise estimate and grid search each equal a
-direct computation over the concatenated sums. A mutation that pools per
-stretch fails.
+With one stretch in block 0, pooled equals the reference, and §5.1 covers
+that. With several stretches, the pooled noise estimate and grid search each
+equal a direct computation over the concatenated sums. A mutation that pools
+per stretch fails.
+
+Blocks: the block boundaries follow §3.2's rule, including the remainder
+joining the block before it, and block b's generator is seeded with `seed +
+b`. Running blocks in parallel gives labels identical to running them in
+order.
 
 ### 5.3 This implementation's table against the authors'
 
@@ -509,7 +528,7 @@ these as figures, not numbers, so they are recorded, not gated.
 
 | Field | Default | Source |
 |---|---|---|
-| `seed` | 1473448196 | the authors' stored example's seed |
+| `seed` | 1473448196 | the authors' stored example's seed; block b uses `seed + b` |
 | `drift_rate_per_s` (k0) | 4.0 | `bmd.h` 28, λ0 = 0.004 at 1 kHz |
 | `microsaccade_rate_per_s` (k1) | 100.0 | `bmd.h` 28, λ1 = 0.1 at 1 kHz |
 | `drift_scale_cap_deg_s` | 1.3 | README, "Additional assumptions" |
@@ -519,6 +538,7 @@ these as figures, not numbers, so they are recorded, not gated.
 | `iterations` | 6 | `bmd.cpp` 784 |
 | `threshold` | 0.5 | `BMD_vis.m` 67 |
 | `min_stretch_ms` | 200 | this implementation's; no measured basis |
+| `block_s` | 60 | the paper's "blocks of ∼1 min" (Preprocessing) |
 | `gate_lambda`, `gate_min_duration_samples` | EK's defaults | EK's own paramset |
 
 The grids (§1.8), the initial ranges (§1.3), the noise lags (§1.4) and the
@@ -548,18 +568,17 @@ settings.
 1. **Runtime.** The reference ran at roughly real time on the lab's
    recording: 2 minutes of one eye took 57–145 s depending on the caps. That
    would be about an hour per eye for a two-hour session.
-   - **A speed-up that keeps exactness.** The grid search dominates, and its 40
-     samples are independent, so it parallelises across cores without changing
-     a single result.
+   - **Speed-ups that keep exactness.** The grid search dominates, and its 40
+     samples are independent. Blocks are independent too (§3.2). Both
+     parallelise across cores without changing a single result.
    - **The decision.** Whether BMD runs nightly or only on demand is the
      requester's, once this implementation's runtime is measured.
-2. **Per eye or per block.** The paper processes independent blocks of about
-   1 minute. Pooling per eye assumes the tracker's noise is stationary over a
-   session.
+2. *Per eye or per block: decided at spec review, per 1-minute block (§3.2).*
 3. **Stretch length and saccade tails.** `min_stretch_ms` has no measured
    basis. Nothing pads EK's saccades, so a post-saccadic oscillation just after
    one falls inside a stretch.
-4. **The measurement rule in §3.5**, for the requester to confirm.
+4. *The measurement rule: decided at spec review, from the take-off sample
+   (§3.5).*
 5. **A calibrated session**, which is what would lift the provisional marking
    (parent §3.2). It would also give degrees for which the §3.3 caps mean what
    the authors meant.
