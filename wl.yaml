@@ -399,7 +399,8 @@ status:
   # when written. Was `4dbbaa3` until BMD's merge `cfd6765` and its CI fix
   # `3312725` (2026-09-27/28; CI green on `3312725`, run 36354069223); true
   # when written.
-  describes: 3312725
+  # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
+  describes: "3312725"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
