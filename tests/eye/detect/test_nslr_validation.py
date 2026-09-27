@@ -1,7 +1,13 @@
-"""NSLR on the lab's reference recording (spec 5.2): exactness where there
-are no gaps, runtime, and agreement with the other detectors. Gated on
-`WLPP_OHDPI_REFERENCE` (never commit the recording). Imports nothing from
-`wl_preproc.schema`."""
+"""NSLR against real data, in two gated sections. Imports nothing from
+`wl_preproc.schema`.
+
+- **Spec 5.2, the lab's reference recording:** exactness where there are no
+  gaps, runtime, and agreement with the other detectors. Gated on
+  `WLPP_OHDPI_REFERENCE` (never commit the recording); the exactness check
+  also needs `WLPP_NSLR_REFERENCE`.
+- **Spec 5.3, the paper's human coders:** Table 1 reproduced the paper's
+  way, over the Andersson et al. (2017) human-coded dataset. Gated on
+  `WLPP_ANDERSSON_DATA`. That dataset is GPL-3.0 and is never committed."""
 
 from __future__ import annotations
 
@@ -76,7 +82,12 @@ def test_exactness_on_a_gap_free_stretch_of_real_data(recording):
         ts = np.arange(len(xy)) / rec.fs_hz
         theirs = np.asarray(nslr_hmm.classify_gaze(ts, xy)[0], dtype=np.int64)
         ours = classify([xy], rec.fs_hz, DEFAULT_NSLR_PARAMS)[0] + 1
-        assert np.array_equal(ours, theirs), eye
+        assert ours.shape == theirs.shape, eye
+        differing = np.flatnonzero(ours != theirs)
+        assert differing.size == 0, (
+            f"{eye}: {differing.size} of {ours.size} samples differ from sample {at}; first at "
+            + ", ".join(f"{i}: ours={ours[i]} reference={theirs[i]}" for i in differing[:10])
+        )
 
 
 def test_runtime_and_agreement_are_measured(recording, capsys):

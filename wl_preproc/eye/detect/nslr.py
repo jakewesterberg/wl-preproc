@@ -364,41 +364,77 @@ def segment(ts: np.ndarray, xy: np.ndarray, noise: np.ndarray,
 
 def continuous_fit(ts: np.ndarray, xy: np.ndarray, splits: list[int]) -> list[np.ndarray]:
     """`slow_nslr.py` 75-124 (spec 1.3): the least-squares continuous
-    piecewise-linear fit for `splits`, as the positions at the segment
-    endpoints. It is a tridiagonal system, solved forward then backward, on
-    the reference's array shapes (`ts` as a column)."""
-    column = ts.reshape(-1, 1)
-    rows = []
-    mw0 = 0.0
-    ww0 = 0.0
-    xw0 = 0.0
-    for k in range(len(splits) - 1):
-        t = column[splits[k]:splits[k + 1]]
-        x = xy[splits[k]:splits[k + 1]]
-        span = t[-1] - t[0]
-        if span == 0:
-            span = 1.0
-        w = (t - t[0]) / span
-        m = 1 - w
-        mw1 = (m * w).sum()
-        mm1 = (m * m).sum()
-        xm1 = (x * m).sum(axis=0)
-        rows.append((mw0, mm1 + ww0, mw1, xm1 + xw0))
-        mw0 = mw1
-        ww0 = (w * w).sum()
-        xw0 = (x * w).sum(axis=0)
-    rows.append((mw0, 0.0 + ww0, 0.0, 0.0 + xw0))
-    sweep = [(0.0, 0.0)]
-    for p0, p1, p2, y in rows:
-        b, g = sweep[-1]
-        denom = p0 * g + p1
-        sweep.append(((y - p0 * b) / denom, -p2 / denom))
-    endpoint = 0.0
-    ends = []
-    for b, g in reversed(sweep[1:]):
-        endpoint = g * endpoint + b
-        ends.append(endpoint)
-    return ends[::-1]
+    piecewise-linear fit for `splits`, as the positions at the knots.
+
+    The unknowns are the knot positions. Within a segment each sample is a
+    mix of the segment's two knots: the later one weighted `rise` (0 at the
+    segment's first sample, 1 at its last), the earlier one `fall = 1 -
+    rise`. So knot `k`'s normal equation involves only knots `k - 1` and
+    `k + 1`, and the system is tridiagonal. Row `k` is:
+    - sub-diagonal: `sum(fall * rise)` over segment `k - 1`;
+    - main diagonal: `sum(rise * rise)` over segment `k - 1` plus
+      `sum(fall * fall)` over segment `k`;
+    - super-diagonal: `sum(fall * rise)` over segment `k`;
+    - right-hand side: `sum(xy * rise)` over segment `k - 1` plus
+      `sum(xy * fall)` over segment `k`, per axis.
+
+    It is solved by the Thomas algorithm: a forward sweep that eliminates
+    the sub-diagonal, then back substitution. Each value is formed from the
+    same operands, in the same order, as the reference forms it, on its
+    array shapes (`ts` as a column), so the endpoints are bit-identical
+    (spec 5.1)."""
+    times = ts.reshape(-1, 1)
+    sub_diagonal, main_diagonal, super_diagonal, right_hand_side = [], [], [], []
+    # What the previous segment contributes to the next row. The first knot
+    # has no previous segment.
+    carried_cross = 0.0
+    carried_rise_sq = 0.0
+    carried_rise_rhs = 0.0
+    for first, stop in zip(splits[:-1], splits[1:]):
+        segment_t = times[first:stop]
+        segment_xy = xy[first:stop]
+        duration = segment_t[-1] - segment_t[0]
+        if duration == 0:
+            duration = 1.0
+        rise = (segment_t - segment_t[0]) / duration
+        fall = 1 - rise
+        cross = (fall * rise).sum()
+        sub_diagonal.append(carried_cross)
+        main_diagonal.append((fall * fall).sum() + carried_rise_sq)
+        super_diagonal.append(cross)
+        right_hand_side.append((segment_xy * fall).sum(axis=0) + carried_rise_rhs)
+        carried_cross = cross
+        carried_rise_sq = (rise * rise).sum()
+        carried_rise_rhs = (segment_xy * rise).sum(axis=0)
+    # The last knot has no segment after it. Adding 0.0 is arithmetic, not
+    # ceremony: it turns a -0.0 sum into +0.0, as the reference's does.
+    sub_diagonal.append(carried_cross)
+    main_diagonal.append(0.0 + carried_rise_sq)
+    super_diagonal.append(0.0)
+    right_hand_side.append(0.0 + carried_rise_rhs)
+
+    # Forward sweep. Each row keeps its reduced right-hand side and its
+    # negated reduced super-diagonal, so back substitution is one
+    # multiply-add per knot.
+    reduced_rhs = 0.0
+    negated_reduced_super = 0.0
+    swept = []
+    for below, diagonal, above, rhs in zip(
+        sub_diagonal, main_diagonal, super_diagonal, right_hand_side
+    ):
+        pivot = below * negated_reduced_super + diagonal
+        reduced_rhs = (rhs - below * reduced_rhs) / pivot
+        negated_reduced_super = -above / pivot
+        swept.append((reduced_rhs, negated_reduced_super))
+
+    # Back substitution, from the last knot to the first.
+    knot = 0.0
+    knots = []
+    for reduced_rhs, negated_reduced_super in reversed(swept):
+        knot = negated_reduced_super * knot + reduced_rhs
+        knots.append(knot)
+    knots.reverse()
+    return knots
 
 
 @dataclass(frozen=True, slots=True)

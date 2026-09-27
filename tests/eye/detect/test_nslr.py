@@ -125,11 +125,30 @@ def test_one_piece_matches_the_references_fit_gaze(fs_hz, seed, seconds):
 
 
 def test_the_noise_is_one_estimate_pooled_over_every_piece():
+    """Spec 3: one noise pair per eye, the standard deviation of every
+    piece's residuals concatenated -- the one noise behaviour the
+    single-piece reference cannot check. The residuals are recomputed from
+    the returned pieces the way `fit_pieces` computes them
+    (`Segmentation.__call__`'s `interp1d`), and their pooled standard
+    deviation must be the returned noise exactly, and must differ from the
+    noise of each piece fitted on its own."""
+    import scipy.interpolate
+
     ts, xy = _trace(500.0, 12, 4.0)
     half = len(ts) // 2
-    pooled = fit_pieces([(ts[:half], xy[:half]), (ts[:len(ts) - half], xy[half:])], DEFAULT_NSLR_PARAMS)
+    pieces = [(ts[:half], xy[:half]), (ts[:len(ts) - half], xy[half:])]
+    pooled = fit_pieces(pieces, DEFAULT_NSLR_PARAMS)
     assert pooled.noise.shape == (2,)
     assert [p.splits[-1] for p in pooled.pieces] == [half, len(ts) - half]
+
+    residuals = [
+        scipy.interpolate.interp1d(fit.times, fit.endpoints, fill_value="extrapolate", axis=0)(t) - x
+        for fit, (t, x) in zip(pooled.pieces, pieces, strict=True)
+    ]
+    assert np.array_equal(np.std(np.concatenate(residuals), axis=0), pooled.noise)
+    for piece in pieces:
+        alone = fit_pieces([piece], DEFAULT_NSLR_PARAMS)
+        assert not np.array_equal(alone.noise, pooled.noise)
 
 
 def test_a_three_piece_line_is_split_exactly_at_its_knots():
