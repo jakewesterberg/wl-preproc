@@ -384,6 +384,17 @@ third_party:
       initial conditions would be one more reimplementation to validate.
       The floor is 1.17 because 1.17.1 is the oldest release the fidelity
       check (spec section 5.1) has run against; nothing older is tested.
+  - name: numba
+    constraint: ">=0.67"
+    why: >-
+      eye/detect/nslr.py compiles NSLR's segmentation loop with numba.njit
+      (no fastmath) -- the requester's choice on 2026-09-27 after plain
+      Python measured about 25 minutes per eye for a two-hour session (design
+      spec 2026-09-27-nslr-design.md section 4.1, section 7). Brings
+      llvmlite. The floor 0.67.0 is the version the design's prototype ran
+      on (Python 3.11 with numpy 2.4.6; 3.13 with numpy 2.5.3). numba
+      declares numpy<2.6, so this pipeline's numpy is capped wherever numba
+      is; a numpy release beyond that waits on numba.
   - name: datajoint
     constraint: ">=2.3,<3"
     why: >-
@@ -499,6 +510,27 @@ third_party:
       spikeinterface ever drops or relaxes that pin, this repository would
       break with nothing on record saying it needed zarr at all, and wlo
       stack would build a workstation missing software this package uses.
+  - name: nslr
+    pinned_at: 67d03f8c4a922a5a7cad9f8378caf8ba8161ee45
+    why: >-
+      Test-time only, AGPL-3.0, test-only by the requester's decision of
+      2026-09-27. tests/eye/detect/_nslr_reference.py loads nslr/slow_nslr.py
+      by path from the checkout .github/workflows/ci.yml fetches at this
+      commit; never installed as a package. The GitLab package's C++ does
+      not build with current compilers and it has no pure-Python fallback;
+      PyPI's nslr 0.0.5 has a root-intercept defect (design spec
+      2026-09-27-nslr-design.md section 2, section 7).
+  - name: nslr-hmm
+    pinned_at: 3598fee3c5def6734ef6c085e44356fedafaf727
+    why: >-
+      Test-time only, AGPL-3.0, test-only by the requester's decision of
+      2026-09-27. tests/eye/detect/_nslr_reference.py loads nslr_hmm.py by
+      path from the checkout .github/workflows/ci.yml fetches at this
+      commit; never installed as a package. Same reasoning as nslr above
+      (design spec 2026-09-27-nslr-design.md section 2, section 7): its
+      companion, the GitLab nslr package's C++, does not build with current
+      compilers and has no pure-Python fallback, and PyPI's nslr 0.0.5 has a
+      root-intercept defect.
   - name: numcodecs
     constraint: ">=0.10,<0.16"
     why: >-
