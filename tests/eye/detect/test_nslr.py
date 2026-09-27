@@ -265,3 +265,57 @@ def test_the_detector_runs_at_the_rigs_real_rate():
                        DEFAULT_NSLR_PARAMS)
     assert {r.label for r in runs} <= {Label.SACCADE, Label.PSO, Label.FIXATION, Label.PURSUIT}
     assert Label.SACCADE in {r.label for r in runs}
+
+
+def test_a_nan_the_mask_offers_is_withheld_and_leaves_every_other_piece_alone():
+    """The final review's I1. The shared mask passes a NaN as usable
+    (`NaN > half-width` is false), and NSLR pools one noise estimate over
+    every piece of the eye (spec 3), so one NaN made the noise NaN for the
+    whole eye: all 50 passes ran, and a piece holding no NaN was relabelled.
+    `detect_nslr` now withholds non-finite gaze itself, so a NaN the mask
+    offers is labelled exactly as if the mask had withheld that sample."""
+    from wl_preproc.eye.detect.nslr import detect_nslr
+
+    clean = overshoot_trace(500.0, 12, 6.0)
+    offered = np.ones(len(clean), bool)
+    offered[1500] = False                 # the mask's own gap: two pieces
+    nan_at = 2500                         # inside the second piece
+    poisoned = clean.copy()
+    poisoned[nan_at, 0] = np.nan
+
+    got = detect_nslr(poisoned, np.zeros_like(poisoned), _available(offered), 500.0,
+                      DEFAULT_NSLR_PARAMS)
+    withheld = offered.copy()
+    withheld[nan_at] = False
+    expected = detect_nslr(clean, np.zeros_like(clean), _available(withheld), 500.0,
+                           DEFAULT_NSLR_PARAMS)
+
+    first_piece = [r for r in got if r.stop <= 1500]
+    assert first_piece and first_piece == [r for r in expected if r.stop <= 1500]
+    assert got == expected
+    assert not any(r.start <= nan_at < r.stop for r in got)
+
+
+def test_a_capped_noise_estimate_warns_and_keeps_the_last_pass():
+    """Spec 6: the guard keeps the last pass, and hitting it is reported. The
+    report is a `RuntimeWarning` naming the pass count; an uncapped fit
+    raises none."""
+    import warnings
+    from dataclasses import replace
+
+    from wl_preproc.eye.detect.nslr import classify
+
+    ts, xy = _trace(500.0, 4)
+    capped = replace(DEFAULT_NSLR_PARAMS, max_noise_passes=1)
+    with pytest.warns(RuntimeWarning, match=r"max_noise_passes=1; the last of its 1 passes is kept"):
+        states = classify([xy], 500.0, capped)[0]
+
+    piece = fit_pieces([(ts, xy)], capped).pieces[0]
+    expected = np.empty(len(xy), np.int64)
+    for k, state in enumerate(decode(features(piece), capped)):
+        expected[piece.splits[k]:piece.splits[k + 1]] = state
+    assert np.array_equal(states, expected)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        classify([xy], 500.0, DEFAULT_NSLR_PARAMS)

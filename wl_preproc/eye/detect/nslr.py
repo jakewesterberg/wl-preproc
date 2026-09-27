@@ -19,6 +19,7 @@ regression. Scientific Reports, 7, 17726. 10.1038/s41598-017-17983-x
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -559,10 +560,23 @@ def classify(pieces_xy: list[np.ndarray], fs_hz: float, params: NslrParams) -> l
     - Every sample takes its segment's state.
 
     Within a piece, `t = index / fs_hz`. Each piece needs at least two
-    samples; `detect_nslr` passes no shorter one."""
+    samples; `detect_nslr` passes no shorter one.
+
+    **A capped noise estimate warns.** If the noise pair never recurs within
+    `max_noise_passes`, the last pass is kept (spec 6) and a `RuntimeWarning`
+    says so, naming the pass count. The reference has no cap, so a capped
+    fit is one the reference would not have finished."""
     if not pieces_xy:
         return []
     fit = fit_pieces([(np.arange(len(xy)) / fs_hz, xy) for xy in pieces_xy], params)
+    if fit.capped:
+        warnings.warn(
+            f"NSLR's noise estimate did not repeat within max_noise_passes="
+            f"{params.max_noise_passes}; the last of its {fit.passes} passes is kept "
+            f"(noise {fit.noise.tolist()} deg)",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     out = []
     for piece in fit.pieces:
         path = decode(features(piece), params)
@@ -590,6 +604,13 @@ def detect_nslr(
     - **The mask splits pieces.** Every maximal stretch of samples the
       validity mask offers (`entry is None`) is a piece. No segment spans a
       gap. A one-sample piece is left unlabelled.
+    - **So does non-finite gaze.** A sample whose gaze is NaN or infinite is
+      withheld here even where the mask offers it. The noise is pooled over
+      every piece of the eye (spec 3), so one NaN would make it NaN for the
+      whole eye: the loop would then run to `max_noise_passes` and relabel
+      pieces that hold no NaN at all. The shared mask passes NaN as usable
+      (`validity.py`: `NaN > half-width` is false), for every detector; that
+      is recorded for the requester, not changed here.
     - **The velocity is ignored.** NSLR never differentiates; a segment's
       slope is its velocity. The argument exists because every `DetectFn` has
       it.
@@ -597,6 +618,7 @@ def detect_nslr(
       runs take `_conjunction_label`'s degenerate branch, and there is no
       minimum duration (spec 4)."""
     usable = np.array([entry is None for entry in available], dtype=bool)
+    usable &= np.isfinite(np.asarray(gaze_deg, dtype=float)).all(axis=1)
     spans = [(int(a), int(b)) for a, b in true_runs(usable) if b - a >= 2]
     per_piece = classify([np.asarray(gaze_deg[a:b], dtype=float) for a, b in spans], fs_hz, params)
     runs: list[Run] = []
