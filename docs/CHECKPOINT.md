@@ -124,10 +124,11 @@ requester chose to merge the same day; true when written.*
 >      rightward, in the calibrated frame (positive x rightward, y upward),
 >      which is the task code's frame for target positions. It is NULL for a
 >      zero displacement.
->    - **Measured.** On the stepped session every detector's stored direction
->      for a planted step was within 1.8° of the planted direction on the two
->      steps above 1°, and within 10.7° on the 0.7° step. The test allows 3°
->      and 15°.
+>    - **Measured**, on the left eye's trace: on the stepped session (BMD on
+>      its drifting copy; NSLR not held below 1°), every held detector's
+>      stored direction for a planted step was within 1.8° of the planted
+>      direction on the two steps above 1°, and within 10.7° on the 0.7°
+>      step. The test allows 3° and 15°.
 >
 >    *Until 2026-09-28 this item named the geometry as next; true when
 >    written.*

@@ -61,6 +61,15 @@ disagreement about measurement".
   positions (eye calibration spec `2026-08-30-eye-ohdpi-calibration-and-gaze-
   design.md` §4.1). So a stored endpoint can be compared with a target
   position directly, with no conversion.
+
+  *Qualified 2026-09-28, after the final review (its M3): this holds by
+  construction for a map fitted to the session's own targets, or carried
+  forward from another session's. A map taken from wl-expcontroller's online
+  calibration, the fallback when the session's own geometry is degenerate,
+  is in that frame only if wl-expcontroller's targets are; its contract says
+  "degrees" and does not state their orientation. Before this branch no
+  stored value was sensitive to a reflection. The positions and direction
+  are.*
 - **A zero displacement has no direction.** Where start equals end,
   `direction_deg` is NULL and the positions are stored. `atan2(0, 0)` would
   return 0°, "rightward", a claim the data do not make.

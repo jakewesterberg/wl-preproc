@@ -416,7 +416,12 @@ class EyeDetection(dj.Computed):
         reliability=null         : double
         # Where the event starts and ends, and its direction: the gaze at
         # the two samples `amplitude_deg` is measured between, so the
-        # amplitude is exactly their distance. Degrees of visual angle,
+        # amplitude is exactly their distance. Those samples are the run's
+        # first and last, except that NSLR's per-eye saccades end at
+        # `gaze[run_stop]` (its landing sample) and BMD's own per-eye events
+        # start at `gaze[run_start - 1]` (its take-off sample), each when
+        # that sample was offered and is finite (`measure.py::
+        # measure_event_run`). Degrees of visual angle,
         # positive x rightward and y upward; the direction counterclockwise
         # from rightward, in [-180, 180], NULL for a zero displacement. On
         # exactly the rows that carry `amplitude_deg` (design spec
