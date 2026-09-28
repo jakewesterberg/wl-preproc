@@ -2694,6 +2694,7 @@ def test_insert_trace_applies_nslrs_floor_but_not_its_landing_rule_to_the_conjun
     stored at 0.0 deg, and the 2-sample row at its first step alone."""
     from wl_preproc.eye.detect.labels import Label, Run
     from wl_preproc.eye.detect.measure import measure
+    from wl_preproc.schema.detect import _STORED_MEASUREMENTS
 
     gaze, v, brief, long_, intervals = _insert_trace_inputs()
     one_sample = (100, 101)
@@ -2703,12 +2704,32 @@ def test_insert_trace_applies_nslrs_floor_but_not_its_landing_rule_to_the_conjun
                                       gaze=gaze, v=v)
     stored = _event_rows(rows)
     for span in (brief, one_sample):
-        assert stored[span]["amplitude_deg"] is None, span
-        assert stored[span]["peak_velocity_deg_s"] is None, span
+        # Every stored measurement, the geometry too (saccade geometry spec
+        # section 1.3; final review M2, 2026-09-28).
+        for column in _STORED_MEASUREMENTS:
+            assert stored[span][column] is None, (span, column)
     expected = measure(gaze, v, *long_, 500.0)
     assert stored[long_]["amplitude_deg"] == expected.amplitude_deg
     assert stored[long_]["peak_velocity_deg_s"] == expected.peak_velocity_deg_s
     assert stored[long_]["amplitude_deg"] != _hypot(gaze[80] - gaze[60])
+
+
+def test_insert_trace_stores_a_zero_displacement_with_its_positions_and_no_direction():
+    """Saccade geometry spec section 1.2, at storage (final review M2,
+    2026-09-28). A one-sample event read by the shared `measure` has no
+    displacement: it is stored with its amplitude 0.0, its start and end both
+    at that sample's gaze, and no direction -- never 0 deg, "rightward". Real
+    data reaches this: Nystrom-Holmqvist's conjunction admits one-sample
+    events."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    gaze, v, _brief, _long, _intervals = _insert_trace_inputs()
+    _master, rows = _run_insert_trace([Run(100, 101, Label.SACCADE)], detector_name="nystrom_holmqvist",
+                                      trace="conjunction", gaze=gaze, v=v)
+    row = _event_rows(rows)[(100, 101)]
+    assert row["amplitude_deg"] == 0.0
+    assert (row["start_x_deg"], row["start_y_deg"]) == (row["end_x_deg"], row["end_y_deg"]) == tuple(gaze[100])
+    assert row["direction_deg"] is None
 
 
 def test_nslr_declares_its_measurement_rule_and_no_other_detector_does():
