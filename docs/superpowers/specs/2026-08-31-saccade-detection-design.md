@@ -500,6 +500,20 @@ own stated reason, in the same first-class-refusal discipline the rest of
 
 ---
 
+> *Amended 2026-09-28 (the requester's decision; handoff
+> `docs/handoffs/2026-09-28-runs-stay-on-usable-data.md`): **no stored run
+> covers a sample the validity mask withheld.** `registry.Detector.detect`
+> holds every detector to it, after the vocabulary check:
+> - a run with withheld samples only at its ends is trimmed back to its
+>   usable stretch;
+> - a run spanning a withheld stretch, with usable data on both sides, is
+>   dropped;
+> - a glissade whose saccade was dropped or end-trimmed is dropped with it.
+>
+> Nyström–Holmqvist's saccade edges walked into blinks on the reference
+> recording: 10% of its left-eye and 19% of its right-eye saccades. No
+> other registered detector emitted such a run.*
+
 ## 4. Per eye, and the conjunction
 
 Engbert & Kliegl's binocular criterion — an event must appear in both eyes

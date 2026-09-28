@@ -407,6 +407,29 @@ left CI red on 3.13 alone for a day while every local run was green.
    the largest bucket. So the paragraph above overstates the disagreement;
    true when written.*
 
+   *Corrected again the same day: every Nyström–Holmqvist number in this
+   section, 2026-09-12 to this morning, was measured on its raw output,
+   whose saccade edges walked into blinks. 10% of its left-eye and 19% of
+   its right-eye saccades included withheld samples, most of them spanning a
+   whole blink. The requester chose a guard in `registry.Detector.detect`.
+   It trims a run with withheld samples at its ends, drops one spanning a
+   withheld stretch, and drops a glissade whose saccade was dropped or
+   end-trimmed. As the pipeline stores it after the guard:*
+
+   | direction | kind | disagreed | unmatched | total dropped | of its own runs |
+   |---|---|---|---|---|---|
+   | left→right | `pso` | 527 | 479 | 1,006 of 1,722 | **0.5842** |
+   | left→right | `saccadic` | 5 | 676 | 681 of 4,641 | **0.1467** |
+   | right→left | `pso` | 599 | 298 | 897 of 1,613 | **0.5561** |
+   | right→left | `saccadic` | 8 | 420 | 428 of 4,384 | **0.0976** |
+
+   *So the saccade cost is 9.8–14.7%, not 4.6–6.9%: saccades straddling a
+   blink in both eyes had matched each other and hidden it. The unmatched
+   breakdown is 542/9/61/64 (left→right) and 185/10/164/61 (right→left), so
+   missing data is the larger share still. Real saccades lost are about 1.5%
+   and 4.0%. The offset mechanism holds in shape: a median 8.02 ms over
+   glissades against a 4.01 ms baseline, both directions.*
+
    **How it was missed:** the per-kind block printed alongside the pair
    breakdown divided only `pairs` by each kind's population, while the
    `drop_rate` printed two lines above it correctly added `disagree + alone`

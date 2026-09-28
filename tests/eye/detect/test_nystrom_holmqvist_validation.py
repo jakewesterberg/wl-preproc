@@ -1570,7 +1570,14 @@ def reference():
         gaze, v, mask = _gaze_velocity_mask(
             raw[eye_name], quality[column], recording.fs_hz, recording.frame_gaps, scale
         )
-        runs = detect_nystrom_holmqvist(gaze, v, mask, recording.fs_hz, DEFAULT_NH_PARAMS)
+        # Through the registry's `detect`, as the pipeline stores it: since
+        # 2026-09-28 that holds every run to the samples the mask offered
+        # (`registry.py::_within_usable`). Until then this called
+        # `detect_nystrom_holmqvist` directly, whose saccade edges walked
+        # into blinks on this recording.
+        from wl_preproc.eye.detect.registry import DETECTORS
+
+        runs = DETECTORS["nystrom_holmqvist"].detect(gaze, v, mask, recording.fs_hz, DEFAULT_NH_PARAMS)
         return _Trace(eye_name, runs, recording.fs_hz, gaze=gaze, mask=mask)
 
     return {
@@ -2076,20 +2083,27 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
     """The 225/337 saccades one eye found and the other did not
     (`docs/handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`),
     sorted by what the other eye was doing over the same samples
-    (`_why_unmatched`). Measured 2026-09-28:
+    (`_why_unmatched`). Measured 2026-09-28, through the registry's
+    `detect` as the pipeline stores it, so after the usable-data guard
+    (`registry.py::_within_usable`):
 
     | | left -> right | right -> left |
     |---|---|---|
-    | the other eye's data was withheld | 121 | 169 |
-    | the other eye's saccade was just outside it | 19 | 12 |
-    | the other eye moved too, undetected | 32 | 104 |
-    | the other eye did not move | 53 | 52 |
+    | unmatched, of the eye's saccades | 676 of 4,641 | 420 of 4,384 |
+    | the other eye's data was withheld | 542 | 185 |
+    | the other eye's saccade was just outside it | 9 | 10 |
+    | the other eye moved too, undetected | 61 | 164 |
+    | the other eye did not move | 64 | 61 |
 
     Only the middle two rows are real saccades the binocular rule loses:
-    about 1% and 2.2% of each eye's saccades. The largest row is missing
-    data, not disagreement, and it is asserted to stay the largest. The
-    still row's events have a median peak velocity of 19-28 deg/s, against
-    118 for saccades both eyes found: noise the rule should drop.
+    about 1.5% and 4.0% of each eye's saccades. The largest row is missing
+    data, not disagreement, and it is asserted to stay the largest.
+
+    *First measured the same day on the detector's raw output, before the
+    guard: 225 of 5,062 and 337 of 5,213 unmatched (121/19/32/53 and
+    169/12/104/52). That output labelled blinks as saccades, and saccades
+    straddling a blink in both eyes had matched each other; true when
+    written.*
     """
     left, right = reference["traces"]
     with capsys.disabled():

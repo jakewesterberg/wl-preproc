@@ -1,5 +1,26 @@
 # Why one eye alone detects a saccade: half is missing data, and the real loss is 1–2%
 
+> **Corrected the same day, 2026-09-28: these numbers are Nyström–Holmqvist's
+> raw output, which labelled blinks as saccades.** This measurement exposed
+> that its saccade edges walked into withheld samples. The requester chose a
+> guard in `registry.Detector.detect` (handoff
+> `2026-09-28-runs-stay-on-usable-data.md`). As the pipeline stores it after
+> the guard:
+>
+> | the other eye | left→right | right→left |
+> |---|---|---|
+> | unmatched, of the eye's saccades | 676 of 4,641 | 420 of 4,384 |
+> | had its data withheld | 542 | 185 |
+> | had a saccade within 20 ms | 9 | 10 |
+> | moved too, undetected | 61 | 164 |
+> | did not move | 64 | 61 |
+>
+> Missing data is still the largest share, and larger. Real saccades lost
+> are about 1.5% (left) and 4.0% (right). The saccade cost of the binocular
+> rule is 14.7% and 9.8%: saccades straddling a blink in both eyes had
+> matched each other and hidden it. The sections below are true for the raw
+> output, as written.
+
 Branch `measure/why-one-eye-alone`, forked from `main` at `7a060e0`.
 
 The 2026-09-19 round found that the binocular agreement rule drops 4.6–6.9%
