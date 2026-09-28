@@ -63,6 +63,24 @@ usable and named different kinds: a kind disagreement, which the binocular
 rule already drops. Cost if wrong: a rare event lost at a blink edge. How
 often it happens is measured on the reference recording and recorded (§6).
 
+*Widened 2026-09-28, while building: **any** two candidate runs from the two
+eyes that overlap or touch are both dropped, whatever their kinds.*
+- *A same-kind pair overlapping by less than the floor was not a match. It
+  is dropped for the same reason as a kind disagreement.*
+- *Two runs of one label that merely touch would merge into one stored run
+  (`runs_from_labels`), attributed to neither eye.*
+
+*Measured on the reference recording, after the usable-data guard: 0–36
+pairs per detector, under 1% of the candidates (Engbert–Kliegl 26,
+Otero-Millan 2, Nyström–Holmqvist 0, REMoDNaV 26, NSLR 36, BMD 24).*
+
+**Ruling (this spec's author, 2026-09-28): an eye with no calibration keeps
+today's refused both-eyes row.** §1 reads which eyes are usable from each
+eye's validity mask. An eye whose calibration was refused has no mask and
+no gaze at all, so the session is monocular. A "both-eyes" trace there
+would be a relabelled copy of the other eye's own trace. Cost if wrong: a
+monocular session has no both-eyes trace, only the usable eye's own.
+
 ## 3. Measurement
 
 - **Two-eye events** are measured on the left eye's gaze, unchanged.
@@ -95,6 +113,23 @@ each label's data came from, not only which eyes were usable.
   accepted. On the reference recording that is about 290 more saccades for
   Nyström–Holmqvist: the 121 + 169 above, before one-eye stretches are
   counted.
+
+  *Measured 2026-09-28, after the usable-data guard (handoff
+  `2026-09-28-runs-stay-on-usable-data.md`): kept one-eye saccades,
+  left/right, per detector.*
+
+  | Detector | Left | Right |
+  |---|---|---|
+  | Engbert–Kliegl | 793 | 513 |
+  | Otero-Millan | 599 | 201 |
+  | Nyström–Holmqvist | 542 | 186 |
+  | REMoDNaV | 587 | 191 |
+  | NSLR | 1,091 | 785 |
+  | BMD | 762 | 382 |
+
+  *The which-eye trace is `neither` on 2.20% of samples for every detector,
+  the masks' own share. It is `left` on 2.0–2.8% and `right` on 1.5–1.9%,
+  since kept events add to the masks' 1.80% and 1.45%.*
 - **Its `n_saccades` and `n_microsaccades`, and agreement scores computed on
   it, mix two-eye and one-eye events.** `EyeDetection.Source` separates them.
 - **Unchanged:**
