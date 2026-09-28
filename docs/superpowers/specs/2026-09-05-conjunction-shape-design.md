@@ -384,6 +384,29 @@ left CI red on 3.13 alone for a day while every local run was green.
    saccade happened, and it is the only part of this section's cost that
    touches a pipeline with no interest in glissades.
 
+   *Measured 2026-09-28 (`tests/eye/detect/test_nystrom_holmqvist_validation.py::
+   test_why_one_eye_alone_detects_a_saccade`; handoff
+   `docs/handoffs/2026-09-28-why-one-eye-alone.md`): **mostly not.** Each
+   unmatched saccade, sorted by what the other eye was doing over the same
+   samples:
+
+   | the other eye | left→right | right→left |
+   |---|---|---|
+   | had its data withheld | 121 | 169 |
+   | had a saccade just outside it (within 20 ms) | 19 | 12 |
+   | moved too, undetected | 32 | 104 |
+   | did not move | 53 | 52 |
+
+   Half is missing data: the two eyes' validity masks differ on 3.25% of
+   samples, most of it at blink edges. The still eye's events are noise the
+   rule should drop, with a median peak velocity of 19–28 °/s against 118 °/s
+   for saccades both eyes found. Only the middle two rows are real saccades
+   the rule loses: about 1% (left) and 2.2% (right) of each eye's saccades.
+   The left eye misses more; its horizontal velocity noise is slightly higher
+   (1.52 against 1.41 °/s). Every registered detector shows missing data as
+   the largest bucket. So the paragraph above overstates the disagreement;
+   true when written.*
+
    **How it was missed:** the per-kind block printed alongside the pair
    breakdown divided only `pairs` by each kind's population, while the
    `drop_rate` printed two lines above it correctly added `disagree + alone`
