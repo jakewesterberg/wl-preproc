@@ -172,7 +172,7 @@ status:
     run to usable data (MERGED 2026-09-28 as 978a3a3), after which those
     figures are about 1.5% and 4.0%. The requester's decision the same day,
     that the both-eyes trace falls back to the usable eye and says which eye
-    it used, is BUILT on spec/both-eyes-fallback, NOT merged as written.
+    it used, is MERGED (2026-09-28, dda2de3).
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised
@@ -416,8 +416,12 @@ status:
   # when written.
   # Was `3312725` until the saccade geometry merge `a8d26da` on 2026-09-28
   # (CI green on `a8d26da`, run 36393583335); true when written.
+  # Was `a8d26da` until the both-eyes fallback merge `dda2de3` on 2026-09-28,
+  # by which time the unmatched-saccades measurement (`a80e061`) and the
+  # usable-data guard (`978a3a3`, CI green, run 36415852458) had also landed;
+  # true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "a8d26da"
+  describes: "dda2de3"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

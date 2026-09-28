@@ -1,14 +1,21 @@
 # Where this build actually is
 
-**Last updated 2026-09-28**, describing `main` at `a8d26da` — the merge of
-`spec/saccade-geometry`: every stored saccade and microsaccade row now carries
-its start and end gaze position and its direction, for every detector (design
-spec `superpowers/specs/2026-09-28-saccade-geometry-design.md`). `a8d26da`'s
-tree is byte-identical to the tested branch head `0398137`: 1726 passed on
-3.11 and 1725 on 3.13 locally, 0 failed. CI read off `a8d26da` itself: green
-on both interpreters, 1725 passed on each with 30 skipped, and the manifest
-check green — `gh run view 36393583335`. CI on later heads is recorded here
-only once read, not before.
+**Last updated 2026-09-28**, describing `main` at `dda2de3` — the merge of
+`spec/both-eyes-fallback`: where one eye's data is missing, the both-eyes
+trace uses the other eye, keeps whole any event the other eye was withheld
+during, and stores which eye each stretch came from in `EyeDetection.Source`
+(design spec `superpowers/specs/2026-09-28-both-eyes-fallback-design.md`).
+`dda2de3`'s tree is byte-identical to the tested branch head `65501b9`: 1758
+passed on 3.11 and 1757 on 3.13 locally, 0 failed. CI read off `dda2de3` itself: green on both
+interpreters, 1757 passed on each with 32 skipped, and the manifest check
+green — `gh run view 36434229836`. CI on later heads is recorded here only
+once read, not before.
+
+*This header named `a8d26da` — the saccade geometry merge, CI
+`36393583335` — until the both-eyes merge. `main` had by then also taken the
+unmatched-saccades measurement (`a80e061`) and the usable-data guard
+(`978a3a3`, CI green, 1733 passed on each interpreter, `36415852458`), which
+this header never named; true when written.*
 
 *This header named `3312725` — BMD's CI fix after its merge `cfd6765`, CI
 `36354069223` — until the geometry merge; true when written.*
@@ -392,8 +399,7 @@ requester chose to merge the same day; true when written.*
 >    *Until 2026-09-28 this item asked the question; true when written.*
 >
 >    **The both-eyes trace now falls back to the usable eye (the requester's
->    decisions of 2026-09-28), BUILT on `spec/both-eyes-fallback` and NOT
->    merged as written.** Where only one eye is usable, it takes that eye's
+>    decisions of 2026-09-28), MERGED as `dda2de3`.** Where only one eye is usable, it takes that eye's
 >    labels. An event the other eye could not see whole is kept whole, as
 >    the eye that saw it: 587 left and 205 right saccades for
 >    Nyström–Holmqvist, and 193–1,277 per eye for the other detectors.

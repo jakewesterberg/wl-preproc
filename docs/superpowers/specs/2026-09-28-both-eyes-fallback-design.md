@@ -103,6 +103,7 @@ the intersection of that run with the other eye's, gives way to it.
   eye that saw it whole, not from the binocular intersection. A matched
   pair whose eyes drop out at opposite ends clashes and keeps only its
   intersection, as before this spec.
+- *Confirmed by the requester the same day, before merge.*
 
 ## 3. Measurement
 
