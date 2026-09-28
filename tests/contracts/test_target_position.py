@@ -55,7 +55,7 @@ def test_roles_are_distinct_and_start_at_the_fixation_point():
 
 # --- PARAM_CHANGE (HANDOVER-wl-expcontroller.md Ask 2) ----------------------
 #
-# wl-expcontroller supports live parameter editing between trials; a change
+# wl-xcon supports live parameter editing between trials; a change
 # at trial 300 is otherwise invisible at analysis. Carries a sequence number,
 # not the changed values -- Escape's own docstring gives the reasoning, the
 # same one BLOCK_START already follows: content belongs in the stream when
@@ -65,7 +65,7 @@ def test_roles_are_distinct_and_start_at_the_fixation_point():
 
 def test_no_pre_existing_escape_value_moved():
     """A frozen interface a separate piece of software is written against
-    (Escape's own docstring: wl-expcontroller emits against this codec).
+    (Escape's own docstring: wl-xcon emits against this codec).
     Adding `PARAM_CHANGE` must not renumber anything -- pinned by name AND
     value, the same discipline `test_no_pre_existing_task_type_code_moved`
     applies to `TaskTypeCode`."""

@@ -13,45 +13,45 @@ wrong or late.
 Full width goes to the sync box and NI; Intan RHS receives the strobe only,
 because its 16 digital inputs cannot fit 16 data lines plus strobe plus barcode.
 
-**Ownership splits on decodability versus meaning**, per wl-expcontroller's
+**Ownership splits on decodability versus meaning**, per wl-xcon's
 ADR-0007 (`docs/design/decisions/ADR-0007-event-vocabulary-ownership.md`,
 accepted 2026-08-31). If getting it wrong makes a recording UNDECODABLE it is
-this module's; if it makes the recording UNINTERPRETABLE it is `wl-exptasks`':
+this module's; if it makes the recording UNINTERPRETABLE it is `wl-xtasks`':
 
     framing, escapes, checksum, payload word counts, DVA encoding   here
     Marker 1-255, session/block/trial structure                     here
-    TaskEvent 256-4095, lab-wide task-event semantics               wl-exptasks
-    TaskTypeCode 100+, lab-defined task identities                  wl-exptasks
-    task-specific / condition 4096-32767                            wl-exptasks
+    TaskEvent 256-4095, lab-wide task-event semantics               wl-xtasks
+    TaskTypeCode 100+, lab-defined task identities                  wl-xtasks
+    task-specific / condition 4096-32767                            wl-xtasks
 
 That ADR was written because two manifests contradicted each other:
-`wl-exptasks/wl.yaml` published `task-event-vocabulary` claiming "wl-preproc reads
+`wl-xtasks/wl.yaml` published `task-event-vocabulary` claiming "wl-preproc reads
 event handling from here rather than defining it", while this file was already
 a frozen interface defining it. `wlo validate` cannot catch that -- it checks
 that a published name resolves to exactly one publisher, not that a description
 is true -- so it was found by reading both repositories.
 
 **That clause is now settled: AGREED 2026-09-01.** `TaskEvent` 256-4095 is
-wl-exptasks' to allocate. The four values already allocated here (256-259)
+wl-xtasks' to allocate. The four values already allocated here (256-259)
 transfer as ALREADY-ALLOCATED -- ownership moving is not permission to
 renumber, and renumbering would silently relabel every event in every prior
-recording. wl-expcontroller is therefore no longer confined to 4096-32767 on
+recording. wl-xcon is therefore no longer confined to 4096-32767 on
 this repository's account.
 
-The enum below stays here because wl-exptasks publishes `task-event-vocabulary`
+The enum below stays here because wl-xtasks publishes `task-event-vocabulary`
 as `stability: planned` and defines no `TaskEvent` in code, so this is the
 only implementation and this pipeline must decode those values today. It is a
-MIRROR of wl-exptasks' allocation, not the source of truth -- the same shape
-`wl_expcontroller/encode.py` uses when it mirrors `PAYLOAD_WORD_COUNTS` rather
-than importing it. **New task events are requested in wl-exptasks and never added
-here.** When wl-exptasks ships a package this becomes a pinned dependency the way
+MIRROR of wl-xtasks' allocation, not the source of truth -- the same shape
+wl-xcon's `encode.py` uses when it mirrors `PAYLOAD_WORD_COUNTS` rather
+than importing it. **New task events are requested in wl-xtasks and never added
+here.** When wl-xtasks ships a package this becomes a pinned dependency the way
 `wl-sync` already is; `wl.yaml`'s `consumes` entry records the edge meanwhile.
 
 Consequences of the rule that bind this module either way: no value is ever
 renumbered; a NEW ESCAPE is an amendment to a frozen layer, while a new task
-event is not; and nobody writes a second decoder -- wl-expcontroller tests
+event is not; and nobody writes a second decoder -- wl-xcon tests
 conformance by round-tripping its emitted streams through `decode_stream`
-below, which is why its `wl_expcontroller/encode.py` may mirror
+below, which is why its `encode.py` may mirror
 `PAYLOAD_WORD_COUNTS` without becoming a second source of truth.
 """
 
@@ -125,7 +125,7 @@ class Escape(IntEnum):
     """Escape codes introducing multi-word payloads. Range 32768+.
 
     **`PARAM_CHANGE` carries a sequence number, not the values that
-    changed** (HANDOVER-wl-expcontroller.md Ask 2). wl-expcontroller
+    changed** (HANDOVER-wl-expcontroller.md Ask 2). wl-xcon
     supports live parameter editing between trials -- their own example is
     changing a search array's eccentricity from 0 to 10 degrees while the
     animal works -- and a change at trial 300 is otherwise invisible at
@@ -162,16 +162,16 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
 
 
 class TaskEvent(IntEnum):
-    """Task events. Range 256-4095. **Allocated in wl-exptasks, mirrored here.**
+    """Task events. Range 256-4095. **Allocated in wl-xtasks, mirrored here.**
 
-    Do not add a value to this enum. The range is wl-exptasks' to allocate
-    (wl-expcontroller ADR-0007, its pending clause agreed by this repository
+    Do not add a value to this enum. The range is wl-xtasks' to allocate
+    (wl-xcon ADR-0007, its pending clause agreed by this repository
     2026-09-01); a new task event is requested there and mirrored here once it
     exists. The four below predate the split and transfer as already-allocated
     -- **none of them is ever renumbered**, because a renumbering silently
     relabels every event in every recording already on disk.
 
-    Mirrored rather than imported because wl-exptasks publishes this artifact as
+    Mirrored rather than imported because wl-xtasks publishes this artifact as
     `stability: planned` and has no package to import from yet; this pipeline
     still has to decode these values today. See the module docstring.
 
@@ -208,7 +208,7 @@ class TaskEvent(IntEnum):
 # numbers that differ per rig and change whenever a monitor moves. Whatever
 # renders the stimulus knows the geometry; this pipeline deliberately holds
 # none. (This used to name MonkeyLogic's own `ScreenInfo.PixelsPerDegree` as
-# the system that holds it. Under wl-expcontroller's ADR-0005 MonkeyLogic is
+# the system that holds it. Under wl-xcon's ADR-0005 MonkeyLogic is
 # not deployed at all, so that clause named a system that would not exist --
 # and separately, `bhv2.py`'s own module docstring ("Which top-level block,
 # and which of its fields") already found no `ScreenInfo` block exists even

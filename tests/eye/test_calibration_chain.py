@@ -390,12 +390,12 @@ def test_a_corrupt_bhv2_still_lets_the_chain_reach_carried_forward(tmp_path):
     assert result.carried_from == "2026-08-20_subjA"
 
 
-def test_read_online_map_dispatches_a_yaml_path_to_the_expcontroller_reader(tmp_path):
+def test_read_online_map_dispatches_a_yaml_path_to_the_xcon_reader(tmp_path):
     """`read_online_map` gains a branch, not a second entry point
     (HANDOVER-wl-expcontroller.md Ask 1): `.bhv2` still reaches `bhv2.py`
     (every test above this one proves that path untouched), and `.yaml` now
-    reaches `wl_preproc.eye.expcontroller.read_expcontroller_map` --
-    `tests/eye/test_expcontroller.py` covers that reader's own contract in
+    reaches `wl_preproc.eye.xcon.read_xcon_map` --
+    `tests/eye/test_xcon.py` covers that reader's own contract in
     full, per-eye reading included; this only proves the dispatch itself
     picks it for a `.yaml` path and returns the `OnlineCalibration` that
     reader produces, unwrapped further.
@@ -459,7 +459,7 @@ def test_read_online_map_declines_a_malformed_yaml_file_without_raising(tmp_path
     """The `.yaml` branch's own failure mode reaches the fallback chain the
     same way the `.bhv2` branch's does
     (`test_read_online_map_catches_an_unreadable_file_rather_than_raising`,
-    above): declined, not raised, so one bad expcontroller log cannot cost a
+    above): declined, not raised, so one bad xcon log cannot cost a
     session its whole calibration chain."""
     path = tmp_path / "session.yaml"
     path.write_text("{not: valid: yaml: [")
