@@ -167,7 +167,10 @@ status:
     (4) measuring which of the 225/337 unmatched saccades are real --
     DONE 2026-09-28: half is missing data in the other eye, mostly at blink
     edges; real saccades the binocular rule loses are about 1% (left) and
-    2.2% (right). Next, the requester's decision the same day: the
+    2.2% (right), on Nystrom-Holmqvist's raw output. That output labelled
+    blinks as saccades; a guard in registry.Detector.detect now holds every
+    run to usable data (branch fix/runs-stay-on-usable-data, NOT merged as
+    written), after which those figures are about 1.5% and 4.0%. Next, the requester's decision the same day: the
     both-eyes trace falls back to the usable eye where one is missing, with
     a per-eye missingness trace (its own spec first).
 

@@ -369,6 +369,22 @@ requester chose to merge the same day; true when written.*
 >    and 2.2% (right). Pinned by `test_why_one_eye_alone_detects_a_saccade`;
 >    see `docs/handoffs/2026-09-28-why-one-eye-alone.md`.
 >
+>    **Corrected the same day: those were Nyström–Holmqvist's raw output,
+>    which labelled blinks as saccades.** Its saccade edges walked into
+>    withheld samples: 10% (left) and 19% (right) of its saccades. The
+>    requester chose a guard in `registry.Detector.detect`, built on
+>    `fix/runs-stay-on-usable-data` and NOT merged as written.
+>    - It trims a run with withheld samples at its ends, drops one spanning
+>      a withheld stretch, and drops a glissade whose saccade was dropped or
+>      end-trimmed.
+>    - After the guard: the saccade cost is 14.7% / 9.8%; unmatched is 676 /
+>      420, of which missing data is 542 / 185; real saccades lost are about
+>      1.5% / 4.0%.
+>    - No other detector emitted a run over withheld samples, so only
+>      Nyström–Holmqvist's stored rows change.
+>
+>    See `docs/handoffs/2026-09-28-runs-stay-on-usable-data.md`.
+>
 >    *Until 2026-09-28 this item asked the question; true when written.*
 >
 >    **Next, the requester's decision of 2026-09-28: the both-eyes trace
