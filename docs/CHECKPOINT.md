@@ -1,14 +1,20 @@
 # Where this build actually is
 
-**Last updated 2026-09-28**, describing `main` at `cadef7e` — the merge of
-`fix/conjunction-floor`: a two-eye event in the both-eyes trace is at least as
-long as its detector's own minimum, and never one sample (the requester's
-decision; handoff `handoffs/2026-09-28-conjunction-floor.md`). `cadef7e`'s
-tree is byte-identical to the tested branch head `0c64530`: 1768 passed on
-3.11 and 1767 on 3.13 locally, 0 failed. CI read off `cadef7e` itself: green on both
-interpreters, 1767 passed on each with 32 skipped, and the manifest check
-green — `gh run view 36449262350`. CI on later heads is recorded here only
-once read, not before.
+**Last updated 2026-09-28**, describing `main` at `0aa4928` — the merge of
+`fix/xcon-rename`: wl-expcontroller is wl-xcon, and the session folder it
+writes is `xcon/` (the requester's rename). It follows `f7095aa`, the merge of
+`fix/gaze-glitches`: tracker glitches are repaired before the mask or any
+detector reads the gaze (handoff `handoffs/2026-09-28-gaze-glitches.md`); CI
+green on `f7095aa`, 1780 passed on each interpreter, `gh run view 36461007339`.
+`0aa4928`'s tree is byte-identical to the tested branch head `ae75612`: 1781
+passed on 3.11 and 1780 on 3.13 locally, 0 failed. CI read off `0aa4928`
+itself: green on both interpreters, 1780 passed on each with 32 skipped, and
+the manifest check green — `gh run view 36463681187`. CI on later heads is
+recorded here only once read, not before.
+
+*This header named `cadef7e` — the conjunction floor merge, CI green, 1767
+passed on each interpreter, `36449262350` — until the glitch and rename
+merges; true when written.*
 
 *This header named `dda2de3` — the both-eyes fallback merge, CI green, 1757
 passed on each interpreter, `36434229836` — until the floor merge; true when
@@ -424,8 +430,7 @@ requester chose to merge the same day; true when written.*
 >    alone; true when written.*
 >
 >    **Tracker glitches are repaired before anything reads the gaze (the
->    requester's decision of 2026-09-28), BUILT on `fix/gaze-glitches` and
->    NOT merged as written.** Gaze that leaves and returns in under 10 ms,
+>    requester's decision of 2026-09-28), MERGED as `f7095aa`.** Gaze that leaves and returns in under 10 ms,
 >    each jump faster than the mask's 1000 °/s sample to sample, had passed
 >    the mask. It sat inside 1–20% of each detector's saccades and put them
 >    far above the main sequence. It is now replaced by the straight line
@@ -439,8 +444,8 @@ requester chose to merge the same day; true when written.*
 >    (`contracts/paths.py::XCON_DIRNAME`), and `eye/expcontroller.py` is
 >    `eye/xcon.py`. Current code, config and docs take the new names; dated
 >    documents, including `HANDOVER-wl-expcontroller.md`, keep the old ones.
->    BUILT on `fix/xcon-rename`, NOT merged as written. wl-xcon's writer
->    switches to `xcon/` only once this is on `main`.
+>    MERGED as `0aa4928`. wl-xcon's writer switches to `xcon/` only once
+>    this is on `main`, and was told the merge commit.
 >
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`

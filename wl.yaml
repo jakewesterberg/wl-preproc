@@ -176,7 +176,7 @@ status:
     it used, is MERGED (2026-09-28, dda2de3).
     Tracker glitches (gaze out and back faster than an eye, under 10 ms)
     are repaired before the mask and every detector read the gaze --
-    BUILT on fix/gaze-glitches, NOT merged as written.
+    MERGED 2026-09-28 (f7095aa).
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised
@@ -426,8 +426,11 @@ status:
   # true when written.
   # Was `dda2de3` until the conjunction floor merge `cadef7e` the same day
   # (CI green on `dda2de3`, run 36434229836); true when written.
+  # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
+  # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
+  # true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "cadef7e"
+  describes: "0aa4928"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
