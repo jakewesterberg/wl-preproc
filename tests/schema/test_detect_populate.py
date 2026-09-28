@@ -4879,3 +4879,78 @@ def test_a_two_eye_span_gives_way_only_where_a_kept_run_covers_it():
                                [Run(45, 62, Label.SACCADE)], gaze, v, left_offered, right_offered)
 
     assert [(r["run_start"], r["run_stop"], r["label"]) for r in rows] == [(45, 80, "saccade")]
+
+
+# -- Tracker glitches (handoff `docs/handoffs/2026-09-28-gaze-glitches.md`) --
+
+# One-, two- and four-sample left-eye glitches in the detection trial's
+# quiet opening, well before its first step at 1.0 s: `LeftCR4X` shifted by
+# 1,000 px (about 5 deg) for that many samples, then back.
+_GLITCHES = ((4 * TRIAL_DURATION_S + 0.20, 1), (4 * TRIAL_DURATION_S + 0.40, 2),
+             (4 * TRIAL_DURATION_S + 0.60, 4))
+_GLITCH_PX = 1000.0
+
+
+def _inject_left_eye_glitches(session_dir) -> None:
+    from wl_preproc.synth.ohdpi import HEADER
+
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    header_line, data_lines = lines[0], lines[1:]
+    column = HEADER.index("LeftCR4X")
+    for onset_s, width in _GLITCHES:
+        first = _first_row_at(onset_s)
+        for row in range(first, first + width):
+            fields = data_lines[row].split(" ")
+            fields[column] = f"{float(fields[column]) + _GLITCH_PX:.4f}"
+            data_lines[row] = " ".join(fields)
+    ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def glitch_session(daemon_module, prefix, tmp_path_factory):
+    """`stepped_session`'s construction with `_GLITCHES` planted in the left
+    eye. Date, subject and seed checked unclaimed across `tests/` on
+    2026-09-28. Returns `(session_key, report, glitch_rows)`, the stored-trace
+    rows each glitch starts on."""
+    from tests.schema.test_eye_populate import _rows_for_times
+
+    session_key, segment, _onsets = _build_stepped_session(
+        tmp_path_factory,
+        # `subject` is `varchar(8)` -- exactly 8.
+        dirname="detectglitch", session_id="2027-07-12_01", subject="detglt01",
+        session_datetime=datetime.datetime(2027, 7, 12, 9, 0), seed=712,
+        after_generate=_inject_left_eye_glitches,
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    return session_key, report, _rows_for_times(session_key, segment, [t for t, _ in _GLITCHES])
+
+
+def test_no_detector_stores_a_tracker_glitch_as_a_saccade(glitch_session):
+    """The requester's decision of 2026-09-28: gaze that leaves and returns
+    faster than an eye can move is repaired before the mask or any detector
+    reads it. Each planted glitch is a 5 deg jump and back, which the shared
+    five-point velocity reads as about 830 deg/s, under the mask's 1000 deg/s
+    limit -- so before the repair it was usable, and detected."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, glitch_rows = glitch_session
+    for name in _detector_names():
+        runs = (detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}).to_dicts()
+        for row, (_onset, width) in zip(glitch_rows, _GLITCHES):
+            over = [(r["run_start"], r["run_stop"], r["label"]) for r in runs
+                    if r["label"] in ("saccade", "microsaccade")
+                    and r["run_start"] < row + width and r["run_stop"] > row]
+            assert over == [], (name, row, width, over)
+
+
+def test_the_share_of_gaze_repaired_is_stored_per_eye(glitch_session):
+    """`EyeValidity.frac_glitch_repaired`: the seven planted samples in the
+    left eye, none in the right."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _rows = glitch_session
+    rows = {r["eye"]: r for r in (detect.EyeValidity & session_key).to_dicts()}
+    left = rows["left"]
+    assert left["frac_glitch_repaired"] == pytest.approx(sum(w for _, w in _GLITCHES) / left["n_samples"])
+    assert rows["right"]["frac_glitch_repaired"] == 0.0
