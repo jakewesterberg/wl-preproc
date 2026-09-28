@@ -664,25 +664,17 @@ class EyeDetection(dj.Computed):
                 floor,
                 _conjunction_label(detector, params, gaze),
             )
-            # Where only one eye is usable, the trace falls back to it, and a
-            # one-eye event the other eye could not have seen is kept whole
-            # (design spec `2026-09-28-both-eyes-fallback-design.md`, the
-            # requester's decisions of 2026-09-28). A gap is filled from the
+            # Where only one eye is usable, the trace falls back to it, and an
+            # event the other eye could not see whole is kept whole as the
+            # eye that did (design spec `2026-09-28-both-eyes-fallback-design.md`,
+            # the requester's decisions of 2026-09-28). A gap is filled from the
             # left eye's mask only where NEITHER eye is usable; one usable
             # eye makes the gap that eye's `fixation`.
-            kept, source = _conjunction_fallback(
-                spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2], floor,
-            )
-            fill = np.array(
-                [label if source_label == "neither" else None
-                 for label, source_label in zip(offered, source)],
-                dtype=object,
+            intervals, kept, source, fill = _conjunction_parts(
+                conjunction_spans, spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2],
             )
             self._insert_trace(
-                key, "conjunction", gaze, v, fill,
-                [*conjunction_spans,
-                 *_one_eye_pieces(spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2]),
-                 *(run for _, run in kept)],
+                key, "conjunction", gaze, v, fill, intervals,
                 fs_hz, detector, detector_params,
                 kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept},
                 eyes=per_eye,
@@ -836,6 +828,23 @@ class EyeDetection(dj.Computed):
         moved the boundaries would store a label and an amplitude that
         disagree -- the exact defect this round exists to close. The run
         measured here is always the span labelled there.
+
+        *Since the both-eyes fallback (design spec
+        `2026-09-28-both-eyes-fallback-design.md`) the conjunction's
+        intervals also include own-eye runs kept whole
+        (`_conjunction_parts`), each carrying its own eye's label and
+        measured as that eye's row (`kept`). Kept runs from the two eyes
+        never overlap or touch (`_conjunction_fallback`'s clash rule), and a
+        two-eye span inside a kept run gives way to it. One merge remains
+        possible: a kept run touching a same-label kept run or two-eye span
+        from the adjacent run of its OWN eye. That eye's own trace merges
+        the two the same way. Such a run is measured on the eye usable
+        throughout it (`eyes`, spec section 3), and for a detector
+        declaring the amplitude split its label is its parts' label, not
+        `classify` over the merged amplitude -- as in that eye's own trace.
+        The final review of 2026-09-28 found the rule before it split one
+        event into two rows instead (its C1); true of the code before that
+        fix.*
 
         **`reliability` is mapped back onto the final runs by EXACT
         `(start, stop)` match, and is `None` for anything else.** It is a
@@ -994,6 +1003,13 @@ def _overlapping(
     the same reason: `left` and `right` arrive sorted from today's detector,
     and nothing in that contract says they must.
 
+    *Since the both-eyes fallback (design spec
+    `2026-09-28-both-eyes-fallback-design.md`) these spans are not the
+    conjunction's only intervals: `_conjunction_parts` adds the own-eye runs
+    it keeps whole, and a span inside one gives way to it. The guarantee
+    above is between these spans; `_insert_trace`'s docstring states what
+    holds between a span and a kept run.*
+
     **The floor is here because the binocular criterion is a FILTER, not a
     generator** (whole-branch review, finding H3). It must never produce an
     event shorter than either eye's own detector would have accepted. Without
@@ -1099,50 +1115,82 @@ def _always(label: Label) -> Callable[[int, int], Label]:
     return lambda _start, _stop: label
 
 
-def _conjunction_fallback(left, right, left_offered, right_offered, min_duration_samples):
-    """The one-eye events the conjunction keeps, and which eye each of its
-    samples draws on (design spec `2026-09-28-both-eyes-fallback-design.md`
+def _conjunction_parts(two_eye, left, right, left_offered, right_offered):
+    """Everything the conjunction trace is built from besides its
+    measurements: its intervals, the one-eye runs kept whole, which eye each
+    sample draws on, and the fill (design spec
+    `2026-09-28-both-eyes-fallback-design.md`). `two_eye` is
+    `_conjunction_runs`' output; `left_offered` is also the left eye's mask,
+    whose label fills a sample where NEITHER eye is usable -- one usable eye
+    makes a gap that eye's `fixation`.
+
+    **A two-eye span gives way to a kept run wherever the kept run covers
+    it.** The span is the intersection of that run with the other eye's, so
+    the kept run is the same event, whole. Storing both would split one
+    event into two rows -- the intersection, labelled from its own
+    amplitude, and a one-eye fragment beside it, whose label could
+    contradict its own (the final review's C1, 2026-09-28). A span reaches
+    past its kept run only where `_conjunction_runs` coalesced it across two
+    touching runs of one eye; the part over the other run stands. It keeps
+    the span's label, touches the kept run, and is stored with it as one
+    run when the two share a label, as that eye's own trace stores its two
+    runs. Six such spans on the reference recording, all
+    Nystrom-Holmqvist's, whose label does not depend on amplitude.
+
+    **Where one eye alone is usable, the kept runs ARE that eye's events**:
+    every run of a carried kind there has the other eye withheld during it.
+    Between them the fill paints `fixation`, as it paints a both-usable
+    gap. A run dropped by `_conjunction_fallback`'s clash rule leaves
+    `fixation` over its one-eye stretch.
+
+    Returns `(intervals, kept, source, fill)`, `kept` as
+    `_conjunction_fallback` returns it."""
+    kept, source = _conjunction_fallback(left, right, left_offered, right_offered)
+    in_kept = np.zeros(len(source), dtype=bool)
+    for _, run in kept:
+        in_kept[run.start:run.stop] = True
+    fill = np.array(
+        [label if source_label == "neither" else None for label, source_label in zip(left_offered, source)],
+        dtype=object,
+    )
+    intervals = [Run(span.start + start, span.start + stop, span.label)
+                 for span in two_eye for start, stop in true_runs(~in_kept[span.start:span.stop])]
+    return [*intervals, *(run for _, run in kept)], kept, source, fill
+
+
+def _conjunction_fallback(left, right, left_offered, right_offered):
+    """The own-eye runs the conjunction keeps whole, and which eye each of
+    its samples draws on (design spec `2026-09-28-both-eyes-fallback-design.md`
     sections 2 and 4).
 
     **An own-eye run is kept, whole,** when its kind is one the conjunction
-    carries, the other eye has no same-kind run overlapping it by
-    `min_duration_samples`, and the other eye's mask withholds at least one
-    of its samples: the other eye could not have confirmed it. Two such runs
-    from the two eyes that overlap or touch are both dropped. Over an
-    overlap both eyes were usable and the two-eye rule did not accept them;
-    touching runs of one label would merge into one stored run.
+    carries and the other eye's mask withholds at least one of its samples:
+    the other eye could not have seen all of it. That holds whether or not
+    the other eye saw part of it -- a two-eye event whose other eye drops
+    out mid-flight is kept as the eye that saw it whole
+    (`_conjunction_parts`). Two such runs from the two eyes that overlap or
+    touch are both dropped. Over an overlap both eyes were usable and named
+    two events; touching runs of one label would merge into one stored run.
+
+    *Until the final review of 2026-09-28 a run was kept only when the
+    other eye had no same-kind run overlapping it by the detector's floor.
+    That split a two-eye event whose other eye dropped out mid-flight into
+    two stored rows; true when written.*
 
     Returns `(kept, source)`: `kept` as `(eye, run)` in time order, and
     `source` a per-sample object array of `both`, `left`, `right` or
     `neither` -- which eyes were usable, with each kept run marked by its
     own eye along its whole length."""
-    floor = max(int(min_duration_samples), 1)
     usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
               "right": np.array([label is None for label in right_offered], dtype=bool)}
     runs = {"left": sorted(left, key=lambda run: run.start), "right": sorted(right, key=lambda run: run.start)}
     withheld_before = {eye: np.concatenate(([0], np.cumsum(~usable[eye]))) for eye in usable}
-    stops = {eye: np.array([run.stop for run in runs[eye]], dtype=np.int64) for eye in runs}
-
-    def overlapping(run, eye):
-        """`eye`'s runs overlapping or touching `run` -- per-eye runs are
-        disjoint and sorted, so they are one contiguous slice."""
-        index = int(np.searchsorted(stops[eye], run.start, side="left"))
-        while index < len(runs[eye]) and runs[eye][index].start <= run.stop:
-            yield runs[eye][index]
-            index += 1
-
-    def matched(run, other_eye) -> bool:
-        kind = kind_of(run.label)
-        return any(kind_of(other.label) == kind
-                   and min(run.stop, other.stop) - max(run.start, other.start) >= floor
-                   for other in overlapping(run, other_eye))
 
     candidates = {"left": [], "right": []}
     for eye, other_eye in (("left", "right"), ("right", "left")):
         for run in runs[eye]:
             if (kind_of(run.label) is not None
-                    and withheld_before[other_eye][run.stop] > withheld_before[other_eye][run.start]
-                    and not matched(run, other_eye)):
+                    and withheld_before[other_eye][run.stop] > withheld_before[other_eye][run.start]):
                 candidates[eye].append(run)
 
     candidate_stops = {eye: np.array([run.stop for run in candidates[eye]], dtype=np.int64)
@@ -1165,23 +1213,6 @@ def _conjunction_fallback(left, right, left_offered, right_offered, min_duration
     for eye, run in kept:
         source[run.start:run.stop] = eye
     return kept, source
-
-
-def _one_eye_pieces(left, right, left_offered, right_offered) -> list[Run]:
-    """Each eye's runs, cut to the samples where that eye alone was usable
-    (design spec `2026-09-28-both-eyes-fallback-design.md` section 1): where
-    only one eye has data, the conjunction takes that eye's labels. A piece
-    of a run matched elsewhere joins the two-eye run beside it when they
-    share a label."""
-    usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
-              "right": np.array([label is None for label in right_offered], dtype=bool)}
-    pieces: list[Run] = []
-    for eye, other_eye, runs in (("left", "right", left), ("right", "left", right)):
-        alone = usable[eye] & ~usable[other_eye]
-        for run in runs:
-            for start, stop in true_runs(alone[run.start:run.stop]):
-                pieces.append(Run(start=run.start + start, stop=run.start + stop, label=run.label))
-    return pieces
 
 
 def _value_runs(values: np.ndarray) -> list[tuple[int, int, object]]:

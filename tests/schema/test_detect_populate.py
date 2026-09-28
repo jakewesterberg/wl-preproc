@@ -4448,7 +4448,7 @@ def test_a_one_eye_event_the_other_eye_could_not_see_is_kept_whole():
     from wl_preproc.schema.detect import _conjunction_fallback
 
     saccade = Run(10, 20, Label.SACCADE)
-    kept, source = _conjunction_fallback([saccade], [], _offered(40), _offered(40, range(15, 40)), 1)
+    kept, source = _conjunction_fallback([saccade], [], _offered(40), _offered(40, range(15, 40)))
     assert kept == [("left", saccade)]
     assert list(source) == ["both"] * 10 + ["left"] * 30
 
@@ -4458,7 +4458,7 @@ def test_an_unmatched_event_the_other_eye_could_see_is_still_dropped():
     from wl_preproc.eye.detect.labels import Label, Run
     from wl_preproc.schema.detect import _conjunction_fallback
 
-    kept, source = _conjunction_fallback([Run(10, 20, Label.SACCADE)], [], _offered(40), _offered(40), 1)
+    kept, source = _conjunction_fallback([Run(10, 20, Label.SACCADE)], [], _offered(40), _offered(40))
     assert kept == []
     assert set(source) == {"both"}
 
@@ -4471,55 +4471,31 @@ def test_a_label_the_conjunction_does_not_carry_is_never_kept():
     from wl_preproc.eye.detect.labels import Label, Run
     from wl_preproc.schema.detect import _conjunction_fallback
 
-    kept, source = _conjunction_fallback([Run(10, 20, Label.FIXATION)], [], _offered(40), _offered(40, [15]), 1)
+    kept, source = _conjunction_fallback([Run(10, 20, Label.FIXATION)], [], _offered(40), _offered(40, [15]))
     assert kept == []
     assert list(source[10:20]) == ["both"] * 5 + ["left"] + ["both"] * 4
 
 
-def test_a_matched_event_is_left_to_the_two_eye_rule():
-    """A same-kind counterpart overlapping by exactly the floor makes it the
-    two-eye rule's, although the right eye was withheld during it."""
-    from wl_preproc.eye.detect.labels import Label, Run
-    from wl_preproc.schema.detect import _conjunction_fallback
-
-    kept, _ = _conjunction_fallback([Run(10, 20, Label.SACCADE)], [Run(12, 22, Label.MICROSACCADE)],
-                                    _offered(40), _offered(40, [19]), 8)
-    assert kept == []
-
-
-def test_a_same_kind_overlap_shorter_than_the_floor_is_no_match():
-    """Spec section 2: unmatched in `_kind_agreement`'s sense, so an overlap
-    under the floor does not count. The right eye was withheld during the
-    left eye's saccade and not the other way round, so only the left run is
-    a candidate, and it is kept."""
+@pytest.mark.parametrize("right_label", ["microsaccade", "drift"])
+def test_an_event_the_other_eye_saw_only_in_part_is_kept_whole(right_label):
+    """Spec section 2, as ruled after the final review (C1, 2026-09-28):
+    the right eye saw the start of the left eye's saccade -- as the same
+    kind, or as something else, often its own background (BMD's `drift`,
+    NSLR's and REMoDNaV's pursuit) -- and then its data was withheld. It
+    could not have seen the whole event, so the left eye's run is kept
+    whole. The right eye's run, over which the left eye was usable
+    throughout, is not a candidate."""
     from wl_preproc.eye.detect.labels import Label, Run
     from wl_preproc.schema.detect import _conjunction_fallback
 
     saccade = Run(10, 20, Label.SACCADE)
-    kept, _ = _conjunction_fallback([saccade], [Run(17, 26, Label.SACCADE)],
-                                    _offered(40), _offered(40, [11]), 6)
-    assert kept == [("left", saccade)]
-
-
-def test_the_other_eyes_run_of_another_kind_is_no_match():
-    """Spec section 2 matches by kind. The other eye's own label over the
-    event is what it saw instead, not a counterpart: often its background,
-    which BMD (`drift`), NSLR and REMoDNaV (pursuit) emit as a kind the
-    conjunction intersects. Measured 2026-09-28 on the reference recording,
-    after the usable-data guard: such a run overlaps 451 of BMD's 1,500 kept
-    runs, 257 of NSLR's 3,353, 71 of REMoDNaV's 1,049 and 2 of
-    Nystrom-Holmqvist's 768."""
-    from wl_preproc.eye.detect.labels import Label, Run
-    from wl_preproc.schema.detect import _conjunction_fallback
-
-    saccade = Run(10, 20, Label.SACCADE)
-    kept, _ = _conjunction_fallback([saccade], [Run(12, 18, Label.DRIFT)],
-                                    _offered(40), _offered(40, [18, 19]), 1)
+    kept, _ = _conjunction_fallback([saccade], [Run(12, 18, Label(right_label))],
+                                    _offered(40), _offered(40, range(18, 22)))
     assert kept == [("left", saccade)]
 
 
 @pytest.mark.parametrize("right_run", ["different kind, overlapping", "one label, touching",
-                                       "same kind, overlapping less than the floor"])
+                                       "same kind, overlapping"])
 def test_two_candidates_that_overlap_or_touch_are_both_dropped(right_run):
     """Spec section 2's ruling, as widened while building: each eye was
     withheld somewhere in the other's run, so both are candidates, and they
@@ -4529,9 +4505,9 @@ def test_two_candidates_that_overlap_or_touch_are_both_dropped(right_run):
 
     right = {"different kind, overlapping": Run(18, 26, Label.PSO),
              "one label, touching": Run(20, 26, Label.SACCADE),
-             "same kind, overlapping less than the floor": Run(17, 26, Label.SACCADE)}[right_run]
+             "same kind, overlapping": Run(17, 26, Label.SACCADE)}[right_run]
     kept, _ = _conjunction_fallback([Run(10, 20, Label.SACCADE)], [right], _offered(40, [25]),
-                                    _offered(40, [11]), 6)
+                                    _offered(40, [11]))
     assert kept == []
 
 
@@ -4540,25 +4516,30 @@ def test_the_which_eye_trace_names_the_usable_eyes():
     eye was usable, `right` where only the right, `neither` where no eye."""
     from wl_preproc.schema.detect import _conjunction_fallback, _value_runs
 
-    _kept, source = _conjunction_fallback([], [], _offered(12, [6, 7, 8, 9]), _offered(12, [2, 3, 8, 9]), 1)
+    _kept, source = _conjunction_fallback([], [], _offered(12, [6, 7, 8, 9]), _offered(12, [2, 3, 8, 9]))
     assert _value_runs(source) == [(0, 2, "both"), (2, 4, "left"), (4, 6, "both"), (6, 8, "right"),
                                    (8, 10, "neither"), (10, 12, "both")]
 
 
-def test_where_one_eye_alone_is_usable_the_conjunction_takes_its_labels():
-    """Spec section 1: each eye's runs, cut to the samples where it alone
-    was usable. A run the other eye matched elsewhere contributes only its
-    one-eye stretch; the two-eye rule has the rest."""
+def test_where_one_eye_alone_is_usable_the_conjunction_takes_its_events_whole():
+    """Spec section 1, through `_conjunction_parts`: every event of a
+    carried kind the other eye was withheld during is that eye's own run,
+    whole -- here the left eye's saccade and drift and the right eye's
+    glissade. The two-eye intersection inside the left eye's saccade gives
+    way to it. Where one eye is usable the fill is `None`, painted
+    `fixation`."""
     from wl_preproc.eye.detect.labels import Label, Run
-    from wl_preproc.schema.detect import _one_eye_pieces
+    from wl_preproc.schema.detect import _conjunction_parts
 
     left = [Run(10, 20, Label.SACCADE), Run(30, 40, Label.DRIFT)]
     right = [Run(10, 14, Label.SACCADE), Run(22, 28, Label.PSO)]
     left_offered = _offered(40, range(24, 26))       # left withheld at 24-25
     right_offered = _offered(40, [*range(15, 22), 35])  # right withheld at 15-21 and 35
-    assert _one_eye_pieces(left, right, left_offered, right_offered) == [
-        Run(15, 20, Label.SACCADE), Run(35, 36, Label.DRIFT), Run(24, 26, Label.PSO),
-    ]
+    intervals, kept, _source, fill = _conjunction_parts([Run(10, 14, Label.SACCADE)], left, right,
+                                                        left_offered, right_offered)
+    assert intervals == [Run(10, 20, Label.SACCADE), Run(22, 28, Label.PSO), Run(30, 40, Label.DRIFT)]
+    assert [eye for eye, _ in kept] == ["left", "right", "left"]
+    assert all(label is None for label in fill)
 
 
 @pytest.mark.parametrize("detector_name, rule, first, last", [
@@ -4590,9 +4571,15 @@ def test_a_kept_one_eye_event_is_stored_as_its_own_eyes_row(detector_name, rule,
 
 @pytest.mark.parametrize("withheld, measured_on", [("right", "left"), ("left", "right"), ("both", None)])
 def test_a_conjunction_run_is_measured_on_the_eye_usable_throughout_it(withheld, measured_on):
-    """Spec section 3, as ruled while building: a two-eye saccade joined by
-    its one-eye continuation is one stored run. It is measured on the eye
-    usable throughout it, the left first, and unmeasured when neither was."""
+    """Spec section 3, as ruled while building: two conjunction intervals
+    of one label that touch are one stored run -- a kept run beside a
+    same-label run of its own eye, which that eye's own trace merges too.
+    It is measured on the eye usable throughout it, the left first, and
+    unmeasured when neither was.
+
+    *Until the final review of 2026-09-28 this named a two-eye saccade
+    joined by its one-eye continuation, which no longer arises; true when
+    written.*"""
     from wl_preproc.eye.detect.labels import Label, Run
 
     gaze, v, *_ = _insert_trace_inputs()
@@ -4732,3 +4719,127 @@ def test_the_which_eye_trace_is_both_throughout_when_both_eyes_are_usable(steppe
         n_samples = (detect.EyeDetection & where).fetch1("n_samples")
         sources = (detect.EyeDetection.Source & where).to_dicts(order_by="source_index")
         assert [(s["source_start"], s["source_stop"], s["source"]) for s in sources] == [(0, n_samples, "both")], name
+
+
+def _stored_conjunction(detector_name, left, right, gaze, v, left_offered, right_offered):
+    """The conjunction's stored event rows for two eyes' runs, assembled as
+    `EyeDetection.make()` assembles them, at the detector's default params."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import (
+        _conjunction_label,
+        _conjunction_parts,
+        _conjunction_runs,
+        _eye_detection_params,
+        _min_duration_samples,
+        _params_for,
+    )
+
+    detector = get_detector(detector_name)
+    params = _eye_detection_params(detector)
+    floor = _min_duration_samples(_params_for(detector, params))
+    two_eye = _conjunction_runs(left, right, floor, _conjunction_label(detector, params, gaze))
+    intervals, kept, _source, fill = _conjunction_parts(two_eye, left, right, left_offered, right_offered)
+    eyes = {"left": (gaze, v, left_offered), "right": (gaze, v, right_offered)}
+    _master, rows = _run_insert_trace(intervals, detector_name=detector_name, trace="conjunction", gaze=gaze, v=v,
+                                      offered=fill, kept={(r.start, r.stop): (e, *eyes[e]) for e, r in kept},
+                                      eyes=eyes)
+    return [r for r in rows if r["label"] in ("saccade", "microsaccade")]
+
+
+def _a_saccade(start, stop, step_deg, n=200):
+    gaze = np.zeros((n, 2))
+    gaze[start:stop, 0] = np.arange(stop - start) * step_deg
+    gaze[stop:, 0] = gaze[stop - 1, 0]
+    v = np.zeros((n, 2))
+    v[:, 0] = 50.0
+    return gaze, v
+
+
+@pytest.mark.parametrize("detector_name", ["engbert_kliegl", "otero_millan", "bmd"])
+def test_a_two_eye_saccade_whose_other_eye_drops_out_mid_flight_is_one_event(detector_name):
+    """The final review's C1 (2026-09-28). Both eyes see the saccade until
+    the right eye's mask withholds it from sample 66, where the usable-data
+    guard ends the right eye's run. The intersection alone is 0.375 deg, a
+    microsaccade; the left eye's whole run is 1.425 deg. The both-eyes trace
+    stores ONE event: the left eye's run whole, as the left eye's own row
+    stores it -- never the intersection plus a one-eye fragment whose label
+    contradicts its amplitude."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    gaze, v = _a_saccade(60, 80, 0.075)
+    left_offered = np.full(200, None, dtype=object)
+    right_offered = np.full(200, None, dtype=object)
+    right_offered[66:120] = Label.BLINK
+    left = [Run(60, 80, Label.SACCADE)]
+
+    rows = _stored_conjunction(detector_name, left, [Run(60, 66, Label.MICROSACCADE)], gaze, v,
+                               left_offered, right_offered)
+
+    (own,) = [r for r in _run_insert_trace(left, detector_name=detector_name, trace="left", gaze=gaze, v=v,
+                                           offered=left_offered)[1] if r["label"] == "saccade"]
+    assert [(r["run_start"], r["run_stop"], r["label"]) for r in rows] == [(60, 80, "saccade")]
+    assert rows[0]["amplitude_deg"] == own["amplitude_deg"]
+
+
+def test_a_two_eye_saccade_is_one_event_when_the_other_eye_stops_short_of_its_blink():
+    """The final review's C1, second shape: the right eye's run ends two
+    samples before its mask withholds, so the intersection and the left
+    eye's one-eye stretch are separated by `fixation`. Still one event."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    gaze, v = _a_saccade(55, 80, 0.2)
+    left_offered = np.full(200, None, dtype=object)
+    right_offered = np.full(200, None, dtype=object)
+    right_offered[66:75] = Label.BLINK
+
+    rows = _stored_conjunction("nystrom_holmqvist", [Run(60, 80, Label.SACCADE)], [Run(55, 64, Label.SACCADE)],
+                               gaze, v, left_offered, right_offered)
+
+    assert [(r["run_start"], r["run_stop"], r["label"]) for r in rows] == [(60, 80, "saccade")]
+
+
+def test_a_two_eye_saccade_whose_eyes_drop_out_at_opposite_ends_keeps_its_intersection():
+    """Each eye's run has the other eye withheld at one end, so both are
+    candidates, and they overlap: spec section 2's clash rule keeps neither.
+    What stands is the two-eye intersection, labelled from its own
+    amplitude as before this branch; nothing of either run is stored as a
+    one-eye fragment."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _eye_detection_params
+    from wl_preproc.eye.detect.registry import get_detector
+
+    gaze, v = _a_saccade(58, 80, 0.075)
+    left_offered = np.full(200, None, dtype=object)
+    right_offered = np.full(200, None, dtype=object)
+    left_offered[50:60] = Label.BLINK
+    right_offered[78:90] = Label.BLINK
+
+    rows = _stored_conjunction("engbert_kliegl", [Run(60, 80, Label.SACCADE)], [Run(58, 78, Label.SACCADE)],
+                               gaze, v, left_offered, right_offered)
+
+    cut = _eye_detection_params(get_detector("engbert_kliegl"))["microsaccade_max_deg"]
+    (row,) = rows
+    assert (row["run_start"], row["run_stop"]) == (60, 78)
+    assert row["label"] == ("saccade" if row["amplitude_deg"] >= cut else "microsaccade")
+
+
+def test_a_two_eye_span_gives_way_only_where_a_kept_run_covers_it():
+    """`_conjunction_runs` coalesces touching intersections, so one two-eye
+    span can cross from one run of an eye into the next. Here the left eye
+    has two touching saccades; only the second is kept (the right eye's
+    data is withheld during it). The span gives way over the kept run and
+    stands over the first, so the binocular part is not lost; the two touch,
+    share a label, and are stored as one run, as the left eye's own trace
+    stores its two runs. Six such spans on the reference recording, all
+    Nystrom-Holmqvist's (2026-09-28)."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    gaze, v = _a_saccade(40, 80, 0.1)
+    left_offered = np.full(200, None, dtype=object)
+    right_offered = np.full(200, None, dtype=object)
+    right_offered[70:90] = Label.BLINK
+
+    rows = _stored_conjunction("nystrom_holmqvist", [Run(40, 60, Label.SACCADE), Run(60, 80, Label.SACCADE)],
+                               [Run(45, 62, Label.SACCADE)], gaze, v, left_offered, right_offered)
+
+    assert [(r["run_start"], r["run_stop"], r["label"]) for r in rows] == [(45, 80, "saccade")]
