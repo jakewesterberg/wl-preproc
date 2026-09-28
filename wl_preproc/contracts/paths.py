@@ -17,9 +17,17 @@ SYSTEMS: tuple[str, ...] = ("syncbox", "spikeglx", "rhs", "ohdpi", "bcam")
 #
 # **Named for the ROLE, not the vendor**, the same split
 # `eye.calibration.CalibrationSource.ONLINE` draws: MonkeyLogic writes a
-# `.bhv2` here today, and `wl-expcontroller` will write whatever it writes.
+# `.bhv2` here today, and `wl-xcon` will write whatever it writes.
 # A directory called `monkeylogic/` would need renaming the day the second
 # controller lands, and every path already written against it would be wrong.
+#
+# *Renamed 2026-09-28 from `expcontroller` to `xcon`, the requester's decision
+# when wl-expcontroller became wl-xcon. `xcon` is the controller's name and
+# also short for "experiment controller", so the role reading above still
+# holds. No session on disk used the old name. wl-xcon's coordinating
+# session said the same day that its session writer switches to `xcon/` only
+# once this rename is on wl-preproc's `main`, and that its tests will import
+# this constant.*
 #
 # **Deliberately NOT a `SYSTEMS` entry**, and that is a real distinction
 # rather than a naming preference. `SYSTEMS` members are acquisition systems:
@@ -31,7 +39,7 @@ SYSTEMS: tuple[str, ...] = ("syncbox", "spikeglx", "rhs", "ohdpi", "bcam")
 # there would demand an extractor that cannot exist and break that assertion.
 # Discovery iterates `SYSTEMS` explicitly, so an extra directory beside them
 # is simply ignored rather than treated as an unknown system.
-EXPCONTROLLER_DIRNAME = "expcontroller"
+XCON_DIRNAME = "xcon"
 
 MANIFEST_FILENAME = "session_manifest.yaml"
 DONE_MARKER_FILENAME = "DONE"
@@ -51,14 +59,14 @@ class SessionLayout:
         return self.dir / MANIFEST_FILENAME
 
     @property
-    def expcontroller_dir(self) -> Path:
+    def xcon_dir(self) -> Path:
         """The experiment controller's own log directory for this session.
 
         Not reached through `system_dir`, which validates against `SYSTEMS`
         and would reject this name -- correctly, for the reason
-        `EXPCONTROLLER_DIRNAME` gives.
+        `XCON_DIRNAME` gives.
         """
-        return self.dir / EXPCONTROLLER_DIRNAME
+        return self.dir / XCON_DIRNAME
 
     def system_dir(self, system: str) -> Path:
         if system not in SYSTEMS:

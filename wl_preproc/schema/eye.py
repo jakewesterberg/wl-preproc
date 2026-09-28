@@ -60,7 +60,7 @@ from wl_preproc.eye.calibration import (
 )
 from wl_preproc.eye.gaze import purkinje_vector
 from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
-from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+from wl_preproc.contracts.paths import XCON_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
 schema = dj.Schema()
@@ -296,14 +296,14 @@ class EyeCalibration(dj.Computed):
         # decision to correct it.
         #
         # MUST be measured on the RAW channel, never a corrected one --
-        # load-bearing now that wl-expcontroller corrects drift ONLINE, during
+        # load-bearing now that wl-xcon corrects drift ONLINE, during
         # the session (design spec section 3.6's 2026-08-31 addition,
         # HANDOVER-wl-expcontroller.md): a residual computed on their
         # corrected trace would measure the correction rather than the
         # animal's own drift, understating it down to zero -- "would look
         # like unusually good tracking" in their own words. True here only
         # because `eye.gaze.purkinje_vector` reads CR1/CR4 straight off the
-        # ohDPI recording, columns wl-expcontroller's own controller does not
+        # ohDPI recording, columns wl-xcon's own controller does not
         # write -- not because this table checks for a corrected trace and
         # refuses it.
         # Key: (subject, session_datetime, eye, block_id).
@@ -404,7 +404,7 @@ class EyeCalibration(dj.Computed):
     def make(self, key: dict) -> None:
         """Both eyes' calibration for one session, through design spec
         section 3.5's fallback chain in full: fit our own, try the online
-        candidate (MonkeyLogic's `.bhv2` or wl-expcontroller's own format,
+        candidate (MonkeyLogic's `.bhv2` or wl-xcon's own format,
         `eye/calibration.py::read_online_map`'s own two branches), try the
         best same-day carried-forward map, or refuse and say why.
 
@@ -638,14 +638,14 @@ class EyeCalibration(dj.Computed):
         # -- The online candidate. `.bhv2` genuinely has no per-eye split
         # (MonkeyLogic's own Origin & Gain calibration is one map, read_
         # online_map's own bhv2 branch wraps it into the same OnlineCalibration
-        # for both eyes); wl-expcontroller's own format is genuinely per eye
-        # (eye/expcontroller.py's own module docstring), so this ONE call
+        # for both eyes); wl-xcon's own format is genuinely per eye
+        # (eye/xcon.py's own module docstring), so this ONE call
         # resolves the file once and `.for_eye(eye_value)` picks the right
         # side inside the loop below -- review round 1's correction to an
         # earlier version of this line, which passed one shared candidate to
         # `resolve_calibration` for both eyes regardless of which reader
         # produced it.
-        online = read_online_map(_find_expcontroller_log(session_dir))
+        online = read_online_map(_find_xcon_log(session_dir))
 
         rows = []
         block_rows = []
@@ -908,11 +908,11 @@ def _session_time_to_row(
     return int(np.searchsorted(offsets, sample, side="right")) - 1
 
 
-def _find_expcontroller_log(session_dir: Path) -> Path | None:
+def _find_xcon_log(session_dir: Path) -> Path | None:
     """The session's own experiment-controller log, if one exists.
 
     **A convention now exists, and this reads it**: `contracts.paths.
-    EXPCONTROLLER_DIRNAME` -- `<session>/expcontroller/`. This function used
+    XCON_DIRNAME` -- `<session>/xcon/`. This function used
     to `rglob("*.bhv2")` over the whole session tree and take the first match,
     which was the least-assuming choice available when nothing said where such
     a file sits; that gap was recorded as needing a human decision through two
@@ -926,14 +926,14 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
 
     Two globs now, both format-named, because two readers exist:
     `*.bhv2` for `eye/bhv2.py` (MonkeyLogic), and `*.yaml` for
-    `eye/expcontroller.py` (wl-expcontroller, added when ADR-0005 made
+    `eye/xcon.py` (wl-xcon, added when ADR-0005 made
     MonkeyLogic permanently undeployed and `.bhv2` therefore permanently
     absent -- HANDOVER-wl-expcontroller.md Ask 1). This is the second glob
     this function's own prior docstring reserved a place for: "the glob is
     format-named because a reader for that controller's own format does not
     exist yet. When it does, this is where the second glob goes, and nothing
     above it changes" -- true on both counts. The DIRECTORY stays role-named
-    (`EXPCONTROLLER_DIRNAME`), so neither glob nor either reader needed a
+    (`XCON_DIRNAME`), so neither glob nor either reader needed a
     path change; `read_online_map` itself picks the reader by extension, so
     this function still returns a bare `Path | None` and nothing above it
     (`EyeCalibration.make()`, `resolve_calibration`, the schema, the report)
@@ -955,7 +955,7 @@ def _find_expcontroller_log(session_dir: Path) -> Path | None:
     as an ordinary skip (design spec section 4.5: "a missing or unreadable
     .bhv2 is not an error").
     """
-    directory = session_dir / EXPCONTROLLER_DIRNAME
+    directory = session_dir / XCON_DIRNAME
     if not directory.is_dir():
         return None
     matches = sorted((*directory.glob("*.bhv2"), *directory.glob("*.yaml")))

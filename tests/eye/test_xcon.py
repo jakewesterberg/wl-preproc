@@ -1,9 +1,9 @@
-"""`wl_preproc/eye/expcontroller.py`: wl-expcontroller's own online
+"""`wl_preproc/eye/xcon.py`: wl-xcon's own online
 calibration log, read rather than mis-assembled or guessed at.
 
 Written as raw YAML text, not built through `yaml.safe_dump`, so each fixture
-doubles as a literal example of the contract wl-expcontroller writes against
-(`expcontroller.py`'s own module docstring: "the field list above is the
+doubles as a literal example of the contract wl-xcon writes against
+(`xcon.py`'s own module docstring: "the field list above is the
 contract") -- the same reason `tests/eye/test_bhv2.py` hand-packs its `.bhv2`
 bytes rather than reusing this reader's own encoder.
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel, OnlineCalibration
-from wl_preproc.eye.expcontroller import read_expcontroller_map
+from wl_preproc.eye.xcon import read_xcon_map
 
 # Two eyes, deliberately DIFFERENT coefficients -- so a test comparing
 # `.left` against `.right` cannot pass by accident the way it could if both
@@ -129,7 +129,7 @@ def test_a_valid_two_eye_file_yields_a_different_map_per_eye(tmp_path):
     order rather than inheriting a vendor's differing convention the way
     `eye/bhv2.py::as_calibration_map` must.
     """
-    result = read_expcontroller_map(_write(tmp_path, _GOOD_TWO_EYE))
+    result = read_xcon_map(_write(tmp_path, _GOOD_TWO_EYE))
 
     assert _same_map(result.left, _LEFT_MAP)
     assert _same_map(result.right, _RIGHT_MAP)
@@ -141,7 +141,7 @@ def test_a_valid_second_order_file_round_trips_to_the_right_calibration_map(tmp_
     exercised here for a single eye (`right` simply absent -- see
     `test_a_single_eye_file_leaves_the_other_eye_without_a_candidate` for
     that absence proven as its own behaviour, not incidental here)."""
-    result = read_expcontroller_map(_write(tmp_path, _GOOD_SECOND_ORDER_LEFT_ONLY))
+    result = read_xcon_map(_write(tmp_path, _GOOD_SECOND_ORDER_LEFT_ONLY))
 
     assert _same_map(
         result.left,
@@ -159,13 +159,13 @@ def test_a_borrowed_map_carries_no_fabricated_fit_history(tmp_path):
     how THIS package fit the coefficients" and must stay at their `0`/`nan`
     defaults for every borrowed source, `online` included, even though THIS
     file's own per-eye `conditioning` fields (0.87/0.79, above) state real
-    numbers -- wl-expcontroller's own fit quality, not this package's.
+    numbers -- wl-xcon's own fit quality, not this package's.
     Stuffing either into `CalibrationMap.conditioning` would "claim evidence
     that does not exist", the exact fabrication `CalibrationMap`'s docstring
     names. Checked for BOTH eyes, not just one -- the per-eye split does not
     get to skip this rule for either side.
     """
-    result = read_expcontroller_map(_write(tmp_path, _GOOD_TWO_EYE))
+    result = read_xcon_map(_write(tmp_path, _GOOD_TWO_EYE))
 
     for one_eye in (result.left, result.right):
         assert one_eye.n_points == 0
@@ -179,7 +179,7 @@ def test_a_single_eye_file_leaves_the_other_eye_without_a_candidate(tmp_path):
     the identical "nothing to offer" signal `resolve_calibration` already
     treats a never-offered candidate as.
     """
-    result = read_expcontroller_map(_write(tmp_path, _GOOD_SECOND_ORDER_LEFT_ONLY))
+    result = read_xcon_map(_write(tmp_path, _GOOD_SECOND_ORDER_LEFT_ONLY))
 
     assert result.left is not None
     assert result.right is None
@@ -195,7 +195,7 @@ def test_an_unknown_model_declines_only_that_eye(tmp_path):
     """
     bad = _GOOD_TWO_EYE.replace("model: affine\n  coefficients:\n    x: [0.5", "model: cubic\n  coefficients:\n    x: [0.5")
 
-    result = read_expcontroller_map(_write(tmp_path, bad))
+    result = read_xcon_map(_write(tmp_path, bad))
 
     assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
@@ -214,7 +214,7 @@ def test_a_coefficient_count_disagreeing_with_its_model_declines_only_that_eye(t
         "x: [0.5, 0.06, 0.007]", "x: [0.5, 0.06, 0.007, 0.0008, 0.0009, 0.0010]"
     )
 
-    result = read_expcontroller_map(_write(tmp_path, bad))
+    result = read_xcon_map(_write(tmp_path, bad))
 
     assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
@@ -222,13 +222,13 @@ def test_a_coefficient_count_disagreeing_with_its_model_declines_only_that_eye(t
 
 def test_an_unexpected_field_inside_one_eye_record_declines_only_that_eye(tmp_path):
     """`_EyeRecord`'s own `extra="forbid"` is per-eye too: a stray field
-    under `right:` (a typo in a future wl-expcontroller writer, say) must
+    under `right:` (a typo in a future wl-xcon writer, say) must
     not cost `left` its own perfectly good map."""
     bad = _GOOD_TWO_EYE.replace(
         "right:\n  model: affine", "right:\n  model: affine\n  extra_field: 1"
     )
 
-    result = read_expcontroller_map(_write(tmp_path, bad))
+    result = read_xcon_map(_write(tmp_path, bad))
 
     assert _same_map(result.left, _LEFT_MAP)
     assert result.right is None
@@ -242,35 +242,35 @@ def test_a_malformed_file_is_declined_rather_than_raising(tmp_path):
     `right` inside, so the whole file declines to bare `None`."""
     path = _write(tmp_path, "{not: valid: yaml: [")
 
-    assert read_expcontroller_map(path) is None
+    assert read_xcon_map(path) is None
 
 
 def test_a_file_missing_a_required_file_wide_field_is_declined(tmp_path):
     """"The field list above is the contract" cuts both ways at the
     file-wide level: `mapping_version`/`raw_definition`/`targets` are all
-    required, `extra="forbid"` on `_ExpcontrollerCalibration`. Here
+    required, `extra="forbid"` on `_XconCalibration`. Here
     `mapping_version` is simply absent -- and unlike a per-eye field, there
     is no partial outcome to preserve: the whole file declines."""
     lines = [
         line for line in _GOOD_TWO_EYE.strip().splitlines() if not line.startswith("mapping_version")
     ]
 
-    assert read_expcontroller_map(_write(tmp_path, "\n".join(lines))) is None
+    assert read_xcon_map(_write(tmp_path, "\n".join(lines))) is None
 
 
 def test_a_file_with_an_unexpected_file_wide_field_is_declined(tmp_path):
     """The other half of "the field list above is the contract" at the
     file-wide level: an unexpected top-level field is refused rather than
-    silently ignored, so a typo in a future wl-expcontroller writer
+    silently ignored, so a typo in a future wl-xcon writer
     (`raw_defintion:`, say) fails loudly as a decline instead of silently
     dropping the real `raw_definition` this reader still checks."""
     bad = _GOOD_TWO_EYE + "\nextra_field: 1\n"
 
-    assert read_expcontroller_map(_write(tmp_path, bad)) is None
+    assert read_xcon_map(_write(tmp_path, bad)) is None
 
 
 def test_a_raw_definition_that_does_not_match_is_declined(tmp_path):
-    """Checked, not merely stored (`expcontroller.py`'s own module
+    """Checked, not merely stored (`xcon.py`'s own module
     docstring): coefficients fit against a raw vector other than `CR1 - CR4`
     would be silently misapplied to `eye/gaze.py::purkinje_vector`'s
     CR1-CR4 difference if accepted anyway. Not one of
@@ -282,14 +282,14 @@ def test_a_raw_definition_that_does_not_match_is_declined(tmp_path):
     """
     bad = _GOOD_TWO_EYE.replace('raw_definition: "CR1 - CR4"', 'raw_definition: "CR2 - CR4"')
 
-    assert read_expcontroller_map(_write(tmp_path, bad)) is None
+    assert read_xcon_map(_write(tmp_path, bad)) is None
 
 
 def test_absence_is_an_ordinary_skip(tmp_path):
     """No file at `path` at all -- the same "not an error" outcome design
     spec section 4.5 states for `.bhv2`, generalised: `read_online_map`
-    never even reaches this function for a session with no expcontroller
-    log at all (`_find_expcontroller_log` returns `None` first), but this
+    never even reaches this function for a session with no xcon
+    log at all (`_find_xcon_log` returns `None` first), but this
     function is just as forgiving if it is ever asked about a path directly.
     """
-    assert read_expcontroller_map(tmp_path / "nope.yaml") is None
+    assert read_xcon_map(tmp_path / "nope.yaml") is None

@@ -1,22 +1,22 @@
-"""wl-expcontroller's own online calibration log -- the second reader
+"""wl-xcon's own online calibration log -- the second reader
 `eye/calibration.py::read_online_map` was always going to need.
 
 **Why this module exists.** `CalibrationSource.ONLINE`'s own docstring
 (`eye/calibration.py`) named the problem before it was real: "The
 behavioural control system will change, and whatever replaces MonkeyLogic
-will also save a calibration." Under wl-expcontroller's ADR-0005, MonkeyLogic
+will also save a calibration." Under wl-xcon's ADR-0005, MonkeyLogic
 is not deployed at all -- HANDOVER-wl-expcontroller.md's Ask 1 -- so `.bhv2`
 never exists and `read_online_map`'s only reader (`eye/bhv2.py`) never has
 anything to open. This module is the second reader `schema/eye.py::
-_find_expcontroller_log`'s own docstring already reserved a glob for. Format-
+_find_xcon_log`'s own docstring already reserved a glob for. Format-
 specific things keep format names (`bhv2.py`'s own docstring states that
 principle); this one is named for the controller because, unlike `.bhv2`,
 the format below has no vendor name of its own to borrow -- it is defined by
 this module, for this one cross-repo contract.
 
 **They write the file, we read it.** A small YAML file, one per session, at
-`<session>/expcontroller/*.yaml` (`contracts.paths.EXPCONTROLLER_DIRNAME`;
-`schema/eye.py::_find_expcontroller_log` finds it). Wire format is YAML, not
+`<session>/xcon/*.yaml` (`contracts.paths.XCON_DIRNAME`;
+`schema/eye.py::_find_xcon_log` finds it). Wire format is YAML, not
 JSON, matching every other file this pipeline reads that a DIFFERENT repository
 writes: `contracts/sidecar.py` (the FLIR behaviour-camera project's own
 sidecar), `contracts/done.py` (a transfer's own completion marker),
@@ -36,7 +36,7 @@ many eyes it produced a usable fit for. `model`, `coefficients` (`x`/`y`, in
 `basis()` column order), `conditioning` and `rms_residual_deg` are PER EYE,
 each living under an optional `left:`/`right:` key -- they are properties of
 ONE eye's own fit against ONE eye's own raw vector, and nothing about them is
-shared just because the file that carries them is. `_ExpcontrollerCalibration`
+shared just because the file that carries them is. `_XconCalibration`
 declares the three file-wide fields and nothing else at its own level
 (`extra="forbid"`); `_EyeRecord` declares the four per-eye fields and nothing
 else, independently, for whichever of `left`/`right` is present. A file
@@ -51,7 +51,7 @@ produced it may simply have been better on one side this session. So `left`
 and `right` are validated SEPARATELY, each against its own copy of
 `_EyeRecord`, and a failure in one (an unknown `model`, a coefficient count
 that disagrees with it) declines only that eye's own candidate rather than
-the whole file: `_ExpcontrollerCalibration.left`/`.right` are typed as loose
+the whole file: `_XconCalibration.left`/`.right` are typed as loose
 `dict[str, Any] | None`, not `_EyeRecord | None`, specifically so that a
 malformed `right` cannot make pydantic refuse to construct the outer model
 at all and take a perfectly good `left` down with it. `_eye_map`, below, is
@@ -65,7 +65,7 @@ that vendor boundary, because MonkeyLogic's own convention differs from ours
 and neither side controls the other's format. Here the direction is
 reversed: this module defines the wire format, so it simply specifies
 `basis()` column order as part of the contract (the field list above says so
-directly) and wl-expcontroller writes to it -- no re-ordering step exists
+directly) and wl-xcon writes to it -- no re-ordering step exists
 here because none is needed.
 
 **`raw_definition` is checked, not merely stored.** The brief lists it as a
@@ -73,7 +73,7 @@ field to read; this module also refuses a file whose stated value is not
 `"CR1 - CR4"` -- the same feature `eye/calibration.py`'s own module docstring
 names ("The feature is P1 - P4", P1/P4 being ohDPI's own names for the
 Purkinje images `eye/gaze.py::purkinje_vector` reads as `CR1`/`CR4`). A file
-is a set of coefficients fit against SOME raw vector; if wl-expcontroller
+is a set of coefficients fit against SOME raw vector; if wl-xcon
 ever changed which channels it fits against, coefficients honestly labelled
 for that change would be silently misapplied to `purkinje_vector`'s CR1-CR4
 difference if this reader trusted them anyway. Not one of the two refusal
@@ -134,8 +134,8 @@ class _Coefficients(BaseModel):
 
 class _EyeRecord(BaseModel):
     """One eye's own calibration: which model it reached, its coefficients,
-    and how wl-expcontroller judged its own fit. Validated from an already
-    isolated raw `dict` (`_ExpcontrollerCalibration.left`/`.right`'s own
+    and how wl-xcon judged its own fit. Validated from an already
+    isolated raw `dict` (`_XconCalibration.left`/`.right`'s own
     loose typing, module docstring's "Per eye, independently"), never as a
     nested field of that outer model directly -- the isolation is what lets
     a bad `right` decline only `right` rather than taking a good `left`
@@ -150,7 +150,7 @@ class _EyeRecord(BaseModel):
     because "fabricating a point count or a conditioning score for it would
     claim evidence that does not exist" -- true here exactly as it is for
     `eye/bhv2.py::as_calibration_map`, whose own `CalibrationMap(...)` calls
-    likewise never pass either. wl-expcontroller's own `conditioning`/
+    likewise never pass either. wl-xcon's own `conditioning`/
     `rms_residual_deg` describe how THEY fit THEIR coefficients for THIS
     eye, a different fact this reader has no column to misreport it into.
     """
@@ -173,7 +173,7 @@ class _EyeRecord(BaseModel):
         return value
 
 
-class _ExpcontrollerCalibration(BaseModel):
+class _XconCalibration(BaseModel):
     """The file's own three FILE-WIDE fields (module docstring), plus
     `left`/`right` -- each an already-isolated raw `dict` or absent,
     deliberately NOT typed as `_EyeRecord | None` here. Typing them as
@@ -219,7 +219,7 @@ def _eye_map(record: dict[str, Any] | None) -> CalibrationMap | None:
     disagrees with `model` (not re-derived here -- see `_Coefficients`'s
     own docstring) -- also declines to `None` rather than raising, so one
     eye's bad record can never surface as an exception out of
-    `read_expcontroller_map` for a session whose OTHER eye might be fine.
+    `read_xcon_map` for a session whose OTHER eye might be fine.
     """
     if record is None:
         return None
@@ -239,7 +239,7 @@ def _eye_map(record: dict[str, Any] | None) -> CalibrationMap | None:
         return None
 
 
-def read_expcontroller_map(path: str | Path) -> OnlineCalibration | None:
+def read_xcon_map(path: str | Path) -> OnlineCalibration | None:
     """The file at `path` as an `OnlineCalibration`, or `None`.
 
     **`None` means the file itself could not be read at all** -- missing,
@@ -271,7 +271,7 @@ def read_expcontroller_map(path: str | Path) -> OnlineCalibration | None:
     """
     try:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        cal = _ExpcontrollerCalibration.model_validate(payload)
+        cal = _XconCalibration.model_validate(payload)
     except (OSError, yaml.YAMLError, TypeError, ValueError):
         return None
 

@@ -321,7 +321,7 @@ class OnlineCalibration:
     per-eye split (`schema/eye.py::EyeCalibration.make()`'s own comment,
     predating this class): a usable MonkeyLogic calibration becomes
     `left=right=<the same map>`, `read_online_map`'s bhv2 branch does that
-    wrapping itself so `bhv2.py` needed no change. wl-expcontroller's own
+    wrapping itself so `bhv2.py` needed no change. wl-xcon's own
     format is genuinely per-eye (HANDOVER-wl-expcontroller.md Ask 1: "We fit
     your basis to your raw vector") and a file offering only one eye is a
     valid, ordinary outcome -- not a malformed file, not an error -- so the
@@ -352,12 +352,12 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
 
     Named for the role, not the vendor -- and that role now has two readers,
     branched on below by file extension: MonkeyLogic's `.bhv2` (`bhv2.py`),
-    and wl-expcontroller's own format (`expcontroller.py`), added the day
+    and wl-xcon's own format (`xcon.py`), added the day
     ADR-0005 made MonkeyLogic undeployed and `.bhv2` therefore permanently
     absent (HANDOVER-wl-expcontroller.md Ask 1). Both were anticipated
     exactly here: `CalibrationSource.ONLINE`'s own docstring already said
     "whatever replaces MonkeyLogic will also save a calibration", and
-    `schema/eye.py::_find_expcontroller_log`'s docstring already reserved
+    `schema/eye.py::_find_xcon_log`'s docstring already reserved
     "this is where the second glob goes, and nothing above it changes" for
     the day a second reader existed.
 
@@ -369,7 +369,7 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
     genuinely has no per-eye split -- but wrong as a general contract:
     design spec section 3.7 already requires "both eyes, independently...
     separate maps", and treating a MonkeyLogic-shaped limitation as this
-    function's own contract meant a wl-expcontroller session was having
+    function's own contract meant a wl-xcon session was having
     half of what it sent discarded, with the discarded half depending on
     which eye happened to validate against a shared map that was only ever
     fit to one of them. `resolve_calibration` itself did not change and
@@ -381,8 +381,8 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
     Each reader's own branch is documented where it lives, not repeated
     here: `bhv2.py`'s own module docstring and `read_calibration`/
     `as_calibration_map`'s own docstrings cover the `.bhv2` reasoning (Task
-    6, Controller rulings C/D); `expcontroller.py`'s own module docstring
-    and `read_expcontroller_map`'s own docstring cover the new one, per-eye
+    6, Controller rulings C/D); `xcon.py`'s own module docstring
+    and `read_xcon_map`'s own docstring cover the new one, per-eye
     reading included. What is common to both, stated once here: a reader
     for this function never raises. A missing path (`path is None`, checked
     below before either reader is even chosen) is an ordinary skip and
@@ -395,7 +395,7 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
     "nothing at all" case -- see `OnlineCalibration`'s own docstring.
 
     The imports below are local, not at module scope, for the identical
-    reason in both branches: `bhv2.py` and `expcontroller.py` each import
+    reason in both branches: `bhv2.py` and `xcon.py` each import
     `CalibrationMap` from THIS module (their own module docstrings), so a
     module-level import here would close a cycle. Verified directly for the
     `bhv2.py` pair: a module-level version of this same import raises
@@ -406,7 +406,7 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
     imported are defined -- when the other module reaches back for it. A
     deferred import, run only once this function is actually called,
     sidesteps that: by then neither module is mid-load. The same shape
-    applies to `expcontroller.py` by construction (its own module-level
+    applies to `xcon.py` by construction (its own module-level
     `from wl_preproc.eye.calibration import CalibrationMap, CalibrationModel`
     is the identical import this docstring already describes for `bhv2.py`),
     not independently re-verified against that pair -- the mechanism is the
@@ -417,9 +417,9 @@ def read_online_map(path: str | Path | None) -> OnlineCalibration | None:
 
     path = Path(path)
     if path.suffix == ".yaml":
-        from wl_preproc.eye.expcontroller import read_expcontroller_map
+        from wl_preproc.eye.xcon import read_xcon_map
 
-        return read_expcontroller_map(path)
+        return read_xcon_map(path)
 
     from wl_preproc.eye.bhv2 import Bhv2Unreadable, as_calibration_map, read_calibration
 
@@ -454,9 +454,9 @@ def resolve_calibration(
 
     `online` arrives already resolved to a single `CalibrationMap | None`
     for THIS eye -- ordinarily via `read_online_map(...).for_eye(eye)` --
-    rather than as a `.bhv2`/expcontroller path or an `OnlineCalibration`
+    rather than as a `.bhv2`/xcon path or an `OnlineCalibration`
     covering both eyes, so every vendor boundary (`bhv2.py`,
-    `expcontroller.py`) and the per-eye selection between them
+    `xcon.py`) and the per-eye selection between them
     (`OnlineCalibration.for_eye`) live upstream of this function: it never
     touches the filesystem, and neither reader nor `OnlineCalibration`
     itself reaches this far -- confirmed by this function's own signature,

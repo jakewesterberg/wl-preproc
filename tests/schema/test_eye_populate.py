@@ -1824,24 +1824,24 @@ def _write_walkable_bhv2(path) -> None:
     path.write_bytes(b"")
 
 
-def test_the_expcontroller_log_is_found_in_its_own_directory(tmp_path):
-    """The first positive coverage `_find_expcontroller_log` has ever had.
+def test_the_xcon_log_is_found_in_its_own_directory(tmp_path):
+    """The first positive coverage `_find_xcon_log` has ever had.
 
     Every fixture in this file produces a session with no such log at all --
     the synthetic generator writes `task.json`, never a `.bhv2` -- so the
     lookup returned `None` in every test that existed and a lookup hardcoded
     to `return None` would have passed all of them.
     """
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.contracts.paths import XCON_DIRNAME
     from wl_preproc.schema import eye
 
-    log = tmp_path / EXPCONTROLLER_DIRNAME / "session.bhv2"
+    log = tmp_path / XCON_DIRNAME / "session.bhv2"
     _write_walkable_bhv2(log)
 
-    assert eye._find_expcontroller_log(tmp_path) == log
+    assert eye._find_xcon_log(tmp_path) == log
 
 
-def test_a_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
+def test_a_log_outside_the_xcon_directory_is_not_found(tmp_path):
     """THE point of settling the convention.
 
     This function used to `rglob` the whole session tree and take the first
@@ -1856,76 +1856,76 @@ def test_a_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
     _write_walkable_bhv2(tmp_path / "ohdpi" / "misfiled.bhv2")
     _write_walkable_bhv2(tmp_path / "monkeylogic" / "old_convention.bhv2")
 
-    assert eye._find_expcontroller_log(tmp_path) is None
+    assert eye._find_xcon_log(tmp_path) is None
 
 
-def test_an_absent_or_empty_expcontroller_directory_is_an_ordinary_skip(tmp_path):
+def test_an_absent_or_empty_xcon_directory_is_an_ordinary_skip(tmp_path):
     """Neither is an error: design spec section 4.5, "a missing or unreadable
     .bhv2 is not an error"."""
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.contracts.paths import XCON_DIRNAME
     from wl_preproc.schema import eye
 
-    assert eye._find_expcontroller_log(tmp_path) is None
+    assert eye._find_xcon_log(tmp_path) is None
 
-    (tmp_path / EXPCONTROLLER_DIRNAME).mkdir()
-    assert eye._find_expcontroller_log(tmp_path) is None
+    (tmp_path / XCON_DIRNAME).mkdir()
+    assert eye._find_xcon_log(tmp_path) is None
 
 
 def test_the_first_log_by_name_is_taken_when_a_session_has_several(tmp_path):
     """Sorted, so the choice is stable rather than filesystem-order dependent
     -- the same guarantee the whole-tree search gave, kept."""
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.contracts.paths import XCON_DIRNAME
     from wl_preproc.schema import eye
 
     for name in ("c.bhv2", "a.bhv2", "b.bhv2"):
-        _write_walkable_bhv2(tmp_path / EXPCONTROLLER_DIRNAME / name)
+        _write_walkable_bhv2(tmp_path / XCON_DIRNAME / name)
 
-    found = eye._find_expcontroller_log(tmp_path)
+    found = eye._find_xcon_log(tmp_path)
     assert found is not None and found.name == "a.bhv2"
 
 
-def _write_expcontroller_yaml(path) -> None:
+def _write_xcon_yaml(path) -> None:
     """A minimal, syntactically-valid YAML file at `path`.
 
-    Deliberately not a full `read_expcontroller_map` contract (no
+    Deliberately not a full `read_xcon_map` contract (no
     `mapping_version`/`model`/... ) -- these tests are about WHICH FILE
-    `_find_expcontroller_log` finds, never about what is inside one, exactly
+    `_find_xcon_log` finds, never about what is inside one, exactly
     the same restriction `_write_walkable_bhv2`'s own docstring states for
-    its `.bhv2` counterpart. `tests/eye/test_expcontroller.py` covers the
+    its `.bhv2` counterpart. `tests/eye/test_xcon.py` covers the
     contract itself.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("placeholder: true\n")
 
 
-def test_the_expcontroller_log_is_found_when_it_is_the_new_format(tmp_path):
-    """The second glob `_find_expcontroller_log`'s own docstring reserved a
+def test_the_xcon_log_is_found_when_it_is_the_new_format(tmp_path):
+    """The second glob `_find_xcon_log`'s own docstring reserved a
     place for (HANDOVER-wl-expcontroller.md Ask 1): `*.yaml`, alongside the
     pre-existing `*.bhv2`, in the same role-named directory."""
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.contracts.paths import XCON_DIRNAME
     from wl_preproc.schema import eye
 
-    log = tmp_path / EXPCONTROLLER_DIRNAME / "session.yaml"
-    _write_expcontroller_yaml(log)
+    log = tmp_path / XCON_DIRNAME / "session.yaml"
+    _write_xcon_yaml(log)
 
-    assert eye._find_expcontroller_log(tmp_path) == log
+    assert eye._find_xcon_log(tmp_path) == log
 
 
-def test_a_yaml_log_outside_the_expcontroller_directory_is_not_found(tmp_path):
-    """The convention `test_a_log_outside_the_expcontroller_directory_is_not_
+def test_a_yaml_log_outside_the_xcon_directory_is_not_found(tmp_path):
+    """The convention `test_a_log_outside_the_xcon_directory_is_not_
     found` proves for `.bhv2` applies identically to the new format: reading
-    ONLY `EXPCONTROLLER_DIRNAME`, with no whole-tree fallback, is the point,
+    ONLY `XCON_DIRNAME`, with no whole-tree fallback, is the point,
     regardless of which controller wrote the stray file."""
     from wl_preproc.schema import eye
 
-    _write_expcontroller_yaml(tmp_path / "stray.yaml")
-    _write_expcontroller_yaml(tmp_path / "ohdpi" / "misfiled.yaml")
+    _write_xcon_yaml(tmp_path / "stray.yaml")
+    _write_xcon_yaml(tmp_path / "ohdpi" / "misfiled.yaml")
 
-    assert eye._find_expcontroller_log(tmp_path) is None
+    assert eye._find_xcon_log(tmp_path) is None
 
 
 def test_matches_across_both_formats_are_sorted_together(tmp_path):
-    """`_find_expcontroller_log`'s own docstring states the two globs are
+    """`_find_xcon_log`'s own docstring states the two globs are
     sorted TOGETHER, not tried one format after the other: the choice among
     matches is by name, never by format. Proven here with one file of each
     format, named so the alphabetically-first one is the `.yaml`, the
@@ -1933,13 +1933,13 @@ def test_matches_across_both_formats_are_sorted_together(tmp_path):
     -- a test that would still pass if the implementation silently preferred
     `.bhv2` regardless of name would prove nothing.
     """
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+    from wl_preproc.contracts.paths import XCON_DIRNAME
     from wl_preproc.schema import eye
 
-    _write_walkable_bhv2(tmp_path / EXPCONTROLLER_DIRNAME / "z_session.bhv2")
-    _write_expcontroller_yaml(tmp_path / EXPCONTROLLER_DIRNAME / "a_session.yaml")
+    _write_walkable_bhv2(tmp_path / XCON_DIRNAME / "z_session.bhv2")
+    _write_xcon_yaml(tmp_path / XCON_DIRNAME / "a_session.yaml")
 
-    found = eye._find_expcontroller_log(tmp_path)
+    found = eye._find_xcon_log(tmp_path)
     assert found is not None and found.name == "a_session.yaml"
 
 
@@ -1963,8 +1963,8 @@ _ONLINE_LEFT_CONST = (0.001, -0.001)
 _ONLINE_RIGHT_CONST = (0.002, -0.002)
 
 
-def _write_per_eye_expcontroller_log(session_dir, *, left: bool, right: bool) -> None:
-    from wl_preproc.contracts.paths import EXPCONTROLLER_DIRNAME
+def _write_per_eye_xcon_log(session_dir, *, left: bool, right: bool) -> None:
+    from wl_preproc.contracts.paths import XCON_DIRNAME
 
     def _eye_block(const: tuple[float, float]) -> str:
         gx0, gy0 = const
@@ -1980,15 +1980,15 @@ def _write_per_eye_expcontroller_log(session_dir, *, left: bool, right: bool) ->
     if right:
         text += "right:\n" + _eye_block(_ONLINE_RIGHT_CONST)
 
-    directory = session_dir / EXPCONTROLLER_DIRNAME
+    directory = session_dir / XCON_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "calibration.yaml").write_text(text)
 
 
 @pytest.fixture(scope="module")
 def online_per_eye_session(daemon_module, prefix, tmp_path_factory):
-    """`degenerate_session`'s own geometry, plus a two-eye expcontroller log
-    written into `expcontroller/` BEFORE `daemon_module.run_once()` runs --
+    """`degenerate_session`'s own geometry, plus a two-eye xcon log
+    written into `xcon/` BEFORE `daemon_module.run_once()` runs --
     the only difference from `degenerate_session` itself. FITTED still
     refuses (same central-only targets); with a `.bhv2`-shaped one-map-both-
     eyes candidate this would fall through to it identically for both rows,
@@ -2001,7 +2001,7 @@ def online_per_eye_session(daemon_module, prefix, tmp_path_factory):
     truth = generate_session(root, recipe)
     targets = [(0.0, 0.0)] * N_TRIALS
     _inject_fixations(root / recipe.session_id, recipe, truth, targets)
-    _write_per_eye_expcontroller_log(root / recipe.session_id, left=True, right=True)
+    _write_per_eye_xcon_log(root / recipe.session_id, left=True, right=True)
     session_key = _land(
         root, recipe, datetime.datetime(2027, 4, 8, 9, 0),
         acquisition_systems=("syncbox", "ohdpi"),
@@ -2046,7 +2046,7 @@ def online_left_only_session(daemon_module, prefix, tmp_path_factory):
     truth = generate_session(root, recipe)
     targets = [(0.0, 0.0)] * N_TRIALS
     _inject_fixations(root / recipe.session_id, recipe, truth, targets)
-    _write_per_eye_expcontroller_log(root / recipe.session_id, left=True, right=False)
+    _write_per_eye_xcon_log(root / recipe.session_id, left=True, right=False)
     session_key = _land(
         root, recipe, datetime.datetime(2027, 4, 9, 9, 0),
         acquisition_systems=("syncbox", "ohdpi"),
