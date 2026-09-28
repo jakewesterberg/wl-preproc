@@ -113,6 +113,14 @@ the measured boundaries (`trial.Block`) as `measured_start_time` and
 `trial_id`, `outcome` (the trial type), `block_id`, `condition` where present,
 and per-system coverage columns from `TrialCoverage`.
 
+*Ruled while planning, 2026-09-28: never present today, so the trials table
+has no `condition` column. The event stage stores a condition code on its
+`CONDITION` event (`schema/events.py`), not on a trial, and `trial.Trial`
+has none, so the code reaches the file as that event's `condition` in
+`/intervals/task_events`. Tying a `CONDITION` event to a trial by time is new
+meaning, left until a trial-level condition exists. Cost if wrong: a reader
+joins the two by time.*
+
 **`/events/task_events`** (`EventsTable`, NWB core since 2.9): one row per
 decoded event code, `timestamp`, `event_type` (the `event.EventType` name),
 and the attributes the event stage stores (`trial_id`, `block_id`,
@@ -257,6 +265,11 @@ block set.**
     are for samples, so adjacent blocks never share one. Measured on the
     synthetic session: the half-open rule dropped `BLOCK_END`.*
 - **Validity and repair stretches:** clipped to the block edges.
+  - *Ruled while planning, 2026-09-28: blocks that touch are one interval
+    for trimming, so a stretch across the edge two blocks share stays one
+    stretch. wl.works may assert two blocks where one was measured, and
+    clipping at their shared edge would make one blink two rows. Which
+    samples, runs and events fall inside is unchanged.*
 - **Tables not tied to time** (calibration, clocks, segments, agreement): as
   stored, for the session.
 
