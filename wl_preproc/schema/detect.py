@@ -443,6 +443,8 @@ class EyeDetection(dj.Computed):
         # whole at a mask edge -- and `neither` where no eye was usable.
         # Written for the `conjunction` trace only; the runs tile
         # [0, n_samples), and `source_stop` is EXCLUSIVE.
+        # Key: (subject, session_datetime, trace, validity_paramset_type,
+        # validity_paramset_idx, paramset_type, paramset_idx, source_index).
         -> master
         source_index : int unsigned
         ---
