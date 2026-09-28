@@ -25,6 +25,7 @@ above would otherwise have a hole exactly one trace wide.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -32,7 +33,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.bmd import DEFAULT_BMD_PARAMS, detect_bmd
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
-from wl_preproc.eye.detect.labels import Label, LabelledInterval
+from wl_preproc.eye.detect.labels import Label, LabelledInterval, kind_of, true_runs
 from wl_preproc.eye.detect.nslr import DEFAULT_NSLR_PARAMS, detect_nslr
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
@@ -171,7 +172,53 @@ class Detector:
                 f"vocabulary {sorted(label.value for label in self.vocabulary)} "
                 "does not contain"
             )
-        return intervals
+        return _within_usable(intervals, available)
+
+
+def _within_usable(intervals: list[LabelledInterval], available: np.ndarray) -> list[LabelledInterval]:
+    """Every interval held to the samples the validity mask offered: the
+    requester's decision of 2026-09-28. The mask, not the detector, owns
+    `blink` and `invalid` (the `vocabulary` comment above), so a run must
+    not overwrite them.
+    - With withheld samples only at its ends, a run is trimmed back to its
+      one usable stretch, keeping its label and reliability.
+    - With a withheld stretch inside it and usable data on both sides, a run
+      is dropped: a "saccade" across a blink is not a measurable saccade.
+    - With no usable sample, a run is dropped.
+
+    **A glissade goes with its saccade.** A `pso` run starts where its
+    saccade ends, so when this guard drops a saccadic run, or trims its end,
+    the `pso` that started at that end is dropped too. A saccade trimmed
+    only at its start keeps its glissade.
+
+    Found on the reference recording, where Nystrom-Holmqvist's saccade
+    edges walked into blinks: 521 of its 5,062 left-eye and 985 of its 5,213
+    right-eye saccades, most of them straddling a blink. No other detector
+    emitted such a run."""
+    usable = np.array([entry is None for entry in available], dtype=bool)
+    fates = []
+    broken_saccade_ends = set()
+    for interval in intervals:
+        pieces = true_runs(usable[interval.start:interval.stop])
+        if len(pieces) != 1:
+            fate = None
+        else:
+            start, stop = pieces[0]
+            fate = (interval.start + start, interval.start + stop)
+        fates.append(fate)
+        if kind_of(interval.label) == "saccadic" and (fate is None or fate[1] != interval.stop):
+            broken_saccade_ends.add(interval.stop)
+    held: list[LabelledInterval] = []
+    for interval, fate in zip(intervals, fates):
+        if fate is None:
+            continue
+        if interval.label is Label.PSO and interval.start in broken_saccade_ends:
+            continue
+        if fate == (interval.start, interval.stop):
+            held.append(interval)
+        else:
+            held.append(dataclasses.replace(interval, start=fate[0], stop=fate[1]))
+    return held
 
 
 DETECTORS: dict[str, Detector] = {
