@@ -635,6 +635,55 @@ def _agreeing_saccade_offset_differences(agreements) -> np.ndarray:
     )
 
 
+#: Why the other eye has no counterpart for an own saccade: the four buckets
+#: of the 2026-09-28 measurement, tried in this order.
+_MISSING = "the other eye's data was withheld"
+_NEAR_MISS = "the other eye's saccade was just outside it"
+_MISSED = "the other eye moved too, undetected"
+_STILL = "the other eye did not move"
+
+#: How far outside an own saccade the other eye's saccade may lie and still be
+#: the same movement placed differently: 10 samples, about 20 ms at the rig's
+#: 498.55 Hz.
+_NEAR_MISS_SAMPLES = 10
+
+#: The other eye "moved too" when its displacement over the own saccade's
+#: samples is at least half the own eye's. Over the saccades both eyes found,
+#: every registered detector's median ratio is 0.97-1.03 (measured
+#: 2026-09-28), so half is far below agreement and far above stillness.
+_MOVED_TOO_RATIO = 0.5
+
+
+def _why_unmatched(run, own_gaze, other_gaze, other_mask, other_runs) -> str:
+    """Why the other eye found nothing for this own saccade.
+
+    1. `_MISSING`: the other eye's data was withheld somewhere in `[start,
+       stop)`, so the conjunction could not have held the event whatever
+       that eye did. Tried first.
+    2. `_NEAR_MISS`: the other eye has a saccadic run within
+       `_NEAR_MISS_SAMPLES` of it, the same movement placed apart.
+    3. `_MISSED`: the other eye's displacement over the same samples is at
+       least `_MOVED_TOO_RATIO` of the own eye's; it moved, and its detector
+       did not call it.
+    4. `_STILL`: otherwise, including an own run with no displacement.
+
+    Displacement is endpoint to endpoint, as `measure.py::amplitude` reads
+    it. Generic over anything with `.start`/`.stop`/`.label`, like
+    `_kind_agreement`."""
+    start, stop = run.start, run.stop
+    if any(label is not None for label in other_mask[start:stop]):
+        return _MISSING
+    for other in other_runs:
+        if (_kind_of(other.label) == "saccadic" and other.start < stop + _NEAR_MISS_SAMPLES
+                and other.stop > start - _NEAR_MISS_SAMPLES):
+            return _NEAR_MISS
+    own = float(np.hypot(*(own_gaze[stop - 1] - own_gaze[start])))
+    moved = float(np.hypot(*(other_gaze[stop - 1] - other_gaze[start])))
+    if own > 0.0 and moved / own >= _MOVED_TOO_RATIO:
+        return _MISSED
+    return _STILL
+
+
 def test_saccade_and_microsaccade_are_one_kind_to_the_agreement_statistic():
     """`KIND_OF` (`eye/detect/labels.py`) maps both to `"saccadic"`, so the
     conjunction intersects a left `saccade` with a right `microsaccade` and
@@ -1246,6 +1295,65 @@ def test_the_dropped_tally_counts_both_reasons_the_rule_discards_a_run():
     assert counts.dropped_by_kind() == Counter({"saccadic": 1, Label.PSO.value: 1})
 
 
+# -- Why one eye alone detects a saccade (2026-09-28) ---------------------------
+#
+# The 225/337 saccades one eye found and the other did not are sorted by what
+# the other eye was doing over the same samples.
+
+
+def _eye(n=40, step=None):
+    """Gaze at rest, or stepping `size` degrees right over `[start, stop)`."""
+    gaze = np.zeros((n, 2))
+    if step is not None:
+        start, stop, size = step
+        gaze[start:stop, 0] = np.linspace(size / (stop - start), size, stop - start)
+        gaze[stop:, 0] = size
+    return gaze
+
+
+def _open_mask(n=40):
+    return np.full(n, None, dtype=object)
+
+
+def test_an_unmatched_saccade_over_the_other_eyes_withheld_data_is_missing_data():
+    """First, and ahead of everything else: with the other eye withheld, the
+    conjunction could not have held the event whatever that eye did."""
+    from wl_preproc.eye.detect.labels import Run
+
+    run = Run(10, 16, Label.SACCADE)
+    mask = _open_mask()
+    mask[12] = Label.INVALID
+    other_runs = [Run(18, 22, Label.SACCADE)]  # a near miss too, which must not win
+    assert _why_unmatched(run, _eye(step=(10, 16, 1.0)), _eye(step=(10, 16, 1.0)), mask, other_runs) == _MISSING
+
+
+def test_an_unmatched_saccade_with_the_other_eyes_saccade_just_outside_it_is_a_near_miss():
+    from wl_preproc.eye.detect.labels import Run
+
+    run = Run(10, 16, Label.SACCADE)
+    near = [Run(16 + _NEAR_MISS_SAMPLES - 1, 30, Label.SACCADE)]
+    far = [Run(16 + _NEAR_MISS_SAMPLES, 30, Label.SACCADE)]
+    fixation = [Run(16, 20, Label.FIXATION)]
+    assert _why_unmatched(run, _eye(step=(10, 16, 1.0)), _eye(), _open_mask(), near) == _NEAR_MISS
+    assert _why_unmatched(run, _eye(step=(10, 16, 1.0)), _eye(), _open_mask(), far) == _STILL
+    assert _why_unmatched(run, _eye(step=(10, 16, 1.0)), _eye(), _open_mask(), fixation) == _STILL
+
+
+@pytest.mark.parametrize("other_size, why", [(0.6, "missed"), (0.5, "missed"), (0.4, "still")])
+def test_the_other_eye_moved_too_at_half_the_own_eyes_displacement_or_more(other_size, why):
+    from wl_preproc.eye.detect.labels import Run
+
+    run = Run(10, 16, Label.SACCADE)
+    got = _why_unmatched(run, _eye(step=(10, 16, 1.0)), _eye(step=(10, 16, other_size)), _open_mask(), [])
+    assert got == {"missed": _MISSED, "still": _STILL}[why]
+
+
+def test_an_own_saccade_with_no_displacement_is_still_not_an_error():
+    from wl_preproc.eye.detect.labels import Run
+
+    assert _why_unmatched(Run(10, 16, Label.SACCADE), _eye(), _eye(step=(10, 16, 1.0)), _open_mask(), []) == _STILL
+
+
 def test_the_expected_pair_shares_are_the_product_of_the_two_kind_mixes():
     """What the breakdown must be read against.
 
@@ -1396,10 +1504,14 @@ class _Trace:
     fixation-fill rather than this detector's real output.
     """
 
-    def __init__(self, name: str, runs: list, fs_hz: float):
+    def __init__(self, name: str, runs: list, fs_hz: float, gaze=None, mask=None):
         self.name = name
         self.runs = runs
         self.fs_hz = fs_hz
+        #: The gaze and validity mask the runs were detected on, for
+        #: `_why_unmatched`.
+        self.gaze = gaze
+        self.mask = mask
         self.saccades = [run for run in runs if run.label == Label.SACCADE]
         self.glissades = [run for run in runs if run.label == Label.PSO]
         # The paper's own tau_min (Table 2), in samples at this recording's
@@ -1459,7 +1571,7 @@ def reference():
             raw[eye_name], quality[column], recording.fs_hz, recording.frame_gaps, scale
         )
         runs = detect_nystrom_holmqvist(gaze, v, mask, recording.fs_hz, DEFAULT_NH_PARAMS)
-        return _Trace(eye_name, runs, recording.fs_hz)
+        return _Trace(eye_name, runs, recording.fs_hz, gaze=gaze, mask=mask)
 
     return {
         "sample": sample,
@@ -1954,3 +2066,42 @@ def test_remodnav_finds_a_comparable_number_of_saccades(reference, capsys):
             "(spec section 5), so this is not automatically a defect, but a "
             "gap this wide is worth looking at before trusting either count."
         )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
+    """The 225/337 saccades one eye found and the other did not
+    (`docs/handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`),
+    sorted by what the other eye was doing over the same samples
+    (`_why_unmatched`). Measured 2026-09-28:
+
+    | | left -> right | right -> left |
+    |---|---|---|
+    | the other eye's data was withheld | 121 | 169 |
+    | the other eye's saccade was just outside it | 19 | 12 |
+    | the other eye moved too, undetected | 32 | 104 |
+    | the other eye did not move | 53 | 52 |
+
+    Only the middle two rows are real saccades the binocular rule loses:
+    about 1% and 2.2% of each eye's saccades. The largest row is missing
+    data, not disagreement, and it is asserted to stay the largest. The
+    still row's events have a median peak velocity of 19-28 deg/s, against
+    118 for saccades both eyes found: noise the rule should drop.
+    """
+    left, right = reference["traces"]
+    with capsys.disabled():
+        print("\n  why one eye alone detects a saccade (Nystrom-Holmqvist):")
+    for name, own, other in (("left->right", left, right), ("right->left", right, left)):
+        counts = _kind_agreement(own.runs, other.runs, NH_CONJUNCTION_FLOOR_SAMPLES)
+        alone = [run for run in counts.unmatched if _kind_of(run.label) == "saccadic"]
+        why = Counter(_why_unmatched(run, own.gaze, other.gaze, other.mask, other.runs) for run in alone)
+        saccades = sum(1 for run in own.runs if _kind_of(run.label) == "saccadic")
+        with capsys.disabled():
+            print(f"    {name}: {len(alone)} of {saccades} saccades unmatched")
+            for reason in (_MISSING, _NEAR_MISS, _MISSED, _STILL):
+                print(f"      {reason:45} {why[reason]:5d}  ({why[reason] / saccades:.2%} of saccades)")
+        assert sum(why.values()) == len(alone), name
+        assert why.most_common(1)[0][0] == _MISSING, (name, why)
