@@ -164,7 +164,12 @@ status:
     cross-detector decision still open;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
     `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
-    (4) measuring which of the 225/337 unmatched saccades are real.
+    (4) measuring which of the 225/337 unmatched saccades are real --
+    DONE 2026-09-28: half is missing data in the other eye, mostly at blink
+    edges; real saccades the binocular rule loses are about 1% (left) and
+    2.2% (right). Next, the requester's decision the same day: the
+    both-eyes trace falls back to the usable eye where one is missing, with
+    a per-eye missingness trace (its own spec first).
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised

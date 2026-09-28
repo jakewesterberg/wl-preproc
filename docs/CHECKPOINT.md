@@ -356,10 +356,30 @@ requester chose to merge the same day; true when written.*
 >    test_nystrom_holmqvist_validation.py` is gone, and the kind-map tests
 >    moved to `tests/eye/detect/test_labels.py`, so the 3.13 cross-check
 >    (no DataJoint) runs them too.
-> 4. **Which of the 225/337 unmatched saccades are real.** One eye detects a
->    saccade the other misses entirely — essentially the whole 4.6–6.9%
->    saccade cost. A measurement that refines a number already in hand, so it
->    ranks below the code items.
+> 4. **DONE 2026-09-28: which of the 225/337 unmatched saccades are real.**
+>    Mostly not a disagreement at all. Nyström–Holmqvist's one-eye-only
+>    saccades, sorted by what the other eye was doing:
+>    - the other eye's data was withheld: 121 / 169;
+>    - it had a saccade within 20 ms: 19 / 12;
+>    - it moved too but went undetected: 32 / 104;
+>    - it did not move: 53 / 52.
+>
+>    Half is missing data, mostly at blink edges; the still-eye events are
+>    noise. Real saccades the binocular rule loses come to about 1% (left)
+>    and 2.2% (right). Pinned by `test_why_one_eye_alone_detects_a_saccade`;
+>    see `docs/handoffs/2026-09-28-why-one-eye-alone.md`.
+>
+>    *Until 2026-09-28 this item asked the question; true when written.*
+>
+>    **Next, the requester's decision of 2026-09-28: the both-eyes trace
+>    falls back to the good eye where one eye is missing, and each eye gets
+>    a missingness trace beside it.** Today, where one eye is missing, the
+>    both-eyes trace holds no event. It labels the gap from the left eye's
+>    mask alone, so 1.8% of the reference recording (right eye missing) reads
+>    as `fixation`. The requester chose to use the usable eye's data there,
+>    with a per-eye missingness trace so it is always visible whether the
+>    trace draws on the left eye, the right eye, or both. It changes what
+>    the stored both-eyes trace means, so it gets its own spec first.
 >
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
