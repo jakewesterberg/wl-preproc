@@ -87,6 +87,17 @@ monocular session has no both-eyes trace, only the usable eye's own.
 - **One-eye events,** whether in a one-eye stretch or kept at a mask edge,
   are measured as their own eye's row is (§2).
 
+*Ruled 2026-09-28, while building: a two-eye event can continue into a
+stretch where one eye is withheld.*
+- *There, §1 gives the conjunction the usable eye's label, so the two-eye
+  run and that continuation share a label and are stored as one run.*
+- *Such a run is measured on whichever eye was usable throughout it, the left
+  first as for every two-eye event.*
+- *If neither eye was usable throughout it, it is stored unmeasured, never
+  measured on a withheld sample.*
+- *Cost if wrong: such a run is measured on the right eye where it would
+  otherwise have been the left, or left unmeasured.*
+
 The per-eye traces are unchanged.
 
 ## 4. The "which eye" trace
