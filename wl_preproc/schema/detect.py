@@ -106,6 +106,7 @@ from wl_preproc.eye.detect.labels import (
     kind_of,
     labels_from_runs,
     runs_from_labels,
+    true_runs,
 )
 from wl_preproc.schema import DEFAULT_PREFIX, core, paramset, pipeline
 
@@ -1023,6 +1024,101 @@ def _always(label: Label) -> Callable[[int, int], Label]:
     FLOOR is what is under test and which label a surviving span carries is
     not."""
     return lambda _start, _stop: label
+
+
+def _conjunction_fallback(left, right, left_offered, right_offered, min_duration_samples):
+    """The one-eye events the conjunction keeps, and which eye each of its
+    samples draws on (design spec `2026-09-28-both-eyes-fallback-design.md`
+    sections 2 and 4).
+
+    **An own-eye run is kept, whole,** when its kind is one the conjunction
+    carries, the other eye has no same-kind run overlapping it by
+    `min_duration_samples`, and the other eye's mask withholds at least one
+    of its samples: the other eye could not have confirmed it. Two such runs
+    from the two eyes that overlap or touch are both dropped. Over an
+    overlap both eyes were usable and the two-eye rule did not accept them;
+    touching runs of one label would merge into one stored run.
+
+    Returns `(kept, source)`: `kept` as `(eye, run)` in time order, and
+    `source` a per-sample object array of `both`, `left`, `right` or
+    `neither` -- which eyes were usable, with each kept run marked by its
+    own eye along its whole length."""
+    floor = max(int(min_duration_samples), 1)
+    usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
+              "right": np.array([label is None for label in right_offered], dtype=bool)}
+    runs = {"left": sorted(left, key=lambda run: run.start), "right": sorted(right, key=lambda run: run.start)}
+    withheld_before = {eye: np.concatenate(([0], np.cumsum(~usable[eye]))) for eye in usable}
+    stops = {eye: np.array([run.stop for run in runs[eye]], dtype=np.int64) for eye in runs}
+
+    def overlapping(run, eye):
+        """`eye`'s runs overlapping or touching `run` -- per-eye runs are
+        disjoint and sorted, so they are one contiguous slice."""
+        index = int(np.searchsorted(stops[eye], run.start, side="left"))
+        while index < len(runs[eye]) and runs[eye][index].start <= run.stop:
+            yield runs[eye][index]
+            index += 1
+
+    def matched(run, other_eye) -> bool:
+        kind = kind_of(run.label)
+        return any(kind_of(other.label) == kind
+                   and min(run.stop, other.stop) - max(run.start, other.start) >= floor
+                   for other in overlapping(run, other_eye))
+
+    candidates = {"left": [], "right": []}
+    for eye, other_eye in (("left", "right"), ("right", "left")):
+        for run in runs[eye]:
+            if (kind_of(run.label) is not None
+                    and withheld_before[other_eye][run.stop] > withheld_before[other_eye][run.start]
+                    and not matched(run, other_eye)):
+                candidates[eye].append(run)
+
+    candidate_stops = {eye: np.array([run.stop for run in candidates[eye]], dtype=np.int64)
+                       for eye in candidates}
+
+    def clashes(run, other_eye) -> bool:
+        index = int(np.searchsorted(candidate_stops[other_eye], run.start, side="left"))
+        return index < len(candidates[other_eye]) and candidates[other_eye][index].start <= run.stop
+
+    kept = sorted(
+        [(eye, run) for eye, other_eye in (("left", "right"), ("right", "left"))
+         for run in candidates[eye] if not clashes(run, other_eye)],
+        key=lambda pair: pair[1].start,
+    )
+
+    source = np.full(len(usable["left"]), "neither", dtype=object)
+    source[usable["left"] & usable["right"]] = "both"
+    source[usable["left"] & ~usable["right"]] = "left"
+    source[~usable["left"] & usable["right"]] = "right"
+    for eye, run in kept:
+        source[run.start:run.stop] = eye
+    return kept, source
+
+
+def _one_eye_pieces(left, right, left_offered, right_offered) -> list[Run]:
+    """Each eye's runs, cut to the samples where that eye alone was usable
+    (design spec `2026-09-28-both-eyes-fallback-design.md` section 1): where
+    only one eye has data, the conjunction takes that eye's labels. A piece
+    of a run matched elsewhere joins the two-eye run beside it when they
+    share a label."""
+    usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
+              "right": np.array([label is None for label in right_offered], dtype=bool)}
+    pieces: list[Run] = []
+    for eye, other_eye, runs in (("left", "right", left), ("right", "left", right)):
+        alone = usable[eye] & ~usable[other_eye]
+        for run in runs:
+            for start, stop in true_runs(alone[run.start:run.stop]):
+                pieces.append(Run(start=run.start + start, stop=run.start + stop, label=run.label))
+    return pieces
+
+
+def _value_runs(values: np.ndarray) -> list[tuple[int, int, object]]:
+    """Maximal `(start, stop, value)` runs of a per-sample array, tiling it."""
+    runs, start = [], 0
+    for index in range(1, len(values) + 1):
+        if index == len(values) or values[index] != values[start]:
+            runs.append((start, index, values[start]))
+            start = index
+    return runs
 
 
 def _conjunction_runs(
