@@ -374,6 +374,10 @@ requester chose to merge the same day; true when written.*
 >    withheld samples: 10% (left) and 19% (right) of its saccades. The
 >    requester chose a guard in `registry.Detector.detect`, built on
 >    `fix/runs-stay-on-usable-data` and NOT merged as written.
+>    *Merged 2026-09-28 as `978a3a3`: CI green on both interpreters, 1733
+>    passed on each with 31 skipped (`gh run view 36415852458`), and the
+>    manifest check green. The measurement itself merged earlier the same
+>    day as `a80e061`, CI green.*
 >    - It trims a run with withheld samples at its ends, drops one spanning
 >      a withheld stretch, and drops a glissade whose saccade was dropped or
 >      end-trimmed.
@@ -387,15 +391,18 @@ requester chose to merge the same day; true when written.*
 >
 >    *Until 2026-09-28 this item asked the question; true when written.*
 >
->    **Next, the requester's decision of 2026-09-28: the both-eyes trace
->    falls back to the good eye where one eye is missing, and each eye gets
->    a missingness trace beside it.** Today, where one eye is missing, the
->    both-eyes trace holds no event. It labels the gap from the left eye's
->    mask alone, so 1.8% of the reference recording (right eye missing) reads
->    as `fixation`. The requester chose to use the usable eye's data there,
->    with a per-eye missingness trace so it is always visible whether the
->    trace draws on the left eye, the right eye, or both. It changes what
->    the stored both-eyes trace means, so it gets its own spec first.
+>    **The both-eyes trace now falls back to the usable eye (the requester's
+>    decisions of 2026-09-28), BUILT on `spec/both-eyes-fallback` and NOT
+>    merged as written.** Where only one eye is usable, it takes that eye's
+>    labels. A one-eye event the other eye could not have seen is kept
+>    whole: 542 left and 186 right saccades for Nyström–Holmqvist, and
+>    191–1,091 per eye for the other detectors. `EyeDetection.Source`
+>    records which eye each stretch came from. See
+>    `docs/handoffs/2026-09-28-both-eyes-fallback.md`.
+>
+>    *Until then this paragraph said the both-eyes trace holds no event
+>    where one eye is missing, and labels that gap from the left eye's mask
+>    alone; true when written.*
 >
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`

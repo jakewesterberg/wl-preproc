@@ -122,6 +122,11 @@ using the usable eye's data where only one eye is usable. They also asked for
 **a missingness trace for each eye**, so it is always visible whether the
 both-eyes trace draws on the left eye, the right eye, or both.
 
+*Built 2026-09-28 on `spec/both-eyes-fallback`; see handoff
+`2026-09-28-both-eyes-fallback.md`. The "missingness trace for each eye" was
+ruled into one "which eye" trace, `EyeDetection.Source` (the requester's
+choice the same day).*
+
 This changes what the stored both-eyes trace means:
 - the binocular criterion where both eyes are usable, one eye elsewhere;
 - which gaze its events are measured on;

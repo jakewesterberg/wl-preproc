@@ -40,6 +40,13 @@ same shape as the per-eye traces it is built from, and `pso_as` stays where
 **A conjunction run is the temporal intersection of two runs of the same
 kind, and it carries that kind's label.**
 
+> *Amended 2026-09-28 (spec `2026-09-28-both-eyes-fallback-design.md`, the
+> requester's decisions): this rule holds where both eyes are usable. Where
+> only one eye is usable, the conjunction carries that eye's own labels. A
+> one-eye event is kept whole when the other eye's data was withheld during
+> it and the other eye has no counterpart of its kind. `EyeDetection.Source`
+> records which eye each stretch came from.*
+
 `saccade` and `microsaccade` are **one** kind. §1 calls them *"a split, not a
 ranking"* — the same event distinguished only by size — so they intersect
 together and the surviving span is labelled by `classify` on its own measured
