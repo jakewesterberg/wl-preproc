@@ -126,16 +126,18 @@ NULL_GLISSADE_RATE_CEILING = 0.10
 #: test plants; 0.25 is headroom under it rather than a bound tuned to clear.
 NULL_KIND_DISAGREEMENT_FLOOR = 0.25
 
-#: The conjunction's duration floor for THIS detector, in samples.
-#: `schema/detect.py::_min_duration_samples` reads `min_duration_samples` off
-#: the detector's own params with `getattr(..., 1)`. That field belongs to
-#: `EngbertKlieglParams`; `NystromHolmqvistParams` states its durations in
-#: milliseconds and has none -- so Nystrom-Holmqvist's conjunction admits a
-#: ONE-sample binocular event where Engbert-Kliegl's requires six. Measured
-#: rather than assumed (`_min_duration_samples(DEFAULT_NH_PARAMS)` returns 1),
-#: and restated as a literal here because this file imports nothing from
-#: `wl_preproc.schema`.
-NH_CONJUNCTION_FLOOR_SAMPLES = 1
+#: The conjunction's duration floor for THIS detector, in samples:
+#: Nystrom-Holmqvist's own 10 ms minimum saccade, counted as it counts it,
+#: `round(10 * 498.55 / 1000)` = 5 at the reference recording's rate
+#: (`schema/detect.py::_min_duration_samples`, the requester's decision of
+#: 2026-09-28). Restated as a literal here because this file imports nothing
+#: from `wl_preproc.schema`.
+#:
+#: *Until 2026-09-28 it was 1: the floor read only Engbert-Kliegl's
+#: `min_duration_samples`, and Nystrom-Holmqvist's conjunction admitted a
+#: ONE-sample binocular event. Every number recorded below before that date
+#: was measured at 1; true when written.*
+NH_CONJUNCTION_FLOOR_SAMPLES = 5
 
 #: REMoDNaV oracle comparison, restricted to a leading slice of the
 #: recording rather than the full ~39 minutes / 1.17M samples -- following
@@ -2085,19 +2087,24 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
     sorted by what the other eye was doing over the same samples
     (`_why_unmatched`). Measured 2026-09-28, through the registry's
     `detect` as the pipeline stores it, so after the usable-data guard
-    (`registry.py::_within_usable`):
+    (`registry.py::_within_usable`), at the conjunction's floor of 5
+    samples (`NH_CONJUNCTION_FLOOR_SAMPLES`):
 
     | | left -> right | right -> left |
     |---|---|---|
-    | unmatched, of the eye's saccades | 676 of 4,641 | 420 of 4,384 |
-    | the other eye's data was withheld | 542 | 185 |
-    | the other eye's saccade was just outside it | 9 | 10 |
+    | unmatched, of the eye's saccades | 691 of 4,641 | 437 of 4,384 |
+    | the other eye's data was withheld | 552 | 189 |
+    | the other eye's saccade was just outside it | 13 | 22 |
     | the other eye moved too, undetected | 61 | 164 |
-    | the other eye did not move | 64 | 61 |
+    | the other eye did not move | 65 | 62 |
 
     Only the middle two rows are real saccades the binocular rule loses:
-    about 1.5% and 4.0% of each eye's saccades. The largest row is missing
+    about 1.6% and 4.2% of each eye's saccades. The largest row is missing
     data, not disagreement, and it is asserted to stay the largest.
+
+    *Measured the same day at the old floor of 1 sample: 676 and 420
+    unmatched (542/9/61/64 and 185/10/164/61), about 1.5% and 4.0%; true
+    when written.*
 
     *First measured the same day on the detector's raw output, before the
     guard: 225 of 5,062 and 337 of 5,213 unmatched (121/19/32/53 and

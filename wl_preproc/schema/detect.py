@@ -657,7 +657,7 @@ class EyeDetection(dj.Computed):
             # applies WITHIN a kind, so the conjunction trace carries the same
             # vocabulary as the two eyes it is built from. `_overlapping` is
             # the single-kind primitive underneath it.
-            floor = _min_duration_samples(detector_params)
+            floor = _min_duration_samples(detector_params, fs_hz)
             conjunction_spans = _conjunction_runs(
                 spans["left"],
                 spans["right"],
@@ -1537,23 +1537,37 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     return label_for
 
 
-def _min_duration_samples(detector_params) -> int:
+def _min_duration_samples(detector_params, fs_hz: float) -> int:
     """The floor `_overlapping` inherits from the detector that produced both
     eyes' spans -- the SAME params object the detector actually ran with, not
     a second reading of the paramset dict.
 
-    `getattr` with a default of 1, rather than a bare attribute access,
-    because `min_duration_samples` is a field of `EngbertKlieglParams` and
-    not part of `registry.Detector.run`'s own contract: stage 2's six other
-    detectors (design spec section 3.1) each bring their own params
-    dataclass, and some of them have no minimum duration to declare. 1 is
-    the honest floor for such a detector -- it would itself have accepted a
-    one-sample run, so the rule "never shorter than either eye's own
-    detector would have accepted" is satisfied by admitting one here too --
-    and it is also the weakest value that keeps `measure`'s `stop > start`
-    precondition true.
+    **The detector's own declared minimum, and never less than 2 samples**
+    (the requester's decision of 2026-09-28):
+    - `min_duration_samples` where the params declare it (Engbert-Kliegl's
+      6);
+    - otherwise `min_saccade_duration_ms`, counted in samples as the
+      detectors that declare it count it, `round(ms * fs_hz / 1000)`
+      (Nystrom-Holmqvist's and REMoDNaV's 10 ms: 5 samples at the rig's
+      498.55 Hz);
+    - otherwise nothing, so the lab-wide 2.
+
+    A single-sample event's amplitude is 0.0 deg by construction
+    (`measure`'s `gaze_deg[stop - 1] - gaze_deg[start]`), so no two-eye
+    event may be one sample, whatever its detector would accept.
+
+    *Until 2026-09-28 only `min_duration_samples` was read, with a default
+    of 1: the other five detectors' two-eye events could be one sample
+    long, and Nystrom-Holmqvist's and REMoDNaV's 10 ms minimums, declared
+    in milliseconds, were never seen. On the reference recording that
+    stored 3-26 two-eye saccades per detector at exactly 0.0 deg; true when
+    written.*
     """
-    return int(getattr(detector_params, "min_duration_samples", 1))
+    declared = getattr(detector_params, "min_duration_samples", None)
+    if declared is None:
+        minimum_ms = getattr(detector_params, "min_saccade_duration_ms", None)
+        declared = 1 if minimum_ms is None else int(round(minimum_ms * fs_hz / 1000.0))
+    return max(int(declared), 2)
 
 
 def _params_for(detector, params: dict):

@@ -157,6 +157,14 @@ requester chose to merge the same day; true when written.*
 >    three.* *BMD's conjunction has the one-sample floor too (BMD spec §4 and
 >    §8 item 8), so five detectors now share it.*
 >
+>    *Decided 2026-09-28 (the requester), on `fix/conjunction-floor`, NOT
+>    merged as written: a two-eye event is at least as long as the
+>    detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+>    Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+>    samples at 498.55 Hz) -- and never a single sample, for any detector
+>    (`schema/detect.py::_min_duration_samples`; handoff
+>    `2026-09-28-conjunction-floor.md`).*
+>
 >    *Until 2026-09-27 this item also named NSLR here, alongside Bayesian
 >    microsaccade detection, gave U'n'Eye as the third unwritten detector, and
 >    named the floor as inherited by two detectors; true when written.*

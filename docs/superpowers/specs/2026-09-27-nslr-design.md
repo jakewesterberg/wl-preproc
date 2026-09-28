@@ -700,6 +700,13 @@ verbatim from `nslr_hmm.py` 39–42.
    `min_duration_samples`, and 7 of its 3,888 conjunction rows on the
    reference recording are one sample long. So "three detectors" above
    undercounts by one (measured in the conjunction round, 2026-09-27).*
+
+   *Decided 2026-09-28 (the requester): a two-eye event is at least as long
+   as the detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+   Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+   samples at 498.55 Hz) -- and never a single sample, for any detector
+   (`schema/detect.py::_min_duration_samples`; handoff
+   `2026-09-28-conjunction-floor.md`).*
 5. **Exact-float termination across platforms.** §1.4's stopping rule is exact,
    so a platform whose `log` differs by an ULP could take a different number of
    passes. Fidelity is proved on CI's platform and this machine's; the guard

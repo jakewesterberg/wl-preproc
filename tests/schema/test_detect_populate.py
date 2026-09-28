@@ -2148,7 +2148,7 @@ def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
     # Read off the detector's own defaults, then pinned: the arithmetic below
     # is written against a floor of 6 and would be silently vacuous at 1.
     assert floor == 6
-    assert _min_duration_samples(DEFAULT_EK_PARAMS) == floor
+    assert _min_duration_samples(DEFAULT_EK_PARAMS, 500.0) == floor
 
     def sacc(start, stop):
         return Run(start, stop, Label.SACCADE)
@@ -2168,7 +2168,7 @@ def test_the_conjunction_inherits_the_detectors_own_minimum_duration():
     assert _overlapping([sacc(100, 130)], [sacc(105, 140)], floor, saccade) == [sacc(105, 130)]
 
 
-def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor():
+def test_a_detector_declaring_no_minimum_duration_gets_two_samples():
     """Stage 2's six other detectors (design spec section 3.1) each bring
     their own params dataclass, and `min_duration_samples` is a field of
     `EngbertKlieglParams` rather than part of `registry.Detector.run`'s
@@ -2181,6 +2181,11 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     the weakest value that keeps `measure`'s own `stop > start` precondition
     true, which is why `_overlapping` floors at 1 rather than trusting the
     number it is handed.
+
+    *Since the requester's decision of 2026-09-28 the answer is 2, not 1:
+    no detector's two-eye event may be a single sample, whose amplitude is
+    0.0 deg by construction. The paragraph above was true when written;
+    `_overlapping`'s own floor of 1, below, is unchanged.*
     """
     from dataclasses import dataclass
 
@@ -2191,7 +2196,7 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     class _NoFloorParams:
         threshold_deg_s: float
 
-    assert _min_duration_samples(_NoFloorParams(threshold_deg_s=30.0)) == 1
+    assert _min_duration_samples(_NoFloorParams(threshold_deg_s=30.0), 500.0) == 2
 
     def sacc(start, stop):
         return Run(start, stop, Label.SACCADE)
@@ -2203,6 +2208,37 @@ def test_a_detector_declaring_no_minimum_duration_gets_the_weakest_honest_floor(
     assert _overlapping([sacc(0, 10)], [sacc(9, 20)], 1, saccade) == [sacc(9, 10)]
     # And a paramset naming 0 cannot weaken it into a span `measure` refuses.
     assert _overlapping([sacc(0, 10)], [sacc(10, 20)], 0, saccade) == []
+
+
+@pytest.mark.parametrize("detector_name, floor", [
+    ("engbert_kliegl", 6), ("otero_millan", 2), ("nystrom_holmqvist", 5),
+    ("remodnav", 5), ("nslr", 2), ("bmd", 2),
+])
+def test_each_detectors_two_eye_floor_is_its_own_minimum_and_never_one_sample(detector_name, floor):
+    """The requester's decision of 2026-09-28: a two-eye event is at least
+    as long as the detector's own declared minimum -- Engbert-Kliegl's 6
+    samples, Nystrom-Holmqvist's and REMoDNaV's 10 ms -- and never a single
+    sample, for any detector. At the rig's 498.55 Hz 10 ms is 5 samples.
+    Before it, only Engbert-Kliegl's minimum was read, and the other five
+    detectors' two-eye events could be one sample long, at 0.0 deg."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _eye_detection_params, _min_duration_samples, _params_for
+
+    detector = get_detector(detector_name)
+    assert _min_duration_samples(_params_for(detector, _eye_detection_params(detector)), 498.55) == floor
+
+
+@pytest.mark.parametrize("fs_hz", [250.0, 498.55, 1000.0, 2000.0])
+def test_a_millisecond_minimum_is_counted_in_samples_as_the_detector_counts_it(fs_hz):
+    """REMoDNaV turns its 10 ms minimum saccade into samples with its own
+    `_Samples.at`; the two-eye floor counts it the same way, so the
+    conjunction never admits an event its own eyes' detector would not.
+    Still never below 2 samples (at 250 Hz, 10 ms rounds to 2)."""
+    from wl_preproc.eye.detect.remodnav import DEFAULT_REMODNAV_PARAMS, _Samples
+    from wl_preproc.schema.detect import _min_duration_samples
+
+    own = _Samples.at(DEFAULT_REMODNAV_PARAMS, fs_hz).min_saccade
+    assert _min_duration_samples(DEFAULT_REMODNAV_PARAMS, fs_hz) == max(own, 2)
 
 
 def test_a_left_fixation_never_crosses_a_right_saccade():
@@ -4736,7 +4772,7 @@ def _stored_conjunction(detector_name, left, right, gaze, v, left_offered, right
 
     detector = get_detector(detector_name)
     params = _eye_detection_params(detector)
-    floor = _min_duration_samples(_params_for(detector, params))
+    floor = _min_duration_samples(_params_for(detector, params), 500.0)
     two_eye = _conjunction_runs(left, right, floor, _conjunction_label(detector, params, gaze))
     intervals, kept, _source, fill = _conjunction_parts(two_eye, left, right, left_offered, right_offered)
     eyes = {"left": (gaze, v, left_offered), "right": (gaze, v, right_offered)}

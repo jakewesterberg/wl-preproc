@@ -552,6 +552,13 @@ left CI red on 3.13 alone for a day while every local run was green.
    conjunction. The measurement above uses 1, matching what the conjunction
    really does for this detector.
 
+   *Decided 2026-09-28 (the requester): a two-eye event is at least as long
+   as the detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+   Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+   samples at 498.55 Hz) -- and never a single sample, for any detector
+   (`schema/detect.py::_min_duration_samples`; handoff
+   `2026-09-28-conjunction-floor.md`).*
+
    **One drift risk taken on deliberately.** The measurement lives in
    `tests/eye/`, which imports nothing from `wl_preproc.schema` (that file's
    own docstring: the 3.13 cross-check runs it with `--noconftest` in a venv

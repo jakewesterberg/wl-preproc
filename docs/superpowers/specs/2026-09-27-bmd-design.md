@@ -767,6 +767,14 @@ settings.
 8. **BMD's one-sample conjunction rows.** On the drifting session one BMD
    conjunction microsaccade was one sample long, and so stored at 0.0°: the
    shared one-sample floor (NSLR spec §8 item 4), now met by BMD too.
+
+   *Decided 2026-09-28 (the requester): a two-eye event is at least as long
+   as the detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+   Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+   samples at 498.55 Hz) -- and never a single sample, for any detector
+   (`schema/detect.py::_min_duration_samples`; handoff
+   `2026-09-28-conjunction-floor.md`).*
+
 9. **Small steps can still split on a drifting eye.** Drift reduces BMD's
    splitting of a small step; it does not remove it. On one drifting seed the
    0.75° step came back as three detections.

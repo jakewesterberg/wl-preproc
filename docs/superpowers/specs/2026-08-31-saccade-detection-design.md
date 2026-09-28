@@ -556,6 +556,13 @@ binocular name.
 > whole. The fallback is not silent: `EyeDetection.Source` names the eye
 > each stretch came from, `both`, `left`, `right` or `neither`.*
 
+> *Decided 2026-09-28 (the requester): a two-eye event is at least as long
+> as the detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+> Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+> samples at 498.55 Hz) -- and never a single sample, for any detector
+> (`schema/detect.py::_min_duration_samples`; handoff
+> `2026-09-28-conjunction-floor.md`).*
+
 ---
 
 ## 5. Storage: runs as rows

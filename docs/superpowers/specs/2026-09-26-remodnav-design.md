@@ -810,6 +810,14 @@ Nothing else is claimed as a reason for it here.
    checks Engbert–Kliegl only, so nothing fails. Two millisecond-based
    detectors now inherit the one-sample floor: Nyström–Holmqvist and
    REMoDNaV.
+
+   *Decided 2026-09-28 (the requester): a two-eye event is at least as long
+   as the detector's own declared minimum -- Engbert–Kliegl's 6 samples,
+   Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
+   samples at 498.55 Hz) -- and never a single sample, for any detector
+   (`schema/detect.py::_min_duration_samples`; handoff
+   `2026-09-28-conjunction-floor.md`).*
+
 5. **Runtime. Answered 2026-09-26 (Task 6): it is fast.** The whole reference
    recording is 1,177,799 samples per eye at 498.55 Hz, about 39 minutes.
    `detect_remodnav` classified it in 2.5 s (left, 12,613 runs) and 2.6 s
