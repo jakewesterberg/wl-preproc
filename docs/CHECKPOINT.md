@@ -1,15 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-09-28**, describing `main` at `dda2de3` — the merge of
-`spec/both-eyes-fallback`: where one eye's data is missing, the both-eyes
-trace uses the other eye, keeps whole any event the other eye was withheld
-during, and stores which eye each stretch came from in `EyeDetection.Source`
-(design spec `superpowers/specs/2026-09-28-both-eyes-fallback-design.md`).
-`dda2de3`'s tree is byte-identical to the tested branch head `65501b9`: 1758
-passed on 3.11 and 1757 on 3.13 locally, 0 failed. CI read off `dda2de3` itself: green on both
-interpreters, 1757 passed on each with 32 skipped, and the manifest check
-green — `gh run view 36434229836`. CI on later heads is recorded here only
+**Last updated 2026-09-28**, describing `main` at `cadef7e` — the merge of
+`fix/conjunction-floor`: a two-eye event in the both-eyes trace is at least as
+long as its detector's own minimum, and never one sample (the requester's
+decision; handoff `handoffs/2026-09-28-conjunction-floor.md`). `cadef7e`'s
+tree is byte-identical to the tested branch head `0c64530`: 1768 passed on
+3.11 and 1767 on 3.13 locally, 0 failed. CI read off `cadef7e` itself: green on both
+interpreters, 1767 passed on each with 32 skipped, and the manifest check
+green — `gh run view 36449262350`. CI on later heads is recorded here only
 once read, not before.
+
+*This header named `dda2de3` — the both-eyes fallback merge, CI green, 1757
+passed on each interpreter, `36434229836` — until the floor merge; true when
+written.*
 
 *This header named `a8d26da` — the saccade geometry merge, CI
 `36393583335` — until the both-eyes merge. `main` had by then also taken the
@@ -157,8 +160,8 @@ requester chose to merge the same day; true when written.*
 >    three.* *BMD's conjunction has the one-sample floor too (BMD spec §4 and
 >    §8 item 8), so five detectors now share it.*
 >
->    *Decided 2026-09-28 (the requester), on `fix/conjunction-floor`, NOT
->    merged as written: a two-eye event is at least as long as the
+>    *Decided 2026-09-28 (the requester) and merged as `cadef7e`: a
+>    two-eye event is at least as long as the
 >    detector's own declared minimum -- Engbert–Kliegl's 6 samples,
 >    Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
 >    samples at 498.55 Hz) -- and never a single sample, for any detector

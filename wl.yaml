@@ -161,9 +161,8 @@ status:
     see `phase`. *Superseded 2026-09-27: BMD is BUILT and MERGED
     (`cfd6765`); see `phase`.* Three no-duration or millisecond-based detectors now
     inherit the conjunction's one-sample duration floor, which is a
-    cross-detector decision -- DECIDED 2026-09-28 on fix/conjunction-floor,
-    NOT merged as written: each detector's own minimum, never below 2
-    samples;
+    cross-detector decision -- DECIDED and MERGED 2026-09-28 (cadef7e):
+    each detector's own minimum, never below 2 samples;
     (3) moving `_KIND_OF` out of `schema/detect.py` into
     `eye/detect/labels.py` -- DONE 2026-09-26, one definition now;
     (4) measuring which of the 225/337 unmatched saccades are real --
@@ -422,8 +421,10 @@ status:
   # by which time the unmatched-saccades measurement (`a80e061`) and the
   # usable-data guard (`978a3a3`, CI green, run 36415852458) had also landed;
   # true when written.
+  # Was `dda2de3` until the conjunction floor merge `cadef7e` the same day
+  # (CI green on `dda2de3`, run 36434229836); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "dda2de3"
+  describes: "cadef7e"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
