@@ -394,10 +394,12 @@ requester chose to merge the same day; true when written.*
 >    **The both-eyes trace now falls back to the usable eye (the requester's
 >    decisions of 2026-09-28), BUILT on `spec/both-eyes-fallback` and NOT
 >    merged as written.** Where only one eye is usable, it takes that eye's
->    labels. A one-eye event the other eye could not have seen is kept
->    whole: 542 left and 186 right saccades for Nyström–Holmqvist, and
->    191–1,091 per eye for the other detectors. `EyeDetection.Source`
->    records which eye each stretch came from. See
+>    labels. An event the other eye could not see whole is kept whole, as
+>    the eye that saw it: 587 left and 205 right saccades for
+>    Nyström–Holmqvist, and 193–1,277 per eye for the other detectors.
+>    `EyeDetection.Source` records which eye each stretch came from. The
+>    final review found the plan's rule split an event the other eye lost
+>    mid-flight into two rows; fixed before merge. See
 >    `docs/handoffs/2026-09-28-both-eyes-fallback.md`.
 >
 >    *Until then this paragraph said the both-eyes trace holds no event

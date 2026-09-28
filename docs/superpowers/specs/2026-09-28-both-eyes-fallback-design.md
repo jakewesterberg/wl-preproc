@@ -81,6 +81,29 @@ no gaze at all, so the session is monocular. A "both-eyes" trace there
 would be a relabelled copy of the other eye's own trace. Cost if wrong: a
 monocular session has no both-eyes trace, only the usable eye's own.
 
+**Ruling (this spec's author, 2026-09-28, after the final review): the
+second condition is dropped.** An own-eye run of a carried kind is kept
+whole whenever the other eye's mask withholds at least one of its samples,
+whether or not the other eye saw part of it. The two-eye span inside it,
+the intersection of that run with the other eye's, gives way to it.
+- *Why:* the review (its C1) found that a two-eye event whose other eye
+  drops out mid-flight was stored as two events: the intersection, labelled
+  from its own amplitude, and a one-eye fragment, carrying the whole run's
+  label but measured on the fragment alone. On the reference recording that
+  was 356 Engbert–Kliegl events, and 67 Engbert–Kliegl, 34 Otero-Millan and
+  38 BMD rows whose label contradicted their amplitude, where before this
+  spec there were none.
+- *It is the requester's decision applied once more:* the other eye's data
+  was missing during the event, so the event is kept whole, as the eye that
+  saw all of it.
+- *With it,* every event where one eye alone is usable is kept whole, so §1's
+  one-eye row needs no separate rule: the kept runs are that eye's events,
+  and `fixation` fills between them.
+- *Cost if wrong:* such an event's extent and measurement come from the one
+  eye that saw it whole, not from the binocular intersection. A matched
+  pair whose eyes drop out at opposite ends clashes and keeps only its
+  intersection, as before this spec.
+
 ## 3. Measurement
 
 - **Two-eye events** are measured on the left eye's gaze, unchanged.
@@ -97,6 +120,15 @@ stretch where one eye is withheld.*
   measured on a withheld sample.*
 - *Cost if wrong: such a run is measured on the right eye where it would
   otherwise have been the left, or left unmeasured.*
+
+*Since the final review's fix (§2, the last ruling), a two-eye event no
+longer continues into a one-eye stretch: the eye that saw it whole is kept
+instead. A stored run now joins two intervals only where a kept run touches
+a same-label run from its own eye, which that eye's own trace merges the same
+way: 23 rows for Nyström–Holmqvist on the reference recording, none for the
+other five detectors. Six of them are a two-eye span that `_conjunction_runs`
+coalesced across two touching runs of one eye; it gives way only where the
+kept run covers it.*
 
 The per-eye traces are unchanged.
 
@@ -141,6 +173,23 @@ each label's data came from, not only which eyes were usable.
   *The which-eye trace is `neither` on 2.20% of samples for every detector,
   the masks' own share. It is `left` on 2.0–2.8% and `right` on 1.5–1.9%,
   since kept events add to the masks' 1.80% and 1.45%.*
+
+  *Re-measured 2026-09-28 after the final review's fix (§2, the last
+  ruling), which also keeps events the other eye saw only in part:*
+
+  | Detector | Left | Right | Runs dropped by the clash rule |
+  |---|---|---|---|
+  | Engbert–Kliegl | 1,218 | 748 | 108 |
+  | Otero-Millan | 642 | 228 | 10 |
+  | Nyström–Holmqvist | 587 | 205 | 0 |
+  | REMoDNaV | 594 | 193 | 37 |
+  | NSLR | 1,277 | 955 | 106 |
+  | BMD | 969 | 533 | 144 |
+
+  *Label/amplitude contradictions in the both-eyes trace stay at 0 for every
+  detector that splits by amplitude. The which-eye trace is still `neither`
+  on 2.20%. It is `both` on 92.7–93.8% for five detectors and 87.3% for
+  BMD, whose kept runs include its background label, `drift`.*
 - **Its `n_saccades` and `n_microsaccades`, and agreement scores computed on
   it, mix two-eye and one-eye events.** `EyeDetection.Source` separates them.
 - **Unchanged:**
