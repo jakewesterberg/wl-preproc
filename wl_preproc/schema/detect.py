@@ -165,6 +165,10 @@ class EyeValidity(dj.Computed):
     frac_frame_gap=null     : double
     frac_short_epoch=null   : double
     frac_non_finite=null    : double
+    # Not a criterion: the share of samples whose gaze was a tracker
+    # glitch, repaired before the mask was built and still usable
+    # (`eye/detect/glitch.py`, the requester's decision of 2026-09-28).
+    frac_glitch_repaired=null : double
     reason='' : varchar(255)
     """
 
@@ -246,7 +250,6 @@ class EyeValidity(dj.Computed):
         """Both eyes' mask for one session and one paramset."""
         from wl_preproc.eye.detect.validity import ValidityParams, validity_labels
         from wl_preproc.eye.detect.velocity import velocity
-        from wl_preproc.eye.gaze import gaze_trace
         from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
         from wl_preproc.schema import eye as eye_schema, ingest
 
@@ -283,7 +286,7 @@ class EyeValidity(dj.Computed):
                               "no usable calibration, so gaze is undefined"})
                 continue
 
-            gaze = gaze_trace(path, file_eye, map_)
+            gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
             quality = read_columns(path, [f"{file_eye}DataQuality"])[f"{file_eye}DataQuality"]
             mask = validity_labels(
                 gaze, velocity(gaze, recording.fs_hz), quality,
@@ -304,6 +307,7 @@ class EyeValidity(dj.Computed):
             runs = runs_from_labels(np.where(labels == None, Label.FIXATION, labels))  # noqa: E711
             self.insert1({
                 **row, "status": "computed", "n_samples": len(labels),
+                "frac_glitch_repaired": float(repaired.mean()),
                 # Every one of design spec section 7's "per-criterion
                 # rejected fractions" (five, and six since `non_finite`
                 # joined on 2026-09-27). Four were `None` here, under
@@ -504,8 +508,8 @@ class EyeDetection(dj.Computed):
         refused session wearing one eye's excuse for the other's silence.
         """
         from wl_preproc.eye.detect.registry import get_detector
+        from wl_preproc.eye.detect.validity import ValidityParams
         from wl_preproc.eye.detect.velocity import velocity
-        from wl_preproc.eye.gaze import gaze_trace
         from wl_preproc.eye.ohdpi import read_ohdpi
         from wl_preproc.schema import eye as eye_schema, ingest
 
@@ -521,6 +525,12 @@ class EyeDetection(dj.Computed):
             "paramset_idx": key["paramset_idx"],
         }).fetch1("params")
         detector = get_detector(params["detector"])
+        # The mask was built on glitch-repaired gaze; the detector must read
+        # the same gaze, so the repair runs under the mask's own params.
+        validity_params = ValidityParams(**(paramset.ParamSet & {
+            "paramset_type": key["validity_paramset_type"],
+            "paramset_idx": key["validity_paramset_idx"],
+        }).fetch1("params"))
         # Built ONCE, above the per-eye loop rather than inside it, because
         # the conjunction's own duration floor is read off this same object
         # (`_min_duration_samples`, below): both eyes and the intersection of
@@ -559,7 +569,7 @@ class EyeDetection(dj.Computed):
             map_ = eye_schema._map_from_row(
                 (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()
             )
-            gaze = gaze_trace(path, file_eye, map_)
+            gaze, _repaired = _repaired_gaze(path, file_eye, map_, fs_hz, validity_params)
             v = velocity(gaze, fs_hz)
             available = labels_from_runs(
                 [Run(r["run_start"], r["run_stop"], Label(r["label"]))
@@ -1535,6 +1545,18 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
         return classify(amplitude(gaze, start, stop), microsaccade_max_deg)
 
     return label_for
+
+
+def _repaired_gaze(path, file_eye: str, map_, fs_hz: float, validity_params):
+    """One eye's gaze in degrees, with tracker glitches repaired, and which
+    samples were: the one place `EyeValidity` and `EyeDetection` both get
+    their gaze from, so the mask and every detector read the same gaze
+    (`eye/detect/glitch.py`, the requester's decision of 2026-09-28)."""
+    from wl_preproc.eye.detect.glitch import repair_glitches
+    from wl_preproc.eye.gaze import gaze_trace
+
+    return repair_glitches(gaze_trace(path, file_eye, map_), fs_hz,
+                           validity_params.max_speed_deg_s, validity_params.max_glitch_ms)
 
 
 def _min_duration_samples(detector_params, fs_hz: float) -> int:

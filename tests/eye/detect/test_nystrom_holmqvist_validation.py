@@ -1485,12 +1485,19 @@ def _scaled_affine_map(scale: float):
 
 def _gaze_velocity_mask(raw_xy, quality, fs_hz, frame_gaps, scale):
     """One eye's gaze at `scale`, its velocity, and its validity mask.
-    Restated from `test_otero_millan_validation.py`, not imported."""
+    Restated from `test_otero_millan_validation.py`, not imported -- and,
+    since 2026-09-28, with tracker glitches repaired as the pipeline repairs
+    them (`eye/detect/glitch.py`), so the checks below measure the gaze
+    the pipeline stores detections from."""
     from wl_preproc.eye.calibration import apply_map
+    from wl_preproc.eye.detect.glitch import repair_glitches
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
     from wl_preproc.eye.detect.velocity import velocity
 
-    gaze = apply_map(_scaled_affine_map(scale), raw_xy)
+    gaze, _repaired = repair_glitches(
+        apply_map(_scaled_affine_map(scale), raw_xy), fs_hz,
+        DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
+    )
     v = velocity(gaze, fs_hz)
     return gaze, v, validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
 
@@ -2088,23 +2095,28 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
     (`_why_unmatched`). Measured 2026-09-28, through the registry's
     `detect` as the pipeline stores it, so after the usable-data guard
     (`registry.py::_within_usable`), at the conjunction's floor of 5
-    samples (`NH_CONJUNCTION_FLOOR_SAMPLES`):
+    samples (`NH_CONJUNCTION_FLOOR_SAMPLES`), on glitch-repaired gaze
+    (`eye/detect/glitch.py`):
 
     | | left -> right | right -> left |
     |---|---|---|
-    | unmatched, of the eye's saccades | 691 of 4,641 | 437 of 4,384 |
-    | the other eye's data was withheld | 552 | 189 |
-    | the other eye's saccade was just outside it | 13 | 22 |
-    | the other eye moved too, undetected | 61 | 164 |
-    | the other eye did not move | 65 | 62 |
+    | unmatched, of the eye's saccades | 497 of 4,793 | 468 of 4,756 |
+    | the other eye's data was withheld | 311 | 188 |
+    | the other eye's saccade was just outside it | 25 | 28 |
+    | the other eye moved too, undetected | 92 | 179 |
+    | the other eye did not move | 69 | 73 |
 
     Only the middle two rows are real saccades the binocular rule loses:
-    about 1.6% and 4.2% of each eye's saccades. The largest row is missing
+    about 2.4% and 4.4% of each eye's saccades. The largest row is missing
     data, not disagreement, and it is asserted to stay the largest.
 
-    *Measured the same day at the old floor of 1 sample: 676 and 420
-    unmatched (542/9/61/64 and 185/10/164/61), about 1.5% and 4.0%; true
-    when written.*
+    *Measured the same day before the glitch repair: 691 of 4,641 and 437
+    of 4,384 unmatched (552/13/61/65 and 189/22/164/62), about 1.6% and
+    4.2%. The repair made usable most of the right eye's samples the
+    speed criterion had withheld around large glitches, so fewer left-eye
+    saccades land on withheld right-eye data. And at the old floor of 1
+    sample: 676 and 420 unmatched (542/9/61/64 and 185/10/164/61), about
+    1.5% and 4.0%; both true when written.*
 
     *First measured the same day on the detector's raw output, before the
     guard: 225 of 5,062 and 337 of 5,213 unmatched (121/19/32/53 and
@@ -2138,9 +2150,13 @@ def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
     two eyes. Recorded, and one thing asserted: after the usable-data guard
     no run covers a withheld sample, so the which-eye trace is `neither`
     exactly where both eyes' masks withhold. Measured 2026-09-28, after the
-    final review's fix: 587 left and 205 right saccades kept whole, and the
-    trace is `both` on 93.76%, `left` 2.42%, `right` 1.62% and `neither`
-    2.20%.
+    final review's fix, on glitch-repaired gaze: 340 left and 211 right
+    saccades kept whole, and the trace is `both` on 95.17%, `left` 1.87%,
+    `right` 1.38% and `neither` 1.58%.
+
+    *Before the glitch repair (the same day): 587 and 205, with `both` on
+    93.76%, `left` 2.42%, `right` 1.62% and `neither` 2.20%; true when
+    written.*
 
     *Before that fix only events the other eye had not matched were kept:
     542 and 186, with `both` on 93.84%, `left` 2.36% and `right` 1.59%;

@@ -182,6 +182,33 @@ or quality flag is not a finite number is `invalid`.
   no non-finite gaze, velocity or quality value in either eye (measured
   2026-09-27), so its mask is unchanged.
 
+**Added 2026-09-28: tracker glitches are repaired before the mask is built**
+(the requester's decision; handoff `docs/handoffs/2026-09-28-gaze-glitches.md`).
+A glitch is gaze that leaves and comes back in under `max_glitch_ms` (10 ms),
+each jump faster than criterion 3's own speed ceiling, sample to sample.
+It is replaced by the straight line between the samples either side
+(`eye/detect/glitch.py`).
+- **Why criterion 3 missed them.** It reads the shared five-point velocity,
+  which reports a one-sample excursion of `A` degrees as about `A * fs / 6`:
+  a 10° glitch at 500 Hz reads about 830 °/s, under 1000 °/s.
+- **Why they mattered.** On the reference recording about 2,000 passed the
+  mask per eye, inside 1–20% of each detector's saccades, depending on the
+  detector. Those saccades sat far above the main sequence: median +1.8 to
+  +2.5 sd for Engbert–Kliegl and Nyström–Holmqvist, +1.0 sd for BMD.
+- **Why repaired, not withheld.** Withheld and widened like the other
+  criteria, each glitch dropped the saccade it fell inside, real ones
+  included. Repaired, the saccades containing one sit close to the main
+  sequence (median +0.3 to +0.6 sd for all three), and saccades that were
+  only a glitch disappear.
+- **It is not a criterion.** Repaired samples stay usable. The share is
+  stored as `EyeValidity.frac_glitch_repaired`: 0.93% (left) and 0.76%
+  (right) on the reference recording.
+- **One place.** `EyeValidity` and `EyeDetection` read gaze through one
+  function, `schema/detect.py::_repaired_gaze`, so the mask and every
+  detector see the same repaired gaze.
+- **Its cost.** Stored gaze-derived values at a repaired sample, including an
+  event's start or end position, are interpolated, not measured.
+
 ---
 
 ## 2.5 Post-saccadic oscillation is not an edge case on this instrument

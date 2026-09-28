@@ -67,6 +67,11 @@ class ValidityParams:
     max_speed_deg_s: float
     dilate_samples: int
     min_epoch_samples: int
+    # Not a mask criterion: `glitch.py::repair_glitches` repairs gaze that
+    # leaves and returns faster than `max_speed_deg_s` within less than
+    # this, before the mask or any detector reads it. A default, unlike the
+    # fields above, so a paramset written before it existed still loads.
+    max_glitch_ms: float = 10.0
 
 
 # **These are placeholders with no measured basis on this rig** (design spec
@@ -79,6 +84,10 @@ DEFAULT_VALIDITY_PARAMS = ValidityParams(
     max_speed_deg_s=1000.0,
     dilate_samples=5,
     min_epoch_samples=10,
+    # Not a placeholder: 10 ms is the shortest saccade Nystrom-Holmqvist and
+    # REMoDNaV accept, below which an out-and-back cannot be two eye
+    # movements (the requester's decision of 2026-09-28).
+    max_glitch_ms=10.0,
 )
 
 
