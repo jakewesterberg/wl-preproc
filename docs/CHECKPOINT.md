@@ -433,6 +433,15 @@ requester chose to merge the same day; true when written.*
 >    eye: 0.93% and 0.76% on the reference recording. See
 >    `docs/handoffs/2026-09-28-gaze-glitches.md`.
 >
+>    **Three lab packages were renamed (the requester, 2026-09-28):**
+>    wl-expcontroller is wl-xcon, wl-expviz is wl-xviz and wl-exptasks is
+>    wl-xtasks. The session folder the controller writes is now `xcon/`
+>    (`contracts/paths.py::XCON_DIRNAME`), and `eye/expcontroller.py` is
+>    `eye/xcon.py`. Current code, config and docs take the new names; dated
+>    documents, including `HANDOVER-wl-expcontroller.md`, keep the old ones.
+>    BUILT on `fix/xcon-rename`, NOT merged as written. wl-xcon's writer
+>    switches to `xcon/` only once this is on `main`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked
@@ -1238,7 +1247,9 @@ and a test pins the synthetic generator's header to it. 1c-4's spec carries a ne
    pair, Task 4 of the second-order plan. And where an experiment-controller log sits
    (2026-08-31, `ac7ead2`): `<session>/expcontroller/`, named for the ROLE so MonkeyLogic's
    `.bhv2` and `wl-expcontroller`'s own format share one path, and deliberately not a
-   `SYSTEMS` entry — see `contracts/paths.py::EXPCONTROLLER_DIRNAME`. **What remains is
+   `SYSTEMS` entry — see `contracts/paths.py::EXPCONTROLLER_DIRNAME`. *Renamed `xcon/`
+   (`XCON_DIRNAME`) on 2026-09-28, the requester's decision when wl-expcontroller became
+   wl-xcon; true when written.* **What remains is
    yours to emit, not to decide**: §4's `TARGET_POSITION` encoding from the task, which the
    eye spec specifies exactly.
 
