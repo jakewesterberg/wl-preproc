@@ -174,6 +174,9 @@ status:
     figures are about 1.5% and 4.0%. The requester's decision the same day,
     that the both-eyes trace falls back to the usable eye and says which eye
     it used, is MERGED (2026-09-28, dda2de3).
+    Tracker glitches (gaze out and back faster than an eye, under 10 ms)
+    are repaired before the mask and every detector read the gaze --
+    BUILT on fix/gaze-glitches, NOT merged as written.
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised

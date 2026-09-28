@@ -21,7 +21,8 @@ reference recording (OpenIrisDPI's tutorial recording):
   every saccade it fell inside, real ones included;
 - repaired, the saccades that contain one sit close to the main sequence of
   glitch-free saccades (median +0.3 to +0.6 sd, against +1.8 to +2.5 sd
-  unrepaired), while saccades that were only a glitch disappear.
+  unrepaired for Engbert-Kliegl and Nystrom-Holmqvist, +1.0 sd for BMD),
+  while saccades that were only a glitch disappear.
 
 **Why shorter than `max_glitch_ms`**: at 10 ms, the shortest saccade
 Nystrom-Holmqvist and REMoDNaV accept, an out-and-back can no longer be ruled

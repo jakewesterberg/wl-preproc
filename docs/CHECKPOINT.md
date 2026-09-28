@@ -423,6 +423,16 @@ requester chose to merge the same day; true when written.*
 >    where one eye is missing, and labels that gap from the left eye's mask
 >    alone; true when written.*
 >
+>    **Tracker glitches are repaired before anything reads the gaze (the
+>    requester's decision of 2026-09-28), BUILT on `fix/gaze-glitches` and
+>    NOT merged as written.** Gaze that leaves and returns in under 10 ms,
+>    each jump faster than the mask's 1000 °/s sample to sample, had passed
+>    the mask. It sat inside 1–20% of each detector's saccades and put them
+>    far above the main sequence. It is now replaced by the straight line
+>    across it, and `EyeValidity.frac_glitch_repaired` stores the share per
+>    eye: 0.93% and 0.76% on the reference recording. See
+>    `docs/handoffs/2026-09-28-gaze-glitches.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked
