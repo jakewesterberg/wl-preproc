@@ -2119,3 +2119,34 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
                 print(f"      {reason:45} {why[reason]:5d}  ({why[reason] / saccades:.2%} of saccades)")
         assert sum(why.values()) == len(alone), name
         assert why.most_common(1)[0][0] == _MISSING, (name, why)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WLPP_OHDPI_REFERENCE"),
+    reason="needs the real reference recording",
+)
+def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
+    """The both-eyes trace's fallback to the usable eye (design spec
+    `2026-09-28-both-eyes-fallback-design.md` section 6), on this detector's
+    two eyes. Recorded, and one thing asserted: after the usable-data guard
+    no run covers a withheld sample, so the which-eye trace is `neither`
+    exactly where both eyes' masks withhold. Measured 2026-09-28, after the
+    final review's fix: 587 left and 205 right saccades kept whole, and the
+    trace is `both` on 93.76%, `left` 2.42%, `right` 1.62% and `neither`
+    2.20%.
+
+    *Before that fix only events the other eye had not matched were kept:
+    542 and 186, with `both` on 93.84%, `left` 2.36% and `right` 1.59%;
+    true when written.*"""
+    from wl_preproc.schema.detect import _conjunction_fallback
+
+    left, right = reference["traces"]
+    kept, source = _conjunction_fallback(left.runs, right.runs, left.mask, right.mask)
+    kinds = Counter((eye, _kind_of(run.label)) for eye, run in kept)
+    shares = {value: float(np.mean(source == value)) for value in ("both", "left", "right", "neither")}
+    with capsys.disabled():
+        print(f"\n  both-eyes fallback (Nystrom-Holmqvist): saccades kept whole, left "
+              f"{kinds['left', 'saccadic']}, right {kinds['right', 'saccadic']}; all kept runs {len(kept)}")
+        print("  which eye: " + ", ".join(f"{value} {share:.2%}" for value, share in shares.items()))
+    neither = np.array([a is not None and b is not None for a, b in zip(left.mask, right.mask)])
+    assert np.array_equal(source == "neither", neither)

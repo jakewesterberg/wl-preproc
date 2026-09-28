@@ -169,10 +169,10 @@ status:
     edges; real saccades the binocular rule loses are about 1% (left) and
     2.2% (right), on Nystrom-Holmqvist's raw output. That output labelled
     blinks as saccades; a guard in registry.Detector.detect now holds every
-    run to usable data (branch fix/runs-stay-on-usable-data, NOT merged as
-    written), after which those figures are about 1.5% and 4.0%. Next, the requester's decision the same day: the
-    both-eyes trace falls back to the usable eye where one is missing, with
-    a per-eye missingness trace (its own spec first).
+    run to usable data (MERGED 2026-09-28 as 978a3a3), after which those
+    figures are about 1.5% and 4.0%. The requester's decision the same day,
+    that the both-eyes trace falls back to the usable eye and says which eye
+    it used, is BUILT on spec/both-eyes-fallback, NOT merged as written.
 
     Two items are BLOCKED on hardware and should be raised again when it
     exists. The barcode and timebase alignment path has never been exercised

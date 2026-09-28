@@ -547,6 +547,15 @@ binocular name.
 > regardless of whether an intersection claimed the sample
 > (2026-09-05 conjunction-shape design, §1, §1.2).
 
+> *Amended 2026-09-28 (spec `2026-09-28-both-eyes-fallback-design.md`, the
+> requester's decisions): "never a silent monocular fallback wearing a
+> binocular name" still holds for a session with a refused eye, which keeps
+> its refused conjunction row. Within a session where both eyes calibrated,
+> the conjunction now falls back to the usable eye where the other's data is
+> withheld, and a one-eye event the other eye could not have seen is kept
+> whole. The fallback is not silent: `EyeDetection.Source` names the eye
+> each stretch came from, `both`, `left`, `right` or `neither`.*
+
 ---
 
 ## 5. Storage: runs as rows
