@@ -100,7 +100,8 @@ status:
     other detector's stored rows are unchanged.
 
     Saccade geometry is BUILT on `spec/saccade-geometry` (2026-09-28, NOT
-    merged as written): every stored saccade and microsaccade row carries
+    merged as written; merged and pushed as `a8d26da` the same day, CI
+    green): every stored saccade and microsaccade row carries
     its start and end gaze position and its direction, from the two samples
     its amplitude reads, for every detector (design spec
     `2026-09-28-saccade-geometry-design.md`).
@@ -405,8 +406,10 @@ status:
   # when written. Was `4dbbaa3` until BMD's merge `cfd6765` and its CI fix
   # `3312725` (2026-09-27/28; CI green on `3312725`, run 36354069223); true
   # when written.
+  # Was `3312725` until the saccade geometry merge `a8d26da` on 2026-09-28
+  # (CI green on `a8d26da`, run 36393583335); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "3312725"
+  describes: "a8d26da"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

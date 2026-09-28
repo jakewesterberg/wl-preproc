@@ -1,15 +1,17 @@
 # Where this build actually is
 
-**Last updated 2026-09-28**, describing `main` at `3312725`. That commit
-follows `cfd6765`, the merge of `spec/bmd`: Bayesian microsaccade detection,
-the sixth registered detector (design spec
-`superpowers/specs/2026-09-27-bmd-design.md`). `3312725` fixes the test
-harness after CI's first run on `cfd6765` failed three fidelity tests (below,
-"Start here" item 2). CI read off `3312725` itself: green on both
-interpreters, 1713 passed on each with 30 skipped, 0 failed, and the manifest
-check green — `gh run view 36354069223`. Locally, with the reference
-recording as well, 1714 passed on 3.11 and 1713 on 3.13. CI on later heads is
-recorded here only once read, not before.
+**Last updated 2026-09-28**, describing `main` at `a8d26da` — the merge of
+`spec/saccade-geometry`: every stored saccade and microsaccade row now carries
+its start and end gaze position and its direction, for every detector (design
+spec `superpowers/specs/2026-09-28-saccade-geometry-design.md`). `a8d26da`'s
+tree is byte-identical to the tested branch head `0398137`: 1726 passed on
+3.11 and 1725 on 3.13 locally, 0 failed. CI read off `a8d26da` itself: green
+on both interpreters, 1725 passed on each with 30 skipped, and the manifest
+check green — `gh run view 36393583335`. CI on later heads is recorded here
+only once read, not before.
+
+*This header named `3312725` — BMD's CI fix after its merge `cfd6765`, CI
+`36354069223` — until the geometry merge; true when written.*
 
 *This header named `4dbbaa3` — the validity fix's merge, 1620 passed on 3.11
 and 1619 on 3.13, CI `36329654715` — until BMD's merge; true when written.*
@@ -111,7 +113,8 @@ requester chose to merge the same day; true when written.*
 >    remaining unwritten detector; it wants the GPU, so it stays blocked.
 >
 >    **Saccade geometry is BUILT on `spec/saccade-geometry` (2026-09-28), NOT
->    merged as written** (spec `superpowers/specs/2026-09-28-saccade-geometry-
+>    merged as written** *(merged and pushed the same day as `a8d26da`; CI
+>    green)* (spec `superpowers/specs/2026-09-28-saccade-geometry-
 >    design.md`; the requester's choice of 2026-09-27).
 >    - **What it stores.** Every stored saccade and microsaccade row, for
 >      every detector, now carries `start_x_deg`, `start_y_deg`, `end_x_deg`,
