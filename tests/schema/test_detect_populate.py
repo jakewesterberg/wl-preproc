@@ -4316,3 +4316,80 @@ def test_bmds_own_events_are_measured_from_take_off_and_its_copied_saccades_are_
     assert not _measured_from_takeoff(bmd, "conjunction", Label.MICROSACCADE, None)
     assert not _measured_from_takeoff(bmd, "conjunction", Label.SACCADE, 0.9)
     assert not _measured_from_takeoff(ek, "left", Label.MICROSACCADE, None)
+
+
+# -- Saccade geometry (design spec `2026-09-28-saccade-geometry-design.md`) -----
+
+#: How far a planted step's stored direction may sit from the planted one.
+#: Measured 2026-09-28 on `stepped_session` (BMD on the drifting copy), over
+#: every registered detector: at most 1.8 deg on the two steps above 1 deg,
+#: and at most 10.7 deg on the 0.7 deg step, where the gaze noise is a larger
+#: share of the displacement (Engbert-Kliegl's; REMoDNaV's 8.3 deg next).
+_DIRECTION_TOLERANCE_DEG = {True: 3.0, False: 15.0}  # keyed on "1 deg or more"
+
+
+def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped_session):
+    """Spec section 4. On every trace, for every registered detector:
+    - a row with an amplitude has its start and end positions, the amplitude
+      is exactly their distance, and the direction is their angle (NULL only
+      where they coincide);
+    - a row without an amplitude has none of the five."""
+    import math
+
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    geometry = ("start_x_deg", "start_y_deg", "end_x_deg", "end_y_deg", "direction_deg")
+    measured = 0
+    for name in _detector_names():
+        for trace in ("left", "right", "conjunction"):
+            where = {**session_key, "trace": trace, **_detector(name)}
+            for row in (detect.EyeDetection.Run & where).to_dicts():
+                if row["amplitude_deg"] is None:
+                    assert all(row[column] is None for column in geometry), (name, trace, row)
+                    continue
+                dx = row["end_x_deg"] - row["start_x_deg"]
+                dy = row["end_y_deg"] - row["start_y_deg"]
+                assert row["amplitude_deg"] == float(np.hypot(dx, dy)), (name, trace, row)
+                if dx == 0.0 and dy == 0.0:
+                    assert row["direction_deg"] is None, (name, trace, row)
+                else:
+                    assert row["direction_deg"] == math.degrees(math.atan2(dy, dx)), (name, trace, row)
+                measured += 1
+    assert measured, "the fixture must give the detectors events to measure"
+
+
+def test_a_planted_steps_stored_direction_is_the_planted_direction(stepped_session, drifting_stepped_session):
+    """Spec section 4, end to end. The stepped session plants A -> B -> C -> A
+    on the x axis alone: rightward, rightward, then leftward back to A. Every
+    event run a detector finds at a planted step points the planted way,
+    within `_DIRECTION_TOLERANCE_DEG`. BMD is read on its drifting copy
+    (`_HELD_ON_A_DRIFTING_EYE`), and NSLR is not held below 1 deg
+    (`_NOT_USED_BELOW_1_DEG`)."""
+    from wl_preproc.schema import detect
+
+    positions = [0.0]
+    for step in _STEPS_PX:
+        positions.append(positions[-1] + step)
+    positions[-1] = positions[0]
+    planted = [0.0 if b > a else 180.0 for a, b in zip(positions, positions[1:])]
+    amplitudes_deg = [abs(b - a) * CAL_SCALE for a, b in zip(positions, positions[1:])]
+    assert planted == [0.0, 0.0, 180.0]
+
+    checked = 0
+    for name in _detector_names():
+        session_key, _report, planted_onsets = (
+            drifting_stepped_session if name in _HELD_ON_A_DRIFTING_EYE else stepped_session
+        )
+        runs = (detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}).to_dicts()
+        for onset, want, amplitude_deg in zip(planted_onsets, planted, amplitudes_deg, strict=True):
+            if name in _NOT_USED_BELOW_1_DEG and amplitude_deg < 1.0:
+                continue
+            found = [r for r in runs if r["label"] in ("saccade", "microsaccade")
+                     and abs(r["run_start"] - onset) <= 5]
+            assert found, (name, onset)
+            for run in found:
+                off = (run["direction_deg"] - want + 180.0) % 360.0 - 180.0
+                assert abs(off) <= _DIRECTION_TOLERANCE_DEG[amplitude_deg >= 1.0], (name, onset, run["direction_deg"])
+                checked += 1
+    assert checked >= 3 * len(_detector_names()) - 1
