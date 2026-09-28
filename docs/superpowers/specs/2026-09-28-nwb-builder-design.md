@@ -79,6 +79,11 @@ it, and the table that records what was written.
 - **A command, `wlpp nwb build <subject> <session_datetime> <montage_id>
   <activation_id> --out <path>`,** which runs the same function for one
   activation.
+
+  *Ruled while planning, 2026-09-28: `build(activation_key, nwb_root)` takes
+  the root and derives the path from the identifier (section 6), and the
+  command takes `--subject`, `--session-datetime`, `--montage-id`,
+  `--activation-id` and `--nwb-root`. One path rule, in one place.*
 - **Declared dependencies:** `pynwb>=4.1,<5` (installed today only because
   element-animal pulls it in) and `nwbinspector`, each with a reason in
   `wl.yaml`'s `third_party`.
@@ -113,6 +118,15 @@ decoded event code, `timestamp`, `event_type` (the `event.EventType` name),
 and the attributes the event stage stores (`trial_id`, `block_id`,
 `condition`). A meanings table gives each event type its description from
 `contracts/events.py`.
+
+*Amended while planning, 2026-09-28 (section 12.1 verified): Neurosift does
+not display NWB 2.10's `EventsTable` -- its `Events` viewer handles only the
+older `ndx-events` extension's types. So the events are
+`/intervals/task_events`, a `TimeIntervals` with start equal to stop at each
+event's time, which Neurosift draws on its timeline. `nwbinspector` flags a
+stop that does not exceed its start as a best-practice violation, not a
+critical one; the table's description says why. No meanings table: each
+row's `event_type` is the code's own name.*
 
 **`processing/timebase`**
 - `timing_provenance`: one row, `TimingProvenance`'s tier and counts.
@@ -185,6 +199,13 @@ the sync box's PTP-disciplined accuracy once the lab time service exists.
 - *wl-sync's segment header now carries `clock_trusted`, but the wl-sync
   commit this repository pins predates it. Reading it needs the pin moved,
   which is its own change; until then the 60 s rule stands in for it.*
+- *Corrected while planning, 2026-09-28: the pinned wl-sync predates
+  `wl_sync/clock.py` altogether, not only `clock_trusted` (the module arrived
+  in wl-sync's commit `3ce66b9`, 2026-08-17). The epoch is restated in
+  `nwb/gather.py` and pinned equal to wl-sync's by a test that runs wherever
+  a newer wl-sync is installed. A synthetic session's barcodes are counters
+  from 1,000,000 (`synth/timeline.py`), not seconds since 2020, so every
+  synthetic file takes the manifest fallback -- which is what exercises it.*
 
 ### 4.3 The eye's sample times
 
@@ -230,6 +251,11 @@ block set.**
   timestamps.
 - **Events, trials and detected runs:** kept when their start falls in a
   block. A run is never cut; one ending after its block keeps its true end.
+  - *Ruled while planning, 2026-09-28: an EVENT is kept when it falls in a
+    block or exactly on its end. An event is an instant, and the one on a
+    block's end is that block's own `BLOCK_END` marker; half-open intervals
+    are for samples, so adjacent blocks never share one. Measured on the
+    synthetic session: the half-open rule dropped `BLOCK_END`.*
 - **Validity and repair stretches:** clipped to the block edges.
 - **Tables not tied to time** (calibration, clocks, segments, agreement): as
   stored, for the session.
@@ -275,6 +301,21 @@ writes is written-once.
   inspection; piece 2 publishes only `written` files.
 - The inspector's default configuration, not DANDI's. A DANDI export is a
   derivative (the `export` action), with its own requirements.
+
+*Measured while planning, 2026-09-28, with `nwbinspector` 0.7.2 on these
+files: two checks are critical under the default configuration.*
+- *`check_subject_age`: a subject with neither age nor date of birth. So a
+  file built without wl.works' subject details (section 9) is `invalid`, and
+  piece 2 will not publish it: those details are required for publication in
+  practice. Ruling (this spec's author): keep the rule rather than exempt the
+  check, because an NWB file without the animal's age is a real gap. Cost if
+  wrong: until wl.works sends the details, no file is publishable.*
+- *`check_session_start_time_future_date`: a start in the future. Real
+  sessions never are; the end-to-end test's synthetic session is dated in the
+  past for this reason.*
+- *Everything else it reports on these files is a suggestion or a
+  best-practice violation: empty tables, perfectly regular timestamps on
+  gap-free synthetic data, the zero-length events, non-standard module names.*
 
 ## 9. The subject's details, from wl.works
 
@@ -341,6 +382,17 @@ still built. Its `session_description` says which eye is missing.
    `Subject.Species` part).
 5. **Sharing one `timestamps` dataset across four series** writes as an HDF5
    link, and the inspector accepts it.
+
+*Answered while planning, 2026-09-28:*
+1. *Neurosift: gzip is HDF5's own filter, which its reader supports; the
+   events are a `TimeIntervals` (section 3's amendment).*
+2. *The critical checks: section 8's amendment.*
+3. *Python 3.13: `pynwb` 4.2.0 and `nwbinspector` 0.7.2 install and build
+   these files there; 3.11 resolves `pynwb` 4.1.0.*
+4. *Species: element-animal's `Species` lookup, then its `Subject.Species`
+   part, one species per subject, replaced when wl.works sends another.*
+5. *Shared timestamps: written as an HDF5 link to one dataset; the inspector
+   raises nothing about it.*
 
 ## 13. Out of scope
 
