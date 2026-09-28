@@ -434,6 +434,23 @@ class EyeDetection(dj.Computed):
         direction_deg=null : double
         """
 
+    class Source(dj.Part):
+        definition = """
+        # Which eye each stretch of the CONJUNCTION trace's labels came from
+        # (design spec `2026-09-28-both-eyes-fallback-design.md` section 4):
+        # `both` where the two-eye rule labelled it, `left` or `right` where
+        # that eye alone did -- a one-eye stretch, or a one-eye event kept
+        # whole at a mask edge -- and `neither` where no eye was usable.
+        # Written for the `conjunction` trace only; the runs tile
+        # [0, n_samples), and `source_stop` is EXCLUSIVE.
+        -> master
+        source_index : int unsigned
+        ---
+        source_start : int unsigned
+        source_stop  : int unsigned
+        source       : enum('both','left','right','neither')
+        """
+
     @property
     def key_source(self):
         """Every validity row -- INCLUDING refused ones -- times the
@@ -638,17 +655,44 @@ class EyeDetection(dj.Computed):
             # applies WITHIN a kind, so the conjunction trace carries the same
             # vocabulary as the two eyes it is built from. `_overlapping` is
             # the single-kind primitive underneath it.
+            floor = _min_duration_samples(detector_params)
             conjunction_spans = _conjunction_runs(
                 spans["left"],
                 spans["right"],
-                _min_duration_samples(detector_params),
+                floor,
                 _conjunction_label(detector, params, gaze),
             )
-            self._insert_trace(key, "conjunction", gaze, v, offered, conjunction_spans, fs_hz,
-                               detector, detector_params)
+            # Where only one eye is usable, the trace falls back to it, and a
+            # one-eye event the other eye could not have seen is kept whole
+            # (design spec `2026-09-28-both-eyes-fallback-design.md`, the
+            # requester's decisions of 2026-09-28). A gap is filled from the
+            # left eye's mask only where NEITHER eye is usable; one usable
+            # eye makes the gap that eye's `fixation`.
+            kept, source = _conjunction_fallback(
+                spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2], floor,
+            )
+            fill = np.array(
+                [label if source_label == "neither" else None
+                 for label, source_label in zip(offered, source)],
+                dtype=object,
+            )
+            self._insert_trace(
+                key, "conjunction", gaze, v, fill,
+                [*conjunction_spans,
+                 *_one_eye_pieces(spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2]),
+                 *(run for _, run in kept)],
+                fs_hz, detector, detector_params,
+                kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept},
+                eyes=per_eye,
+            )
+            self.Source.insert(
+                {**key, "trace": "conjunction", "source_index": index,
+                 "source_start": start, "source_stop": stop, "source": value}
+                for index, (start, stop, value) in enumerate(_value_runs(source))
+            )
 
     def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
-                      detector, detector_params) -> None:
+                      detector, detector_params, kept=None, eyes=None) -> None:
         """One trace's master row and its runs.
 
         **This method assigns no labels of its own.** Each interval arrives
@@ -800,17 +844,15 @@ class EyeDetection(dj.Computed):
         matches neither. Attributing either half's reliability to that run
         would put a fabricated number in the one column a reader consults to
         decide how much to trust a detection -- so the map simply misses and
-        `None` is stored, which is the honest answer. The conjunction trace
-        gets `None` throughout for the same reason it gets its label derived
-        rather than checked: no detector produced it.
+        `None` is stored, which is the honest answer. The conjunction trace's
+        two-eye runs get `None` for the same reason they get their label
+        derived rather than checked: no detector produced them. A one-eye
+        event the conjunction keeps (`kept`) is that eye's own run, and
+        carries its own reliability (design spec
+        `2026-09-28-both-eyes-fallback-design.md` section 2).
         """
         from wl_preproc.eye.detect.measure import measure_event_run
 
-        # The landing rule is per-eye only: a conjunction span is an
-        # intersection and does not end on a detector's knot. The floor
-        # applies to every trace (see this docstring's conjunction
-        # paragraph).
-        runs_end_before_landing = detector.runs_end_before_landing and trace != "conjunction"
         # Read the way `_min_duration_samples` reads a detector's params: a
         # field only NSLR's params declare, so every other detector has no
         # floor on any trace.
@@ -834,15 +876,44 @@ class EyeDetection(dj.Computed):
             "reason": "",
         })
 
+        # A one-eye event kept in the conjunction (`kept`, keyed by span) is
+        # measured exactly as its own eye's row is: that eye's gaze, velocity
+        # and mask, and that eye's rules. Every other conjunction run, given
+        # both eyes' inputs (`eyes`), is measured on the eye usable
+        # throughout it, the left first; with neither, it is stored
+        # unmeasured (design spec `2026-09-28-both-eyes-fallback-design.md`
+        # section 3).
+        kept = kept or {}
+
+        def _measured_on(run: Run):
+            span = (run.start, run.stop)
+            if span in kept:
+                return kept[span]
+            if eyes is None:
+                return (trace, gaze, v, offered)
+            for eye in ("left", "right"):
+                eye_gaze, eye_v, eye_offered = eyes[eye]
+                if all(label is None for label in eye_offered[run.start:run.stop]):
+                    return (trace, eye_gaze, eye_v, offered)
+            return None
+
         def _run_row(index: int, run: Run) -> dict:
             measurement = None
-            if run.label in (Label.SACCADE, Label.MICROSACCADE):
+            source = _measured_on(run) if run.label in (Label.SACCADE, Label.MICROSACCADE) else None
+            if source is not None:
+                span = (run.start, run.stop)
+                measured_as, run_gaze, run_v, run_offered = source
+                # The landing rule is per-eye only: a two-eye span is an
+                # intersection and does not end on a detector's knot. The
+                # floor applies to every trace (see this docstring's
+                # conjunction paragraph).
                 measurement = measure_event_run(
-                    gaze, v, offered, run.start, run.stop, fs_hz,
-                    runs_end_before_landing=runs_end_before_landing,
+                    run_gaze, run_v, run_offered, run.start, run.stop, fs_hz,
+                    runs_end_before_landing=(detector.runs_end_before_landing
+                                             and measured_as != "conjunction"),
                     min_measured_ms=min_measured_ms,
                     runs_start_after_takeoff=_measured_from_takeoff(
-                        detector, trace, run.label, reliability_by_span.get((run.start, run.stop))
+                        detector, measured_as, run.label, reliability_by_span.get(span)
                     ),
                 )
             return {

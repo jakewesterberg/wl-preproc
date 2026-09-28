@@ -1342,19 +1342,30 @@ def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_se
 
 def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
     """The point of withholding it: every registered detector's stored run
-    over the missing sample, on the left trace and in the conjunction, is the
-    mask's own `invalid` -- no detector was handed the sample to label."""
+    over the missing sample, on the left trace, is the mask's own `invalid`
+    -- no detector was handed the sample to label. The conjunction falls
+    back to the right eye there: it carries the right eye's own label, and
+    `EyeDetection.Source` says `right` (design spec
+    `2026-09-28-both-eyes-fallback-design.md` section 1).
+
+    *Until 2026-09-28 the conjunction was labelled from the left eye's mask
+    alone, and read `invalid` here too; true when written.*"""
     from wl_preproc.schema import detect
+
+    def covering(table, trace, name, start, stop):
+        (row,) = (table & {**session_key, "trace": trace, **_detector(name)}
+                  & f"{start} <= {missing_row}" & f"{stop} > {missing_row}").to_dicts()
+        return row
 
     session_key, _report, missing_row = missing_gaze_session
     for name in _detector_names():
-        for trace in ("left", "conjunction"):
-            (covering,) = (
-                detect.EyeDetection.Run
-                & {**session_key, "trace": trace, **_detector(name)}
-                & f"run_start <= {missing_row}" & f"run_stop > {missing_row}"
-            ).to_dicts()
-            assert covering["label"] == "invalid", (name, trace, covering["label"])
+        left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
+        assert left["label"] == "invalid", (name, left["label"])
+        right = covering(detect.EyeDetection.Run, "right", name, "run_start", "run_stop")
+        both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
+        assert both["label"] == right["label"], (name, both["label"], right["label"])
+        source = covering(detect.EyeDetection.Source, "conjunction", name, "source_start", "source_stop")
+        assert source["source"] == "right", (name, source)
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
@@ -2555,7 +2566,7 @@ class _CapturedInserts:
 
 
 def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0, *, detector_name="engbert_kliegl",
-                      trace="left", gaze=None, v=None, offered=None):
+                      trace="left", gaze=None, v=None, offered=None, kept=None, eyes=None):
     """`EyeDetection._insert_trace` over a ramp and a fully-available mask
     unless given others, as `detector_name` at its default params, returning
     `(master_row, run_rows)`."""
@@ -2575,7 +2586,7 @@ def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0, *, detector_name="e
     sink = _CapturedInserts()
     detect_schema.EyeDetection._insert_trace(
         sink, {"subject": "s"}, trace, gaze, v, offered, intervals, fs_hz,
-        detector, detector.defaults,
+        detector, detector.defaults, kept=kept, eyes=eyes,
     )
     (master,) = sink.master
     return master, sink.rows
@@ -4548,3 +4559,176 @@ def test_where_one_eye_alone_is_usable_the_conjunction_takes_its_labels():
     assert _one_eye_pieces(left, right, left_offered, right_offered) == [
         Run(15, 20, Label.SACCADE), Run(35, 36, Label.DRIFT), Run(24, 26, Label.PSO),
     ]
+
+
+@pytest.mark.parametrize("detector_name, rule, first, last", [
+    ("nslr", {"runs_end_before_landing": True, "min_measured_ms": 10.0}, 60, 80),
+    ("bmd", {"runs_end_before_landing": False, "min_measured_ms": None, "runs_start_after_takeoff": True}, 59, 79),
+])
+def test_a_kept_one_eye_event_is_stored_as_its_own_eyes_row(detector_name, rule, first, last):
+    """Spec sections 2 and 3: a kept run is measured on its own eye's gaze,
+    under that eye's rules -- NSLR's landing sample, BMD's take-off sample
+    for its own events, neither of which the conjunction's two-eye runs use
+    -- and carries its own reliability."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.measure import measure_event_run
+
+    gaze, v, _brief, _long, _intervals = _insert_trace_inputs()
+    left_gaze = gaze * 2.0
+    offered = np.full(len(gaze), None, dtype=object)
+    run = Run(60, 80, Label.SACCADE, reliability=0.9)
+
+    _master, rows = _run_insert_trace([run], detector_name=detector_name, trace="conjunction", gaze=gaze, v=v,
+                                      kept={(60, 80): ("left", left_gaze, v, offered)})
+
+    row = _event_rows(rows)[(60, 80)]
+    expected = measure_event_run(left_gaze, v, offered, 60, 80, 500.0, **rule)
+    assert row["amplitude_deg"] == expected.amplitude_deg
+    assert (row["start_x_deg"], row["end_x_deg"]) == (float(left_gaze[first, 0]), float(left_gaze[last, 0]))
+    assert row["reliability"] == 0.9
+
+
+@pytest.mark.parametrize("withheld, measured_on", [("right", "left"), ("left", "right"), ("both", None)])
+def test_a_conjunction_run_is_measured_on_the_eye_usable_throughout_it(withheld, measured_on):
+    """Spec section 3, as ruled while building: a two-eye saccade joined by
+    its one-eye continuation is one stored run. It is measured on the eye
+    usable throughout it, the left first, and unmeasured when neither was."""
+    from wl_preproc.eye.detect.labels import Label, Run
+
+    gaze, v, *_ = _insert_trace_inputs()
+    eye_gaze = {"left": gaze * 2.0, "right": gaze * 3.0}
+    offered = {eye: np.full(len(gaze), None, dtype=object) for eye in ("left", "right")}
+    for eye in ("left", "right"):
+        if withheld in (eye, "both"):
+            offered[eye][75] = Label.INVALID
+    eyes = {eye: (eye_gaze[eye], v, offered[eye]) for eye in ("left", "right")}
+    two_eye, continuation = Run(60, 70, Label.SACCADE), Run(70, 80, Label.SACCADE)
+
+    _master, rows = _run_insert_trace([two_eye, continuation], trace="conjunction", gaze=gaze, v=v, eyes=eyes)
+
+    row = _event_rows(rows)[(60, 80)]
+    if measured_on is None:
+        assert row["amplitude_deg"] is None
+    else:
+        assert (row["start_x_deg"], row["end_x_deg"]) == (float(eye_gaze[measured_on][60, 0]),
+                                                          float(eye_gaze[measured_on][79, 0]))
+
+
+# Both eyes withheld over 100 ms of the detection trial's quiet opening,
+# well before its first step at 1.0 s.
+_BOTH_WITHHELD_S = (4 * TRIAL_DURATION_S + 0.3, 4 * TRIAL_DURATION_S + 0.4)
+
+
+def _withhold_one_eye_then_both(session_dir) -> None:
+    """Drive the RIGHT eye's `DataQuality` to zero from 50 ms before the
+    first planted step to 150 ms after its onset, so only the left eye can
+    see it, and BOTH eyes' over `_BOTH_WITHHELD_S`. `_build_stepped_session`
+    puts the detection trial after four calibration trials."""
+    from wl_preproc.synth.ohdpi import HEADER
+
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    header_line, data_lines = lines[0], lines[1:]
+    onset_s = 4 * TRIAL_DURATION_S + _ONSET_OFFSETS_S[0]
+    withheld = [
+        ("RightDataQuality", onset_s - 0.05, onset_s + 0.15),
+        ("LeftDataQuality", *_BOTH_WITHHELD_S),
+        ("RightDataQuality", *_BOTH_WITHHELD_S),
+    ]
+    for name, start_s, stop_s in withheld:
+        column = HEADER.index(name)
+        for row in range(_first_row_at(start_s), _first_row_at(stop_s)):
+            fields = data_lines[row].split(" ")
+            fields[column] = "0.0000"
+            data_lines[row] = " ".join(fields)
+    ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def one_eye_gap_session(daemon_module, prefix, tmp_path_factory):
+    """`stepped_session`'s construction with the right eye withheld over the
+    first planted step and both eyes over `_BOTH_WITHHELD_S`. Date, subject
+    and seed checked unclaimed across `tests/` on 2026-09-28. Returns
+    `(session_key, report, planted_onsets, both_withheld_row)`, the last the
+    stored-trace row at the middle of `_BOTH_WITHHELD_S`."""
+    from tests.schema.test_eye_populate import _rows_for_times
+
+    session_key, segment, onset_times = _build_stepped_session(
+        tmp_path_factory,
+        dirname="detectgap", session_id="2027-07-11_01", subject="detgap01",
+        session_datetime=datetime.datetime(2027, 7, 11, 9, 0), seed=711,
+        after_generate=_withhold_one_eye_then_both,
+    )
+    report = daemon_module.run_once(prefix=prefix)
+    *planted, both_withheld_row = _rows_for_times(session_key, segment,
+                                                  [*onset_times, sum(_BOTH_WITHHELD_S) / 2])
+    return session_key, report, planted, both_withheld_row
+
+
+def test_the_both_eyes_trace_keeps_a_step_only_the_left_eye_could_see(one_eye_gap_session):
+    """Spec section 6, stored: with the right eye withheld over the first
+    planted step, every registered detector's both-eyes trace still carries
+    it. It is marked `left` in `EyeDetection.Source`, which tiles the trace,
+    and it is measured as the left eye's own row."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, planted, _both_withheld_row = one_eye_gap_session
+    first = planted[0]
+    for name in _detector_names():
+        where = {**session_key, "trace": "conjunction", **_detector(name)}
+        conjunction = {(r["run_start"], r["run_stop"]): r
+                       for r in (detect.EyeDetection.Run & where).to_dicts()}
+        # The left eye's own event at the step, wherever this detector puts
+        # its onset (Otero-Millan's is 7 samples early on this session).
+        at_step = [r for r in (detect.EyeDetection.Run
+                               & {**session_key, "trace": "left", **_detector(name)}).to_dicts()
+                   if r["label"] in ("saccade", "microsaccade")
+                   and r["run_start"] <= first + 5 and r["run_stop"] > first]
+        assert at_step, name
+
+        sources = (detect.EyeDetection.Source & where).to_dicts(order_by="source_index")
+        n_samples = (detect.EyeDetection & where).fetch1("n_samples")
+        assert sources[0]["source_start"] == 0 and sources[-1]["source_stop"] == n_samples, name
+        assert all(a["source_stop"] == b["source_start"] for a, b in zip(sources, sources[1:])), name
+
+        for left in at_step:
+            span = (left["run_start"], left["run_stop"])
+            assert span in conjunction, (name, span)
+            assert conjunction[span]["label"] == left["label"], name
+            assert conjunction[span]["amplitude_deg"] == left["amplitude_deg"], name
+            covering = [s["source"] for s in sources if s["source_start"] <= span[0] and span[1] <= s["source_stop"]]
+            assert covering == ["left"], (name, span, covering)
+
+
+def test_where_neither_eye_is_usable_the_both_eyes_trace_keeps_the_left_masks_label(one_eye_gap_session):
+    """Spec section 1's last row: with both eyes withheld, the both-eyes
+    trace carries the left eye's own mask label, as it did before the
+    fallback -- not `fixation` -- and `EyeDetection.Source` says `neither`."""
+    from wl_preproc.schema import detect
+
+    def covering(table, trace, name, start, stop):
+        (row,) = (table & {**session_key, "trace": trace, **_detector(name)}
+                  & f"{start} <= {row_index}" & f"{stop} > {row_index}").to_dicts()
+        return row
+
+    session_key, _report, _planted, row_index = one_eye_gap_session
+    for name in _detector_names():
+        left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
+        both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
+        assert left["label"] in ("blink", "invalid"), (name, left["label"])
+        assert both["label"] == left["label"], (name, both["label"], left["label"])
+        source = covering(detect.EyeDetection.Source, "conjunction", name, "source_start", "source_stop")
+        assert source["source"] == "neither", (name, source)
+
+
+def test_the_which_eye_trace_is_both_throughout_when_both_eyes_are_usable(stepped_session):
+    """Spec section 4: the stepped session withholds nothing, so every
+    registered detector's both-eyes trace draws on both eyes throughout."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    for name in _detector_names():
+        where = {**session_key, "trace": "conjunction", **_detector(name)}
+        n_samples = (detect.EyeDetection & where).fetch1("n_samples")
+        sources = (detect.EyeDetection.Source & where).to_dicts(order_by="source_index")
+        assert [(s["source_start"], s["source_stop"], s["source"]) for s in sources] == [(0, n_samples, "both")], name
