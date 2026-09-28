@@ -99,6 +99,12 @@ status:
     non-finite gaze, and warns when its noise estimate is capped. Every
     other detector's stored rows are unchanged.
 
+    Saccade geometry is BUILT on `spec/saccade-geometry` (2026-09-28, NOT
+    merged as written): every stored saccade and microsaccade row carries
+    its start and end gaze position and its direction, from the two samples
+    its amplitude reads, for every detector (design spec
+    `2026-09-28-saccade-geometry-design.md`).
+
     Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
     (2026-09-27, NOT merged as written; merged and pushed as `cfd6765` the
     same day, CI green from `3312725`). It is the sixth registered

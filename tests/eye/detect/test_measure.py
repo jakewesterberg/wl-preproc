@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 
@@ -232,3 +234,55 @@ def test_the_takeoff_sample_is_used_only_when_it_was_offered(case):
                             runs_start_after_takeoff=True)
 
     assert got == measure(gaze, _speeds(), start, stop, 500.0)
+
+
+# -- Saccade geometry (design spec `2026-09-28-saccade-geometry-design.md`) -----
+#
+# Every measurement carries the gaze at the two samples its amplitude reads,
+# and the direction from one to the other: 0 deg rightward, 90 deg upward.
+
+
+@pytest.mark.parametrize("dx, dy, direction", [
+    (1.0, 0.0, 0.0), (0.0, 1.0, 90.0), (-1.0, 0.0, 180.0), (0.0, -1.0, -90.0), (1.0, 1.0, 45.0),
+])
+def test_the_direction_is_counterclockwise_from_rightward_in_degrees(dx, dy, direction):
+    """Spec 1.2: 0 deg is rightward and 90 deg upward, in the calibrated
+    frame (positive x rightward, positive y upward)."""
+    gaze = np.zeros((5, 2))
+    gaze[2:] = [dx, dy]
+    got = measure(gaze, np.zeros((5, 2)), 1, 4, 500.0)
+    assert got.direction_deg == pytest.approx(direction, abs=1e-12)
+
+
+def test_the_positions_are_the_two_samples_the_amplitude_reads():
+    """Spec 1.1: start `gaze[start]`, end `gaze[stop - 1]`, and the amplitude
+    is exactly the distance between them."""
+    gaze = _walk()
+    got = measure(gaze, _speeds(), 10, 16, 500.0)
+    assert (got.start_x_deg, got.start_y_deg) == tuple(gaze[10])
+    assert (got.end_x_deg, got.end_y_deg) == tuple(gaze[15])
+    assert got.amplitude_deg == float(np.hypot(got.end_x_deg - got.start_x_deg, got.end_y_deg - got.start_y_deg))
+    assert got.direction_deg == math.degrees(math.atan2(gaze[15, 1] - gaze[10, 1], gaze[15, 0] - gaze[10, 0]))
+
+
+@pytest.mark.parametrize("rule, first, last", [("landing", 10, 16), ("take-off", 9, 15)])
+def test_each_detectors_rule_moves_the_positions_with_the_amplitude(rule, first, last):
+    """Spec 1.1: NSLR's landing rule ends at `gaze[stop]`; BMD's take-off rule
+    starts at `gaze[start - 1]`. The positions follow the same samples."""
+    gaze = _walk()
+    got = measure_event_run(gaze, _speeds(), _offered(40), 10, 16, 500.0,
+                            runs_end_before_landing=rule == "landing", min_measured_ms=None,
+                            runs_start_after_takeoff=rule == "take-off")
+    assert (got.start_x_deg, got.start_y_deg) == tuple(gaze[first])
+    assert (got.end_x_deg, got.end_y_deg) == tuple(gaze[last])
+    assert got.amplitude_deg == float(np.hypot(got.end_x_deg - got.start_x_deg, got.end_y_deg - got.start_y_deg))
+    assert got.duration_s == 6 / 500.0
+
+
+def test_a_zero_displacement_has_positions_and_no_direction():
+    """Spec 1.2: where start equals end, the direction is NULL, never 0 deg."""
+    gaze = np.full((5, 2), 2.5)
+    got = measure(gaze, np.zeros((5, 2)), 0, 5, 500.0)
+    assert got.amplitude_deg == 0.0
+    assert got.direction_deg is None
+    assert (got.start_x_deg, got.start_y_deg, got.end_x_deg, got.end_y_deg) == (2.5, 2.5, 2.5, 2.5)

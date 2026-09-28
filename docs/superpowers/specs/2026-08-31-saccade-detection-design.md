@@ -567,6 +567,12 @@ carries neither measurement; see §3's amendment.)* The runs table is
 therefore strictly more informative than the per-sample trace it encodes, not
 a lossy substitute for it.
 
+*Amended 2026-09-28 (spec `2026-09-28-saccade-geometry-design.md`): each event
+row also carries `start_x_deg`, `start_y_deg`, `end_x_deg`, `end_y_deg` and
+`direction_deg`. These are the gaze at the two samples its amplitude reads,
+and the direction from one to the other, counterclockwise from rightward in
+degrees. They are on exactly the rows that carry an amplitude.*
+
 **Size, and a number that was an estimate and is now measured too.** The
 reference recording is 1,177,799 rows — 39.4 minutes at the **498.55 Hz**
 `read_ohdpi` derives from its own frame span, not the nominal 500 Hz quoted
@@ -1084,7 +1090,7 @@ closed for calibration, and it is fixed the same way: correct the fixture.
 |---|---|---|
 | `EyeValidity` | `(subject, session_datetime, eye, validity_paramset_idx)` | the mask, as runs; per-criterion rejected fractions |
 | `EyeDetection` | `(subject, session_datetime, trace, validity_paramset_idx, paramset_idx)` | status, reason, event counts, label fractions |
-| `EyeDetection.Run` | `+ run_index` | `run_start, run_stop, label, amplitude_deg, peak_velocity_deg_s, reliability` |
+| `EyeDetection.Run` | `+ run_index` | `run_start, run_stop, label, amplitude_deg, peak_velocity_deg_s, reliability, start_x_deg, start_y_deg, end_x_deg, end_y_deg, direction_deg` (the last five amended 2026-09-28) |
 | `DetectorAgreement` | `(…, trace, validity_paramset_idx, paramset_a, paramset_b, metric, vocabulary, pso_as)` | `value, n_samples_compared` |
 | `DetectionQuality` | `(subject, session_datetime)` | `blended_agreement`, session summary |
 | `SaccadeMainSequence` | `(…, trace, validity_paramset_idx, paramset_idx)` | `v_max`, saturation constant, `n_saccades`, amplitude span, `r_squared`, `fit_status`, `reason` |

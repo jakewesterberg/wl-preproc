@@ -107,11 +107,31 @@ requester chose to merge the same day; true when written.*
 >    storing either as a typed array is the change if a real one costs real
 >    space.
 > 2. **Bayesian microsaccade detection is BUILT and MERGED** (`cfd6765`,
->    pushed 2026-09-27; CI green from `3312725`; below). Next, the requester's choice of
->    2026-09-27: store each saccade and microsaccade row's direction and its
->    start and end gaze positions, for every detector, on its own branch
->    (BMD spec §9). U'n'Eye is the remaining unwritten detector; it wants the
->    GPU, so it stays blocked.
+>    pushed 2026-09-27; CI green from `3312725`; below). U'n'Eye is the
+>    remaining unwritten detector; it wants the GPU, so it stays blocked.
+>
+>    **Saccade geometry is BUILT on `spec/saccade-geometry` (2026-09-28), NOT
+>    merged as written** (spec `superpowers/specs/2026-09-28-saccade-geometry-
+>    design.md`; the requester's choice of 2026-09-27).
+>    - **What it stores.** Every stored saccade and microsaccade row, for
+>      every detector, now carries `start_x_deg`, `start_y_deg`, `end_x_deg`,
+>      `end_y_deg` and `direction_deg`.
+>    - **How they are computed.** They are the gaze at the two samples its
+>      amplitude reads, so the amplitude is exactly their distance. They are
+>      computed once, in `measure.py`, under each detector's rule: NSLR's
+>      landing sample and BMD's take-off sample.
+>    - **The direction convention.** Degrees counterclockwise from
+>      rightward, in the calibrated frame (positive x rightward, y upward),
+>      which is the task code's frame for target positions. It is NULL for a
+>      zero displacement.
+>    - **Measured**, on the left eye's trace: on the stepped session (BMD on
+>      its drifting copy; NSLR not held below 1°), every held detector's
+>      stored direction for a planted step was within 1.8° of the planted
+>      direction on the two steps above 1°, and within 10.7° on the 0.7°
+>      step. The test allows 3° and 15°.
+>
+>    *Until 2026-09-28 this item named the geometry as next; true when
+>    written.*
 >
 >    *Until 2026-09-27 this item opened "Bayesian microsaccade detection.
 >    Real code, hardware-free, and it matters as a SACCADE detector", as the

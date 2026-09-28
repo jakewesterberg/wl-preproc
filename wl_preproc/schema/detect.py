@@ -414,6 +414,23 @@ class EyeDetection(dj.Computed):
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double
         reliability=null         : double
+        # Where the event starts and ends, and its direction: the gaze at
+        # the two samples `amplitude_deg` is measured between, so the
+        # amplitude is exactly their distance. Those samples are the run's
+        # first and last, except that NSLR's per-eye saccades end at
+        # `gaze[run_stop]` (its landing sample) and BMD's own per-eye events
+        # start at `gaze[run_start - 1]` (its take-off sample), each when
+        # that sample was offered and is finite (`measure.py::
+        # measure_event_run`). Degrees of visual angle,
+        # positive x rightward and y upward; the direction counterclockwise
+        # from rightward, in [-180, 180], NULL for a zero displacement. On
+        # exactly the rows that carry `amplitude_deg` (design spec
+        # `2026-09-28-saccade-geometry-design.md`).
+        start_x_deg=null   : double
+        start_y_deg=null   : double
+        end_x_deg=null     : double
+        end_y_deg=null     : double
+        direction_deg=null : double
         """
 
     @property
@@ -817,7 +834,7 @@ class EyeDetection(dj.Computed):
         })
 
         def _run_row(index: int, run: Run) -> dict:
-            amplitude_deg = peak_velocity_deg_s = None
+            measurement = None
             if run.label in (Label.SACCADE, Label.MICROSACCADE):
                 measurement = measure_event_run(
                     gaze, v, offered, run.start, run.stop, fs_hz,
@@ -827,17 +844,24 @@ class EyeDetection(dj.Computed):
                         detector, trace, run.label, reliability_by_span.get((run.start, run.stop))
                     ),
                 )
-                if measurement is not None:
-                    amplitude_deg = measurement.amplitude_deg
-                    peak_velocity_deg_s = measurement.peak_velocity_deg_s
             return {
                 **row, "run_index": index, "run_start": run.start, "run_stop": run.stop,
-                "label": run.label.value, "amplitude_deg": amplitude_deg,
-                "peak_velocity_deg_s": peak_velocity_deg_s,
+                "label": run.label.value,
+                **{column: None if measurement is None else getattr(measurement, column)
+                   for column in _STORED_MEASUREMENTS},
                 "reliability": reliability_by_span.get((run.start, run.stop)),
             }
 
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
+
+
+#: The `Measurement` fields `EyeDetection.Run` stores, each under its own
+#: name, all NULL for a run that is not measured. `duration_s` is not stored:
+#: it is `(run_stop - run_start) / fs_hz` on every row.
+_STORED_MEASUREMENTS = (
+    "amplitude_deg", "peak_velocity_deg_s",
+    "start_x_deg", "start_y_deg", "end_x_deg", "end_y_deg", "direction_deg",
+)
 
 
 def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:

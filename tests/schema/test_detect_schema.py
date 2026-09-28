@@ -76,9 +76,12 @@ def test_validity_is_keyed_per_real_eye_not_per_trace(schemas, enum_values):
 
 
 def test_a_run_row_carries_its_measurements_nullably(schemas):
-    """A saccade run IS an event, so it carries amplitude and peak velocity;
-    fixation, blink and invalid runs leave them null."""
-    for name in ("amplitude_deg", "peak_velocity_deg_s", "reliability"):
+    """A saccade run IS an event, so it carries amplitude and peak velocity,
+    and where it starts and ends and its direction (design spec
+    `2026-09-28-saccade-geometry-design.md`); fixation, blink and invalid runs
+    leave them null."""
+    for name in ("amplitude_deg", "peak_velocity_deg_s", "reliability",
+                 "start_x_deg", "start_y_deg", "end_x_deg", "end_y_deg", "direction_deg"):
         assert schemas.EyeDetection.Run.heading.attributes[name].nullable
 
 

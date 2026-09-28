@@ -10,6 +10,8 @@ whichever detector found the saccade.
 
 from __future__ import annotations
 
+import dataclasses
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,9 +26,31 @@ MICROSACCADE_MAX_DEG = 1.0
 
 @dataclass(frozen=True, slots=True)
 class Measurement:
+    """One event's measurement. The positions are the gaze at the two
+    samples the amplitude is measured between, so `amplitude_deg` is exactly
+    the distance from start to end and `direction_deg` its angle (design spec
+    `2026-09-28-saccade-geometry-design.md` section 1)."""
+
     amplitude_deg: float
     peak_velocity_deg_s: float
     duration_s: float
+    start_x_deg: float
+    start_y_deg: float
+    end_x_deg: float
+    end_y_deg: float
+    direction_deg: float | None
+
+
+def direction(dx_deg: float, dy_deg: float) -> float | None:
+    """The angle of a displacement, in degrees counterclockwise from
+    rightward: 0 is rightward, 90 upward, +/-180 leftward, -90 downward, in
+    the calibrated frame (positive x rightward, positive y upward; the task
+    code's frame for target positions). `None` for a zero displacement,
+    which has no direction -- `atan2(0, 0)` would say 0, "rightward"
+    (design spec `2026-09-28-saccade-geometry-design.md` section 1.2)."""
+    if dx_deg == 0.0 and dy_deg == 0.0:
+        return None
+    return math.degrees(math.atan2(dy_deg, dx_deg))
 
 
 def amplitude(gaze_deg: np.ndarray, start: int, stop: int) -> float:
@@ -96,10 +120,16 @@ def measure(
     if stop <= start:
         raise ValueError(f"measure requires stop > start; got start={start}, stop={stop}")
     speed = np.hypot(velocity_deg_s[start:stop, 0], velocity_deg_s[start:stop, 1])
+    first, last = gaze_deg[start], gaze_deg[stop - 1]
     return Measurement(
         amplitude_deg=amplitude(gaze_deg, start, stop),
         peak_velocity_deg_s=float(speed.max()) if speed.size else 0.0,
         duration_s=float(stop - start) / fs_hz,
+        start_x_deg=float(first[0]),
+        start_y_deg=float(first[1]),
+        end_x_deg=float(last[0]),
+        end_y_deg=float(last[1]),
+        direction_deg=direction(float(last[0] - first[0]), float(last[1] - first[1])),
     )
 
 
@@ -159,7 +189,9 @@ def measure_event_run(
     measures it. The requester's decision of 2026-09-27.
 
     `duration_s` is the run's own, `(stop - start) / fs_hz`, under every
-    rule."""
+    rule. The positions and direction are the widened window's, the same two
+    samples its amplitude reads (design spec
+    `2026-09-28-saccade-geometry-design.md` section 1.1)."""
     if min_measured_ms is not None and (stop - start) / fs_hz < min_measured_ms / 1000.0:
         return None
     lo, hi = start, stop
@@ -180,11 +212,7 @@ def measure_event_run(
     if (lo, hi) == (start, stop):
         return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz)
     widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz)
-    return Measurement(
-        amplitude_deg=widened.amplitude_deg,
-        peak_velocity_deg_s=widened.peak_velocity_deg_s,
-        duration_s=float(stop - start) / fs_hz,
-    )
+    return dataclasses.replace(widened, duration_s=float(stop - start) / fs_hz)
 
 
 def classify(amplitude_deg: float, microsaccade_max_deg: float) -> Label:
