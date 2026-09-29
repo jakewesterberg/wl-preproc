@@ -488,6 +488,13 @@ requester chose to merge the same day; true when written.*
 >    share needs its `nwb/` folder made once by hand**; wlpp never writes to
 >    a share without one. See `docs/handoffs/2026-09-29-nwb-publishing.md`.
 >
+>    **The raw archive now writes only to a mounted share** (2026-09-29, on
+>    `fix/archive-share-marker`, NOT merged as written). The review above
+>    found that the old code archived onto an unmounted mount point. **The
+>    archive share needs a `.wlpp-archive-share` marker at its root, placed
+>    once by hand**; without it the daemon archives nothing and says why,
+>    and `wlpp archive` refuses (the archive spec §3's amendment).
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

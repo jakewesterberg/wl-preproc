@@ -299,7 +299,10 @@ fixed code rightly adopts the file.
 - **The raw archive stage creates `--nas-root` if it is missing.** It can
   therefore archive onto an unmounted NAS mount point, the same failure I3
   fixed for NWB files. That code is outside this branch, so it is **a
-  follow-up the requester should schedule.** Raw data archived onto local
+  follow-up the requester should schedule.** *(The requester scheduled it
+  as next, and it is built on `fix/archive-share-marker`: the share needs a
+  `.wlpp-archive-share` marker, placed once by hand; see the archive spec
+  §3's 2026-09-29 amendment.)* Raw data archived onto local
   disk and then reclaimed from scratch would be hidden under the NAS mount.
 - **A dataset held in memory while it is hashed.** This is piece 1's design,
   and it matters at piece 3's sizes (M8).

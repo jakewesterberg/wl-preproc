@@ -44,6 +44,30 @@ class ArchiveOutcome:
     store: StoreResult
 
 
+#: The file a person places once at the root of the NAS share the archive is
+#: written to, when the share is set up. wlpp never creates it, nor the root.
+SHARE_MARKER = ".wlpp-archive-share"
+
+
+def share_unreachable(nas_root: Path) -> str | None:
+    """Why the archive share cannot be written to now, or None.
+
+    An unmounted NAS mount point is an empty directory, or none at all. The
+    archive written there would sit on this host's own disk under the NAS's
+    name: recorded as archived, then possibly reclaimed from scratch, and
+    hidden once the share is mounted again. So the archive writes only where
+    the marker is (the fix the NWB shares got in NWB publishing's final
+    review, I3, applied to the raw archive)."""
+    marker = Path(nas_root) / SHARE_MARKER
+    try:
+        if marker.is_file():
+            return None
+    except OSError as exc:
+        return f"the archive share at {nas_root} is not reachable: {marker}: {exc}"
+    return (f"the archive share at {nas_root} is not reachable: {marker} is not there (the share is not "
+            f"mounted, or its {SHARE_MARKER} was never placed)")
+
+
 def archive_session(
     session_dir: Path, nas_root: Path, key: dict, *, prefix: str = DEFAULT_PREFIX
 ) -> ArchiveOutcome:
