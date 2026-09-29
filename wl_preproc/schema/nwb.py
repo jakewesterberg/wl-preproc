@@ -60,6 +60,55 @@ class NwbFile(dj.Manual):
         """
 
 
+
+@schema
+class NwbChange(dj.Manual):
+    definition = """
+    # Every change to an activation's file that wl.works polls for: built
+    # (an NwbFile row), published, or moved between shares. The sequence only
+    # increases, and is GET /nwb's cursor (design spec
+    # `2026-09-29-nwb-publishing-design.md` sections 6 and 9).
+    # Key: (change_seq).
+    change_seq : int unsigned auto_increment
+    ---
+    -> NwbFile
+    kind : enum('built','published','moved')
+    changed_at : datetime(6)
+    """
+
+
+@schema
+class NwbPlacement(dj.Manual):
+    definition = """
+    # Where an activation's file is, one row per publish or move: append-only,
+    # and the latest row for an activation is where the file is now (design
+    # spec `2026-09-29-nwb-publishing-design.md` section 9). `path` is
+    # relative to the share, the triple wl.works' Plan 23 section 10.1 names.
+    # Key: (change_seq).
+    -> NwbChange
+    ---
+    tier : enum('slow','fast')
+    host : varchar(64)
+    share : varchar(64)
+    path : varchar(512)
+    n_bytes : bigint unsigned
+    """
+
+
+@schema
+class ActiveSet(dj.Manual):
+    definition = """
+    # Each PUT /nwb/active, as received: the whole set of activations
+    # wl.works wants on the fast share. Append-only; the latest row is the
+    # desired state (design spec `2026-09-29-nwb-publishing-design.md`
+    # section 5). Key: (set_seq).
+    set_seq : int unsigned auto_increment
+    ---
+    received_at : datetime(6)
+    requested_by = null : varchar(64)
+    activations : <blob>   # [{subject, session_datetime, montage_id, activation_id}, ...]
+    """
+
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Bind these tables to `{prefix}nwb`. Idempotent."""
     request.activate(prefix=prefix)

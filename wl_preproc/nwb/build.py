@@ -128,6 +128,9 @@ def record(activation_key: dict, result: BuildResult) -> None:
     with connection.transaction:
         nwb_schema.NwbFile.insert1(row)
         nwb_schema.NwbFile.Dataset.insert({**key, **checksum} for checksum in result.checksums)
+        # What GET /nwb's cursor sees first (design spec
+        # `2026-09-29-nwb-publishing-design.md` section 6).
+        nwb_schema.NwbChange.insert1({**key, "kind": "built", "changed_at": row["built_at"]})
 
 
 def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, list[str]]:

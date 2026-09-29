@@ -464,6 +464,124 @@ def test_the_daemon_stage_records_every_activation(activation, daemon_module, pr
     assert rows[(1, 0)]["status"] == "refused"
 
 
+@pytest.fixture(scope="module")
+def slow_share(tmp_path_factory):
+    """One slow share for the whole module, as a real deployment has: a file
+    published in one test is where the next one looks."""
+    from wl_preproc.nwb.publish import Share
+
+    return Share(tier="slow", mount=tmp_path_factory.mktemp("nwb-slow"), host="wl-nas", name="hdd")
+
+
+def _placed_path(share, key):
+    from wl_preproc.schema import nwb as nwb_schema
+
+    identifier = (nwb_schema.NwbFile & key).fetch1("nwb_identifier")
+    subject, session_id = identifier.split(".")[:2]
+    return share.local(share.relative(subject, session_id, identifier))
+
+
+def _unrecord(key, *shares):
+    """Delete an activation's row and any file it published: what an
+    operator does before rebuilding it."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    if nwb_schema.NwbFile & key:
+        for share in shares:
+            path = _placed_path(share, key)
+            for leftover in path.parent.glob(path.stem + ".*"):
+                leftover.unlink()
+        (nwb_schema.NwbFile & key).delete(prompt=False)
+
+
+def test_the_daemon_publishes_every_written_file_to_the_slow_share(activation, daemon_module, prefix, slow_share,
+                                                                    tmp_path_factory):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 4: verified,
+    described, recorded as a change and a placement, and the scratch copy
+    deleted. Only `written` files are published."""
+    from wl_preproc.nwb.publish import current_placement, description_path, mismatches
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, key, _blocks = activation
+    slow = slow_share
+    report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-publish-build"),
+                                    nwb_slow=slow)
+    assert not [e for e in report["errors"] if "NwbPlacement" in e], report["errors"]
+    assert report["nwb_published"] >= 1
+    row = (nwb_schema.NwbFile & key).fetch1()
+    placement = current_placement(key)
+    assert (placement["tier"], placement["host"], placement["share"]) == ("slow", "wl-nas", "hdd")
+    assert placement["path"] == f"nwb/nwbstep1/2025-07-20_01/{row['nwb_identifier']}.nwb"
+    published = slow.local(placement["path"])
+    assert mismatches(published, (nwb_schema.NwbFile.Dataset & key).to_dicts()) == []
+    assert json.loads(description_path(published).read_text())["identity"]["identifier"] == row["nwb_identifier"]
+    assert not Path(row["path"]).exists()
+    assert sorted(change["kind"] for change in (nwb_schema.NwbChange & key).to_dicts()) == ["built", "published"]
+    for unpublished in (nwb_schema.NwbFile & session_key & "status != 'written'").keys():
+        assert current_placement(unpublished) is None
+
+
+def test_publishing_skips_a_freed_session(activation, prefix, slow_share, tmp_path_factory):
+    from wl_preproc.nwb import build as build_module
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    _unrecord(key, slow_share)
+    build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-freed-publish-build")))
+    publish_module.run_publish(slow_share, freed=[session_key])
+    assert publish_module.current_placement(key) is None
+
+
+def test_a_publish_that_fails_verification_records_nothing_and_retries(activation, prefix, monkeypatch, slow_share,
+                                                                       tmp_path_factory):
+    """Section 4: a copy that does not verify is deleted and reported, no
+    placement is recorded, and the next pass publishes it."""
+    from wl_preproc.nwb import build as build_module
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    _unrecord(key, slow_share)
+    build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-verify-build")))
+    slow = slow_share
+    real = publish_module.mismatches
+    monkeypatch.setattr(publish_module, "mismatches", lambda path, checksums: ["/forced"])
+    _published, errors = publish_module.run_publish(slow)
+    assert [error for error in errors if "differ after copying" in error]
+    assert publish_module.current_placement(key) is None
+    target = _placed_path(slow, key)
+    assert not list(target.parent.glob(target.name + "*"))
+    monkeypatch.setattr(publish_module, "mismatches", real)
+    publish_module.run_publish(slow)
+    assert publish_module.current_placement(key)["tier"] == "slow"
+
+
+def test_publishing_never_overwrites_a_file_no_placement_records(activation, prefix, slow_share, tmp_path_factory):
+    """Parent spec section 8.3: regeneration never overwrites. A row deleted
+    without its published file, then rebuilt, must not replace that file:
+    the lab's annotations exist only inside it."""
+    from wl_preproc.nwb import build as build_module
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[0])
+    _unrecord(key, slow_share)
+    build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-overwrite-first")))
+    publish_module.run_publish(slow_share)
+    published = _placed_path(slow_share, key)
+    before = published.read_bytes()
+    (nwb_schema.NwbFile & key).delete(prompt=False)
+    build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-overwrite-second")))
+    _published, errors = publish_module.run_publish(slow_share)
+    assert [error for error in errors if "not overwritten" in error]
+    assert published.read_bytes() == before
+    assert publish_module.current_placement(key) is None
+
+
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage
     does: the others are recorded, the failure is reported, and the failed
@@ -527,6 +645,13 @@ def test_a_path_recorded_for_another_activation_is_refused(activation, prefix, m
     if not nwb_schema.NwbFile & canonical:
         build_module.record(canonical, build_module.build(canonical, tmp_path_factory.mktemp("nwb-canonical")))
     recorded = Path((nwb_schema.NwbFile & canonical).fetch1("path"))
+    # Publishing deletes the scratch copy once it is on a share (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 4); the row still names
+    # the path, which is what the refusal reads, so a stand-in file keeps the
+    # "left untouched" half of this test meaningful.
+    if not recorded.exists():
+        recorded.parent.mkdir(parents=True, exist_ok=True)
+        recorded.write_bytes(b"another activation's file")
     before = recorded.read_bytes()
     key = _derivative(session_key, blocks, prefix, blocks[-1])
     monkeypatch.setattr(build_module, "nwb_path", lambda *args: recorded)

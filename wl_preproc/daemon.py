@@ -880,6 +880,8 @@ def run_once(
     host: str | None = None,
     share: str | None = None,
     nwb_root: Path | None = None,
+    nwb_slow=None,
+    nwb_fast=None,
 ) -> dict:
     """One pass of the runner. Returns what it did, for the daily report.
 
@@ -996,6 +998,17 @@ def run_once(
         nwb_built, nwb_errors = run_stage(nwb_root, freed=currently_freed(prefix=prefix))
         errors.extend(nwb_errors)
 
+    # Publishing (design spec `2026-09-29-nwb-publishing-design.md` section
+    # 4): opt-in on the slow share, a `publish.Share`. `None` when absent.
+    nwb_published: int | None
+    if nwb_slow is None:
+        nwb_published = None
+    else:
+        from wl_preproc.nwb.publish import run_publish
+
+        nwb_published, publish_errors = run_publish(nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+        errors.extend(publish_errors)
+
     archived: int | None
     if nas_root is None or host is None or share is None:
         archived = None
@@ -1011,6 +1024,7 @@ def run_once(
         "stale_jobs_reaped": reaped,
         "archived": archived,
         "nwb": nwb_built,
+        "nwb_published": nwb_published,
         # How many sessions were freed, and so skipped, when the pass began --
         # a count, so a skip never reads as an all-clear.
         "freed_skipped": freed_skipped,
