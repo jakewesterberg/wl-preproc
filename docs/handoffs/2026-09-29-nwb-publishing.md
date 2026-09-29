@@ -245,7 +245,7 @@ merge**. It found:
 - sixteen Minor issues;
 - nine behaviours it declined to judge.
 
-Its report was kept in the plan's workspace.
+Its findings are summarised here.
 
 **All seven Critical and Important findings were fixed in one pass.** Each
 has a test that failed before the fix and passes after it, all in
@@ -291,6 +291,30 @@ fixed code rightly adopts the file.
 - **A move whose source changes during the copy is abandoned and retried.**
   *Cost if wrong:* a file under constant writing is never moved, and each
   pass says so.
+
+**What the reviewer declined to judge, and the ruling on each:**
+- **Subject and session names unchecked in share paths.** This is the
+  pattern the archive and piece 1 already use, and the names come from our
+  own tables, not from the network. It stands.
+- **The raw archive stage creates `--nas-root` if it is missing.** It can
+  therefore archive onto an unmounted NAS mount point, the same failure I3
+  fixed for NWB files. That code is outside this branch, so it is **a
+  follow-up the requester should schedule.** Raw data archived onto local
+  disk and then reclaimed from scratch would be hidden under the NAS mount.
+- **A dataset held in memory while it is hashed.** This is piece 1's design,
+  and it matters at piece 3's sizes (M8).
+- **Whether SMB or NFS renames are atomic, and whether HDF5 file locking
+  works on the share.** Both need the NAS, which is not bought yet. They are
+  recorded as open (M8).
+- **Whether wl.works parses the listing's times and 202 bodies.** That is
+  wl.works' side, and the contract is exported.
+- **The subject string on each `trials.jsonl` line.** That is wl-xcon's
+  contract, and the join fails safe.
+- **Piece 2b's effects on listing and publishing.** Out of scope; M12 is
+  carried forward.
+- **A null pipeline commit off a checkout.** Planning ruling 2 accepted it.
+- **Size limits on `GET /nwb` without a cursor.** No bound is stated; it is
+  deferred with M2.
 
 **Deferred minors** (M1–M16 in the review):
 - M1: `active_keys` fetches every active set.
