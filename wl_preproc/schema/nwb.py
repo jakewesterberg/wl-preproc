@@ -21,10 +21,11 @@ class NwbFile(dj.Manual):
     # Key: (subject, session_datetime, montage_id, activation_id).
     -> request.Activation
     ---
-    # written: built and no critical nwbinspector finding. invalid: built,
-    # with at least one (kept for inspection; piece 2 publishes only
-    # `written`). refused: not built, `reason` says why; never retried
-    # automatically -- delete the row to rebuild.
+    # written: built and no nwbinspector finding at CRITICAL or above
+    # (ERROR, PYNWB_VALIDATION, CRITICAL; `n_critical` counts them).
+    # invalid: built, with at least one (kept for inspection; piece 2
+    # publishes only `written`). refused: not built, `reason` says why; never
+    # retried automatically -- delete the row to rebuild.
     status : enum('written','invalid','refused')
     path = '' : varchar(1024)
     n_bytes = null : bigint unsigned

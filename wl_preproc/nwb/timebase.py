@@ -58,7 +58,7 @@ def add_timebase(nwb: NWBFile, provenance: dict, clocks: list[dict], segments: l
     module.add(_table("clock_reference", "Where the wall-clock time of session t = 0 came from (section 4.2).",
                       [clock_reference], {
         "source": "barcode: the first barcode's own value (seconds since 2020-01-01 UTC); manifest: started_at.",
-        "reference_time": "The wall-clock time of t = 0, ISO 8601 UTC.",
+        "reference_datetime": "The wall-clock time of t = 0, ISO 8601 UTC.",
         "manifest_started_at": "The session manifest's started_at, ISO 8601 UTC.",
         "started_at_difference_s": "started_at minus the barcode's time of t = 0, seconds.",
     }))

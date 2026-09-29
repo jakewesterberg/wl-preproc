@@ -10,7 +10,7 @@ from pathlib import Path
 from wl_preproc.nwb.checksums import dataset_checksums
 from wl_preproc.nwb.eye import add_eye_series, add_eye_tables
 from wl_preproc.nwb.eye_events import add_agreement, add_detections, add_sources
-from wl_preproc.nwb.gather import Refused, gather
+from wl_preproc.nwb.gather import Refused, gather, readiness
 from wl_preproc.nwb.intervals import add_blocks, add_task_events, add_trials
 from wl_preproc.nwb.session import new_file
 from wl_preproc.nwb.timebase import add_timebase
@@ -30,9 +30,23 @@ class BuildResult:
     checksums: list = dataclasses.field(default_factory=list)
 
 
-def nwb_path(nwb_root: Path, identifier: str) -> Path:
-    """`{nwb_root}/{session_id}/{identifier}.nwb` (section 6)."""
-    return Path(nwb_root) / identifier.split(".")[0] / f"{identifier}.nwb"
+def nwb_path(nwb_root: Path, subject: str, session_id: str, identifier: str) -> Path:
+    """`{nwb_root}/{subject}/{session_id}/{identifier}.nwb` (section 6). The
+    subject scopes it, as it scopes the NAS copy
+    (`archive/stage.py::nas_root_for_subject`): two animals can share a
+    session id (the final review's C1)."""
+    return Path(nwb_root) / subject / session_id / f"{identifier}.nwb"
+
+
+def _recorded_for_another(activation_key: dict, path: Path) -> dict | None:
+    """The key of another activation whose recorded file is `path`, if any."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    own = {k: activation_key[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
+    for row in (nwb_schema.NwbFile & {"path": str(path)}).keys():
+        if row != own:
+            return row
+    return None
 
 
 def build(activation_key: dict, nwb_root: Path) -> BuildResult:
@@ -53,7 +67,14 @@ def build(activation_key: dict, nwb_root: Path) -> BuildResult:
         add_detections(nwb, data.eye["detections"])
         add_sources(nwb, data.eye["sources"])
         add_agreement(nwb, data.eye["agreement"])
-    path = nwb_path(nwb_root, data.session["identifier"])
+    path = nwb_path(nwb_root, data.session["subject"]["subject_id"], data.session["session_id"],
+                    data.session["identifier"])
+    other = _recorded_for_another(activation_key, path)
+    if other is not None:
+        # Never replace another activation's recorded file (the final
+        # review's C1, second line): one subject's two rigs can number the
+        # same day's sessions alike.
+        return BuildResult(status="refused", reason=f"{path} is already recorded for {other}")
     write_atomically(nwb, path)
     findings = inspect_file(path)
     return BuildResult(
@@ -97,8 +118,10 @@ def record(activation_key: dict, result: BuildResult) -> None:
 
 def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """The daemon's `_nwb_stage`: every activation without an `NwbFile` row,
-    skipping freed sessions. Returns `(activations recorded, per-activation
-    failures)`, the archive stage's shape."""
+    skipping freed sessions and, without recording anything, those whose
+    inputs are not all computed yet (`gather.readiness`). Returns
+    `(activations recorded, per-activation failures)`, the archive stage's
+    shape."""
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import request
 
@@ -108,6 +131,8 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
             continue
         try:
+            if readiness(key) is not None:
+                continue
             record(key, build(key, nwb_root))
             recorded += 1
         except Exception as exc:  # one bad activation must not take down the run

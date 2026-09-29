@@ -87,7 +87,7 @@ def test_the_timebase_tables(tmp_path):
                "drift_ppm": 2.0, "residual_us_rms": 10.0}]
     segments = [{"system": "ohdpi", "file_path": "ohdpi/x.txt", "first_sample": 7, "offset_s": 0.1,
                  "start_s": 0.1, "end_s": 60.1, "n_samples": 30000}]
-    reference = {"source": "barcode", "reference_time": T0.isoformat(), "manifest_started_at": T0.isoformat(),
+    reference = {"source": "barcode", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
                  "started_at_difference_s": 0.4}
     _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference))
     with io:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import io
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -42,6 +43,23 @@ def _request(key, idempotency_key, montage, blocks, block_ids=None):
     )
 
 
+def _derivative(session_key, blocks, prefix, block):
+    """The one-block derivative over `block`. `accept` returns the
+    activation it already holds for a block set, so every caller gets the
+    same one."""
+    from wl_preproc.responder.jobs import accept
+
+    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
+    return accept(_request(session_key, f"nwbstep1-block-{block['block_id']}", montage, blocks,
+                           block_ids=[block["block_id"]]), prefix=prefix)
+
+
+def _command(key, nwb_root, prefix):
+    return ["nwb", "build", "--subject", key["subject"], "--session-datetime", key["session_datetime"].isoformat(),
+            "--montage-id", str(key["montage_id"]), "--activation-id", str(key["activation_id"]),
+            "--nwb-root", str(nwb_root), "--prefix", prefix]
+
+
 @pytest.fixture(scope="module")
 def activation(daemon_module, prefix, tmp_path_factory):
     """`stepped_session`'s construction (tests/schema/test_detect_populate.py),
@@ -75,6 +93,11 @@ def activation(daemon_module, prefix, tmp_path_factory):
     ]
     montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
     key = accept(_request(session_key, "nwbstep1-canonical", montage, blocks), prefix=prefix)
+    # The next pass computes what wl.works' blocks add: their coverage.
+    # *Added with the final review's I4: until then every file here was built
+    # before it, without block coverage, and nothing noticed; true when
+    # written.*
+    daemon_module.run_once(prefix=prefix)
     return session_key, key, blocks
 
 
@@ -93,10 +116,13 @@ def test_the_file_is_written_valid_and_describes_the_activation(built):
     assert not [f for f in built.findings if f["importance"] == "CRITICAL"]
     with NWBHDF5IO(str(built.path), "r") as handle:
         nwb = handle.read()
-        assert nwb.identifier == "2025-07-20_01.montage-0.activation-0"
+        assert nwb.identifier == "nwbstep1.2025-07-20_01.montage-0.activation-0"
         assert (nwb.subject.species, nwb.subject.sex) == ("Macaca mulatta", "F")
         assert tuple(nwb.experimenter) == ("jw",)
         assert nwb.session_start_time == built.clock["reference_time"]
+    # The subject scopes the path as well as the identifier (the final
+    # review's C1): {nwb_root}/{subject}/{session_id}/{identifier}.nwb.
+    assert (built.path.parent.parent.name, built.path.parent.name) == ("nwbstep1", "2025-07-20_01")
 
 
 def test_a_synthetic_sessions_clock_falls_back_to_the_manifest(activation, built):
@@ -425,6 +451,122 @@ def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monk
     assert len([e for e in errors if "the raw ohDPI file is unreadable" in e]) == 1, errors
     assert len(nwb_schema.NwbFile & failing) == 0
     assert (nwb_schema.NwbFile & fine).fetch1("status") == "written"
+
+
+def test_the_command_refuses_a_freed_session(activation, prefix, monkeypatch, tmp_path_factory, capsys):
+    """The final review's I5: a freed session's files are gone from scratch,
+    and another session may since have landed at its path, so the command
+    refuses it, as the stage skips it."""
+    from wl_preproc.archive import scratch
+    from wl_preproc.cli.main import main
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    (nwb_schema.NwbFile & key).delete(prompt=False)
+    monkeypatch.setattr(scratch, "currently_freed", lambda *, prefix=None: [dict(session_key)])
+    assert main(_command(key, tmp_path_factory.mktemp("nwb-freed-command"), prefix)) == 1
+    assert "freed" in capsys.readouterr().out
+    assert len(nwb_schema.NwbFile & key) == 0
+
+
+def test_a_path_recorded_for_another_activation_is_refused(activation, prefix, monkeypatch, tmp_path_factory):
+    """The final review's C1, second line: should two activations ever
+    resolve to one file (one subject's two rigs numbering the same day's
+    sessions alike), the second is refused rather than replace the first's
+    recorded file. Forced here by pointing a derivative at the canonical
+    activation's recorded path."""
+    from wl_preproc.nwb import build as build_module
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, canonical, blocks = activation
+    if not nwb_schema.NwbFile & canonical:
+        build_module.record(canonical, build_module.build(canonical, tmp_path_factory.mktemp("nwb-canonical")))
+    recorded = Path((nwb_schema.NwbFile & canonical).fetch1("path"))
+    before = recorded.read_bytes()
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    monkeypatch.setattr(build_module, "nwb_path", lambda *args: recorded)
+    result = build_module.build(key, tmp_path_factory.mktemp("nwb-collision"))
+    assert (result.status, result.path) == ("refused", None)
+    assert "already recorded" in result.reason
+    assert recorded.read_bytes() == before
+
+
+def test_blocks_the_eye_recording_does_not_reach_are_built_without_eye_data(activation, prefix, tmp_path_factory):
+    """The final review's I2: an activation whose blocks hold no eye sample
+    (the tracker started late, or stopped early) is built without eye data,
+    and its description says so. For one build the first block is moved past
+    the end of the recording, and restored after."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.nwb.build import build
+    from wl_preproc.schema import core
+
+    session_key, _key, blocks = activation
+    first = min(blocks, key=lambda b: b["start_s"])
+    past = max(b["end_s"] for b in blocks) + 2.0
+    key = _derivative(session_key, blocks, prefix, first)
+    core.Block.update1({**session_key, "block_id": first["block_id"], "start_s": past, "end_s": past + 1.0})
+    try:
+        result = build(key, tmp_path_factory.mktemp("nwb-no-samples"))
+    finally:
+        core.Block.update1({**session_key, "block_id": first["block_id"], "start_s": first["start_s"],
+                            "end_s": first["end_s"]})
+    assert result.status == "written", (result.reason, result.findings)
+    with NWBHDF5IO(str(result.path), "r") as handle:
+        nwb = handle.read()
+        assert "behavior" not in nwb.processing and "eye_events" not in nwb.processing
+        assert "no sample in these blocks" in nwb.session_description
+
+
+def test_the_stage_waits_for_upstream_keys_not_yet_computed(activation, prefix, tmp_path_factory):
+    """The final review's I4(a): a key of this session that an upstream table
+    has not computed yet (still to run, or errored) would leave the file
+    without it, recorded as final. One `BlockCoverage` row is held back, and
+    the stage waits until it is back."""
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import coverage
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    (nwb_schema.NwbFile & key).delete(prompt=False)
+    saved = (coverage.BlockCoverage & session_key).to_dicts()[0]
+    (coverage.BlockCoverage & {k: saved[k] for k in coverage.BlockCoverage.primary_key}).delete(prompt=False)
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-wait-upstream"))
+        assert len(nwb_schema.NwbFile & key) == 0
+    finally:
+        coverage.BlockCoverage.insert1(saved, allow_direct_insert=True)
+    run_stage(tmp_path_factory.mktemp("nwb-wait-upstream-after"))
+    assert (nwb_schema.NwbFile & key).fetch1("status") == "written"
+
+
+def test_the_stage_waits_for_session_time_rather_than_refusing(activation, prefix, tmp_path_factory, capsys):
+    """The final review's I4(b): no `TimingProvenance` row means "not yet",
+    not a refusal. The stage records nothing and tries again next pass, and
+    the command says what it is waiting on. The timing row is restored as it
+    was, as in the refusal tests."""
+    from wl_preproc.cli.main import main
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import timebase
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    (nwb_schema.NwbFile & key).delete(prompt=False)
+    saved = (timebase.TimingProvenance & session_key).fetch1()
+    (timebase.TimingProvenance & session_key).delete(prompt=False)
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-wait-time"))
+        assert len(nwb_schema.NwbFile & key) == 0
+        assert main(_command(key, tmp_path_factory.mktemp("nwb-wait-command"), prefix)) == 1
+        assert "not ready: waiting on TimingProvenance" in capsys.readouterr().out
+        assert len(nwb_schema.NwbFile & key) == 0
+    finally:
+        timebase.TimingProvenance.insert1(saved, allow_direct_insert=True)
+    run_stage(tmp_path_factory.mktemp("nwb-wait-time-after"))
+    assert (nwb_schema.NwbFile & key).fetch1("status") == "written"
 
 
 def test_a_file_without_the_subjects_date_of_birth_is_invalid(activation, tmp_path_factory):

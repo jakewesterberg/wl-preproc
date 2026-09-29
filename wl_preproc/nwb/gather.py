@@ -40,7 +40,7 @@ class Gathered:
     trials: list[dict]
     events: list[dict]
     timebase: dict
-    eye: dict | None  # None: no ohDPI recording in the session
+    eye: dict | None  # None: no ohDPI recording in the session, or no sample of it in the blocks
 
 
 def _aware_utc(value: datetime.datetime) -> datetime.datetime:
@@ -57,6 +57,50 @@ def _block_set(activation_key: dict, activation: dict, session_key: dict) -> lis
         rows = [row for row in (core.Block & session_key).to_dicts()
                 if montage["start_s"] <= row["start_s"] < montage["end_s"]]
     return sorted(rows, key=lambda row: row["start_s"])
+
+
+def identifier_for(activation_key: dict, session_id: str) -> str:
+    """`{subject}.{session_id}.montage-{m}.activation-{a}`. A session id is
+    the sync box's date and index, not scoped to a subject, so two animals
+    can share one (`archive/stage.py::nas_root_for_subject`; the final
+    review's C1)."""
+    return (f"{activation_key['subject']}.{session_id}.montage-{activation_key['montage_id']}"
+            f".activation-{activation_key['activation_id']}")
+
+
+def readiness(activation_key: dict) -> str | None:
+    """`None` when everything the file is built from has been computed for
+    the session, else what it is still waiting on (the final review's I4).
+    Not a refusal: the stage records nothing and tries again next pass.
+
+    A key of the session that a table's `key_source` holds but the table
+    does not is one `populate()` has still to run, or one that errored. A
+    file built now would silently leave it out and be recorded as final.
+    Every table here writes a row for every key it is given, refusals
+    included, so no key waits forever by design."""
+    from wl_preproc.schema import consensus, coverage, detect, timebase
+    from wl_preproc.schema import eye as eye_schema
+
+    session_key = {k: activation_key[k] for k in ("subject", "session_datetime")}
+    if not timebase.TimingProvenance & session_key:
+        return "waiting on TimingProvenance"
+    for table in (coverage.BlockCoverage, coverage.TrialCoverage, eye_schema.EyeCalibration,
+                  detect.EyeValidity, detect.EyeDetection, consensus.DetectorAgreement):
+        pending = (table().key_source & session_key) - table.proj()
+        if len(pending):
+            return f"waiting on {table.__name__}: {len(pending)} key(s) of this session not yet computed"
+    return None
+
+
+def agreement_rows(rows: list[dict], names: dict) -> list[dict]:
+    """`DetectorAgreement` rows between registered detectors, by name. A
+    NULL score -- the metric undefined, nothing comparable or kappa's 0/0 --
+    is written as NaN (the final review's I1)."""
+    return [{"detector_a": names[row["paramset_a"]], "detector_b": names[row["paramset_b"]],
+             "trace": row["trace"], "metric": row["metric"], "vocabulary": row["vocabulary"],
+             "pso_as": row["pso_as"], "value": np.nan if row["value"] is None else float(row["value"]),
+             "n_samples_compared": int(row["n_samples_compared"])}
+            for row in rows if row["paramset_a"] in names and row["paramset_b"] in names]
 
 
 def reference_from(first_barcode_value: int, started_at: datetime.datetime) -> dict:
@@ -172,7 +216,7 @@ def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
         "segments": segments,
         "clock_reference": {
             "source": clock["source"],
-            "reference_time": clock["reference_time"].isoformat(),
+            "reference_datetime": clock["reference_time"].isoformat(),
             "manifest_started_at": clock["manifest_started_at"].isoformat(),
             "started_at_difference_s": clock["started_at_difference_s"],
         },
@@ -214,6 +258,10 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
     times = eye_schema.row_session_times(segment, offsets)
     edges = _edges(times, segment)
     keep = blocks.contains(times)
+    if not keep.any():
+        # The tracker started after, or stopped before, these blocks (the
+        # final review's I2): nothing to write, and HDF5 cannot chunk it.
+        return {"no_samples": True}
     validity_params = ValidityParams(**(paramset.ParamSet & {"paramset_type": "eye_validity",
                                                             "paramset_idx": validity_idx}).fetch1("params"))
 
@@ -267,13 +315,8 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
                                 "runs": _runs_to_intervals([(r["source_start"], r["source_stop"], r["source"])
                                                             for r in source_rows], edges, blocks)})
 
-    agreement = []
-    for row in (consensus.DetectorAgreement & {**session_key, "validity_paramset_idx": validity_idx}).to_dicts():
-        if row["paramset_a"] in names and row["paramset_b"] in names:
-            agreement.append({"detector_a": names[row["paramset_a"]], "detector_b": names[row["paramset_b"]],
-                              "trace": row["trace"], "metric": row["metric"], "vocabulary": row["vocabulary"],
-                              "pso_as": row["pso_as"], "value": float(row["value"]),
-                              "n_samples_compared": int(row["n_samples_compared"])})
+    agreement = agreement_rows(
+        (consensus.DetectorAgreement & {**session_key, "validity_paramset_idx": validity_idx}).to_dicts(), names)
 
     return {"times": times[keep], "gaze": gaze, "pupil": pupil, "calibration": calibration,
             "validity": validity, "repairs": repairs, "detections": detections, "sources": sources,
@@ -306,6 +349,9 @@ def gather(activation_key: dict) -> Gathered:
 
     validity_idx = paramset.register("eye_validity", dataclasses.asdict(DEFAULT_VALIDITY_PARAMS))
     eye = _eye(session_key, session_dir, blocks, validity_idx, detection_idx)
+    no_eye_samples = eye is not None and eye.get("no_samples", False)
+    if no_eye_samples:
+        eye = None
 
     session_id = session_dir.name
     task_types = sorted({row["task_type"] for row in block_rows})
@@ -313,11 +359,13 @@ def gather(activation_key: dict) -> Gathered:
                    f"blocks {', '.join(str(row['block_id']) for row in block_rows)} ({', '.join(task_types)}).")
     if eye is not None and eye["missing_eyes"]:
         description += " No calibration for the " + " and ".join(eye["missing_eyes"]) + " eye, so its gaze is absent."
+    if no_eye_samples:
+        description += " The eye recording has no sample in these blocks, so the file has no eye data."
     requested_by = (request.Request & {"idempotency_key": activation["request_key"]}).fetch1("requested_by")
     systems = sorted({system for row in _blocks(block_rows, session_key) for system in row["coverage"]})
     return Gathered(
         session={
-            "identifier": f"{session_id}.montage-{key['montage_id']}.activation-{key['activation_id']}",
+            "identifier": identifier_for(key, session_id),
             "session_id": session_id,
             "description": description,
             "reference_time": clock["reference_time"],

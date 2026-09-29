@@ -118,3 +118,23 @@ def test_a_failed_write_leaves_no_file_under_the_final_name(tmp_path, monkeypatc
     with pytest.raises(RuntimeError):
         write_atomically(new_file(SESSION), path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_findings_ranked_above_critical_also_block(tmp_path):
+    """The final review's I3: nwbinspector ranks PYNWB_VALIDATION (the file
+    fails the NWB schema) and ERROR above CRITICAL. An ERROR that the file
+    cannot be read blocks it; an ERROR that one of the inspector's own checks
+    raised does not -- nwbinspector 0.7's checks raise on any empty table --
+    and is kept with the other findings."""
+    import h5py
+
+    from wl_preproc.nwb.validate import inspect_file, n_critical
+
+    levels = ("ERROR", "PYNWB_VALIDATION", "CRITICAL", "BEST_PRACTICE_VIOLATION", "BEST_PRACTICE_SUGGESTION")
+    assert n_critical([{"importance": level, "check": "check_x"} for level in levels]) == 3
+    crashed = {"importance": "ERROR", "check": "During evaluation of 'check_col_not_nan' - <class 'IndexError'>"}
+    assert n_critical([crashed]) == 0
+    path = tmp_path / "not_nwb.nwb"
+    with h5py.File(path, "w") as handle:
+        handle["data"] = [1, 2, 3]
+    assert n_critical(inspect_file(path)) >= 1

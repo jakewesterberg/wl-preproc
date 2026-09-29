@@ -660,11 +660,24 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.nwb.build import build, record
         from wl_preproc.schema import nwb as nwb_schema
 
+        from wl_preproc.archive import scratch
+        from wl_preproc.nwb.gather import readiness
+
         activate_all(prefix=args.prefix)
         key = {"subject": args.subject, "session_datetime": args.session_datetime,
                "montage_id": args.montage_id, "activation_id": args.activation_id}
         if nwb_schema.NwbFile & key:
             print(f"already recorded: {(nwb_schema.NwbFile & key).fetch1('status')}; delete the row to rebuild")
+            return 1
+        # As the daemon's stage skips them: a freed session's files are gone
+        # from scratch, and another session may have landed at its path.
+        if {"subject": args.subject, "session_datetime": args.session_datetime} in scratch.currently_freed(
+                prefix=args.prefix):
+            print("freed: rehydrate the session first (wlpp rehydrate)")
+            return 1
+        waiting = readiness(key)
+        if waiting is not None:
+            print(f"not ready: {waiting}")
             return 1
         result = build(key, args.nwb_root)
         record(key, result)

@@ -95,6 +95,10 @@ activation's blocks (§5).
 
 **File-level metadata**
 - `identifier`: `{session_id}.montage-{m}.activation-{a}`.
+  - *Amended by the final review, 2026-09-29 (its C1): `{subject}.{session_id}.montage-{m}.activation-{a}`.
+    A session id is the sync box's date and index, not scoped to a subject,
+    so two animals can share one; `archive/stage.py::nas_root_for_subject`
+    fixed the same defect for the NAS copy.*
 - `session_id`: the manifest's session id (the session directory's name).
 - `session_description`: the activation's role, its montage and its blocks'
   task types.
@@ -287,6 +291,11 @@ block set.**
 - **Where:** `{nwb_root}/{session_id}/{identifier}.nwb`. `nwb_root` is a
   scratch location given to the stage and the command. Piece 2 publishes
   from there.
+  - *Amended by the final review, 2026-09-29 (its C1):
+    `{nwb_root}/{subject}/{session_id}/{identifier}.nwb`, for §3's reason.
+    And a build whose path another activation's row already records is
+    refused rather than replace that file: one subject's two rigs can number
+    the same day's sessions alike.*
 - **Size:** for a two-hour session, the eye series are about 250 MB before
   compression, most of it pupil; every table is small.
 
@@ -312,6 +321,13 @@ writes is written-once.
   `CRITICAL` importance in `n_critical`.
 - **Any critical finding makes the status `invalid`.** The file is kept for
   inspection; piece 2 publishes only `written` files.
+  - *Amended by the final review, 2026-09-29 (its I3): any finding at
+    `CRITICAL` or above. nwbinspector ranks `PYNWB_VALIDATION` (the file
+    fails the NWB schema) and `ERROR` (pynwb cannot read it) above
+    `CRITICAL`, and `n_critical` counts all three. One exception: an `ERROR`
+    that one of the inspector's own checks raised says nothing about the
+    file -- nwbinspector 0.7's column checks raise on every empty table --
+    so it does not block, and is stored with the rest.*
 - The inspector's default configuration, not DANDI's. A DANDI export is a
   derivative (the `export` action), with its own requirements.
 
@@ -356,6 +372,20 @@ otherwise be retried every pass).
 - no `TimingProvenance` row, or tier D: no trustworthy session time;
 - no blocks in the activation's block set;
 - more than one ohDPI segment in the session (§4.3).
+
+*Amended by the final review, 2026-09-29 (its I4): the stage and the command
+first ask whether the activation is ready, and one that is not is skipped
+with no row and tried again next pass. Ready means a `TimingProvenance` row
+exists, and no key of the session is still outstanding in the computed
+tables the file is built from (`BlockCoverage`, `TrialCoverage`,
+`EyeCalibration`, `EyeValidity`, `EyeDetection`, `DetectorAgreement`). A
+missing `TimingProvenance` row is therefore "not yet", not a refusal. A file
+built earlier would have left an outstanding key out and been recorded as
+final. `gather` still refuses a missing row if called directly. Rebuilding a
+recorded file when its inputs later change -- an `invalid` row once wl.works
+sends the date of birth, or any row after an upstream recompute -- is piece
+2's lifecycle; until then the row is deleted by hand to rebuild. The command
+also refuses a freed session, as the stage skips one (its I5).*
 
 **One partial case:** with no computed `EyeCalibration` for an eye, that
 eye's gaze, validity, repairs and detections are left out and the file is
