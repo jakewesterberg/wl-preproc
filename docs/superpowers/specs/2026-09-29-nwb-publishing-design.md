@@ -111,6 +111,18 @@ checked in CI, as `job_request.json` is.
   narrow-waveform units exist.
 - `checksums`: `algorithm: "sha256"` and one entry per dataset (§7).
 
+*Amended while planning, 2026-09-29 (what proving the code established):*
+- *`identity` names the superseded activation `supersedes_activation_id`,
+  not `supersedes`. `tests/schema/test_guardrails.py` forbids any
+  `"supersedes":` key in the source, the guard that nothing writes
+  `Activation.supersedes`, and a clearer name beats weakening it.*
+- *`identity.pipeline` is the name and the commit only. The package's version
+  is a constant that has never moved, and reading it needs `importlib`, which
+  `tests/test_cli_guardrails.py` bans outright.*
+- *Why a trial's condition or settings are unknown is one file-level `notes`
+  list, not repeated per block: the rig's record is joined for the whole
+  file.*
+
 **Not in the description: the file's location.** It changes when the file
 moves between shares; `GET /nwb` reports it (§6). **Not ours: the
 experimenter's good/bad notes and the experiment links.** wl.works holds them,
@@ -153,6 +165,11 @@ blocks):
 - The raw per-trial record stays in the session directory, where the rig writes
   it.
 
+*Amended while planning, 2026-09-29: the conditions table's name column is
+`condition`, not `name`. A `DynamicTable`'s own `name` attribute shadows a
+column called that; measured, pandas returned the table's name for every
+row.*
+
 **This reverses a ruling in piece 1** (its §3, "the trials table has no
 `condition` column"). That ruling held while a condition lived only on its
 `CONDITION` event. The rig's record ties each trial to its condition by trial
@@ -175,6 +192,12 @@ share, as wl.works' location triple requires (`wl-works/docs/superpowers/specs/
 2026-08-04-plan-23-dataset-viewer-design.md` §10.1). The roots are
 configuration: the lab may give NWBs their own top-level folder on the slow
 share, apart from the raw archive's `<subject>/<session>` folders.
+
+*Amended while planning, 2026-09-29: each root is the share's mount point, and
+every file lives under a fixed top-level `nwb/` folder on it,
+`<mount>/nwb/<subject>/<session_id>/<identifier>.nwb`. That keeps NWBs apart
+from the raw archive, and makes the recorded share-relative path
+computable from the mount alone.*
 
 **Opt-in, like the archive and the builder.** Without the slow share, publishing
 does not run and reports `None`. Without the fast share, placement does not run.
@@ -204,6 +227,12 @@ them. **Failures:**
   next pass, like the archive stage.
 - A half-copied file never carries its final name, and no placement is recorded
   until verification passes.
+- *Amended while planning, 2026-09-29: **publishing never writes over a file
+  no placement records.** A row deleted without its published file and then
+  rebuilt would otherwise replace that file, and the lab's annotations exist
+  only inside it (parent spec §8.3: "regeneration supersedes; it never
+  overwrites"). It is refused and reported every pass, for a person to
+  resolve.*
 
 ## 5. The active set, and placement
 
@@ -237,6 +266,13 @@ Annotations the lab has appended travel with the file.
   dataset can be marked active before its files exist.
 - **Unknown activations** are kept, and named in `PUT /nwb/active`'s response
   (§6). They may be built later.
+- *Amended while planning, 2026-09-29:*
+  - ***A move whose old copy could not be deleted** stands, and the next pass
+    finishes it. That happens when a reader holds the file, or the share
+    refuses the delete. Without this, two copies would outlive the move, and
+    a later move back would stop on the rule above.*
+  - ***A published file missing from its share** is reported by path each
+    pass, and its placement stays as recorded.*
 
 ## 6. Talking to wl.works
 
@@ -308,6 +344,13 @@ The latest row is the desired state.
 
 The cursor `GET /nwb` uses covers `NwbFile` and `NwbPlacement` changes. How it
 is kept is the plan's to settle (§11.3).
+
+*Settled while planning, 2026-09-29:*
+- *The cursor is its own table, `NwbChange`: one row per build, publish or
+  move, keyed on `change_seq`, an `auto_increment`. `NwbPlacement` is keyed on
+  the change that made it.*
+- *`auto_increment` and `LAST_INSERT_ID()` were measured working under
+  DataJoint 2.3.*
 
 ## 10. What wl.works and wl-xcon must do
 
