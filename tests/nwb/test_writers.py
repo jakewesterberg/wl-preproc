@@ -1,0 +1,198 @@
+"""The NWB writers, on plain data (design spec
+`2026-09-28-nwb-builder-design.md` sections 3, 6 and 11)."""
+
+from __future__ import annotations
+
+import datetime
+
+import h5py
+import numpy as np
+import pytest
+
+T0 = datetime.datetime(2026, 9, 28, 12, 0, tzinfo=datetime.timezone.utc)
+SESSION = {
+    "identifier": "2026-09-28_01.montage-0.activation-0",
+    "session_id": "2026-09-28_01",
+    "description": "canonical activation, montage 0",
+    "reference_time": T0,
+    "experimenter": "jw",
+    "subject": {"subject_id": "monk01", "species": "Macaca mulatta", "sex": "F",
+                "date_of_birth": datetime.date(2016, 3, 2)},
+}
+BLOCKS = [{"block_id": 1, "start_s": 0.0, "end_s": 30.0, "task_type": "rf_map", "works_block_id": "wb-1",
+           "measured_start_s": 0.5, "measured_stop_s": 29.5,
+           "coverage": {"ohdpi": ("full", 30.0), "spikeglx": ("partial", 12.0)}},
+          {"block_id": 2, "start_s": 30.0, "end_s": 60.0, "task_type": "search", "works_block_id": None,
+           "measured_start_s": None, "measured_stop_s": None, "coverage": {"ohdpi": ("full", 30.0)}}]
+TRIALS = [{"trial_id": 1, "start_s": 1.0, "stop_s": 3.0, "outcome": "correct", "block_id": 1,
+           "coverage": {"ohdpi": ("full", 2.0)}}]
+EVENTS = [{"time_s": 1.0, "event_type": "TRIAL_START", "trial_id": 1, "block_id": None, "condition": None},
+          {"time_s": 2.5, "event_type": "CODE_256", "trial_id": None, "block_id": None, "condition": None}]
+
+
+def _write(tmp_path, build):
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.nwb.session import new_file
+    from wl_preproc.nwb.write import write_atomically
+
+    nwb = new_file(SESSION)
+    build(nwb)
+    path = tmp_path / "f.nwb"
+    write_atomically(nwb, path)
+    io = NWBHDF5IO(str(path), "r")
+    return path, io, io.read()
+
+
+def test_the_file_is_one_activation_on_session_time(tmp_path):
+    _path, io, nwb = _write(tmp_path, lambda nwb: None)
+    with io:
+        assert nwb.identifier == SESSION["identifier"]
+        assert nwb.session_start_time == T0 and nwb.timestamps_reference_time == T0
+        assert tuple(nwb.experimenter) == ("jw",)
+        assert (nwb.subject.species, nwb.subject.sex) == ("Macaca mulatta", "F")
+        assert nwb.subject.date_of_birth.date() == datetime.date(2016, 3, 2)
+
+
+def test_blocks_trials_and_events(tmp_path):
+    from wl_preproc.nwb.intervals import add_blocks, add_task_events, add_trials
+
+    def build(nwb):
+        add_blocks(nwb, BLOCKS, ["ohdpi", "spikeglx"])
+        add_trials(nwb, TRIALS, ["ohdpi"])
+        add_task_events(nwb, EVENTS)
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        blocks = nwb.intervals["blocks"].to_dataframe()
+        assert blocks["block_id"].tolist() == [1, 2]
+        assert blocks["works_block_id"].tolist() == ["wb-1", ""]
+        assert np.isnan(blocks["measured_start_time"].iloc[1])
+        assert blocks["coverage_spikeglx"].tolist() == ["partial", ""]
+        assert blocks["covered_s_spikeglx"].iloc[0] == 12.0 and np.isnan(blocks["covered_s_spikeglx"].iloc[1])
+        trials = nwb.trials.to_dataframe()
+        assert trials[["trial_id", "outcome", "block_id", "coverage_ohdpi"]].iloc[0].tolist() == [1, "correct", 1, "full"]
+        events = nwb.intervals["task_events"].to_dataframe()
+        assert events["start_time"].tolist() == events["stop_time"].tolist() == [1.0, 2.5]
+        assert events["event_type"].tolist() == ["TRIAL_START", "CODE_256"]
+        assert events["trial_id"].tolist() == [1, -1]
+
+
+def test_the_timebase_tables(tmp_path):
+    from wl_preproc.nwb.timebase import add_timebase
+
+    provenance = {"tier": "A", "n_systems_aligned": 2, "n_segments": 2, "n_rejected_segments": 0,
+                  "worst_residual_us": 12.0, "worst_drift_ppm": 3.0}
+    clocks = [{"system": "ohdpi", "fit_status": "fitted", "nominal_rate_hz": 500.0, "fitted_rate_hz": 498.55,
+               "drift_ppm": 2.0, "residual_us_rms": 10.0}]
+    segments = [{"system": "ohdpi", "file_path": "ohdpi/x.txt", "first_sample": 7, "offset_s": 0.1,
+                 "start_s": 0.1, "end_s": 60.1, "n_samples": 30000}]
+    reference = {"source": "barcode", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
+                 "started_at_difference_s": 0.4}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference))
+    with io:
+        module = nwb.processing["timebase"]
+        assert module["timing_provenance"].to_dataframe()["tier"].tolist() == ["A"]
+        assert module["system_clocks"].to_dataframe()["fitted_rate_hz"].tolist() == [498.55]
+        assert module["segments"].to_dataframe()["n_samples"].tolist() == [30000]
+        assert module["clock_reference"].to_dataframe()["source"].tolist() == ["barcode"]
+
+
+def _eye_data(n=2000, eyes=("left", "right")):
+    times = 1.0 + np.arange(n) / 500.0
+    gaze = {eye: np.column_stack([np.sin(times), np.cos(times)]) for eye in eyes}
+    pupil = {eye: np.ones((n, 5)) for eye in ("left", "right")}
+    return times, gaze, pupil
+
+
+def test_the_eye_series_share_one_timestamps_dataset(tmp_path):
+    from wl_preproc.nwb.eye import add_eye_series
+
+    times, gaze, pupil = _eye_data()
+    path, io, nwb = _write(tmp_path, lambda nwb: add_eye_series(nwb, times, gaze, pupil))
+    with io:
+        eye = nwb.processing["behavior"]["EyeTracking"]
+        np.testing.assert_allclose(eye["gaze_left"].timestamps[:], times)
+        np.testing.assert_allclose(eye["gaze_right"].data[:], gaze["right"].astype(np.float32))
+        assert nwb.processing["behavior"]["PupilTracking"]["pupil_right"].data.shape == (2000, 5)
+    with h5py.File(path) as handle:
+        base = "processing/behavior"
+        left = handle[f"{base}/EyeTracking/gaze_left/timestamps"]
+        for other in ("EyeTracking/gaze_right", "PupilTracking/pupil_left", "PupilTracking/pupil_right"):
+            assert handle[f"{base}/{other}/timestamps"].id == left.id, other
+        data = handle[f"{base}/EyeTracking/gaze_left/data"]
+        assert data.compression == "gzip" and data.chunks == (2000, 2)
+
+
+def test_continuous_chunks_are_about_256_kb():
+    from wl_preproc.nwb.columns import CHUNK_BYTES, continuous
+
+    io = continuous(np.zeros((1_000_000, 2), dtype=np.float32))
+    assert io.io_settings["chunks"] == (CHUNK_BYTES // 8, 2)
+    assert io.io_settings["compression"] == "gzip"
+
+
+def test_an_eye_with_no_calibration_has_no_gaze(tmp_path):
+    """Design spec section 10's one partial case."""
+    from wl_preproc.nwb.eye import add_eye_series
+
+    times, gaze, pupil = _eye_data(eyes=("left",))
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_eye_series(nwb, times, gaze, pupil))
+    with io:
+        assert list(nwb.processing["behavior"]["EyeTracking"].spatial_series) == ["gaze_left"]
+
+
+def test_the_eye_tables(tmp_path):
+    from wl_preproc.nwb.eye import add_eye_tables
+
+    calibration = [{"eye": "left", "calibration_source": "fitted", "calibration_model": "affine",
+                    "gx_const": 0.1, "gx_dx": 1.0, "gx_dy": 0.0, "gx_dx2": None, "gx_dy2": None, "gx_dxdy": None,
+                    "gy_const": 0.0, "gy_dx": 0.0, "gy_dy": 1.0, "gy_dx2": None, "gy_dy2": None, "gy_dxdy": None,
+                    "validation_error_deg": 0.4, "n_points": 9, "residual_deg_rms": 0.3, "residual_deg_max": 0.8,
+                    "reason": ""}]
+    validity = {"left": [(3.0, 3.2, "blink")], "right": []}
+    repairs = {"left": [(5.0, 5.004)], "right": []}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_eye_tables(nwb, calibration, validity, repairs))
+    with io:
+        module = nwb.processing["behavior"]
+        cal = module["eye_calibration"].to_dataframe()
+        assert cal["gx_const"].tolist() == [0.1] and np.isnan(cal["gx_dx2"].iloc[0])
+        assert module["eye_validity_left"].to_dataframe()["label"].tolist() == ["blink"]
+        assert len(module["eye_validity_right"]) == 0
+        assert module["eye_glitch_repairs_left"].to_dataframe()["stop_time"].tolist() == [5.004]
+
+
+def test_every_detectors_events_and_sources_and_agreement(tmp_path):
+    from wl_preproc.nwb.eye_events import add_agreement, add_detections, add_sources
+
+    runs = [{"start_s": 1.0, "stop_s": 1.04, "label": "saccade", "amplitude_deg": 2.0, "peak_velocity_deg_s": 150.0,
+             "start_x_deg": 0.0, "start_y_deg": 0.0, "end_x_deg": 2.0, "end_y_deg": 0.0, "direction_deg": 0.0,
+             "reliability": None},
+            {"start_s": 1.04, "stop_s": 2.0, "label": "fixation"}]
+    tables = [{"name": f"engbert_kliegl_{trace}", "description": "d", "runs": runs} for trace in ("left", "right", "conjunction")]
+    sources = [{"name": "engbert_kliegl_source", "description": "d", "runs": [(0.0, 60.0, "both")]}]
+    agreement = [{"detector_a": "engbert_kliegl", "detector_b": "bmd", "trace": "left", "metric": "event_f1",
+                  "vocabulary": "saccadic", "pso_as": "", "value": 0.8, "n_samples_compared": 1000}]
+
+    def build(nwb):
+        add_detections(nwb, tables)
+        add_sources(nwb, sources)
+        add_agreement(nwb, agreement)
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        module = nwb.processing["eye_events"]
+        left = module["engbert_kliegl_left"].to_dataframe()
+        assert left["label"].tolist() == ["saccade", "fixation"]
+        assert left["amplitude_deg"].iloc[0] == 2.0 and np.isnan(left["amplitude_deg"].iloc[1])
+        assert np.isnan(left["reliability"].iloc[0])
+        assert module["engbert_kliegl_source"].to_dataframe()["source"].tolist() == ["both"]
+        assert module["detector_agreement"].to_dataframe()["value"].tolist() == [0.8]
+
+
+def test_a_table_with_no_rows_writes(tmp_path):
+    from wl_preproc.nwb.intervals import add_task_events
+
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_task_events(nwb, []))
+    with io:
+        assert len(nwb.intervals["task_events"]) == 0

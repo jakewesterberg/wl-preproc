@@ -11,6 +11,7 @@ controls its UI. We refuse to emit markup at all rather than relying on that.
 
 from __future__ import annotations
 
+import datetime
 import re
 from typing import Annotated, Any, Literal
 
@@ -194,6 +195,22 @@ class ProbeEntry(BaseModel):
     trajectory_id: _TrajectoryId | None = None
 
 
+class SubjectDetails(BaseModel):
+    """The animal, as wl.works' own record states it: what an NWB file's
+    `subject` needs beyond an id (design spec
+    `2026-09-28-nwb-builder-design.md` section 9, the requester's decision
+    of 2026-09-28). Optional in the request; `responder/jobs.py::accept`
+    writes it into element-animal's own tables, replacing the stub
+    `ingest/landing.py` lands."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # A Latin name, as element-animal's `Species` prefers for NWB export.
+    species: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    sex: Literal["M", "F", "U"] = "U"
+    date_of_birth: datetime.date | None = None
+
+
 class MetadataBundle(BaseModel):
     """Everything wl-preproc needs from the ELN, carried inbound with the request."""
 
@@ -212,6 +229,7 @@ class MetadataBundle(BaseModel):
     experimenter: str
     subject: str
     task_types: list[str]
+    subject_details: SubjectDetails | None = None
 
 
 class JobRequest(BaseModel):

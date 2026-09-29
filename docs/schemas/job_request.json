@@ -34,6 +34,17 @@
           "title": "Subject",
           "type": "string"
         },
+        "subject_details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "task_types": {
           "items": {
             "type": "string"
@@ -114,6 +125,51 @@
         "insertion_number"
       ],
       "title": "ProbeEntry",
+      "type": "object"
+    },
+    "SubjectDetails": {
+      "additionalProperties": false,
+      "description": "The animal, as wl.works' own record states it: what an NWB file's\n`subject` needs beyond an id (design spec\n`2026-09-28-nwb-builder-design.md` section 9, the requester's decision\nof 2026-09-28). Optional in the request; `responder/jobs.py::accept`\nwrites it into element-animal's own tables, replacing the stub\n`ingest/landing.py` lands.",
+      "properties": {
+        "date_of_birth": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date Of Birth"
+        },
+        "sex": {
+          "default": "U",
+          "enum": [
+            "M",
+            "F",
+            "U"
+          ],
+          "title": "Sex",
+          "type": "string"
+        },
+        "species": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Species"
+        }
+      },
+      "title": "SubjectDetails",
       "type": "object"
     }
   },

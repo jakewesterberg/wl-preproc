@@ -1,9 +1,39 @@
 # Amendments to wl-works
 
-**Two are outstanding, opened 2026-08-22.** The earlier two batches are closed; their records are
-kept below, because
+**Three are outstanding: two opened 2026-08-22, one 2026-09-28.** The earlier two batches are
+closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — the activation-request payload gains the subject's details
+
+**Opened 2026-09-28** with the NWB builder
+([`specs/2026-09-28-nwb-builder-design.md`](superpowers/specs/2026-09-28-nwb-builder-design.md)
+§9), the requester's decision: every NWB file names its subject's species, sex and date of
+birth, and **wl.works' `animal` record is the authority for all three.** wl-preproc lands only a
+stub (`ingest/landing.py`: sex unknown, a 1900-01-01 placeholder birth date), and cannot fetch
+the rest, for §11.2's reason: everything it needs from the ELN arrives with the request.
+
+**This repository's half is built.** `contracts/protocol.py`'s `MetadataBundle` gains an optional
+`subject_details`, and `docs/schemas/job_request.json` carries it:
+
+```json
+{ "species": "Macaca mulatta", "sex": "F", "date_of_birth": "2016-03-02" }
+```
+
+`species` is a Latin name, at most 64 characters (element-animal's `Species`); `sex` is `M`, `F`
+or `U`; `date_of_birth` is an ISO date. All three are optional, and unknown keys are refused.
+`responder/jobs.py::accept` writes them into the subject's own record, replacing the stub; the
+latest request wins.
+
+**Why it matters more than metadata usually does.** `nwbinspector` rates a subject with neither
+age nor date of birth as CRITICAL (measured 2026-09-28), and a file with a critical finding is
+not published. **Until wl.works sends `date_of_birth`, no NWB file is publishable.**
+
+**Still open on their side:** their caller must send the field, and row 18b's fake wl-preproc
+must accept it.
 
 ---
 

@@ -191,6 +191,19 @@ def main(argv: list[str] | None = None) -> int:
     daemon_p.add_argument("--nas-root", type=Path, default=None)
     daemon_p.add_argument("--host", default=None)
     daemon_p.add_argument("--share", default=None)
+    # Optional like `--nas-root`: absent, the NWB builder stage is skipped
+    # and says so (design spec `2026-09-28-nwb-builder-design.md` section 2).
+    daemon_p.add_argument("--nwb-root", type=Path, default=None)
+
+    nwb_p = subparsers.add_parser("nwb", help="NWB export")
+    nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
+    nwb_build = nwb_sub.add_parser("build", help="build one activation's NWB file and record it")
+    nwb_build.add_argument("--subject", required=True)
+    nwb_build.add_argument("--session-datetime", required=True, type=datetime.datetime.fromisoformat)
+    nwb_build.add_argument("--montage-id", required=True, type=int)
+    nwb_build.add_argument("--activation-id", required=True, type=int)
+    nwb_build.add_argument("--nwb-root", required=True, type=Path)
+    nwb_build.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
     ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
@@ -642,11 +655,41 @@ def main(argv: list[str] | None = None) -> int:
         print(staging_manifest(entries))
         return 0
 
+    if args.group == "nwb" and args.action == "build":
+        from wl_preproc.daemon import activate_all
+        from wl_preproc.nwb.build import build, record
+        from wl_preproc.schema import nwb as nwb_schema
+
+        from wl_preproc.archive import scratch
+        from wl_preproc.nwb.gather import readiness
+
+        activate_all(prefix=args.prefix)
+        key = {"subject": args.subject, "session_datetime": args.session_datetime,
+               "montage_id": args.montage_id, "activation_id": args.activation_id}
+        if nwb_schema.NwbFile & key:
+            print(f"already recorded: {(nwb_schema.NwbFile & key).fetch1('status')}; delete the row to rebuild")
+            return 1
+        # As the daemon's stage skips them: a freed session's files are gone
+        # from scratch, and another session may have landed at its path.
+        if {"subject": args.subject, "session_datetime": args.session_datetime} in scratch.currently_freed(
+                prefix=args.prefix):
+            print("freed: rehydrate the session first (wlpp rehydrate)")
+            return 1
+        waiting = readiness(key)
+        if waiting is not None:
+            print(f"not ready: {waiting}")
+            return 1
+        result = build(key, args.nwb_root)
+        record(key, result)
+        print(f"{result.status}: {result.path or result.reason}")
+        return 0 if result.status == "written" else 1
+
     if args.group == "daemon":
         from wl_preproc.daemon import run_once
 
         report = run_once(
-            prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share
+            prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share,
+            nwb_root=args.nwb_root,
         )
         print(f"populated: {report['populated']}")
         print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
@@ -660,6 +703,10 @@ def main(argv: list[str] | None = None) -> int:
             print("archived: skipped (no --nas-root/--host/--share)")
         else:
             print(f"archived: {report['archived']}")
+        if report["nwb"] is None:
+            print("nwb: skipped (no --nwb-root)")
+        else:
+            print(f"nwb: {report['nwb']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:

@@ -39,6 +39,7 @@ from wl_preproc.schema import (
     events,
     eye,
     ingest,
+    nwb,
     paramset,
     # Imported, but deliberately NOT one of `_PROJECT_SCHEMA_MODULES` below --
     # that tuple's own comment says why `pipeline` is excepted from it.
@@ -306,6 +307,7 @@ _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("events", events),
     ("eye", eye),
     ("ingest", ingest),
+    ("nwb", nwb),
     ("paramset", paramset),
     ("request", request),
     ("timebase", timebase),
@@ -877,6 +879,7 @@ def run_once(
     nas_root: Path | None = None,
     host: str | None = None,
     share: str | None = None,
+    nwb_root: Path | None = None,
 ) -> dict:
     """One pass of the runner. Returns what it did, for the daily report.
 
@@ -981,6 +984,18 @@ def run_once(
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")
 
+    # The NWB builder (design spec `2026-09-28-nwb-builder-design.md` section
+    # 2): opt-in like archival, and for the same reason -- it writes under a
+    # configured root. `None`, not `0`, when not configured.
+    nwb_built: int | None
+    if nwb_root is None:
+        nwb_built = None
+    else:
+        from wl_preproc.nwb.build import run_stage
+
+        nwb_built, nwb_errors = run_stage(nwb_root, freed=currently_freed(prefix=prefix))
+        errors.extend(nwb_errors)
+
     archived: int | None
     if nas_root is None or host is None or share is None:
         archived = None
@@ -995,6 +1010,7 @@ def run_once(
         "errors": errors,
         "stale_jobs_reaped": reaped,
         "archived": archived,
+        "nwb": nwb_built,
         # How many sessions were freed, and so skipped, when the pass began --
         # a count, so a skip never reads as an all-clear.
         "freed_skipped": freed_skipped,

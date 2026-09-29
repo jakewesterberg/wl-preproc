@@ -860,9 +860,15 @@ def _session_time_to_row(
     Step one -- session time to TRUE SAMPLE INDEX -- is the same linear map
     `core.Segment.make()` fit (`session_s = native_s/scale + offset_s`),
     here inverted and expressed directly through the segment's own stored
-    extent (`start_s` at sample 0, `end_s` at sample `n_samples - 1`) rather
-    than re-deriving `scale`/`offset_s` separately. The two are equivalent
-    by construction, and this needs no rate or barcode reference of its own.
+    extent (`start_s` at sample 0, `end_s` at sample `n_samples`, one past
+    the last, which is how `core.Segment.make()` computes it) rather than
+    re-deriving `scale`/`offset_s` separately. The two are equivalent by
+    construction, and this needs no rate or barcode reference of its own.
+    It is the exact inverse of `row_session_times`.
+
+    *Until 2026-09-28 this placed `end_s` at sample `n_samples - 1`, off by
+    up to one sample (2 ms) at the end of the file (design spec
+    `2026-09-28-nwb-builder-design.md` section 4.3); true when written.*
 
     Step two -- true sample index to ROW -- exists because `Segment.
     n_samples` is the recording's TRUE FRAME SPAN, rows PLUS the frames the
@@ -903,9 +909,22 @@ def _session_time_to_row(
         return None
     span = segment["end_s"] - segment["start_s"]
     frac = 0.0 if span <= 0 else (session_s - segment["start_s"]) / span
-    sample = int(round(frac * (n_samples - 1)))
+    sample = int(round(frac * n_samples))
     sample = min(max(sample, 0), n_samples - 1)
     return int(np.searchsorted(offsets, sample, side="right")) - 1
+
+
+def row_session_times(segment: dict, offsets: np.ndarray) -> np.ndarray:
+    """Every ohDPI file row's session time, in seconds.
+
+    `offsets[row]` is the row's own true sample index (`_frame_offsets`), and
+    sample `k` is at `start_s + k * (end_s - start_s) / n_samples`:
+    `core.Segment.end_s` is the time of sample `n_samples`, one past the last.
+    A dropped frame leaves a gap in the times rather than shifting the rows
+    after it. `_session_time_to_row` is the exact inverse (design spec
+    `2026-09-28-nwb-builder-design.md` section 4.3)."""
+    span = segment["end_s"] - segment["start_s"]
+    return segment["start_s"] + np.asarray(offsets, dtype=float) * (span / segment["n_samples"])
 
 
 def _find_xcon_log(session_dir: Path) -> Path | None:

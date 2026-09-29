@@ -58,6 +58,7 @@ def _request(
     block_ids: list[int] | None = None,
     domain: str = "neural",
     experimenter: str = "jw",
+    subject_details: dict | None = None,
 ) -> JobRequest:
     """A `JobRequest` naming `(montage_id, session_datetime)` in its
     selection, with `block_ids` present only when the caller supplies one --
@@ -80,6 +81,7 @@ def _request(
             experimenter=experimenter,
             subject=subject,
             task_types=[],
+            subject_details=subject_details,
         ),
     )
 
@@ -966,3 +968,53 @@ def test_accept_rejects_a_session_this_host_has_never_ingested(
             f"{table.__name__} changed under a rejected request: "
             f"{len(rows_before)} row(s) before, {len(rows_after)} after"
         )
+
+
+def test_the_subjects_details_fill_its_own_record(landed_session, prefix):
+    """Design spec `2026-09-28-nwb-builder-design.md` section 9, the
+    requester's decision: wl.works sends the animal's species, sex and date
+    of birth with the job request, and they replace what wl-preproc knew --
+    `ingest/landing.py` lands only a stub."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import pipeline
+
+    subject = "jbsubj01"
+    naive_dt = datetime.datetime(2027, 5, 9, 9, 0)
+    landed_session(subject, naive_dt)
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        idempotency_key="jbsubj01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        subject_details={"species": "Macaca mulatta", "sex": "F",
+                         "date_of_birth": datetime.date(2016, 3, 2)},
+    )
+
+    accept(job, prefix=prefix)
+
+    row = (pipeline.subject.Subject & {"subject": subject}).fetch1()
+    assert (row["sex"], row["subject_birth_date"]) == ("F", datetime.date(2016, 3, 2))
+    assert (pipeline.subject.Subject.Species & {"subject": subject}).fetch1("species") == "Macaca mulatta"
+
+
+def test_a_request_without_details_leaves_the_subject_alone(landed_session, prefix):
+    """They are optional: a request that does not carry them changes nothing
+    about the subject."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import pipeline
+
+    subject = "jbsubj02"
+    naive_dt = datetime.datetime(2027, 5, 10, 9, 0)
+    landed_session(subject, naive_dt)
+    before = (pipeline.subject.Subject & {"subject": subject}).fetch1()
+    job = _request(
+        subject=subject,
+        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+        idempotency_key="jbsubj02-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+    )
+
+    accept(job, prefix=prefix)
+
+    assert (pipeline.subject.Subject & {"subject": subject}).fetch1() == before
+    assert len(pipeline.subject.Subject.Species & {"subject": subject}) == 0

@@ -393,6 +393,27 @@ def _blocks_outside_window(effective: dict[int, dict], montage_row: dict) -> lis
     ]
 
 
+def _record_subject_details(subject: str, details) -> None:
+    """wl.works' own record of the animal, when the request carries it,
+    written into element-animal's tables: `Subject.sex`,
+    `Subject.subject_birth_date` and `Subject.Species` (design spec
+    `2026-09-28-nwb-builder-design.md` section 9). Absent, nothing about the
+    subject changes. The latest request wins: the ELN is the authority."""
+    if details is None:
+        return
+    from wl_preproc.schema import pipeline
+
+    row = {"subject": subject, "sex": details.sex}
+    if details.date_of_birth is not None:
+        row["subject_birth_date"] = details.date_of_birth
+    pipeline.subject.Subject.update1(row)
+    if details.species is not None:
+        pipeline.subject.Species.insert1({"species": details.species}, skip_duplicates=True)
+        pipeline.subject.Subject.Species.insert1(
+            {"subject": subject, "species": details.species}, replace=True
+        )
+
+
 def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     """A validated `JobRequest` becomes `Montage`/`Block`/`Request`/`Activation`
     rows. Design spec section 6.1. Returns the `Activation` primary key.
@@ -492,6 +513,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # written. ----
 
     # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
+    _record_subject_details(metadata.subject, metadata.subject_details)
     if montage_rows:
         core.Montage.insert(montage_rows, skip_duplicates=True)
 
