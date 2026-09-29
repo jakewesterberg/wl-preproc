@@ -110,6 +110,15 @@ def _land(tmp_path: Path, prefix: str, subject: str, *, verify: bool = True, mut
     return session_dir, key
 
 
+def _nas(tmp_path: Path) -> Path:
+    """The NAS share, as a person sets it up: its root, with the marker that
+    says it is mounted (`archive/stage.py::SHARE_MARKER`)."""
+    nas_root = tmp_path / "nas"
+    nas_root.mkdir(exist_ok=True)
+    (nas_root / ".wlpp-archive-share").touch()
+    return nas_root
+
+
 def _called_session_dirs(mock) -> list[Path]:
     """Every `session_dir` -- the stage's own first positional argument to
     `archive_session` -- some call actually used. See this module's own
@@ -131,7 +140,7 @@ def test_a_verified_session_is_handed_to_archival(tmp_path, dj_conn, prefix):
         # `tests/cli/test_archive_cli.py` already covers end to end.
         archived.return_value.all_matched = False
         archived.return_value.verdicts = []
-        daemon.run_once(prefix=prefix, nas_root=tmp_path / "nas", host="vault", share="cold")
+        daemon.run_once(prefix=prefix, nas_root=_nas(tmp_path), host="vault", share="cold")
 
     assert session_dir in _called_session_dirs(archived)
 
@@ -151,7 +160,7 @@ def test_a_session_ingested_with_no_verify_is_not_archived(tmp_path, dj_conn, pr
     session_dir, _key = _land(tmp_path, prefix, "trig2", verify=False)
 
     with patch("wl_preproc.daemon.archive_session") as archived:
-        daemon.run_once(prefix=prefix, nas_root=tmp_path / "nas", host="vault", share="cold")
+        daemon.run_once(prefix=prefix, nas_root=_nas(tmp_path), host="vault", share="cold")
 
     assert session_dir not in _called_session_dirs(archived)
 
@@ -174,7 +183,7 @@ def test_a_declared_only_session_is_not_archived(tmp_path, dj_conn, prefix):
     )
 
     with patch("wl_preproc.daemon.archive_session") as archived:
-        daemon.run_once(prefix=prefix, nas_root=tmp_path / "nas", host="vault", share="cold")
+        daemon.run_once(prefix=prefix, nas_root=_nas(tmp_path), host="vault", share="cold")
 
     assert session_dir not in _called_session_dirs(archived)
 
@@ -210,7 +219,7 @@ def test_a_quarantined_session_is_not_archived(tmp_path, dj_conn, prefix):
     )
 
     with patch("wl_preproc.daemon.archive_session") as archived:
-        daemon.run_once(prefix=prefix, nas_root=tmp_path / "nas", host="vault", share="cold")
+        daemon.run_once(prefix=prefix, nas_root=_nas(tmp_path), host="vault", share="cold")
 
     assert session_dir not in _called_session_dirs(archived)
 
@@ -247,6 +256,23 @@ def test_an_already_archived_session_is_not_archived_again(tmp_path, dj_conn, pr
     )
 
     with patch("wl_preproc.daemon.archive_session") as archived:
-        daemon.run_once(prefix=prefix, nas_root=tmp_path / "nas", host="vault", share="cold")
+        daemon.run_once(prefix=prefix, nas_root=_nas(tmp_path), host="vault", share="cold")
 
     assert session_dir not in _called_session_dirs(archived)
+
+
+def test_an_unmounted_share_is_not_archived_to(tmp_path, dj_conn, prefix):
+    """The share's marker is missing, as on an unmounted mount point: the
+    stage archives nothing this pass and says why, and writes nothing onto
+    this host's own disk under the NAS's name."""
+    session_dir, _key = _land(tmp_path, prefix, "trig_unmounted", verify=True)
+    unmounted = tmp_path / "nas"
+    unmounted.mkdir()
+
+    with patch("wl_preproc.daemon.archive_session") as archived:
+        report = daemon.run_once(prefix=prefix, nas_root=unmounted, host="vault", share="cold")
+
+    assert session_dir not in _called_session_dirs(archived)
+    assert [e for e in report["errors"] if ".wlpp-archive-share" in e and str(unmounted) in e], report["errors"]
+    assert report["archived"] == 0
+    assert list(unmounted.iterdir()) == []

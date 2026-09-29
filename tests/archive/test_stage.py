@@ -136,3 +136,23 @@ def test_a_failing_verification_insert_rolls_back_the_artifact_row(tmp_path, dj_
         "the transaction must roll back the ArchiveArtifact insert too, not "
         "leave a parent row with zero children behind"
     )
+
+
+def test_the_archive_share_is_reachable_only_with_its_marker(tmp_path):
+    """An unmounted NAS mount point is an empty directory, or none. The
+    archive writes only where the marker a person placed once at the share's
+    root is there, and never creates the root or the marker."""
+    from wl_preproc.archive.stage import SHARE_MARKER, share_unreachable
+
+    assert SHARE_MARKER == ".wlpp-archive-share"
+    mounted = tmp_path / "mounted"
+    mounted.mkdir()
+    (mounted / SHARE_MARKER).touch()
+    assert share_unreachable(mounted) is None
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    gone = tmp_path / "gone"
+    for root in (empty, gone):
+        reason = share_unreachable(root)
+        assert SHARE_MARKER in reason and str(root) in reason
+    assert list(empty.iterdir()) == [] and not gone.exists()

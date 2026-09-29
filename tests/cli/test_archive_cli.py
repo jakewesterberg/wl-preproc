@@ -106,6 +106,15 @@ def _section(body: str, heading: str) -> str:
     return body.split(marker, 1)[1].split("\n## ", 1)[0]
 
 
+def _nas(parent):
+    """The NAS share, as a person sets it up: its root, with the marker that
+    says it is mounted (`archive/stage.py::SHARE_MARKER`)."""
+    nas_root = parent / "nas"
+    nas_root.mkdir(exist_ok=True)
+    (nas_root / ".wlpp-archive-share").touch()
+    return nas_root
+
+
 # -- wlpp archive --------------------------------------------------------
 
 
@@ -113,7 +122,7 @@ def test_archive_writes_the_artifact_row_with_a_nas_relative_path(landed, prefix
     from wl_preproc.schema import archive
 
     session_dir, key = landed("arcw1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
 
     code = main(
         [
@@ -177,7 +186,7 @@ def test_archive_prints_verified_and_writes_one_verification_row_per_file(landed
     from wl_preproc.schema import archive
 
     session_dir, key = landed("arcw2")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     expected = _expected_digests(session_dir)
 
     code = main(
@@ -212,7 +221,7 @@ def test_archive_writes_no_rows_when_verification_fails(landed, prefix, capsys):
     from wl_preproc.schema import archive
 
     session_dir, key = landed("arcw3")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     _corrupt_a_done_marker(session_dir)
 
     code = main(
@@ -257,7 +266,7 @@ def test_archiving_the_same_session_twice_succeeds_and_the_digest_matches_the_na
     from wl_preproc.schema import archive
 
     session_dir, key = landed("arcrr1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     archive_args = [
         "archive",
         "--session",
@@ -301,7 +310,7 @@ def test_a_failed_rearchive_invalidates_the_prior_good_row(landed, prefix):
     from wl_preproc.schema import archive
 
     session_dir, key = landed("arcrr2")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     archive_args = [
         "archive",
         "--session",
@@ -358,7 +367,7 @@ def test_a_raising_publish_leaves_no_stale_row_and_drops_off_rig_may_clear(lande
     from wl_preproc.schema import archive
 
     session_dir, key = landed("rawpub1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     archive_args = [
         "archive",
         "--session",
@@ -422,7 +431,7 @@ def test_two_subjects_sharing_a_session_id_do_not_collide_on_the_nas(landed, pre
     session_dir_b, key_b = landed("subB")
     assert session_dir_a.name == session_dir_b.name  # same session_id, different subjects
 
-    nas_root = session_dir_a.parent.parent / "nas"
+    nas_root = _nas(session_dir_a.parent.parent)
     for session_dir in (session_dir_a, session_dir_b):
         code = main(
             [
@@ -524,7 +533,7 @@ def test_reclaim_preview_marks_a_forced_judgement_failure_overridden(landed, pre
     whole-branch review's Critical finding), so the preview would be NOT
     reclaimable for a reason this test is not about."""
     session_dir, key = landed("rclmc6")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
           "--host", "vault", "--share", "cold", "--prefix", prefix])
     _timing(key, prefix, tier="D")
@@ -662,7 +671,7 @@ def test_a_db_row_with_no_sentinel_on_disk_is_not_verified(landed, prefix):
     from wl_preproc.schema import archive
 
     session_dir, key = landed("nosent1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     # Explicit, not relied on from an earlier `main(["archive", ...])` call
     # in this same test the way other callers of `_archive_and_verify_
     # directly` get it for free: this test never runs a real archive, so
@@ -704,7 +713,7 @@ def test_tape_manifest_lists_a_verified_session_and_excludes_an_unverified_one(l
     session_dir, verified_key = landed("tpm1")
     _, unverified_key = landed("tpm2")
 
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(
         [
             "archive",
@@ -826,7 +835,7 @@ def test_report_names_a_verified_archive_as_clear_to_the_rig(landed, prefix):
     other verified session did.
     """
     session_dir, key = landed("rptcl1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(
         [
             "archive",
@@ -860,7 +869,7 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
     no_tier_resolved`). It must block on `not_tier_d` and on
     `timing_resolved`, named, not merely vanish or block on something else."""
     session_dir, key = landed("rptub1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(
         [
             "archive",
@@ -891,7 +900,7 @@ def test_report_names_the_blocking_condition_for_an_unreclaimed_session(landed, 
 
 def test_report_omits_a_fully_reclaimable_session_from_unreclaimed(landed, prefix):
     session_dir, key = landed("rptok1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(
         [
             "archive",
@@ -923,7 +932,7 @@ def test_report_names_the_missing_nwb_for_an_unforced_session(landed, prefix):
     """Until Phase 3, every archived session still on scratch is blocked by
     the NWB unless forced -- true, and the report must say so by name."""
     session_dir, key = landed("rptnwb1")
-    nas_root = session_dir.parent.parent / "nas"
+    nas_root = _nas(session_dir.parent.parent)
     main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
           "--host", "vault", "--share", "cold", "--prefix", prefix])
     _timing(key, prefix, tier="A")
@@ -935,3 +944,26 @@ def test_report_names_the_missing_nwb_for_an_unforced_session(landed, prefix):
     assert len(line) == 1, section
     assert "canonical_nwb_present" in line[0]
     assert "not_tier_d" not in line[0]
+
+
+@pytest.mark.parametrize("state", ["empty mount point", "no mount point"])
+def test_archive_refuses_a_share_that_is_not_mounted(landed, prefix, capsys, state):
+    """An unmounted share: `wlpp archive` refuses before touching the NAS or
+    the database, so the prior archive row, describing bytes on the real
+    share, survives, and nothing is written onto this host's own disk."""
+    from wl_preproc.schema import archive
+
+    session_dir, key = landed(f"arcu{'e' if state == 'empty mount point' else 'm'}")
+    real = _nas(session_dir.parent.parent)
+    assert main(["archive", "--session", str(session_dir), "--nas-root", str(real), "--host", "vault",
+                 "--share", "cold", "--prefix", prefix]) == 0
+    before = (archive.ArchiveArtifact & key).to_dicts()
+    unmounted = session_dir.parent.parent / "unmounted"
+    if state == "empty mount point":
+        unmounted.mkdir()
+    code = main(["archive", "--session", str(session_dir), "--nas-root", str(unmounted), "--host", "vault",
+                 "--share", "cold", "--prefix", prefix])
+    assert code == 2
+    assert ".wlpp-archive-share" in capsys.readouterr().out
+    assert (archive.ArchiveArtifact & key).to_dicts() == before
+    assert not unmounted.exists() or list(unmounted.iterdir()) == []

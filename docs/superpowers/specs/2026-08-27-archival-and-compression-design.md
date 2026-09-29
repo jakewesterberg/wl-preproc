@@ -193,6 +193,23 @@ states the rule it lives under: *"Positive observations only; absence renders
 `unknown`, never 'no data'."* Without a sentinel, a half-copied artifact and a
 finished one are the same observation.
 
+> **Amended 2026-09-29, requested and approved by the requester** after NWB
+> publishing's final review (its declined item 2):
+> - **Publish writes only to a mounted share.** A person places a marker file,
+>   `.wlpp-archive-share`, once, at the root of the NAS share the archive is
+>   written to. wlpp never creates the marker or the root.
+> - **Why.** An unmounted mount point is an empty directory, or none, and the
+>   old `mkdir(parents=True)` then created the root and published onto this
+>   host's own disk under the NAS's name. The session was recorded as
+>   archived, possibly reclaimed from scratch, and then hidden once the share
+>   was mounted again.
+> - **Where it is checked.** The daemon's stage and `wlpp archive` both check
+>   the marker before anything touches the NAS or the prior `ArchiveArtifact`
+>   row. The daemon checks only when a session is waiting, archives nothing
+>   that pass, and says why. The command refuses with exit status 2.
+> - **Unchanged.** Reclamation and rehydration only read the NAS.
+>   (`archive/stage.py::share_unreachable`.)
+
 ### 3.1 When it runs, and why that is not a scheduling preference
 
 **Archival is triggered as soon as ingest verification passes**, before anything

@@ -396,7 +396,15 @@ def main(argv: list[str] | None = None) -> int:
             archive_session,
             nas_root_for_subject,
             record_archive_outcome,
+            share_unreachable,
         )
+
+        # Before anything touches the NAS or the prior archive row: an
+        # unmounted share is refused, never written to.
+        reason = share_unreachable(args.nas_root)
+        if reason:
+            print(f"refusing: {reason}.")
+            return 2
 
         session_dir = Path(args.session)
         # Key first, before `archive_session` runs: the NAS publish path

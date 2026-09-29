@@ -27,7 +27,12 @@ import datajoint as dj
 # this module itself holds the name, not if `_archive_stage` reached it via
 # `wl_preproc.archive.stage.archive_session` on every call. See
 # `_archive_stage` below for how the two archival helpers are then combined.
-from wl_preproc.archive.stage import archive_session, nas_root_for_subject, record_archive_outcome
+from wl_preproc.archive.stage import (
+    archive_session,
+    nas_root_for_subject,
+    record_archive_outcome,
+    share_unreachable,
+)
 from wl_preproc.schema import (
     DEFAULT_PREFIX,
     archive,
@@ -853,7 +858,13 @@ def _archive_stage(
     # course -- reclaiming requires its `ArchiveArtifact` row -- but if
     # that row were deleted by hand, whatever now sits at its recorded path
     # would be archived under its key. Skipped like every other stage.
-    for key in (k for k in _archive_stage_keys() if k not in freed):
+    keys = [k for k in _archive_stage_keys() if k not in freed]
+    # Checked only when there is something to archive, and before anything
+    # touches the NAS: an unmounted share must not be written to
+    # (`archive/stage.py::share_unreachable`). One report for the pass.
+    if keys and (reason := share_unreachable(nas_root)):
+        return 0, [f"archive: {reason}; nothing archived"]
+    for key in keys:
         session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
         try:
             outcome = archive_session(

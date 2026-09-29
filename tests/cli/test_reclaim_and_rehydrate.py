@@ -57,6 +57,8 @@ def landed(landed, prefix):
 
 def _archive(session_dir, prefix):
     nas_root = session_dir.parent.parent / "nas"
+    nas_root.mkdir(exist_ok=True)
+    (nas_root / ".wlpp-archive-share").touch()  # the share's marker: `archive/stage.py::SHARE_MARKER`
     code = main(["archive", "--session", str(session_dir), "--nas-root", str(nas_root),
                  "--host", "vault", "--share", "cold", "--prefix", prefix])
     assert code == 0
