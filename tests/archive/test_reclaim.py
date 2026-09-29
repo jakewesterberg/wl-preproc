@@ -262,8 +262,9 @@ def _hold(key, *, verdict: str, hour: int = 11):
 def test_pins_condition_names_and_order_to_production(session, prefix):
     """A session set up to pass every condition that CAN pass today returns
     conditions whose `.name`s equal `CONDITION_NAMES`, in that order -- and
-    is blocked by `canonical_nwb_present` alone, because NWB export does not
-    exist yet (2026-09-26 rehydration design, section 0 ruling 3)."""
+    is blocked by `canonical_nwb_present` alone, because the session has no
+    published canonical NWB (2026-09-26 rehydration design, section 0 ruling
+    3; design spec `2026-09-29-nwb-publishing-design.md` section 8)."""
     from wl_preproc.archive.reclaim import reclaim_conditions
 
     key = session("rclmall")
@@ -340,21 +341,57 @@ def test_pins_condition_kinds_to_production(session, prefix):
     assert _condition(predicate, "timing_resolved").overridable is False
 
 
-def test_canonical_nwb_present_fails_until_phase_3(session, prefix):
-    """Ruling 3: reclamation follows the canonical NWB, and NWB export is not
-    built. Pinned on the detail string, so that wiring the real query in
-    Phase 3 breaks this test -- the reminder to update what a reader of the
-    report sees."""
+_NWB_STATES = {
+    "no montage": ("rcnwb0", "no montage, so no canonical activation"),
+    "no activation": ("rcnwb1", "montage 0: no canonical activation"),
+    "not built": ("rcnwb2", "montage 0: its canonical NWB is not built yet"),
+    "invalid": ("rcnwb3", "montage 0: its canonical NWB is invalid"),
+    "unpublished": ("rcnwb4", "montage 0: its canonical NWB is built but not yet published"),
+    "published": ("rcnwb5", ""),
+}
+
+
+@pytest.mark.parametrize("state", list(_NWB_STATES))
+def test_canonical_nwb_present_follows_the_published_canonical_file(session, prefix, state):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 8: true only
+    when every montage has a canonical activation whose file is `written`
+    and published; otherwise false, saying why, and still overridable.
+
+    *Until 2026-09-29 this test pinned the hard-coded detail "NWB export is
+    not built (Phase 3)", as the reminder to update it when the real query
+    arrived; true when written.*"""
     from wl_preproc.archive.reclaim import reclaim_conditions
+    from wl_preproc.nwb.publish import record_change
+    from wl_preproc.schema import core, request
+    from wl_preproc.schema import nwb as nwb_schema
 
-    key = session("rclmnwb")
+    subject, detail = _NWB_STATES[state]
+    key = session(subject)
+    request.activate(prefix=prefix)
+    nwb_schema.activate(prefix=prefix)
+    now = datetime.datetime(2027, 5, 1, 12, 0)
+    activation = {**key, "montage_id": 0, "activation_id": 0}
+    if state != "no montage":
+        core.Montage.insert1({**key, "montage_id": 0, "start_s": 0.0, "end_s": 10.0})
+    if state not in ("no montage", "no activation"):
+        request.Request.insert1({"idempotency_key": f"{subject}-k", "task_type": "neural", "origin": "wl_works",
+                                 "payload": {}, "requested_at": now})
+        request.Activation.insert1({**activation, "role": "canonical", "request_key": f"{subject}-k",
+                                    "created_at": now})
+    try:
+        if state in ("invalid", "unpublished", "published"):
+            nwb_schema.NwbFile.insert1({**activation, "status": "invalid" if state == "invalid" else "written",
+                                        "built_at": now})
+        if state == "published":
+            record_change(activation, "published",
+                          {"tier": "slow", "host": "wl-nas", "share": "hdd", "path": "nwb/x.nwb", "n_bytes": 1})
 
-    predicate = reclaim_conditions(key, expected_file_count=0, prefix=prefix)
-
-    nwb = _condition(predicate, "canonical_nwb_present")
-    assert nwb.passed is False
-    assert nwb.overridable is True
-    assert nwb.detail == "NWB export is not built (Phase 3)"
+        nwb = _condition(reclaim_conditions(key, expected_file_count=0, prefix=prefix), "canonical_nwb_present")
+        assert (nwb.passed, nwb.detail, nwb.overridable) == (state == "published", detail, True)
+    finally:
+        # These rows have no file behind them. Left in the suite's shared
+        # database, the NWB stages in later tests would try to publish them.
+        (nwb_schema.NwbFile & activation).delete(prompt=False)
 
 
 def test_a_force_overrides_tier_d_and_the_missing_nwb(session, prefix):
