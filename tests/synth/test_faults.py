@@ -112,3 +112,27 @@ def test_a_dropped_frame_fault_leaves_a_real_gap_in_the_written_file(tmp_path):
 
     assert len(recording.frame_gaps) == 1
     assert recording.frame_gaps[0].n_missing == 3
+
+
+def test_a_mismatched_rig_line_joins_neither_trial_it_confuses(tmp_path):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 13: a
+    mismatched line in a variant. The second trial's line carries the
+    first's number, so neither trial joins, and the notes say both why."""
+    from wl_sync.session import SessionId
+
+    from wl_preproc.contracts.paths import SessionLayout
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.nwb.conditions import join
+    from wl_preproc.synth.recipe import CI_RECIPE
+    from wl_preproc.synth.session import generate_session
+
+    recipe = CI_RECIPE.model_copy(update={"faults": (Fault.MISMATCHED_RIG_LINE,)})
+    truth = generate_session(tmp_path, recipe)
+    layout = SessionLayout(tmp_path, SessionId.parse(recipe.session_id))
+    record = read_rig_trials(layout.dir, recipe.subject)
+    trials = [{"trial_id": trial.trial_id} for trial in truth.trials]
+    matched, notes = join(trials, record)
+    first, second = truth.trials[0].trial_id, truth.trials[1].trial_id
+    assert first not in matched and second not in matched
+    assert len(matched) == len(trials) - 2
+    assert any("more than once" in note for note in notes) and any("no single line" in note for note in notes)

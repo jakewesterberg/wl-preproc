@@ -39,6 +39,7 @@ class Fault(str, Enum):
     MISSING_DEVICE = "missing_device"
     TRIAL_COUNT_MISMATCH = "trial_count_mismatch"
     TRUNCATED_FILE = "truncated_file"
+    MISMATCHED_RIG_LINE = "mismatched_rig_line"
 
 
 class ChannelSpec(BaseModel):

@@ -788,7 +788,7 @@ def make_handler(
             `since` is anything but one non-negative integer."""
             query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
             values = query.get("since", [])
-            if set(query) - {"since"} or len(values) > 1 or (values and not values[0].isdigit()):
+            if set(query) - {"since"} or len(values) > 1 or (values and not (values[0].isascii() and values[0].isdigit())):
                 self._send_json(422, {"error": "the only parameter is since, one non-negative integer"})
                 return
             try:

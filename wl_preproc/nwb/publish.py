@@ -53,6 +53,12 @@ class ChangedWhileMoving(Exception):
     The copy is removed and nothing recorded; the next pass tries again."""
 
 
+class OldCopyLeft(Exception):
+    """A move that is recorded and stands, whose old copy could not be
+    deleted (a reader holds it, or the share refused): the next pass's
+    sweep finishes it. Counted as a move, and reported."""
+
+
 class PublishConflict(Exception):
     """A file already at the target that no placement records. Never
     overwritten: the lab's annotations live only inside published files
@@ -69,7 +75,9 @@ class Share:
     mount: Path
     host: str
     name: str
-    headroom_bytes: int = 0
+    # Free space a move to this share must leave. None: a tenth of the
+    # share's size (the requester's default, 2026-09-29).
+    headroom_bytes: int | None = None
 
     def relative(self, subject: str, session_id: str, identifier: str) -> str:
         return f"{NWB_DIR}/{subject}/{session_id}/{identifier}.nwb"
@@ -79,7 +87,9 @@ class Share:
 
     def has_room(self, n_bytes: int) -> bool:
         """Whether `n_bytes` more still leaves the configured headroom free."""
-        return shutil.disk_usage(self.mount).free - n_bytes >= self.headroom_bytes
+        usage = shutil.disk_usage(self.mount)
+        headroom = self.headroom_bytes if self.headroom_bytes is not None else usage.total // 10
+        return usage.free - n_bytes >= headroom
 
     def unreachable(self) -> str | None:
         """Why this share cannot be used now, or None. Its `nwb/` folder is
@@ -139,8 +149,15 @@ def write_description(nwb_path: Path, description: dict) -> None:
     """The description beside the file, written last and atomically."""
     target = description_path(nwb_path)
     partial = target.with_name(target.name + ".partial")
-    partial.write_text(json.dumps(description, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(partial, target)
+    try:
+        with open(partial, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(description, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(partial, target)
+    finally:
+        if partial.exists():
+            partial.unlink()
 
 
 def placements(key: dict) -> list[dict]:
@@ -179,11 +196,8 @@ def active_keys() -> set[tuple]:
     """The activations the latest `PUT /nwb/active` wants on the fast share."""
     from wl_preproc.schema import nwb as nwb_schema
 
-    rows = nwb_schema.ActiveSet.to_dicts()
-    if not rows:
-        return set()
-    latest = max(rows, key=lambda row: row["set_seq"])
-    return {activation_tuple(item) for item in latest["activations"]}
+    rows = nwb_schema.ActiveSet.to_dicts(order_by="set_seq DESC", limit=1)
+    return {activation_tuple(item) for item in rows[0]["activations"]} if rows else set()
 
 
 def activation_tuple(key: dict) -> tuple:
@@ -331,7 +345,10 @@ def move(key: dict, placement: dict, source_share: Share, target_share: Share) -
         raise ChangedWhileMoving(f"{source}: changed while it was being moved (someone is writing to it); "
                                  "not moved, tried again next pass")
     record_change(key, "moved", moved)
-    _remove_old_copy(source)
+    try:
+        _remove_old_copy(source)
+    except OSError as exc:
+        raise OldCopyLeft(f"moved; the old copy {source} is left for the next pass: {exc}") from exc
     return moved
 
 
@@ -401,6 +418,9 @@ def run_placement(slow: Share, fast: Share) -> tuple[int, list[str]]:
                 continue
             move(key, placement, shares[placement["tier"]], shares[wanted])
             moved += 1
+        except OldCopyLeft as left:
+            moved += 1
+            errors.append(f"NwbPlacement {key}: {left}")
         except Exception as exc:  # one file must not stop the others; retried next pass
             errors.append(f"NwbPlacement {key}: {exc}")
     return moved, errors

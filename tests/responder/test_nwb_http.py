@@ -44,7 +44,8 @@ def test_the_listing_is_behind_the_token_and_takes_an_optional_cursor(serve_nwb)
     assert calls == [None, 5]
 
 
-@pytest.mark.parametrize("query", ["since=x", "since=-1", "since=1&since=2", "other=1", "since="])
+@pytest.mark.parametrize("query", ["since=x", "since=-1", "since=1&since=2", "other=1", "since=",
+                                   "since=%C2%B2", "since=%D9%A3"])
 def test_a_cursor_that_is_not_one_non_negative_integer_is_422(serve_nwb, query):
     base = serve_nwb(nwb_list_fn=_unused)
     status, body = _request(f"{base}/nwb?{query}", method="GET", token=TOKEN)

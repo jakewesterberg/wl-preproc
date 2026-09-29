@@ -690,8 +690,8 @@ def test_an_old_copy_that_could_not_be_deleted_is_removed_on_the_next_pass(activ
     monkeypatch.setattr(publish_module, "_remove_old_copy", in_use)
     _set_active(key)
     try:
-        _moved, errors = publish_module.run_placement(slow_share, fast_share)
-        assert [error for error in errors if "is in use" in error]
+        moved, errors = publish_module.run_placement(slow_share, fast_share)
+        assert moved == 1 and [error for error in errors if "is in use" in error and "left for the next pass" in error]
         assert publish_module.current_placement(key)["tier"] == "fast" and old.exists()
         monkeypatch.setattr(publish_module, "_remove_old_copy", real)
         publish_module.run_placement(slow_share, fast_share)
@@ -1089,6 +1089,42 @@ def test_a_leftover_annotated_after_its_move_is_left_for_a_person(activation, mo
         publish_module.run_placement(slow_share, fast_share)
     assert publish_module.current_placement(key)["tier"] == "slow"
 
+
+
+def test_a_second_wlpp_process_leaves_the_nwb_stages_alone(activation, daemon_module, prefix, slow_share,
+                                                            fast_share, tmp_path_factory, capsys):
+    """The final review's M4. A daemon pass that outlives its cron interval,
+    or `wlpp nwb build` beside a pass, would publish, move and record the
+    same files at once: one process holds a database lock for the NWB
+    stages, and the other skips them and says why."""
+    import datajoint as dj
+    import pymysql
+
+    from wl_preproc.cli.main import main
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    _unrecord(key, slow_share, fast_share)
+    other = pymysql.connect(host=dj.config["database.host"], port=int(dj.config["database.port"]),
+                            user=dj.config["database.user"], password=dj.config["database.password"])
+    try:
+        with other.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0)", (f"wlpp_nwb_{prefix}",))
+            assert cursor.fetchone()[0] == 1
+        report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-locked"),
+                                        nwb_slow=slow_share, nwb_fast=fast_share)
+        assert [e for e in report["errors"] if "another wlpp process" in e], report["errors"]
+        assert (report["nwb"], report["nwb_published"], report["nwb_moved"]) == (0, 0, 0)
+        assert not nwb_schema.NwbFile & key
+        assert main(_command(key, tmp_path_factory.mktemp("nwb-locked-command"), prefix)) == 1
+        assert "another wlpp process" in capsys.readouterr().out
+    finally:
+        other.close()
+    report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-unlocked"),
+                                    nwb_slow=slow_share, nwb_fast=fast_share)
+    assert not [e for e in report["errors"] if "another wlpp process" in e]
+    assert nwb_schema.NwbFile & key
 
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage

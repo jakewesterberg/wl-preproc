@@ -39,7 +39,7 @@ And its counterpart, which is this host's own:
 Everything else here describes behaviour that already exists. These four items are the
 ones a client written against Plan 10 as it stands today would get wrong.
 
-1. **Send `Authorization: Bearer <token>` on both endpoints.** Plan 10 §6's request is an
+1. **Send `Authorization: Bearer <token>` on every endpoint.** Plan 10 §6's request is an
    action name plus an idempotency key and carries no credential. Without the header,
    every request — including a health check — is answered `401`. See
    [Authentication](#authentication).
@@ -456,17 +456,17 @@ Every code this host can return, on any endpoint.
 |---|---|---|---|---|
 | `200` | all but `PUT /nwb/active` | the response above | Accepted, health served, or files listed. A `down` verdict is a `200`. | — |
 | `202` | `PUT /nwb/active` | `{"accepted": …, "unknown": […]}` | The active set is recorded; the daemon's next pass moves files. | — |
-| `400` | both | `{"error": "bad request"}` | Malformed request line, or an unparseable version such as `HTTP/9.9.9`. See the framing note below. | No — fix the client |
-| `401` | both | `{"error": "unauthorized"}` | Missing, wrong-scheme, or wrong token; or a verb neither endpoint answers. | No — fix the credential |
+| `400` | all | `{"error": "bad request"}` | Malformed request line, or an unparseable version such as `HTTP/9.9.9`. See the framing note below. | No — fix the client |
+| `401` | all | `{"error": "unauthorized"}` | Missing, wrong-scheme, or wrong token; or a verb no endpoint answers. | No — fix the credential |
 | `404` | all | `{"error": "not found"}` | Path is not one of `/health`, `/jobs`, `/nwb`, `/nwb/active`; or a query string on any path but `/nwb`. | No |
-| `405` | both | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, authenticated `PUT /health`. | No |
+| `405` | all | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, `GET /nwb/active`, authenticated `PUT /health`. | No |
 | `408` | `POST /jobs`, `PUT /nwb/active` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
 | `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content. | **No — needs a human** |
-| `414` | both | `{"error": "request line too long"}` | Over-long request line. | No |
+| `414` | all | `{"error": "request line too long"}` | Over-long request line. | No |
 | `422` | `POST /jobs`, `PUT /nwb/active`, `GET /nwb` (a `since` that is not one non-negative integer) | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
-| `431` | both | `{"error": "request header fields too large"}` | Oversized header. | No |
-| `500` | both | `{"error": "<ExceptionType>: <message>"}` | This host's own fault, infrastructure included. | **Yes** |
-| `505` | both | `{"error": "http version not supported"}` | `HTTP/2.0` or later. See the framing note below. | No |
+| `431` | all | `{"error": "request header fields too large"}` | Oversized header. | No |
+| `500` | all | `{"error": "<ExceptionType>: <message>"}` | This host's own fault, infrastructure included. | **Yes** |
+| `505` | all | `{"error": "http version not supported"}` | `HTTP/2.0` or later. See the framing note below. | No |
 
 **The framing note**, stated rather than left to be discovered. On the paths where the
 request line itself could not be parsed — a malformed request line, and any unparseable or

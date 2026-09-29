@@ -451,6 +451,20 @@ is recorded in `trials.jsonl` as the join key.*
 5. **How long sha256 takes** over a large file, measured on the synthetic
    harness scaled up. This is wl.works' own open question (Plan 24's item 1).
 
+*Recorded after NWB publishing's final review, 2026-09-29 (its M8):*
+- *Item 4 is **still open**, and cannot be settled before the NAS is bought.
+  At commissioning, check that a rename on the share replaces its target
+  atomically, and whether HDF5 file locking works there. The `.partial`
+  rule depends on the first. The second decides whether a reader can hold
+  a file open while it is moved.*
+- *Item 5 is **measured**: `nwb/checksums.py::dataset_checksums` hashed a
+  1 GiB file of four 256 MiB datasets in 0.64 s. That is about 1.6 GiB/s on
+  an Apple M3 Max with the file in the page cache. A 25 GB file would take
+  about 15 s. Peak memory was about 555 MiB, because each dataset is held
+  whole (piece 1's design). On the NAS, the share's read rate will set the
+  time, not the hash. Placement hashes a file twice per move, so a move
+  costs about two reads of the file.*
+
 ## 12. The hardware discussion, 2026-09-29 (input for the purchase, not a requirement)
 
 **From the parent spec's own numbers, at two sessions a week:**
