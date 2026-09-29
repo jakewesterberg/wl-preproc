@@ -52,7 +52,7 @@ class NwbFile(dj.Manual):
         ---
         dtype : varchar(64)
         shape : varchar(64)
-        blake3 : char(64)
+        sha256 : char(64)
         paired_with = '' : varchar(512)
         """
 

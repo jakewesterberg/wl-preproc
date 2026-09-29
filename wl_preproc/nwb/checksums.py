@@ -1,6 +1,8 @@
 """Checksums of the file's written-once datasets (parent spec section 8.2,
 for wl.works Plan 24 section 3.3; design spec
-`2026-09-28-nwb-builder-design.md` section 7).
+`2026-09-28-nwb-builder-design.md` section 7), as `sha256`: wl.works' Plan 24
+settles the algorithm (design spec `2026-09-29-nwb-publishing-design.md`
+section 7).
 
 **Each dataset's DECODED contents, never a group's**: `colnames` is an
 attribute that changes when a column is appended, so a group checksum
@@ -11,9 +13,9 @@ carries, not data) and `/file_create_date` (when it was written)."""
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
-import blake3
 import h5py
 import numpy as np
 
@@ -35,7 +37,7 @@ def _content_bytes(dataset: h5py.Dataset) -> bytes:
 
 
 def dataset_checksums(path: Path) -> list[dict]:
-    """One row per dataset: `dataset_path`, `dtype`, `shape`, `blake3` and
+    """One row per dataset: `dataset_path`, `dtype`, `shape`, `sha256` and
     `paired_with` (a ragged column's other half, '' otherwise)."""
     rows = []
     with h5py.File(path, "r") as handle:
@@ -56,7 +58,7 @@ def dataset_checksums(path: Path) -> list[dict]:
                 "dataset_path": name,
                 "dtype": str(dataset.dtype),
                 "shape": str(tuple(dataset.shape)),
-                "blake3": blake3.blake3(_content_bytes(dataset)).hexdigest(),
+                "sha256": hashlib.sha256(_content_bytes(dataset)).hexdigest(),
                 "paired_with": paired if paired in present else "",
             })
     return rows
