@@ -473,6 +473,23 @@ def slow_share(tmp_path_factory):
     return Share(tier="slow", mount=tmp_path_factory.mktemp("nwb-slow"), host="wl-nas", name="hdd")
 
 
+@pytest.fixture(scope="module")
+def fast_share(tmp_path_factory):
+    from wl_preproc.nwb.publish import Share
+
+    return Share(tier="fast", mount=tmp_path_factory.mktemp("nwb-fast"), host="wl-nas", name="nvme")
+
+
+def _set_active(*keys):
+    """What PUT /nwb/active records: the whole set, as JSON carries it."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.ActiveSet.insert1({
+        "received_at": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
+        "activations": [{**key, "session_datetime": key["session_datetime"].isoformat()} for key in keys],
+    })
+
+
 def _placed_path(share, key):
     from wl_preproc.schema import nwb as nwb_schema
 
@@ -580,6 +597,157 @@ def test_publishing_never_overwrites_a_file_no_placement_records(activation, pre
     assert [error for error in errors if "not overwritten" in error]
     assert published.read_bytes() == before
     assert publish_module.current_placement(key) is None
+
+
+def test_the_active_set_moves_a_file_to_the_fast_share_and_back_with_its_annotations(
+        activation, daemon_module, prefix, slow_share, fast_share):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 5: one live
+    copy, moved by the daemon to whichever share the latest active set
+    wants; an annotation appended on the fast share travels back with it."""
+    from wl_preproc.nwb.publish import current_placement, description_path, run_placement
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _blocks = activation
+    _set_active(key)
+    report = daemon_module.run_once(prefix=prefix, nwb_slow=slow_share, nwb_fast=fast_share)
+    assert report["nwb_moved"] >= 1
+    placement = current_placement(key)
+    assert placement["tier"] == "fast"
+    on_fast = fast_share.local(placement["path"])
+    assert on_fast.exists() and description_path(on_fast).exists()
+    assert not slow_share.local(placement["path"]).exists()
+    with h5py.File(on_fast, "a") as handle:
+        handle.create_dataset("/lab_annotation", data=[1, 2, 3])
+    _set_active()
+    run_placement(slow_share, fast_share)
+    back = current_placement(key)
+    assert back["tier"] == "slow" and not on_fast.exists()
+    with h5py.File(slow_share.local(back["path"]), "r") as handle:
+        assert handle["/lab_annotation"][:].tolist() == [1, 2, 3]
+    kinds = [change["kind"] for change in sorted((nwb_schema.NwbChange & key).to_dicts(), key=lambda c: c["change_seq"])]
+    assert kinds[-2:] == ["moved", "moved"]
+
+
+def test_changed_written_once_data_stops_a_move(activation, slow_share, fast_share):
+    """Section 5: something changed data that must never change; the file
+    stays where it is, and the report names the dataset."""
+    from wl_preproc.nwb.publish import current_placement, run_placement
+
+    _session_key, key, _blocks = activation
+    path = slow_share.local(current_placement(key)["path"])
+    with h5py.File(path, "r+") as handle:
+        original = handle["/intervals/trials/start_time"][0]
+        handle["/intervals/trials/start_time"][0] = original + 1.0
+    try:
+        _set_active(key)
+        _moved, errors = run_placement(slow_share, fast_share)
+        assert [error for error in errors if "changed on the NAS" in error and "start_time" in error]
+        assert current_placement(key)["tier"] == "slow" and path.exists()
+    finally:
+        with h5py.File(path, "r+") as handle:
+            handle["/intervals/trials/start_time"][0] = original
+        _set_active()
+
+
+def test_the_fast_share_headroom_stops_a_move(activation, slow_share, fast_share):
+    import dataclasses
+
+    from wl_preproc.nwb.publish import current_placement, run_placement
+
+    _session_key, key, _blocks = activation
+    _set_active(key)
+    try:
+        _moved, errors = run_placement(slow_share, dataclasses.replace(fast_share, headroom_bytes=10**18))
+        assert [error for error in errors if "headroom" in error]
+        assert current_placement(key)["tier"] == "slow"
+    finally:
+        _set_active()
+
+
+def test_an_old_copy_that_could_not_be_deleted_is_removed_on_the_next_pass(activation, slow_share, fast_share,
+                                                                           monkeypatch):
+    """Review Focus 1 (the plan): a reader holds the old copy, or the share
+    refuses the delete. The move stands; the next pass finishes it, so one
+    live copy remains and a later move back is not stuck on a conflict."""
+    from wl_preproc.nwb import publish as publish_module
+
+    _session_key, key, _blocks = activation
+    old = slow_share.local(publish_module.current_placement(key)["path"])
+    real = publish_module._remove_old_copy
+
+    def in_use(path):
+        raise PermissionError(f"{path} is in use")
+
+    monkeypatch.setattr(publish_module, "_remove_old_copy", in_use)
+    _set_active(key)
+    try:
+        _moved, errors = publish_module.run_placement(slow_share, fast_share)
+        assert [error for error in errors if "is in use" in error]
+        assert publish_module.current_placement(key)["tier"] == "fast" and old.exists()
+        monkeypatch.setattr(publish_module, "_remove_old_copy", real)
+        publish_module.run_placement(slow_share, fast_share)
+        assert not old.exists()
+    finally:
+        monkeypatch.setattr(publish_module, "_remove_old_copy", real)
+        _set_active()
+        publish_module.run_placement(slow_share, fast_share)
+    assert publish_module.current_placement(key)["tier"] == "slow"
+
+
+def test_an_active_set_naming_a_refused_file_changes_nothing(activation, slow_share, fast_share):
+    """Review Focus 4 (the plan): wl.works may name any activation. A refused
+    one is accepted, never published or moved, and costs no error a pass."""
+    from wl_preproc.nwb.publish import current_placement, run_placement, run_publish
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, _blocks = activation
+    refused = (nwb_schema.NwbFile & session_key & {"status": "refused"}).keys()
+    assert refused
+    _set_active(*refused)
+    try:
+        _published, publish_errors = run_publish(slow_share, fast_share)
+        _moved, placement_errors = run_placement(slow_share, fast_share)
+        assert not [error for error in publish_errors + placement_errors if "'montage_id': 1," in error]
+        assert all(current_placement(key) is None for key in refused)
+    finally:
+        _set_active()
+
+
+def test_a_published_file_deleted_by_hand_is_reported_not_moved(activation, slow_share, fast_share):
+    """Review Focus 5 (the plan): the file is gone from its share. The
+    placement stays as recorded and every pass says so, by path."""
+    from wl_preproc.nwb.publish import current_placement, run_placement
+
+    _session_key, key, _blocks = activation
+    path = slow_share.local(current_placement(key)["path"])
+    kept = path.read_bytes()
+    path.unlink()
+    _set_active(key)
+    try:
+        _moved, errors = run_placement(slow_share, fast_share)
+        assert [error for error in errors if "missing from its share" in error and str(path) in error]
+        assert current_placement(key)["tier"] == "slow"
+    finally:
+        path.write_bytes(kept)
+        _set_active()
+
+
+def test_an_active_activation_publishes_straight_to_the_fast_share(activation, prefix, slow_share, fast_share,
+                                                                   tmp_path_factory):
+    """Section 5: a dataset can be marked active before its files exist."""
+    from wl_preproc.nwb import build as build_module
+    from wl_preproc.nwb import publish as publish_module
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    _unrecord(key, slow_share, fast_share)
+    build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-straight-to-fast")))
+    _set_active(key)
+    try:
+        publish_module.run_publish(slow_share, fast_share)
+        assert publish_module.current_placement(key)["tier"] == "fast"
+    finally:
+        _set_active()
 
 
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):

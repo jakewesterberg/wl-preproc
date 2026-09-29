@@ -33,6 +33,13 @@ class VerificationError(Exception):
     """A copy whose written-once datasets do not match the build's checksums."""
 
 
+class ChangedData(Exception):
+    """A written-once dataset that no longer matches its checksum on the NAS:
+    something changed data that must never change. The file is not moved,
+    for a person to look at (design spec
+    `2026-09-29-nwb-publishing-design.md` section 5)."""
+
+
 class PublishConflict(Exception):
     """A file already at the target that no placement records. Never
     overwritten: the lab's annotations live only inside published files
@@ -209,3 +216,74 @@ def run_publish(slow: Share, fast: Share | None = None, freed: list[dict] | None
         except Exception as exc:  # one file must not stop the others; retried next pass
             errors.append(f"NwbPlacement {key}: {exc}")
     return published, errors
+
+
+def move(key: dict, placement: dict, source_share: Share, target_share: Share) -> dict:
+    """Move one published file, and its description, to the other share:
+    checked, copied and verified, recorded, then the old copy deleted.
+    Annotations the lab appended travel with it."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    source = source_share.local(placement["path"])
+    if not source.exists():
+        raise FileNotFoundError(f"{source}: the published file is missing from its share; not moved")
+    checksums = (nwb_schema.NwbFile.Dataset & key_of(key)).to_dicts()
+    changed = mismatches(source, checksums)
+    if changed:
+        raise ChangedData(f"{source}: {len(changed)} written-once dataset(s) changed on the NAS, first "
+                          f"{changed[0]}; not moved")
+    description = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
+    moved = place(key, source, target_share, checksums, description)
+    record_change(key, "moved", moved)
+    _remove_old_copy(source)
+    return moved
+
+
+def _remove_old_copy(path: Path) -> None:
+    """A moved file's old copy, and its description. A deletion that fails
+    (the share refuses, a reader holds it) leaves the move recorded; the
+    placement stage finishes it on a later pass."""
+    path.unlink(missing_ok=True)
+    description_path(path).unlink(missing_ok=True)
+
+
+def run_placement(slow: Share, fast: Share, freed: list[dict] | None = None) -> tuple[int, list[str]]:
+    """The daemon's placement stage: every published file whose share is not
+    the one the latest active set wants is moved, one live copy at a time;
+    moves to the fast share stop at its headroom. Returns `(moved,
+    failures)`."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    freed = freed or []
+    wanted_fast = active_keys()
+    shares = {"slow": slow, "fast": fast}
+    moved, errors = 0, []
+    published = nwb_schema.NwbFile & (nwb_schema.NwbChange & {"kind": "published"}).proj(
+        "subject", "session_datetime", "montage_id", "activation_id")
+    for key in published.keys():
+        if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
+            continue
+        placement = current_placement(key)
+        if placement is None:
+            continue
+        # One live copy: a copy on the other share is an earlier move whose
+        # old copy could not be deleted then. Finish that move first.
+        other = shares["fast" if placement["tier"] == "slow" else "slow"].local(placement["path"])
+        if other.exists() or description_path(other).exists():
+            try:
+                _remove_old_copy(other)
+            except OSError as exc:
+                errors.append(f"NwbPlacement {key}: the old copy at {other} could not be removed: {exc}")
+                continue
+        wanted = "fast" if activation_tuple(key) in wanted_fast else "slow"
+        if placement["tier"] == wanted:
+            continue
+        if wanted == "fast" and not fast.has_room(placement["n_bytes"]):
+            errors.append(f"NwbPlacement {key}: the fast share is at its headroom; not moved")
+            continue
+        try:
+            move(key, placement, shares[placement["tier"]], shares[wanted])
+            moved += 1
+        except Exception as exc:  # one file must not stop the others; retried next pass
+            errors.append(f"NwbPlacement {key}: {exc}")
+    return moved, errors

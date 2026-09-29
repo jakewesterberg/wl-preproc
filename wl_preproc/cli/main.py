@@ -732,6 +732,10 @@ def main(argv: list[str] | None = None) -> int:
             print("nwb published: skipped (no --nwb-slow-root)")
         else:
             print(f"nwb published: {report['nwb_published']}")
+        if report["nwb_moved"] is None:
+            print("nwb moved: skipped (no --nwb-fast-root)")
+        else:
+            print(f"nwb moved: {report['nwb_moved']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:

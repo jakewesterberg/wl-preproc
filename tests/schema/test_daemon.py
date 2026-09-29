@@ -272,7 +272,7 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
 
     # `nwb` joined 2026-09-28 (design spec `2026-09-28-nwb-builder-design.md`).
     assert set(baseline) == {
-        "populated", "errors", "stale_jobs_reaped", "archived", "nwb", "nwb_published", "freed_skipped"
+        "populated", "errors", "stale_jobs_reaped", "archived", "nwb", "nwb_published", "nwb_moved", "freed_skipped"
     }
     assert isinstance(baseline["freed_skipped"], int)
     assert baseline["populated"] == first["populated"], (

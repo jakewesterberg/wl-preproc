@@ -1009,6 +1009,17 @@ def run_once(
         nwb_published, publish_errors = run_publish(nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
         errors.extend(publish_errors)
 
+    # Placement (section 5): with both shares, each published file is moved
+    # to the one the latest active set wants. `None` without the fast share.
+    nwb_moved: int | None
+    if nwb_slow is None or nwb_fast is None:
+        nwb_moved = None
+    else:
+        from wl_preproc.nwb.publish import run_placement
+
+        nwb_moved, placement_errors = run_placement(nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+        errors.extend(placement_errors)
+
     archived: int | None
     if nas_root is None or host is None or share is None:
         archived = None
@@ -1025,6 +1036,7 @@ def run_once(
         "archived": archived,
         "nwb": nwb_built,
         "nwb_published": nwb_published,
+        "nwb_moved": nwb_moved,
         # How many sessions were freed, and so skipped, when the pass began --
         # a count, so a skip never reads as an all-clear.
         "freed_skipped": freed_skipped,
