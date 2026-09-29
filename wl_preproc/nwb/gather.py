@@ -68,6 +68,16 @@ def identifier_for(activation_key: dict, session_id: str) -> str:
             f".activation-{activation_key['activation_id']}")
 
 
+def _paramsets() -> tuple[int, dict[str, int]]:
+    """The eye_validity paramset and the eye_detection paramsets a file is
+    built from: the registered defaults. Registering is idempotent."""
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
+    from wl_preproc.schema import detect, paramset
+
+    detection_idx = detect.register_default_paramsets()
+    return paramset.register("eye_validity", dataclasses.asdict(DEFAULT_VALIDITY_PARAMS)), detection_idx
+
+
 def readiness(activation_key: dict) -> str | None:
     """`None` when everything the file is built from has been computed for
     the session, else what it is still waiting on (the final review's I4).
@@ -77,18 +87,29 @@ def readiness(activation_key: dict) -> str | None:
     does not is one `populate()` has still to run, or one that errored. A
     file built now would silently leave it out and be recorded as final.
     Every table here writes a row for every key it is given, refusals
-    included, so no key waits forever by design."""
+    included, so no key waits forever by design. Only the paramsets the
+    file reads are waited on: a key of another paramset, one that can only
+    ever error say, must not hold every file back."""
     from wl_preproc.schema import consensus, coverage, detect, timebase
     from wl_preproc.schema import eye as eye_schema
 
     session_key = {k: activation_key[k] for k in ("subject", "session_datetime")}
     if not timebase.TimingProvenance & session_key:
         return "waiting on TimingProvenance"
+    validity_idx, detection_idx = _paramsets()
+    detectors = ", ".join(str(idx) for idx in sorted(detection_idx.values()))
+    read = {
+        detect.EyeValidity: {"validity_paramset_idx": validity_idx},
+        detect.EyeDetection: f"validity_paramset_idx = {validity_idx} AND paramset_idx IN ({detectors})",
+        consensus.DetectorAgreement: (f"validity_paramset_idx = {validity_idx} AND paramset_a IN ({detectors}) "
+                                      f"AND paramset_b IN ({detectors})"),
+    }
     for table in (coverage.BlockCoverage, coverage.TrialCoverage, eye_schema.EyeCalibration,
                   detect.EyeValidity, detect.EyeDetection, consensus.DetectorAgreement):
-        pending = (table().key_source & session_key) - table.proj()
+        pending = (table().key_source & session_key & read.get(table, {})) - table.proj()
         if len(pending):
-            return f"waiting on {table.__name__}: {len(pending)} key(s) of this session not yet computed"
+            return (f"waiting on {table.__name__}: {len(pending)} key(s) of this session not yet computed, "
+                    f"first {pending.keys()[0]}")
     return None
 
 
@@ -325,8 +346,7 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
 
 def gather(activation_key: dict) -> Gathered:
     """One activation's data, or `Refused` with the reason (section 10)."""
-    from wl_preproc.schema import detect, ingest, request, timebase
-    from wl_preproc.schema import paramset
+    from wl_preproc.schema import ingest, request, timebase
 
     key = {k: activation_key[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
     session_key = {k: key[k] for k in ("subject", "session_datetime")}
@@ -344,10 +364,7 @@ def gather(activation_key: dict) -> Gathered:
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     clock = _reference_time(session_dir, key["session_datetime"])
-    detection_idx = detect.register_default_paramsets()
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
-
-    validity_idx = paramset.register("eye_validity", dataclasses.asdict(DEFAULT_VALIDITY_PARAMS))
+    validity_idx, detection_idx = _paramsets()
     eye = _eye(session_key, session_dir, blocks, validity_idx, detection_idx)
     no_eye_samples = eye is not None and eye.get("no_samples", False)
     if no_eye_samples:

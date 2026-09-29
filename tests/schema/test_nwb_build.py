@@ -542,6 +542,23 @@ def test_the_stage_waits_for_upstream_keys_not_yet_computed(activation, prefix, 
     assert (nwb_schema.NwbFile & key).fetch1("status") == "written"
 
 
+def test_the_stage_waits_only_on_what_the_file_reads(activation, prefix):
+    """A detection paramset the file does not read -- here one for a
+    detector that does not exist, so its key can only ever error -- must
+    not hold the file back. Found in the full suite, where another module's
+    registration left such a key outstanding for every session."""
+    from wl_preproc.nwb.gather import readiness
+    from wl_preproc.schema import detect, paramset
+
+    session_key, key, _blocks = activation
+    extra = paramset.register("eye_detection", {"detector": "not_a_detector_nwb_build"})
+    try:
+        assert len((detect.EyeDetection().key_source & session_key) - detect.EyeDetection.proj()) >= 1
+        assert readiness(key) is None
+    finally:
+        (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": extra}).delete()
+
+
 def test_the_stage_waits_for_session_time_rather_than_refusing(activation, prefix, tmp_path_factory, capsys):
     """The final review's I4(b): no `TimingProvenance` row means "not yet",
     not a refusal. The stage records nothing and tries again next pass, and
