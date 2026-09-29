@@ -657,6 +657,24 @@ third_party:
       both dependents' real constraints rather than restating zarr's own
       oddly-specific point exclusions, which this repository has no
       independent reason to assert.
+  - name: pynwb
+    constraint: ">=4.1,<5"
+    why: >-
+      NWB export (docs/superpowers/specs/2026-09-28-nwb-builder-design.md):
+      wl_preproc/nwb/ writes every file through it. It was already installed,
+      but only because element-animal declares pynwb>=1.4.0; this package now
+      imports it directly, so the dependency is declared as its own. 4.x is
+      the floor because the builder writes NWB schema 2.10 files; CI resolves
+      4.2.
+  - name: nwbinspector
+    constraint: ">=0.7,<0.8"
+    why: >-
+      Validates every NWB file the builder writes (parent spec section 8.1:
+      "validated with nwbinspector before publication"); a CRITICAL finding
+      marks the file invalid. Pinned to 0.7 because its critical checks were
+      measured against these files on 2026-09-28 -- a subject with no age or
+      date of birth, and a future session start -- and a new minor may add
+      or regrade checks.
 
 # The only place this edge is written down where another repository can see it.
 # The dependency itself lives in pyproject.toml, which nothing outside this
