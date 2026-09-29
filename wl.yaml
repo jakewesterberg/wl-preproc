@@ -139,7 +139,9 @@ status:
     fast/slow placement set by wl.works through `PUT /nwb/active`, `GET
     /nwb`, and a real `canonical_nwb_present` (design spec
     `2026-09-29-nwb-publishing-design.md`; handoff
-    `docs/handoffs/2026-09-29-nwb-publishing.md`).
+    `docs/handoffs/2026-09-29-nwb-publishing.md`). The raw archive writes only
+    to a NAS share carrying a `.wlpp-archive-share` marker, placed once by
+    hand (merged as `7075799`, 2026-09-29; archive spec §3's amendment).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -446,12 +448,14 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `d63be54` until the archive-share merge `7075799` on 2026-09-29 (CI
+  # green on `d63be54`, run 36615133955); true when written.
   # Was `a8e1642` until the NWB publishing merge `d63be54` on 2026-09-29 (CI
   # green on `a8e1642`, run 36557961229); true when written.
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "d63be54"
+  describes: "7075799"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

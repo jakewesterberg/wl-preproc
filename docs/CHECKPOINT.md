@@ -1,18 +1,24 @@
 # Where this build actually is
 
-**Last updated 2026-09-29**, describing `main` at `d63be54` — the merge of
-`spec/nwb-publishing`: NWB publishing, piece 2a of Phase 3's NWB export. It
-gives every file a description beside it, publishes files to the NAS's slow
-share, lets wl.works move them to and from the fast share, and makes
-`canonical_nwb_present` real (handoff `handoffs/2026-09-29-nwb-publishing.md`).
-`d63be54`'s tree is byte-identical to the branch head `7c22a0b`, whose code is
-`0a246c4`'s, the final review's fix pass: 1900 passed on 3.11 and 1899 on 3.13
-locally, 0 failed. CI read off `d63be54` itself: green on both interpreters,
-1899 passed on each with 33 skipped, and the manifest check green — `gh run
-view 36615133955`. CI on later heads is recorded here only once read, not
-before.
+**Last updated 2026-09-29**, describing `main` at `7075799`, the merge of
+`fix/archive-share-marker`. The raw archive now writes only to a NAS share
+carrying a `.wlpp-archive-share` marker, placed once by hand (the archive
+spec §3's amendment). It follows `d63be54`, the merge of
+`spec/nwb-publishing`: NWB publishing, piece 2a of Phase 3's NWB export
+(handoff `handoffs/2026-09-29-nwb-publishing.md`). CI green on `d63be54`, 1899
+passed on each interpreter, `gh run view 36615133955`.
 
-*This header named `a8e1642` — the NWB builder merge, CI green, 1828 passed
+`7075799`'s tree is byte-identical to the tested branch head `f8749e4`: 1904
+passed on 3.11 and 1903 on 3.13 locally, 0 failed. CI read off `7075799`
+itself is green on both interpreters, 1903 passed on each with 33 skipped,
+and the manifest check is green (`gh run view 36623205590`). CI on later
+heads is recorded here only once read, not before.
+
+*This header named `d63be54` (the NWB publishing merge, CI green, 1899 passed on
+each interpreter, `36615133955`) until the archive-share merge; true when
+written.*
+
+*Before that it named `a8e1642` — the NWB builder merge, CI green, 1828 passed
 on each interpreter, `36557961229` — until the NWB publishing merge; true when
 written.*
 
@@ -489,7 +495,8 @@ requester chose to merge the same day; true when written.*
 >    a share without one. See `docs/handoffs/2026-09-29-nwb-publishing.md`.
 >
 >    **The raw archive now writes only to a mounted share** (2026-09-29, on
->    `fix/archive-share-marker`, NOT merged as written). The review above
+>    `fix/archive-share-marker`, NOT merged as written; *merged and pushed as
+>    `7075799` the same day, CI green, 1903 passed on each interpreter*). The review above
 >    found that the old code archived onto an unmounted mount point. **The
 >    archive share needs a `.wlpp-archive-share` marker at its root, placed
 >    once by hand**; without it the daemon archives nothing and says why,
