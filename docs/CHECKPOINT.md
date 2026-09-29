@@ -1,18 +1,24 @@
 # Where this build actually is
 
-**Last updated 2026-09-29**, describing `main` at `a8e1642` — the merge of
-`spec/nwb-builder`: the NWB builder, piece 1 of Phase 3's NWB export, which
-writes one activation's file and records it in `nwb.NwbFile` (handoff
-`handoffs/2026-09-28-nwb-builder.md`). `a8e1642`'s tree is byte-identical to
-the tested branch head `d048ec0`, whose code is `bc4fc98`'s: 1829 passed on
-3.11 and 1828 on 3.13 locally, 0 failed. CI read off `a8e1642` itself: green
-on both interpreters, 1828 passed on each with 33 skipped, and the manifest
-check green — `gh run view 36557961229`. CI on later heads is recorded here
-only once read, not before.
+**Last updated 2026-09-29**, describing `main` at `d63be54` — the merge of
+`spec/nwb-publishing`: NWB publishing, piece 2a of Phase 3's NWB export. It
+gives every file a description beside it, publishes files to the NAS's slow
+share, lets wl.works move them to and from the fast share, and makes
+`canonical_nwb_present` real (handoff `handoffs/2026-09-29-nwb-publishing.md`).
+`d63be54`'s tree is byte-identical to the branch head `7c22a0b`, whose code is
+`0a246c4`'s, the final review's fix pass: 1900 passed on 3.11 and 1899 on 3.13
+locally, 0 failed. CI read off `d63be54` itself: green on both interpreters,
+1899 passed on each with 33 skipped, and the manifest check green — `gh run
+view 36615133955`. CI on later heads is recorded here only once read, not
+before.
 
-*This header named `0aa4928` — the xcon rename merge after the glitch-repair
-merge `f7095aa`, CI green, 1780 passed on each interpreter, `36463681187` —
-until the NWB builder merge; true when written.*
+*This header named `a8e1642` — the NWB builder merge, CI green, 1828 passed
+on each interpreter, `36557961229` — until the NWB publishing merge; true when
+written.*
+
+*Before that it named `0aa4928` — the xcon rename merge after the
+glitch-repair merge `f7095aa`, CI green, 1780 passed on each interpreter,
+`36463681187` — until the NWB builder merge; true when written.*
 
 *This header named `cadef7e` — the conjunction floor merge, CI green, 1767
 passed on each interpreter, `36449262350` — until the glitch and rename
@@ -461,10 +467,11 @@ requester chose to merge the same day; true when written.*
 >    its absence CRITICAL (the OPEN entry in
 >    `pending-wl-works-amendments.md`). `canonical_nwb_present` stays `False`
 >    until piece 2, publication, so a real reclamation still needs a
->    recorded force. See `docs/handoffs/2026-09-28-nwb-builder.md`.
+>    recorded force *(true when written; real since `d63be54`)*. See `docs/handoffs/2026-09-28-nwb-builder.md`.
 >
 >    **NWB publishing (piece 2a) is BUILT on `spec/nwb-publishing`
->    (2026-09-29), NOT merged as written** (spec
+>    (2026-09-29), NOT merged as written** *(merged and pushed as `d63be54`
+>    the same day; CI green, 1899 passed on each interpreter)* (spec
 >    `superpowers/specs/2026-09-29-nwb-publishing-design.md`). Every file is
 >    built with a description beside it, `<identifier>.json`, for wl.works'
 >    dataset builder: its tasks, conditions by stimulus settings, data types
