@@ -73,6 +73,34 @@ def reclaimable(predicate: Predicate) -> bool:
     return not blocking(predicate)
 
 
+def _canonical_nwb(session_key: dict, prefix: str) -> tuple[bool, str]:
+    """Whether every montage of the session has a canonical activation whose
+    NWB file is `written` and published, on either share (design spec
+    `2026-09-29-nwb-publishing-design.md` section 8), and, when not, why."""
+    from wl_preproc.nwb.publish import current_placement
+    from wl_preproc.schema import core, request
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.activate(prefix=prefix)
+    montages = sorted(int(m) for m in (core.Montage & session_key).to_arrays("montage_id"))
+    if not montages:
+        return False, "no montage, so no canonical activation"
+    problems = []
+    for montage_id in montages:
+        canonical = (request.Activation & session_key & {"montage_id": montage_id, "role": "canonical"}).keys()
+        if not canonical:
+            problems.append(f"montage {montage_id}: no canonical activation")
+        for key in canonical:
+            rows = (nwb_schema.NwbFile & key).to_dicts()
+            if not rows:
+                problems.append(f"montage {montage_id}: its canonical NWB is not built yet")
+            elif rows[0]["status"] != "written":
+                problems.append(f"montage {montage_id}: its canonical NWB is {rows[0]['status']}")
+            elif current_placement(key) is None:
+                problems.append(f"montage {montage_id}: its canonical NWB is built but not yet published")
+    return not problems, "; ".join(problems)
+
+
 def reclaim_conditions(
     session_key: dict,
     expected_file_count: int,
@@ -211,15 +239,14 @@ def reclaim_conditions(
                 "no paramset queue exists yet (2b-5); passes vacuously",
                 overridable=True,
             ),
-            # Fails, unlike the vacuous condition above: the requester's
-            # position is that reclamation follows the canonical NWB
-            # (2026-09-26 rehydration design, section 0, ruling 3), so the
-            # absence of NWB export must block rather than wave through. It
-            # gains a real query when Phase 3 writes one.
+            # The requester's position is that reclamation follows the
+            # canonical NWB (2026-09-26 rehydration design, section 0, ruling
+            # 3). *A hard-coded False, "NWB export is not built (Phase 3)",
+            # until the NWB publishing design of 2026-09-29 gave it this
+            # query; true when written.*
             Condition(
                 "canonical_nwb_present",
-                False,
-                "NWB export is not built (Phase 3)",
+                *_canonical_nwb(session_key, prefix),
                 overridable=True,
             ),
             # Safety-kind: a hold must block. A force clears it by being the

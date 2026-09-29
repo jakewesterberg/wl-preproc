@@ -125,6 +125,11 @@ has none, so the code reaches the file as that event's `condition` in
 meaning, left until a trial-level condition exists. Cost if wrong: a reader
 joins the two by time.*
 
+*Superseded 2026-09-29 by `2026-09-29-nwb-publishing-design.md` §2.2: the rig's
+own trial record ties each trial to its condition by trial number, and the
+requester's datasets select by condition, so the trials table gains
+`condition` and the settings that vary. True when written.*
+
 **`/events/task_events`** (`EventsTable`, NWB core since 2.9): one row per
 decoded event code, `timestamp`, `event_type` (the `event.EventType` name),
 and the attributes the event stage stores (`trial_id`, `block_id`,
@@ -312,6 +317,8 @@ writes is written-once.
   `blake3`, `paired_with`.
 - **Stable:** rebuilding the same activation from the same inputs gives the
   same checksums. `identifier` and `built_at` are attributes, not hashed.
+- *Amended 2026-09-29 by `2026-09-29-nwb-publishing-design.md` §7: `sha256`,
+  not `blake3`, as wl.works' Plan 24 settles; every other rule here stands.*
 
 ## 8. Validation
 

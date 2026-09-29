@@ -60,9 +60,21 @@ def test_checksums_are_of_contents_and_stable_across_rebuilds(tmp_path):
     assert "/intervals/task_events/start_time" in by_path
     assert not any(row["dataset_path"].startswith(("/specifications", "/file_create_date")) for row in first)
     changed_paths = {row["dataset_path"] for row in changed} & set(by_path)
-    assert [p for p in sorted(changed_paths) if {r["dataset_path"]: r for r in changed}[p]["blake3"] != by_path[p]["blake3"]] == [
+    assert [p for p in sorted(changed_paths) if {r["dataset_path"]: r for r in changed}[p]["sha256"] != by_path[p]["sha256"]] == [
         "/intervals/task_events/start_time", "/intervals/task_events/stop_time"]
 
+
+def test_each_checksum_is_the_sha256_of_the_decoded_contents(tmp_path):
+    """wl.works' Plan 24 settles the algorithm, sha256 (design spec
+    `2026-09-29-nwb-publishing-design.md` section 7): a checksum anyone can
+    recompute from the dataset's values with the standard library."""
+    import hashlib
+
+    from wl_preproc.nwb.checksums import dataset_checksums
+
+    rows = {row["dataset_path"]: row for row in dataset_checksums(_file(tmp_path, "a.nwb", [1.0, 2.0]))}
+    expected = hashlib.sha256(np.array([1.0, 2.0]).tobytes()).hexdigest()
+    assert rows["/intervals/task_events/start_time"]["sha256"] == expected
 
 def test_a_ragged_column_is_recorded_as_a_pair(tmp_path):
     from pynwb.file import Subject  # noqa: F401 -- pynwb's experimenter is a ragged-free list; build one below

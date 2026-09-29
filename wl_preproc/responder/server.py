@@ -142,6 +142,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from wl_preproc.responder import health, jobs
+from wl_preproc.responder import nwb as nwb_endpoints
 from wl_preproc.responder.handler import ConflictError, make_handler
 from wl_preproc.schema import DEFAULT_PREFIX
 from wl_preproc.schema.request import KeyReuseError
@@ -213,7 +214,18 @@ def serve(
         with lock:
             return _translate_accept_errors(request, prefix=prefix)
 
-    handler_cls = make_handler(token, locked_health_fn, locked_accept_fn)
+    # GET /nwb and PUT /nwb/active (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 6), under the same lock.
+    def locked_nwb_list_fn(since):
+        with lock:
+            return nwb_endpoints.list_files(since, prefix=prefix)
+
+    def locked_nwb_active_fn(request):
+        with lock:
+            return nwb_endpoints.set_active(request, prefix=prefix)
+
+    handler_cls = make_handler(token, locked_health_fn, locked_accept_fn, locked_nwb_list_fn,
+                               locked_nwb_active_fn)
     httpd = ThreadingHTTPServer(("", port), handler_cls)
     try:
         if ready is not None:

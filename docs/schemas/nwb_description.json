@@ -1,0 +1,716 @@
+{
+  "$defs": {
+    "Behaviour": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "title": "Events",
+          "type": "integer"
+        },
+        "trials": {
+          "title": "Trials",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "trials",
+        "events"
+      ],
+      "title": "Behaviour",
+      "type": "object"
+    },
+    "Block": {
+      "additionalProperties": false,
+      "properties": {
+        "asserted": {
+          "$ref": "#/$defs/Interval"
+        },
+        "block_id": {
+          "title": "Block Id",
+          "type": "integer"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "title": "Conditions",
+          "type": "array"
+        },
+        "coverage": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Coverage"
+          },
+          "title": "Coverage",
+          "type": "object"
+        },
+        "measured": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "trials": {
+          "$ref": "#/$defs/TrialCounts"
+        },
+        "works_block_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Works Block Id"
+        }
+      },
+      "required": [
+        "block_id",
+        "works_block_id",
+        "task",
+        "asserted",
+        "measured",
+        "trials",
+        "coverage",
+        "conditions"
+      ],
+      "title": "Block",
+      "type": "object"
+    },
+    "Checksums": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "sha256",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "datasets": {
+          "items": {
+            "$ref": "#/$defs/DatasetChecksum"
+          },
+          "title": "Datasets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "algorithm",
+        "datasets"
+      ],
+      "title": "Checksums",
+      "type": "object"
+    },
+    "Condition": {
+      "additionalProperties": false,
+      "description": "One condition that ran in a block: by its name in the rig's record,\nwith the settings constant across its trials and a summary of those that\nvaried; or, without that record, by the stream's CONDITION number with\nsettings unknown (null).",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Code"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Settings"
+        },
+        "trials": {
+          "$ref": "#/$defs/TrialCounts"
+        },
+        "varying": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Varying"
+        }
+      },
+      "required": [
+        "name",
+        "code",
+        "settings",
+        "varying",
+        "trials"
+      ],
+      "title": "Condition",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "title": "Coverage",
+          "type": "string"
+        },
+        "covered_s": {
+          "title": "Covered S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "coverage",
+        "covered_s"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "DataTypes": {
+      "additionalProperties": false,
+      "properties": {
+        "behaviour": {
+          "$ref": "#/$defs/Behaviour"
+        },
+        "ephys": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ephys"
+        },
+        "eye": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EyeData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eye_events": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EyeEvents"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "photodiode": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Photodiode"
+        },
+        "stimulation": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stimulation"
+        },
+        "video": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Video"
+        }
+      },
+      "required": [
+        "eye",
+        "eye_events",
+        "behaviour"
+      ],
+      "title": "DataTypes",
+      "type": "object"
+    },
+    "DatasetChecksum": {
+      "additionalProperties": false,
+      "properties": {
+        "dataset_path": {
+          "title": "Dataset Path",
+          "type": "string"
+        },
+        "dtype": {
+          "title": "Dtype",
+          "type": "string"
+        },
+        "paired_with": {
+          "title": "Paired With",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "shape": {
+          "title": "Shape",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_path",
+        "dtype",
+        "shape",
+        "sha256",
+        "paired_with"
+      ],
+      "title": "DatasetChecksum",
+      "type": "object"
+    },
+    "EyeData": {
+      "additionalProperties": false,
+      "properties": {
+        "gaze": {
+          "items": {
+            "enum": [
+              "left",
+              "right"
+            ],
+            "type": "string"
+          },
+          "title": "Gaze",
+          "type": "array"
+        },
+        "pupil": {
+          "items": {
+            "enum": [
+              "left",
+              "right"
+            ],
+            "type": "string"
+          },
+          "title": "Pupil",
+          "type": "array"
+        }
+      },
+      "required": [
+        "gaze",
+        "pupil"
+      ],
+      "title": "EyeData",
+      "type": "object"
+    },
+    "EyeEvents": {
+      "additionalProperties": false,
+      "properties": {
+        "detectors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Detectors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "detectors"
+      ],
+      "title": "EyeEvents",
+      "type": "object"
+    },
+    "Identity": {
+      "additionalProperties": false,
+      "properties": {
+        "activation_id": {
+          "title": "Activation Id",
+          "type": "integer"
+        },
+        "built_at": {
+          "format": "date-time",
+          "title": "Built At",
+          "type": "string"
+        },
+        "identifier": {
+          "title": "Identifier",
+          "type": "string"
+        },
+        "montage_id": {
+          "title": "Montage Id",
+          "type": "integer"
+        },
+        "n_critical": {
+          "title": "N Critical",
+          "type": "integer"
+        },
+        "pipeline": {
+          "$ref": "#/$defs/Pipeline"
+        },
+        "rig": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rig"
+        },
+        "role": {
+          "enum": [
+            "canonical",
+            "derivative"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "session_datetime": {
+          "format": "date-time",
+          "title": "Session Datetime",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "written",
+            "invalid"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "supersedes_activation_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Supersedes Activation Id"
+        }
+      },
+      "required": [
+        "identifier",
+        "subject",
+        "session_id",
+        "session_datetime",
+        "rig",
+        "montage_id",
+        "activation_id",
+        "role",
+        "supersedes_activation_id",
+        "built_at",
+        "pipeline",
+        "status",
+        "n_critical"
+      ],
+      "title": "Identity",
+      "type": "object"
+    },
+    "Interval": {
+      "additionalProperties": false,
+      "properties": {
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        },
+        "stop_s": {
+          "title": "Stop S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_s",
+        "stop_s"
+      ],
+      "title": "Interval",
+      "type": "object"
+    },
+    "Pipeline": {
+      "additionalProperties": false,
+      "description": "The code that built the file. The commit is the provenance: the\npackage's own version is a constant that has never moved, and reading it\nneeds `importlib`, which `tests/test_cli_guardrails.py` bans outright.",
+      "properties": {
+        "commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Commit"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "commit"
+      ],
+      "title": "Pipeline",
+      "type": "object"
+    },
+    "Quality": {
+      "additionalProperties": false,
+      "properties": {
+        "eye_usable_fraction": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "propertyNames": {
+            "enum": [
+              "left",
+              "right"
+            ]
+          },
+          "title": "Eye Usable Fraction",
+          "type": "object"
+        },
+        "reference_source": {
+          "enum": [
+            "barcode",
+            "manifest"
+          ],
+          "title": "Reference Source",
+          "type": "string"
+        },
+        "timing_tier": {
+          "title": "Timing Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timing_tier",
+        "reference_source",
+        "eye_usable_fraction"
+      ],
+      "title": "Quality",
+      "type": "object"
+    },
+    "SubjectInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "age_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Age Days"
+        },
+        "date_of_birth": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Date Of Birth"
+        },
+        "sex": {
+          "enum": [
+            "M",
+            "F",
+            "U"
+          ],
+          "title": "Sex",
+          "type": "string"
+        },
+        "species": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Species"
+        }
+      },
+      "required": [
+        "species",
+        "sex",
+        "date_of_birth",
+        "age_days"
+      ],
+      "title": "SubjectInfo",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "name"
+      ],
+      "title": "Task",
+      "type": "object"
+    },
+    "TrialCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "by_outcome": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "By Outcome",
+          "type": "object"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "by_outcome"
+      ],
+      "title": "TrialCounts",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/Block"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "checksums": {
+      "$ref": "#/$defs/Checksums"
+    },
+    "data_types": {
+      "$ref": "#/$defs/DataTypes"
+    },
+    "identity": {
+      "$ref": "#/$defs/Identity"
+    },
+    "notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "probes": {
+      "default": [],
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Probes",
+      "type": "array"
+    },
+    "processing": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Processing",
+      "type": "object"
+    },
+    "quality": {
+      "$ref": "#/$defs/Quality"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "subject": {
+      "$ref": "#/$defs/SubjectInfo"
+    }
+  },
+  "required": [
+    "identity",
+    "subject",
+    "data_types",
+    "blocks",
+    "quality",
+    "notes",
+    "checksums"
+  ],
+  "title": "NwbDescription",
+  "type": "object"
+}

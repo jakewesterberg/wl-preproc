@@ -1,9 +1,54 @@
 # Amendments to wl-works
 
-**Three are outstanding: two opened 2026-08-22, one 2026-09-28.** The earlier two batches are
-closed; their records are kept below, because
+**Four are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29.** The earlier two
+batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — NWB files: find them, select them by what they hold, and say which are active
+
+**Opened 2026-09-29** with NWB publishing
+([`specs/2026-09-29-nwb-publishing-design.md`](superpowers/specs/2026-09-29-nwb-publishing-design.md)),
+the requester's decisions: every finished NWB file is published to the NAS with a description
+of what it holds; a file is on the fast share when it belongs to a dataset someone has marked
+active in wl.works; and **wl.works' dataset builder (Plan 24) is what assigns files to datasets**,
+by task, by the stimulus settings of the conditions that actually ran, by the experimenter's
+notes, and later by areas, probes and processing results.
+
+**This repository's half is built.** None of it needs wl.works to reach this host; wl.works opens
+every connection, as always ([`docs/ops/lab-host-protocol.md`](ops/lab-host-protocol.md)):
+
+- **`GET /nwb?since=<cursor>`** lists every file whose record changed: its activation, status,
+  where it is now (host, share, path relative to the share, and `fast` or `slow`), and its
+  description. The cursor only increases.
+- **Each file's description** ([`docs/schemas/nwb_description.json`](schemas/nwb_description.json))
+  is also written beside the file as `<identifier>.json`, so wl.works need never open an NWB to
+  decide anything (its own Plan 20 §4.5 asks for exactly this). Per block it names the task, the
+  conditions that ran with their stimulus settings and trial counts, and per-system coverage;
+  per file, the subject, the data types present, the timing tier and the checksums.
+- **Checksums are `sha256`** of each written-once dataset's decoded contents, as Plan 24 §3.3 and
+  its item 1 settle.
+- **`PUT /nwb/active`** takes the whole set of activations that belong on the fast share, every
+  time ([`docs/schemas/active_set_request.json`](schemas/active_set_request.json)). This host
+  moves the files; the next `GET /nwb` shows where they went.
+
+**Still open on their side:**
+
+1. **The dataset builder's predicates reach into the description**: a condition's settings, the
+   data types, and later probes, areas and the processing summary. Plan 24's predicates today
+   "live on **blocks**" (its §1.1); the description's per-block entries are shaped to join onto
+   `animal_session_block` through `works_block_id`.
+2. **"Active" is a record with a person's name on it**, not a status column, per Plan 24 line 60
+   ("Status is derived, never stored").
+3. **wl.works computes which activations its active datasets match, and sends them** with
+   `PUT /nwb/active` whenever that set changes.
+4. **wl.works polls `GET /nwb`** to fill `analysis_activation`'s location triple (Plan 23
+   §10.1), instead of the owner of that row reading paths out of anywhere else.
+5. **The planner's planned experiments stay intent.** The requester's own caution, 2026-09-29:
+   planned sessions do not always follow through as planned, so datasets select on what was
+   recorded.
 
 ---
 

@@ -240,3 +240,75 @@ class JobRequest(BaseModel):
     parameters: dict[str, Any]
     idempotency_key: str
     metadata: MetadataBundle
+
+
+# -- NWB files: GET /nwb and PUT /nwb/active (design spec
+# `2026-09-29-nwb-publishing-design.md` section 6). -------------------------
+
+
+class ActivationKey(BaseModel):
+    """One activation, as wl.works names it back to this host. A naive
+    `session_datetime` is UTC, as every one this host issues is."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: Annotated[str, Field(min_length=1, max_length=64)]
+    session_datetime: datetime.datetime
+    montage_id: _MontageId
+    activation_id: Annotated[int, Field(ge=0)]
+
+
+class ActiveSetRequest(BaseModel):
+    """`PUT /nwb/active`: the WHOLE set of activations wl.works wants on the
+    fast share, every time. Sending the same set twice changes nothing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    activations: list[ActivationKey]
+    requested_by: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+
+
+class ActiveSetResponse(BaseModel):
+    """`202`: how many activations the set holds, and which of them this
+    host has no activation for yet (kept; they may be built later)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: int
+    unknown: list[ActivationKey]
+
+
+class Placement(BaseModel):
+    """Where a published file is: wl.works' location triple (its Plan 23
+    section 10.1), the path relative to the share, and which share tier."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tier: Literal["slow", "fast"]
+    host: str
+    share: str
+    path: str
+    n_bytes: int
+
+
+class NwbListingEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    activation: ActivationKey
+    identifier: str
+    status: Literal["written", "invalid", "refused"]
+    reason: str
+    placement: Placement | None
+    # `contracts/nwb_description.py::NwbDescription`, exported on its own as
+    # `nwb_description.json`; null for a refused activation.
+    description: dict[str, Any] | None
+
+
+class NwbListing(BaseModel):
+    """`GET /nwb?since=<cursor>`: every file whose record changed after the
+    cursor, and the cursor to send next time. The cursor only increases."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cursor: int
+    files: list[NwbListingEntry]

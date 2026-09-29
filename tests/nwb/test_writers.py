@@ -78,6 +78,42 @@ def test_blocks_trials_and_events(tmp_path):
         assert events["trial_id"].tolist() == [1, -1]
 
 
+def test_the_trials_carry_their_condition_and_the_settings_that_varied(tmp_path):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 2.2: the
+    condition's name, and one column per setting that varied."""
+    from wl_preproc.nwb.intervals import add_trials
+
+    trials = [{**TRIALS[0], "condition": "contrast-50", "settings": {"contrast": 0.5, "xy": "[0, 5]"}},
+              {**TRIALS[0], "trial_id": 2, "start_s": 4.0, "stop_s": 5.0, "condition": "",
+               "settings": {"contrast": np.nan, "xy": ""}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_trials(nwb, trials, ["ohdpi"]))
+    with io:
+        frame = nwb.trials.to_dataframe()
+        assert frame["condition"].tolist() == ["contrast-50", ""]
+        assert frame["setting_contrast"].iloc[0] == 0.5 and np.isnan(frame["setting_contrast"].iloc[1])
+        assert frame["setting_xy"].tolist() == ["[0, 5]", ""]
+
+
+def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
+    from wl_preproc.nwb.intervals import add_conditions
+
+    conditions = [{"name": "contrast-50", "code": None, "settings": {"contrast": 0.5},
+                   "varying": {"hold": {"min": 0.3, "max": 0.35}}, "trials": {"total": 2, "by_outcome": {"correct": 2}}},
+                  {"name": None, "code": 7, "settings": None, "varying": None,
+                   "trials": {"total": 1, "by_outcome": {"correct": 1}}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_conditions(nwb, conditions))
+    with io:
+        frame = nwb.processing["behavior"]["conditions"].to_dataframe()
+        assert frame["condition"].tolist() == ["", "contrast-50"]
+        assert frame["code"].tolist() == [7, -1]
+        assert frame["settings"].tolist() == ["", '{"contrast": 0.5}']
+        assert frame["varying"].tolist() == ["", '{"hold": {"max": 0.35, "min": 0.3}}']
+        assert frame["n_trials"].tolist() == [1, 2]
+    (tmp_path / "empty").mkdir()
+    _path, io, nwb = _write(tmp_path / "empty", lambda nwb: add_conditions(nwb, []))
+    with io:
+        assert "behavior" not in nwb.processing
+
 def test_the_timebase_tables(tmp_path):
     from wl_preproc.nwb.timebase import add_timebase
 

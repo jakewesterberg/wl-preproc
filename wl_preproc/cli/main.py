@@ -23,7 +23,8 @@ from wl_sync.log import SyncBoxLogHeader
 
 from wl_preproc.contracts.done import DoneMarker
 from wl_preproc.contracts.manifest import SessionManifest
-from wl_preproc.contracts.protocol import HealthResponse, JobRequest
+from wl_preproc.contracts.nwb_description import NwbDescription
+from wl_preproc.contracts.protocol import ActiveSetRequest, HealthResponse, JobRequest, NwbListing
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
 
 # `wl_preproc.schema.__init__` is deliberately import-cheap (a constant and
@@ -37,6 +38,9 @@ EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "syncbox_log_header": SyncBoxLogHeader,
     "health_response": HealthResponse,
     "job_request": JobRequest,
+    "nwb_description": NwbDescription,
+    "active_set_request": ActiveSetRequest,
+    "nwb_listing": NwbListing,
 }
 
 
@@ -194,6 +198,14 @@ def main(argv: list[str] | None = None) -> int:
     # Optional like `--nas-root`: absent, the NWB builder stage is skipped
     # and says so (design spec `2026-09-28-nwb-builder-design.md` section 2).
     daemon_p.add_argument("--nwb-root", type=Path, default=None)
+    # Publishing (design spec `2026-09-29-nwb-publishing-design.md` section
+    # 3): each share as where it is mounted here and its name, the NAS named
+    # by `--host`. Without the slow share, publishing is skipped.
+    daemon_p.add_argument("--nwb-slow-root", type=Path, default=None)
+    daemon_p.add_argument("--nwb-slow-share", default=None)
+    daemon_p.add_argument("--nwb-fast-root", type=Path, default=None)
+    daemon_p.add_argument("--nwb-fast-share", default=None)
+    daemon_p.add_argument("--nwb-fast-headroom-gb", type=float, default=0.0)
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -686,10 +698,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.group == "daemon":
         from wl_preproc.daemon import run_once
+        from wl_preproc.nwb.publish import Share
 
+        shares = {}
+        for tier in ("slow", "fast"):
+            root, name = getattr(args, f"nwb_{tier}_root"), getattr(args, f"nwb_{tier}_share")
+            if (root is None) != (name is None) or (root is not None and args.host is None):
+                parser.error(f"--nwb-{tier}-root needs --nwb-{tier}-share and --host, and the reverse")
+            if root is not None:
+                headroom = int(args.nwb_fast_headroom_gb * 1e9) if tier == "fast" else 0
+                shares[tier] = Share(tier=tier, mount=root, host=args.host, name=name, headroom_bytes=headroom)
+        if "fast" in shares and "slow" not in shares:
+            parser.error("--nwb-fast-root needs --nwb-slow-root: the slow share is every file's long-term home")
         report = run_once(
             prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share,
-            nwb_root=args.nwb_root,
+            nwb_root=args.nwb_root, nwb_slow=shares.get("slow"), nwb_fast=shares.get("fast"),
         )
         print(f"populated: {report['populated']}")
         print(f"stale jobs reaped: {report['stale_jobs_reaped']}")
@@ -707,6 +730,14 @@ def main(argv: list[str] | None = None) -> int:
             print("nwb: skipped (no --nwb-root)")
         else:
             print(f"nwb: {report['nwb']}")
+        if report["nwb_published"] is None:
+            print("nwb published: skipped (no --nwb-slow-root)")
+        else:
+            print(f"nwb published: {report['nwb_published']}")
+        if report["nwb_moved"] is None:
+            print("nwb moved: skipped (no --nwb-fast-root)")
+        else:
+            print(f"nwb moved: {report['nwb_moved']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:

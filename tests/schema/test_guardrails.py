@@ -680,6 +680,10 @@ _EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
         # The NWB builder's inspector findings (design spec
         # `2026-09-28-nwb-builder-design.md` section 8), added 2026-09-28.
         "wl_preproc.schema.nwb.NwbFile.inspector_findings",
+        # The file's description (design spec
+        # `2026-09-29-nwb-publishing-design.md` section 2), added 2026-09-29.
+        "wl_preproc.schema.nwb.NwbFile.description",
+        "wl_preproc.schema.nwb.ActiveSet.activations",
         "wl_preproc.schema.ephys.Unit.spike_times",
         "wl_preproc.schema.ephys.Unit.spike_sites",
         "wl_preproc.schema.ephys.Unit.spike_depths",
@@ -755,17 +759,31 @@ def test_every_blob_attribute_round_trips_an_array(all_tables, dj_conn):
     # docstring makes.
     arr = _PROBE_ARRAY
     exercised = []
+    inserted = []
     for module_name, table_name, table, attr in blob_attrs:
         qualified = f"{module_name}.{table_name}.{attr}"
         _build_parents(table)
         row = {**_synthetic_row(table, exclude=attr), attr: arr}
         key = {k: row[k] for k in table.primary_key}
         table.insert1(row, skip_duplicates=True)
+        inserted.append((table, key))
         got = (table & key).fetch1(attr)
         assert isinstance(got, np.ndarray), f"{table_name}.{attr} returned {type(got).__name__}"
         assert got.shape == arr.shape and got.dtype == arr.dtype
         assert np.array_equal(got, arr)
         exercised.append(qualified)
+
+    # The NWB stages read `nwb.ActiveSet`'s latest row as the desired active
+    # set and every `nwb.NwbFile` row as a built file, so a synthetic row left
+    # here acts as live state for every later test in the session (found
+    # 2026-09-29, design spec `2026-09-29-nwb-publishing-design.md`). Removed
+    # once round-tripped; the synthetic activation it hangs from stays, and
+    # the NWB readiness gate keeps it out of the build stage.
+    from wl_preproc.schema import nwb as nwb_schema
+
+    for table, key in inserted:
+        if table is nwb_schema.ActiveSet or table is nwb_schema.NwbFile:
+            (table & key).delete(prompt=False)
 
     exercised_set = set(exercised)
     assert exercised_set == _EXPECTED_EXERCISED_BLOB_ATTRIBUTES, (

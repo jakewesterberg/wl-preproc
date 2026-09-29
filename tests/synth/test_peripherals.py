@@ -126,3 +126,21 @@ def test_camera_fps_has_margin_over_the_floor():
     from wl_preproc.timebase.extract import min_sample_rate_hz
 
     assert CAMERA_FPS >= 1.25 * min_sample_rate_hz()
+
+
+def test_the_rig_record_has_wl_xcons_line_shape(tmp_path):
+    """One line per planted trial, each with the fields wl-xcon's
+    `Recorder.trial` writes and the subject on every line (design spec
+    `2026-09-29-nwb-publishing-design.md` section 13)."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.synth.peripherals import write_rig_trials
+
+    truth = build_timeline(CI_RECIPE)
+    (tmp_path / "xcon").mkdir()
+    write_rig_trials(tmp_path / "xcon" / "trials.jsonl", CI_RECIPE, truth)
+    lines = [json.loads(line) for line in (tmp_path / "xcon" / "trials.jsonl").read_text().splitlines()]
+    assert all(set(line) == {"index", "subject", "outcome", "block", "condition", "params"} for line in lines)
+    record = read_rig_trials(tmp_path, CI_RECIPE.subject)
+    assert record.problems == ()
+    assert [trial.index for trial in record.trials] == [trial.trial_id for trial in truth.trials]
+    assert {trial.condition for trial in record.trials} <= {"contrast-10", "contrast-25", "contrast-50", "contrast-100"}

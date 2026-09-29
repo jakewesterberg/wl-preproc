@@ -132,7 +132,13 @@ status:
     file from the tables and the raw ohDPI file, recorded in `nwb.NwbFile`,
     opt-in from the daemon with `--nwb-root` and run by `wlpp nwb build`
     (design spec `2026-09-28-nwb-builder-design.md`; handoff
-    `docs/handoffs/2026-09-28-nwb-builder.md`).
+    `docs/handoffs/2026-09-28-nwb-builder.md`). NWB publishing, piece 2a,
+    is BUILT on `spec/nwb-publishing` (2026-09-29, not yet merged): a
+    description beside every file, publishing to the NAS's slow share,
+    fast/slow placement set by wl.works through `PUT /nwb/active`, `GET
+    /nwb`, and a real `canonical_nwb_present` (design spec
+    `2026-09-29-nwb-publishing-design.md`; handoff
+    `docs/handoffs/2026-09-29-nwb-publishing.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -147,7 +153,9 @@ status:
     byte for byte, and
     `wlpp reclaim --no-dry-run` deletes, run by a person, behind a proof
     against the NAS copy. A sixth condition, the canonical NWB, fails until
-    Phase 3, so every real reclamation needs a recorded force until then; a
+    Phase 3, so every real reclamation needs a recorded force until then
+    (*on `spec/nwb-publishing` it is real: it passes once every montage's
+    canonical file is written and published*); a
     seventh, `timing_resolved`, is never overridden, so no session is freed
     before its timebase stages ran on its real files. On a freed session
     the stages that read raw files would raise and a future

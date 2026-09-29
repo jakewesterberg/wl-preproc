@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 from pynwb import NWBFile
 from pynwb.epoch import TimeIntervals
@@ -48,12 +50,25 @@ def add_blocks(nwb: NWBFile, blocks: list[dict], systems: list[str]) -> None:
     ))
 
 
+def _setting_columns(rows: list[dict]) -> list:
+    """One column per setting that varied across the session's trials
+    (design spec `2026-09-29-nwb-publishing-design.md` section 2.2)."""
+    keys = sorted(set().union(*(row.get("settings", {}).keys() for row in rows))) if rows else []
+    return [column(f"setting_{key}",
+                   f"The rig's resolved {key} for the trial (xcon/trials.jsonl): numbers as numbers, anything "
+                   "else as JSON text; NaN or '' where the trial has no line in that record.",
+                   [row["settings"][key] for row in rows])
+            for key in keys]
+
+
 def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
-    """`/intervals/trials`: trial id, outcome, block and per-system coverage."""
+    """`/intervals/trials`: trial id, outcome, block, condition, the
+    settings that varied, and per-system coverage."""
     rows = sorted(trials, key=lambda row: row["start_s"])
     nwb.trials = TimeIntervals(
         name="trials",
-        description="Trials decoded from the event codes, with their outcome and per-system coverage.",
+        description=("Trials decoded from the event codes, with their outcome, the condition they ran under, "
+                     "the stimulus settings that varied across the session, and per-system coverage."),
         columns=[
             column("start_time", "Trial start, session seconds.", [r["start_s"] for r in rows]),
             column("stop_time", "Trial stop, session seconds.", [r["stop_s"] for r in rows]),
@@ -61,9 +76,46 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
             column("outcome", "correct, error, abort, fixation_break or no_response.", [r["outcome"] or "" for r in rows]),
             column("block_id", "The measured block the trial belongs to (-1 if none).",
                    [-1 if r["block_id"] is None else r["block_id"] for r in rows]),
+            column("condition", ("The condition the trial ran under: its name in the rig's record "
+                                 "(xcon/trials.jsonl), else the CONDITION number sent inside it, else ''."),
+                   [r.get("condition", "") for r in rows]),
+            *_setting_columns(rows),
             *_coverage_columns(rows, systems),
         ],
     )
+
+
+def add_conditions(nwb: NWBFile, conditions: list[dict]) -> None:
+    """`processing/behavior/conditions`: one row per condition that ran, with
+    the settings constant across its trials and those that varied (design
+    spec `2026-09-29-nwb-publishing-design.md` section 2.2). Nothing is
+    written when no condition is known."""
+    if not conditions:
+        return
+    from pynwb.core import DynamicTable
+
+    from wl_preproc.nwb.eye import behavior_module
+
+    rows = sorted(conditions, key=lambda row: (row["name"] or "", -1 if row["code"] is None else row["code"]))
+    behavior_module(nwb).add(DynamicTable(
+        name="conditions",
+        description=("Every condition that ran in the file's trials: its name in the rig's record and the "
+                     "CONDITION number sent for it (-1 where none), the settings constant across its trials "
+                     "and a summary of those that varied, both as JSON ('' where the rig's record is absent)."),
+        columns=[
+            # `condition`, not `name`: a DynamicTable's own `name` attribute
+            # would shadow a column called that.
+            column("condition", "The condition's name in the rig's record ('' where only its number is known).",
+                   [row["name"] or "" for row in rows]),
+            column("code", "The CONDITION number sent for it (-1 where none).",
+                   [-1 if row["code"] is None else row["code"] for row in rows]),
+            column("settings", "The settings constant across its trials, as JSON.",
+                   ["" if row["settings"] is None else json.dumps(row["settings"], sort_keys=True) for row in rows]),
+            column("varying", "Each setting that varied within it: a range for numbers, else its distinct values, as JSON.",
+                   ["" if row["varying"] is None else json.dumps(row["varying"], sort_keys=True) for row in rows]),
+            column("n_trials", "How many of the file's trials ran under it.", [row["trials"]["total"] for row in rows]),
+        ],
+    ))
 
 
 def add_task_events(nwb: NWBFile, events: list[dict]) -> None:

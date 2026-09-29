@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "ActivationKey": {
+      "additionalProperties": false,
+      "description": "One activation, as wl.works names it back to this host. A naive\n`session_datetime` is UTC, as every one this host issues is.",
+      "properties": {
+        "activation_id": {
+          "minimum": 0,
+          "title": "Activation Id",
+          "type": "integer"
+        },
+        "montage_id": {
+          "maximum": 127,
+          "minimum": -128,
+          "title": "Montage Id",
+          "type": "integer"
+        },
+        "session_datetime": {
+          "format": "date-time",
+          "title": "Session Datetime",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "session_datetime",
+        "montage_id",
+        "activation_id"
+      ],
+      "title": "ActivationKey",
+      "type": "object"
+    },
+    "NwbListingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "activation": {
+          "$ref": "#/$defs/ActivationKey"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Description"
+        },
+        "identifier": {
+          "title": "Identifier",
+          "type": "string"
+        },
+        "placement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Placement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "written",
+            "invalid",
+            "refused"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "activation",
+        "identifier",
+        "status",
+        "reason",
+        "placement",
+        "description"
+      ],
+      "title": "NwbListingEntry",
+      "type": "object"
+    },
+    "Placement": {
+      "additionalProperties": false,
+      "description": "Where a published file is: wl.works' location triple (its Plan 23\nsection 10.1), the path relative to the share, and which share tier.",
+      "properties": {
+        "host": {
+          "title": "Host",
+          "type": "string"
+        },
+        "n_bytes": {
+          "title": "N Bytes",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "share": {
+          "title": "Share",
+          "type": "string"
+        },
+        "tier": {
+          "enum": [
+            "slow",
+            "fast"
+          ],
+          "title": "Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier",
+        "host",
+        "share",
+        "path",
+        "n_bytes"
+      ],
+      "title": "Placement",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "`GET /nwb?since=<cursor>`: every file whose record changed after the\ncursor, and the cursor to send next time. The cursor only increases.",
+  "properties": {
+    "cursor": {
+      "title": "Cursor",
+      "type": "integer"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/NwbListingEntry"
+      },
+      "title": "Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "cursor",
+    "files"
+  ],
+  "title": "NwbListing",
+  "type": "object"
+}

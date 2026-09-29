@@ -15,6 +15,7 @@ from wl_preproc.synth.peripherals import (
     camera_frame_count,
     write_camera_sidecar,
     write_manifest,
+    write_rig_trials,
     write_task_file,
 )
 from wl_preproc.synth.ohdpi import write_ohdpi
@@ -58,6 +59,10 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
     layout = SessionLayout(root, SessionId.parse(recipe.session_id))
     layout.dir.mkdir(parents=True, exist_ok=True)
     write_manifest(layout.manifest_path, recipe)
+    # The rig's own trial record, which is not one of SYSTEMS (wl-xcon writes
+    # its folder beside them).
+    layout.xcon_dir.mkdir(exist_ok=True)
+    write_rig_trials(layout.xcon_dir / "trials.jsonl", recipe, truth)
 
     rng = np.random.default_rng(recipe.seed + 2)
     finished_at = SYNTH_EPOCH + datetime.timedelta(seconds=recipe.duration_s)
