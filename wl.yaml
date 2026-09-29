@@ -127,7 +127,8 @@ status:
     zero noise instead of raising.
 
     The NWB builder, piece 1 of Phase 3's NWB export, is BUILT on
-    `spec/nwb-builder` (2026-09-29, NOT merged as written): one activation's
+    `spec/nwb-builder` (2026-09-29, NOT merged as written; merged and pushed
+    as `a8e1642` the same day, CI green): one activation's
     file from the tables and the raw ohDPI file, recorded in `nwb.NwbFile`,
     opt-in from the daemon with `--nwb-root` and run by `wlpp nwb build`
     (design spec `2026-09-28-nwb-builder-design.md`; handoff
@@ -436,8 +437,10 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
+  # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "0aa4928"
+  describes: "a8e1642"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

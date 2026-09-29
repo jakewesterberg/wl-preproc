@@ -1,16 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-09-28**, describing `main` at `0aa4928` — the merge of
-`fix/xcon-rename`: wl-expcontroller is wl-xcon, and the session folder it
-writes is `xcon/` (the requester's rename). It follows `f7095aa`, the merge of
-`fix/gaze-glitches`: tracker glitches are repaired before the mask or any
-detector reads the gaze (handoff `handoffs/2026-09-28-gaze-glitches.md`); CI
-green on `f7095aa`, 1780 passed on each interpreter, `gh run view 36461007339`.
-`0aa4928`'s tree is byte-identical to the tested branch head `ae75612`: 1781
-passed on 3.11 and 1780 on 3.13 locally, 0 failed. CI read off `0aa4928`
-itself: green on both interpreters, 1780 passed on each with 32 skipped, and
-the manifest check green — `gh run view 36463681187`. CI on later heads is
-recorded here only once read, not before.
+**Last updated 2026-09-29**, describing `main` at `a8e1642` — the merge of
+`spec/nwb-builder`: the NWB builder, piece 1 of Phase 3's NWB export, which
+writes one activation's file and records it in `nwb.NwbFile` (handoff
+`handoffs/2026-09-28-nwb-builder.md`). `a8e1642`'s tree is byte-identical to
+the tested branch head `d048ec0`, whose code is `bc4fc98`'s: 1829 passed on
+3.11 and 1828 on 3.13 locally, 0 failed. CI read off `a8e1642` itself: green
+on both interpreters, 1828 passed on each with 33 skipped, and the manifest
+check green — `gh run view 36557961229`. CI on later heads is recorded here
+only once read, not before.
+
+*This header named `0aa4928` — the xcon rename merge after the glitch-repair
+merge `f7095aa`, CI green, 1780 passed on each interpreter, `36463681187` —
+until the NWB builder merge; true when written.*
 
 *This header named `cadef7e` — the conjunction floor merge, CI green, 1767
 passed on each interpreter, `36449262350` — until the glitch and rename
@@ -448,7 +450,8 @@ requester chose to merge the same day; true when written.*
 >    this is on `main`, and was told the merge commit.
 >
 >    **The NWB builder is BUILT on `spec/nwb-builder` (2026-09-29), NOT
->    merged as written** (piece 1 of Phase 3's NWB export; spec
+>    merged as written** *(merged and pushed as `a8e1642` the same day; CI
+>    green, 1828 passed on each interpreter)* (piece 1 of Phase 3's NWB export; spec
 >    `superpowers/specs/2026-09-28-nwb-builder-design.md`). It writes one
 >    activation's file to `{nwb_root}/{subject}/{session_id}/{identifier}.nwb`
 >    once the session's computed tables are complete, opt-in with `wlpp
