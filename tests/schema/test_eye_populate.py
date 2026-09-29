@@ -147,7 +147,12 @@ def _frame_offsets_of(path) -> list[int]:
 def _sample_for_time(segment: dict, session_s: float) -> int:
     """Step one of `eye._session_time_to_row`, on its own: session time to the
     recording's own TRUE SAMPLE INDEX, `session_s = start_s + (sample /
-    (n_samples - 1)) * (end_s - start_s)` inverted.
+    n_samples) * (end_s - start_s)` inverted: `end_s` is the time of sample
+    `n_samples`, one past the last.
+
+    *`n_samples - 1` until 2026-09-28, the same off-by-one as the function it
+    checks (design spec `2026-09-28-nwb-builder-design.md` section 4.3);
+    true when written.*
 
     Separate from `_row_for_time` below because on a recording that dropped
     frames these are two different numbers, and several assertions in this
@@ -158,7 +163,7 @@ def _sample_for_time(segment: dict, session_s: float) -> int:
     n_samples = segment["n_samples"]
     span = segment["end_s"] - segment["start_s"]
     frac = (session_s - segment["start_s"]) / span
-    return min(max(round(frac * (n_samples - 1)), 0), n_samples - 1)
+    return min(max(round(frac * n_samples), 0), n_samples - 1)
 
 
 def _row_for_time(segment: dict, session_s: float, offsets: list[int]) -> int:

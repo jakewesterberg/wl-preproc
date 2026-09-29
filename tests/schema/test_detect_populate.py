@@ -1001,6 +1001,11 @@ def test_populating_out_of_order_writes_nothing_rather_than_a_false_refusal(
     )
 
 
+# The smallest planted step is 0.75 deg; anything detected at or above this
+# is of planted size.
+_PLANTED_SIZE_DEG = 0.5
+
+
 def test_the_next_full_pass_then_computes_both_eyes(out_of_order_session):
     """The other half of M5: staying outstanding must not mean staying
     outstanding forever. One ordinary `run_once()` -- which assembles
@@ -1035,7 +1040,18 @@ def test_the_next_full_pass_then_computes_both_eyes(out_of_order_session):
         runs = (
             detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
         ).to_dicts(order_by="run_index")
-        detected = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+        # Planted size only: every planted step is at least 0.75 deg. A
+        # detector's own noise floor is its detector tests' business, not
+        # this recovery claim's.
+        #
+        # *Since 2026-09-28: correcting `eye._session_time_to_row` by one
+        # sample moved this session's calibration gain by about 0.1%, and
+        # REMoDNaV then also stored a 0.11 deg, 10 ms noise event on the left
+        # eye; every planted step was still found. Until then this counted
+        # every saccadic run, noise floor included (design spec
+        # `2026-09-28-nwb-builder-design.md` section 4.3); true when written.*
+        detected = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")
+                    and r["amplitude_deg"] is not None and r["amplitude_deg"] >= _PLANTED_SIZE_DEG]
         assert len(detected) == len(onsets) == 3, name
         for got, want in zip(detected, onsets, strict=True):
             assert abs(got - want) <= 5, name
