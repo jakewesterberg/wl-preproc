@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import io
+import json
 from pathlib import Path
 
 import h5py
@@ -158,6 +159,27 @@ def test_blocks_trials_and_events_carry_the_tables_times(activation, built):
         np.testing.assert_allclose(sorted(events["start_time"]), inside)
         assert "BLOCK_END" in set(events["event_type"])
         assert not {"SESSION_START", "SESSION_END"} & set(events["event_type"])
+
+
+def test_the_trials_carry_the_rigs_conditions_and_settings(activation, built):
+    """Design spec `2026-09-29-nwb-publishing-design.md` sections 2.1 and
+    2.2: the synthetic rig record (`synth/peripherals.py::rig_condition`),
+    joined by trial number. A setting constant across the session is the
+    conditions table's, never a trials column."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.synth.peripherals import rig_condition
+
+    with NWBHDF5IO(str(built.path), "r") as handle:
+        nwb = handle.read()
+        trials = nwb.trials.to_dataframe()
+        expected = [rig_condition(int(trial_id)) for trial_id in trials["trial_id"]]
+        assert trials["condition"].tolist() == [name for name, _ in expected]
+        assert trials["setting_contrast"].tolist() == [params["contrast"] for _, params in expected]
+        assert "setting_orientation_deg" not in trials.columns
+        conditions = nwb.processing["behavior"]["conditions"].to_dataframe()
+        assert sorted(conditions["condition"]) == sorted({name for name, _ in expected})
+        assert all(json.loads(settings)["orientation_deg"] == 45.0 for settings in conditions["settings"])
 
 
 def test_the_eye_is_on_session_time_and_every_detector_is_there(activation, built):
@@ -354,7 +376,8 @@ def test_a_session_without_an_eye_recording_is_built_without_one(activation, mon
     assert result.status == "written", result.findings
     with NWBHDF5IO(str(result.path), "r") as handle:
         nwb = handle.read()
-        assert set(nwb.processing) == {"timebase"}
+        assert "eye_events" not in nwb.processing
+        assert not {"EyeTracking", "PupilTracking"} & set(nwb.processing["behavior"].data_interfaces)
         assert len(nwb.trials) and len(nwb.intervals["task_events"])
 
 

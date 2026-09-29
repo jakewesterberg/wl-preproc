@@ -41,6 +41,11 @@ class Gathered:
     events: list[dict]
     timebase: dict
     eye: dict | None  # None: no ohDPI recording in the session, or no sample of it in the blocks
+    # Every condition that ran in the file's trials, and why any trial's
+    # condition or settings are unknown (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 2.1).
+    conditions: list[dict] = dataclasses.field(default_factory=list)
+    condition_notes: list[str] = dataclasses.field(default_factory=list)
 
 
 def _aware_utc(value: datetime.datetime) -> datetime.datetime:
@@ -219,6 +224,33 @@ def _events(blocks: BlockSet, session_key: dict) -> list[dict]:
     return events
 
 
+def _conditions(trials: list[dict], events: list[dict], blocks: list[dict], session_dir: Path,
+                subject: str) -> tuple[list[dict], list[str]]:
+    """Each trial's condition and the settings that varied, and each block's
+    conditions and trial counts, from the rig's own record joined by trial
+    number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
+    and 2.2). Returns the file's conditions and the notes on what did not
+    join."""
+    import collections
+
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
+
+    trials.sort(key=lambda trial: trial["start_s"])
+    matched, notes = join(trials, read_rig_trials(session_dir, subject))
+    codes = stream_codes(trials, events)
+    names, settings = trial_columns(trials, matched, codes)
+    for position, trial in enumerate(trials):
+        trial["condition"] = names[position]
+        trial["settings"] = {key: values[position] for key, values in settings.items()}
+    for block in blocks:
+        inside = [trial for trial in trials if block["start_s"] <= trial["start_s"] < block["end_s"]]
+        outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
+        block["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
+        block["conditions"] = block_conditions(inside, matched, codes)
+    return block_conditions(trials, matched, codes), notes
+
+
 def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
     from wl_preproc.schema import core, timebase
 
@@ -379,7 +411,11 @@ def gather(activation_key: dict) -> Gathered:
     if no_eye_samples:
         description += " The eye recording has no sample in these blocks, so the file has no eye data."
     requested_by = (request.Request & {"idempotency_key": activation["request_key"]}).fetch1("requested_by")
-    systems = sorted({system for row in _blocks(block_rows, session_key) for system in row["coverage"]})
+    block_out = _blocks(block_rows, session_key)
+    systems = sorted({system for row in block_out for system in row["coverage"]})
+    trials = _trials(blocks, session_key)
+    events = _events(blocks, session_key)
+    conditions, condition_notes = _conditions(trials, events, block_out, session_dir, key["subject"])
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),
@@ -391,9 +427,11 @@ def gather(activation_key: dict) -> Gathered:
             "clock": clock,
         },
         systems=systems,
-        blocks=_blocks(block_rows, session_key),
-        trials=_trials(blocks, session_key),
-        events=_events(blocks, session_key),
+        blocks=block_out,
+        trials=trials,
+        events=events,
         timebase=_timebase(session_key, provenance[0], clock),
         eye=eye,
+        conditions=conditions,
+        condition_notes=condition_notes,
     )
