@@ -15,14 +15,27 @@ written, and applied here verbatim from it.
 ## 1. What was built
 
 `wl_preproc/nwb/build.py::build(activation_key, nwb_root)` writes one
-`request.Activation`'s file to `{nwb_root}/{session_id}/{identifier}.nwb`, with
-`identifier` = `{session_id}.montage-{m}.activation-{a}`. It re-opens the
+`request.Activation`'s file to `{nwb_root}/{subject}/{session_id}/{identifier}.nwb`,
+with `identifier` = `{subject}.{session_id}.montage-{m}.activation-{a}` (the
+subject added by the final review: two animals can share a session id). It
+re-opens the
 file, checksums every dataset, runs `nwbinspector`, and records the result in
 a new table, `nwb.NwbFile`, with one `NwbFile.Dataset` row per dataset. It
 runs from the daemon (`wlpp daemon --nwb-root PATH`, opt-in like
 `--nas-root`) and from `wlpp nwb build --subject … --session-datetime …
 --montage-id … --activation-id … --nwb-root …`. The command will not
-overwrite a recorded activation: delete its row to rebuild.
+overwrite a recorded activation (delete its row to rebuild), refuses a freed
+session, and says what an activation that is not ready is waiting on.
+
+**Ready first.** Neither the stage nor the command builds an activation until
+its session has a `TimingProvenance` row and no key still outstanding in
+`BlockCoverage`, `TrialCoverage`, `EyeCalibration`, `EyeValidity`,
+`EyeDetection` or `DetectorAgreement`, for the default paramsets the file
+reads (`gather.readiness`). One that is not ready gets no row and is tried
+again next pass, and the command names a key it waits on. An upstream key
+that errored therefore holds its session's files back rather than being
+silently left out of them; a key of a paramset the file does not read never
+does.
 
 `gather.py` is the one module that reads the database and the raw ohDPI
 file. Every writer takes plain data and is tested without either.
@@ -61,15 +74,25 @@ decoded barcode. Everything is trimmed to the activation's blocks (spec §5).
 nor date of birth as CRITICAL, and a file with a critical finding is
 `invalid`: kept, but never published by piece 2. **Until wl.works sends
 `subject_details.date_of_birth`, no real file is publishable.** The request
-is the OPEN entry in `docs/pending-wl-works-amendments.md`.
+is the OPEN entry in `docs/pending-wl-works-amendments.md`. **An `invalid`
+row is not rebuilt when the date of birth later arrives:** delete it to
+rebuild. Rebuilding recorded files when their inputs change is piece 2's
+lifecycle, so turning on `--nwb-root` before wl.works ships the field
+creates rows that will have to be cleared.
+
+"Critical" means at `CRITICAL` or above: nwbinspector's `PYNWB_VALIDATION`
+(schema) and `ERROR` (unreadable) block too, except an `ERROR` that one of
+its own checks raised, which nwbinspector 0.7 does on every empty table.
 
 A future `session_start_time` is the other critical check measured on these
 files. A real session is never in the future.
 
-**Refused, with a row and a reason and no file:** no `TimingProvenance`,
-timing tier D, no blocks in the activation's block set, or more than one
-ohDPI segment. A refusal is never retried automatically. **Partial:** an
-eye without a calibration is left out, and the file's description says so.
+**Refused, with a row and a reason and no file:** timing tier D, no blocks
+in the activation's block set, more than one ohDPI segment, or a path
+another activation's row already records. A refusal is never retried
+automatically. **Partial:** an eye without a calibration is left out, and
+so is the whole eye when the recording has no sample in the activation's
+blocks; the file's description says which.
 
 ## 3. The clock
 
@@ -150,3 +173,51 @@ stage's per-activation catch, no eye recording, runs never cut).
 `WLPP_OHDPI_REFERENCE` unset, as CI has it: **1820 passed, 31 skipped, 1 deselected, 1 xfailed** on 3.11 and **1819
 passed, 33 skipped, 1 xfailed** on 3.13, 0 failed, on `9ed427e`. `main` at
 `0aa4928` gave 1781 and 1780; the branch adds 40 tests, one of which skips.
+
+## 7. The final review, and what it changed
+
+A fresh reviewer (Opus) read the whole branch on 2026-09-29: one Critical,
+five Important, thirteen Minor. The Critical and every Important finding
+were fixed in one pass (`4554a61`), except the third part of I4, which was
+ruled (below). Each fix has a test that failed first, and a mutation check.
+- **C1.** The subject was in neither the path nor the identifier, so two
+  animals sharing a session id would have overwritten each other's file.
+  Also, a build whose path another row records is now refused.
+- **I1.** A NULL agreement score (an undefined metric) failed the whole build.
+- **I2.** An activation whose blocks hold no eye sample failed in h5py.
+- **I3.** Findings above CRITICAL did not block. Making them block surfaced
+  two things: nwbinspector 0.7's own checks raise on every empty table,
+  ruled not to block; and our `clock_reference.reference_time` held an ISO
+  string where NWB expects seconds, renamed `reference_datetime`.
+- **I4.** Incomplete upstream work was baked into a permanent row. The
+  readiness gate (section 1) fixes it, and exposed that the end-to-end
+  fixture had built every file without block coverage. The fixture now runs
+  the daemon pass after wl.works' request. The first full suite after the
+  gate then showed it holding every file back, on a key of a paramset another
+  test module left registered that could only error; it now waits only on
+  the paramsets the file reads (`bc4fc98`).
+- **I5.** The command did not refuse a freed session.
+
+Ruled rather than fixed: rebuilding `invalid` rows when the date of birth
+arrives, and any rebuild after an upstream recompute, are piece 2's
+lifecycle. The ledger has every ruling, with its cost if wrong.
+
+**Deferred minors,** for whoever picks this up:
+- A failure after the rename leaves an unrecorded file under the final name.
+- A relative `--nwb-root` is stored relative.
+- `h5py` and `hdmf` are imported but not declared.
+- `wl.yaml` and `pyproject.toml` say NWB 2.10; pynwb 4.2 on 3.13 writes
+  2.11.0.
+- `sex` defaults to `U`, so a request that omits it overwrites a known sex.
+- Subject details are written before `submit()` can still reject a request.
+- A file from a session with no ohDPI recording at all does not say why.
+- `eye_calibration.reason` is always empty.
+- The command and the daemon share one `.partial` name.
+- No end-to-end trusted-barcode test, and none of non-adjacent blocks.
+- `Subject.description` claims wl.works stated details it did not send.
+- Spec §7 calls `identifier` an attribute; in NWB it is a hashed dataset.
+- Column dtypes follow the data (a missing value makes a column float64).
+
+**Full suite after the fixes:** on `bc4fc98`, **1829 passed, 31 skipped, 1
+deselected, 1 xfailed** on 3.11 and **1828 passed, 33 skipped, 1 xfailed**
+on 3.13, 0 failed: the review added 9 tests.

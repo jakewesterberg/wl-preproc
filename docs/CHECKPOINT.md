@@ -450,9 +450,10 @@ requester chose to merge the same day; true when written.*
 >    **The NWB builder is BUILT on `spec/nwb-builder` (2026-09-29), NOT
 >    merged as written** (piece 1 of Phase 3's NWB export; spec
 >    `superpowers/specs/2026-09-28-nwb-builder-design.md`). It writes one
->    activation's file to `{nwb_root}/{session_id}/{identifier}.nwb`, opt-in
->    with `wlpp daemon --nwb-root` or run by `wlpp nwb build`, and records it
->    in `nwb.NwbFile` with a checksum per dataset. **A file is `invalid`
+>    activation's file to `{nwb_root}/{subject}/{session_id}/{identifier}.nwb`
+>    once the session's computed tables are complete, opt-in with `wlpp
+>    daemon --nwb-root` or run by `wlpp nwb build`, and records it in
+>    `nwb.NwbFile` with a checksum per dataset. **A file is `invalid`
 >    until wl.works sends the subject's date of birth**: `nwbinspector` rates
 >    its absence CRITICAL (the OPEN entry in
 >    `pending-wl-works-amendments.md`). `canonical_nwb_present` stays `False`

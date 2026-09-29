@@ -378,7 +378,8 @@ first ask whether the activation is ready, and one that is not is skipped
 with no row and tried again next pass. Ready means a `TimingProvenance` row
 exists, and no key of the session is still outstanding in the computed
 tables the file is built from (`BlockCoverage`, `TrialCoverage`,
-`EyeCalibration`, `EyeValidity`, `EyeDetection`, `DetectorAgreement`). A
+`EyeCalibration`, `EyeValidity`, `EyeDetection`, `DetectorAgreement`), for
+the paramsets the file reads: the default validity and detection ones. A
 missing `TimingProvenance` row is therefore "not yet", not a refusal. A file
 built earlier would have left an outstanding key out and been recorded as
 final. `gather` still refuses a missing row if called directly. Rebuilding a
