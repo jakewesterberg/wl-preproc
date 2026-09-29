@@ -447,6 +447,18 @@ requester chose to merge the same day; true when written.*
 >    MERGED as `0aa4928`. wl-xcon's writer switches to `xcon/` only once
 >    this is on `main`, and was told the merge commit.
 >
+>    **The NWB builder is BUILT on `spec/nwb-builder` (2026-09-29), NOT
+>    merged as written** (piece 1 of Phase 3's NWB export; spec
+>    `superpowers/specs/2026-09-28-nwb-builder-design.md`). It writes one
+>    activation's file to `{nwb_root}/{session_id}/{identifier}.nwb`, opt-in
+>    with `wlpp daemon --nwb-root` or run by `wlpp nwb build`, and records it
+>    in `nwb.NwbFile` with a checksum per dataset. **A file is `invalid`
+>    until wl.works sends the subject's date of birth**: `nwbinspector` rates
+>    its absence CRITICAL (the OPEN entry in
+>    `pending-wl-works-amendments.md`). `canonical_nwb_present` stays `False`
+>    until piece 2, publication, so a real reclamation still needs a
+>    recorded force. See `docs/handoffs/2026-09-28-nwb-builder.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

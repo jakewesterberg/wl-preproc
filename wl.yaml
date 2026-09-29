@@ -125,6 +125,13 @@ status:
     the saccades BMD copies from Engbert-Kliegl; and BMD runs on every
     session. Its fix pass also made a perfectly still trace take C's log of a
     zero noise instead of raising.
+
+    The NWB builder, piece 1 of Phase 3's NWB export, is BUILT on
+    `spec/nwb-builder` (2026-09-29, NOT merged as written): one activation's
+    file from the tables and the raw ohDPI file, recorded in `nwb.NwbFile`,
+    opt-in from the daemon with `--nwb-root` and run by `wlpp nwb build`
+    (design spec `2026-09-28-nwb-builder-design.md`; handoff
+    `docs/handoffs/2026-09-28-nwb-builder.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
