@@ -463,6 +463,20 @@ requester chose to merge the same day; true when written.*
 >    until piece 2, publication, so a real reclamation still needs a
 >    recorded force. See `docs/handoffs/2026-09-28-nwb-builder.md`.
 >
+>    **NWB publishing (piece 2a) is BUILT on `spec/nwb-publishing`
+>    (2026-09-29), NOT merged as written** (spec
+>    `superpowers/specs/2026-09-29-nwb-publishing-design.md`). Every file is
+>    built with a description beside it, `<identifier>.json`, for wl.works'
+>    dataset builder: its tasks, conditions by stimulus settings, data types
+>    and quality. Written files are published to the NAS's slow share, moved
+>    to and from the fast share by `PUT /nwb/active`, and listed with their
+>    place and description by `GET /nwb`. `canonical_nwb_present` is now
+>    real. **The rig emits no `TRIAL_NUMBER`, so a real session gives no
+>    trials**: the OPEN entry in `pending-wl-xcon-amendments.md`, filed by
+>    wl-xcon as its XC-155. Until this repository reads XC-155's join field,
+>    a trial record whose lines name a run is not joined at all. See
+>    `docs/handoffs/2026-09-29-nwb-publishing.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

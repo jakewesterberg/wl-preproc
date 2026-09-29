@@ -153,7 +153,7 @@ superpowers/specs/2026-08-31-S2-event-vocabulary-design.md`).
   stream's `CONDITION` numbers with `settings: null`.
 
 *Amended during execution, 2026-09-29 (wl-xcon's reply, its backlog XC-155 at
-`4a7d05f`, and its slice b3a-1 plan, decision 4):* *since b3a-1 a session holds
+`4a7d05f`, and its slice b3a-1 plan, decisions 2 and 4):* *since b3a-1 a session holds
 several runs. Each line of `trials.jsonl` names its `run`, each run counts its
 trials from 0, and the `TRIAL_NUMBER` wl-xcon will emit is unique within the
 session. A per-run `index` is then not the join key even where it is unique:
