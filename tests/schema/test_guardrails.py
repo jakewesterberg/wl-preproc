@@ -677,6 +677,9 @@ _EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
         "wl_preproc.schema.ingest.Quarantine.detail",
         "wl_preproc.schema.paramset.ParamSet.params",
         "wl_preproc.schema.request.Request.payload",
+        # The NWB builder's inspector findings (design spec
+        # `2026-09-28-nwb-builder-design.md` section 8), added 2026-09-28.
+        "wl_preproc.schema.nwb.NwbFile.inspector_findings",
         "wl_preproc.schema.ephys.Unit.spike_times",
         "wl_preproc.schema.ephys.Unit.spike_sites",
         "wl_preproc.schema.ephys.Unit.spike_depths",
