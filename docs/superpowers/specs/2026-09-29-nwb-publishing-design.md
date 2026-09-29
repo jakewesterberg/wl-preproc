@@ -152,6 +152,16 @@ superpowers/specs/2026-08-31-S2-event-vocabulary-design.md`).
 - **Without the record** (older or synthetic sessions), `conditions` lists the
   stream's `CONDITION` numbers with `settings: null`.
 
+*Amended during execution, 2026-09-29 (wl-xcon's reply, its backlog XC-155 at
+`4a7d05f`, and its slice b3a-1 plan, decision 4):* *since b3a-1 a session holds
+several runs. Each line of `trials.jsonl` names its `run`, each run counts its
+trials from 0, and the `TRIAL_NUMBER` wl-xcon will emit is unique within the
+session. A per-run `index` is then not the join key even where it is unique:
+the stream's trial 50 can be the second run's tenth trial while the only line
+with index 50 is that run's fifty-first. So a record whose lines name a run is
+not joined at all, and the file's `notes` say why. It is joined again once
+wl-preproc reads the key XC-155 records.*
+
 ### 2.2 The file itself carries the same information
 
 **The file stands on its own** (parent spec §8.1: self-contained over its
@@ -381,6 +391,11 @@ us.
 - emit `TRIAL_NUMBER` equal to its trial record's `index`;
 - emit a `CONDITION` number, and record that number beside the condition's name
   in `trials.jsonl`.
+
+*Amended during execution, 2026-09-29:* *§11 item 1 found neither is emitted.
+wl-xcon filed it as XC-155, which also changes the first ask: the number is
+unique within the session, not the per-run `index` (see §2.1's amendment), and
+is recorded in `trials.jsonl` as the join key.*
 
 ## 11. What a plan must verify rather than assume
 

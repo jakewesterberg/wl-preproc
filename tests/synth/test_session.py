@@ -104,3 +104,10 @@ def test_every_system_declares_the_files_it_wrote(tmp_path, recipe):
         assert {entry.path for entry in marker.files} == on_disk
         for entry in marker.files:
             assert (system_dir / entry.path).stat().st_size == entry.bytes
+
+
+def test_the_rigs_trial_record_is_written_beside_the_systems(tmp_path):
+    """`xcon/` is not one of SYSTEMS; the rig writes it beside them."""
+    truth = generate_session(tmp_path, CI_RECIPE)
+    layout = SessionLayout(tmp_path, SessionId.parse(CI_RECIPE.session_id))
+    assert len((layout.xcon_dir / "trials.jsonl").read_text().splitlines()) == len(truth.trials)

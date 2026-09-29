@@ -143,3 +143,40 @@ def write_task_file(path: Path, truth: GroundTruth) -> None:
         ],
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+# The rig's per-trial record, as wl-xcon writes it (`wl_xcon/record.py::
+# Recorder.trial`): four contrasts, one fixed orientation and target, and a
+# fixation hold that varies WITHIN one condition -- so every branch of the
+# builder's condition summary has something to read (design spec
+# `2026-09-29-nwb-publishing-design.md` section 13).
+RIG_CONTRASTS = (0.10, 0.25, 0.50, 1.00)
+
+
+def rig_condition(trial_id: int) -> tuple[str, dict]:
+    """The synthetic rig's condition name and resolved parameters for a trial."""
+    contrast = RIG_CONTRASTS[trial_id % len(RIG_CONTRASTS)]
+    hold_s = 0.35 if contrast == 0.50 and (trial_id // len(RIG_CONTRASTS)) % 2 else 0.30
+    return f"contrast-{round(contrast * 100)}", {
+        "contrast": contrast,
+        "orientation_deg": 45.0,
+        "fix_hold_s": hold_s,
+        "target_xy_deg": [0.0, 5.0],
+    }
+
+
+def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
+    """Stands in for wl-xcon's `xcon/trials.jsonl`: one JSON object per line,
+    per trial, with the subject on every line."""
+    lines = []
+    for trial in truth.trials:
+        condition, params = rig_condition(trial.trial_id)
+        lines.append(json.dumps({
+            "index": trial.trial_id,
+            "subject": recipe.subject,
+            "outcome": "correct",
+            "block": f"block-{trial.block_id}",
+            "condition": condition,
+            "params": params,
+        }, sort_keys=True))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
