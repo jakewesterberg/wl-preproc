@@ -1004,21 +1004,33 @@ def run_once(
     if nwb_slow is None:
         nwb_published = None
     else:
-        from wl_preproc.nwb.publish import run_publish
+        from wl_preproc.nwb import publish
 
-        nwb_published, publish_errors = run_publish(nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
-        errors.extend(publish_errors)
+        try:
+            nwb_published, publish_errors = publish.run_publish(
+                nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+            errors.extend(publish_errors)
+        except Exception as exc:  # a failing stage must not stop the others
+            nwb_published = 0
+            errors.append(f"NwbPlacement: publishing failed: {exc}")
 
     # Placement (section 5): with both shares, each published file is moved
     # to the one the latest active set wants. `None` without the fast share.
+    # Freed sessions are NOT skipped: placement reads only the NAS and the
+    # database, never scratch, and a published session is exactly what
+    # reclamation frees (the final review's C2).
     nwb_moved: int | None
     if nwb_slow is None or nwb_fast is None:
         nwb_moved = None
     else:
-        from wl_preproc.nwb.publish import run_placement
+        from wl_preproc.nwb import publish
 
-        nwb_moved, placement_errors = run_placement(nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
-        errors.extend(placement_errors)
+        try:
+            nwb_moved, placement_errors = publish.run_placement(nwb_slow, nwb_fast)
+            errors.extend(placement_errors)
+        except Exception as exc:  # a failing stage must not stop the others
+            nwb_moved = 0
+            errors.append(f"NwbPlacement: placement failed: {exc}")
 
     archived: int | None
     if nas_root is None or host is None or share is None:

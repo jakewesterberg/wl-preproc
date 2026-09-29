@@ -474,8 +474,12 @@ requester chose to merge the same day; true when written.*
 >    real. **The rig emits no `TRIAL_NUMBER`, so a real session gives no
 >    trials**: the OPEN entry in `pending-wl-xcon-amendments.md`, filed by
 >    wl-xcon as its XC-155. Until this repository reads XC-155's join field,
->    a trial record whose lines name a run is not joined at all. See
->    `docs/handoffs/2026-09-29-nwb-publishing.md`.
+>    a trial record whose lines name a run is not joined at all. The final
+>    review found two Critical and five Important issues, all fixed with
+>    tests (handoff §8). The Critical ones: a rebuilt row could delete an
+>    annotated published copy, and placement skipped freed sessions. **Each
+>    share needs its `nwb/` folder made once by hand**; wlpp never writes to
+>    a share without one. See `docs/handoffs/2026-09-29-nwb-publishing.md`.
 >
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`

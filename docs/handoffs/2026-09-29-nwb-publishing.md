@@ -59,8 +59,13 @@ fast share if it is in the active set and the fast share has room. The copy:
 3. is renamed.
 
 The description is then written beside it, the placement recorded, and the
-scratch copy deleted. Nothing is written over a file no placement records
-(`PublishConflict`). A freed session is skipped.
+scratch copy deleted. A freed session is skipped.
+
+Nothing is written over a file no placement records. A file already at the
+activation's path on **either** share is handled one of two ways:
+- if its written-once data is this row's, it is **adopted** where it is
+  (after the final review, §8);
+- otherwise it is refused (`PublishConflict`).
 
 **Placement** (`run_placement`, the next stage). It keeps one live copy of
 each file, on the share the latest active set wants:
@@ -69,8 +74,13 @@ each file, on the share the latest active set wants:
   changed dataset stops it (`ChangedData`).
 - A move to the fast share stops at its headroom.
 - The lab's annotations move with the file.
-- An old copy that could not be deleted is removed on the next pass.
-- A published file deleted by hand is reported by path, not moved.
+- An old copy that could not be deleted is removed on the next pass, but
+  only if the placement history put it there, the current copy is present,
+  and nobody wrote to it after the move. Anything else is reported and left
+  for a person.
+- A file that changes while it is being moved is not moved.
+- A published file deleted by hand is reported by path every pass.
+- Freed sessions are not skipped: placement never reads scratch.
 
 **Tables.**
 - `nwb.NwbChange` is an append-only record of `built`, `published` and
@@ -106,6 +116,9 @@ wlpp daemon --host <nas> --nwb-root <scratch> \
 
 - Each share is named by where it is mounted on this host and by its name on
   the NAS. `--host` names the NAS.
+- **Make the `nwb/` folder once on each share, by hand, when setting it up.**
+  wlpp never makes it. A share without it is reported as not reachable, so
+  an unmounted share is never written to (final review, §8).
 - Files go under a fixed `nwb/` folder on each mount. The recorded path is
   relative to the share.
 - Without the slow share, publishing is skipped, and the report's
@@ -201,7 +214,7 @@ land before the lab's first real sessions.
   *Cost if wrong:* a multi-run session's conditions stay empty until this
   repository reads XC-155's field. They are never wrong.
 
-## 7. The measured counts
+## 7. The measured counts (before the final review)
 
 | Task | Before the code | After | Mutations |
 |---|---|---|---|
@@ -222,3 +235,80 @@ proven ones.
 `WLPP_OHDPI_REFERENCE` unset, as CI has it): **1887 passed, 31 skipped, 1 deselected, 1 xfailed** on 3.11 and
 **1886 passed, 33 skipped, 1 xfailed**, 0 failed on 3.13. The plan measured 1886 and 1885 before the execution
 ruling's test was added; `main` at `85ea88d` gives 1829 and 1828.
+
+## 8. The final review, and its fix pass
+
+A fresh reviewer (Opus) read the whole branch and said **not ready to
+merge**. It found:
+- two Critical and five Important issues, six of them reproduced by
+  scenario tests against the real module fixtures;
+- sixteen Minor issues;
+- nine behaviours it declined to judge.
+
+Its report was kept in the plan's workspace.
+
+**All seven Critical and Important findings were fixed in one pass.** Each
+has a test that failed before the fix and passes after it, all in
+`tests/schema/test_nwb_build.py`:
+
+| Finding | What was wrong | Test |
+|---|---|---|
+| C1 | A deleted-and-rebuilt row published to the other share, and placement's sweep then deleted the old, annotated copy. | `test_a_rebuilt_row_takes_over_its_annotated_published_file_on_either_share` (both directions), `test_an_unrecorded_copy_with_other_data_on_the_other_share_is_refused`, `test_the_sweep_deletes_only_a_leftover_its_history_records_beside_a_present_copy` |
+| C2 | Placement skipped freed sessions. This branch makes published sessions freeable, so most of the active set would have stayed on slow, with no error. | `test_placement_moves_a_freed_sessions_file` |
+| I1 | A missing published file was reported only when a move was wanted. | `test_a_published_file_missing_where_it_belongs_is_reported_each_pass` |
+| I2 | A failure after the rename left the file stuck for ever behind "not overwritten". | `test_a_file_left_unrecorded_after_its_rename_is_adopted_next_pass` |
+| I3 | An unmounted share was published to. | `test_a_share_that_is_not_mounted_is_not_published_to` (an empty mount point, and none) |
+| I4 | An unreachable fast share stopped the whole daemon pass. | `test_an_unreachable_fast_share_fails_its_moves_not_the_pass`, `test_a_failing_nwb_stage_does_not_stop_the_pass` |
+| I5 | A move could lose an annotation written during the copy, or to the leftover after it. | `test_a_file_changed_while_it_is_moved_is_not_moved`, `test_a_leftover_annotated_after_its_move_is_left_for_a_person` |
+
+**Evidence for the fix pass:**
+- Ten mutation checks, one per new guard, were all caught.
+- **Full suite after the fix pass: 1900 passed, 31 skipped, 1 deselected, 1 xfailed on 3.11, and 1899 passed, 33 skipped, 1 xfailed on 3.13, 0 failed.**
+
+`test_publishing_never_overwrites_a_file_no_placement_records` now alters the
+published file's written-once data before the rebuild. Without that, the
+fixed code rightly adopts the file.
+
+**Rulings made in the fix pass:**
+- **Placement does not skip freed sessions.** The requester's 2026-09-26 rule
+  that the daemon skips a freed session in every stage was argued from stages
+  that read scratch. Placement reads only the NAS and the database.
+  Publishing keeps its skip. *Cost if wrong:* the skip is one line to put
+  back. **The requester should confirm this reading of their rule.**
+- **A share is usable only if its `nwb/` folder is already there,** and wlpp
+  never makes it. This tells a mounted share from the host's own disk.
+  `os.path.ismount` could not do that under test. *Cost if wrong:* one
+  folder made at setup.
+- **An unrecorded file at an activation's path is adopted if its
+  written-once data matches, and refused otherwise.** Its description is
+  replaced; the description is ours, derived from the row. *Cost if wrong:*
+  a rebuilt row with identical data takes over the old file and its
+  annotations, which is what a person rebuilding wants.
+- **The sweep compares a leftover's modification time with the move's
+  recording time,** so it trusts the NAS clock. *Cost if wrong:* a NAS clock
+  running behind by more than the gap between the move and a write could
+  delete a copy annotated just after the move.
+- **A move whose source changes during the copy is abandoned and retried.**
+  *Cost if wrong:* a file under constant writing is never moved, and each
+  pass says so.
+
+**Deferred minors** (M1–M16 in the review):
+- M1: `active_keys` fetches every active set.
+- M2: `GET /nwb` makes two queries per file and has no page size.
+- M3: `since` accepts Unicode digits, which gives a 500.
+- M4: cursor holes with two writers; a single-runner lock would close them.
+- M5: a deleted row is invisible to `GET /nwb`.
+- M6: the fast headroom defaults to 0 and takes negatives.
+- M7: two of spec §13's synthetic cases are missing, and the synthetic record
+  marks every trial correct.
+- M8: spec §11 items 4 and 5 are unrecorded; rename atomicity needs the NAS,
+  and the sha256 cost is measurable now.
+- M9: the protocol doc's status table still says "both".
+- M10: no migration note for piece 1's `nwb` tables. **A development
+  database that declared them must drop and redeclare them.**
+- M11: an off-by-one join is undetectable, and outcomes could cross-check it.
+- M12: `_canonical_nwb` will need to ignore superseded canonicals in piece 2b.
+- M13: `NwbFile.path` describes a scratch copy that publishing deletes.
+- M14: a failed description write leaves a `.json.partial`.
+- M15: a move whose old copy stayed is counted as a failure.
+- M16: `wl.yaml` and CHECKPOINT say "not merged", to update at merge.

@@ -209,6 +209,14 @@ every file lives under a fixed top-level `nwb/` folder on it,
 from the raw archive, and makes the recorded share-relative path
 computable from the mount alone.*
 
+*Amended after the final review, 2026-09-29 (its I3):* *a person makes the
+`nwb/` folder once on each share when it is set up, and wlpp never makes it.
+A share whose `nwb/` folder is not there is not reachable: an unmounted
+mount point is an empty directory, or none, and publishing onto it would
+fill this host's own disk and record a place the NAS does not have. Then
+publishing publishes nothing, or to the slow share only if it is the fast
+share that is missing; placement moves nothing; and each pass says so.*
+
 **Opt-in, like the archive and the builder.** Without the slow share, publishing
 does not run and reports `None`. Without the fast share, placement does not run.
 
@@ -243,6 +251,18 @@ them. **Failures:**
   only inside it (parent spec §8.3: "regeneration supersedes; it never
   overwrites"). It is refused and reported every pass, for a person to
   resolve.*
+- *Amended after the final review, 2026-09-29 (its C1 and I2):* *the rule
+  looks at **both** shares, and a file there whose written-once datasets all
+  match this row's checksums is **adopted** where it is: its description is
+  written, its placement recorded, and the scratch copy deleted. Such a file
+  is this activation's own. It was left by a publish that failed after the
+  rename, or by a row deleted and rebuilt from the same data. Adopting it
+  never writes over it, and keeps its annotations. A file whose data differs,
+  or one on each share, is refused as before. Without this, a rebuild
+  published beside an annotated copy on the other share, and placement then
+  deleted that copy as a leftover.*
+- *Amended after the final review, 2026-09-29 (its I4):* *one share failing
+  fails its files, and never the daemon's pass: the other stages still run.*
 
 ## 5. The active set, and placement
 
@@ -283,6 +303,26 @@ Annotations the lab has appended travel with the file.
     a later move back would stop on the rule above.*
   - ***A published file missing from its share** is reported by path each
     pass, and its placement stays as recorded.*
+- *Amended after the final review, 2026-09-29 (its C1, I1, I5 and C2):*
+  - *The leftover of a move is deleted only when three things all hold:*
+    - *an earlier placement of this activation put it on that share, at that
+      path;*
+    - *the current copy is present;*
+    - *nobody wrote to it after the move was recorded, judged by its
+      modification time against the move's recording time, so this trusts
+      the NAS clock.*
+
+    *Anything else on the other share is reported and left for a person.*
+  - *A missing published file is reported by publishing's pass, so every
+    pass reports it, not only a pass that wants to move it, and with only
+    the slow share configured too.*
+  - *A file that changes while it is being moved, its size or modification
+    time, is not moved: the new copy is removed, nothing is recorded, and
+    the next pass tries again.*
+  - *Placement does not skip freed sessions. The daemon's rule that every
+    stage skips a freed session (the requester's, 2026-09-26) was argued from
+    stages that read scratch. Placement reads only the NAS and the database,
+    and §8 makes a published session exactly what reclamation frees.*
 
 ## 6. Talking to wl.works
 
