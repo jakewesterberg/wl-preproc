@@ -39,6 +39,9 @@ class NwbFile(dj.Manual):
     started_at_difference_s = null : double
     n_critical = null : int unsigned
     inspector_findings = null : <blob>
+    # What the file holds, for wl.works' dataset builder (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 2); null when refused.
+    description = null : <blob>
     reason = '' : varchar(1024)
     """
 

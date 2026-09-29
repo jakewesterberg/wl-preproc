@@ -91,3 +91,12 @@ def test_job_request_schema_carries_the_montage_bounds(tmp_path):
     boundary = schema["$defs"]["MontageBoundary"]
     assert boundary["properties"]["montage_id"]["maximum"] == 127  # tinyint
     assert boundary["additionalProperties"] is False
+
+
+def test_the_nwb_description_schema_is_exported_for_wl_works(tmp_path):
+    """wl.works' dataset builder selects on it (design spec
+    `2026-09-29-nwb-publishing-design.md` section 2)."""
+    export_schemas(tmp_path)
+    schema = json.loads((tmp_path / "nwb_description.json").read_text())
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert {"Block", "Condition", "Checksums"} <= set(schema["$defs"])

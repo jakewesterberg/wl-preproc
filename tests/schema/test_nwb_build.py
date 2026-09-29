@@ -182,6 +182,26 @@ def test_the_trials_carry_the_rigs_conditions_and_settings(activation, built):
         assert all(json.loads(settings)["orientation_deg"] == 45.0 for settings in conditions["settings"])
 
 
+def test_the_description_describes_the_file(activation, built):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 2, on the
+    synthetic session: what is in the file, by what actually ran."""
+    from wl_preproc.contracts.nwb_description import NwbDescription
+
+    description = built.description
+    NwbDescription.model_validate(description)
+    assert description["identity"]["identifier"] == built.identifier
+    assert (description["identity"]["rig"], description["identity"]["role"]) == ("rig-a", "canonical")
+    assert description["subject"]["age_days"] == (_SESSION_DATETIME.date() - datetime.date(2016, 3, 2)).days
+    assert description["data_types"]["eye"] == {"gaze": ["left", "right"], "pupil": ["left", "right"]}
+    assert len(description["data_types"]["eye_events"]["detectors"]) == 6
+    assert [block["block_id"] for block in description["blocks"]] == [1, 2]
+    assert all(block["task"]["name"] == "rf_map" for block in description["blocks"])
+    names = {condition["name"] for block in description["blocks"] for condition in block["conditions"]}
+    assert names and names <= {"contrast-10", "contrast-25", "contrast-50", "contrast-100"}
+    assert description["checksums"]["datasets"] == built.checksums
+    assert description["notes"] == []
+
+
 def test_the_eye_is_on_session_time_and_every_detector_is_there(activation, built):
     from pynwb import NWBHDF5IO
 
@@ -439,6 +459,7 @@ def test_the_daemon_stage_records_every_activation(activation, daemon_module, pr
     assert set(rows) == {(r["montage_id"], r["activation_id"]) for r in (request.Activation & session_key).to_dicts()}
     canonical = rows[(key["montage_id"], key["activation_id"])]
     assert canonical["status"] == "written" and canonical["reference_source"] == "manifest"
+    assert canonical["description"]["identity"]["identifier"] == canonical["nwb_identifier"]
     assert len(nwb_schema.NwbFile.Dataset & canonical) > 50
     assert rows[(1, 0)]["status"] == "refused"
 

@@ -276,6 +276,29 @@ def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
     }
 
 
+def _usable_fraction(times: np.ndarray, stretches: list[tuple]) -> float | None:
+    """The share of the file's samples of one eye that no withheld stretch
+    covers (design spec `2026-09-29-nwb-publishing-design.md` section 2)."""
+    if not len(times):
+        return None
+    withheld = np.zeros(len(times), dtype=bool)
+    for start, stop, *_ in stretches:
+        low, high = np.searchsorted(times, [start, stop], side="left")
+        withheld[low:high] = True
+    return float(1.0 - withheld.mean())
+
+
+def _rig(session_dir: Path) -> str | None:
+    """The rig the session's manifest names, or None if it cannot be read."""
+    from wl_preproc.contracts.manifest import SessionManifest
+    from wl_preproc.contracts.paths import MANIFEST_FILENAME
+
+    try:
+        return SessionManifest.from_yaml((session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")).rig
+    except (OSError, ValueError):
+        return None
+
+
 def _edges(times: np.ndarray, segment: dict) -> np.ndarray:
     """Session time of every row, plus the time one sample past the last:
     `edges[stop]` is an exclusive run's stop time."""
@@ -373,7 +396,9 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
 
     return {"times": times[keep], "gaze": gaze, "pupil": pupil, "calibration": calibration,
             "validity": validity, "repairs": repairs, "detections": detections, "sources": sources,
-            "agreement": agreement, "missing_eyes": [eye for eye in EYES if eye not in calibrated]}
+            "agreement": agreement, "missing_eyes": [eye for eye in EYES if eye not in calibrated],
+            "usable_fraction": {eye: _usable_fraction(times[keep], validity[eye]) if eye in validity else None
+                                for eye in EYES}}
 
 
 def gather(activation_key: dict) -> Gathered:
@@ -420,6 +445,13 @@ def gather(activation_key: dict) -> Gathered:
         session={
             "identifier": identifier_for(key, session_id),
             "session_id": session_id,
+            "session_datetime": _aware_utc(key["session_datetime"]),
+            "montage_id": key["montage_id"],
+            "activation_id": key["activation_id"],
+            "role": activation["role"],
+            "supersedes_activation_id": activation["supersedes"],
+            "rig": _rig(session_dir),
+            "timing_tier": provenance[0]["tier"],
             "description": description,
             "reference_time": clock["reference_time"],
             "experimenter": requested_by or None,

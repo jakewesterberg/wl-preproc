@@ -680,6 +680,9 @@ _EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
         # The NWB builder's inspector findings (design spec
         # `2026-09-28-nwb-builder-design.md` section 8), added 2026-09-28.
         "wl_preproc.schema.nwb.NwbFile.inspector_findings",
+        # The file's description (design spec
+        # `2026-09-29-nwb-publishing-design.md` section 2), added 2026-09-29.
+        "wl_preproc.schema.nwb.NwbFile.description",
         "wl_preproc.schema.ephys.Unit.spike_times",
         "wl_preproc.schema.ephys.Unit.spike_sites",
         "wl_preproc.schema.ephys.Unit.spike_depths",

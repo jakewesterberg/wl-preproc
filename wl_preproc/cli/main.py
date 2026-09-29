@@ -23,6 +23,7 @@ from wl_sync.log import SyncBoxLogHeader
 
 from wl_preproc.contracts.done import DoneMarker
 from wl_preproc.contracts.manifest import SessionManifest
+from wl_preproc.contracts.nwb_description import NwbDescription
 from wl_preproc.contracts.protocol import HealthResponse, JobRequest
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
 
@@ -37,6 +38,7 @@ EXPORTED_MODELS: dict[str, type[BaseModel]] = {
     "syncbox_log_header": SyncBoxLogHeader,
     "health_response": HealthResponse,
     "job_request": JobRequest,
+    "nwb_description": NwbDescription,
 }
 
 

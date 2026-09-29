@@ -8,6 +8,7 @@ import datetime
 from pathlib import Path
 
 from wl_preproc.nwb.checksums import dataset_checksums
+from wl_preproc.nwb.describe import describe
 from wl_preproc.nwb.eye import add_eye_series, add_eye_tables
 from wl_preproc.nwb.eye_events import add_agreement, add_detections, add_sources
 from wl_preproc.nwb.gather import Refused, gather, readiness
@@ -28,6 +29,11 @@ class BuildResult:
     clock: dict | None = None
     findings: list = dataclasses.field(default_factory=list)
     checksums: list = dataclasses.field(default_factory=list)
+    # The file's description (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 2); None when refused.
+    description: dict | None = None
+    built_at: datetime.datetime = dataclasses.field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 def nwb_path(nwb_root: Path, subject: str, session_id: str, identifier: str) -> Path:
@@ -78,14 +84,20 @@ def build(activation_key: dict, nwb_root: Path) -> BuildResult:
         return BuildResult(status="refused", reason=f"{path} is already recorded for {other}")
     write_atomically(nwb, path)
     findings = inspect_file(path)
+    status = "invalid" if n_critical(findings) else "written"
+    checksums = dataset_checksums(path)
+    built_at = datetime.datetime.now(datetime.timezone.utc)
     return BuildResult(
-        status="invalid" if n_critical(findings) else "written",
+        status=status,
         path=path,
         n_bytes=path.stat().st_size,
         identifier=data.session["identifier"],
         clock=data.session["clock"],
         findings=findings,
-        checksums=dataset_checksums(path),
+        checksums=checksums,
+        description=describe(data, status=status, n_critical=n_critical(findings), checksums=checksums,
+                             built_at=built_at),
+        built_at=built_at,
     )
 
 
@@ -102,13 +114,14 @@ def record(activation_key: dict, result: BuildResult) -> None:
         "status": result.status,
         "path": str(result.path or ""),
         "n_bytes": result.n_bytes,
-        "built_at": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
+        "built_at": result.built_at.astimezone(datetime.timezone.utc).replace(tzinfo=None),
         "nwb_identifier": result.identifier,
         "reference_time": clock["reference_time"].astimezone(datetime.timezone.utc).replace(tzinfo=None) if clock else None,
         "reference_source": clock.get("source"),
         "started_at_difference_s": clock.get("started_at_difference_s"),
         "n_critical": None if result.status == "refused" else n_critical(result.findings),
         "inspector_findings": result.findings or None,
+        "description": result.description,
         "reason": result.reason,
     }
     connection = dj.conn()
