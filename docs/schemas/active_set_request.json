@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "ActivationKey": {
+      "additionalProperties": false,
+      "description": "One activation, as wl.works names it back to this host. A naive\n`session_datetime` is UTC, as every one this host issues is.",
+      "properties": {
+        "activation_id": {
+          "minimum": 0,
+          "title": "Activation Id",
+          "type": "integer"
+        },
+        "montage_id": {
+          "maximum": 127,
+          "minimum": -128,
+          "title": "Montage Id",
+          "type": "integer"
+        },
+        "session_datetime": {
+          "format": "date-time",
+          "title": "Session Datetime",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "session_datetime",
+        "montage_id",
+        "activation_id"
+      ],
+      "title": "ActivationKey",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "`PUT /nwb/active`: the WHOLE set of activations wl.works wants on the\nfast share, every time. Sending the same set twice changes nothing.",
+  "properties": {
+    "activations": {
+      "items": {
+        "$ref": "#/$defs/ActivationKey"
+      },
+      "title": "Activations",
+      "type": "array"
+    },
+    "requested_by": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requested By"
+    }
+  },
+  "required": [
+    "activations"
+  ],
+  "title": "ActiveSetRequest",
+  "type": "object"
+}

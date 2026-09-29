@@ -750,6 +750,38 @@ def test_an_active_activation_publishes_straight_to_the_fast_share(activation, p
         _set_active()
 
 
+def test_the_listing_and_the_active_set_through_the_responders_functions(activation, prefix, slow_share,
+                                                                         fast_share):
+    """Design spec `2026-09-29-nwb-publishing-design.md` section 6, against
+    the database: what GET /nwb lists, what its cursor holds back, and what
+    PUT /nwb/active records, unknown activations named."""
+    from wl_preproc.contracts.protocol import ActiveSetRequest
+    from wl_preproc.nwb.publish import activation_tuple, active_keys, run_placement
+    from wl_preproc.responder.nwb import list_files, set_active
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _blocks = activation
+    identifier = (nwb_schema.NwbFile & key).fetch1("nwb_identifier")
+    everything = list_files(None, prefix=prefix)
+    (entry,) = [item for item in everything["files"] if item["identifier"] == identifier]
+    assert entry["status"] == "written" and entry["placement"]["tier"] == "slow"
+    assert entry["description"]["identity"]["identifier"] == identifier
+    cursor = everything["cursor"]
+    assert list_files(cursor, prefix=prefix)["files"] == []
+    answer = set_active(ActiveSetRequest.model_validate(
+        {"activations": [key, {**key, "activation_id": 99}], "requested_by": "jw"}), prefix=prefix)
+    assert answer["accepted"] == 2 and [item["activation_id"] for item in answer["unknown"]] == [99]
+    assert activation_tuple(key) in active_keys()
+    try:
+        run_placement(slow_share, fast_share)
+        changed = list_files(cursor, prefix=prefix)
+        assert [item["placement"]["tier"] for item in changed["files"] if item["identifier"] == identifier] == ["fast"]
+        assert changed["cursor"] > cursor
+    finally:
+        _set_active()
+        run_placement(slow_share, fast_share)
+
+
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage
     does: the others are recorded, the failure is reported, and the failed

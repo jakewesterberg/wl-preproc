@@ -182,13 +182,19 @@ import hmac
 import json
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
+from urllib.parse import parse_qs
 
 from pydantic import ValidationError
 
-from wl_preproc.contracts.protocol import JobRequest
+from wl_preproc.contracts.protocol import ActiveSetRequest, JobRequest
 
 _HEALTH_PATH = "/health"
 _JOBS_PATH = "/jobs"
+# NWB files (design spec `2026-09-29-nwb-publishing-design.md` section 6):
+# answered only by a handler built with their callables. `/nwb` is the one
+# path that takes a query string (`?since=<cursor>`).
+_NWB_PATH = "/nwb"
+_NWB_ACTIVE_PATH = "/nwb/active"
 
 # The two known paths, mapped to which HTTP method each one answers -- used
 # by both do_GET and do_POST (and do_PUT's five aliases) to decide 404 (path
@@ -350,6 +356,8 @@ def make_handler(
     token: str,
     health_fn: Callable[[], Any],
     accept_fn: Callable[[JobRequest], dict],
+    nwb_list_fn: Callable[[int | None], dict] | None = None,
+    nwb_active_fn: Callable[[ActiveSetRequest], dict] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build a `BaseHTTPRequestHandler` subclass closing over `token` and the
     two callables. A fresh class per call -- not a module-level singleton --
@@ -411,6 +419,15 @@ def make_handler(
         _token = token
         _health_fn = staticmethod(health_fn)
         _accept_fn = staticmethod(accept_fn)
+        _nwb_list_fn = staticmethod(nwb_list_fn) if nwb_list_fn is not None else None
+        _nwb_active_fn = staticmethod(nwb_active_fn) if nwb_active_fn is not None else None
+        # This handler's route table: the two fixed endpoints, plus the NWB
+        # ones when their callables were given.
+        _paths = {
+            **_PATH_METHODS,
+            **({_NWB_PATH: "GET"} if nwb_list_fn is not None else {}),
+            **({_NWB_ACTIVE_PATH: "PUT"} if nwb_active_fn is not None else {}),
+        }
 
         # Review Important 5: BaseHTTPRequestHandler's version_string() joins
         # these two into the Server header sent on EVERY response (this
@@ -613,8 +630,11 @@ def make_handler(
             to 404 or 405 here, never `None`, since `_PATH_METHODS` never
             maps any path to any of those six verbs.
             """
-            expected = _PATH_METHODS.get(self.path)
-            if expected is None:
+            path, _, query = self.path.partition("?")
+            expected = self._paths.get(path)
+            # A query string is `/nwb`'s alone; anywhere else it is a path
+            # this host does not answer, exactly as before `/nwb` existed.
+            if expected is None or (query and path != _NWB_PATH):
                 self._send_json(404, {"error": "not found"})
                 return 404
             if expected != method:
@@ -628,8 +648,10 @@ def make_handler(
                 return
             if self._route_or_none("GET") is not None:
                 return
-            # Only _HEALTH_PATH answers GET (see _PATH_METHODS) -- reached
-            # only when self.path == _HEALTH_PATH.
+            if self.path.partition("?")[0] == _NWB_PATH:
+                self._get_nwb()
+                return
+            # Otherwise only _HEALTH_PATH answers GET (see _PATH_METHODS).
             try:
                 response = self._health_fn()
                 # response.model_dump_json() moved INSIDE this try -- review
@@ -761,6 +783,21 @@ def make_handler(
             else:
                 self._send_json(200, {"activation": result, "accepted": True})
 
+        def _get_nwb(self) -> None:
+            """`GET /nwb[?since=<cursor>]`: 200 with the listing; 422 when
+            `since` is anything but one non-negative integer."""
+            query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+            values = query.get("since", [])
+            if set(query) - {"since"} or len(values) > 1 or (values and not values[0].isdigit()):
+                self._send_json(422, {"error": "the only parameter is since, one non-negative integer"})
+                return
+            try:
+                payload = self._nwb_list_fn(int(values[0]) if values else None)
+            except Exception as exc:  # noqa: BLE001 -- see module docstring's table
+                self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
+                return
+            self._send_json(200, payload)
+
         def _parse_job_request(self) -> JobRequest:
             """The request body as a validated `JobRequest`. Raises
             `ValueError` (via this method's own `Content-Length` checks,
@@ -844,19 +881,20 @@ def make_handler(
             default, a digit string) -- an empty body then fails at
             `json.loads(b"")`, still a `ValueError`, just one step later.
             """
+            return self._parse_body(JobRequest)
+
+        def _parse_body(self, model):
+            """The body as a validated `model`, under exactly the
+            `Content-Length`, size and timeout rules `_parse_job_request`
+            documents; `PUT /nwb/active` reads its body the same way."""
             raw_length = self.headers.get("Content-Length", "0")
             if not raw_length.isdigit():
-                raise ValueError(
-                    f"Content-Length {raw_length!r} is not a valid non-negative integer"
-                )
+                raise ValueError(f"Content-Length {raw_length!r} is not a valid non-negative integer")
             length = int(raw_length)
             if length > _MAX_CONTENT_LENGTH:
-                raise ValueError(
-                    f"Content-Length {length} exceeds the {_MAX_CONTENT_LENGTH}-byte limit"
-                )
+                raise ValueError(f"Content-Length {length} exceeds the {_MAX_CONTENT_LENGTH}-byte limit")
             raw = self.rfile.read(length) if length else b""
-            payload = json.loads(raw.decode("utf-8"))
-            return JobRequest.model_validate(payload)
+            return model.model_validate(json.loads(raw.decode("utf-8")))
 
         # Review Important 5: every verb neither endpoint answers still
         # authenticates FIRST, exactly like do_GET/do_POST -- the
@@ -876,17 +914,43 @@ def make_handler(
         # actually sends: an authenticated caller gets 404 or 405, the
         # honest routing answer, where send_error's blanket 501-becomes-401
         # would tell an authenticated caller nothing at all.
-        def do_PUT(self) -> None:
+        def _foreign(self) -> None:
             if not self._authorized():
                 self._send_json(401, _UNAUTHORIZED_BODY)
                 return
             self._route_or_none(self.command)
 
-        do_DELETE = do_PUT
-        do_HEAD = do_PUT
-        do_OPTIONS = do_PUT
-        do_PATCH = do_PUT
-        do_TRACE = do_PUT
+        def do_PUT(self) -> None:
+            """`PUT /nwb/active` (design spec
+            `2026-09-29-nwb-publishing-design.md` section 6): 202 with the
+            count accepted and the activations unknown here; 422 for a
+            malformed body; 408 when it never arrives. PUT anywhere else is
+            the foreign-verb answer above, unchanged."""
+            if not self._authorized():
+                self._send_json(401, _UNAUTHORIZED_BODY)
+                return
+            if self._route_or_none("PUT") is not None:
+                return
+            try:
+                request = self._parse_body(ActiveSetRequest)
+            except ValueError as exc:
+                self._send_json(422, _error_body(exc))
+                return
+            except TimeoutError:
+                self._send_json(408, {"error": "request timed out"})
+                return
+            try:
+                result = self._nwb_active_fn(request)
+            except Exception as exc:  # noqa: BLE001 -- see module docstring's table
+                self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
+                return
+            self._send_json(202, result)
+
+        do_DELETE = _foreign
+        do_HEAD = _foreign
+        do_OPTIONS = _foreign
+        do_PATCH = _foreign
+        do_TRACE = _foreign
 
         # log_message is deliberately NOT overridden: BaseHTTPRequestHandler's
         # default writes one access-log line per request to stderr, which is

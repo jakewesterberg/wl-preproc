@@ -27,7 +27,7 @@ buried in it, and it is right to:
 
 And its counterpart, which is this host's own:
 
-> **Every request to this host must carry a bearer token.** Both endpoints. An action the
+> **Every request to this host must carry a bearer token.** Every endpoint. An action the
 > app declines to show is still an HTTP endpoint on the LAN, and the population of an
 > unauthenticated LAN endpoint is not "any lab member" — it is anything plugged into the
 > lab network.
@@ -403,21 +403,67 @@ that same activation.
 
 ---
 
+## `GET /nwb`
+
+*Added 2026-09-29 with NWB publishing (`docs/superpowers/specs/2026-09-29-nwb-publishing-design.md`
+section 6).* Lists every NWB file whose record changed after a cursor, so wl.works can learn
+where each file is and what it holds without opening it.
+
+```
+GET /nwb?since=<cursor>
+Authorization: Bearer <token>
+```
+
+- **`since`** is optional, one non-negative integer. Without it, every file is listed.
+- **The response** is [`docs/schemas/nwb_listing.json`](../schemas/nwb_listing.json):
+  `{"cursor": <int>, "files": [...]}`. Send `cursor` as the next `since`; it only increases.
+- **Each file:**
+  - `activation`: the key;
+  - `identifier` and `status` (`written`, `invalid` or `refused`), and `reason`;
+  - `placement`: `tier` (`fast` or `slow`), `host`, `share`, `path` relative to the share,
+    and `n_bytes`, or `null` until published;
+  - `description`: [`docs/schemas/nwb_description.json`](../schemas/nwb_description.json),
+    or `null` for a refused activation.
+
+A file changes when it is built, published, or moved between shares.
+
+## `PUT /nwb/active`
+
+*Added 2026-09-29, the same spec, section 5.* The **whole** set of activations wl.works wants
+on the fast share, every time. This host records it and moves files in the daemon's next
+pass; `GET /nwb` then shows each file's new `placement`. Sending the same set twice changes
+nothing.
+
+```json
+{"activations": [{"subject": "…", "session_datetime": "2027-01-12T09:00:00",
+                  "montage_id": 0, "activation_id": 0}],
+ "requested_by": "<wl.works user, or null>"}
+```
+
+The body is [`docs/schemas/active_set_request.json`](../schemas/active_set_request.json),
+read under the same `Content-Length` rules as `POST /jobs`. The answer is `202` with
+`{"accepted": <n>, "unknown": [<keys this host has no activation for yet>]}`. Unknown keys
+are kept: a dataset may be marked active before its files exist, and a file in the set
+publishes straight to the fast share.
+
+---
+
 ## Status codes
 
-Every code this host can return, on either endpoint.
+Every code this host can return, on any endpoint.
 
 | Code | Endpoint | Body | Meaning | Retryable? |
 |---|---|---|---|---|
-| `200` | both | the response above | Accepted, or health served. A `down` verdict is a `200`. | — |
+| `200` | all but `PUT /nwb/active` | the response above | Accepted, health served, or files listed. A `down` verdict is a `200`. | — |
+| `202` | `PUT /nwb/active` | `{"accepted": …, "unknown": […]}` | The active set is recorded; the daemon's next pass moves files. | — |
 | `400` | both | `{"error": "bad request"}` | Malformed request line, or an unparseable version such as `HTTP/9.9.9`. See the framing note below. | No — fix the client |
 | `401` | both | `{"error": "unauthorized"}` | Missing, wrong-scheme, or wrong token; or a verb neither endpoint answers. | No — fix the credential |
-| `404` | both | `{"error": "not found"}` | Path is neither `/health` nor `/jobs`. | No |
+| `404` | all | `{"error": "not found"}` | Path is not one of `/health`, `/jobs`, `/nwb`, `/nwb/active`; or a query string on any path but `/nwb`. | No |
 | `405` | both | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, authenticated `PUT /health`. | No |
-| `408` | `POST /jobs` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
+| `408` | `POST /jobs`, `PUT /nwb/active` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
 | `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content. | **No — needs a human** |
 | `414` | both | `{"error": "request line too long"}` | Over-long request line. | No |
-| `422` | `POST /jobs` | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
+| `422` | `POST /jobs`, `PUT /nwb/active`, `GET /nwb` (a `since` that is not one non-negative integer) | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
 | `431` | both | `{"error": "request header fields too large"}` | Oversized header. | No |
 | `500` | both | `{"error": "<ExceptionType>: <message>"}` | This host's own fault, infrastructure included. | **Yes** |
 | `505` | both | `{"error": "http version not supported"}` | `HTTP/2.0` or later. See the framing note below. | No |
@@ -765,6 +811,11 @@ discovering an option.
   progress is not observable through this protocol at all. When it becomes observable it
   will be as a **reading**, because readings are the surface this host already publishes
   and wl.works already polls — not as a new endpoint.
+  - *Amended 2026-09-29 for NWB files, not job progress: `GET /nwb` is a new endpoint,
+    because what wl.works needs there is a list of files, each with its location and its
+    description, which a reading's single `label`/`value` string cannot carry
+    (`docs/superpowers/specs/2026-09-29-nwb-publishing-design.md` section 6). Job progress
+    itself is unchanged by this: still a reading when it arrives.*
 - **No result upload.** wl.works pulls; this host never pushes. Rows 27 and 29 already
   discover their outputs by polling the NAS.
 - **No TLS.** Plan 10 §5.4 makes plain HTTP the stated default for this leg and argues it:
@@ -785,11 +836,14 @@ discovering an option.
 
 ## Machine-readable schemas
 
-`wlpp schemas export` writes JSON Schema for both wire contracts, and CI diffs the
+`wlpp schemas export` writes JSON Schema for every wire contract, and CI diffs the
 directory so a drifted export fails the build:
 
 - [`docs/schemas/health_response.json`](../schemas/health_response.json)
 - [`docs/schemas/job_request.json`](../schemas/job_request.json)
+- [`docs/schemas/nwb_listing.json`](../schemas/nwb_listing.json) and
+  [`docs/schemas/nwb_description.json`](../schemas/nwb_description.json), `GET /nwb`
+- [`docs/schemas/active_set_request.json`](../schemas/active_set_request.json), `PUT /nwb/active`
 
 These are what wl.works' contract tests should validate against, and they are why this
 protocol needed no OpenAPI-generating web framework on the box that holds every session's
