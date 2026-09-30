@@ -1089,6 +1089,18 @@ activation must re-evaluate once the missing rows land** — otherwise every lat
 strands a session until somebody notices. Whatever implements the canonical trigger must treat
 "quarantined, waiting on ELN" as a *retryable* state with no manual step, not a terminal one.
 
+> **Amended 2026-09-30 by the canonical lifecycle design**
+> ([`2026-09-30-canonical-lifecycle-design.md`](2026-09-30-canonical-lifecycle-design.md)
+> §0 decision 1, the requester's): **what implements the canonical trigger is wl.works.**
+> - wl.works runs the 12-hour clock and waits on its own ELN, since the probe insertions,
+>   block verdicts and subject details all live there.
+> - It sends a canonical job request, re-fires while the ELN is not current, and regenerates
+>   with a replacement naming the canonical it supersedes.
+> - wl-preproc holds no clock and never guesses a montage.
+>
+> The 12-hour value stands, and now lives in wl.works. The requirement above, retryable with
+> no manual step, moves with it (`pending-wl-works-amendments.md`'s 2026-09-30 entry).
+
 **Item 12 shrinks but does not close.** No machine creates a block under this ruling, so no
 machine actor is needed *for blocks*. The question remains open for the canonical activation
 row itself.
@@ -1379,7 +1391,7 @@ So three of five fold into existing phases at near-zero marginal cost, and two a
 | 9 | Who creates `animal_session_block` rows, and when. **wl-preproc's half is closed** (2026-08-13, §8.3.1): it never writes, it cross-validates decoded boundaries, and it quarantines on absence — a ruling that needs nothing from wl.works. **The cross-repo half is open, and was never carried back** (found 2026-08-15 while designing 1c-2): nothing in wl.works commits it to authoring montage or block rows, or to when, and Plan 11 §3.2 still reads *"neither taken… Owner: whoever plans 11a"*. **A resolution is proposed and not ratified** (2026-08-15, §8.3.1's amendment): wl-preproc owns the *measurement* in `core.Block`/`core.Montage`, wl.works keeps the *authored record*, and `works_block_id` links them — the third option Plan 11 §3.2 named and declined to refuse. Absence then reports an unlinked block instead of quarantining. Text deferred in `docs/pending-wl-works-amendments.md`; **item stays open until it lands there** | Phase 0 |
 | 10 | ~~The X-hour canonical delay value~~ **Closed 2026-08-13 — 12 hours.** The tight end of the range: it buys morning availability and pays in regeneration, and it makes automatic re-firing of a quarantined activation load-bearing rather than optional. §8.3.1 | ~~Phase 0~~ |
 | 11 | Whether `seed` and `device` are pinned to the activation or may differ across its probe runs. wl.works flags this as unsettled; **wl-preproc is the machine that would pin them**, so this is answerable from here | Phase 2 |
-| 12 | Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11). **Narrowed 2026-08-13 by item 9's ruling**: no machine creates a block, so this is now only about the activation row itself. The narrowing survives item 9's 2026-08-15 reopening, because it rests on wl-preproc's own half, which did close | Phase 1 |
+| 12 | ~~Identity of the actor for automatic canonical activations — a system user, or a nullable `requestedBy` under an `origin` discriminator (§11). **Narrowed 2026-08-13 by item 9's ruling**: no machine creates a block, so this is now only about the activation row itself. The narrowing survives item 9's 2026-08-15 reopening, because it rests on wl-preproc's own half, which did close~~ **Closed 2026-09-30** by the canonical lifecycle design (§2): wl.works' scheduler fires the canonical, and wl-preproc writes the activation row on that request, with `Request.origin` `wl_works` and `requested_by` null — the nullable `requestedBy` under an `origin` discriminator | ~~Phase 1~~ |
 | 13 | Who renders the "checked good" verdict (§8.5), and whether it is entered here or in wl.works. **Nothing in wl.works models it and it was declined rather than folded in**, so if it lives there it needs a row somebody designs | Phase 3 |
 | 14 | Chunk shape and per-dataset compression settings that keep the NWB efficiently range-readable (§8.1.2). Measurable on synthetic files before January | Phase 3 |
 | 15 | Whether the derived-vs-recorded channel map comparison (§11.6) should ever *block* a session or only warn. Blocking makes wl.works' pinout a hard dependency of preprocessing | Phase 2 |

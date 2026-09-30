@@ -142,6 +142,13 @@ status:
     `docs/handoffs/2026-09-29-nwb-publishing.md`). The raw archive writes only
     to a NAS share carrying a `.wlpp-archive-share` marker, placed once by
     hand (merged as `7075799`, 2026-09-29; archive spec §3's amendment).
+    The canonical lifecycle, piece 2b, is BUILT on `spec/canonical-lifecycle`
+    (2026-09-30, not yet merged): wl.works fires every canonical and names
+    the one a replacement supersedes; the superseded file stays readable and
+    is marked in `GET /nwb`; reclamation counts only the current canonical;
+    and invalid files rebuild themselves once the subject's details arrive
+    (design spec `2026-09-30-canonical-lifecycle-design.md`; handoff
+    `docs/handoffs/2026-09-30-canonical-lifecycle.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**

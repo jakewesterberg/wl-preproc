@@ -505,6 +505,19 @@ requester chose to merge the same day; true when written.*
 >    once by hand**; without it the daemon archives nothing and says why,
 >    and `wlpp archive` refuses (the archive spec §3's amendment).
 >
+>    **The canonical lifecycle (piece 2b) is BUILT on
+>    `spec/canonical-lifecycle` (2026-09-30), NOT merged as written** (spec
+>    `superpowers/specs/2026-09-30-canonical-lifecycle-design.md`). **wl.works
+>    fires every canonical** (the requester's decision): it runs the 12-hour
+>    clock, waits on its ELN, and regenerates by sending a replacement that
+>    names the canonical it supersedes. wl-preproc honours the replacement
+>    under a per-montage lock, keeps the old file readable, marks it
+>    `superseded_by` in `GET /nwb`, and counts only the current canonical for
+>    reclamation. **An `invalid` file rebuilds itself** once the subject
+>    details it lacked arrive. What wl.works must do is the new OPEN entry in
+>    `pending-wl-works-amendments.md`. See
+>    `docs/handoffs/2026-09-30-canonical-lifecycle.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

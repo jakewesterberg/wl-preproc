@@ -164,6 +164,16 @@ replacement, so a stray write anywhere else still fails it.
   canonical that superseded it, or null.
 - The replacement itself appears when it is built, as any file does.
 
+*Amended while planning, 2026-09-30:* *the `superseded` change is recorded by the daemon's
+build stage on its next pass, once per activation, not by the responder when it accepts the
+replacement.*
+- *The responder is not under the NWB lock (`nwb/lock.py`, the publishing review's M4).*
+- *An `NwbChange` written there beside a daemon pass could commit a sequence number out of
+  order, and leave a hole in the cursor.*
+- *The listing's `superseded_by` is read from `Activation.supersedes` whenever the old file is
+  listed, so it is right from the moment the replacement is accepted. Only the cursor's
+  notice waits for the pass.*
+
 **Reclamation checks only the current canonical** (the final review's M12).
 - `archive/reclaim.py::canonical_nwb_present` is true when **each montage's
   current canonical** is `written` and published.
