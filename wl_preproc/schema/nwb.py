@@ -71,14 +71,16 @@ class NwbFile(dj.Manual):
 class NwbChange(dj.Manual):
     definition = """
     # Every change to an activation's file that wl.works polls for: built
-    # (an NwbFile row), published, or moved between shares. The sequence only
-    # increases, and is GET /nwb's cursor (design spec
+    # (an NwbFile row), published, moved between shares, or superseded by a
+    # replacement canonical (design spec
+    # `2026-09-30-canonical-lifecycle-design.md` section 4). The sequence
+    # only increases, and is GET /nwb's cursor (design spec
     # `2026-09-29-nwb-publishing-design.md` sections 6 and 9).
     # Key: (change_seq).
     change_seq : int unsigned auto_increment
     ---
     -> NwbFile
-    kind : enum('built','published','moved')
+    kind : enum('built','published','moved','superseded')
     changed_at : datetime(6)
     """
 

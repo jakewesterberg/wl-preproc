@@ -133,6 +133,31 @@ def record(activation_key: dict, result: BuildResult) -> None:
         nwb_schema.NwbChange.insert1({**key, "kind": "built", "changed_at": row["built_at"]})
 
 
+def note_superseded() -> int:
+    """A `superseded` change, once, for every activation with a row that a
+    replacement canonical names, so `GET /nwb`'s cursor carries it (design
+    spec `2026-09-30-canonical-lifecycle-design.md` section 4). Recorded by
+    the daemon, under the NWB lock with every other `NwbChange` writer,
+    rather than by the responder when it accepts the replacement: a second
+    writer outside the lock could commit a sequence number out of order and
+    leave a hole in the cursor. Returns how many it recorded."""
+    from wl_preproc.nwb.publish import record_change
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request
+
+    named = [{"subject": row["subject"], "session_datetime": row["session_datetime"],
+              "montage_id": row["montage_id"], "activation_id": row["supersedes"]}
+             for row in (request.Activation & "supersedes IS NOT NULL").to_dicts()]
+    if not named:
+        return 0
+    noted = (nwb_schema.NwbChange & {"kind": "superseded"}).proj(
+        "subject", "session_datetime", "montage_id", "activation_id")
+    keys = ((nwb_schema.NwbFile & named) - noted).keys()
+    for key in keys:
+        record_change(key, "superseded")
+    return len(keys)
+
+
 def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """The daemon's `_nwb_stage`: every activation without an `NwbFile` row,
     skipping freed sessions, superseded activations (a replacement arrived
@@ -147,6 +172,10 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
 
     freed = freed or []
     recorded, errors = 0, []
+    try:
+        note_superseded()
+    except Exception as exc:  # the builds below must still run
+        errors.append(f"NwbChange superseded: {exc}")
     for key in (request.Activation - nwb_schema.NwbFile.proj()).keys():
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
             continue

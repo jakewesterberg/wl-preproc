@@ -80,6 +80,17 @@
           ],
           "title": "Status",
           "type": "string"
+        },
+        "superseded_by": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Superseded By"
         }
       },
       "required": [
@@ -88,7 +99,8 @@
         "status",
         "reason",
         "placement",
-        "description"
+        "description",
+        "superseded_by"
       ],
       "title": "NwbListingEntry",
       "type": "object"

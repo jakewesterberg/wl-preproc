@@ -28,6 +28,7 @@ def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
     None): its status, where its file is now, and its description."""
     from wl_preproc.nwb.publish import activation_tuple, key_of
     from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request as request_schema
 
     nwb_schema.activate(prefix=prefix)
     changes = nwb_schema.NwbChange.proj(*_KEY).to_dicts() if since is None else \
@@ -38,6 +39,15 @@ def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
     # columns it returns (the final review's M2).
     rows = {activation_tuple(row): row for row in (nwb_schema.NwbFile & keys).proj(
         "nwb_identifier", "status", "reason", "description").to_dicts()} if keys else {}
+    # Which activation supersedes which: the old file stays, marked.
+    successor = {}
+    montages = list({(k["subject"], k["session_datetime"], k["montage_id"]): {
+        "subject": k["subject"], "session_datetime": k["session_datetime"], "montage_id": k["montage_id"]}
+        for k in keys}.values())
+    if montages:
+        for row in (request_schema.Activation & montages & "supersedes IS NOT NULL").to_dicts():
+            successor[(row["subject"], row["session_datetime"], row["montage_id"], row["supersedes"])] = \
+                row["activation_id"]
     latest = {}
     for placement in ((nwb_schema.NwbPlacement * nwb_schema.NwbChange & keys).to_dicts() if keys else []):
         held = latest.get(activation_tuple(placement))
@@ -54,6 +64,8 @@ def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
             "placement": None if placement is None else {
                 field: placement[field] for field in ("tier", "host", "share", "path", "n_bytes")},
             "description": row["description"],
+            "superseded_by": successor.get((key["subject"], key["session_datetime"], key["montage_id"],
+                                            key["activation_id"])),
         })
     return NwbListing.model_validate({"cursor": cursor, "files": files}).model_dump(mode="json")
 
