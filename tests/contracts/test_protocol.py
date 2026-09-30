@@ -274,3 +274,45 @@ def test_an_insertion_number_beyond_tinyint_unsigned_is_refused():
         MetadataBundle.model_validate(
             _bundle(probes=[{"serial": "NP-1", "insertion_number": 256}])
         )
+
+
+# -- The aim and the latest assignment (design spec
+# `2026-09-30-nwb-probes-design.md` section 4).
+
+_TARGET = {"area": "V4d", "atlas": "CHARM", "atlas_level": 6}
+_ASSIGNMENT = {"area": "V4d", "source": "at_rig", "asserted_at": "2025-06-11T09:30:00Z"}
+
+
+def test_a_probe_entry_carries_its_aim_and_its_latest_assignment():
+    bundle = MetadataBundle.model_validate(_bundle(probes=[
+        {"serial": "NP-1", "insertion_number": 1, "target": _TARGET, "area_assignment": _ASSIGNMENT}]))
+    probe = bundle.probes[0]
+    assert (probe.target.area, probe.target.atlas, probe.target.atlas_level) == ("V4d", "CHARM", 6)
+    assert (probe.area_assignment.area, probe.area_assignment.source) == ("V4d", "at_rig")
+
+
+def test_a_request_without_either_stays_valid():
+    probe = MetadataBundle.model_validate(_bundle()).probes[0]
+    assert probe.target is None and probe.area_assignment is None
+
+
+@pytest.mark.parametrize("target", [
+    {"area": "V4d", "atlas": "CHARM"},  # all three or none
+    {**_TARGET, "area": "A" * 33},  # InsertionLocation.area : varchar(32)
+    {**_TARGET, "atlas_level": 256},  # atlas_level : tinyint unsigned
+    {**_TARGET, "area": ""},
+])
+def test_a_partial_or_oversized_target_is_refused(target):
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(_bundle(probes=[{"serial": "NP-1", "insertion_number": 1, "target": target}]))
+
+
+@pytest.mark.parametrize("assignment", [
+    {**_ASSIGNMENT, "source": "guess"},  # wl.works' six sources only
+    {key: value for key, value in _ASSIGNMENT.items() if key != "asserted_at"},
+    {**_ASSIGNMENT, "atlas": "CHARM"},  # Plan 19's assignment row names no atlas
+])
+def test_an_assignment_outside_wl_works_own_shape_is_refused(assignment):
+    with pytest.raises(ValidationError):
+        MetadataBundle.model_validate(
+            _bundle(probes=[{"serial": "NP-1", "insertion_number": 1, "area_assignment": assignment}]))

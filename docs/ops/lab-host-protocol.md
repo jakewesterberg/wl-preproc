@@ -321,7 +321,15 @@ than something one side can do quietly.
   "metadata": {
     "blocks": [],
     "montage_boundaries": [],
-    "probes": [],
+    "probes": [
+      {
+        "serial": "19011110001",
+        "insertion_number": 1,
+        "trajectory_id": "T-0042",
+        "target": {"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+        "area_assignment": {"area": "V4d", "source": "at_rig", "asserted_at": "2027-06-01T10:15:00Z"}
+      }
+    ],
     "experimenter": "jwesterberg",
     "subject": "pico",
     "task_types": ["memguided"]
@@ -369,6 +377,27 @@ than something one side can do quietly.
   them**, since a later request carrying corrected boundaries is wl.works correcting its
   own record, which is its call to make explicitly rather than something to infer from
   whichever payload arrived last.
+- **`metadata.probes`** lists each insertion: its probe's `serial` and its
+  `insertion_number`, with an optional `trajectory_id`, and, since the probes design
+  (`2026-09-30-nwb-probes-design.md` §4), two more optional keys:
+  - `target` is the insertion's aim, your `targetArea`, `atlas` and `atlasLevel`, as
+    `{"area", "atlas", "atlas_level"}`. **All three or none**: a partial one is a `422`.
+    `area` and `atlas` are at most 32 characters; `atlas_level` is 0–255.
+  - `area_assignment` is the insertion's **latest** `insertion_area_assignment`, as
+    `{"area", "source", "asserted_at"}`. `source` is one of `histology`,
+    `functional_mapping`, `waveform_depth`, `structural_imaging`, `at_rig` and `other`.
+    `asserted_at` is ISO-8601, like `session_datetime`, but is **kept to the
+    microsecond**, since two assignments may fall in one second. There is no atlas key,
+    because your assignment row lists no atlas column.
+  - **The latest request wins** for an insertion, unlike `blocks` and
+    `montage_boundaries`, and as for `subject_details`: you are the authority on where a
+    probe went. Assignments accumulate, as in your own table, and a request repeating one
+    adds nothing. An insertion that a request does not mention is left as it was, so a
+    request may name only its own montage's insertions.
+  - This host joins each insertion to the probe the recording names, by `serial` (for
+    SpikeGLX, the `.meta`'s `imDatPrb_sn`). The NWB file notes a serial the recording
+    does not name, or one reported for two insertions in one session, rather than
+    guessing which segments each covers.
 - **`parameters`** is recorded verbatim as part of the stored request and is read by
   nothing today; the stage that eventually runs the job is what will interpret it. It is
   not inert, though: the whole request payload participates in the key-reuse comparison, so

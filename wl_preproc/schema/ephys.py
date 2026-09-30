@@ -170,6 +170,50 @@ class InsertionLocation(dj.Manual):
 
 
 @schema
+class InsertionReport(dj.Manual):
+    definition = """
+    # What wl.works says about one insertion, as the latest job request for
+    # the session said it (design spec 2026-09-30-nwb-probes-design.md section
+    # 2.2). Key: (subject, session_datetime, insertion_number).
+    #
+    # Recorded, never derived, and not a ProbeInsertion: the serial is plain
+    # text because the probe may not have been recorded yet, and the probes
+    # stage links the two once it has (section 2.3). The latest request wins,
+    # as with the subject's details -- the ELN is the authority -- and an
+    # insertion a later request does not mention is left alone, since a
+    # request may name only its own montage's insertions.
+    -> pipeline.Session
+    insertion_number : tinyint unsigned
+    ---
+    probe_serial : varchar(32)
+    trajectory_id = null : varchar(64)
+    target_area = null : varchar(32)
+    target_atlas = null : varchar(32)
+    target_atlas_level = null : tinyint unsigned
+    """
+
+
+@schema
+class AreaAssignment(dj.Manual):
+    definition = """
+    # Each area assignment wl.works has reported for an insertion, append-only
+    # as its own insertion_area_assignment is (section 2.2). Key: (subject,
+    # session_datetime, insertion_number, asserted_at). The latest by
+    # asserted_at is the insertion's assigned area.
+    #
+    # No foreign key to InsertionReport: that row is replaced when a later
+    # request corrects it, and a replacement must not have to remove what was
+    # asserted. datetime(6), so two assignments a second apart stay two.
+    -> pipeline.Session
+    insertion_number : tinyint unsigned
+    asserted_at : datetime(6)  # naive UTC
+    ---
+    area : varchar(32)
+    source : enum('histology','functional_mapping','waveform_depth','structural_imaging','at_rig','other')
+    """
+
+
+@schema
 class SegmentConfig(dj.Manual):
     definition = """
     # Which electrode set one probe was recording through, for one segment.

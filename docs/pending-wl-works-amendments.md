@@ -1,6 +1,6 @@
 # Amendments to wl-works
 
-**Five are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, one 2026-09-30.** The earlier two
+**Six are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
@@ -130,6 +130,43 @@ not published. **Until wl.works sends `date_of_birth`, no NWB file is publishabl
 
 **Still open on their side:** their caller must send the field, and row 18b's fake wl-preproc
 must accept it.
+
+---
+
+# OPEN — each insertion's aim and latest area assignment, in the request
+
+**Opened 2026-09-30** with probes and areas in the NWB
+([`specs/2026-09-30-nwb-probes-design.md`](superpowers/specs/2026-09-30-nwb-probes-design.md)
+§4), the requester's decision: every NWB file and its description carry both the insertion's
+**aim** and its **latest area assignment**, each labelled for what it is. wl.works holds both:
+`item_insertion.targetArea`, `atlas` and `atlasLevel`, and `insertion_area_assignment` (its Plan
+19, read on its `main` at `a28ee96`). This host cannot fetch them, for §11.2's reason.
+
+**This repository's half is built.** `contracts/protocol.py`'s `ProbeEntry` gains two optional
+keys, and `docs/schemas/job_request.json` carries them:
+
+```json
+{ "serial": "19011110001", "insertion_number": 1,
+  "target": { "area": "V4d", "atlas": "CHARM", "atlas_level": 6 },
+  "area_assignment": { "area": "V4d", "source": "at_rig", "asserted_at": "2027-06-01T10:15:00Z" } }
+```
+
+`target` is all three or none. `area_assignment` is the insertion's latest assignment: `source`
+is one of Plan 19's six, and `asserted_at` keeps its microseconds. `responder/jobs.py::accept`
+records the report, where the latest request wins, and every assignment, append-only. The probes
+stage joins the report to the probe the recording names, by serial.
+
+**Read but not confirmed there:** Plan 19's `insertion_area_assignment` row lists no atlas column,
+so an assigned area arrives without one. If an assignment does carry an atlas, the contract gains
+a key.
+
+**Also flagged:** a probe inserted twice in one session (moved, so a second insertion with the
+same serial) cannot be joined. The request does not say which montage each insertion covers, and
+this host notes the case in the file rather than guessing. If the case is real, each entry needs
+its montage.
+
+**Still open on their side:** their caller must send both keys, and row 18b's fake wl-preproc
+must accept them.
 
 ---
 

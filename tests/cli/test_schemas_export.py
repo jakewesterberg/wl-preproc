@@ -100,3 +100,17 @@ def test_the_nwb_description_schema_is_exported_for_wl_works(tmp_path):
     schema = json.loads((tmp_path / "nwb_description.json").read_text())
     assert schema["properties"]["schema_version"]["const"] == 1
     assert {"Block", "Condition", "Checksums"} <= set(schema["$defs"])
+
+
+def test_job_request_schema_carries_the_aim_and_the_assignment(tmp_path):
+    """wl.works builds its fake against the exported file (design spec
+    `2026-09-30-nwb-probes-design.md` section 4)."""
+    export_schemas(tmp_path)
+    schema = json.loads((tmp_path / "job_request.json").read_text())
+    probe = schema["$defs"]["ProbeEntry"]
+    assert {"target", "area_assignment"} <= set(probe["properties"]) and "target" not in probe["required"]
+    target = schema["$defs"]["InsertionTarget"]
+    assert set(target["required"]) == {"area", "atlas", "atlas_level"}
+    assignment = schema["$defs"]["InsertionAreaAssignment"]
+    assert set(assignment["properties"]["source"]["enum"]) == {
+        "histology", "functional_mapping", "waveform_depth", "structural_imaging", "at_rig", "other"}

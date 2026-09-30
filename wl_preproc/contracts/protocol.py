@@ -161,6 +161,35 @@ class MontageBoundary(BaseModel):
     end_s: _SessionSeconds
 
 
+_Area = Annotated[str, Field(min_length=1, max_length=32)]  # ephys.InsertionLocation.area : varchar(32)
+
+
+class InsertionTarget(BaseModel):
+    """The insertion's aim, as wl.works' `item_insertion` holds it:
+    `targetArea`, `atlas` and `atlasLevel`, "a copy of the plan's target"
+    (its Plan 19). All three or none (design spec
+    `2026-09-30-nwb-probes-design.md` section 4): an area without its atlas
+    names no place."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    area: _Area
+    atlas: Annotated[str, Field(min_length=1, max_length=32)]  # InsertionLocation.atlas : varchar(32)
+    atlas_level: Annotated[int, Field(ge=0, le=255)]  # InsertionLocation.atlas_level : tinyint unsigned
+
+
+class InsertionAreaAssignment(BaseModel):
+    """The latest of wl.works' `insertion_area_assignment` rows for the
+    insertion: one area, who or what assigned it, and when. Plan 19's row
+    lists no atlas column, so none is carried (section 4)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    area: _Area
+    source: Literal["histology", "functional_mapping", "waveform_depth", "structural_imaging", "at_rig", "other"]
+    asserted_at: datetime.datetime
+
+
 class ProbeEntry(BaseModel):
     """One penetration: which probe, which insertion, and which trajectory it
     ran against. Section 11.2's payload block, verbatim: *"probe serials +
@@ -193,6 +222,12 @@ class ProbeEntry(BaseModel):
     # hides nothing: the montage is still known, and only the electrode ->
     # CT/MR chain is unavailable for that penetration.
     trajectory_id: _TrajectoryId | None = None
+
+    # Both optional, so requests without them stay valid (section 4). The
+    # file carries both, each labelled for what it is (the requester's
+    # decision 1 of 2026-09-30).
+    target: InsertionTarget | None = None
+    area_assignment: InsertionAreaAssignment | None = None
 
 
 class SubjectDetails(BaseModel):
