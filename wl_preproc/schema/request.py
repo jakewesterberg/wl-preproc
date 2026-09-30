@@ -64,6 +64,14 @@ schema = dj.Schema()
 _ORIGIN_ENUM = "enum('ingest','wl_works','cli','auto')"
 
 
+class SupersedeConflict(dj.DataJointError):
+    """A replacement naming an activation that is not its montage's current
+    canonical: wl.works and this host disagree about which file is current
+    (design spec `2026-09-30-canonical-lifecycle-design.md` section 3, case
+    5). Like `KeyReuseError`, a disagreement resending cannot fix, so the
+    responder answers it `409`."""
+
+
 class KeyReuseError(dj.DataJointError):
     """An idempotency key reused for materially different content — see
     ``_reject_key_reuse``, this module's only raiser. A caller's mistake that
@@ -404,6 +412,7 @@ def submit(
     selection: dict,
     payload: dict,
     requested_by: str | None = None,
+    block_ids: list[int] | tuple[int, ...] = (),
 ) -> dict:
     """Record a request and the canonical activation it selects, atomically.
 
@@ -534,6 +543,15 @@ def submit(
             },
             skip_duplicates=True,
         )
+        # A canonical that names its block set -- how wl.works leaves out a
+        # bad block (design spec `2026-09-30-canonical-lifecycle-design.md`
+        # section 3). Without one, the builder takes every block in the
+        # montage, as before.
+        if block_ids:
+            ActivationBlock.insert(
+                [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))],
+                skip_duplicates=True,
+            )
         return key
 
 
@@ -568,6 +586,143 @@ def is_superseded(key: dict) -> bool:
     montage = {k: key[k] for k in ("subject", "session_datetime", "montage_id")}
     replaced = (Activation & montage & "supersedes IS NOT NULL").to_arrays("supersedes")
     return int(key["activation_id"]) in {int(value) for value in replaced}
+
+
+# How long a replacement waits for its montage's lock before failing
+# retryably. A module constant so a test can make it 0.
+_REPLACEMENT_LOCK_WAIT_S = 10
+
+
+def _replacement_lock_name(montage_key: dict) -> str:
+    """One MySQL named lock per montage, for replacements. Hashed: MySQL
+    allows 64 characters, and a subject and a datetime can exceed that."""
+    montage = "|".join(str(montage_key[k]) for k in ("subject", "session_datetime", "montage_id"))
+    return "wlpp_canonical_" + hashlib.sha256(montage.encode("utf-8")).hexdigest()[:40]
+
+
+def submit_replacement(
+    idempotency_key: str,
+    task_type: str,
+    origin: str,
+    selection: dict,
+    payload: dict,
+    requested_by: str | None = None,
+    *,
+    supersedes_activation_id: int,
+    block_ids: list[int] | tuple[int, ...] = (),
+) -> dict:
+    """Record a request and the canonical activation that replaces the
+    montage's current one, `supersedes_activation_id`: at the montage's next free
+    activation id, with `supersedes` set and, if given, its block set
+    (design spec `2026-09-30-canonical-lifecycle-design.md` section 3, case
+    3). The superseded activation and its file are left exactly as they are.
+
+    A retry under the same idempotency key returns the same activation
+    (case 4). Naming anything but the current canonical raises
+    `SupersedeConflict` (case 5) and records nothing.
+
+    **The one writer of `Activation.supersedes`**
+    (`tests/schema/test_guardrails.py::_SUPERSEDES_WRITER`).
+
+    **Serialised per montage by a named lock, taken BEFORE the transaction.**
+    DataJoint starts every transaction `WITH CONSISTENT SNAPSHOT`
+    (`datajoint/adapters/mysql.py`), so a check made inside one cannot see
+    a rival replacement committed after it began: two replacements of the
+    same canonical would both pass and fork the chain. Holding the lock
+    before the snapshot is taken means each sees the other's commit. A
+    named lock sits outside InnoDB's row locks, so it cannot deadlock with
+    `submit_derivative`'s allocation in the same montage (see
+    `_locking_read_one`). Held elsewhere for longer than
+    `_REPLACEMENT_LOCK_WAIT_S`, it fails as an ordinary, retryable
+    `DataJointError`.
+    """
+    if not schema.is_activated():
+        raise dj.DataJointError(
+            "request.activate(prefix) must run before submit_replacement() — "
+            "the Request/Activation tables are not yet bound to a database."
+        )
+    if dj.conn().in_transaction:
+        raise dj.DataJointError(
+            "submit_replacement() opens its own transaction and DataJoint "
+            "transactions do not nest, so it cannot be called from inside "
+            "one. Call it as its own unit of work; see submit()'s docstring."
+        )
+    import datetime as _dt
+
+    montage_key = {k: selection[k] for k in ("subject", "session_datetime", "montage_id")}
+    selection_key = {**montage_key, "role": "canonical", "supersedes": int(supersedes_activation_id)}
+    connection = dj.conn()
+    lock = _replacement_lock_name(montage_key)
+    if connection.query("SELECT GET_LOCK(%s, %s)", args=(lock, _REPLACEMENT_LOCK_WAIT_S)).fetchone()[0] != 1:
+        raise dj.DataJointError(
+            f"another replacement of montage {montage_key!r} holds its lock; try again"
+        )
+    try:
+        with connection.transaction:
+            prior = Request & {"idempotency_key": idempotency_key}
+            if prior:
+                _reject_key_reuse(
+                    prior.fetch1(),
+                    idempotency_key=idempotency_key,
+                    task_type=task_type,
+                    origin=origin,
+                    payload=payload,
+                    requested_by=requested_by,
+                    selection_key=selection_key,
+                )
+                produced = (Activation & {"request_key": idempotency_key} & selection_key).to_dicts()
+                if produced:
+                    return {k: produced[0][k] for k in Activation.primary_key}
+            current = current_canonical(montage_key)
+            if current is None or current["activation_id"] != int(supersedes_activation_id):
+                named = "none" if current is None else f"activation {current['activation_id']}"
+                raise SupersedeConflict(
+                    f"activation {supersedes_activation_id} is not the current canonical of montage "
+                    f"{montage_key['montage_id']}; the current canonical is {named}. wl.works and "
+                    "this host disagree about which file is current: a person should look."
+                )
+            if not prior:
+                Request.insert1(
+                    {
+                        "idempotency_key": idempotency_key,
+                        "task_type": task_type,
+                        "origin": origin,
+                        "payload": payload,
+                        "requested_by": requested_by,
+                        "requested_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                    }
+                )
+            used = (Activation & montage_key).to_arrays("activation_id")
+            activation_id = int(max(used) + 1) if len(used) else 1
+            for _ in range(_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS):
+                key = {**montage_key, "activation_id": activation_id}
+                try:
+                    _insert_new_derivative(
+                        {
+                            **key,
+                            "role": "canonical",
+                            "request_key": idempotency_key,
+                            "created_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
+                            "supersedes": int(supersedes_activation_id),
+                        }
+                    )
+                    break
+                except dj.errors.DuplicateError:
+                    # A derivative took this id meanwhile: the lock above
+                    # serialises replacements, not derivatives.
+                    activation_id += 1
+            else:
+                raise dj.DataJointError(
+                    f"submit_replacement: exhausted {_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS} "
+                    f"attempts to allocate an activation_id for {montage_key!r}"
+                )
+            if block_ids:
+                ActivationBlock.insert(
+                    [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
+                )
+            return key
+    finally:
+        connection.query("SELECT RELEASE_LOCK(%s)", args=(lock,))
 
 
 _MAX_DERIVATIVE_ALLOCATE_ATTEMPTS = 10

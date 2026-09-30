@@ -1240,3 +1240,80 @@ def test_submit_returns_the_current_canonical_after_a_replacement(req, selection
 
 def test_a_montage_without_a_canonical_has_no_current_one(req, selection):
     assert req.current_canonical(selection) is None
+
+
+def test_a_replacement_supersedes_the_current_canonical_at_the_next_id(req, selection):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 3,
+    case 3: the next free activation id, `role = 'canonical'`, superseding
+    the one named, and from then on the current canonical."""
+    first = req.submit("k-rep-1", "neural", "wl_works", selection, {}, None)
+    replacement = req.submit_replacement("k-rep-2", "neural", "wl_works", selection, {}, None,
+                                         supersedes_activation_id=first["activation_id"])
+    row = (req.Activation & replacement).fetch1()
+    assert (row["activation_id"], row["role"], row["supersedes"]) == (1, "canonical", 0)
+    assert {k: req.current_canonical(selection)[k] for k in req.Activation.primary_key} == replacement
+
+
+def test_a_retried_replacement_returns_the_same_activation(req, selection):
+    """Case 4: the protocol's ordinary retry, same idempotency key."""
+    first = req.submit("k-retry-1", "neural", "wl_works", selection, {}, None)
+    once = req.submit_replacement("k-retry-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    again = req.submit_replacement("k-retry-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    assert once == again and len(req.Activation & selection) == 2 and first["activation_id"] == 0
+
+
+@pytest.mark.parametrize("target", ["superseded", "unknown", "derivative"])
+def test_a_replacement_of_anything_but_the_current_canonical_is_a_conflict(req, selection, target):
+    """Case 5: wl.works and this host disagree about which canonical is
+    current. Refused, naming the current one, and nothing is recorded."""
+    req.submit(f"k-stale-1-{target}", "neural", "wl_works", selection, {}, None)
+    req.submit_replacement(f"k-stale-2-{target}", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    derivative = req.submit_derivative(f"k-stale-3-{target}", "neural", "wl_works", selection, [1, 2], {}, None)
+    named = {"superseded": 0, "unknown": 77, "derivative": derivative["activation_id"]}[target]
+    with pytest.raises(req.SupersedeConflict, match="current canonical is activation 1"):
+        req.submit_replacement(f"k-stale-4-{target}", "neural", "wl_works", selection, {}, None, supersedes_activation_id=named)
+    assert not req.Request & {"idempotency_key": f"k-stale-4-{target}"}
+    assert len(req.Activation & selection & "role = 'canonical'") == 2
+
+
+def test_a_canonical_can_name_its_block_set(req, selection):
+    """Section 3: how wl.works leaves out a bad block, on a first canonical
+    or a replacement. The builder reads the set from `ActivationBlock`."""
+    from wl_preproc.nwb.gather import _block_set
+
+    first = req.submit("k-blocks-1", "neural", "wl_works", selection, {}, None, block_ids=[1, 3])
+    replacement = req.submit_replacement("k-blocks-2", "neural", "wl_works", selection, {}, None,
+                                         supersedes_activation_id=0, block_ids=[2])
+    session_key = {k: selection[k] for k in ("subject", "session_datetime")}
+    for key, expected in ((first, [1, 3]), (replacement, [2])):
+        row = (req.Activation & key).fetch1()
+        assert sorted(int(b) for b in (req.ActivationBlock & key).to_arrays("block_id")) == expected
+        assert [b["block_id"] for b in _block_set(key, row, session_key)] == expected
+
+
+def test_a_reused_key_for_another_replacement_is_key_reuse(req, selection):
+    req.submit("k-reuse-1", "neural", "wl_works", selection, {}, None)
+    req.submit_replacement("k-reuse-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    with pytest.raises(req.KeyReuseError):
+        req.submit_replacement("k-reuse-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=1)
+
+
+def test_a_replacement_waits_for_the_montage_lock(req, selection, monkeypatch):
+    """Two replacements of one canonical, racing, must not both succeed:
+    each takes the montage's lock before its transaction, whose consistent
+    snapshot would otherwise hide the other's commit. Held elsewhere, the
+    lock is a retryable failure, never a second replacement."""
+    import datajoint as dj
+
+    req.submit("k-lock-1", "neural", "wl_works", selection, {}, None)
+    monkeypatch.setattr(req, "_REPLACEMENT_LOCK_WAIT_S", 0)
+    other = _raw_connection()
+    try:
+        with other.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0)", (req._replacement_lock_name(selection),))
+            assert cursor.fetchone()[0] == 1
+        with pytest.raises(dj.DataJointError, match="another replacement"):
+            req.submit_replacement("k-lock-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    finally:
+        other.close()
+    assert len(req.Activation & selection) == 1
