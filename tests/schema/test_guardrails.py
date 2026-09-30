@@ -914,20 +914,25 @@ _SUPERSEDES_WRITER = ("wl_preproc/schema/request.py", "submit_replacement")
 
 def _supersedes_writes(rel: str, text: str) -> list[tuple[int, str]]:
     """Every line of `text` that writes `supersedes`, with its number, but
-    not inside `_SUPERSEDES_WRITER`. The enclosing function is the last
-    top-level `def` above the line."""
+    not inside `_SUPERSEDES_WRITER`. The enclosing function is the
+    top-level `def` or `async def` whose own lines, decorators included,
+    hold the line -- read from the parse tree, so module-level code after
+    the function is not mistaken for it (the 2b final review's M1)."""
+    import ast
     import re
 
     dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
     subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
     keyword_write = re.compile(r"""supersedes\s*=(?!=)""")
     ddl_declaration = re.compile(r"""^supersedes\s*=\s*\w+\s*:""")
-    top_level_def = re.compile(r"""^def (\w+)\(""")
-    writes, function = [], None
+    owner: dict[int, str] = {}
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+            owner.update({lineno: node.name for lineno in range(first, node.end_lineno + 1)})
+    writes = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        if line.startswith(("def ", "class ")):
-            match = top_level_def.match(line)
-            function = match.group(1) if match else None
+        function = owner.get(lineno)
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
@@ -951,6 +956,13 @@ def test_the_supersedes_rule_allows_exactly_one_function():
     assert _supersedes_writes("wl_preproc/nwb/build.py", writer) == [(2, "row = {'supersedes': x}")]
     after = writer + "\n\ndef later(x):\n    row['supersedes'] = x\n"
     assert _supersedes_writes("wl_preproc/schema/request.py", after) == [(6, "row['supersedes'] = x")]
+    # The 2b final review's M1: the function is its own lines, not every
+    # line until the next `def` -- module-level code and an `async def`
+    # after it are caught.
+    module_level = writer + "\n\n_DEFAULT = {'supersedes': 1}\n"
+    assert _supersedes_writes("wl_preproc/schema/request.py", module_level) == [(5, "_DEFAULT = {'supersedes': 1}")]
+    async_after = writer + "\n\nasync def later(x):\n    row['supersedes'] = x\n"
+    assert _supersedes_writes("wl_preproc/schema/request.py", async_after) == [(6, "row['supersedes'] = x")]
 
 
 def test_every_table_documents_its_key_in_schema(all_tables):

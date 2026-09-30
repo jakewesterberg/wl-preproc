@@ -150,8 +150,9 @@ from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
 
 def _translate_accept_errors(request, *, prefix: str) -> dict:
     """`jobs.accept(request, prefix=prefix)`, translating
-    `schema/request.py`'s `KeyReuseError` -- and nothing else -- into
-    `handler.py`'s own `ConflictError`.
+    `schema/request.py`'s `KeyReuseError` and, since the canonical lifecycle,
+    its `SupersedeConflict` -- and nothing else -- into `handler.py`'s own
+    `ConflictError`.
 
     `KeyReuseError`, NOT its base `dj.DataJointError`: see that class's own
     docstring and this module's "translation seam" section. Every other

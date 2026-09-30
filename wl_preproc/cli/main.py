@@ -684,6 +684,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.archive import scratch
         from wl_preproc.nwb.gather import readiness
         from wl_preproc.nwb.lock import Busy, exclusive
+        from wl_preproc.schema import request as request_schema
 
         activate_all(prefix=args.prefix)
         # Under the daemon's NWB lock (`nwb/lock.py`): a build beside a pass
@@ -694,6 +695,12 @@ def main(argv: list[str] | None = None) -> int:
                        "montage_id": args.montage_id, "activation_id": args.activation_id}
                 if nwb_schema.NwbFile & key:
                     print(f"already recorded: {(nwb_schema.NwbFile & key).fetch1('status')}; delete the row to rebuild")
+                    return 1
+                # As the stage never builds one (the canonical lifecycle
+                # design, section 4; the 2b final review's M8).
+                successor = request_schema.superseded_by(key)
+                if successor is not None:
+                    print(f"superseded by activation {successor}: a superseded activation is not built")
                     return 1
                 # As the daemon's stage skips them: a freed session's files are gone
                 # from scratch, and another session may have landed at its path.

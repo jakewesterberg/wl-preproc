@@ -358,7 +358,8 @@ than something one side can do quietly.
   - `"supersedes_activation_id": N`, with `"role": "canonical"`, is a **replacement**: a
     new canonical superseding `N`, which must be the montage's current canonical. The
     superseded file stays where it is, readable, and `GET /nwb` marks it. A replacement
-    naming anything else is a `409`.
+    naming anything else is a `409`. A null `supersedes_activation_id`, like a null
+    `role`, means the key is absent.
   - A canonical request with no `supersedes_activation_id`, for a montage that already has
     one, returns the montage's **current** canonical.
 - **`metadata`** is the bundle this host needs from the ELN, and it is the reason this

@@ -132,9 +132,11 @@ below and become a handled `500`:
   retry clears, so `500` is the honest answer and the seam now leaves them
   alone.
 
-The one correct, intended `409` path is `KeyReuseError` -> `ConflictError`
--> `409`, and it exists only because `server.py` performs that translation
-before this module ever sees the exception.
+The correct, intended `409` paths are `KeyReuseError` and, since the
+canonical lifecycle, `SupersedeConflict` (a replacement naming a canonical
+that is no longer current) -> `ConflictError` -> `409`. They exist only
+because `server.py` performs that translation before this module ever sees
+the exception.
 
 **Foreign verbs, and everything else stdlib answers by itself.** `GET`/
 `POST` are the only two `do_*` methods `BaseHTTPRequestHandler` would
@@ -269,10 +271,11 @@ _SEND_ERROR_FALLBACK_BODY = {"error": "request rejected"}
 class ConflictError(Exception):
     """Raised by an `accept_fn` -- via `server.py`'s translation seam,
     never directly by this DataJoint-free module -- for a request that
-    conflicts with state already on record: today, specifically,
-    `schema/request.py::_reject_key_reuse` refusing an idempotency key
-    reused for materially different content, which raises that module's own
-    `KeyReuseError`. Maps to `409`, not `422` or `500` -- see the module
+    conflicts with state already on record: `schema/request.py::_reject_key_reuse`
+    refusing an idempotency key reused for materially different content
+    (`KeyReuseError`), or `submit_replacement` refusing a replacement that
+    names a canonical no longer current (`SupersedeConflict`). Maps to
+    `409`, not `422` or `500` -- see the module
     docstring's "Why key reuse maps to `409`" section for the full
     reasoning.
 

@@ -169,6 +169,41 @@ discard loop, was fixed as part of I1):
 - **M10:** a null `supersedes_activation_id` is a `422`, while a null `role`
   means absent.
 
+**The minors were then fixed on `fix/lifecycle-minors`** (2026-09-30, the
+requester's choice). Each code fix has a test that failed first and a mutation
+check that was caught:
+- **M1:** the guardrail finds the enclosing function from the parse tree.
+  Module-level code and an `async def` after `submit_replacement` are
+  caught.
+- **M2:** now tested:
+  - an out-of-window block in a canonical's block set;
+  - the first request re-sent under its own key;
+  - a real stale replacement over HTTP through the real `accept()`.
+  These pinned behaviour that already held.
+- **M3, measured:** on MySQL 8 in strict mode, inserting `superseded` into
+  a `nwb_change` declared with the old list is refused (`1265 Data truncated
+  for column 'kind'`). **An existing database needs `ALTER TABLE
+  <prefix>nwb.nwb_change MODIFY kind enum('built','published','moved','superseded')
+  NOT NULL`**, which keeps every row, or its `nwb` schema dropped and
+  redeclared.
+- **M4:** docstrings name both `409`s, and `NwbFile`'s comment says what
+  happens to `invalid` rows now.
+- **M5:** the invalid-file check reads each subject once per pass.
+- **M6:** already fixed in the fix pass above.
+- **M7:** the replacement lock.
+  - Its name carries the database.
+  - Inside the transaction it checks it still holds the lock, so a
+    reconnect can't run a replacement unserialised.
+  - Its wait is 2 s, because the responder's lock is held meanwhile.
+  - A failing release never hides the original error.
+- **M8:** `wlpp nwb build` refuses a superseded activation, naming the one
+  that replaced it.
+- **M9:** each pass reports an activation left unbuilt because its session
+  was freed, with "rehydrate it to build". The older freed-session test now
+  allows exactly those reports.
+- **M10:** a null `supersedes_activation_id` means absent, like a null
+  `role`.
+
 **What the reviewer declined to judge, and the ruling on each** (all stand):
 - **A `role: canonical` request with `block_ids`, for a montage that already
   has a canonical, returns the current one.** Decision 2 makes it a re-send.

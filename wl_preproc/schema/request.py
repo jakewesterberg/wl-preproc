@@ -86,7 +86,8 @@ class KeyReuseError(dj.DataJointError):
     ``AccessError``, ``MissingTableError``, ``IntegrityError`` and
     ``ThreadSafetyError`` all derive from it (confirmed against the installed
     2.3.2 package). ``responder/server.py::_translate_accept_errors`` turns
-    exactly this type into the responder's ``409``; catching the root there
+    exactly this type, and ``SupersedeConflict``, into the responder's
+    ``409``; catching the root there
     instead also answered ``409`` for a MySQL restart or a LAN blip mid-POST
     (``LostConnectionError``, raised on the production write path, inside
     ``submit()``'s transaction), telling wl.works to stop retrying and
@@ -392,9 +393,10 @@ def _reject_key_reuse(
         # in this module that raises it, and the only one that means "the
         # caller must mint a new key" rather than "this host is broken". See
         # KeyReuseError's own docstring for why the distinction has to be a
-        # type: responder/server.py's seam maps exactly this to 409, and the
-        # six other raise sites in this file (not-activated, in_transaction,
-        # empty block_ids, allocation exhaustion) must stay 500.
+        # type: responder/server.py's seam maps exactly this, and
+        # SupersedeConflict, to 409; every other raise site in this file
+        # (not-activated, in_transaction, empty block_ids, allocation
+        # exhaustion, a replacement's lock) must stay 500.
         raise KeyReuseError(
             f"idempotency key {idempotency_key!r} is already recorded against a "
             "different request, so this is key reuse rather than a retry: "
@@ -581,23 +583,47 @@ def current_canonical(montage_key: dict) -> dict | None:
     return max(current, key=lambda row: row["activation_id"]) if current else None
 
 
+def superseded_by(key: dict) -> int | None:
+    """The activation of the same montage that supersedes this one, or None."""
+    montage = {k: key[k] for k in ("subject", "session_datetime", "montage_id")}
+    for row in (Activation & montage & "supersedes IS NOT NULL").to_dicts():
+        if int(row["supersedes"]) == int(key["activation_id"]):
+            return int(row["activation_id"])
+    return None
+
+
 def is_superseded(key: dict) -> bool:
     """Whether another activation of the same montage supersedes this one."""
-    montage = {k: key[k] for k in ("subject", "session_datetime", "montage_id")}
-    replaced = (Activation & montage & "supersedes IS NOT NULL").to_arrays("supersedes")
-    return int(key["activation_id"]) in {int(value) for value in replaced}
+    return superseded_by(key) is not None
 
 
 # How long a replacement waits for its montage's lock before failing
 # retryably. A module constant so a test can make it 0.
-_REPLACEMENT_LOCK_WAIT_S = 10
+# How long a replacement waits for its montage's lock before failing
+# retryably. Short, because the responder holds its own process-wide lock
+# meanwhile and `/health` waits behind it (the 2b final review's M7); a
+# module constant so a test can make it 0.
+_REPLACEMENT_LOCK_WAIT_S = 2
 
 
-def _replacement_lock_name(montage_key: dict) -> str:
-    """One MySQL named lock per montage, for replacements. Hashed: MySQL
-    allows 64 characters, and a subject and a datetime can exceed that."""
-    montage = "|".join(str(montage_key[k]) for k in ("subject", "session_datetime", "montage_id"))
+def _replacement_lock_name(montage_key: dict, database: str | None = None) -> str:
+    """One MySQL named lock per montage, for replacements, carrying the
+    database -- as `nwb/lock.py`'s carries the prefix -- so a test suite's
+    and a deployment's never meet. Hashed: MySQL allows 64 characters, and a
+    database, a subject and a datetime can exceed that."""
+    database = Activation.database if database is None else database
+    montage = "|".join([database, *(str(montage_key[k]) for k in ("subject", "session_datetime", "montage_id"))])
     return "wlpp_canonical_" + hashlib.sha256(montage.encode("utf-8")).hexdigest()[:40]
+
+
+def _holds_lock(connection, name: str) -> bool:
+    """Whether this database session holds the named lock. A reconnect opens
+    a new session, which does not."""
+    return connection.query("SELECT IS_USED_LOCK(%s) = CONNECTION_ID()", args=(name,)).fetchone()[0] == 1
+
+
+def _release_lock(connection, name: str) -> None:
+    connection.query("SELECT RELEASE_LOCK(%s)", args=(name,))
 
 
 def submit_replacement(
@@ -657,8 +683,13 @@ def submit_replacement(
         raise dj.DataJointError(
             f"another replacement of montage {montage_key!r} holds its lock; try again"
         )
-    try:
+
+    def within() -> dict:
         with connection.transaction:
+            # A reconnect between the lock and this transaction opens a session
+            # that does not hold it: refuse rather than run unserialised (M7).
+            if not _holds_lock(connection, lock):
+                raise dj.DataJointError(f"lost the montage lock {lock} (a reconnect?); try again")
             prior = Request & {"idempotency_key": idempotency_key}
             if prior:
                 _reject_key_reuse(
@@ -721,8 +752,20 @@ def submit_replacement(
                     [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
                 )
             return key
-    finally:
-        connection.query("SELECT RELEASE_LOCK(%s)", args=(lock,))
+
+    try:
+        result = within()
+    except BaseException:
+        # The error already raised is the answer wl.works must see; a
+        # release that fails too must not replace it (M7). The lock goes
+        # with the session in any case.
+        try:
+            _release_lock(connection, lock)
+        except Exception:
+            pass
+        raise
+    _release_lock(connection, lock)
+    return result
 
 
 _MAX_DERIVATIVE_ALLOCATE_ATTEMPTS = 10
