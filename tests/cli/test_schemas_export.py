@@ -98,8 +98,14 @@ def test_the_nwb_description_schema_is_exported_for_wl_works(tmp_path):
     `2026-09-29-nwb-publishing-design.md` section 2)."""
     export_schemas(tmp_path)
     schema = json.loads((tmp_path / "nwb_description.json").read_text())
-    assert schema["properties"]["schema_version"]["const"] == 1
+    assert schema["properties"]["schema_version"]["const"] == 2
     assert {"Block", "Condition", "Checksums"} <= set(schema["$defs"])
+    # Version 2: each probe has a defined shape (design spec
+    # `2026-09-30-nwb-probes-design.md` section 3.2).
+    probe = schema["$defs"]["ProbeInfo"]
+    assert set(probe["required"]) == {"serial", "probe_type", "insertion_number", "trajectory_id", "n_electrodes",
+                                      "target", "assignment", "area_from"}
+    assert set(probe["properties"]["area_from"]["enum"]) == {"assignment", "target", "unknown"}
 
 
 def test_job_request_schema_carries_the_aim_and_the_assignment(tmp_path):

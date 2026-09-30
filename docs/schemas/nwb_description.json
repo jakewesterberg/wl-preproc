@@ -507,6 +507,153 @@
       "title": "Pipeline",
       "type": "object"
     },
+    "ProbeAssignment": {
+      "additionalProperties": false,
+      "description": "The latest area wl.works had assigned the insertion when the file was\nbuilt. A later one does not rewrite the file.",
+      "properties": {
+        "area": {
+          "title": "Area",
+          "type": "string"
+        },
+        "asserted_at": {
+          "format": "date-time",
+          "title": "Asserted At",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "histology",
+            "functional_mapping",
+            "waveform_depth",
+            "structural_imaging",
+            "at_rig",
+            "other"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "area",
+        "source",
+        "asserted_at"
+      ],
+      "title": "ProbeAssignment",
+      "type": "object"
+    },
+    "ProbeInfo": {
+      "additionalProperties": false,
+      "description": "One probe in the file: the serial and type from the recording (or\nfrom wl.works' report when no recording names it), its insertion from\nthe report, the active sites the file holds, and both areas. `area_from`\nsays which one the file's area label came from.",
+      "properties": {
+        "area_from": {
+          "enum": [
+            "assignment",
+            "target",
+            "unknown"
+          ],
+          "title": "Area From",
+          "type": "string"
+        },
+        "assignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProbeAssignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "insertion_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Insertion Number"
+        },
+        "n_electrodes": {
+          "title": "N Electrodes",
+          "type": "integer"
+        },
+        "probe_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Probe Type"
+        },
+        "serial": {
+          "title": "Serial",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProbeTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trajectory_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trajectory Id"
+        }
+      },
+      "required": [
+        "serial",
+        "probe_type",
+        "insertion_number",
+        "trajectory_id",
+        "n_electrodes",
+        "target",
+        "assignment",
+        "area_from"
+      ],
+      "title": "ProbeInfo",
+      "type": "object"
+    },
+    "ProbeTarget": {
+      "additionalProperties": false,
+      "description": "The insertion's aim, as wl.works reported it.",
+      "properties": {
+        "area": {
+          "title": "Area",
+          "type": "string"
+        },
+        "atlas": {
+          "title": "Atlas",
+          "type": "string"
+        },
+        "atlas_level": {
+          "title": "Atlas Level",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "area",
+        "atlas",
+        "atlas_level"
+      ],
+      "title": "ProbeTarget",
+      "type": "object"
+    },
     "Quality": {
       "additionalProperties": false,
       "properties": {
@@ -677,8 +824,7 @@
     "probes": {
       "default": [],
       "items": {
-        "additionalProperties": true,
-        "type": "object"
+        "$ref": "#/$defs/ProbeInfo"
       },
       "title": "Probes",
       "type": "array"
@@ -693,8 +839,8 @@
       "$ref": "#/$defs/Quality"
     },
     "schema_version": {
-      "const": 1,
-      "default": 1,
+      "const": 2,
+      "default": 2,
       "title": "Schema Version",
       "type": "integer"
     },

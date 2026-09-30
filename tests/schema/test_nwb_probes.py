@@ -68,6 +68,8 @@ def three_probes(daemon_module, prefix, tmp_path_factory):
     activation = _canonical(daemon_module, prefix, key, "pnwb1-k1", [
         {"serial": _S1, "insertion_number": 1, "trajectory_id": "T-1", "target": _AIM, "area_assignment": _ASSIGNED},
         {"serial": _S2, "insertion_number": 2, "target": _AIM},
+        # A typo: no recording in the session names this serial.
+        {"serial": "19011119998", "insertion_number": 4},
     ])
     return key, activation
 
@@ -211,3 +213,39 @@ def test_a_file_waits_for_the_census_of_its_session(three_probes):
     finally:
         ephys.ProbeCensus.populate(last)
     assert readiness(activation) is None
+
+
+def test_the_description_lists_each_probe_and_says_what_it_could_not_place_or_join(built):
+    """Section 3.2's entries and notes: an unknown part number, a probe with
+    no report, and a report that matches no recorded probe."""
+    probes = built.description["probes"]
+    assert [(p["serial"], p["probe_type"], p["insertion_number"], p["trajectory_id"], p["n_electrodes"],
+             p["area_from"]) for p in probes] == [
+        (_S1, "NP1000", 1, "T-1", 4, "assignment"), (_S2, "NP1032", 2, None, 4, "target"),
+        (_S3, "NP9999", None, None, 0, "unknown")]
+    assert probes[0]["target"] == _AIM
+    assert probes[0]["assignment"] == {"area": "V4v", "source": "at_rig", "asserted_at": "2025-06-22T11:00:00Z"}
+    notes = built.description["notes"]
+    assert any(note.startswith(f"probe {_S3}: part number NP9999") and "no electrodes in this file" in note
+               for note in notes)
+    assert f"probe {_S3} has no report from wl.works, so its insertion and area are unknown" in notes
+    assert ("insertion 4 names probe 19011119998, which no recording in this session names, so the report is "
+            "not joined") in notes
+
+
+def test_a_serial_reported_for_two_insertions_is_listed_once_and_noted(daemon_module, prefix, tmp_path_factory):
+    from wl_preproc.nwb.build import build
+
+    _recipe, key = _session(tmp_path_factory, subject="pnwb3", session_id="2025-06-24_01", probe_serial="19011110017")
+    daemon_module.run_once(prefix=prefix)
+    activation = _canonical(daemon_module, prefix, key, "pnwb3-k1", [
+        {"serial": "19011110017", "insertion_number": 1, "target": _AIM},
+        {"serial": "19011110017", "insertion_number": 2}])
+
+    result = build(activation, tmp_path_factory.mktemp("nwb-twice"))
+
+    assert result.status == "written", (result.reason, result.findings)
+    (probe,) = result.description["probes"]
+    assert (probe["insertion_number"], probe["area_from"], probe["n_electrodes"]) == (None, "unknown", 4)
+    assert ("probe 19011110017 is reported for insertions 1 and 2, and which segments each covers is not known, "
+            "so neither is joined and its area is unknown") in result.description["notes"]

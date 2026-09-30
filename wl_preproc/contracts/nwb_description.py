@@ -3,10 +3,11 @@ opening it. Frozen interface: exported to `docs/schemas/nwb_description.json`
 and checked in CI (design spec `2026-09-29-nwb-publishing-design.md`
 section 2).
 
-**Versioned and open.** `schema_version` is 1. Later pieces add groups and
-fields -- the probes and areas, a processing summary with unit counts, the
-photodiode, video and stimulation -- and never rename or remove one within a
-version. This side validates strictly (`extra="forbid"`), so what it publishes
+**Versioned and open.** `schema_version` is 2: version 2 gave `probes` its
+shape, each probe with both of its areas (design spec
+`2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
+fields -- a processing summary with unit counts, the photodiode, video and
+stimulation -- and never rename or remove one within a version. This side validates strictly (`extra="forbid"`), so what it publishes
 is exactly this; a READER must ignore fields it does not know, which is what
 lets a later version add them.
 
@@ -21,7 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class _Frozen(BaseModel):
@@ -150,19 +151,53 @@ class Checksums(_Frozen):
     datasets: list[DatasetChecksum]
 
 
+class ProbeTarget(_Frozen):
+    """The insertion's aim, as wl.works reported it."""
+
+    area: str
+    atlas: str
+    atlas_level: int
+
+
+class ProbeAssignment(_Frozen):
+    """The latest area wl.works had assigned the insertion when the file was
+    built. A later one does not rewrite the file."""
+
+    area: str
+    source: Literal["histology", "functional_mapping", "waveform_depth", "structural_imaging", "at_rig", "other"]
+    asserted_at: datetime.datetime
+
+
+class ProbeInfo(_Frozen):
+    """One probe in the file: the serial and type from the recording (or
+    from wl.works' report when no recording names it), its insertion from
+    the report, the active sites the file holds, and both areas. `area_from`
+    says which one the file's area label came from."""
+
+    serial: str
+    probe_type: str | None
+    insertion_number: int | None
+    trajectory_id: str | None
+    n_electrodes: int
+    target: ProbeTarget | None
+    assignment: ProbeAssignment | None
+    area_from: Literal["assignment", "target", "unknown"]
+
+
 class NwbDescription(_Frozen):
-    schema_version: Literal[1] = SCHEMA_VERSION
+    schema_version: Literal[2] = SCHEMA_VERSION
     identity: Identity
     subject: SubjectInfo
     data_types: DataTypes
-    # Empty in version 1; piece 3 describes each probe (type, serial,
-    # insertion, trajectory, target areas, per-channel areas).
-    probes: list[dict[str, Any]] = []
+    # Every probe the file holds; empty in version 1. Areas are per
+    # insertion: nothing yet produces a per-channel one.
+    probes: list[ProbeInfo] = []
     blocks: list[Block]
     quality: Quality
     # Empty in version 1; piece 3 adds the processing summary (for example
     # the number of single units, and whether any narrow-waveform units).
     processing: dict[str, Any] = {}
-    # Why any trial's condition or settings are unknown.
+    # Why any trial's condition or settings are unknown, then what the file
+    # could not place or join about a probe.
     notes: list[str]
     checksums: Checksums

@@ -465,7 +465,12 @@ Authorization: Bearer <token>
   - `placement`: `tier` (`fast` or `slow`), `host`, `share`, `path` relative to the share,
     and `n_bytes`, or `null` until published;
   - `description`: [`docs/schemas/nwb_description.json`](../schemas/nwb_description.json),
-    or `null` for a refused activation.
+    or `null` for a refused activation. **Version 2** (since the probes design,
+    `2026-09-30-nwb-probes-design.md` §3.2) gives `probes` its shape: each probe's
+    `serial`, `probe_type`, `insertion_number`, `trajectory_id`, `n_electrodes`, `target`
+    and `assignment`, and `area_from`, which says whether the file's area label came from
+    the assignment, the aim, or neither. A file built before then says version 1 and has
+    no probes; read `schema_version`, and ignore fields you do not know.
 
 A file changes when it is built, published, or moved between shares.
 
