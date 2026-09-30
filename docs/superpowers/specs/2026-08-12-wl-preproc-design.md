@@ -365,6 +365,8 @@ A 3 s segment therefore never estimates its own rate — it inherits a session-w
 
 This also yields a free integrity check: a segment whose local barcodes disagree with the device-level rate indicates a mis-assigned file or a device clock reset, surfacing as a QC failure rather than a silent millisecond error.
 
+> **Amended 2026-09-30** (`2026-09-30-nwb-probes-design.md`, amendment 12). A clock reset *between* segments is not a fault. Each recording's barcodes are timed from its own first sample, and a restarted SpikeGLX run starts its count at zero again, so the rate is fitted with an intercept per segment (`timebase/fit.py::fit_rate_across`). The implementation pooled all segments under one intercept until then, and fitted a synthetic restart at −951,278 ppm. A reset or a mis-assigned file *within* a segment still surfaces as residual.
+
 **SpikeGLX handles imec↔NI sync internally** using its own mechanism. The barcode aligns SpikeGLX-as-a-whole to session time via one NI digital line. Fewer moving parts; the imec SMA stays free.
 
 All data is written to NWB in session time, with fit parameters, residuals, and native stream timestamps retained so every transform is reversible and auditable.

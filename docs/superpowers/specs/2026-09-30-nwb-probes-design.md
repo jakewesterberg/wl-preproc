@@ -260,3 +260,63 @@ last refuses the build:
 - **Over real HTTP:** a job request carrying `target` and `area_assignment`,
   and one refused for a partial `target`.
 - **The full suite runs once, on both interpreters.**
+
+## Amendments, 2026-09-30, made while proving the plan
+
+The plan (`plans/2026-09-30-nwb-probes.md`) was proven in code before it was written, and
+these settle what §0's decisions left open or correct what the code found. §0 stands.
+
+1. **`SegmentProbe` is `ephys.ProbeCensus.Probe`** (§2.1). A master row per SpikeGLX
+   segment marks its run read, with no probe as readily as with two, and readiness waits on
+   it. Each part row is one imec stream (`imec0`, …): its serial, part number, electrode
+   configuration (null when its sites cannot be placed) and `problem`.
+2. **What a `.meta` cannot say is recorded once, not reported every pass** (§2.1, §5). A
+   landed file does not change. So the part row names what is missing in `problem`: a
+   serial, a part number, a type `probeinterface` does not know, an imroTbl it cannot map,
+   or a file it cannot read. The file's notes carry it. A probe whose sites cannot be placed
+   gets no `ProbeType` (Phase 2a's invariant: no type without its electrodes), no `Probe` and
+   no configuration. It is listed with its part number and no electrodes.
+3. **A serial is one physical probe.** A `.meta` naming a serial already registered as
+   another type records a problem, and its sites are recorded under neither type.
+4. **A serial reported for two insertions of one session is not joined** (§2.3). That is a
+   moved probe, and the request does not say which segments each insertion covers. Neither
+   is linked, the file lists the probe with area `unknown` and notes why, and the wl.works
+   entry flags the case.
+5. **An insertion that a later request does not mention is left as it was** (§2.2), since a
+   request may name only its own montage's insertions. For an insertion it does mention,
+   the latest request wins entirely, including a field it now leaves out. **The linker
+   takes back only links it could have made** (§2.3): reports are never deleted, so every
+   insertion it linked has one, and a `ProbeInsertion` with no report was made some other
+   way and is left alone. The full suite found this: a test's synthetic insertion, with a
+   sort pointing at it, was being taken back on every pass.
+6. **A file waits for the census of every SpikeGLX segment in its session** (§3.3), not only
+   its montage's: a segment not yet read has no extent to place it by.
+7. **The builder reads `ProbeCensus`, `InsertionReport` and `AreaAssignment`** (§0
+   decision 4), not the linked `ProbeInsertion`, `InsertionLocation` and `SegmentConfig`.
+   One path covers a joined probe and one that cannot be joined; the linked tables hold the
+   same facts, joined for sorting.
+8. **pynwb fixes the electrode table's own description** (§3.1): NWB's `ElectrodesTable`,
+   measured on pynwb 4.1. That areas are per insertion and not depth-resolved is said in
+   each area column's description and each group's instead. A device carries the serial as
+   `serial_number` and the part number as its `DeviceModel`.
+9. **`probeinterface` is a runtime dependency, not a test-only oracle** (§6 item 1):
+   `pyproject.toml` declares it, and the census maps each imroTbl with its `read_spikeglx`.
+   `wl.yaml` did not declare it, and now does.
+10. **Both SpikeGLX layouts are read** (§2.1): the generator's flat names and SpikeGLX's own
+    per-probe folders. The rig's real layout has not been seen.
+11. **The generator's restart writes its second run under SpikeGLX's own names**,
+    `<session_id>_g1_t0.nidq.bin` and `<session_id>_g1_t0.imec<N>.<band>.bin` (§7). Under
+    flat names, spikeinterface's reader put both runs in segment 0 and refused the folder;
+    under these it reads two segments.
+12. **The timebase fitted a restarted system wrongly; fixed here** (found by §7's restart).
+    Each recording's barcodes are timed from its own first sample, so a restarted run counts
+    from zero again. Pooled under one intercept, a synthetic 15 s session restarted at 9 s
+    fitted −951,278 ppm and fell to tier D. `timebase/fit.py::fit_rate_across` fits one rate
+    with an intercept per segment, as parent spec §4.5 describes. One segment fits exactly as
+    before.
+13. **A restart across task codes costs the timing tier. Recorded, not changed.** The NI
+    record lacks the codes sent while SpikeGLX was stopped, and `events/agreement.py`'s
+    0.999 threshold reads them as disagreement: a 0.5 s gap across CI_RECIPE's block
+    boundary gave agreement 0.75 and tier D. A bank change on the rig pauses the task, so
+    the fixtures restart mid-trial. If the lab ever restarts SpikeGLX with the task running,
+    the agreement should compare only the stretches the NI recorded (handoff §3).

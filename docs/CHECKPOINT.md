@@ -529,6 +529,22 @@ requester chose to merge the same day; true when written.*
 >    `pending-wl-works-amendments.md`. See
 >    `docs/handoffs/2026-09-30-canonical-lifecycle.md`.
 >
+>    **Probes and areas in every NWB file (piece 3's hardware-free slice)
+>    are BUILT on `spec/nwb-probes` (2026-09-30), NOT merged as written**
+>    (spec `superpowers/specs/2026-09-30-nwb-probes-design.md`). **The
+>    recording names the probe; wl.works says where it went** (the
+>    requester's decisions): a new daemon stage, `ephys.ProbeCensus`, reads
+>    each SpikeGLX run's `.meta`; `accept()` records each insertion's aim and
+>    latest area assignment; each pass links the two into Phase 2a's
+>    `ProbeInsertion`, `InsertionLocation` and `SegmentConfig`; and every file
+>    names its probes, a row per active site, with both areas. A bank change
+>    inside a montage refuses the file. The description is version 2.
+>    **Proving it found a timebase defect, fixed here:** a restarted system's
+>    rate was fitted under one intercept, so every bank change on the rig
+>    would have cost its session its timing (−951,278 ppm on a synthetic
+>    restart). What wl.works must do is a new OPEN entry in
+>    `pending-wl-works-amendments.md`. See `docs/handoffs/2026-09-30-nwb-probes.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked
