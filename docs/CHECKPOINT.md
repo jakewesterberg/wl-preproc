@@ -1,19 +1,23 @@
 # Where this build actually is
 
-**Last updated 2026-09-30**, describing `main` at `9fa7c1f`, the merge of
-`spec/canonical-lifecycle`: the canonical lifecycle, piece 2b of Phase 3's
-NWB export (handoff `handoffs/2026-09-30-canonical-lifecycle.md`). wl.works
-fires every canonical, and names the one a replacement supersedes. Invalid
-files rebuild themselves once the subject's details arrive. It follows
-`1f02d59`, the minors merge: CI green, 1910 passed on each interpreter,
-`gh run view 36678124790`.
+**Last updated 2026-09-30**, describing `main` at `f106bb2`, the merge of
+`fix/lifecycle-minors`: the canonical lifecycle's deferred minors
+(handoff `handoffs/2026-09-30-canonical-lifecycle.md` §6).
+- It follows `9fa7c1f`, the canonical-lifecycle merge (piece 2b): CI green,
+  1944 passed on each interpreter, `gh run view 36704973720`.
+- **wl.works has taken on the three NWB-export asks.** They are queued as its
+  next brainstorm, and the requester confirmed them. See
+  `pending-wl-works-amendments.md`.
 
-`9fa7c1f`'s tree is byte-identical to the tested branch head `17db1c5`, the
-final review's fix pass: 1945 passed on 3.11 and 1944 on 3.13 locally, 0
-failed. CI read off `9fa7c1f` itself is green on both interpreters, 1944
-passed on each with 33 skipped, and the manifest check is green (`gh run
-view 36704973720`). CI on later heads is recorded here only once read, not
-before.
+`f106bb2`'s tree is byte-identical to the tested branch head `8c1712d`: 1956
+passed on 3.11 and 1955 on 3.13 locally, 0 failed. CI read off `f106bb2`
+itself is green on both interpreters, 1955 passed on each with 33 skipped,
+and the manifest check is green (`gh run view 36718097838`). CI on later
+heads is recorded here only once read, not before.
+
+*This header named `9fa7c1f` (the canonical-lifecycle merge, CI green, 1944
+passed on each interpreter, `36704973720`) until the lifecycle-minors merge;
+true when written.*
 
 *This header named `1f02d59` (the minors merge, CI green, 1910 passed on each
 interpreter, `36678124790`) until the canonical-lifecycle merge; true when

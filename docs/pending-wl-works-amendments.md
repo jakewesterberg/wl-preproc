@@ -9,6 +9,9 @@ batches are closed; their records are kept below, because
 
 # OPEN — wl.works fires the canonical NWB, and regenerates it by naming what it replaces
 
+*Acknowledged by wl.works on 2026-09-30, read on its local `main` at `862f3af9`, which was not yet pushed. It is queued in its `docs/superpowers/brainstorm-queue.md` as "wl-preproc's three NWB-export asks", its next session's brainstorm, and the requester confirmed the asks as theirs.*
+*Its `docs/ops/waiting-on.md` now says that wl.works fires the canonical and wl-preproc generates it.*
+
 **Opened 2026-09-30** with the canonical lifecycle
 ([`specs/2026-09-30-canonical-lifecycle-design.md`](superpowers/specs/2026-09-30-canonical-lifecycle-design.md)),
 on the requester's decision that day: **wl.works fires every canonical**. Everything the decision
@@ -52,6 +55,8 @@ it must not guess a montage (parent spec §8.3, "no insertion record → no cano
 ---
 
 # OPEN — NWB files: find them, select them by what they hold, and say which are active
+
+*Acknowledged by wl.works on 2026-09-30, read on its local `main` at `862f3af9`, which was not yet pushed. It is queued in its `docs/superpowers/brainstorm-queue.md` as "wl-preproc's three NWB-export asks", its next session's brainstorm, and the requester confirmed the asks as theirs.*
 
 **Opened 2026-09-29** with NWB publishing
 ([`specs/2026-09-29-nwb-publishing-design.md`](superpowers/specs/2026-09-29-nwb-publishing-design.md)),
@@ -97,6 +102,8 @@ every connection, as always ([`docs/ops/lab-host-protocol.md`](ops/lab-host-prot
 ---
 
 # OPEN — the activation-request payload gains the subject's details
+
+*Acknowledged by wl.works on 2026-09-30, read on its local `main` at `862f3af9`, which was not yet pushed. It is queued in its `docs/superpowers/brainstorm-queue.md` as "wl-preproc's three NWB-export asks", its next session's brainstorm, and the requester confirmed the asks as theirs.*
 
 **Opened 2026-09-28** with the NWB builder
 ([`specs/2026-09-28-nwb-builder-design.md`](superpowers/specs/2026-09-28-nwb-builder-design.md)
