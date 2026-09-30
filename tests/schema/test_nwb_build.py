@@ -1189,6 +1189,38 @@ def test_the_listing_marks_a_superseded_file_through_the_cursor(activation, pref
         (request.Activation & [new, old]).delete(prompt=False)
         (request.Request & {"idempotency_key": "nwbstep1-listing-superseded"}).delete(prompt=False)
 
+
+def test_an_invalid_file_is_rebuilt_once_its_missing_subject_details_arrive(activation, prefix, slow_share,
+                                                                            fast_share, tmp_path_factory):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 5.
+    Built without a date of birth, the file is `invalid`; a pass with nothing
+    changed leaves it alone; once the date arrives, the next pass rebuilds
+    it, and it is `written`. It was never published, so nothing is lost."""
+    from wl_preproc.ingest.landing import SUBJECT_BIRTH_DATE_UNKNOWN
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import pipeline
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[0])
+    _unrecord(key, slow_share, fast_share)
+    birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
+    pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-first"))
+        first = (nwb_schema.NwbFile & key).fetch1()
+        assert first["status"] == "invalid"
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-unchanged"))
+        assert (nwb_schema.NwbFile & key).fetch1("built_at") == first["built_at"]
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-after"))
+        rebuilt = (nwb_schema.NwbFile & key).fetch1()
+        assert rebuilt["status"] == "written"
+        assert rebuilt["description"]["subject"]["date_of_birth"] == birth.isoformat()
+        assert not Path(first["path"]).exists()
+    finally:
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage
     does: the others are recorded, the failure is reported, and the failed

@@ -158,6 +158,39 @@ def note_superseded() -> int:
     return len(keys)
 
 
+def resolved_invalid() -> list[dict]:
+    """Every `invalid` activation whose subject's details differ from those
+    its file was built with -- the date of birth arrived, say (design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 5). Compared by value:
+    `responder/jobs.py::_record_subject_details` keeps no timestamp. A
+    rebuild that is still invalid now matches, so it is not rebuilt again
+    until the details change once more."""
+    from wl_preproc.nwb.gather import _subject
+    from wl_preproc.schema import nwb as nwb_schema
+
+    resolved = []
+    for row in (nwb_schema.NwbFile & {"status": "invalid"}).proj("description").to_dicts():
+        current = _subject(row["subject"])
+        now = {"species": current["species"], "sex": current["sex"],
+               "date_of_birth": None if current["date_of_birth"] is None else current["date_of_birth"].isoformat()}
+        built_with = (row["description"] or {}).get("subject") or {}
+        if {field: built_with.get(field) for field in now} != now:
+            resolved.append({k: row[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")})
+    return resolved
+
+
+def _discard(key: dict) -> None:
+    """An `invalid` activation's row and scratch file, so the stage rebuilds
+    it. Never published (publishing takes only `written`), so no one has
+    annotated it."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    path = (nwb_schema.NwbFile & key).fetch1("path")
+    (nwb_schema.NwbFile & key).delete(prompt=False)
+    if path:
+        Path(path).unlink(missing_ok=True)
+
+
 def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """The daemon's `_nwb_stage`: every activation without an `NwbFile` row,
     skipping freed sessions, superseded activations (a replacement arrived
@@ -176,6 +209,11 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
         note_superseded()
     except Exception as exc:  # the builds below must still run
         errors.append(f"NwbChange superseded: {exc}")
+    try:
+        for key in resolved_invalid():
+            _discard(key)
+    except Exception as exc:  # the builds below must still run
+        errors.append(f"NwbFile invalid: {exc}")
     for key in (request.Activation - nwb_schema.NwbFile.proj()).keys():
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
             continue
