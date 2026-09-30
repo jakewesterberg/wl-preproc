@@ -269,3 +269,17 @@ def test_a_groups_description_names_both_areas(source, words):
     assert area_text(probe) == (f"target: V4d (CHARM, level 6); {words} (2026-09-28). "
                                 "The insertion's area, not depth-resolved.")
     assert area_text(_probe("2")).startswith("no area reported")
+
+
+def test_a_serial_an_hdf5_name_cannot_hold_is_kept_whole_under_a_safe_name(tmp_path):
+    """The final review's M4: HDMF refuses `/` and `:` in an object's name,
+    and an Intan probe's serial comes from wl.works unchecked. The device
+    and group names are made safe; the serial itself is kept whole."""
+    from wl_preproc.nwb.probes import add_probes
+
+    odd = _probe("A1x32/5:mm", probe_type=None)
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_probes(nwb, [odd]))
+    with io:
+        assert list(nwb.devices) == ["probe-A1x32_5_mm"]
+        assert nwb.devices["probe-A1x32_5_mm"].serial_number == "A1x32/5:mm"
+        assert list(nwb.electrode_groups) == ["probe-A1x32_5_mm"]

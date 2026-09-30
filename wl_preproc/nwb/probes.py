@@ -36,6 +36,13 @@ _COLUMNS = (
 )
 
 
+def _name(serial: str) -> str:
+    """`probe-<serial>`, with the `/` and `:` HDMF refuses in an object's name
+    made `_` (the final review's M4): an Intan probe's serial comes from
+    wl.works unchecked. The serial itself is kept whole, as `serial_number`."""
+    return "probe-" + serial.replace("/", "_").replace(":", "_")
+
+
 def area_text(probe: dict) -> str:
     """Both areas, each labelled, for a group's description:
     `target: V4d (CHARM, level 6); assigned at rig: V4d (2027-01-12)`."""
@@ -62,13 +69,13 @@ def add_probes(nwb: NWBFile, probes: list[dict]) -> None:
             models[part] = nwb.create_device_model(name=part, manufacturer="IMEC", model_number=part,
                                                    description=f"Neuropixels probe model {part}.")
         device = nwb.create_device(
-            name=f"probe-{probe['serial']}", serial_number=probe["serial"], model=models.get(part),
+            name=_name(probe["serial"]), serial_number=probe["serial"], model=models.get(part),
             description=(f"The probe the recording's .meta names, serial {probe['serial']}." if part is not None
                          else f"Probe {probe['serial']}, as wl.works' report names it; the recording does not "
                               "name its type."))
         number = probe["insertion_number"]
         groups.append((probe, nwb.create_electrode_group(
-            name=f"insertion-{number}" if number is not None else f"probe-{probe['serial']}",
+            name=f"insertion-{number}" if number is not None else _name(probe["serial"]),
             description=area_text(probe), location=probe["area"], device=device)))
     if not any(probe["electrodes"] for probe in probes):
         return
