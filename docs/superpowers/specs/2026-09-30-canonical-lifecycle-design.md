@@ -87,7 +87,15 @@ automatic canonical activation.
 - wl-preproc writes the activation row, on a request from wl.works'
   scheduler.
 - `Request.origin` is `wl_works`, as `accept()` stamps it today.
-- `requested_by` is null: no person asked.
+- `requested_by` is the experimenter wl.works names in `metadata.experimenter`, a
+  required field, as for every request. `nwb/gather.py` names that person as the
+  file's experimenter.
+
+*Corrected after the final review, 2026-09-30 (its I4):* *this said "`requested_by`
+is null: no person asked", which the code never did. `accept()` stamps
+`metadata.experimenter`, which the contract requires, and a null here would strip
+the experimenter from every canonical file. If a marker for machine-fired requests
+is ever wanted, it needs `requested_by` split from the file's experimenter first.*
 
 ## 3. The replacement request
 

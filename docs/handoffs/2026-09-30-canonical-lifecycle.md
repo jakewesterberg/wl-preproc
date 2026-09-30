@@ -126,3 +126,66 @@ an unread `role` leaves the whole-montage canonical. The exported
 **Full suite, once, with every task applied** (BMD and NSLR references set,
 `WLPP_OHDPI_REFERENCE` unset, as CI has it): **1941 passed, 31 skipped, 1 deselected, 1 xfailed** on 3.11 and **1940 passed, 33 skipped, 1 xfailed** on 3.13, 0 failed. `main` at `668d7eb`
 gives 1911 and 1910.
+
+## 6. The final review, and its fix pass
+
+A fresh reviewer (Opus) read the whole branch and found **no Critical issues,
+four Important, ten Minor**, plus nine behaviours it declined to judge. It
+checked the replacement lock under a real two-connection race: the loser
+waited, saw the winner, and got a `409`.
+
+**All four Important findings were fixed in one pass:**
+
+| Finding | What was wrong | Fixed by | Test |
+|---|---|---|---|
+| I1 | An `invalid` row whose details arrived was discarded even when the same pass would not rebuild it: a superseded activation, or a freed session. Its only file and its listing entry were lost. | Discard only what this pass rebuilds: not freed, not superseded, and ready. Also one `try` per row. | `test_an_invalid_row_the_stage_will_not_rebuild_survives_its_details_arriving` (superseded and freed), red then green |
+| I2 | Review Focus 1's test did not pin that the lock comes before the transaction's snapshot. | A real race test: the loser waits on the lock while the winner commits. | `test_a_waiting_replacement_sees_the_winner_and_is_refused`, which fails with the lock moved inside the transaction (a fork at activation 2) |
+| I3 | Review Focus 4's test did not pin "not rebuilt every pass" with the details present. | A file invalid for another reason, with the date of birth present. | `test_a_file_invalid_for_another_reason_is_not_rebuilt_every_pass`, which fails when the date is compared as a date |
+| I4 | Spec §2 and parent item 12 said `requested_by` is null; the code sets it to `metadata.experimenter`, which is also the file's experimenter. | Both corrected, with a dated note. | none (docs) |
+
+The two mutations of I1's guard, the superseded check and the freed check,
+were both caught.
+
+**Deferred minors** (M1–M10 in the review; M6, one `try` for the whole
+discard loop, was fixed as part of I1):
+- **M1:** the guardrail's narrowing also admits module-level code, and an
+  `async def`, after `submit_replacement`.
+- **M2:** Review Focus 5 is tested with an unknown block rather than an
+  out-of-window one. Focus 2 is not re-sent under the original key. The
+  `409` HTTP test stubs `accept`.
+- **M3:** the `NwbChange` enum migration is neither measured nor documented.
+  **An existing development database needs `{prefix}nwb` dropped and
+  redeclared.**
+- **M4:** docstrings still call `KeyReuseError` the only `409`, and
+  `NwbFile`'s comment still says `invalid` rows are kept for inspection.
+- **M5:** `resolved_invalid` reads every invalid description, with two subject
+  queries per row, on every pass.
+- **M7:** named-lock details. The name has no prefix; a reconnect drops the
+  lock; the 10 s wait blocks the responder's lock; and a `RELEASE_LOCK` that
+  raises masks the original error.
+- **M8:** `wlpp nwb build` builds a superseded activation without saying so.
+- **M9:** a replacement for a freed session is accepted and never built,
+  silently.
+- **M10:** a null `supersedes_activation_id` is a `422`, while a null `role`
+  means absent.
+
+**What the reviewer declined to judge, and the ruling on each** (all stand):
+- **A `role: canonical` request with `block_ids`, for a montage that already
+  has a canonical, returns the current one.** Decision 2 makes it a re-send.
+  To change the blocks, wl.works sends a replacement.
+- **Two concurrent first canonicals could union their block rows.** The
+  responder serialises requests in one process.
+- **Subject details and montage/block rows are written before a `409`.** This
+  predates the branch.
+- **Odd `block_ids` elements** (`true`, a non-list). This predates the branch.
+- **A species correction adds a second `Subject.Species` row.** This predates
+  the branch.
+- **A re-sent plain canonical returns a new activation under the same key
+  after a replacement.** Required by §3 case 2.
+- **Retrying a replacement returns it even after it was itself superseded.**
+  This is the ordinary idempotent retry.
+- **Upstream recomputes, and hand-deleted rows.** Open by §1 and §8.
+- **The per-call cost of `current_canonical` and `is_superseded`.** Small at
+  lab scale.
+
+**Full suite after the fix pass: 1945 passed, 31 skipped, 1 deselected, 1 xfailed on 3.11, and 1944 passed, 33 skipped, 1 xfailed on 3.13, 0 failed.**

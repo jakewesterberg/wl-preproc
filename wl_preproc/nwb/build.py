@@ -209,11 +209,22 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
         note_superseded()
     except Exception as exc:  # the builds below must still run
         errors.append(f"NwbChange superseded: {exc}")
+    # Only what this same pass rebuilds is discarded (the final review's I1):
+    # a superseded activation "stays as it is" (spec section 4), a freed
+    # session cannot be built, and one not ready would vanish from GET /nwb
+    # until it is. Each is kept, invalid and listed, for a later pass.
     try:
-        for key in resolved_invalid():
-            _discard(key)
+        resolved = resolved_invalid()
     except Exception as exc:  # the builds below must still run
-        errors.append(f"NwbFile invalid: {exc}")
+        resolved, errors = [], [*errors, f"NwbFile invalid: {exc}"]
+    for key in resolved:
+        try:
+            if ({"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed
+                    or request.is_superseded(key) or readiness(key) is not None):
+                continue
+            _discard(key)
+        except Exception as exc:  # one file must not stop the others
+            errors.append(f"NwbFile invalid {key}: {exc}")
     for key in (request.Activation - nwb_schema.NwbFile.proj()).keys():
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
             continue

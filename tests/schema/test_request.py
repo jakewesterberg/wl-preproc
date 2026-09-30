@@ -1317,3 +1317,46 @@ def test_a_replacement_waits_for_the_montage_lock(req, selection, monkeypatch):
     finally:
         other.close()
     assert len(req.Activation & selection) == 1
+
+
+
+def test_a_waiting_replacement_sees_the_winner_and_is_refused(req, selection):
+    """The final review's I2, Review Focus 1 pinned properly. The lock must be
+    taken BEFORE the transaction's consistent snapshot: a replacement that
+    waited for it must see the winner's commit and be refused, never fork
+    the chain with a second canonical superseding the same one."""
+    import threading
+    import time
+
+    req.submit("k-race-1", "neural", "wl_works", selection, {}, None)
+    req.Request.insert1({"idempotency_key": "k-race-2", "task_type": "neural", "origin": "wl_works",
+                         "payload": {}, "requested_at": datetime.datetime(2027, 6, 1, 12, 0)})
+    other, result = _raw_connection(), {}
+    name = req._replacement_lock_name(selection)
+    try:
+        with other.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0)", (name,))
+            assert cursor.fetchone()[0] == 1
+
+        def loser():
+            try:
+                result["key"] = req.submit_replacement("k-race-3", "neural", "wl_works", selection, {}, None,
+                                                       supersedes_activation_id=0)
+            except Exception as exc:  # noqa: BLE001 -- asserted below
+                result["exc"] = exc
+
+        thread = threading.Thread(target=loser)
+        thread.start()
+        time.sleep(1.5)
+        with other.cursor() as cursor:  # the winner commits while the loser waits
+            cursor.execute(
+                f"INSERT INTO {req.Activation.full_table_name} (subject, session_datetime, montage_id, "
+                "activation_id, role, request_key, created_at, supersedes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (selection["subject"], selection["session_datetime"], selection["montage_id"], 1, "canonical",
+                 "k-race-2", datetime.datetime(2027, 6, 1, 12, 0), 0))
+            cursor.execute("SELECT RELEASE_LOCK(%s)", (name,))
+        thread.join(30)
+    finally:
+        other.close()
+    assert isinstance(result.get("exc"), req.SupersedeConflict), result
+    assert len(req.Activation & selection & "supersedes = 0") == 1
