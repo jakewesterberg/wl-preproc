@@ -108,7 +108,8 @@ A new OPEN entry in `docs/pending-wl-works-amendments.md`:
 
 ## 5. The measured counts
 
-Measured while proving the plan; execution measures them again, and replaces any that differ.
+Measured while proving the plan. Execution measured every one of them again and got the same
+counts, and every mutation was caught again.
 
 | Task | Before the code | After | Mutations |
 |---|---|---|---|
@@ -136,4 +137,49 @@ a test, in Task 6.
 
 ## 6. The final review, and its fix pass
 
-*Filled after execution.*
+A fresh reviewer on Opus read `da95dd9..78296a5`. It found no Critical issue, one Important
+and ten Minor, and its verdict was "with fixes". Two Minors were re-graded to Important by
+their effect. All three were fixed in one pass, each with a test watched failing first:
+
+- **I1: a file's probes came from its whole montage window** (`077122a`). A derivative on one
+  side of a bank change inside wl.works' montage was refused, permanently, though parent spec
+  §8.3 names it as the remedy. Segments are now those the file's own blocks overlap (spec
+  amendment 14). `test_a_file_on_one_side_of_a_bank_change_builds`.
+- **M1, re-graded: a damaged site table** (`92c28b1`). A table holding only its header raised
+  `TypeError` past the reader, which would park the segment's census for good and hold its
+  files on readiness. A table cut mid-entry passed as a map of fewer sites. Both are now
+  problems (amendment 15). `test_a_short_imro_table_is_a_problem_not_a_partial_map`.
+- **M4, re-graded: a serial holding `/` or `:`** (`df7d14e`). HDMF refuses those in a name, so
+  every build of the file failed. That can reach the Intan path, where wl.works supplies the
+  serial. The device and group names are made safe, and the serial is kept whole.
+  `test_a_serial_an_hdf5_name_cannot_hold_is_kept_whole_under_a_safe_name`.
+
+**Full suite after the fix pass:** **2035 passed, 25 skipped, 1 deselected, 1 xfailed** on 3.11 and **2034 passed, 27 skipped, 1 xfailed** on 3.13, 0 failed (four tests more than before the fix pass: one for I1, two for M1, one for M4).
+
+**Deferred minors:**
+- **M2.** A request that `submit()` refuses (a `409`, or a database error) has already
+  replaced the reports and appended its assignments, as the subject's details already are.
+  `test_a_refused_request_records_no_report`'s docstring claims more than `accept()`'s own
+  checks do.
+- **M3.** A relink updates `ProbeInsertion.probe_serial` and `SegmentConfig`'s configuration
+  underneath an existing sort; only taking a link back refuses. **Sorting's plan must guard
+  this.**
+- **M5.** A probe whose `.meta` names a serial but no part number is described as named by
+  wl.works' report.
+- **M6.** In a session with both SpikeGLX and Intan, a mistyped SpikeGLX serial in a report is
+  listed as an Intan probe.
+- **M7.** `rel_x`/`rel_y` are µm, and nothing in the file says so.
+- **M8.** `test_one_segment_fits_exactly_as_the_pooled_fit_does` compares `fit_rate_across`
+  with `fit_rate`, which now calls it; pin a literal instead.
+- **M9.** Overlapping daemon passes can report a spurious duplicate-key link error. It rolls
+  back, so nothing is corrupted.
+- **M10.** In `ProbeCensus.make`, a bare `Probe` is the Manual table and `self.Probe` the
+  part: correct, and easy to misread.
+
+**What the reviewer set aside,** each ruled in the ledger as it stands: an out-of-order retry
+regressing a report; a serial reported twice; the refusal of a canonical across a bank
+change; a restart across task codes; a corrected `.meta`; an insertion wl.works deletes;
+per-insertion areas; an Intan probe listed in every montage's file (the contract carries no
+montage per insertion); duplicate insertion numbers in one request (a wl.works fault); the
+link stage visiting every reported session each pass; and the `test_ephys`/`test_daemon`
+order dependency, which `main` has too.

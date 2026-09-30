@@ -320,3 +320,13 @@ these settle what §0's decisions left open or correct what the code found. §0 
     boundary gave agreement 0.75 and tier D. A bank change on the rig pauses the task, so
     the fixtures restart mid-trial. If the lab ever restarts SpikeGLX with the task running,
     the agreement should compare only the stretches the NI recorded (handoff §3).
+14. **A file's probes come from the segments its own blocks overlap, not from its whole
+    montage** (§3.1, §5; the final review's I1). With the montage window, a derivative on one
+    side of a bank change inside wl.works' montage was refused, permanently. Yet that
+    derivative is parent spec §8.3's remedy for exactly that case. A file whose blocks cross
+    the change is still refused, as §5 requires.
+15. **The reader records anything `probeinterface` raises as a problem**, and records a site
+    table shorter than the file's AP channels as one too (amendment 2; the final review's
+    M1). A table holding only its header raised `TypeError`, which parked the segment's
+    census job until it was cleared by hand. A table cut mid-entry passed as a map of fewer
+    sites.
