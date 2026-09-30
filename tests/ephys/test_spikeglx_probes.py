@@ -77,6 +77,28 @@ def test_a_probe_whose_sites_cannot_be_mapped_says_why(tmp_path, change, expect)
     assert probe.serial == recipe.probe_serial
 
 
+@pytest.mark.parametrize("entries, expect", [
+    (0, "TypeError"),  # the header alone: probeinterface raises TypeError, not ValueError
+    (1, "places 1 of the 4"),  # cut short: read as one site where the file records four channels
+])
+def test_a_short_imro_table_is_a_problem_not_a_partial_map(tmp_path, entries, expect):
+    """The final review's M1. A table cut short must not escape as an
+    exception, which would park the segment's census job for good, nor pass
+    as a map of fewer sites than the file records."""
+    import re
+
+    from wl_preproc.ephys.spikeglx_probes import read_run
+
+    _recipe, nidq = _run(tmp_path)
+    (meta,) = nidq.parent.glob("*_imec0.ap.meta")
+    text = meta.read_text()
+    table = re.search(r"^~imroTbl=(\(\d+,\d+\))(.*)$", text, re.M)
+    kept = "".join(re.findall(r"\([^)]*\)", table.group(2))[:entries])
+    meta.write_text(text.replace(table.group(0), f"~imroTbl={table.group(1)}{kept}"))
+    (probe,) = read_run(nidq)
+    assert probe.electrodes is None and expect in probe.problem
+
+
 def test_a_meta_without_a_serial_keeps_its_sites(tmp_path):
     from wl_preproc.ephys.spikeglx_probes import read_run
 

@@ -55,6 +55,15 @@ def _fields(meta: Path) -> dict[str, str]:
     return fields
 
 
+def _saved_ap_channels(fields: dict[str, str]) -> int | None:
+    """How many AP channels the file records (`snsApLfSy`'s first count), or
+    None when the .meta does not say."""
+    try:
+        return int(fields["snsApLfSy"].split(",")[0])
+    except (KeyError, ValueError):
+        return None
+
+
 def read_probe(meta: Path) -> RecordedProbe:
     """One imec stream's probe, from its `.meta`.
 
@@ -85,12 +94,24 @@ def read_probe(meta: Path) -> RecordedProbe:
                             "cannot be placed")
         else:
             index = {contact: i for i, contact in enumerate(full.contact_ids)}
-            # probeinterface asserts on a missing imroTbl and raises
-            # ValueError on a malformed one (measured, 0.3.2).
+            # Anything probeinterface raises on a damaged table is a problem to
+            # record, never a failed segment: it asserts on a missing imroTbl,
+            # raises ValueError on a malformed one and TypeError on one holding
+            # only its header (measured, 0.3.2; the final review's M1).
             try:
-                electrodes = tuple(sorted(index[contact] for contact in read_spikeglx(meta).contact_ids))
-            except (AssertionError, KeyError, ValueError) as exc:
-                problems.append(f"the imroTbl could not be mapped onto {part_number}'s sites: {exc}")
+                placed = tuple(sorted(index[contact] for contact in read_spikeglx(meta).contact_ids))
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"the imroTbl could not be mapped onto {part_number}'s sites: "
+                                f"{type(exc).__name__}: {exc}")
+            else:
+                # A table cut short parses as fewer sites than the file
+                # records; read_spikeglx keeps only the saved channels, as
+                # snsApLfSy counts them.
+                saved = _saved_ap_channels(fields)
+                if saved is not None and len(placed) != saved:
+                    problems.append(f"the imroTbl places {len(placed)} of the {saved} AP channels the file records")
+                else:
+                    electrodes = placed
     return RecordedProbe(stream=stream, serial=serial, part_number=part_number, electrodes=electrodes,
                          problem="; ".join(problems) or None)
 
