@@ -13,6 +13,7 @@ transaction; see section 10's hazard table.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import datajoint as dj
@@ -997,51 +998,64 @@ def run_once(
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")
 
-    # The NWB builder (design spec `2026-09-28-nwb-builder-design.md` section
-    # 2): opt-in like archival, and for the same reason -- it writes under a
-    # configured root. `None`, not `0`, when not configured.
-    nwb_built: int | None
-    if nwb_root is None:
-        nwb_built = None
-    else:
-        from wl_preproc.nwb.build import run_stage
+    # The three NWB stages run under one database lock (`nwb/lock.py`): a
+    # second wlpp process -- a pass outliving its cron interval, or `wlpp nwb
+    # build` -- leaves them to the first and says so. `0`, not `None`, for a
+    # configured stage skipped that way.
+    from wl_preproc.nwb.lock import Busy, exclusive
 
-        nwb_built, nwb_errors = run_stage(nwb_root, freed=currently_freed(prefix=prefix))
-        errors.extend(nwb_errors)
+    nwb_built: int | None = None
+    nwb_published: int | None = None
+    nwb_moved: int | None = None
+    try:
+        with exclusive(prefix) if nwb_root is not None or nwb_slow is not None else contextlib.nullcontext():
+            # The NWB builder (design spec `2026-09-28-nwb-builder-design.md` section
+            # 2): opt-in like archival, and for the same reason -- it writes under a
+            # configured root. `None`, not `0`, when not configured.
+            if nwb_root is None:
+                nwb_built = None
+            else:
+                from wl_preproc.nwb.build import run_stage
 
-    # Publishing (design spec `2026-09-29-nwb-publishing-design.md` section
-    # 4): opt-in on the slow share, a `publish.Share`. `None` when absent.
-    nwb_published: int | None
-    if nwb_slow is None:
-        nwb_published = None
-    else:
-        from wl_preproc.nwb import publish
+                nwb_built, nwb_errors = run_stage(nwb_root, freed=currently_freed(prefix=prefix))
+                errors.extend(nwb_errors)
 
-        try:
-            nwb_published, publish_errors = publish.run_publish(
-                nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
-            errors.extend(publish_errors)
-        except Exception as exc:  # a failing stage must not stop the others
-            nwb_published = 0
-            errors.append(f"NwbPlacement: publishing failed: {exc}")
+            # Publishing (design spec `2026-09-29-nwb-publishing-design.md` section
+            # 4): opt-in on the slow share, a `publish.Share`. `None` when absent.
+            if nwb_slow is None:
+                nwb_published = None
+            else:
+                from wl_preproc.nwb import publish
 
-    # Placement (section 5): with both shares, each published file is moved
-    # to the one the latest active set wants. `None` without the fast share.
-    # Freed sessions are NOT skipped: placement reads only the NAS and the
-    # database, never scratch, and a published session is exactly what
-    # reclamation frees (the final review's C2).
-    nwb_moved: int | None
-    if nwb_slow is None or nwb_fast is None:
-        nwb_moved = None
-    else:
-        from wl_preproc.nwb import publish
+                try:
+                    nwb_published, publish_errors = publish.run_publish(
+                        nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+                    errors.extend(publish_errors)
+                except Exception as exc:  # a failing stage must not stop the others
+                    nwb_published = 0
+                    errors.append(f"NwbPlacement: publishing failed: {exc}")
 
-        try:
-            nwb_moved, placement_errors = publish.run_placement(nwb_slow, nwb_fast)
-            errors.extend(placement_errors)
-        except Exception as exc:  # a failing stage must not stop the others
-            nwb_moved = 0
-            errors.append(f"NwbPlacement: placement failed: {exc}")
+            # Placement (section 5): with both shares, each published file is moved
+            # to the one the latest active set wants. `None` without the fast share.
+            # Freed sessions are NOT skipped: placement reads only the NAS and the
+            # database, never scratch, and a published session is exactly what
+            # reclamation frees (the final review's C2).
+            if nwb_slow is None or nwb_fast is None:
+                nwb_moved = None
+            else:
+                from wl_preproc.nwb import publish
+
+                try:
+                    nwb_moved, placement_errors = publish.run_placement(nwb_slow, nwb_fast)
+                    errors.extend(placement_errors)
+                except Exception as exc:  # a failing stage must not stop the others
+                    nwb_moved = 0
+                    errors.append(f"NwbPlacement: placement failed: {exc}")
+    except Busy as busy:
+        nwb_built = None if nwb_root is None else 0
+        nwb_published = None if nwb_slow is None else 0
+        nwb_moved = None if nwb_slow is None or nwb_fast is None else 0
+        errors.append(f"NwbPlacement: {busy}")
 
     archived: int | None
     if nas_root is None or host is None or share is None:

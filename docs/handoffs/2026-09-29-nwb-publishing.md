@@ -124,6 +124,10 @@ wlpp daemon --host <nas> --nwb-root <scratch> \
 - Without the slow share, publishing is skipped, and the report's
   `nwb_published` is null. Without both shares, placement is skipped, and
   `nwb_moved` is null. The fast share needs the slow one.
+- **Migrating a development database** that declared piece 1's `nwb` tables:
+  drop and redeclare them. DataJoint does not alter a table, and piece 1's
+  `NwbFile.Dataset` had `blake3` and no `description`. No real file exists
+  yet.
 - **Every file is `invalid` until wl.works sends the subject's date of
   birth** (piece 1). `invalid` files are never published. So on real data
   nothing is published until that OPEN entry is done.
@@ -319,7 +323,9 @@ fixed code rightly adopts the file.
 - **Size limits on `GET /nwb` without a cursor.** No bound is stated; it is
   deferred with M2.
 
-**Deferred minors** (M1–M16 in the review):
+**Deferred minors** (M1–M16 in the review). *Most are done on
+`fix/nwb-minors` (2026-09-29, the requester's choice); the status is given
+after the list.*
 - M1: `active_keys` fetches every active set.
 - M2: `GET /nwb` makes two queries per file and has no page size.
 - M3: `since` accepts Unicode digits, which gives a 500.
@@ -339,3 +345,34 @@ fixed code rightly adopts the file.
 - M14: a failed description write leaves a `.json.partial`.
 - M15: a move whose old copy stayed is counted as a failure.
 - M16: `wl.yaml` and CHECKPOINT say "not merged", to update at merge.
+
+**Where each minor stands, after `fix/nwb-minors`:**
+- **Fixed, each with a test that failed first:**
+  - M3: `since` takes only ASCII digits, so other digits get a 422. `Content-Length`
+    already answered 422, since `int()` raises `ValueError` there.
+  - M4: a database lock (`nwb/lock.py`) keeps a second wlpp process out of
+    the NWB stages and out of `wlpp nwb build`.
+  - M6: moves keep a tenth of the fast share free unless
+    `--nwb-fast-headroom-gb` says otherwise (the requester's choice), and a
+    negative margin is refused.
+  - M7: `Fault.MISMATCHED_RIG_LINE` is the synthetic variant spec §13 asked
+    for. The reviewer's other M7 claim was wrong: the synthetic stream marks
+    every trial correct too (`synth/timeline.py`).
+  - M14: a failed description write leaves nothing behind, and the
+    description is flushed to disk.
+  - M15: a move whose old copy stayed is counted as a move.
+- **Fixed, covered by the existing tests:**
+  - M1: only the newest active set is read.
+  - M2: `GET /nwb` takes two queries in all and reads only the columns it
+    returns.
+- **Documented:**
+  - M8 (spec §11's amendment);
+  - M9 (the protocol doc's status table);
+  - M10 (above);
+  - M13 (`NwbFile`'s comment).
+- **Moved to piece 2b's spec:** M5 and M12. A deleted row needs change
+  records that outlive it, and superseding does not exist yet.
+- **Moved to when wl-xcon's XC-155 lands:** M11. Real joins begin then, and
+  the two outcome vocabularies must be read in wl-xcon first.
+- **Moved to wl.works' next contract change:** M2's page size.
+- **Done at merge:** M16.

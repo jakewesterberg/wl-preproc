@@ -12,6 +12,8 @@ import datetime
 from wl_preproc.contracts.protocol import ActiveSetRequest, ActiveSetResponse, NwbListing
 from wl_preproc.schema import DEFAULT_PREFIX
 
+_KEY = ("subject", "session_datetime", "montage_id", "activation_id")
+
 
 def _key_json(key: dict) -> dict:
     moment = key["session_datetime"]
@@ -24,20 +26,26 @@ def _key_json(key: dict) -> dict:
 def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
     """Every activation whose file changed after `since` (all of them when
     None): its status, where its file is now, and its description."""
-    from wl_preproc.nwb.publish import activation_tuple, current_placement, key_of
+    from wl_preproc.nwb.publish import activation_tuple, key_of
     from wl_preproc.schema import nwb as nwb_schema
 
     nwb_schema.activate(prefix=prefix)
-    changes = nwb_schema.NwbChange.to_dicts() if since is None else \
-        (nwb_schema.NwbChange & f"change_seq > {int(since)}").to_dicts()
+    changes = nwb_schema.NwbChange.proj(*_KEY).to_dicts() if since is None else \
+        (nwb_schema.NwbChange & f"change_seq > {int(since)}").proj(*_KEY).to_dicts()
     cursor = max((change["change_seq"] for change in changes), default=since or 0)
-    keys = {activation_tuple(change): key_of(change) for change in changes}
+    keys = list({activation_tuple(change): key_of(change) for change in changes}.values())
+    # Two queries for the whole listing, not two per file, and only the
+    # columns it returns (the final review's M2).
+    rows = {activation_tuple(row): row for row in (nwb_schema.NwbFile & keys).proj(
+        "nwb_identifier", "status", "reason", "description").to_dicts()} if keys else {}
+    latest = {}
+    for placement in ((nwb_schema.NwbPlacement * nwb_schema.NwbChange & keys).to_dicts() if keys else []):
+        held = latest.get(activation_tuple(placement))
+        if held is None or placement["change_seq"] > held["change_seq"]:
+            latest[activation_tuple(placement)] = placement
     files = []
-    for _tuple, key in sorted(keys.items()):
-        rows = (nwb_schema.NwbFile & key).to_dicts()
-        if not rows:
-            continue
-        row, placement = rows[0], current_placement(key)
+    for moment in sorted(rows):
+        row, placement, key = rows[moment], latest.get(moment), key_of(rows[moment])
         files.append({
             "activation": _key_json(key),
             "identifier": row["nwb_identifier"],

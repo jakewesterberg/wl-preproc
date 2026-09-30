@@ -31,6 +31,7 @@ FAULT_FUNCTIONS: dict[Fault, str] = {
     Fault.DROPPED_CAMERA_FRAMES: "drop_camera_frames",
     Fault.TRIAL_COUNT_MISMATCH: "corrupt_trial_count",
     Fault.TRUNCATED_FILE: "truncate_file",
+    Fault.MISMATCHED_RIG_LINE: "mismatch_rig_line",
 }
 
 
@@ -131,3 +132,13 @@ def truncate_file(path: Path, keep_fraction: float) -> None:
     size = path.stat().st_size
     with path.open("r+b") as handle:
         handle.truncate(int(size * keep_fraction))
+
+
+def mismatch_rig_line(lines: list[dict]) -> list[dict]:
+    """The rig's trial record with its second line carrying the first line's
+    trial number: one number named twice, one not at all. Joining by trial
+    number must attach neither trial's condition (design spec
+    `2026-09-29-nwb-publishing-design.md` section 13)."""
+    if len(lines) < 2:
+        return list(lines)
+    return [lines[0], {**lines[1], "index": lines[0]["index"]}, *lines[2:]]

@@ -205,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     daemon_p.add_argument("--nwb-slow-share", default=None)
     daemon_p.add_argument("--nwb-fast-root", type=Path, default=None)
     daemon_p.add_argument("--nwb-fast-share", default=None)
-    daemon_p.add_argument("--nwb-fast-headroom-gb", type=float, default=0.0)
+    # Free space moves to the fast share leave; unset, a tenth of the share.
+    daemon_p.add_argument("--nwb-fast-headroom-gb", type=float, default=None)
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -682,39 +683,50 @@ def main(argv: list[str] | None = None) -> int:
 
         from wl_preproc.archive import scratch
         from wl_preproc.nwb.gather import readiness
+        from wl_preproc.nwb.lock import Busy, exclusive
 
         activate_all(prefix=args.prefix)
-        key = {"subject": args.subject, "session_datetime": args.session_datetime,
-               "montage_id": args.montage_id, "activation_id": args.activation_id}
-        if nwb_schema.NwbFile & key:
-            print(f"already recorded: {(nwb_schema.NwbFile & key).fetch1('status')}; delete the row to rebuild")
+        # Under the daemon's NWB lock (`nwb/lock.py`): a build beside a pass
+        # would record the same activation twice.
+        try:
+            with exclusive(args.prefix):
+                key = {"subject": args.subject, "session_datetime": args.session_datetime,
+                       "montage_id": args.montage_id, "activation_id": args.activation_id}
+                if nwb_schema.NwbFile & key:
+                    print(f"already recorded: {(nwb_schema.NwbFile & key).fetch1('status')}; delete the row to rebuild")
+                    return 1
+                # As the daemon's stage skips them: a freed session's files are gone
+                # from scratch, and another session may have landed at its path.
+                if {"subject": args.subject, "session_datetime": args.session_datetime} in scratch.currently_freed(
+                        prefix=args.prefix):
+                    print("freed: rehydrate the session first (wlpp rehydrate)")
+                    return 1
+                waiting = readiness(key)
+                if waiting is not None:
+                    print(f"not ready: {waiting}")
+                    return 1
+                result = build(key, args.nwb_root)
+                record(key, result)
+                print(f"{result.status}: {result.path or result.reason}")
+                return 0 if result.status == "written" else 1
+        except Busy as busy:
+            print(f"{busy}; try again when it finishes")
             return 1
-        # As the daemon's stage skips them: a freed session's files are gone
-        # from scratch, and another session may have landed at its path.
-        if {"subject": args.subject, "session_datetime": args.session_datetime} in scratch.currently_freed(
-                prefix=args.prefix):
-            print("freed: rehydrate the session first (wlpp rehydrate)")
-            return 1
-        waiting = readiness(key)
-        if waiting is not None:
-            print(f"not ready: {waiting}")
-            return 1
-        result = build(key, args.nwb_root)
-        record(key, result)
-        print(f"{result.status}: {result.path or result.reason}")
-        return 0 if result.status == "written" else 1
 
     if args.group == "daemon":
         from wl_preproc.daemon import run_once
         from wl_preproc.nwb.publish import Share
 
         shares = {}
+        if args.nwb_fast_headroom_gb is not None and args.nwb_fast_headroom_gb < 0:
+            parser.error("--nwb-fast-headroom-gb cannot be negative")
         for tier in ("slow", "fast"):
             root, name = getattr(args, f"nwb_{tier}_root"), getattr(args, f"nwb_{tier}_share")
             if (root is None) != (name is None) or (root is not None and args.host is None):
                 parser.error(f"--nwb-{tier}-root needs --nwb-{tier}-share and --host, and the reverse")
             if root is not None:
-                headroom = int(args.nwb_fast_headroom_gb * 1e9) if tier == "fast" else 0
+                headroom = 0 if tier == "slow" else (
+                    None if args.nwb_fast_headroom_gb is None else int(args.nwb_fast_headroom_gb * 1e9))
                 shares[tier] = Share(tier=tier, mount=root, host=args.host, name=name, headroom_bytes=headroom)
         if "fast" in shares and "slow" not in shares:
             parser.error("--nwb-fast-root needs --nwb-slow-root: the slow share is every file's long-term home")

@@ -27,6 +27,12 @@ class NwbFile(dj.Manual):
     # publishes only `written`). refused: not built, `reason` says why; never
     # retried automatically -- delete the row to rebuild.
     status : enum('written','invalid','refused')
+    # path and n_bytes: the scratch copy the builder wrote. Publishing deletes
+    # it once the file is placed; where the file is now is its latest
+    # NwbPlacement. Deleting a published row to rebuild it is safe: the
+    # rebuild takes over the published file when its written-once data
+    # matches, and is refused when it does not (design spec
+    # `2026-09-29-nwb-publishing-design.md` section 4's amendment).
     path = '' : varchar(1024)
     n_bytes = null : bigint unsigned
     built_at : datetime

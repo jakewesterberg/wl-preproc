@@ -16,7 +16,8 @@ from wl_sync.barcode import encode
 
 from wl_preproc.contracts.manifest import SCHEMA_VERSION, SessionManifest, StartedAtSource
 from wl_preproc.contracts.sidecar import BehaviorCameraSidecar, VideoFile
-from wl_preproc.synth.recipe import SYNTH_EPOCH, SessionRecipe
+from wl_preproc.synth.faults import mismatch_rig_line
+from wl_preproc.synth.recipe import SYNTH_EPOCH, Fault, SessionRecipe
 from wl_preproc.synth.timeline import apply_drift
 from wl_preproc.synth.truth import GroundTruth
 
@@ -171,12 +172,14 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
     lines = []
     for trial in truth.trials:
         condition, params = rig_condition(trial.trial_id)
-        lines.append(json.dumps({
+        lines.append({
             "index": trial.trial_id,
             "subject": recipe.subject,
             "outcome": "correct",
             "block": f"block-{trial.block_id}",
             "condition": condition,
             "params": params,
-        }, sort_keys=True))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        })
+    if Fault.MISMATCHED_RIG_LINE in recipe.faults:
+        lines = mismatch_rig_line(lines)
+    path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n", encoding="utf-8")

@@ -90,3 +90,32 @@ def test_an_activation_key_compares_whatever_carried_it():
     aware = {**naive, "session_datetime": datetime.datetime(2027, 1, 12, 10, tzinfo=datetime.timezone(datetime.timedelta(hours=1)))}
     text = {**naive, "session_datetime": "2027-01-12T09:00:00"}
     assert activation_tuple(naive) == activation_tuple(aware) == activation_tuple(text) == ("s", "2027-01-12T09:00:00", 0, 1)
+
+
+def test_the_fast_share_keeps_a_tenth_of_itself_free_by_default(tmp_path, monkeypatch):
+    """The requester's choice, 2026-09-29: with no margin given, moves to the
+    fast share stop at 10% of its size, instead of filling it."""
+    import collections
+    import shutil
+
+    from wl_preproc.nwb.publish import Share
+
+    usage = collections.namedtuple("usage", "total used free")
+    share = Share(tier="fast", mount=tmp_path, host="wl-nas", name="nvme")
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: usage(1000, 850, 150))
+    assert share.has_room(50) and not share.has_room(51)
+
+
+def test_a_description_that_cannot_be_written_leaves_nothing(tmp_path, monkeypatch):
+    """The final review's M14: a failed write leaves no `.json.partial`."""
+    import os
+
+    from wl_preproc.nwb.publish import write_description
+
+    def refused(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", refused)
+    with pytest.raises(OSError, match="No space"):
+        write_description(tmp_path / "x.nwb", {"schema_version": 1})
+    assert list(tmp_path.iterdir()) == []
