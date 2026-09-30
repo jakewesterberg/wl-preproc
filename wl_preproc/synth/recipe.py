@@ -150,6 +150,15 @@ class SessionRecipe(BaseModel):
     # lab's probe is NP1032, whose columns sit 103 um apart, and spec section 7
     # turns on a fixture being able to say so.
     probe_part_number: str = "NP1000"
+    # The probe's serial, as SpikeGLX writes it (`imDatPrb_sn`): wl.works'
+    # report of an insertion names the probe by it (design spec
+    # `2026-09-30-nwb-probes-design.md` section 2). Eleven digits, as IMEC's are.
+    probe_serial: str = "19011110001"
+    # Which bank of 384 the recorded channels sit in (NP 1.0's imroTbl:
+    # electrode = bank * 384 + channel). Nonzero is a partial bank selection,
+    # the case where reading the imroTbl rather than assuming the first sites
+    # is the whole point.
+    probe_bank: int = Field(default=0, ge=0)
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and
@@ -215,6 +224,12 @@ class SessionRecipe(BaseModel):
     @property
     def duration_s(self) -> float:
         return sum(block.duration_s for block in self.blocks)
+
+    def recorded_sites(self) -> list[dict]:
+        """The electrodes this session's SpikeGLX channels record, in channel
+        order: `probe_bank`'s 384, from its first."""
+        first = self.probe_bank * 384
+        return electrode_rows(self.probe_part_number)[first : first + self.n_ap_channels]
 
     # There is deliberately no resolved_channels() here. Defaulting the names was
     # tried on this object and put Intan's Port A convention on a device-neutral
@@ -286,6 +301,11 @@ class SessionRecipe(BaseModel):
             available = len(electrode_rows(self.probe_part_number))
         except UnknownProbeType as exc:
             raise ValueError(str(exc)) from exc
+        if self.probe_bank * 384 + self.n_ap_channels > available and self.n_ap_channels <= available:
+            raise ValueError(
+                f"probe_bank {self.probe_bank} with {self.n_ap_channels} channels needs electrodes up to "
+                f"{self.probe_bank * 384 + self.n_ap_channels - 1}, but {self.probe_part_number} has {available} sites"
+            )
         if self.n_ap_channels > available:
             raise ValueError(
                 f"n_ap_channels is {self.n_ap_channels} but "

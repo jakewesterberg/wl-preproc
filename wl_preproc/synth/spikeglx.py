@@ -113,7 +113,7 @@ def _meta_text(
 ) -> str:
     n_ap = recipe.n_ap_channels
     file_bytes = n_samples * n_channels * 2
-    sites = electrode_rows(recipe.probe_part_number)[:n_ap]
+    sites = recipe.recorded_sites()
     rate = recipe.ap_sample_rate_hz if band == "ap" else LF_SAMPLE_RATE_HZ
     # SpikeInterface picks the stream apart on this pair: (n_ap, 0, 1) is an AP
     # file and (0, n_ap, 1) is an LF one. Getting it wrong yields a file the
@@ -121,7 +121,7 @@ def _meta_text(
     ap_lf_sy = f"{n_ap},0,1" if band == "ap" else f"0,{n_ap},1"
 
     imro = f"({n_ap},{n_ap})" + "".join(
-        f"({c} 0 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
+        f"({c} {recipe.probe_bank} 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
     )
     chan_map = (
         f"({n_ap},0,1)"
@@ -155,6 +155,9 @@ def _meta_text(
         # hardcoded NP1000 (Neuropixels 1.0) -- SessionRecipe.probe_part_number
         # is what lets a fixture name NP1032 instead.
         f"imDatPrb_pn={recipe.probe_part_number}",
+        # The probe's serial: what an insertion is joined on (design spec
+        # `2026-09-30-nwb-probes-design.md` section 2.1).
+        f"imDatPrb_sn={recipe.probe_serial}",
         # Which channels were saved. ProbeInterface requires it to map the
         # imroTbl onto physical sites; "all" is the whole-probe case.
         "snsSaveChanSubset=all",
@@ -177,7 +180,7 @@ def write_spikeglx(
     n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * fs)
     n_channels = recipe.n_ap_channels + 1
 
-    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    sites = recipe.recorded_sites()
     data = np.zeros((n_samples, n_channels), dtype=np.float64)
     if truth.units:
         data[:, :-1] = (
@@ -228,7 +231,7 @@ def _write_lf(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_p
     fs = LF_SAMPLE_RATE_HZ
     n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * fs)
     n_channels = recipe.n_ap_channels + 1
-    sites = electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    sites = recipe.recorded_sites()
 
     data = np.zeros((n_samples, n_channels), dtype=np.float64)
     if truth.units:
