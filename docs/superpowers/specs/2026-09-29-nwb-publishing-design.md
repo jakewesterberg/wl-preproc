@@ -373,6 +373,12 @@ file is published,** on either share. It is false, with the reason stated, when:
 
 It stays `overridable`: a recorded force still clears it, as today.
 
+*Amended 2026-09-30 by the canonical lifecycle design
+([`2026-09-30-canonical-lifecycle-design.md`](2026-09-30-canonical-lifecycle-design.md) §4; this
+spec's final review, M12):* *only each montage's **current** canonical counts, the one no
+replacement supersedes. A superseded canonical, refused or invalid, no longer blocks a session
+whose replacement is published.*
+
 ## 9. Tables
 
 **`nwb.NwbFile`** gains:

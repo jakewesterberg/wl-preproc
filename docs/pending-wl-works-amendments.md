@@ -1,9 +1,53 @@
 # Amendments to wl-works
 
-**Four are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29.** The earlier two
+**Five are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, one 2026-09-30.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — wl.works fires the canonical NWB, and regenerates it by naming what it replaces
+
+**Opened 2026-09-30** with the canonical lifecycle
+([`specs/2026-09-30-canonical-lifecycle-design.md`](superpowers/specs/2026-09-30-canonical-lifecycle-design.md)),
+on the requester's decision that day: **wl.works fires every canonical**. Everything the decision
+needs lives in wl.works: which probe insertions define the montages, which blocks are bad, and
+the subject's details. This host cannot ask for them, since wl.works opens every connection, and
+it must not guess a montage (parent spec §8.3, "no insertion record → no canonical").
+
+**This repository's half is built.**
+- **A canonical request may name its block set:** `selection` gains `"role": "canonical"` with
+  `block_ids`. Without `role`, a request means what it always meant.
+- **A replacement names what it supersedes:** `"role": "canonical"` with
+  `"supersedes_activation_id": N`.
+  - `N` must be the montage's current canonical.
+  - This host creates a new canonical at the next free activation id, with `supersedes = N`,
+    and answers with its key.
+  - The old file stays exactly where it is, readable, its annotations untouched.
+  - A replacement naming anything else is a `409`: wl.works and this host disagree about which
+    file is current.
+- **A canonical request without `supersedes_activation_id`,** for a montage that already has
+  one, returns its current canonical.
+- **`GET /nwb` lists a superseded file with `superseded_by`,** carried to a cursor by a
+  `superseded` change.
+- **An `invalid` file is rebuilt here** once the subject details it lacked arrive in a job
+  request. wl.works need do nothing for it.
+
+**Still open on their side:**
+1. **Run the 12-hour clock,** and wait until the ELN holds the session's insertions, block
+   verdicts and subject details. Then send a canonical job request, and re-fire while the ELN
+   is not current: the parent spec's "retryable state with no manual step" (§8.3.1) is now
+   wl.works'. A `422` naming a session this host has not ingested yet is the ordinary
+   "not yet": retry it.
+2. **Leave out bad blocks** by sending `"role": "canonical"` with `block_ids`.
+3. **Regenerate with a replacement** naming the current canonical, and treat a `409` as a
+   disagreement for a person.
+4. **Read `superseded_by`** in `GET /nwb`, alongside wl.works' own `supersedesId` and
+   `supersededAt` (Plan 24 §10.4).
+5. **Change `docs/ops/waiting-on.md`,** which says "wl-preproc generates the canonical session
+   NWB automatically some hours after the data lands". wl.works now fires it; wl-preproc still
+   generates the file.
 
 ---
 

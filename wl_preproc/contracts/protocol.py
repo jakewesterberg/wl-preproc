@@ -302,6 +302,9 @@ class NwbListingEntry(BaseModel):
     # `contracts/nwb_description.py::NwbDescription`, exported on its own as
     # `nwb_description.json`; null for a refused activation.
     description: dict[str, Any] | None
+    # The replacement canonical that supersedes this activation, or null
+    # (design spec `2026-09-30-canonical-lifecycle-design.md` section 4).
+    superseded_by: int | None
 
 
 class NwbListing(BaseModel):

@@ -885,34 +885,72 @@ def test_no_code_path_writes_activation_supersedes():
     RST double-backticks, never a Python quote character next to an `=` or
     `[`. Confirmed all patterns fire on their intended shape and stay
     silent against the committed source before being relied on here.
+
+    *Narrowed 2026-09-30* (design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 3): one function,
+    `request.py::submit_replacement`, now writes it, and
+    `_supersedes_writes` below skips exactly that function.
     """
+    offenders = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        rel = path.relative_to(SOURCE_ROOT.parent)
+        offenders.extend(f"{rel}:{lineno}: {line[:70]}"
+                         for lineno, line in _supersedes_writes(rel.as_posix(), path.read_text()))
+    assert not offenders, (
+        "a source line writes 'supersedes' (as a dict key, a subscript "
+        "assignment, or a keyword argument) outside "
+        f"{_SUPERSEDES_WRITER[0]}::{_SUPERSEDES_WRITER[1]}; a derivative never "
+        "supersedes a canonical, and only a replacement canonical, which that "
+        "one function creates, supersedes anything (design spec "
+        "`2026-09-30-canonical-lifecycle-design.md` section 3):\n  " + "\n  ".join(offenders)
+    )
+
+
+# The one function allowed to write `Activation.supersedes`, since the
+# canonical lifecycle (design spec `2026-09-30-canonical-lifecycle-design.md`
+# section 3). Until then the rule allowed no writer at all.
+_SUPERSEDES_WRITER = ("wl_preproc/schema/request.py", "submit_replacement")
+
+
+def _supersedes_writes(rel: str, text: str) -> list[tuple[int, str]]:
+    """Every line of `text` that writes `supersedes`, with its number, but
+    not inside `_SUPERSEDES_WRITER`. The enclosing function is the last
+    top-level `def` above the line."""
     import re
 
     dict_key_write = re.compile(r"""["']supersedes["']\s*:""")
     subscript_write = re.compile(r"""\[\s*["']supersedes["']\s*\]\s*=(?!=)""")
     keyword_write = re.compile(r"""supersedes\s*=(?!=)""")
     ddl_declaration = re.compile(r"""^supersedes\s*=\s*\w+\s*:""")
+    top_level_def = re.compile(r"""^def (\w+)\(""")
+    writes, function = [], None
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.startswith(("def ", "class ")):
+            match = top_level_def.match(line)
+            function = match.group(1) if match else None
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if (
+            dict_key_write.search(stripped)
+            or subscript_write.search(stripped)
+            or (keyword_write.search(stripped) and not ddl_declaration.match(stripped))
+        ) and (rel, function) != _SUPERSEDES_WRITER:
+            writes.append((lineno, stripped))
+    return writes
 
-    offenders = []
-    for path in SOURCE_ROOT.rglob("*.py"):
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if (
-                dict_key_write.search(stripped)
-                or subscript_write.search(stripped)
-                or (keyword_write.search(stripped) and not ddl_declaration.match(stripped))
-            ):
-                rel = path.relative_to(SOURCE_ROOT.parent)
-                offenders.append(f"{rel}:{lineno}: {stripped[:70]}")
-    assert not offenders, (
-        "a source line writes 'supersedes' (as a dict key, a subscript "
-        "assignment, or a keyword argument); Activation.supersedes must "
-        "remain unwritten by every code path -- a derivative never "
-        "supersedes a canonical, and nothing regenerates a canonical yet "
-        "either:\n  " + "\n  ".join(offenders)
-    )
+
+def test_the_supersedes_rule_allows_exactly_one_function():
+    """The narrowing admits only `submit_replacement`: the same write in any
+    other function of the same module, or in the same-named function of
+    another module, is still caught."""
+    writer = "def submit_replacement(x):\n    row = {'supersedes': x}\n"
+    other = "def submit(x):\n    row = {'supersedes': x}\n"
+    assert _supersedes_writes("wl_preproc/schema/request.py", writer) == []
+    assert _supersedes_writes("wl_preproc/schema/request.py", other) == [(2, "row = {'supersedes': x}")]
+    assert _supersedes_writes("wl_preproc/nwb/build.py", writer) == [(2, "row = {'supersedes': x}")]
+    after = writer + "\n\ndef later(x):\n    row['supersedes'] = x\n"
+    assert _supersedes_writes("wl_preproc/schema/request.py", after) == [(6, "row['supersedes'] = x")]
 
 
 def test_every_table_documents_its_key_in_schema(all_tables):

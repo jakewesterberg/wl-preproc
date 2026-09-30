@@ -55,8 +55,12 @@ def _aware_utc(value: datetime.datetime) -> datetime.datetime:
 def _block_set(activation_key: dict, activation: dict, session_key: dict) -> list[dict]:
     from wl_preproc.schema import core, request
 
-    if activation["role"] == "derivative":
-        rows = (core.Block & (request.ActivationBlock & activation_key).proj()).to_dicts()
+    # A derivative always names its blocks; since the canonical lifecycle a
+    # canonical may too (design spec `2026-09-30-canonical-lifecycle-design.md`
+    # section 3). Without named blocks, a canonical takes its montage's.
+    named = request.ActivationBlock & activation_key
+    if activation["role"] == "derivative" or named:
+        rows = (core.Block & named.proj()).to_dicts()
     else:
         montage = (core.Montage & activation_key).fetch1()
         rows = [row for row in (core.Block & session_key).to_dicts()

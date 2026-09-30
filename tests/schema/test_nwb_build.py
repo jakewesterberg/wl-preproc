@@ -1126,6 +1126,185 @@ def test_a_second_wlpp_process_leaves_the_nwb_stages_alone(activation, daemon_mo
     assert not [e for e in report["errors"] if "another wlpp process" in e]
     assert nwb_schema.NwbFile & key
 
+
+def test_a_superseded_activation_that_was_never_built_is_not_built(activation, prefix, tmp_path_factory):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 4: a
+    replacement that arrives before its predecessor was built leaves the
+    predecessor unbuilt."""
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request
+
+    session_key, _key, _blocks = activation
+    now = datetime.datetime(2027, 6, 1, 12, 0)
+    old = {**session_key, "montage_id": 1, "activation_id": 50}
+    new = {**session_key, "montage_id": 1, "activation_id": 51}
+    request.Request.insert1({"idempotency_key": "nwbstep1-superseded", "task_type": "neural",
+                             "origin": "wl_works", "payload": {}, "requested_at": now})
+    request.Activation.insert1({**old, "role": "canonical", "request_key": "nwbstep1-superseded", "created_at": now})
+    request.Activation.insert1({**new, "role": "canonical", "request_key": "nwbstep1-superseded", "created_at": now,
+                                "supersedes": 50})
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-superseded"))
+        assert not nwb_schema.NwbFile & old
+        assert nwb_schema.NwbFile & new
+    finally:
+        (nwb_schema.NwbFile & [old, new]).delete(prompt=False)
+        (request.Activation & [new, old]).delete(prompt=False)
+        (request.Request & {"idempotency_key": "nwbstep1-superseded"}).delete(prompt=False)
+
+
+def test_the_listing_marks_a_superseded_file_through_the_cursor(activation, prefix, tmp_path_factory):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 4: the
+    build stage records a `superseded` change for an activation with a row
+    once a replacement names it, exactly once, and `GET /nwb` with a cursor
+    then lists it with `superseded_by`."""
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.responder.nwb import list_files
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request
+
+    session_key, _key, _blocks = activation
+    now = datetime.datetime(2027, 6, 1, 12, 0)
+    old = {**session_key, "montage_id": 1, "activation_id": 60}
+    new = {**session_key, "montage_id": 1, "activation_id": 61}
+    request.Request.insert1({"idempotency_key": "nwbstep1-listing-superseded", "task_type": "neural",
+                             "origin": "wl_works", "payload": {}, "requested_at": now})
+    request.Activation.insert1({**old, "role": "canonical", "request_key": "nwbstep1-listing-superseded",
+                                "created_at": now})
+    nwb_schema.NwbFile.insert1({**old, "status": "refused", "built_at": now, "reason": "no blocks"})
+    cursor = list_files(None, prefix=prefix)["cursor"]
+    request.Activation.insert1({**new, "role": "canonical", "request_key": "nwbstep1-listing-superseded",
+                                "created_at": now, "supersedes": 60})
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-listing-superseded"))
+        run_stage(tmp_path_factory.mktemp("nwb-listing-superseded-again"))
+        assert len(nwb_schema.NwbChange & old & {"kind": "superseded"}) == 1
+        listed = {item["activation"]["activation_id"]: item for item in list_files(cursor, prefix=prefix)["files"]
+                  if item["activation"]["montage_id"] == 1}
+        assert listed[60]["superseded_by"] == 61
+        assert listed[61]["superseded_by"] is None
+    finally:
+        (nwb_schema.NwbFile & [old, new]).delete(prompt=False)
+        (request.Activation & [new, old]).delete(prompt=False)
+        (request.Request & {"idempotency_key": "nwbstep1-listing-superseded"}).delete(prompt=False)
+
+
+def test_an_invalid_file_is_rebuilt_once_its_missing_subject_details_arrive(activation, prefix, slow_share,
+                                                                            fast_share, tmp_path_factory):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 5.
+    Built without a date of birth, the file is `invalid`; a pass with nothing
+    changed leaves it alone; once the date arrives, the next pass rebuilds
+    it, and it is `written`. It was never published, so nothing is lost."""
+    from wl_preproc.ingest.landing import SUBJECT_BIRTH_DATE_UNKNOWN
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import pipeline
+
+    session_key, _key, blocks = activation
+    key = _derivative(session_key, blocks, prefix, blocks[0])
+    _unrecord(key, slow_share, fast_share)
+    birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
+    pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-first"))
+        first = (nwb_schema.NwbFile & key).fetch1()
+        assert first["status"] == "invalid"
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-unchanged"))
+        assert (nwb_schema.NwbFile & key).fetch1("built_at") == first["built_at"]
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+        run_stage(tmp_path_factory.mktemp("nwb-rebuild-after"))
+        rebuilt = (nwb_schema.NwbFile & key).fetch1()
+        assert rebuilt["status"] == "written"
+        assert rebuilt["description"]["subject"]["date_of_birth"] == birth.isoformat()
+        assert not Path(first["path"]).exists()
+    finally:
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+
+
+def _lifecycle_rows(session_key, request_key, rows):
+    """`Activation` rows written directly, each over block 2; tests/ is
+    outside the supersedes guardrail's scan."""
+    from wl_preproc.schema import request
+
+    now = datetime.datetime(2027, 6, 1, 12, 0)
+    request.Request.insert1({"idempotency_key": request_key, "task_type": "neural", "origin": "wl_works",
+                             "payload": {}, "requested_at": now})
+    for row in rows:
+        request.Activation.insert1({"request_key": request_key, "created_at": now, **session_key, **row})
+        request.ActivationBlock.insert1({**session_key, "montage_id": row["montage_id"],
+                                         "activation_id": row["activation_id"], "block_id": 2})
+
+
+def _drop_lifecycle_rows(session_key, request_key, keys):
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request
+
+    (nwb_schema.NwbFile & keys).delete(prompt=False)
+    (request.Activation & keys).delete(prompt=False)
+    (request.Request & {"idempotency_key": request_key}).delete(prompt=False)
+
+
+@pytest.mark.parametrize("why_unbuilt", ["superseded", "freed"])
+def test_an_invalid_row_the_stage_will_not_rebuild_survives_its_details_arriving(
+        activation, prefix, tmp_path_factory, why_unbuilt):
+    """The final review's I1. Discarding an `invalid` row whose details have
+    arrived is only right when the same pass rebuilds it. A superseded
+    activation (spec section 4: it "stays as it is") and one in a freed
+    session are never rebuilt, so their rows, the only record of their
+    files, must survive."""
+    from wl_preproc.ingest.landing import SUBJECT_BIRTH_DATE_UNKNOWN
+    from wl_preproc.nwb.build import build, record, run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import pipeline
+
+    session_key, _key, _blocks = activation
+    old = {**session_key, "montage_id": 0, "activation_id": 90}
+    new = {**session_key, "montage_id": 0, "activation_id": 91}
+    rows = [{"montage_id": 0, "activation_id": 90, "role": "canonical"}]
+    if why_unbuilt == "superseded":
+        rows.append({"montage_id": 0, "activation_id": 91, "role": "canonical", "supersedes": 90})
+    _lifecycle_rows(session_key, f"survive-{why_unbuilt}", rows)
+    birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
+    pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
+    try:
+        record(old, build(old, tmp_path_factory.mktemp(f"survive-{why_unbuilt}-a")))
+        assert (nwb_schema.NwbFile & old).fetch1("status") == "invalid"
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+        run_stage(tmp_path_factory.mktemp(f"survive-{why_unbuilt}-b"),
+                  freed=[dict(session_key)] if why_unbuilt == "freed" else None)
+        row = (nwb_schema.NwbFile & old).to_dicts()
+        assert row and row[0]["status"] == "invalid" and Path(row[0]["path"]).exists()
+        if why_unbuilt == "superseded":
+            assert (nwb_schema.NwbFile & new).fetch1("status") == "written"
+    finally:
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+        _drop_lifecycle_rows(session_key, f"survive-{why_unbuilt}", [old, new])
+
+
+def test_a_file_invalid_for_another_reason_is_not_rebuilt_every_pass(activation, prefix, monkeypatch,
+                                                                     tmp_path_factory):
+    """The final review's I3, Review Focus 4 pinned properly: the subject's
+    details are all present, the file is invalid for another reason, and
+    each pass must find its recorded subject equal to the current one."""
+    import wl_preproc.nwb.build as build_module
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, _blocks = activation
+    key = {**session_key, "montage_id": 0, "activation_id": 97}
+    _lifecycle_rows(session_key, "loop-invalid", [{"montage_id": 0, "activation_id": 97, "role": "derivative",
+                                                   "selection_hash": "loop-invalid"}])
+    monkeypatch.setattr(build_module, "n_critical", lambda findings: 1)
+    try:
+        build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("loop-invalid-a")))
+        first = (nwb_schema.NwbFile & key).fetch1()
+        assert first["status"] == "invalid" and first["description"]["subject"]["date_of_birth"] is not None
+        build_module.run_stage(tmp_path_factory.mktemp("loop-invalid-b"))
+        build_module.run_stage(tmp_path_factory.mktemp("loop-invalid-c"))
+        assert (nwb_schema.NwbFile & key).fetch1("built_at") == first["built_at"]
+    finally:
+        _drop_lifecycle_rows(session_key, "loop-invalid", [key])
+
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage
     does: the others are recorded, the failure is reported, and the failed
