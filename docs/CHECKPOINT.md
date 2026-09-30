@@ -1,18 +1,23 @@
 # Where this build actually is
 
-**Last updated 2026-09-30**, describing `main` at `1f02d59`, the merge of
-`fix/nwb-minors`. It fixes NWB publishing's deferred minors: one wlpp process
-at a time in the NWB stages, and a tenth of the fast share kept free by
-default (handoff `handoffs/2026-09-29-nwb-publishing.md` §8). It follows
-`7075799`, the archive-share merge, and `d63be54`, the NWB publishing merge.
-CI green on `7075799`, 1903 passed on each interpreter, `gh run view
-36623205590`.
+**Last updated 2026-09-30**, describing `main` at `9fa7c1f`, the merge of
+`spec/canonical-lifecycle`: the canonical lifecycle, piece 2b of Phase 3's
+NWB export (handoff `handoffs/2026-09-30-canonical-lifecycle.md`). wl.works
+fires every canonical, and names the one a replacement supersedes. Invalid
+files rebuild themselves once the subject's details arrive. It follows
+`1f02d59`, the minors merge: CI green, 1910 passed on each interpreter,
+`gh run view 36678124790`.
 
-`1f02d59`'s tree is byte-identical to the tested branch head `3cadb65`: 1911
-passed on 3.11 and 1910 on 3.13 locally, 0 failed. CI read off `1f02d59`
-itself is green on both interpreters, 1910 passed on each with 33 skipped,
-and the manifest check is green (`gh run view 36678124790`). CI on later
-heads is recorded here only once read, not before.
+`9fa7c1f`'s tree is byte-identical to the tested branch head `17db1c5`, the
+final review's fix pass: 1945 passed on 3.11 and 1944 on 3.13 locally, 0
+failed. CI read off `9fa7c1f` itself is green on both interpreters, 1944
+passed on each with 33 skipped, and the manifest check is green (`gh run
+view 36704973720`). CI on later heads is recorded here only once read, not
+before.
+
+*This header named `1f02d59` (the minors merge, CI green, 1910 passed on each
+interpreter, `36678124790`) until the canonical-lifecycle merge; true when
+written.*
 
 *This header named `7075799` (the archive-share merge, CI green, 1903 passed on
 each interpreter, `36623205590`) until the minors merge; true when written.*
@@ -506,7 +511,9 @@ requester chose to merge the same day; true when written.*
 >    and `wlpp archive` refuses (the archive spec §3's amendment).
 >
 >    **The canonical lifecycle (piece 2b) is BUILT on
->    `spec/canonical-lifecycle` (2026-09-30), NOT merged as written** (spec
+>    `spec/canonical-lifecycle` (2026-09-30), NOT merged as written** *(merged
+>    and pushed as `9fa7c1f` the same day, after its final review's fix pass;
+>    CI green, 1944 passed on each interpreter)* (spec
 >    `superpowers/specs/2026-09-30-canonical-lifecycle-design.md`). **wl.works
 >    fires every canonical** (the requester's decision): it runs the 12-hour
 >    clock, waits on its ELN, and regenerates by sending a replacement that

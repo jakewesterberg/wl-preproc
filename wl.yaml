@@ -143,7 +143,8 @@ status:
     to a NAS share carrying a `.wlpp-archive-share` marker, placed once by
     hand (merged as `7075799`, 2026-09-29; archive spec §3's amendment).
     The canonical lifecycle, piece 2b, is BUILT on `spec/canonical-lifecycle`
-    (2026-09-30, not yet merged): wl.works fires every canonical and names
+    (2026-09-30; merged and pushed as `9fa7c1f` the same day, CI green): wl.works
+    fires every canonical and names
     the one a replacement supersedes; the superseded file stays readable and
     is marked in `GET /nwb`; reclamation counts only the current canonical;
     and invalid files rebuild themselves once the subject's details arrive
@@ -455,6 +456,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `1f02d59` until the canonical-lifecycle merge `9fa7c1f` on 2026-09-30
+  # (CI green on `1f02d59`, run 36678124790); true when written.
   # Was `7075799` until the minors merge `1f02d59` on 2026-09-30 (CI
   # green on `7075799`, run 36623205590); true when written.
   # Was `d63be54` until the archive-share merge `7075799` on 2026-09-29 (CI
@@ -464,7 +467,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "1f02d59"
+  describes: "9fa7c1f"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
