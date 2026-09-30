@@ -348,6 +348,11 @@ _NWB_STATES = {
     "invalid": ("rcnwb3", "montage 0: its canonical NWB is invalid"),
     "unpublished": ("rcnwb4", "montage 0: its canonical NWB is built but not yet published"),
     "published": ("rcnwb5", ""),
+    # The canonical lifecycle (design spec
+    # `2026-09-30-canonical-lifecycle-design.md` section 4): the refused
+    # activation 0 is superseded by a published activation 1, so only the
+    # current one counts.
+    "superseded": ("rcnwb6", ""),
 }
 
 
@@ -378,20 +383,30 @@ def test_canonical_nwb_present_follows_the_published_canonical_file(session, pre
                                  "payload": {}, "requested_at": now})
         request.Activation.insert1({**activation, "role": "canonical", "request_key": f"{subject}-k",
                                     "created_at": now})
+    current = activation
+    if state == "superseded":
+        current = {**activation, "activation_id": 1}
+        request.Request.insert1({"idempotency_key": f"{subject}-k2", "task_type": "neural",
+                                 "origin": "wl_works", "payload": {}, "requested_at": now})
+        request.Activation.insert1({**current, "role": "canonical", "request_key": f"{subject}-k2",
+                                    "created_at": now, "supersedes": 0})
     try:
-        if state in ("invalid", "unpublished", "published"):
-            nwb_schema.NwbFile.insert1({**activation, "status": "invalid" if state == "invalid" else "written",
+        if state == "superseded":
+            nwb_schema.NwbFile.insert1({**activation, "status": "refused", "built_at": now,
+                                        "reason": "no blocks"})
+        if state in ("invalid", "unpublished", "published", "superseded"):
+            nwb_schema.NwbFile.insert1({**current, "status": "invalid" if state == "invalid" else "written",
                                         "built_at": now})
-        if state == "published":
-            record_change(activation, "published",
+        if state in ("published", "superseded"):
+            record_change(current, "published",
                           {"tier": "slow", "host": "wl-nas", "share": "hdd", "path": "nwb/x.nwb", "n_bytes": 1})
 
         nwb = _condition(reclaim_conditions(key, expected_file_count=0, prefix=prefix), "canonical_nwb_present")
-        assert (nwb.passed, nwb.detail, nwb.overridable) == (state == "published", detail, True)
+        assert (nwb.passed, nwb.detail, nwb.overridable) == (state in ("published", "superseded"), detail, True)
     finally:
         # These rows have no file behind them. Left in the suite's shared
         # database, the NWB stages in later tests would try to publish them.
-        (nwb_schema.NwbFile & activation).delete(prompt=False)
+        (nwb_schema.NwbFile & key).delete(prompt=False)
 
 
 def test_a_force_overrides_tier_d_and_the_missing_nwb(session, prefix):

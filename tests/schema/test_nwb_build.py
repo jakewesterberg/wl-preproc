@@ -1126,6 +1126,33 @@ def test_a_second_wlpp_process_leaves_the_nwb_stages_alone(activation, daemon_mo
     assert not [e for e in report["errors"] if "another wlpp process" in e]
     assert nwb_schema.NwbFile & key
 
+
+def test_a_superseded_activation_that_was_never_built_is_not_built(activation, prefix, tmp_path_factory):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 4: a
+    replacement that arrives before its predecessor was built leaves the
+    predecessor unbuilt."""
+    from wl_preproc.nwb.build import run_stage
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema import request
+
+    session_key, _key, _blocks = activation
+    now = datetime.datetime(2027, 6, 1, 12, 0)
+    old = {**session_key, "montage_id": 1, "activation_id": 50}
+    new = {**session_key, "montage_id": 1, "activation_id": 51}
+    request.Request.insert1({"idempotency_key": "nwbstep1-superseded", "task_type": "neural",
+                             "origin": "wl_works", "payload": {}, "requested_at": now})
+    request.Activation.insert1({**old, "role": "canonical", "request_key": "nwbstep1-superseded", "created_at": now})
+    request.Activation.insert1({**new, "role": "canonical", "request_key": "nwbstep1-superseded", "created_at": now,
+                                "supersedes": 50})
+    try:
+        run_stage(tmp_path_factory.mktemp("nwb-superseded"))
+        assert not nwb_schema.NwbFile & old
+        assert nwb_schema.NwbFile & new
+    finally:
+        (nwb_schema.NwbFile & [old, new]).delete(prompt=False)
+        (request.Activation & [new, old]).delete(prompt=False)
+        (request.Request & {"idempotency_key": "nwbstep1-superseded"}).delete(prompt=False)
+
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage
     does: the others are recorded, the failure is reported, and the failed

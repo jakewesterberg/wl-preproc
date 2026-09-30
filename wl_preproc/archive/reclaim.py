@@ -76,7 +76,10 @@ def reclaimable(predicate: Predicate) -> bool:
 def _canonical_nwb(session_key: dict, prefix: str) -> tuple[bool, str]:
     """Whether every montage of the session has a canonical activation whose
     NWB file is `written` and published, on either share (design spec
-    `2026-09-29-nwb-publishing-design.md` section 8), and, when not, why."""
+    `2026-09-29-nwb-publishing-design.md` section 8), and, when not, why.
+    Only each montage's CURRENT canonical counts: a superseded one, refused
+    or invalid, must not block a session whose replacement is published
+    (design spec `2026-09-30-canonical-lifecycle-design.md` section 4)."""
     from wl_preproc.nwb.publish import current_placement
     from wl_preproc.schema import core, request
     from wl_preproc.schema import nwb as nwb_schema
@@ -87,10 +90,10 @@ def _canonical_nwb(session_key: dict, prefix: str) -> tuple[bool, str]:
         return False, "no montage, so no canonical activation"
     problems = []
     for montage_id in montages:
-        canonical = (request.Activation & session_key & {"montage_id": montage_id, "role": "canonical"}).keys()
-        if not canonical:
+        current = request.current_canonical({**session_key, "montage_id": montage_id})
+        if current is None:
             problems.append(f"montage {montage_id}: no canonical activation")
-        for key in canonical:
+        for key in ([] if current is None else [{k: current[k] for k in request.Activation.primary_key}]):
             rows = (nwb_schema.NwbFile & key).to_dicts()
             if not rows:
                 problems.append(f"montage {montage_id}: its canonical NWB is not built yet")

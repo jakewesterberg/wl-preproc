@@ -517,13 +517,12 @@ def submit(
         # canonical result: caught live by
         # test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero
         # in tests/schema/test_request.py.
-        existing = Activation & canonical_selection_key
-        if existing:
-            # One fetch1() for the whole row rather than one per key
-            # attribute — Activation's key has four parts, so the brief's
-            # dict-comprehension form issued four SELECTs for this branch.
-            row = existing.fetch1()
-            return {k: row[k] for k in Activation.primary_key}
+        # The CURRENT canonical, not any canonical row: once a replacement
+        # exists the montage has two, and a fetch1() here raised (design
+        # spec `2026-09-30-canonical-lifecycle-design.md` section 3, case 2).
+        existing = current_canonical(selection_key)
+        if existing is not None:
+            return {k: existing[k] for k in Activation.primary_key}
 
         key = {**selection_key, "activation_id": 0}
         Activation.insert1(
@@ -547,6 +546,30 @@ def submit(
 # _locking_read_one's for why the re-check inside that retry is an
 # exact-primary-key locking read and a local increment, never a range read,
 # unlike in paramset.register.
+def current_canonical(montage_key: dict) -> dict | None:
+    """The montage's current canonical activation: the canonical row no
+    other activation supersedes (parent spec section 8.3, "exactly one
+    current per (session, montage)"; design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 3). None when the
+    montage has no canonical.
+
+    A replacement only ever supersedes the current canonical, so the chain
+    is linear and exactly one row qualifies; should a hand edit leave two,
+    the latest id wins rather than raising under every stage that asks."""
+    montage = {k: montage_key[k] for k in ("subject", "session_datetime", "montage_id")}
+    rows = (Activation & montage).to_dicts()
+    replaced = {row["supersedes"] for row in rows if row["supersedes"] is not None}
+    current = [row for row in rows if row["role"] == "canonical" and row["activation_id"] not in replaced]
+    return max(current, key=lambda row: row["activation_id"]) if current else None
+
+
+def is_superseded(key: dict) -> bool:
+    """Whether another activation of the same montage supersedes this one."""
+    montage = {k: key[k] for k in ("subject", "session_datetime", "montage_id")}
+    replaced = (Activation & montage & "supersedes IS NOT NULL").to_arrays("supersedes")
+    return int(key["activation_id"]) in {int(value) for value in replaced}
+
+
 _MAX_DERIVATIVE_ALLOCATE_ATTEMPTS = 10
 
 

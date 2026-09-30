@@ -135,8 +135,11 @@ def record(activation_key: dict, result: BuildResult) -> None:
 
 def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """The daemon's `_nwb_stage`: every activation without an `NwbFile` row,
-    skipping freed sessions and, without recording anything, those whose
-    inputs are not all computed yet (`gather.readiness`). Returns
+    skipping freed sessions, superseded activations (a replacement arrived
+    before this one was built: design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 4) and, without
+    recording anything, those whose inputs are not all computed yet
+    (`gather.readiness`). Returns
     `(activations recorded, per-activation failures)`, the archive stage's
     shape."""
     from wl_preproc.schema import nwb as nwb_schema
@@ -148,7 +151,7 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
             continue
         try:
-            if readiness(key) is not None:
+            if request.is_superseded(key) or readiness(key) is not None:
                 continue
             record(key, build(key, nwb_root))
             recorded += 1

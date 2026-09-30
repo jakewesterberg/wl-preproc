@@ -1209,3 +1209,34 @@ def test_locking_read_one_rejects_an_incomplete_key(req):
                 # activation_id deliberately omitted
             }
         )
+
+
+def _replace_by_hand(req, selection, *, supersedes: int, activation_id: int, key: str) -> dict:
+    """A replacement canonical written directly, as design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 3 will have
+    `submit_replacement` write it: the next activation id, superseding the
+    one named."""
+    now = datetime.datetime(2027, 6, 1, 12, 0)
+    req.Request.insert1({"idempotency_key": key, "task_type": "neural", "origin": "wl_works",
+                         "payload": {}, "requested_at": now})
+    row = {**selection, "activation_id": activation_id, "role": "canonical", "request_key": key,
+           "created_at": now, "supersedes": supersedes}
+    req.Activation.insert1(row)
+    return {k: row[k] for k in req.Activation.primary_key}
+
+
+def test_submit_returns_the_current_canonical_after_a_replacement(req, selection):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 3,
+    case 2: once a replacement exists, a canonical request for the montage
+    answers with the current canonical, the one nothing supersedes -- not
+    activation 0."""
+    first = req.submit("k-cur-1", "neural", "wl_works", selection, {}, "jake")
+    replacement = _replace_by_hand(req, selection, supersedes=first["activation_id"], activation_id=1,
+                                   key="k-cur-2")
+    assert req.submit("k-cur-3", "neural", "wl_works", selection, {}, "jake") == replacement
+    assert {k: req.current_canonical(selection)[k] for k in req.Activation.primary_key} == replacement
+    assert req.is_superseded(first) and not req.is_superseded(replacement)
+
+
+def test_a_montage_without_a_canonical_has_no_current_one(req, selection):
+    assert req.current_canonical(selection) is None
