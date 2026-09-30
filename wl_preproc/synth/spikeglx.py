@@ -30,7 +30,7 @@ import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.ephys.geometry import electrode_rows
-from wl_preproc.synth.recipe import SessionRecipe
+from wl_preproc.synth.recipe import ProbeSpec, SessionRecipe
 from wl_preproc.synth.rhs import STROBE_WIDTH_S
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
@@ -65,6 +65,11 @@ LFP_FREQ_HZ = 8.0
 # Distinct offsets exist so two streams never draw the same noise; this one
 # had, silently, until now.
 LF_SEED_OFFSET = 4
+
+# The further probes' noise (`_write_quiet_probe`), drawn from
+# `(recipe.seed, EXTRA_PROBE_SEED, index)`: a tuple seed is its own stream,
+# distinct from every integer seed the other emitters derive.
+EXTRA_PROBE_SEED = 5
 
 # A different tick origin from the sync box, deliberately — see syncbox.py. It
 # is shared by both of this system's streams: SpikeGLX starts and stops imec
@@ -110,10 +115,13 @@ def _meta_text(
     n_channels: int,
     bin_name: str,
     band: str = "ap",
+    probe: ProbeSpec | None = None,
 ) -> str:
+    """One imec stream's `.meta`, for `probe` -- `imec0`'s when not given."""
+    probe = probe or recipe.probes()[0]
     n_ap = recipe.n_ap_channels
     file_bytes = n_samples * n_channels * 2
-    sites = recipe.recorded_sites()
+    sites = probe.sites(n_ap)
     rate = recipe.ap_sample_rate_hz if band == "ap" else LF_SAMPLE_RATE_HZ
     # SpikeInterface picks the stream apart on this pair: (n_ap, 0, 1) is an AP
     # file and (0, n_ap, 1) is an LF one. Getting it wrong yields a file the
@@ -121,7 +129,7 @@ def _meta_text(
     ap_lf_sy = f"{n_ap},0,1" if band == "ap" else f"0,{n_ap},1"
 
     imro = f"({n_ap},{n_ap})" + "".join(
-        f"({c} {recipe.probe_bank} 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
+        f"({c} {probe.bank} 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
     )
     chan_map = (
         f"({n_ap},0,1)"
@@ -132,7 +140,7 @@ def _meta_text(
     # fabricated version alternated x between 16 and 48, which is not the
     # layout of any probe -- NP1000's first four sites are (16,0), (48,0),
     # (0,20), (32,20). Nothing caught it because nothing read the map back.
-    geom = f"({recipe.probe_part_number},1,0,70)" + "".join(
+    geom = f"({probe.part_number},1,0,70)" + "".join(
         f"({s['shank']}:{s['x_coord']:g}:{s['y_coord']:g}:1)" for s in sites
     )
     lines = [
@@ -154,10 +162,10 @@ def _meta_text(
         # table and raises if it is absent. Read from the recipe rather than
         # hardcoded NP1000 (Neuropixels 1.0) -- SessionRecipe.probe_part_number
         # is what lets a fixture name NP1032 instead.
-        f"imDatPrb_pn={recipe.probe_part_number}",
+        f"imDatPrb_pn={probe.part_number}",
         # The probe's serial: what an insertion is joined on (design spec
         # `2026-09-30-nwb-probes-design.md` section 2.1).
-        f"imDatPrb_sn={recipe.probe_serial}",
+        f"imDatPrb_sn={probe.serial}",
         # Which channels were saved. ProbeInterface requires it to map the
         # imroTbl onto physical sites; "all" is the whole-probe case.
         "snsSaveChanSubset=all",
@@ -216,6 +224,10 @@ def write_spikeglx(
     )
     write_nidq(dir_path, recipe, truth, drift_ppm=drift_ppm)
     _write_lf(dir_path, recipe, truth, drift_ppm=drift_ppm)
+    for index, probe in enumerate(recipe.extra_probes, start=1):
+        _write_quiet_probe(dir_path, recipe, probe, index)
+    if recipe.spikeglx_restart is not None:
+        _restart(dir_path, recipe)
     # The imec binary, not the NI one: it is the stream the TRUNCATED_FILE fault
     # truncates and the one every existing caller means by "the SpikeGLX file".
     return bin_path
@@ -272,6 +284,64 @@ def _write_lf(dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_p
         encoding="utf-8",
     )
     return bin_path
+
+
+def _write_quiet_probe(dir_path: Path, recipe: SessionRecipe, probe: ProbeSpec, index: int) -> None:
+    """A further probe's AP and LF streams, `imec<index>`: a noise floor on
+    every channel and the SY column at zero, as `write_spikeglx`'s own
+    timing-only branch writes `imec0`'s. Seeded by a tuple rather than an
+    offset from `recipe.seed`, so no survey of the other emitters' offsets
+    (see `LF_SEED_OFFSET`) is needed to know it draws its own noise."""
+    rng = np.random.default_rng((recipe.seed, EXTRA_PROBE_SEED, index))
+    n_channels = recipe.n_ap_channels + 1
+    for band, fs in (("ap", recipe.ap_sample_rate_hz), ("lf", LF_SAMPLE_RATE_HZ)):
+        n_samples = int((recipe.duration_s + SPIKEGLX_PRE_ROLL_S) * fs)
+        data = np.zeros((n_samples, n_channels), dtype=np.float64)
+        data[:, :-1] = rng.normal(0.0, NOISE_UV / UV_PER_BIT, (n_samples, n_channels - 1))
+        bin_path = dir_path / f"{recipe.session_id}_imec{index}.{band}.bin"
+        data.astype(np.int16).tofile(bin_path)
+        bin_path.with_suffix(".meta").write_text(
+            _meta_text(recipe, n_samples, n_channels, bin_path.name, band=band, probe=probe), encoding="utf-8"
+        )
+
+
+def _restart(dir_path: Path, recipe: SessionRecipe) -> None:
+    """Cut every stream of the run at the restart, as SpikeGLX stopping and
+    starting again would: the first run keeps what was recorded before
+    `at_s`, and the second what was recorded from `at_s + gap_s`. Each file's `.meta` is written again for what it now
+    holds -- the second run's at `imec0`'s new bank when the restart changes
+    it -- and `firstSample` stays 0, since each run starts its own count.
+
+    **The second run takes SpikeGLX's own names, `<session_id>_g1_t0.nidq.bin`
+    and `<session_id>_g1_t0.imec<N>.<band>.bin`**, while the first keeps the
+    flat names every fixture already uses. spikeinterface's reader parses the
+    gate from `_g<N>_t<N>.`; named `<session_id>_g1_imec0...` instead, both
+    runs resolved to segment 0 and it refused the folder (measured,
+    spikeinterface 0.104.8). With these names it reads two segments.
+
+    The cut is at the stream's nominal rate, so under drift the streams' cuts
+    differ by the drift over `at_s` -- microseconds, and nothing reads them
+    finer than the barcodes each run carries."""
+    restart = recipe.spikeglx_restart
+    after = recipe if restart.probe_bank is None else recipe.model_copy(update={"probe_bank": restart.probe_bank})
+    run = recipe.session_id
+    streams = [(f"{run}.nidq.bin", f"{run}_g1_t0.nidq.bin", NIDQ_SAMPLE_RATE_HZ, None, None)]
+    for index in range(len(recipe.probes())):
+        for band, fs in (("ap", recipe.ap_sample_rate_hz), ("lf", LF_SAMPLE_RATE_HZ)):
+            streams.append((f"{run}_imec{index}.{band}.bin", f"{run}_g1_t0.imec{index}.{band}.bin", fs, band, index))
+    for name, name_after, fs, band, index in streams:
+        n_channels = NIDQ_N_DIGITAL_WORDS if band is None else recipe.n_ap_channels + 1
+        data = np.fromfile(dir_path / name, dtype=np.int16).reshape(-1, n_channels)
+        cut = round((restart.at_s + SPIKEGLX_PRE_ROLL_S) * fs)
+        resume = round((restart.at_s + restart.gap_s + SPIKEGLX_PRE_ROLL_S) * fs)
+        for target, part, source in ((dir_path / name, data[:cut], recipe), (dir_path / name_after, data[resume:], after)):
+            part.tofile(target)
+            text = (
+                _nidq_meta_text(source, len(part), target.name)
+                if band is None
+                else _meta_text(source, len(part), n_channels, target.name, band=band, probe=source.probes()[index])
+            )
+            target.with_suffix(".meta").write_text(text, encoding="utf-8")
 
 
 def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str:
