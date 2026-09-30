@@ -23,9 +23,11 @@ class NwbFile(dj.Manual):
     ---
     # written: built and no nwbinspector finding at CRITICAL or above
     # (ERROR, PYNWB_VALIDATION, CRITICAL; `n_critical` counts them).
-    # invalid: built, with at least one (kept for inspection; piece 2
-    # publishes only `written`). refused: not built, `reason` says why; never
-    # retried automatically -- delete the row to rebuild.
+    # invalid: built, with at least one; never published, and rebuilt by the
+    # build stage once the subject details it lacked arrive (the canonical
+    # lifecycle, design spec section 5). refused: not built, `reason` says
+    # why; never retried automatically -- delete the row to rebuild, unless
+    # the activation is superseded, which is never built.
     status : enum('written','invalid','refused')
     # path and n_bytes: the scratch copy the builder wrote. Publishing deletes
     # it once the file is placed; where the file is now is its latest

@@ -410,7 +410,11 @@ def test_the_stage_skips_a_freed_session(activation, tmp_path_factory):
     session_key, _key, _blocks = activation
     before = len(nwb_schema.NwbFile & session_key)
     recorded, errors = run_stage(tmp_path_factory.mktemp("nwb-freed"), freed=[session_key])
-    assert errors == []
+    # Nothing is recorded for this session (other sessions in the suite's
+    # shared database may build); each of its unbuilt activations is reported
+    # as waiting on a rehydration (the 2b final review's M9), and nothing
+    # else is reported.
+    assert all("rehydrate" in error for error in errors), errors
     assert len(nwb_schema.NwbFile & session_key) == before
 
 
@@ -1304,6 +1308,71 @@ def test_a_file_invalid_for_another_reason_is_not_rebuilt_every_pass(activation,
         assert (nwb_schema.NwbFile & key).fetch1("built_at") == first["built_at"]
     finally:
         _drop_lifecycle_rows(session_key, "loop-invalid", [key])
+
+
+def test_the_invalid_check_reads_each_subject_once(activation, prefix, monkeypatch, tmp_path_factory):
+    """The 2b final review's M5: the check runs every pass over every
+    invalid file, so a subject's details are read once per pass, not once
+    per file."""
+    from wl_preproc.ingest.landing import SUBJECT_BIRTH_DATE_UNKNOWN
+    from wl_preproc.nwb import gather
+    from wl_preproc.nwb.build import build, record, resolved_invalid
+    from wl_preproc.schema import pipeline
+
+    session_key, _key, _blocks = activation
+    keys = [{**session_key, "montage_id": 0, "activation_id": i} for i in (80, 81)]
+    _lifecycle_rows(session_key, "subject-once", [{"montage_id": 0, "activation_id": i, "role": "derivative",
+                                                   "selection_hash": f"subject-once-{i}"} for i in (80, 81)])
+    birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
+    pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
+    try:
+        for key in keys:
+            record(key, build(key, tmp_path_factory.mktemp("subject-once")))
+        calls, real = [], gather._subject
+        monkeypatch.setattr(gather, "_subject", lambda subject: calls.append(subject) or real(subject))
+        resolved_invalid()
+        assert calls.count(_SUBJECT) == 1
+    finally:
+        pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
+        _drop_lifecycle_rows(session_key, "subject-once", keys)
+
+
+def test_the_command_refuses_a_superseded_activation(activation, prefix, tmp_path_factory, capsys):
+    """The 2b final review's M8: the stage never builds a superseded
+    activation (spec section 4), and the command says why it will not
+    either, naming the replacement."""
+    from wl_preproc.cli.main import main
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, _blocks = activation
+    old = {**session_key, "montage_id": 0, "activation_id": 70}
+    new = {**session_key, "montage_id": 0, "activation_id": 71}
+    _lifecycle_rows(session_key, "command-superseded", [
+        {"montage_id": 0, "activation_id": 70, "role": "canonical"},
+        {"montage_id": 0, "activation_id": 71, "role": "canonical", "supersedes": 70}])
+    try:
+        assert main(_command(old, tmp_path_factory.mktemp("command-superseded"), prefix)) == 1
+        assert "superseded by activation 71" in capsys.readouterr().out
+        assert not nwb_schema.NwbFile & old
+    finally:
+        _drop_lifecycle_rows(session_key, "command-superseded", [old, new])
+
+
+def test_an_activation_waiting_on_a_freed_session_is_reported(activation, prefix, tmp_path_factory):
+    """The 2b final review's M9: a replacement or derivative accepted after
+    its session was reclaimed is never built until someone rehydrates it,
+    and each pass says so."""
+    from wl_preproc.nwb.build import run_stage
+
+    session_key, _key, _blocks = activation
+    key = {**session_key, "montage_id": 0, "activation_id": 75}
+    _lifecycle_rows(session_key, "freed-waiting", [{"montage_id": 0, "activation_id": 75, "role": "derivative",
+                                                    "selection_hash": "freed-waiting"}])
+    try:
+        _recorded, errors = run_stage(tmp_path_factory.mktemp("freed-waiting"), freed=[dict(session_key)])
+        assert [e for e in errors if "rehydrate" in e and "'activation_id': 75" in e], errors
+    finally:
+        _drop_lifecycle_rows(session_key, "freed-waiting", [key])
 
 def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monkeypatch, tmp_path_factory):
     """The stage catches a failure per activation, as the archive stage

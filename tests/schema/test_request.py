@@ -1360,3 +1360,52 @@ def test_a_waiting_replacement_sees_the_winner_and_is_refused(req, selection):
         other.close()
     assert isinstance(result.get("exc"), req.SupersedeConflict), result
     assert len(req.Activation & selection & "supersedes = 0") == 1
+
+
+def test_the_lock_name_names_the_database(req, selection):
+    """The 2b final review's M7: like `nwb/lock.py`'s, the name carries the
+    database, so a test suite's and a deployment's never meet."""
+    assert req._replacement_lock_name(selection, "a_request") != req._replacement_lock_name(selection, "b_request")
+    assert req._replacement_lock_name(selection) == req._replacement_lock_name(selection, req.Activation.database)
+
+
+def test_a_replacement_that_lost_its_lock_is_refused(req, selection, monkeypatch):
+    """M7: a reconnect between the lock and the transaction opens a session
+    that does not hold it. The replacement is refused retryably rather than
+    run unserialised, and nothing is recorded."""
+    import datajoint as dj
+
+    req.submit("k-lost-1", "neural", "wl_works", selection, {}, None)
+    monkeypatch.setattr(req, "_holds_lock", lambda connection, name: False)
+    with pytest.raises(dj.DataJointError, match="lost the montage lock"):
+        req.submit_replacement("k-lost-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    assert len(req.Activation & selection) == 1 and not req.Request & {"idempotency_key": "k-lost-2"}
+
+
+def test_holds_lock_sees_the_lock_this_session_holds(req, selection):
+    import datajoint as dj
+
+    name = req._replacement_lock_name(selection)
+    connection = dj.conn()
+    assert not req._holds_lock(connection, name)
+    assert connection.query("SELECT GET_LOCK(%s, 0)", args=(name,)).fetchone()[0] == 1
+    try:
+        assert req._holds_lock(connection, name)
+    finally:
+        connection.query("SELECT RELEASE_LOCK(%s)", args=(name,))
+
+
+def test_a_failing_release_never_hides_the_refusal(req, selection, monkeypatch):
+    """M7: the answer wl.works must see is the `409`, not a lock-release
+    fault raised on the way out."""
+    req.submit("k-rel-1", "neural", "wl_works", selection, {}, None)
+    req.submit_replacement("k-rel-2", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+    real = req._release_lock
+
+    def broken(connection, name):
+        real(connection, name)
+        raise RuntimeError("the release failed")
+
+    monkeypatch.setattr(req, "_release_lock", broken)
+    with pytest.raises(req.SupersedeConflict):
+        req.submit_replacement("k-rel-3", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)

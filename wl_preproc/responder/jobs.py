@@ -219,7 +219,8 @@ def _lifecycle_role(selection: dict, block_ids: list) -> bool:
     role = selection.get("role")
     if role not in (None, "canonical", "derivative"):
         raise ValueError(f"selection['role'] must be 'canonical' or 'derivative', got {role!r}")
-    if "supersedes_activation_id" in selection:
+    # A null means absent, as a null `role` does (the 2b final review's M10).
+    if selection.get("supersedes_activation_id") is not None:
         if role != "canonical":
             raise ValueError(
                 "selection['supersedes_activation_id'] needs selection['role'] == 'canonical': only "
@@ -596,7 +597,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             requested_by=metadata.experimenter,
         )
 
-    if "supersedes_activation_id" in selection:
+    if selection.get("supersedes_activation_id") is not None:
         return schema_request.submit_replacement(
             idempotency_key=request.idempotency_key,
             task_type=request.domain,

@@ -1575,6 +1575,28 @@ def test_a_real_key_reuse_conflict_through_the_translation_seam_is_409(
     assert "error" in json.loads(second_body)
 
 
+
+def test_a_real_stale_replacement_through_the_translation_seam_is_409(start_server, landed_session, prefix):
+    """The 2b final review's M2: a REAL `SupersedeConflict`, from a
+    replacement naming a canonical already superseded, through the real
+    `accept()` and seam, over a real socket."""
+    import wl_preproc.responder.server as server_module
+
+    subject = "htpstal1"
+    naive_dt = datetime.datetime(2027, 6, 3, 10, 0)
+    landed_session(subject, naive_dt)
+    base = start_server(TOKEN, _health_ok,
+                        lambda request: server_module._translate_accept_errors(request, prefix=prefix))
+    when = naive_dt.replace(tzinfo=datetime.UTC).isoformat()
+    first = _real_job_payload(subject=subject, session_datetime_iso=when, idempotency_key="htpstal1-k1")
+    replace = dict(first, idempotency_key="htpstal1-k2",
+                   selection={**first["selection"], "role": "canonical", "supersedes_activation_id": 0})
+    stale = dict(replace, idempotency_key="htpstal1-k3")
+    assert _request(f"{base}/jobs", method="POST", token=TOKEN, body=first)[0] == 200
+    assert _request(f"{base}/jobs", method="POST", token=TOKEN, body=replace)[0] == 200
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=stale)
+    assert status == 409 and "current canonical is activation 1" in json.loads(body)["error"]
+
 def test_a_job_for_a_session_that_never_landed_is_422_not_a_retryable_500(
     start_server, dj_conn, prefix
 ):

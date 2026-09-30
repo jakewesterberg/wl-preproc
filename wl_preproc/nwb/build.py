@@ -168,9 +168,14 @@ def resolved_invalid() -> list[dict]:
     from wl_preproc.nwb.gather import _subject
     from wl_preproc.schema import nwb as nwb_schema
 
-    resolved = []
+    resolved, subjects = [], {}
     for row in (nwb_schema.NwbFile & {"status": "invalid"}).proj("description").to_dicts():
-        current = _subject(row["subject"])
+        # Once per subject per pass, not once per file (the 2b final
+        # review's M5): every real file is invalid until wl.works sends
+        # subject details.
+        if row["subject"] not in subjects:
+            subjects[row["subject"]] = _subject(row["subject"])
+        current = subjects[row["subject"]]
         now = {"species": current["species"], "sex": current["sex"],
                "date_of_birth": None if current["date_of_birth"] is None else current["date_of_birth"].isoformat()}
         built_with = (row["description"] or {}).get("subject") or {}
@@ -227,6 +232,13 @@ def run_stage(nwb_root: Path, freed: list[dict] | None = None) -> tuple[int, lis
             errors.append(f"NwbFile invalid {key}: {exc}")
     for key in (request.Activation - nwb_schema.NwbFile.proj()).keys():
         if {"subject": key["subject"], "session_datetime": key["session_datetime"]} in freed:
+            # Accepted after its session was reclaimed -- a replacement a
+            # researcher asked for weeks later, say -- and never built until
+            # someone rehydrates it: each pass says so (the 2b final
+            # review's M9).
+            if not request.is_superseded(key):
+                errors.append(f"NwbFile {key}: its session's scratch was reclaimed; rehydrate it "
+                              "(wlpp rehydrate) to build this activation")
             continue
         try:
             if request.is_superseded(key) or readiness(key) is not None:

@@ -1025,8 +1025,10 @@ def test_a_request_without_details_leaves_the_subject_alone(landed_session, pref
 _LC_BOUNDARIES = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
 _LC_BLOCKS = [
     {"block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s, "works_block_id": None}
-    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0)), start=1)
+    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0), (12.0, 16.0)), start=1)
 ]
+# Block 4 lies outside montage 0's window, [0, 12): named in a canonical's
+# block set, it is refused (the 2b final review's M2).
 
 
 def _lifecycle_job(subject, session_datetime, key, **selection) -> JobRequest:
@@ -1070,6 +1072,8 @@ def test_a_replacement_request_supersedes_the_named_canonical(landed_session, pr
     assert (row["activation_id"], row["role"], row["supersedes"]) == (1, "canonical", first["activation_id"])
     assert accept(job, prefix=prefix) == replacement
     assert accept(_lifecycle_job("jblc002", when, "jblc002-k3"), prefix=prefix) == replacement
+    # The first request, re-sent under its own key (the 2b final review's M2).
+    assert accept(_lifecycle_job("jblc002", when, "jblc002-k1"), prefix=prefix) == replacement
 
 
 def test_a_replacement_of_a_superseded_canonical_is_a_conflict(landed_session, prefix):
@@ -1094,6 +1098,7 @@ def test_a_replacement_of_a_superseded_canonical_is_a_conflict(landed_session, p
     {"role": "canonical", "supersedes_activation_id": True},
     {"role": "canonical", "supersedes_activation_id": "0"},
     {"role": "canonical", "block_ids": [99]},
+    {"role": "canonical", "block_ids": [4]},
 ])
 def test_a_selection_the_lifecycle_refuses_is_a_value_error(landed_session, prefix, selection):
     """Section 3's refusals, each a `422` over HTTP: only a canonical
@@ -1121,3 +1126,19 @@ def test_a_canonical_role_with_no_blocks_takes_the_whole_montage(landed_session,
     key = accept(_lifecycle_job("jblc005", when, "jblc005-k1", role="canonical", block_ids=[]), prefix=prefix)
     assert key["activation_id"] == 0 and (schema_request.Activation & key).fetch1("role") == "canonical"
     assert not schema_request.ActivationBlock & key
+
+
+@pytest.mark.parametrize("selection", [{"supersedes_activation_id": None},
+                                       {"role": "canonical", "supersedes_activation_id": None}])
+def test_a_null_supersedes_is_absent(landed_session, prefix, selection):
+    """The 2b final review's M10: a client that serialises an optional
+    field as null asks for a plain canonical, as a null `role` already
+    does."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    when = datetime.datetime(2027, 5, 20, 14, 0)
+    landed_session("jblc006", when)
+    key = accept(_lifecycle_job("jblc006", when, f"jblc006-{len(selection)}", **selection), prefix=prefix)
+    row = (schema_request.Activation & key).fetch1()
+    assert (row["activation_id"], row["role"], row["supersedes"]) == (0, "canonical", None)
