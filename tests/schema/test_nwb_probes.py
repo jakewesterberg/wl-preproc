@@ -30,9 +30,10 @@ def _bad_part(directory):
         meta.write_text(meta.read_text().replace("imDatPrb_pn=NP1000", "imDatPrb_pn=NP9999"))
 
 
-def _canonical(daemon_module, prefix, key, idempotency_key, probes):
+def _canonical(daemon_module, prefix, key, idempotency_key, probes, block_ids=None):
     """wl.works' canonical over the session's measured blocks, as
-    `tests/schema/test_nwb_build.py`'s fixture asks for it, then a pass."""
+    `tests/schema/test_nwb_build.py`'s fixture asks for it, then a pass.
+    With `block_ids`, a derivative over those blocks instead."""
     from wl_preproc.contracts.protocol import JobRequest, MetadataBundle
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import pipeline
@@ -44,7 +45,8 @@ def _canonical(daemon_module, prefix, key, idempotency_key, probes):
               for index, row in enumerate((pipeline.trial.Block & key).to_dicts(order_by="block_start_time"), 1)]
     activation = accept(JobRequest(
         domain="neural", parameters={}, idempotency_key=idempotency_key,
-        selection={"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC), "montage_id": 0},
+        selection={"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC), "montage_id": 0,
+                   **({} if block_ids is None else {"block_ids": block_ids})},
         metadata=MetadataBundle(
             blocks=blocks, montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 16.0}], probes=probes,
             experimenter="jw", subject=key["subject"], task_types=[],
@@ -196,6 +198,29 @@ def test_a_bank_change_inside_a_montage_refuses_the_file(daemon_module, prefix, 
     assert "19011110014" in result.reason and "two active-site maps" in result.reason
     for path in (core.Segment & key & {"system": "spikeglx"}).to_arrays("file_path"):
         assert path in result.reason
+
+
+def test_a_file_on_one_side_of_a_bank_change_builds(daemon_module, prefix, tmp_path_factory):
+    """The final review's I1: a file's probes come from the segments its own
+    blocks overlap, not from its whole montage. A derivative before the bank
+    change is recorded through one site map and builds -- parent spec
+    section 8.3's remedy for a montage wl.works drew across a bank change --
+    and one whose blocks cross the change is refused, as the canonical is."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.nwb.build import build
+
+    _recipe, key = _session(tmp_path_factory, subject="pnwb6", session_id="2025-06-27_01", probe_serial="19011110019",
+                            spikeglx_restart={**RESTART, "probe_bank": 1})
+    daemon_module.run_once(prefix=prefix)
+    before = _canonical(daemon_module, prefix, key, "pnwb6-k1", [], block_ids=[1])
+    across = _canonical(daemon_module, prefix, key, "pnwb6-k2", [], block_ids=[2])
+
+    built = build(before, tmp_path_factory.mktemp("nwb-before"))
+    assert built.status == "written", (built.reason, built.findings)
+    with NWBHDF5IO(str(built.path), "r") as handle:
+        assert handle.read().electrodes.to_dataframe()["electrode"].tolist() == [0, 1, 2, 3]
+    assert build(across, tmp_path_factory.mktemp("nwb-across")).status == "refused"
 
 
 def test_a_file_waits_for_the_census_of_its_session(three_probes):

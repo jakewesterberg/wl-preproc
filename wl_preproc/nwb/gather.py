@@ -455,8 +455,8 @@ def _probe(serial: str, probe_type: str | None, report: dict | None, electrodes:
     }
 
 
-def _probes(key: dict, session_key: dict) -> tuple[list[dict], list[str]]:
-    """Every probe the montage's SpikeGLX segments recorded, joined to
+def _probes(key: dict, session_key: dict, block_rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Every probe the SpikeGLX segments under the file's blocks recorded, joined to
     wl.works' report of its insertion by serial, and the notes the file
     carries about what could not be placed or joined (design spec
     `2026-09-30-nwb-probes-design.md` sections 3 and 5).
@@ -467,17 +467,19 @@ def _probes(key: dict, session_key: dict) -> tuple[list[dict], list[str]]:
     joined probe and one that cannot be, and the linked tables hold the same
     facts, joined for sorting.
 
-    `Refused` when one probe recorded two active-site maps inside the
-    montage: a bank change should have started a new montage (parent spec
+    `Refused` when one probe recorded two active-site maps under the file's
+    blocks: a bank change should have started a new montage (parent spec
     section 8.3), so the montage is wrong, and a file across it would later
-    be sorted across it."""
+    be sorted across it. **The segments are those the file's own blocks
+    overlap, not its whole montage's** (the final review's I1): a derivative
+    on one side of the change is recorded through one map and builds, which
+    is the remedy section 8.3 names for exactly this case."""
     from wl_preproc.schema import core, ephys
 
-    montage = (core.Montage & key).fetch1()
     segments = {
         row["segment_barcode"]: row
         for row in (core.Segment & session_key & {"system": "spikeglx"}).to_dicts()
-        if row["start_s"] < montage["end_s"] and row["end_s"] > montage["start_s"]
+        if any(row["start_s"] < block["end_s"] and row["end_s"] > block["start_s"] for block in block_rows)
     }
     parts = [part for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
              if part["segment_barcode"] in segments]
@@ -498,7 +500,8 @@ def _probes(key: dict, session_key: dict) -> tuple[list[dict], list[str]]:
                     segments[part["segment_barcode"]]["file_path"])
         if len(maps) > 1:
             raise Refused(
-                f"probe {serial} recorded two active-site maps inside montage {key['montage_id']}, in "
+                f"probe {serial} recorded two active-site maps under this file's blocks of montage "
+                f"{key['montage_id']}, in "
                 + " and in ".join(", ".join(paths) for paths in maps.values())
                 + ": a bank change needs a new montage (parent spec section 8.3), and a file across it would be "
                 "sorted across it")
@@ -551,7 +554,7 @@ def gather(activation_key: dict) -> Gathered:
     if not block_rows:
         raise Refused(f"no blocks in the {activation['role']} activation's block set")
     blocks = BlockSet.of(block_rows)
-    probes, probe_notes = _probes(key, session_key)
+    probes, probe_notes = _probes(key, session_key, block_rows)
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     clock = _reference_time(session_dir, key["session_datetime"])
