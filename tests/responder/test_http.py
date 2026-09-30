@@ -1101,6 +1101,22 @@ def test_translate_accept_errors_turns_key_reuse_into_a_conflict_error(monkeypat
         server_module._translate_accept_errors(object(), prefix=prefix)
 
 
+def test_translate_accept_errors_turns_a_stale_replacement_into_a_conflict_error(monkeypatch, prefix):
+    """A replacement naming a canonical that is not current (design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 3, case 5) is a
+    disagreement for a person, like key reuse: `409`, never retried."""
+    import wl_preproc.responder.server as server_module
+    from wl_preproc.schema.request import SupersedeConflict
+
+    def boom(request, prefix=None):
+        raise SupersedeConflict("activation 0 is not the current canonical of montage 0")
+
+    monkeypatch.setattr("wl_preproc.responder.jobs.accept", boom)
+
+    with pytest.raises(ConflictError, match="not the current canonical"):
+        server_module._translate_accept_errors(object(), prefix=prefix)
+
+
 @pytest.mark.parametrize(
     "error_name",
     ["LostConnectionError", "AccessError", "MissingTableError", "IntegrityError", "ThreadSafetyError"],
@@ -1177,6 +1193,34 @@ def test_a_lost_connection_error_through_the_real_seam_reaches_the_client_as_500
     assert "Traceback" not in text
     assert json.loads(body)["error"].startswith("LostConnectionError:")
 
+
+
+def test_a_stale_replacement_through_the_real_seam_reaches_the_client_as_409(start_server, monkeypatch, prefix):
+    """Design spec `2026-09-30-canonical-lifecycle-design.md` section 3, case
+    5, end to end over a real socket through the real
+    `_translate_accept_errors`."""
+    import wl_preproc.responder.server as server_module
+    from wl_preproc.schema.request import SupersedeConflict
+
+    def boom(request, prefix=None):
+        raise SupersedeConflict("activation 0 is not the current canonical of montage 0")
+
+    monkeypatch.setattr("wl_preproc.responder.jobs.accept", boom)
+    base = start_server(TOKEN, _health_ok, lambda request: server_module._translate_accept_errors(request, prefix=prefix))
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=_valid_job_payload())
+    assert status == 409 and "not the current canonical" in json.loads(body)["error"]
+
+
+def test_a_supersedes_without_a_canonical_role_reaches_the_client_as_422(start_server, prefix):
+    """Section 3: only a canonical supersedes. The real `jobs.accept`,
+    refusing before it reads the database."""
+    import wl_preproc.responder.server as server_module
+
+    payload = _valid_job_payload()
+    payload["selection"] = {**payload["selection"], "supersedes_activation_id": 0}
+    base = start_server(TOKEN, _health_ok, lambda request: server_module._translate_accept_errors(request, prefix=prefix))
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+    assert status == 422 and "only a canonical supersedes" in body.decode("utf-8")
 
 def test_a_datajoint_error_from_accept_fn_bypassing_translation_is_still_a_safe_500(start_server):
     """Defense in depth, not the documented mapping: `handler.py` imports

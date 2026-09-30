@@ -1018,3 +1018,106 @@ def test_a_request_without_details_leaves_the_subject_alone(landed_session, pref
 
     assert (pipeline.subject.Subject & {"subject": subject}).fetch1() == before
     assert len(pipeline.subject.Subject.Species & {"subject": subject}) == 0
+
+
+# -- The canonical lifecycle (design spec 2026-09-30-canonical-lifecycle-design.md section 3)
+
+_LC_BOUNDARIES = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
+_LC_BLOCKS = [
+    {"block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s, "works_block_id": None}
+    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0)), start=1)
+]
+
+
+def _lifecycle_job(subject, session_datetime, key, **selection) -> JobRequest:
+    return JobRequest(
+        domain="neural",
+        selection={"session_datetime": session_datetime, "montage_id": 0, **selection},
+        parameters={},
+        idempotency_key=key,
+        metadata=MetadataBundle(blocks=_LC_BLOCKS, montage_boundaries=_LC_BOUNDARIES, probes=[],
+                                experimenter="jw", subject=subject, task_types=[]),
+    )
+
+
+def test_a_canonical_request_can_name_its_block_set(landed_session, prefix):
+    """How wl.works leaves out a bad block: `role: canonical` with
+    `block_ids`. Without the role, `block_ids` still means a derivative."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    when = datetime.datetime(2027, 5, 20, 9, 0)
+    landed_session("jblc001", when)
+    key = accept(_lifecycle_job("jblc001", when, "jblc001-k1", role="canonical", block_ids=[1, 3]), prefix=prefix)
+    assert key["activation_id"] == 0
+    assert (schema_request.Activation & key).fetch1("role") == "canonical"
+    assert sorted(int(b) for b in (schema_request.ActivationBlock & key).to_arrays("block_id")) == [1, 3]
+    derivative = accept(_lifecycle_job("jblc001", when, "jblc001-k2", block_ids=[1, 3]), prefix=prefix)
+    assert (schema_request.Activation & derivative).fetch1("role") == "derivative"
+
+
+def test_a_replacement_request_supersedes_the_named_canonical(landed_session, prefix):
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    when = datetime.datetime(2027, 5, 20, 10, 0)
+    landed_session("jblc002", when)
+    first = accept(_lifecycle_job("jblc002", when, "jblc002-k1"), prefix=prefix)
+    job = _lifecycle_job("jblc002", when, "jblc002-k2", role="canonical", supersedes_activation_id=0,
+                         block_ids=[1, 2])
+    replacement = accept(job, prefix=prefix)
+    row = (schema_request.Activation & replacement).fetch1()
+    assert (row["activation_id"], row["role"], row["supersedes"]) == (1, "canonical", first["activation_id"])
+    assert accept(job, prefix=prefix) == replacement
+    assert accept(_lifecycle_job("jblc002", when, "jblc002-k3"), prefix=prefix) == replacement
+
+
+def test_a_replacement_of_a_superseded_canonical_is_a_conflict(landed_session, prefix):
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema.request import SupersedeConflict
+
+    when = datetime.datetime(2027, 5, 20, 11, 0)
+    landed_session("jblc003", when)
+    accept(_lifecycle_job("jblc003", when, "jblc003-k1"), prefix=prefix)
+    accept(_lifecycle_job("jblc003", when, "jblc003-k2", role="canonical", supersedes_activation_id=0), prefix=prefix)
+    with pytest.raises(SupersedeConflict, match="current canonical is activation 1"):
+        accept(_lifecycle_job("jblc003", when, "jblc003-k3", role="canonical", supersedes_activation_id=0),
+               prefix=prefix)
+
+
+@pytest.mark.parametrize("selection", [
+    {"supersedes_activation_id": 0},
+    {"role": "derivative", "supersedes_activation_id": 0, "block_ids": [1]},
+    {"role": "derivative"},
+    {"role": "bogus"},
+    {"role": "canonical", "supersedes_activation_id": -1},
+    {"role": "canonical", "supersedes_activation_id": True},
+    {"role": "canonical", "supersedes_activation_id": "0"},
+    {"role": "canonical", "block_ids": [99]},
+])
+def test_a_selection_the_lifecycle_refuses_is_a_value_error(landed_session, prefix, selection):
+    """Section 3's refusals, each a `422` over HTTP: only a canonical
+    supersedes, a derivative names its blocks, and an activation id is one
+    non-negative integer."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    when = datetime.datetime(2027, 5, 20, 12, 0)
+    landed_session("jblc004", when)
+    key = f"jblc004-{sorted(selection.items())!r}"
+    with pytest.raises(ValueError):
+        accept(_lifecycle_job("jblc004", when, key, **selection), prefix=prefix)
+    assert not schema_request.Request & {"idempotency_key": key}
+
+
+def test_a_canonical_role_with_no_blocks_takes_the_whole_montage(landed_session, prefix):
+    """`role: canonical` with an empty `block_ids` is the plain canonical:
+    no named block set, so the builder takes every block in the montage."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    when = datetime.datetime(2027, 5, 20, 13, 0)
+    landed_session("jblc005", when)
+    key = accept(_lifecycle_job("jblc005", when, "jblc005-k1", role="canonical", block_ids=[]), prefix=prefix)
+    assert key["activation_id"] == 0 and (schema_request.Activation & key).fetch1("role") == "canonical"
+    assert not schema_request.ActivationBlock & key

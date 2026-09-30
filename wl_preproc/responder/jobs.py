@@ -140,6 +140,9 @@ _REQUIRED_SELECTION_KEYS = ("session_datetime", "montage_id")
 # the same errno as the integer case). None of the three appears in
 # DataJoint's MySQL adapter's translated-error list.
 _MONTAGE_ID_RANGE = (-128, 127)  # core.Montage.montage_id : tinyint
+# request.Activation.activation_id : int, and a superseded one is never
+# negative: the allocator starts at 0.
+_ACTIVATION_ID_RANGE = (0, 2**31 - 1)
 _BLOCK_ID_RANGE = (-32768, 32767)  # core.Block.block_id : smallint
 _TASK_TYPE_MAX_LEN = 32  # core.Block.task_type : varchar(32)
 _WORKS_BLOCK_ID_MAX_LEN = 64  # core.Block.works_block_id : varchar(64)
@@ -204,6 +207,29 @@ def _coerce_session_datetime(value) -> datetime.datetime:
         "selection['session_datetime'] must be a datetime.datetime or an "
         f"ISO-8601 string, got {type(value).__name__}: {value!r}"
     )
+
+
+def _lifecycle_role(selection: dict, block_ids: list) -> bool:
+    """Whether the request asks for a canonical, from `selection`'s optional
+    `role` and `supersedes_activation_id` (design spec
+    `2026-09-30-canonical-lifecycle-design.md` section 3). Without a `role`
+    a request means what it always meant: `block_ids` makes a derivative,
+    none a canonical over the whole montage. Raises `ValueError` (a `422`)
+    for the combinations section 3 refuses, before anything is written."""
+    role = selection.get("role")
+    if role not in (None, "canonical", "derivative"):
+        raise ValueError(f"selection['role'] must be 'canonical' or 'derivative', got {role!r}")
+    if "supersedes_activation_id" in selection:
+        if role != "canonical":
+            raise ValueError(
+                "selection['supersedes_activation_id'] needs selection['role'] == 'canonical': only "
+                "a canonical supersedes another (parent spec section 8.3)"
+            )
+        _reject_out_of_range_int(selection["supersedes_activation_id"],
+                                 name="selection['supersedes_activation_id']", bounds=_ACTIVATION_ID_RANGE)
+    if role == "derivative" and not block_ids:
+        raise ValueError("selection['role'] 'derivative' needs block_ids: a derivative is its block set")
+    return role == "canonical" or (role is None and not block_ids)
 
 
 def _reject_out_of_range_int(value, *, name: str, bounds: tuple[int, int]) -> None:
@@ -450,6 +476,9 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     """
     selection = request.selection
     _require_selection_keys(selection)
+    # Before anything reads the database: a malformed lifecycle selection
+    # is the caller's to fix, whatever this host holds.
+    canonical = _lifecycle_role(selection, selection.get("block_ids") or [])
 
     metadata = request.metadata
     _reject_oversized_subject(metadata.subject)
@@ -556,7 +585,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # test_accept_normalises_an_aware_datetime_anywhere_in_the_stored_payload.
     payload = request.model_dump(mode="json")
 
-    if block_ids:
+    if not canonical:
         return schema_request.submit_derivative(
             idempotency_key=request.idempotency_key,
             task_type=request.domain,
@@ -567,6 +596,17 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             requested_by=metadata.experimenter,
         )
 
+    if "supersedes_activation_id" in selection:
+        return schema_request.submit_replacement(
+            idempotency_key=request.idempotency_key,
+            task_type=request.domain,
+            origin="wl_works",
+            selection=montage_key,
+            payload=payload,
+            requested_by=metadata.experimenter,
+            supersedes_activation_id=selection["supersedes_activation_id"],
+            block_ids=list(block_ids),
+        )
     return schema_request.submit(
         idempotency_key=request.idempotency_key,
         task_type=request.domain,
@@ -574,4 +614,5 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
         selection=montage_key,
         payload=payload,
         requested_by=metadata.experimenter,
+        block_ids=list(block_ids),
     )

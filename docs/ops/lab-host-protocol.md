@@ -350,6 +350,17 @@ than something one side can do quietly.
   `block_ids`, when present and non-empty, makes the request a **derivative** activation
   over that hand-picked block set; absent or empty makes it the **canonical** activation
   for `(session, montage)`.
+  **Since the canonical lifecycle** (design spec `2026-09-30-canonical-lifecycle-design.md`
+  §3), two optional keys say more:
+  - `"role": "canonical"` with `block_ids` asks for a canonical over those blocks. This is
+    how wl.works leaves out a bad block. `"role": "derivative"` means what `block_ids`
+    alone means.
+  - `"supersedes_activation_id": N`, with `"role": "canonical"`, is a **replacement**: a
+    new canonical superseding `N`, which must be the montage's current canonical. The
+    superseded file stays where it is, readable, and `GET /nwb` marks it. A replacement
+    naming anything else is a `409`.
+  - A canonical request with no `supersedes_activation_id`, for a montage that already has
+    one, returns the montage's **current** canonical.
 - **`metadata`** is the bundle this host needs from the ELN, and it is the reason this
   protocol works pull-only: everything wl-preproc needs arrives inbound with the request,
   because this host cannot call wl.works to ask. `montage_boundaries` and `blocks` are
@@ -372,7 +383,8 @@ than something one side can do quietly.
 ```
 
 `activation` is the primary key of the `Activation` row this request resolved to.
-`activation_id` is `0` for a canonical activation and a positive integer for a derivative.
+`activation_id` is `0` for a montage's first canonical activation, and a positive integer
+for a derivative or a replacement canonical.
 `session_datetime` is rendered ISO-8601 and is naive UTC.
 
 **`accepted: true` means recorded, not finished.** The responder does not compute. It
@@ -461,7 +473,7 @@ Every code this host can return, on any endpoint.
 | `404` | all | `{"error": "not found"}` | Path is not one of `/health`, `/jobs`, `/nwb`, `/nwb/active`; or a query string on any path but `/nwb`. | No |
 | `405` | all | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, `GET /nwb/active`, authenticated `PUT /health`. | No |
 | `408` | `POST /jobs`, `PUT /nwb/active` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
-| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content. | **No — needs a human** |
+| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content; or a replacement naming a canonical that is not the montage's current one. | **No — needs a human** |
 | `414` | all | `{"error": "request line too long"}` | Over-long request line. | No |
 | `422` | `POST /jobs`, `PUT /nwb/active`, `GET /nwb` (a `since` that is not one non-negative integer) | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
 | `431` | all | `{"error": "request header fields too large"}` | Oversized header. | No |
@@ -491,9 +503,11 @@ arrive as ordinary responses with a status line, as does every other code above.
   an oversized `subject`; **a session this host has not ingested yet** (see below); a
   `montage_id`, `block_id`, `task_type`, `works_block_id`, `start_s` or `end_s` that will
   not fit its column; a `montage_id` with no boundary on record and none supplied in the
-  request either; a `block_ids` entry naming no block anywhere; or a `block_ids` entry
-  naming a block outside its montage's `[start_s, end_s)` window. The message names what
-  was wrong.
+  request either; a `block_ids` entry naming no block anywhere; a `block_ids` entry
+  naming a block outside its montage's `[start_s, end_s)` window; a `role` other than
+  `canonical` or `derivative`; `supersedes_activation_id` without `"role": "canonical"`,
+  or not a non-negative integer; or `"role": "derivative"` without `block_ids`. The
+  message names what was wrong.
 
 **A session this host has not ingested yet is a `422`, and it is the ordinary case.** You
 know a session exists from the ELN the moment it is created; this host knows it exists only

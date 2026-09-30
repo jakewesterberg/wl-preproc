@@ -145,7 +145,7 @@ from wl_preproc.responder import health, jobs
 from wl_preproc.responder import nwb as nwb_endpoints
 from wl_preproc.responder.handler import ConflictError, make_handler
 from wl_preproc.schema import DEFAULT_PREFIX
-from wl_preproc.schema.request import KeyReuseError
+from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
 
 
 def _translate_accept_errors(request, *, prefix: str) -> dict:
@@ -168,7 +168,10 @@ def _translate_accept_errors(request, *, prefix: str) -> dict:
     """
     try:
         return jobs.accept(request, prefix=prefix)
-    except KeyReuseError as exc:
+    except (KeyReuseError, SupersedeConflict) as exc:
+        # Both are disagreements resending cannot fix: a reused key, or a
+        # replacement naming a canonical that is no longer current (design
+        # spec `2026-09-30-canonical-lifecycle-design.md` section 3).
         raise ConflictError(str(exc)) from exc
 
 
