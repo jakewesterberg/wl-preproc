@@ -103,44 +103,76 @@ def fit_rate(
     reference_s: Mapping[int, float],
     nominal_rate_hz: float,
 ) -> RateFit:
-    """Least squares of device time against session time, pooled over a session.
+    """Least squares of device time against session time, over one segment's
+    barcodes -- or over several that share one device clock origin.
+    `fit_rate_across` with one segment; see there."""
+    return fit_rate_across([device_barcodes], reference_s, nominal_rate_hz)
+
+
+def fit_rate_across(
+    segments: Sequence[Sequence[Barcode]],
+    reference_s: Mapping[int, float],
+    nominal_rate_hz: float,
+) -> RateFit:
+    """One rate from every segment's barcodes, each segment with its OWN
+    intercept: this module's split, one rate per system and one offset per
+    segment.
 
     `reference_s` maps barcode value to sync-box session time in seconds; the
     sync box defines session time, so it needs no fit of its own.
 
-    Raises `ValueError` below two matched barcodes rather than returning the
-    nominal rate and zero drift. That return would be a number which reads like
-    a measurement and is not one -- the defect shape this project's checkpoint
-    records repeatedly -- and the caller that must handle it is spec section
-    4.1's rejection path, which needs to know.
+    **Why each segment keeps its own intercept.** Each recording's barcodes
+    are timed from that recording's own first sample, so a restarted system
+    -- SpikeGLX stopping and starting again, which a bank change requires --
+    starts its count again at zero. Pooled under one intercept, as this fit
+    was until the probes design (2026-09-30) found it, two runs read as a
+    clock running at a fraction of its rate: measured, -951,278 ppm on a
+    synthetic 15 s session restarted at 9 s. Centred within each segment, the
+    slope is the same whichever origin each recording counts from, and a
+    single segment fits exactly as before.
+
+    Raises `ValueError` below two matched barcodes, or when no segment's
+    barcodes span an interval, rather than returning the nominal rate and
+    zero drift. That return would be a number which reads like a measurement
+    and is not one -- the defect shape this project's checkpoint records
+    repeatedly -- and the caller that must handle it is spec section 4.1's
+    rejection path, which needs to know.
     """
-    pairs = _matched_pairs(device_barcodes, reference_s)
-    if len(pairs) < _MIN_BARCODES_FOR_RATE:
+    groups = [_matched_pairs(barcodes, reference_s) for barcodes in segments]
+    n = sum(len(pairs) for pairs in groups)
+    if n < _MIN_BARCODES_FOR_RATE:
         raise ValueError(
-            f"{len(pairs)} barcode{'' if len(pairs) == 1 else 's'} matched the "
+            f"{n} barcode{'' if n == 1 else 's'} matched the "
             f"reference, and a rate needs at least {_MIN_BARCODES_FOR_RATE}: "
             "one point establishes a position, not a slope"
         )
 
-    n = len(pairs)
-    mean_session = sum(session for session, _device in pairs) / n
-    mean_device = sum(device for _session, device in pairs) / n
-
-    # Centred least squares. Centring is not cosmetic here: session times run to
-    # thousands of seconds and the slope is being resolved to parts per
-    # million, so the uncentred normal equations lose the very digits the fit
-    # exists to produce.
+    # Centred least squares, centred per segment. Centring is not cosmetic
+    # here: session times run to thousands of seconds and the slope is being
+    # resolved to parts per million, so the uncentred normal equations lose
+    # the very digits the fit exists to produce.
+    means = [
+        (sum(session for session, _ in pairs) / len(pairs), sum(device for _, device in pairs) / len(pairs))
+        for pairs in groups
+        if pairs
+    ]
+    groups = [pairs for pairs in groups if pairs]
     covariance = sum(
-        (session - mean_session) * (device - mean_device) for session, device in pairs
+        (session - mean_session) * (device - mean_device)
+        for pairs, (mean_session, mean_device) in zip(groups, means, strict=True)
+        for session, device in pairs
     )
-    variance = sum((session - mean_session) ** 2 for session, _device in pairs)
+    variance = sum(
+        (session - mean_session) ** 2
+        for pairs, (mean_session, _) in zip(groups, means, strict=True)
+        for session, _device in pairs
+    )
     if variance <= 0.0:
         raise ValueError(
-            f"all {n} matched barcodes share one session time, so they span no "
-            "interval and no rate can be fitted from them"
+            f"all {n} matched barcodes share one session time within their segment, so no segment "
+            "spans an interval and no rate can be fitted from them"
         )
     scale = covariance / variance
-    intercept = mean_device - scale * mean_session
 
     # Residuals in the SESSION frame -- the error a downstream consumer would
     # actually make -- rather than in the device frame. The two differ by the
@@ -148,7 +180,9 @@ def fit_rate(
     # and so invisible; the reason to prefer the session frame is that it is
     # the frame the number is reported in.
     residuals_us = [
-        abs((device - intercept) / scale - session) * 1e6 for session, device in pairs
+        abs((device - (mean_device - scale * mean_session)) / scale - session) * 1e6
+        for pairs, (mean_session, mean_device) in zip(groups, means, strict=True)
+        for session, device in pairs
     ]
 
     return RateFit(

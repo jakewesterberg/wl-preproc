@@ -12,7 +12,7 @@ from wl_sync.barcode import Barcode, decode_edges
 
 from wl_preproc.synth.recipe import RECIPES
 from wl_preproc.synth.session import generate_session
-from wl_preproc.timebase.fit import fit_offset, fit_rate
+from wl_preproc.timebase.fit import fit_offset, fit_rate, fit_rate_across
 
 
 def _clean_session_reference() -> dict[int, float]:
@@ -92,6 +92,44 @@ def test_a_rate_cannot_be_fitted_from_fewer_than_two_barcodes():
         fit_rate([Barcode(value=5, start_us=5_000_000)], reference, nominal_rate_hz=1.0)
     with pytest.raises(ValueError, match="0 barcodes"):
         fit_rate([], reference, nominal_rate_hz=1.0)
+
+
+def _restarted(reference, true_ppm, runs):
+    """Each run's barcodes timed from that run's own start, as a restarted
+    SpikeGLX writes them: a new file counts its samples from zero, and
+    `extract_spikeglx` reads no `firstSample`."""
+    return [
+        [Barcode(value=v, start_us=int((reference[v] - reference[values[0]]) * 1e6 * (1 + true_ppm / 1e6)))
+         for v in values]
+        for values in runs
+    ]
+
+
+def test_a_restart_that_starts_the_device_count_again_keeps_the_rate():
+    """One rate per system and one offset per segment -- this module's own
+    split. Pooled under one intercept, the two runs' restarted counts read
+    as a clock running at a fraction of its rate."""
+    reference = _clean_session_reference()
+    runs = _restarted(reference, 40.0, [range(0, 150), range(160, 300)])
+
+    rate = fit_rate_across(runs, reference, nominal_rate_hz=1_000_000.0)
+
+    assert rate.drift_ppm == pytest.approx(40.0, abs=0.05)
+    assert rate.residual_us_max < 2.0
+    assert rate.n_matched == 290
+
+
+def test_one_segment_fits_exactly_as_the_pooled_fit_does():
+    reference = _clean_session_reference()
+    (run,) = _restarted(reference, 12.0, [range(0, 600)])
+    assert fit_rate_across([run], reference, 1_000_000.0) == fit_rate(run, reference, 1_000_000.0)
+
+
+def test_segments_that_each_hold_one_barcode_fit_no_rate():
+    """Each fixes a position and none a slope: refused, as one barcode is."""
+    reference = _clean_session_reference()
+    with pytest.raises(ValueError, match="no segment"):
+        fit_rate_across(_restarted(reference, 0.0, [[10], [20], [30]]), reference, 1_000_000.0)
 
 
 def test_offset_uses_the_session_rate_rather_than_estimating_its_own():
