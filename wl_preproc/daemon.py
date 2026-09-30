@@ -166,6 +166,10 @@ def _computed_tables() -> list:
     return [
         timebase.SystemTimebase,
         core.Segment,
+        # After `Segment`, whose rows are its key_source and whose `file_path`
+        # names the run it reads (design spec `2026-09-30-nwb-probes-design.md`
+        # section 2.1).
+        ephys.ProbeCensus,
         coverage.BlockCoverage,
         # After `Segment` for exactly `BlockCoverage`'s reason -- it intersects
         # a trial's interval with this system's segment extents -- and after
@@ -239,6 +243,9 @@ _COMPUTED_TABLES_EXEMPT: frozenset[str] = frozenset()
 # Computed or Imported), so it owns no `~jobs` table of its own; it is listed
 # here only so the completeness claim below stays true, not because
 # `_computed_tables()` or `reap_stale_jobs` need a new stage for it.
+# *True when written; since the probes design (2026-09-30) `ephys` also
+# declares one `dj.Computed`, `ProbeCensus`, so it now owns a `~jobs` table
+# and is in `_computed_tables()` as a stage.*
 #
 # It stays a written list rather than a `pkgutil` sweep because the outbound
 # guardrail bans `importlib` inside `wl_preproc/` (its ruling is recorded in

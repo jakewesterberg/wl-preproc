@@ -191,6 +191,83 @@ class SegmentConfig(dj.Manual):
 
 
 @schema
+class ProbeCensus(dj.Computed):
+    definition = """
+    # Which probes one SpikeGLX segment's run recorded, read from the run's own
+    # .meta files (design spec 2026-09-30-nwb-probes-design.md section 2.1).
+    # Key: (subject, session_datetime, system, segment_barcode).
+    #
+    # The row marks the segment READ -- with no probe as readily as with two.
+    # The NWB builder waits on it (section 3.3), so a run that recorded no
+    # probe must still have one, and the count is the master's, not a count
+    # of parts that might be absent for either reason.
+    -> core.Segment
+    ---
+    n_probes : tinyint unsigned
+    """
+
+    class Probe(dj.Part):
+        definition = """
+        # One imec stream of the run, in the recording's own words. Key:
+        # (..., segment_barcode, stream).
+        #
+        # `part_number` is what the .meta says, kept whether or not
+        # probeinterface knows it; the config -- and with it `probe_type` --
+        # is set only when the sites could be placed, which is Phase 2a's
+        # invariant: no ProbeType without its electrodes. `problem` says what
+        # is missing and why, empty when nothing is.
+        -> master
+        stream : varchar(8)  # imec0, imec1, ...
+        ---
+        probe_serial = null : varchar(32)
+        part_number = null : varchar(32)
+        -> [nullable] ElectrodeConfig
+        problem = '' : varchar(1024)
+        """
+
+    @property
+    def key_source(self):
+        return core.Segment & {"system": "spikeglx"}
+
+    def make(self, key: dict) -> None:
+        """Read the run once. A landed file does not change, so what could not
+        be read is recorded as a problem rather than raised, which would fail
+        the segment on every pass and record nothing."""
+        from pathlib import Path
+
+        from wl_preproc.ephys.spikeglx_probes import read_run
+        from wl_preproc.schema import ingest
+
+        session_key = {k: key[k] for k in pipeline.Session.primary_key}
+        session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+        run = session_dir / key["system"] / (core.Segment & key).fetch1("file_path")
+        parts = []
+        for probe in read_run(run):
+            problems = [probe.problem] if probe.problem else []
+            # Every key on every row, placed or not: DataJoint refuses a batch
+            # whose rows name different fields.
+            config = {"electrode_config_hash": None, "probe_type": None}
+            registered = (Probe & {"probe_serial": probe.serial}).to_arrays("probe_type") if probe.serial else []
+            if len(registered) and registered[0] != probe.part_number:
+                # One serial is one physical probe; its type cannot change.
+                problems.append(f"serial {probe.serial} is registered as {registered[0]}, but this .meta says "
+                                f"{probe.part_number}; its sites are not recorded under either")
+            elif probe.electrodes is not None:
+                register_probe_type(probe.part_number)
+                if probe.serial:
+                    Probe.insert1({"probe_serial": probe.serial, "probe_type": probe.part_number},
+                                  skip_duplicates=True)
+                config = {
+                    "electrode_config_hash": register_electrode_config(probe.part_number, list(probe.electrodes)),
+                    "probe_type": probe.part_number,
+                }
+            parts.append({**key, "stream": probe.stream, "probe_serial": probe.serial,
+                          "part_number": probe.part_number, **config, "problem": "; ".join(problems)})
+        self.insert1({**key, "n_probes": len(parts)})
+        self.Probe.insert(parts)
+
+
+@schema
 class ClusterQualityLabel(dj.Lookup):
     definition = """
     # Key: (cluster_quality_label).
