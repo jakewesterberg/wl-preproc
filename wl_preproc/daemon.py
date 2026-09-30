@@ -729,6 +729,28 @@ def _not_freed(table, freed: list[dict]) -> tuple:
     return (dj.Not(freed),)
 
 
+def _link_stage() -> tuple[int, list[str]]:
+    """Join each session's wl.works reports to the probes it recorded
+    (`ephys.link_insertions`; design spec `2026-09-30-nwb-probes-design.md`
+    section 2.3). Returns `(insertions whose link changed, per-session
+    failures)`, the two quantities one stage of `run_once` contributes.
+
+    Every session with a report, on every pass, rather than a computed
+    table's once: a later request can correct a report at any time, and a
+    relink has to follow it. A session with no report has nothing this
+    stage made. Freed sessions are not skipped -- it reads only the database,
+    never scratch."""
+    sessions = {(key["subject"], key["session_datetime"]) for key in ephys.InsertionReport.proj().keys()}
+    linked, errors = 0, []
+    for subject, session_datetime in sorted(sessions):
+        key = {"subject": subject, "session_datetime": session_datetime}
+        try:
+            linked += ephys.link_insertions(key)
+        except Exception as exc:  # one session must not stop the others
+            errors.append(f"link_insertions {key}: {exc}")
+    return linked, errors
+
+
 def _populate_event_stage(freed: list[dict] | None = None) -> tuple[int, list[str]]:
     """Build the canonical trial list for each session still missing one.
 
@@ -1004,6 +1026,12 @@ def run_once(
             errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")
+
+    # After the loop, whose `ephys.ProbeCensus` it reads, and before the NWB
+    # stages, which read what it writes.
+    linked, link_errors = _link_stage()
+    populated += linked
+    errors.extend(link_errors)
 
     # The three NWB stages run under one database lock (`nwb/lock.py`): a
     # second wlpp process -- a pass outliving its cron interval, or `wlpp nwb

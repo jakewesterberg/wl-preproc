@@ -54,6 +54,12 @@ class Probe(dj.Manual):
     # One physical probe, by serial. Key: (probe_serial). Serials arrive with
     # the activation request (parent spec section 11.2); this machine cannot
     # fetch them from wl.works.
+    #
+    # *True when written; since the probes design (2026-09-30) a row is
+    # written by the probes stage, ProbeCensus, from the serial and part
+    # number the recording's own .meta names -- the requester's decision that
+    # the recording says which probe was used. The request's serial is
+    # recorded as InsertionReport and joined to this one.*
     probe_serial : varchar(32)
     ---
     -> ProbeType
@@ -607,6 +613,90 @@ def register_electrode_config(part_number: str, electrodes: list[int]) -> str:
         skip_duplicates=True,
     )
     return config_hash
+
+
+def link_insertions(session_key: dict) -> int:
+    """Join wl.works' report of each insertion to the probe the recording
+    names, for one session: `ProbeInsertion`, `InsertionLocation` and
+    `SegmentConfig` (design spec `2026-09-30-nwb-probes-design.md` section
+    2.3). Returns how many insertions' links changed.
+
+    Written as the difference between what the reports and the census say
+    now and what is linked, so it can run on every pass, in either arrival
+    order, and a corrected report relinks: a changed trajectory or aim is
+    updated in place, and a changed serial moves the insertion's segments.
+
+    **Linked only when the serial is reported for ONE insertion of the
+    session, and the census placed its sites** -- `ProbeInsertion` needs a
+    `Probe`, and `SegmentConfig` a config. A serial reported twice is a moved
+    probe whose segments the request does not assign, and is not guessed at.
+
+    **It takes back only links it could have made.** Reports are never
+    deleted, so every insertion it linked has one; an insertion with no report
+    was made some other way and is left alone. A link taken back is deleted
+    with `delete_quick`, which does not cascade: an insertion that something
+    downstream already points at -- a sort -- raises instead of taking the
+    sort with it."""
+    reports = (InsertionReport & session_key).to_dicts()
+    serials = [report["probe_serial"] for report in reports]
+    recorded: dict[str, dict] = {}
+    for part in (ProbeCensus.Probe & session_key & "electrode_config_hash IS NOT NULL").to_dicts():
+        if part["probe_serial"]:
+            segment = (part["system"], part["segment_barcode"])
+            recorded.setdefault(part["probe_serial"], {})[segment] = (part["electrode_config_hash"], part["probe_type"])
+    want = {
+        report["insertion_number"]: report
+        for report in reports
+        if serials.count(report["probe_serial"]) == 1 and report["probe_serial"] in recorded
+    }
+    reported = {int(report["insertion_number"]) for report in reports}
+    changed = 0
+    with dj.conn().transaction:
+        for number in (ProbeInsertion & session_key).to_arrays("insertion_number"):
+            if int(number) in reported and int(number) not in want:
+                where = {**session_key, "insertion_number": int(number)}
+                (SegmentConfig & where).delete_quick()
+                (InsertionLocation & where).delete_quick()
+                (ProbeInsertion & where).delete_quick()
+                changed += 1
+        for number, report in want.items():
+            changed += _link(
+                {**session_key, "insertion_number": number}, report, recorded[report["probe_serial"]]
+            )
+    return changed
+
+
+def _link(where: dict, report: dict, segments: dict) -> int:
+    """One insertion's three kinds of row, brought to what `report` and the
+    census say. 1 if anything changed, else 0."""
+    changed = False
+
+    def settle(table, want: dict | None, have: list[dict]) -> None:
+        """Make `table`'s one row here `want`, or remove it when `want` is None."""
+        nonlocal changed
+        if want is None and have:
+            (table & {name: have[0][name] for name in table.primary_key}).delete_quick()
+        elif want is not None and not have:
+            table.insert1(want)
+        elif want is not None and any(have[0][name] != want[name] for name in want):
+            table.update1(want)
+        else:
+            return
+        changed = True
+
+    settle(ProbeInsertion, {**where, "probe_serial": report["probe_serial"], "trajectory_id": report["trajectory_id"]},
+           (ProbeInsertion & where).to_dicts())
+    aim = None if report["target_area"] is None else {
+        **where, "area": report["target_area"], "atlas": report["target_atlas"],
+        "atlas_level": report["target_atlas_level"]}
+    settle(InsertionLocation, aim, (InsertionLocation & where).to_dicts())
+    have = {(row["system"], row["segment_barcode"]): row for row in (SegmentConfig & where).to_dicts()}
+    for segment in have.keys() | segments.keys():
+        want = None if segment not in segments else {
+            **where, "system": segment[0], "segment_barcode": segment[1],
+            "electrode_config_hash": segments[segment][0], "probe_type": segments[segment][1]}
+        settle(SegmentConfig, want, [have[segment]] if segment in have else [])
+    return int(changed)
 
 
 class EmptyElectrodeIntersection(dj.DataJointError):
