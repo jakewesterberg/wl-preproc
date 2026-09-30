@@ -1,18 +1,21 @@
 # Where this build actually is
 
-**Last updated 2026-09-29**, describing `main` at `7075799`, the merge of
-`fix/archive-share-marker`. The raw archive now writes only to a NAS share
-carrying a `.wlpp-archive-share` marker, placed once by hand (the archive
-spec §3's amendment). It follows `d63be54`, the merge of
-`spec/nwb-publishing`: NWB publishing, piece 2a of Phase 3's NWB export
-(handoff `handoffs/2026-09-29-nwb-publishing.md`). CI green on `d63be54`, 1899
-passed on each interpreter, `gh run view 36615133955`.
+**Last updated 2026-09-30**, describing `main` at `1f02d59`, the merge of
+`fix/nwb-minors`. It fixes NWB publishing's deferred minors: one wlpp process
+at a time in the NWB stages, and a tenth of the fast share kept free by
+default (handoff `handoffs/2026-09-29-nwb-publishing.md` §8). It follows
+`7075799`, the archive-share merge, and `d63be54`, the NWB publishing merge.
+CI green on `7075799`, 1903 passed on each interpreter, `gh run view
+36623205590`.
 
-`7075799`'s tree is byte-identical to the tested branch head `f8749e4`: 1904
-passed on 3.11 and 1903 on 3.13 locally, 0 failed. CI read off `7075799`
-itself is green on both interpreters, 1903 passed on each with 33 skipped,
-and the manifest check is green (`gh run view 36623205590`). CI on later
+`1f02d59`'s tree is byte-identical to the tested branch head `3cadb65`: 1911
+passed on 3.11 and 1910 on 3.13 locally, 0 failed. CI read off `1f02d59`
+itself is green on both interpreters, 1910 passed on each with 33 skipped,
+and the manifest check is green (`gh run view 36678124790`). CI on later
 heads is recorded here only once read, not before.
+
+*This header named `7075799` (the archive-share merge, CI green, 1903 passed on
+each interpreter, `36623205590`) until the minors merge; true when written.*
 
 *This header named `d63be54` (the NWB publishing merge, CI green, 1899 passed on
 each interpreter, `36615133955`) until the archive-share merge; true when
