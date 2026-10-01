@@ -18,6 +18,11 @@ Piece 1, runs and trials, is merged (`b0f8b52`, 2026-10-01; spec
   5. the NWB description joins runs to wl.works' `animal_session_run`.
 - **Carried from piece 1.** Naming a repeated run or block number is this listing's (its
   amendment 8). Its deferred minor M1, the block-start bound with runs on, is settled here (§5).
+- **A refinement from wl.works, 2026-10-01 evening** (session `wl-works-f6`, on the requester's
+  word; its `docs/superpowers/specs/2026-10-01-montage-plan-design.md` §4 and §6, read on its
+  `main` at `6a57b1cc`): each segment's recorded site set should arrive in a form it can compare
+  with a planned IMRO file, *"by electrode index (or the segment's raw `~imroTbl`)"*. It reads
+  NP1015, NP1022, NP1030 and NP1032 IMRO files itself. §2.2 carries both forms.
 
 ---
 
@@ -92,10 +97,16 @@ non-negative integer, otherwise a 422.
   - `start_s`, `end_s` on the recording's clock, and `closed`;
   - the rig's stop reason, `stopped_because` and `stop_kind` (§2.3);
   - **the recording segments the run spans**: for each SpikeGLX segment overlapping the run, its
-    start and end and, for each probe it recorded, the serial, part number, probe type, and the
-    site map's identity (`electrode_config_hash`, `n_electrodes`). Two runs with the same
-    identity share a bank setting. A bank change needs a SpikeGLX restart, so it appears as a run
-    spanning two segments with different identities.
+    start and end and, for each probe it recorded:
+    - the serial, part number and probe type;
+    - **`imro_table`**: the segment's `~imroTbl`, verbatim from its `.meta`. wl.works compares a
+      planned IMRO file with it using the one reader it has for both, so no numbering convention
+      is shared across repositories;
+    - **`electrodes`**: the active sites as this repository's census stores them, sorted indices
+      in probeinterface's contact order for the part number, the saved channels only;
+    - the site map's identity, `electrode_config_hash` and `n_electrodes`. Two runs with the same
+      identity share a bank setting. A bank change needs a SpikeGLX restart, so it appears as a run
+      spanning two segments with different identities.
 - **Blocks under each run**, from the measured `trial.Block` whose start lies in the run:
   - the block's number in the session (its `BLOCK_START` payload) and in its run (its order there,
     from 1);
@@ -115,6 +126,9 @@ archived, and the listing never reads them.
   the end row's `stopped_because` and `stop_kind`. A row is matched to its run by
   `run_in_session` when the start row carries it (wl-xcon's session-levels change), otherwise by
   `run` + 1, its 0-based index.
+- **The raw `~imroTbl`**, as a new nullable `imro_table` on `ephys.ProbeCensus.Probe`, read with
+  the serial and part number it already reads. The census reads each segment once, so a
+  development database redeclares `ProbeCensus` (no real database exists yet).
 - **The block type**, as a `trial.Block.Attribute` row `block_type`: the `block` field of
   `xcon/trials.jsonl`'s lines, joined by `trial_number` (piece 1's key) to the block's stored
   trials. It is set only when every joined line names one type.
@@ -242,7 +256,8 @@ Each flag is a code and a sentence, listed per session or per run:
 ## 7. What goes back to the other repositories
 
 - **wl.works**, for 20b-1 and its vendored schemas (vendor each after its merge, not from the
-  branch): the listing's shape and flags; `metadata.runs`, `works_run_id`,
+  branch): the listing's shape and flags, with each segment's `imro_table` and `electrodes` for
+  its montage-plan comparison; `metadata.runs`, `works_run_id`,
   `selection.probe_runs`, `selection.run_numbers`; what 422 and 409 mean here; description
   version 3; and that the 2 ms check now runs on arrival, because the old one never ran in its
   flow.
@@ -266,6 +281,9 @@ Each flag is a code and a sentence, listed per session or per run:
 6. **That a second named lock does not deadlock** with the NWB stages' lock in one pass.
 7. **How the description's `blocks` are read today** (`GET /nwb`, tests), before version 3
    replaces them.
+8. **Whether probeinterface's contact order is SpikeGLX's electrode number** for NP1015, NP1022,
+   NP1030 and NP1032, so the listing's documentation says truthfully what `electrodes` means. A
+   file saving fewer channels than its `~imroTbl` lists has fewer `electrodes` than its table.
 
 ---
 
