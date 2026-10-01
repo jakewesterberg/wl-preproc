@@ -209,6 +209,11 @@ class SessionRecipe(BaseModel):
     # 3, ... A fixture uses it to repeat a number, as a crash and restart
     # without wl-xcon's XC-026 would, or to exceed element-event's smallint.
     trial_numbers: tuple[int, ...] = ()
+    # Wrap each block in its own run, as wl-xcon sends them: the run's start
+    # (escape 0x8006, its number and task) before the block, and its end
+    # (marker 4) after the block's end. Off by default, so every existing
+    # profile is byte-identical.
+    runs: bool = False
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and

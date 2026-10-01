@@ -550,3 +550,14 @@ def populate_session(key: dict, session_dir: Path) -> None:
         pipeline.trial.BlockTrial.insert(
             block_trial_rows, allow_direct_insert=True, skip_duplicates=True
         )
+
+    # -- core.Run: each run, measured as blocks are (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 2.2). A run that faulted
+    # sent no RUN_END, and its stop is its last event.
+    run_rows = [
+        {**session_key, "run_number": run.run_number, "task_type": run.task_type, "run_start_time": run.start_s,
+         "run_stop_time": run.end_s if run.end_s is not None else run.last_s, "closed": int(run.end_s is not None)}
+        for run in assembly.runs
+    ]
+    if run_rows:
+        core.Run.insert(run_rows, skip_duplicates=True)

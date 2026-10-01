@@ -105,3 +105,19 @@ def test_an_unclosed_block_records_its_last_event():
     # A payload event is timed at its escape word: trial 1's TRIAL_NUMBER.
     assert first.end_s is None and first.last_s == pairs[5][0]
     assert second.end_s == second.last_s == pairs[-1][0]
+
+
+def test_runs_are_measured_like_blocks_and_an_unclosed_one_ends_at_its_last_event():
+    """Design spec `2026-10-01-runs-and-trials-design.md` sections 2.1 and
+    2.3: RUN_START opens a run with its number and task, RUN_END closes it,
+    and a run that faulted -- no RUN_END -- records its last event."""
+    words = [*encode_payload(Escape.RUN_START, [1, 0]), *encode_payload(Escape.BLOCK_START, [1, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+             *encode_payload(Escape.RUN_START, [2, 5]), *encode_payload(Escape.BLOCK_START, [2, 5]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 2]), Marker.TRIAL_END.value,
+             Marker.BLOCK_END.value, Marker.RUN_END.value]
+    pairs = [(0.001 * i, word) for i, word in enumerate(words)]
+    first, second = assemble.assemble(_stream(pairs)).runs
+    assert (first.run_number, first.task_type, first.start_s, first.end_s) == (1, 0, 0.0, None)
+    assert first.last_s == pairs[9][0]  # trial 1's TRIAL_NUMBER, timed at its escape word
+    assert (second.run_number, second.task_type, second.end_s, second.last_s) == (2, 5, pairs[-1][0], pairs[-1][0])

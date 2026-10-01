@@ -58,11 +58,25 @@ class AssembledBlock:
     last_s: float
 
 
+@dataclass(frozen=True, slots=True)
+class AssembledRun:
+    """One run, measured as a block is: from `RUN_START` to `RUN_END`, or to
+    its last event when it faulted and sent no `RUN_END` (design spec
+    `2026-10-01-runs-and-trials-design.md` sections 2.1 and 2.3)."""
+
+    run_number: int
+    task_type: int
+    start_s: float
+    end_s: float | None
+    last_s: float
+
+
 @dataclass
 class Assembly:
     trials: list[AssembledTrial] = field(default_factory=list)
     blocks: list[AssembledBlock] = field(default_factory=list)
     errors: list[DecodeError] = field(default_factory=list)
+    runs: list[AssembledRun] = field(default_factory=list)
 
 
 def _u32(words: tuple[int, ...]) -> int:
@@ -78,6 +92,7 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
     open_trial_id: int | None = None
     open_outcome: str | None = None
     open_block: AssembledBlock | None = None
+    open_run: AssembledRun | None = None
     last_s = 0.0  # the time of the last event before the one in hand
 
     def close_trial(end_s: float | None) -> None:
@@ -116,6 +131,11 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
                     end_s=None,
                     last_s=event.time_s,
                 )
+            elif event.escape is Escape.RUN_START:
+                if open_run is not None:
+                    result.runs.append(replace(open_run, last_s=last_s))
+                open_run = AssembledRun(run_number=event.words[0], task_type=event.words[1], start_s=event.time_s,
+                                        end_s=None, last_s=event.time_s)
             last_s = event.time_s
             continue
 
@@ -135,9 +155,14 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
             elif marker is Marker.BLOCK_END and open_block is not None:
                 result.blocks.append(replace(open_block, end_s=event.time_s, last_s=event.time_s))
                 open_block = None
+            elif marker is Marker.RUN_END and open_run is not None:
+                result.runs.append(replace(open_run, end_s=event.time_s, last_s=event.time_s))
+                open_run = None
             last_s = event.time_s
 
     close_trial(end_s=None)
     if open_block is not None:
         result.blocks.append(replace(open_block, last_s=last_s))
+    if open_run is not None:
+        result.runs.append(replace(open_run, last_s=last_s))
     return result

@@ -185,3 +185,16 @@ def test_a_fixture_can_strobe_the_numbers_it_names():
 def test_trial_numbers_must_name_every_trial():
     with pytest.raises(ValueError, match="trial_numbers names 3 trials, and the session has 4"):
         _recipe(trial_numbers=[1, 2, 3])
+
+
+def test_runs_wrap_each_block_and_a_faulted_run_sends_no_end():
+    """`runs=True` sends wl-xcon's order: the run's start (escape 0x8006),
+    its block, and the run's end (marker 4) after the block's end. A run whose
+    block is unclosed faulted, so it sends no RUN_END either (design spec
+    `2026-10-01-runs-and-trials-design.md` sections 2.1 and 7)."""
+    from wl_preproc.events.assemble import assemble
+
+    runs = assemble(decode_stream(list(build_timeline(_recipe(runs=True, unclosed_blocks=[1])).code_words))).runs
+    assert [(run.run_number, run.task_type, run.end_s is not None) for run in runs] == [
+        (1, int(TaskTypeCode.RF_MAP), False), (2, int(TaskTypeCode.RESTING_DARK), True)]
+    assert not assemble(decode_stream(list(build_timeline(_recipe()).code_words))).runs, "off by default"

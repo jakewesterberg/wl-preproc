@@ -36,9 +36,30 @@ class Montage(dj.Manual):
 
 
 @schema
+class Run(dj.Manual):
+    definition = """
+    # One run of one task, MEASURED from the recording's RUN_START escape and
+    # RUN_END marker by `schema/events.py::populate_session` (design spec
+    # 2026-10-01-runs-and-trials-design.md section 2.2). element-event has no
+    # run level, so this table holds what trial.Block holds for blocks. Blocks
+    # sit inside runs by time. Key: (subject, session_datetime, run_number).
+    -> pipeline.Session
+    run_number : smallint  # from 1 in the session: wl-xcon's run_in_session
+    ---
+    task_type      : smallint unsigned  # the escape's task code; 0 until wl-xtasks allocates one
+    run_start_time : double             # (s) session time
+    run_stop_time  : double             # (s) its RUN_END, or its last event when it faulted
+    closed         : tinyint(1)         # 1 when a RUN_END arrived
+    """
+
+
+@schema
 class Block(dj.Manual):
     definition = """
     # One run of one task, mirroring wl.works animal_session_block.
+    # *True under the August glossary. Since 2026-10-01 the requester's
+    # vocabulary makes a block a stretch of trials inside a run, and a run is
+    # `Run` below; wl.works is revising its own blocks to match.*
     # start_s/end_s are WL.WORKS' ASSERTION, recorded here through accept() --
     # recording an assertion is not authoring it. Closed open item 9: block rows
     # are authored by wl.works' session planner and wl-preproc never writes

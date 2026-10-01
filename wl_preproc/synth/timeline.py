@@ -114,6 +114,9 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
 
     for block_index, block in enumerate(recipe.blocks, start=1):
         block_start = cursor
+        if recipe.runs:
+            for word in encode_payload(Escape.RUN_START, [block_index, int(block.task_type)]):
+                _emit(words, block_start, word)
         for word in encode_payload(
             Escape.BLOCK_START, [block_index, int(block.task_type)]
         ):
@@ -178,6 +181,8 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
         # A run that faults sends no BLOCK_END (wl-xcon's rule for its RUN_END).
         if block_index not in recipe.unclosed_blocks:
             _emit(words, cursor - CODE_WORD_SPACING_S / 2, Marker.BLOCK_END.value)
+            if recipe.runs:
+                _emit(words, cursor - CODE_WORD_SPACING_S / 2, Marker.RUN_END.value)
 
     _emit(words, recipe.duration_s, Marker.SESSION_END.value)
 

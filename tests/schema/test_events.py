@@ -535,3 +535,30 @@ def test_populate_session_stores_the_first_of_a_repeated_number_and_none_too_lar
     strobed = sorted(int(value) for value in (pipeline.event.Event.Attribute & key
                                               & {"attribute_name": "trial_id"}).to_arrays("attribute_value"))
     assert strobed == [1, 2, 2, 40000]
+
+
+def test_populate_session_measures_each_run_into_core_run(events_activated, dj_conn, tmp_path):
+    """Design spec `2026-10-01-runs-and-trials-design.md` section 2.2:
+    element-event has no run level, so `core.Run` holds each measured run.
+    Run 1's block is unclosed, so run 1 faulted: no RUN_END, and its stop is
+    its last event, before run 2 starts."""
+    from wl_preproc.schema import core, pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": "rtruns1", "runs": True,
+                                           "unclosed_blocks": [1]})
+    generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": "rtruns1", "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": "rtruns1", "session_datetime": datetime.datetime(2027, 3, 25, 9, 0)}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+
+    events.populate_session(key, tmp_path / recipe.session_id)
+
+    first, second = (core.Run & key).to_dicts(order_by="run_number")
+    assert [(run["run_number"], run["task_type"], run["closed"]) for run in (first, second)] == [
+        (1, int(recipe.blocks[0].task_type), 0), (2, int(recipe.blocks[1].task_type), 1)]
+    assert first["run_start_time"] < first["run_stop_time"] < second["run_start_time"] < second["run_stop_time"]
