@@ -11,8 +11,9 @@ the start row carries the `task`, the end row `stopped_because` and
 `run` + 1. A start row and its end row share `run`.
 
 **Read, never repaired.** A row that is not a JSON object naming its event and
-run is reported by line and left out. A run that faulted wrote no end row, so
-its stop reason is absent, not guessed.
+run is reported by line and left out. wl-xcon writes a run's end row on every
+way out, a fault included (`stop_kind` "fault"); only a killed process leaves
+none, and that run's stop reason is absent, not guessed.
 
 **One record is one wl-xcon session, which is one animal** (wl-xcon's own
 vocabulary). Its rows carry no subject, so the session's `config.json` is

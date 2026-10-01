@@ -522,7 +522,8 @@ Authorization: Bearer <token>
     `end_s` on the recording's clock, `closed`, wl-xcon's `stopped_because` and `stop_kind`,
     `segments` (the barcodes of the SpikeGLX segments it spans), and `blocks`;
   - each block: `block_number` (in the session), `block_in_run`, `block_type`, `start_s`,
-    `end_s`, `closed`, `n_trials`;
+    `end_s`, `closed` (null when never recorded, for a session read before 2026-10-01),
+    `n_trials`;
   - `segments`, each SpikeGLX file once: `segment_barcode`, `start_s`, `end_s`, and per probe its
     `serial`, `part_number`, `probe_type`, site map (`electrode_config_hash`, `n_electrodes`,
     `electrodes` as SpikeGLX electrode numbers), its `~imroTbl` verbatim as `imro_table`, and

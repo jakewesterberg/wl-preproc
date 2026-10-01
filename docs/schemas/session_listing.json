@@ -2,7 +2,7 @@
   "$defs": {
     "ListedBlock": {
       "additionalProperties": false,
-      "description": "A measured block: consecutive trials under one block type, inside a\nrun. `block_number` is its number in the session, as `BLOCK_START`\nstrobes it; `block_in_run` its order in its run, from 1.",
+      "description": "A measured block: consecutive trials under one block type, inside a\nrun. `block_number` is its number in the session, as `BLOCK_START`\nstrobes it; `block_in_run` its order in its run, from 1. `closed` is\nnull when it was never recorded: a session event-staged before\n2026-10-01 kept no block closure.",
       "properties": {
         "block_in_run": {
           "title": "Block In Run",
@@ -24,8 +24,15 @@
           "title": "Block Type"
         },
         "closed": {
-          "title": "Closed",
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Closed"
         },
         "end_s": {
           "title": "End S",

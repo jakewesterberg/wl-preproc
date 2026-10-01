@@ -50,7 +50,10 @@ Every line of the plan was proven in a scratch worktree before the plan was writ
   NWB description at version 3, and the retirements of `core.Block` and `block_agreement`.
 - **A session deleted after it was listed** has no "removed" entry. `GET /nwb` leaves the same gap.
 - **No page size**, as for `GET /nwb`.
-- **A development database** redeclares `ephys.ProbeCensus`, which gains `imro_table`.
+- **A development database** redeclares `ephys.ProbeCensus`, which gains `imro_table`. Sessions
+  it event-staged before this branch kept no block closure, block type or rig run record: until
+  their event stage is redone, their entries list `closed` as null and flag no recorded task or
+  block type.
 
 ## 4. The rulings
 
@@ -78,3 +81,21 @@ Each is a dated amendment in the spec:
 - **One ruling in execution:** the generated `config.json` named its session `session`, where
   wl-xcon's `taskd` writes `session_id`. It was fixed in its own commit, with a test that failed
   first.
+
+## 6. The final review
+
+One fresh Opus reviewer read the whole branch, with wl-xcon's and wl.works' own files. No
+Critical finding.
+- **Important, fixed:** a session event-staged before this branch listed every block
+  `closed: false` and flags with causes that were not true. Closure is now null when never
+  recorded, and the flags say only what is known (spec amendment 10). Test:
+  `test_what_was_never_recorded_is_unknown_and_the_flags_say_only_that`.
+- **Important, fixed:** a block's float32 start was compared with its run's double start, so hours
+  in a block could fall out of its run. The run's bounds are rounded to float32 first (amendment
+  11). Test: `test_a_block_starting_just_after_its_run_is_in_it_despite_float32_storage`.
+- **Minor raised to Important, fixed:** three documents said a faulted wl-xcon run writes no end
+  row, and wl-xcon writes one. The documents and the generator now match it (amendment 12).
+- **Eight minors deferred** (M2–M9), in the ledger and the final message.
+
+- **The full suite after the fix pass:** 2098 passed, 25 skipped, 1 deselected, 1 xfailed on 3.11,
+  and 2097 passed, 27 skipped, 1 xfailed on 3.13.

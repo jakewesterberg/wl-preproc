@@ -414,7 +414,9 @@ class ListedSegment(BaseModel):
 class ListedBlock(BaseModel):
     """A measured block: consecutive trials under one block type, inside a
     run. `block_number` is its number in the session, as `BLOCK_START`
-    strobes it; `block_in_run` its order in its run, from 1."""
+    strobes it; `block_in_run` its order in its run, from 1. `closed` is
+    null when it was never recorded: a session event-staged before
+    2026-10-01 kept no block closure."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -423,7 +425,7 @@ class ListedBlock(BaseModel):
     block_type: str | None
     start_s: float
     end_s: float
-    closed: bool
+    closed: bool | None
     n_trials: int
 
 

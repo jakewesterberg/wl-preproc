@@ -47,7 +47,9 @@ def test_run_in_session_is_the_number_when_the_start_row_carries_it(tmp_path):
     assert (run.number, run.task, run.stop_kind) == (7, "rf_map", "completed")
 
 
-def test_a_run_that_faulted_has_no_stop_reason(tmp_path):
+def test_a_run_whose_process_was_killed_has_no_stop_reason(tmp_path):
+    """wl-xcon writes a run's end row on every way out, a fault included
+    (`stop_kind` "fault"); only a killed process leaves none."""
     from wl_preproc.events.rigruns import read_rig_runs
 
     (run,) = read_rig_runs(_record(tmp_path, [_start(0, "rf_map")]), "pico").runs

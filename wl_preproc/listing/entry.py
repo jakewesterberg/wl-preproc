@@ -8,7 +8,10 @@ listing stage and `GET /sessions` both call it, so they cannot disagree.
 
 **A block belongs to the run its start lies in**, and a segment to every run
 it overlaps: runs and segments do not align, since a bank change needs a
-SpikeGLX restart and a run need not stop for one.
+SpikeGLX restart and a run need not stop for one. A block's start is stored
+as a MySQL FLOAT (`trial.Block`), a run's as a double (`core.Run`), so the run
+is rounded to float32 before they are compared: rounding is monotonic, so a
+block that starts inside its run is found inside it at any magnitude.
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ import collections
 import dataclasses
 import datetime
 from pathlib import Path
+
+import numpy as np
 
 from wl_preproc.contracts.protocol import SessionEntry
 
@@ -87,7 +92,8 @@ def build_entry(facts: SessionFacts) -> dict:
         start, stop = run["run_start_time"], run["run_stop_time"]
         record = facts.records.get(run["run_number"], {})
         spanned = [segment for segment in segments if segment["start_s"] < stop and segment["end_s"] > start]
-        blocks = sorted((block for block in facts.blocks if start <= block["block_start_time"] <= stop),
+        low, high = float(np.float32(start)), float(np.float32(stop))
+        blocks = sorted((block for block in facts.blocks if low <= block["block_start_time"] <= high),
                         key=lambda block: block["block_start_time"])
         listed_blocks = []
         in_a_run.update(block["block_id"] for block in blocks)
@@ -97,7 +103,8 @@ def build_entry(facts: SessionFacts) -> dict:
                 "block_number": block["block_id"], "block_in_run": order,
                 "block_type": attributes.get("block_type"),
                 "start_s": float(block["block_start_time"]), "end_s": float(block["block_stop_time"]),
-                "closed": attributes.get("closed") == "1", "n_trials": facts.trial_counts.get(block["block_id"], 0),
+                "closed": None if "closed" not in attributes else attributes["closed"] == "1",
+                "n_trials": facts.trial_counts.get(block["block_id"], 0),
             })
         runs.append({
             "run_number": run["run_number"], "task_code": run["task_type"], "task": record.get("task"),
@@ -119,15 +126,12 @@ def build_entry(facts: SessionFacts) -> dict:
                                f"run {run['run_number']} spans segments where probe {serial} records two site "
                                "maps: a bank changed inside the run", run_number=run["run_number"]))
         if record.get("task") is None:
-            flags.append(_flag("task_unknown",
-                               f"run {run['run_number']} has no task: the rig's record has no start row for it",
+            flags.append(_flag("task_unknown", f"run {run['run_number']} has no recorded task",
                                run_number=run["run_number"]))
         for block in listed_blocks:
             if block["block_type"] is None:
-                flags.append(_flag("block_type_unknown",
-                                   f"block {block['block_number']} has no block type: the rig's record names none "
-                                   "or two for its trials", run_number=run["run_number"],
-                                   block_number=block["block_number"]))
+                flags.append(_flag("block_type_unknown", f"block {block['block_number']} has no recorded block type",
+                                   run_number=run["run_number"], block_number=block["block_number"]))
 
     # A block in no run, when the session has runs: its run's RUN_START was
     # lost, or it was strobed outside a run. With no runs at all the session

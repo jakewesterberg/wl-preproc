@@ -154,9 +154,10 @@ def test_the_rig_record_has_wl_xcons_line_shape(tmp_path):
 
 
 def test_the_run_record_has_wl_xcons_row_shape(tmp_path):
-    """With runs on, one start row per run and an end row unless its block is
-    unclosed, as wl-xcon's `run_row` writes them (design spec
-    `2026-10-01-session-listing-and-run-requests-design.md` section 2.3)."""
+    """With runs on, one start row and one end row per run, as wl-xcon's
+    `run_row` writes them (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 2.3). A
+    run whose block is unclosed faulted, and its end row says so."""
     from wl_preproc.events.rigruns import read_rig_runs
     from wl_preproc.synth.peripherals import write_rig_runs
     from wl_preproc.synth.recipe import SessionRecipe
@@ -167,7 +168,7 @@ def test_the_run_record_has_wl_xcons_row_shape(tmp_path):
     record = read_rig_runs(tmp_path, recipe.subject)
     assert record.problems == ()
     assert [(run.number, run.task, run.stop_kind) for run in record.runs] == [
-        (1, recipe.blocks[0].task_type.name.lower(), None),
+        (1, recipe.blocks[0].task_type.name.lower(), "fault"),
         (2, recipe.blocks[1].task_type.name.lower(), "completed")]
     # `config.json` in the keys wl-xcon's `taskd.Session._fixed_config` names them (its `main`,
     # read at `5f79afe`); the reader uses only `subject`.

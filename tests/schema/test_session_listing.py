@@ -37,7 +37,7 @@ def test_an_entry_reads_what_the_daemon_measured(listed):
         "sllist1", recipe.session_id, [recipe.probe_serial])
     assert entry["tier"] in ("A", "B", "C", "D")
     assert [(run["run_number"], run["task"], run["closed"], run["stop_kind"]) for run in entry["runs"]] == [
-        (1, recipe.blocks[0].task_type.name.lower(), False, None),
+        (1, recipe.blocks[0].task_type.name.lower(), False, "fault"),
         (2, recipe.blocks[1].task_type.name.lower(), True, "completed")]
     assert [[(block["block_number"], block["block_type"], block["closed"], block["n_trials"])
              for block in run["blocks"]] for run in entry["runs"]] == [[(1, "block-1", False, 3)],

@@ -151,3 +151,35 @@ def test_a_session_listed_before_its_timing_and_census_has_neither():
     entry = build_entry(_facts(tier=None, segments=[], census=[], electrodes={}))
     assert (entry["tier"], entry["segments"], entry["probes"], entry["flags"]) == (None, [], [], [])
     assert [run["segments"] for run in entry["runs"]] == [[], []]
+
+
+def test_a_block_starting_just_after_its_run_is_in_it_despite_float32_storage():
+    """`trial.Block` stores a block's start as a MySQL FLOAT, `core.Run` its
+    run's as a double. Hours in, float32 rounds a start 0.6 ms after
+    RUN_START to before it (final review I2)."""
+    import numpy as np
+
+    from wl_preproc.listing.entry import build_entry
+
+    stored = float(np.float32(18000.124))
+    assert stored < 18000.1234  # the stored block start falls before its run's
+    entry = build_entry(_facts(
+        runs=[{"run_number": 1, "task_type": 0, "run_start_time": 18000.1234, "run_stop_time": 18100.0, "closed": 1}],
+        records={1: {"task": "rf_map", "stopped_because": "every block is finished", "stop_kind": "completed"}},
+        blocks=[{"block_id": 1, "block_start_time": stored, "block_stop_time": float(np.float32(18099.9))}],
+        trial_counts={1: 3}, segments=[], census=[], electrodes={}, strobed_runs=[1], strobed_blocks=[1]))
+    assert [block["block_number"] for block in entry["runs"][0]["blocks"]] == [1]
+    assert entry["flags"] == []
+
+
+def test_what_was_never_recorded_is_unknown_and_the_flags_say_only_that():
+    """A session event-staged before its block closure, block type and rig
+    run record were kept (final review I1): its closure is unknown, not
+    false, and no flag names a cause."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(records={}, block_attributes={1: {"task_type": "0"}, 2: {"task_type": "0"}}))
+    assert [block["closed"] for run in entry["runs"] for block in run["blocks"]] == [None, None]
+    assert [flag["message"] for flag in entry["flags"]] == [
+        "run 1 has no recorded task", "block 1 has no recorded block type",
+        "run 2 has no recorded task", "block 2 has no recorded block type"]

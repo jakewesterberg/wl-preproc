@@ -350,3 +350,22 @@ settle what the sections above left open; §0 stands.
      pass holding both cannot deadlock;
    - **8:** as amendment 4.
 
+## Amendments, 2026-10-01, from Plan A's final review
+
+10. **What was never recorded is unknown, not false.** A session event-staged before this branch
+    kept no block closure, block type or rig run record. Its blocks list `closed` as null, and
+    `task_unknown` and `block_type_unknown` say only "no recorded task" and "no recorded block
+    type", never a cause. Until its event stage is redone, that is what its entry says (final
+    review I1).
+11. **A block's start is compared with its run's in float32** (§2.2's "the blocks whose start lies
+    in the run"). `trial.Block` stores a FLOAT and `core.Run` a double; hours in, a block
+    starting 0.6 ms after `RUN_START` is stored before it. The run's bounds are rounded to
+    float32 first, which is exact because rounding is monotonic (final review I2). *Plan B builds
+    a file's runs on the same rule; it may instead record each block's run at the event stage.*
+12. **A faulted run has an end row.** wl-xcon's `taskd.py` (its `main`, read at `c4ee20d`) writes
+    the end row on every way out, a fault included, with `stop_kind` "fault" and
+    `stopped_because` "fault, session aborted: ..."; only a killed process leaves none. The
+    generator now writes that row for a run whose block is unclosed, and the documents that said
+    a faulted run writes none are corrected (final review M1, raised to Important as a false claim
+    about another repository).
+

@@ -631,7 +631,7 @@ def _block_attributes(key, name):
 
 def test_populate_session_keeps_the_rig_record_of_each_run_and_each_blocks_facts(events_activated, dj_conn,
                                                                                   tmp_path):
-    """Run 1 faulted (its block unclosed), so wl-xcon wrote it no end row; run
+    """Run 1 faulted (its block unclosed), and wl-xcon's end row says so; run
     2 finished. Each block keeps whether it closed and the block type its
     trials' lines name."""
     from wl_preproc.schema import core
@@ -640,7 +640,8 @@ def test_populate_session_keeps_the_rig_record_of_each_run_and_each_blocks_facts
                                       runs=True, unclosed_blocks=[1])
     records = (core.RunRecord & key).to_dicts(order_by="run_number")
     assert [(row["run_number"], row["task"], row["stopped_because"], row["stop_kind"]) for row in records] == [
-        (1, recipe.blocks[0].task_type.name.lower(), None, None),
+        (1, recipe.blocks[0].task_type.name.lower(), "fault, session aborted: RuntimeError: a synthetic fault",
+         "fault"),
         (2, recipe.blocks[1].task_type.name.lower(), "every block is finished", "completed")]
     assert _block_attributes(key, "closed") == {1: "0", 2: "1"}
     assert _block_attributes(key, "block_type") == {1: "block-1", 2: "block-2"}
