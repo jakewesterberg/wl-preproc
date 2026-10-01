@@ -139,8 +139,15 @@ def test_the_rig_record_has_wl_xcons_line_shape(tmp_path):
     (tmp_path / "xcon").mkdir()
     write_rig_trials(tmp_path / "xcon" / "trials.jsonl", CI_RECIPE, truth)
     lines = [json.loads(line) for line in (tmp_path / "xcon" / "trials.jsonl").read_text().splitlines()]
-    assert all(set(line) == {"index", "subject", "outcome", "block", "condition", "params"} for line in lines)
+    assert all(set(line) == {"index", "run", "trial_number", "subject", "outcome", "block", "condition", "params"}
+               for line in lines)
+    # Since XC-155: runs count from 0 in wl-xcon, indexes restart in each
+    # run, and the number counts across the session (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 3.1).
+    assert [(line["run"], line["index"]) for line in lines] == [
+        (trial.block_id - 1, sum(1 for t in truth.trials[:position] if t.block_id == trial.block_id))
+        for position, trial in enumerate(truth.trials)]
     record = read_rig_trials(tmp_path, CI_RECIPE.subject)
     assert record.problems == ()
-    assert [trial.index for trial in record.trials] == [trial.trial_id for trial in truth.trials]
+    assert [trial.number for trial in record.trials] == [trial.trial_id for trial in truth.trials]
     assert {trial.condition for trial in record.trials} <= {"contrast-10", "contrast-25", "contrast-50", "contrast-100"}

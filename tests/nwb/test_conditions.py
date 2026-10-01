@@ -13,7 +13,7 @@ def _trial(trial_id, start_s, outcome="correct"):
 def _rig(index, condition, **params):
     from wl_preproc.events.rigtrials import RigTrial
 
-    return RigTrial(index=index, outcome="correct", block="main", condition=condition, params=params)
+    return RigTrial(number=index, index=index, outcome="correct", block="main", condition=condition, params=params)
 
 
 def test_trials_join_the_rig_record_by_trial_number_only():
@@ -61,6 +61,19 @@ def test_a_blocks_conditions_are_what_ran_by_settings():
          "varying": {"hold": {"min": 0.3, "max": 0.35}},
          "trials": {"total": 2, "by_outcome": {"correct": 1, "error": 1}}},
     ]
+
+
+def test_the_join_is_on_the_lines_number_not_its_index():
+    """Since XC-155 a line's index restarts in each run; only its number is
+    the stream's TRIAL_NUMBER (design spec `2026-10-01-runs-and-trials-design.md`
+    section 3.1)."""
+    from wl_preproc.events.rigtrials import RigRecord, RigTrial
+    from wl_preproc.nwb.conditions import join
+
+    line = RigTrial(number=7, index=0, outcome="correct", block="main", condition="a", params={})
+    matched, notes = join([_trial(7, 0.0), _trial(0, 1.0)], RigRecord(trials=(line,), problems=()))
+    assert matched == {7: line}
+    assert notes == ["1 trial(s) have no single line in the rig record"]
 
 
 def test_without_the_rig_record_a_condition_is_its_stream_number():

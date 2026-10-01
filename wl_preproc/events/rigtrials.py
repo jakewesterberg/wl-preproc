@@ -14,12 +14,15 @@ reported as a problem, by line number, and left out; nothing is guessed. Two
 animals routinely share one day's session directory, so the record carries the
 subject on every line and only this subject's lines are kept.
 
-**A record that numbers trials within each run is not read at all.** Since
-wl-xcon's slice b3a-1 a session holds several runs, each line names its run,
-and each run counts its trials from 0; the stream's `TRIAL_NUMBER` is numbered
-across the session instead (wl-xcon XC-155). A per-run `index` is then not the
-join key even where it is unique, so no line is read until this module reads
-the key XC-155 records.
+**Each line is keyed by its `trial_number`** (design spec
+`2026-10-01-runs-and-trials-design.md` section 3.1). Since wl-xcon's slice
+b3a-1 a session holds several runs, each line names its run, and each run
+counts its `index` from 0; since its XC-155 each line also carries
+`trial_number`, counted from 1 across the session and equal to the stream's
+`TRIAL_NUMBER`. That number is the key. A record from before XC-155, whose
+lines name no run, is keyed by `index`, which then counted across the
+session. A line that names a run but carries no `trial_number` has no key
+across the session, so it is reported and left out.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ _FIELDS = ("index", "subject", "outcome", "block", "condition", "params")
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RigTrial:
+    number: int  # the stream's TRIAL_NUMBER: `trial_number`, or `index` before XC-155
     index: int
     outcome: str
     block: str
@@ -55,28 +59,34 @@ def read_rig_trials(session_dir: Path, subject: str) -> RigRecord | None:
     path = Path(session_dir) / XCON_DIRNAME / RECORD_NAME
     if not path.is_file():
         return None
-    trials, problems, per_run = [], [], False
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    trials, problems = [], []
+    for number_of_line, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            problems.append(f"line {number}: not JSON")
+            problems.append(f"line {number_of_line}: not JSON")
             continue
         if not isinstance(row, dict) or any(field not in row for field in _FIELDS):
-            problems.append(f"line {number}: missing one of {', '.join(_FIELDS)}")
+            problems.append(f"line {number_of_line}: missing one of {', '.join(_FIELDS)}")
             continue
         if not isinstance(row["index"], int) or isinstance(row["index"], bool) or not isinstance(row["params"], dict):
-            problems.append(f"line {number}: index is not an integer or params is not an object")
+            problems.append(f"line {number_of_line}: index is not an integer or params is not an object")
             continue
         if row["subject"] != subject:
             continue
-        per_run = per_run or "run" in row
-        trials.append(RigTrial(index=row["index"], outcome=str(row["outcome"]), block=str(row["block"]),
-                               condition=str(row["condition"]), params=row["params"]))
-    if per_run:
-        return RigRecord(trials=(), problems=(*problems, (
-            "the rig record numbers trials within each run (its lines name a run) and the stream "
-            "numbers them across the session (wl-xcon XC-155), so no line is joined")))
+        if "trial_number" in row:
+            number = row["trial_number"]
+            if not isinstance(number, int) or isinstance(number, bool):
+                problems.append(f"line {number_of_line}: trial_number is not an integer")
+                continue
+        elif "run" in row:
+            problems.append(f"line {number_of_line}: it names a run but carries no trial_number, so it has no "
+                            "number across the session and joins nothing")
+            continue
+        else:
+            number = row["index"]
+        trials.append(RigTrial(number=number, index=row["index"], outcome=str(row["outcome"]),
+                               block=str(row["block"]), condition=str(row["condition"]), params=row["params"]))
     return RigRecord(trials=tuple(trials), problems=tuple(problems))
