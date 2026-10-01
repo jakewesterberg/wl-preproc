@@ -54,6 +54,24 @@ class Run(dj.Manual):
 
 
 @schema
+class RunRecord(dj.Manual):
+    definition = """
+    # wl-xcon's own record of one run, from `xcon/runs.jsonl`, read by
+    # `schema/events.py::populate_session` (design spec
+    # 2026-10-01-session-listing-and-run-requests-design.md section 2.3). The
+    # rig's word, kept apart from the measured Run, as an assertion is kept
+    # apart from a measurement throughout. Only a measured run has one. A
+    # value longer than its column is cut to it. Key: (subject,
+    # session_datetime, run_number).
+    -> Run
+    ---
+    task = null            : varchar(255)   # the start row's task
+    stopped_because = null : varchar(1024)  # the end row's; null when the run faulted
+    stop_kind = null       : varchar(64)    # the end row's, e.g. completed, operator, limit
+    """
+
+
+@schema
 class Block(dj.Manual):
     definition = """
     # One run of one task, mirroring wl.works animal_session_block.

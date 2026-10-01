@@ -53,6 +53,8 @@ from wl_preproc.contracts.events import (
 )
 from wl_preproc.events.assemble import AssembledBlock, AssembledTrial, assemble
 from wl_preproc.events.extract import extract_syncbox_words
+from wl_preproc.events.rigruns import read_rig_runs
+from wl_preproc.events.rigtrials import read_rig_trials
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.timebase import segments
 from wl_preproc.timebase.fit import RateFit, fit_offset
@@ -344,6 +346,36 @@ def _block_stop_time(block: AssembledBlock) -> float:
 TRIAL_ID_MAX = 32767
 
 
+def _clip(value: str | None, width: int) -> str | None:
+    """A rig-record value cut to its column: a value too long would fail the
+    session's whole event stage on every pass."""
+    return None if value is None else value[:width]
+
+
+def _block_type_rows(session_key: dict, block_trial_rows: list[dict], record) -> list[dict]:
+    """Each block's type: the `block` its trials' rig-record lines name, when
+    they name one (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 2.3).
+    Joined by trial number, as conditions are. A block none of whose trials
+    has a line, or whose lines name two types, has none."""
+    if record is None:
+        return []
+    by_number: dict[int, object] = {}
+    for trial in record.trials:
+        by_number.setdefault(trial.number, trial)
+    names: dict[int, set[str]] = {}
+    for row in block_trial_rows:
+        trial = by_number.get(row["trial_id"])
+        if trial is not None:
+            names.setdefault(row["block_id"], set()).add(trial.block)
+    return [
+        {**session_key, "block_id": block_id, "attribute_name": "block_type",
+         "attribute_value": _clip(next(iter(found)), 2000)}
+        for block_id, found in sorted(names.items())
+        if len(found) == 1
+    ]
+
+
 def populate_session(key: dict, session_dir: Path) -> None:
     """Populate one session's `BehaviorRecording`, `EventType`, `Event`,
     `Trial`, `TrialType`, `Block` and `BlockTrial` from the sync box's decoded
@@ -556,6 +588,17 @@ def populate_session(key: dict, session_dir: Path) -> None:
         }
         for block in assembly.blocks
     ]
+    # Whether each block closed, and its block type from the rig's record
+    # (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    # section 2.3): trial.Block holds neither, and the session listing
+    # reports both.
+    block_attribute_rows += [
+        {**session_key, "block_id": block.block_id, "attribute_name": "closed",
+         "attribute_value": str(int(block.end_s is not None))}
+        for block in assembly.blocks
+    ]
+    block_attribute_rows += _block_type_rows(session_key, block_trial_rows,
+                                             read_rig_trials(session_dir, session_key["subject"]))
     if block_attribute_rows:
         pipeline.trial.Block.Attribute.insert(block_attribute_rows, skip_duplicates=True)
 
@@ -574,3 +617,17 @@ def populate_session(key: dict, session_dir: Path) -> None:
     ]
     if run_rows:
         core.Run.insert(run_rows, skip_duplicates=True)
+
+    # -- core.RunRecord: the rig's record of each measured run (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 2.3).
+    # Read here, once, because the raw files are later archived.
+    rig_runs = read_rig_runs(session_dir, session_key["subject"])
+    measured = {row["run_number"] for row in run_rows}
+    record_rows = [
+        {**session_key, "run_number": run.number, "task": _clip(run.task, 255),
+         "stopped_because": _clip(run.stopped_because, 1024), "stop_kind": _clip(run.stop_kind, 64)}
+        for run in (rig_runs.runs if rig_runs is not None else ())
+        if run.number in measured
+    ]
+    if record_rows:
+        core.RunRecord.insert(record_rows, skip_duplicates=True)
