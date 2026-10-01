@@ -31,12 +31,12 @@ CHECKSUM = {"dataset_path": "/intervals/trials/start_time", "dtype": "float64", 
             "sha256": "0" * 64, "paired_with": ""}
 
 
-def _gathered(eye=None, notes=(), probes=(), probe_notes=()):
+def _gathered(eye=None, notes=(), probes=(), probe_notes=(), trial_notes=()):
     from wl_preproc.nwb.gather import Gathered
 
     return Gathered(session=SESSION, systems=["ohdpi"], blocks=[BLOCK], trials=[{"trial_id": 1}],
                     events=[{}, {}], timebase={}, eye=eye, conditions=[CONDITION], condition_notes=list(notes),
-                    probes=list(probes), probe_notes=list(probe_notes))
+                    probes=list(probes), probe_notes=list(probe_notes), trial_notes=list(trial_notes))
 
 
 def test_the_description_of_a_file_without_eye_data():
@@ -112,3 +112,14 @@ def test_each_probe_is_described_with_both_areas_and_where_its_label_came_from()
          "target": None, "assignment": None, "area_from": "unknown"},
     ]
     assert out["notes"] == ["a condition note", "a probe note"]
+
+
+def test_the_trial_notes_follow_the_condition_notes():
+    """Design spec `2026-10-01-runs-and-trials-design.md` sections 3.2 and
+    3.4: what the stored trials leave out, between the condition notes and
+    the probe notes."""
+    from wl_preproc.nwb.describe import describe
+
+    out = describe(_gathered(notes=["a condition note"], trial_notes=["a trial note"], probe_notes=["a probe note"]),
+                   status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
+    assert out["notes"] == ["a condition note", "a trial note", "a probe note"]

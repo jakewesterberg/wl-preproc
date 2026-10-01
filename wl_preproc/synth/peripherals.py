@@ -168,12 +168,21 @@ def rig_condition(trial_id: int) -> tuple[str, dict]:
 
 def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
     """Stands in for wl-xcon's `xcon/trials.jsonl`: one JSON object per line,
-    per trial, with the subject on every line."""
-    lines = []
-    for trial in truth.trials:
+    per trial, with the subject on every line. In wl-xcon's shape since its
+    XC-155: the run (counted from 0, as wl-xcon counts them; one run per
+    block), the trial's index within its run, and `trial_number`, counted
+    across the session and equal to the stream's TRIAL_NUMBER."""
+    lines, per_run = [], {}
+    for position, trial in enumerate(truth.trials, start=1):
+        index = per_run.get(trial.block_id, 0)
+        per_run[trial.block_id] = index + 1  # a faulted trial still used its index
+        if position in recipe.faulted_trials:
+            continue  # a trial that faults leaves no line (wl-xcon, 2026-10-01)
         condition, params = rig_condition(trial.trial_id)
         lines.append({
-            "index": trial.trial_id,
+            "index": index,
+            "run": trial.block_id - 1,
+            "trial_number": trial.trial_id,
             "subject": recipe.subject,
             "outcome": "correct",
             "block": f"block-{trial.block_id}",

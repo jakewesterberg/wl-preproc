@@ -114,12 +114,17 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
 
     for block_index, block in enumerate(recipe.blocks, start=1):
         block_start = cursor
+        if recipe.runs:
+            for word in encode_payload(Escape.RUN_START, [block_index, int(block.task_type)]):
+                _emit(words, block_start, word)
         for word in encode_payload(
             Escape.BLOCK_START, [block_index, int(block.task_type)]
         ):
             _emit(words, block_start, word)
 
         for _ in range(block.n_trials):
+            if recipe.trial_numbers:
+                trial_id = recipe.trial_numbers[len(trials)]
             trial_start = cursor
             trial_end = cursor + block.trial_duration_s
             trials.append(
@@ -157,8 +162,11 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
             # TRIAL_END moving later: this way neither the next trial's own
             # TRIAL_START nor this block's BLOCK_END (both ratcheted off the
             # last word placed before them, in `_emit`) shift by this change.
-            _emit(words, trial_end - 2 * CODE_WORD_SPACING_S, Marker.TRIAL_CORRECT.value)
-            _emit(words, trial_end - CODE_WORD_SPACING_S, Marker.TRIAL_END.value)
+            # A faulted trial (wl-xcon's shape) sends no outcome and no
+            # TRIAL_END; its time still passes.
+            if len(trials) not in recipe.faulted_trials:
+                _emit(words, trial_end - 2 * CODE_WORD_SPACING_S, Marker.TRIAL_CORRECT.value)
+                _emit(words, trial_end - CODE_WORD_SPACING_S, Marker.TRIAL_END.value)
             cursor = trial_end
             trial_id += 1
 
@@ -170,7 +178,11 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
                 end_s=cursor,
             )
         )
-        _emit(words, cursor - CODE_WORD_SPACING_S / 2, Marker.BLOCK_END.value)
+        # A run that faults sends no BLOCK_END (wl-xcon's rule for its RUN_END).
+        if block_index not in recipe.unclosed_blocks:
+            _emit(words, cursor - CODE_WORD_SPACING_S / 2, Marker.BLOCK_END.value)
+            if recipe.runs:
+                _emit(words, cursor - CODE_WORD_SPACING_S / 2, Marker.RUN_END.value)
 
     _emit(words, recipe.duration_s, Marker.SESSION_END.value)
 

@@ -138,7 +138,8 @@ def mismatch_rig_line(lines: list[dict]) -> list[dict]:
     """The rig's trial record with its second line carrying the first line's
     trial number: one number named twice, one not at all. Joining by trial
     number must attach neither trial's condition (design spec
-    `2026-09-29-nwb-publishing-design.md` section 13)."""
+    `2026-09-29-nwb-publishing-design.md` section 13). The number is
+    `trial_number`, the join key since wl-xcon's XC-155."""
     if len(lines) < 2:
         return list(lines)
-    return [lines[0], {**lines[1], "index": lines[0]["index"]}, *lines[2:]]
+    return [lines[0], {**lines[1], "trial_number": lines[0]["trial_number"]}, *lines[2:]]

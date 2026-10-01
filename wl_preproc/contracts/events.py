@@ -70,6 +70,10 @@ class Marker(IntEnum):
     SESSION_START = 1
     SESSION_END = 2
     BLOCK_END = 3
+    # A run that ends by design (design spec `2026-10-01-runs-and-trials-design.md`
+    # section 2.1). Session structure, so this repository's under ADR-0007; a
+    # run that faults sends none. Its start is `Escape.RUN_START`.
+    RUN_END = 4
     TRIAL_START = 32
     TRIAL_END = 33
     TRIAL_CORRECT = 34
@@ -150,6 +154,12 @@ class Escape(IntEnum):
     CONDITION = 0x8003
     TARGET_POSITION = 0x8004
     PARAM_CHANGE = 0x8005
+    # A run's start, carrying its number in the session and its task: the
+    # run is identified in the recording itself, as a block is, so a lost code
+    # costs one run rather than renumbering the rest (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 2.1; the requester's
+    # vocabulary: a run holds blocks, a block holds trials).
+    RUN_START = 0x8006
 
 
 PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
@@ -158,6 +168,7 @@ PAYLOAD_WORD_COUNTS: dict[Escape, int] = {
     Escape.CONDITION: 2,  # uint32, high word first
     Escape.TARGET_POSITION: 3,  # (role, x_dva, y_dva)
     Escape.PARAM_CHANGE: 2,  # uint32 sequence number, high word first
+    Escape.RUN_START: 2,  # (run_number, task_type_code), BLOCK_START's layout
 }
 
 

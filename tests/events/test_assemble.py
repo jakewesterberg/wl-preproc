@@ -90,3 +90,55 @@ def test_decode_errors_are_kept_rather_than_dropped():
     words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1), (0.002, 0xDEAD)]  # truncated: only 2 of the 3 required words follow the escape
     result = assemble.assemble(_stream(words))
     assert result.errors, "a decode error must reach the assembly's error list"
+
+
+def test_an_unclosed_block_records_its_last_event():
+    """A run that faults sends no BLOCK_END, so the next BLOCK_START finds it
+    open. Its last event is what the recording proves of its end (design
+    spec `2026-10-01-runs-and-trials-design.md` section 2.3)."""
+    words = [*encode_payload(Escape.BLOCK_START, [1, 0]), Marker.TRIAL_START.value,
+             *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+             *encode_payload(Escape.BLOCK_START, [2, 0]), Marker.TRIAL_START.value,
+             *encode_payload(Escape.TRIAL_NUMBER, [0, 2]), Marker.TRIAL_END.value, Marker.BLOCK_END.value]
+    pairs = [(0.001 * i, word) for i, word in enumerate(words)]
+    first, second = assemble.assemble(_stream(pairs)).blocks
+    # A payload event is timed at its escape word: trial 1's TRIAL_NUMBER.
+    assert first.end_s is None and first.last_s == pairs[5][0]
+    assert second.end_s == second.last_s == pairs[-1][0]
+
+
+def test_runs_are_measured_like_blocks_and_an_unclosed_one_ends_at_its_last_event():
+    """Design spec `2026-10-01-runs-and-trials-design.md` sections 2.1 and
+    2.3: RUN_START opens a run with its number and task, RUN_END closes it,
+    and a run that faulted -- no RUN_END -- records its last event."""
+    words = [*encode_payload(Escape.RUN_START, [1, 0]), *encode_payload(Escape.BLOCK_START, [1, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+             *encode_payload(Escape.RUN_START, [2, 5]), *encode_payload(Escape.BLOCK_START, [2, 5]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 2]), Marker.TRIAL_END.value,
+             Marker.BLOCK_END.value, Marker.RUN_END.value]
+    pairs = [(0.001 * i, word) for i, word in enumerate(words)]
+    assembly = assemble.assemble(_stream(pairs))
+    first, second = assembly.runs
+    assert (first.run_number, first.task_type, first.start_s, first.end_s) == (1, 0, 0.0, None)
+    assert first.last_s == pairs[9][0]  # trial 1's TRIAL_NUMBER, timed at its escape word
+    assert (second.run_number, second.task_type, second.end_s, second.last_s) == (2, 5, pairs[-1][0], pairs[-1][0])
+    # A block lies inside its run: the open block ends with its run, not at
+    # the next run's RUN_START (final review C1).
+    assert assembly.blocks[0].last_s == first.last_s
+
+
+def test_a_block_left_open_ends_with_its_run():
+    """A run that ended by design but whose BLOCK_END was lost: the block's
+    stop is its own last event before RUN_END, not a code strobed between
+    runs (MANUAL_REWARD, 4134, here) nor the next run's start."""
+    words = [*encode_payload(Escape.RUN_START, [1, 0]), *encode_payload(Escape.BLOCK_START, [1, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]), Marker.TRIAL_END.value,
+             Marker.RUN_END.value, 4134,
+             *encode_payload(Escape.RUN_START, [2, 0]), *encode_payload(Escape.BLOCK_START, [2, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 2]), Marker.TRIAL_END.value,
+             Marker.BLOCK_END.value, Marker.RUN_END.value]
+    pairs = [(0.001 * i, word) for i, word in enumerate(words)]
+    assembly = assemble.assemble(_stream(pairs))
+    first_block, first_run = assembly.blocks[0], assembly.runs[0]
+    assert first_block.end_s is None and first_block.last_s == pairs[13][0]  # trial 1's TRIAL_END
+    assert first_block.last_s < first_run.end_s == pairs[14][0]

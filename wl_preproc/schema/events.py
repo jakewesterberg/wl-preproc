@@ -186,9 +186,19 @@ def _containing_block(
     `events/agreement.py`'s job, fed into tier resolution by Task 9, not this
     module's. So the containing block is recovered from the two assembled
     interval lists directly.
+
+    **A block that never closed ends where the next one starts** (design spec
+    `2026-10-01-runs-and-trials-design.md` section 2.3). A run that faults
+    sends no BLOCK_END (wl-xcon's rule), and reaching to the end of the
+    stream instead made it the first block holding every later trial's start.
     """
-    for block in blocks:
-        block_end = block.end_s if block.end_s is not None else stream_end_s
+    for position, block in enumerate(blocks):
+        if block.end_s is not None:
+            block_end = block.end_s
+        elif position + 1 < len(blocks):
+            block_end = blocks[position + 1].start_s
+        else:
+            block_end = stream_end_s
         if block.start_s <= trial.start_s < block_end:
             return block
     return None
@@ -252,6 +262,13 @@ def _trial_stop_time(
     4. The last event time in the whole decoded stream -- the only branch a
        trial truncated with nothing recorded after it can ever reach.
 
+    **Branches 3 and 4 are capped at the containing block's stop, closed or
+    not** (design spec `2026-10-01-runs-and-trials-design.md` section 3.3).
+    A trial that faults is in a run that faulted, which sent no BLOCK_END, so
+    branch 2 does not apply and the next trial is in the next run, after the
+    gap between runs. An unclosed block's stop is its last event, so the
+    inferred stop stays inside the trial's own run.
+
     **Fix round 3: branch 1 is exempt from the invariant below, and returns
     before reaching it.** `_containing_block` decides containment by START
     time alone (`block.start_s <= trial.start_s < block_end`), and -- as fix
@@ -291,6 +308,8 @@ def _trial_stop_time(
         stop = ordered_trials[trial_index + 1].start_s
     else:
         stop = stream_end_s
+    if containing_block is not None:
+        stop = min(stop, _block_stop_time(containing_block))
 
     if containing_block is not None and containing_block.end_s is not None:
         assert stop <= containing_block.end_s, (
@@ -302,17 +321,27 @@ def _trial_stop_time(
     return stop
 
 
-def _block_stop_time(block: AssembledBlock, stream_end_s: float) -> float:
-    """`block.end_s`, or the last known event time when `BLOCK_END` never
-    arrived.
+def _block_stop_time(block: AssembledBlock) -> float:
+    """`block.end_s`, or the block's own last event when `BLOCK_END` never
+    arrived: the tightest bound the recording gives (design spec
+    `2026-10-01-runs-and-trials-design.md` section 2.3). `block_stop_time` is
+    not nullable, so something concrete must be written however the run
+    ended.
 
-    Every block in this project's current fixtures DOES carry an explicit
-    `BLOCK_END` (checked in `synth/timeline.py`), so this path is defensive
-    rather than exercised today -- kept for the same reason `_trial_stop_time`
-    has one: `block_stop_time` is not nullable, so something concrete must be
-    written regardless of how the stream ended.
+    *This used to fall back to the last event of the whole stream, reasoning
+    that every fixture's blocks closed. A run that faults sends no BLOCK_END,
+    and the stream's last event is then in a later run.*
     """
-    return block.end_s if block.end_s is not None else stream_end_s
+    return block.end_s if block.end_s is not None else block.last_s
+
+
+# element-event's `trial_id` is a smallint (`trial_id : smallint # trial
+# number (1-based indexing)`), and the stream's TRIAL_NUMBER is a uint32.
+# MySQL refuses a larger id ("Out of range value for column 'trial_id'",
+# 1264, measured 2026-10-01), which failed the whole batch. Such trials are
+# left out instead (design spec `2026-10-01-runs-and-trials-design.md`
+# section 3.4).
+TRIAL_ID_MAX = 32767
 
 
 def populate_session(key: dict, session_dir: Path) -> None:
@@ -417,6 +446,19 @@ def populate_session(key: dict, session_dir: Path) -> None:
                 {**attribute_base, "attribute_name": "task_type",
                  "attribute_value": str(item.words[1])}
             )
+        elif item.escape is Escape.RUN_START:
+            # Kept per occurrence, as BLOCK_START's are: `core.Run` holds the
+            # first run with a number, and a repeat (a crash restart before
+            # wl-xcon's XC-026) stays recoverable here (design spec
+            # `2026-10-01-runs-and-trials-design.md` amendment 8).
+            attribute_rows.append(
+                {**attribute_base, "attribute_name": "run_number",
+                 "attribute_value": str(item.words[0])}
+            )
+            attribute_rows.append(
+                {**attribute_base, "attribute_name": "task_type",
+                 "attribute_value": str(item.words[1])}
+            )
         elif item.escape is Escape.CONDITION:
             # Never emitted by this project's synthetic generator today
             # (checked: synth/timeline.py builds no CONDITION payload); kept
@@ -454,7 +496,16 @@ def populate_session(key: dict, session_dir: Path) -> None:
     # need each trial's containing block.
     trial_rows: list[dict] = []
     block_trial_rows: list[dict] = []
+    stored: set[int] = set()
     for index, trial in enumerate(assembly.trials):
+        # The first trial with a number is stored and a repeat is not; a
+        # number element-event cannot hold is left out. Both stay in Event,
+        # where the file's notes find them (design spec
+        # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4).
+        # Nothing is renumbered.
+        if trial.trial_id in stored or trial.trial_id > TRIAL_ID_MAX:
+            continue
+        stored.add(trial.trial_id)
         containing_block = _containing_block(trial, assembly.blocks, stream_end_s)
         trial_rows.append(
             {
@@ -483,7 +534,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
             **session_key,
             "block_id": block.block_id,
             "block_start_time": block.start_s,
-            "block_stop_time": _block_stop_time(block, stream_end_s),
+            "block_stop_time": _block_stop_time(block),
         }
         for block in assembly.blocks
     ]
@@ -512,3 +563,14 @@ def populate_session(key: dict, session_dir: Path) -> None:
         pipeline.trial.BlockTrial.insert(
             block_trial_rows, allow_direct_insert=True, skip_duplicates=True
         )
+
+    # -- core.Run: each run, measured as blocks are (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 2.2). A run that faulted
+    # sent no RUN_END, and its stop is its last event.
+    run_rows = [
+        {**session_key, "run_number": run.run_number, "task_type": run.task_type, "run_start_time": run.start_s,
+         "run_stop_time": run.end_s if run.end_s is not None else run.last_s, "closed": int(run.end_s is not None)}
+        for run in assembly.runs
+    ]
+    if run_rows:
+        core.Run.insert(run_rows, skip_duplicates=True)

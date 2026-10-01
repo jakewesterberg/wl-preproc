@@ -412,3 +412,188 @@ def test_a_trial_whose_real_end_arrives_after_its_block_closed():
         trial, 0, assembly.trials, containing_block=containing, stream_end_s=stream_end_s
     )
     assert stop == trial.end_s
+
+
+# -- A block that never closed, because its run faulted (design spec `2026-10-01-runs-and-trials-design.md`
+# section 2.3, wl-xcon's warning of 2026-10-01).
+
+
+def _faulted_run_stream():
+    """Run 1: trial 1 complete, trial 2 faults (number, then nothing) and
+    the run sends no BLOCK_END. Run 2: trial 3 complete, closed."""
+    from wl_preproc.contracts.events import Escape, Marker, decode_stream, encode_payload
+
+    words = [*encode_payload(Escape.BLOCK_START, [1, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+             Marker.TRIAL_CORRECT.value, Marker.TRIAL_END.value,
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 2]),
+             *encode_payload(Escape.BLOCK_START, [2, 0]),
+             Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 3]),
+             Marker.TRIAL_CORRECT.value, Marker.TRIAL_END.value, Marker.BLOCK_END.value]
+    return decode_stream(_stream_at_1ms(words))
+
+
+def test_an_unclosed_block_keeps_its_own_trials_and_no_later_ones():
+    """Today the open block reaches the end of the stream and takes trial 3,
+    which is block 2's. It ends, for containment, where block 2 starts. Each
+    run here has one block."""
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _containing_block
+
+    decoded = _faulted_run_stream()
+    assembly = assemble(decoded)
+    stream_end_s = max(item.time_s for item in decoded)
+    assert [_containing_block(trial, assembly.blocks, stream_end_s).block_id for trial in assembly.trials] == [1, 1, 2]
+
+
+def test_a_faulted_trial_stops_inside_its_own_block():
+    """Its inferred stop is capped at its block's stop, the block's last
+    event, rather than reaching across the gap to the next run's first
+    trial."""
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _block_stop_time, _containing_block, _trial_stop_time
+
+    decoded = _faulted_run_stream()
+    assembly = assemble(decoded)
+    stream_end_s = max(item.time_s for item in decoded)
+    run_one = assembly.blocks[0]
+    faulted = assembly.trials[1]
+    assert faulted.end_s is None and faulted.outcome is None
+    stop = _trial_stop_time(faulted, 1, assembly.trials,
+                            _containing_block(faulted, assembly.blocks, stream_end_s), stream_end_s)
+    assert stop == run_one.last_s == _block_stop_time(run_one)
+    assert stop < assembly.blocks[1].start_s
+
+
+def test_populate_session_stores_a_faulted_run_and_its_trial_with_no_outcome(events_activated, dj_conn, tmp_path):
+    """Through the generator and the database: block 1 sends no BLOCK_END
+    and its last trial (trial 3) faults. Each block keeps its own trials,
+    and the faulted trial stores with no outcome, stopping inside block 1."""
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": "rtfault1",
+                                           "unclosed_blocks": [1], "faulted_trials": [3]})
+    generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": "rtfault1", "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": "rtfault1", "session_datetime": datetime.datetime(2027, 3, 23, 9, 0)}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+
+    events.populate_session(key, tmp_path / recipe.session_id)
+
+    pairs = {(row["block_id"], row["trial_id"]) for row in (pipeline.trial.BlockTrial & key).to_dicts()}
+    assert pairs == {(1, 1), (1, 2), (1, 3), (2, 4)}
+    faulted = (pipeline.trial.Trial & key & {"trial_id": 3}).fetch1()
+    block_one, block_two = (pipeline.trial.Block & key).to_dicts(order_by="block_id")
+    assert faulted["trial_type"] is None
+    assert faulted["trial_stop_time"] <= block_one["block_stop_time"] < block_two["block_start_time"]
+
+
+def test_a_hang_stores_with_no_outcome_and_its_recorded_end():
+    """wl-xcon's hang: no outcome marker, then TRIAL_END (design spec
+    `2026-10-01-runs-and-trials-design.md` section 3.1)."""
+    from wl_preproc.contracts.events import Escape, Marker, decode_stream, encode_payload
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _trial_stop_time
+
+    words = [Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]), Marker.TRIAL_END.value]
+    decoded = decode_stream(_stream_at_1ms(words))
+    (trial,) = assemble(decoded).trials
+    assert (trial.outcome, trial.end_s) == (None, 0.005)
+    assert _trial_stop_time(trial, 0, [trial], None, 0.005) == 0.005
+
+
+def test_populate_session_stores_the_first_of_a_repeated_number_and_none_too_large(events_activated, dj_conn,
+                                                                                  tmp_path):
+    """Design spec sections 3.2 and 3.4: the first trial with a number is
+    stored and its repeat is not; a number above element-event's smallint is
+    left out rather than failing the session; every strobed number stays in
+    `Event`, so both are recoverable for the file's notes."""
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": "rtnums1",
+                                           "trial_numbers": [1, 2, 2, 40000]})
+    truth = generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": "rtnums1", "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": "rtnums1", "session_datetime": datetime.datetime(2027, 3, 24, 9, 0)}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+
+    events.populate_session(key, tmp_path / recipe.session_id)
+
+    stored = (pipeline.trial.Trial & key).to_dicts(order_by="trial_id")
+    assert [row["trial_id"] for row in stored] == [1, 2]
+    assert stored[1]["trial_start_time"] == pytest.approx(truth.trials[1].start_s, abs=0.01)  # the first 2
+    strobed = sorted(int(value) for value in (pipeline.event.Event.Attribute & key
+                                              & {"attribute_name": "trial_id"}).to_arrays("attribute_value"))
+    assert strobed == [1, 2, 2, 40000]
+
+
+def test_populate_session_measures_each_run_into_core_run(events_activated, dj_conn, tmp_path):
+    """Design spec `2026-10-01-runs-and-trials-design.md` section 2.2:
+    element-event has no run level, so `core.Run` holds each measured run.
+    Run 1's block is unclosed, so run 1 faulted: no RUN_END, and its stop is
+    its last event, before run 2 starts."""
+    from wl_preproc.schema import core, pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": "rtruns1", "runs": True,
+                                           "unclosed_blocks": [1], "faulted_trials": [3]})
+    generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": "rtruns1", "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": "rtruns1", "session_datetime": datetime.datetime(2027, 3, 25, 9, 0)}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+
+    events.populate_session(key, tmp_path / recipe.session_id)
+
+    first, second = (core.Run & key).to_dicts(order_by="run_number")
+    assert [(run["run_number"], run["task_type"], run["closed"]) for run in (first, second)] == [
+        (1, int(recipe.blocks[0].task_type), 0), (2, int(recipe.blocks[1].task_type), 1)]
+    assert first["run_start_time"] < first["run_stop_time"] < second["run_start_time"] < second["run_stop_time"]
+    # A block lies inside its run, and so does the run's faulted trial, its
+    # last (final review C1).
+    block_one = (pipeline.trial.Block & key & {"block_id": 1}).fetch1()
+    faulted = (pipeline.trial.Trial & key & {"trial_id": 3}).fetch1()
+    assert faulted["trial_stop_time"] <= block_one["block_stop_time"] <= first["run_stop_time"]
+    # Every RUN_START keeps its number in Event, as every BLOCK_START and
+    # TRIAL_NUMBER does, so a repeated run is recoverable (final review I2).
+    numbers = (pipeline.event.Event.Attribute & key & {"event_type": "RUN_START", "attribute_name": "run_number"})
+    assert sorted(int(value) for value in numbers.to_arrays("attribute_value")) == [1, 2]
+
+
+def test_a_faulted_trial_stops_inside_its_own_run_when_runs_are_marked():
+    """wl-xcon's order, through the real codec, with two minutes between
+    runs: run 1's block never closes and its trial 2 faults. The block's stop
+    and the trial's are run 1's last event, never run 2's RUN_START (final
+    review C1)."""
+    from wl_preproc.contracts.events import Escape, Marker, decode_stream, encode_payload
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _block_stop_time, _containing_block, _trial_stop_time
+
+    run_one = [*encode_payload(Escape.RUN_START, [1, 0]), *encode_payload(Escape.BLOCK_START, [1, 0]),
+               Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+               Marker.TRIAL_CORRECT.value, Marker.TRIAL_END.value,
+               Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 2])]
+    run_two = [*encode_payload(Escape.RUN_START, [2, 0]), *encode_payload(Escape.BLOCK_START, [2, 0]),
+               Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 3]),
+               Marker.TRIAL_CORRECT.value, Marker.TRIAL_END.value, Marker.BLOCK_END.value, Marker.RUN_END.value]
+    pairs = [*_stream_at_1ms(run_one), *((120.0 + time_s, word) for time_s, word in _stream_at_1ms(run_two))]
+    decoded = decode_stream(pairs)
+    assembly = assemble(decoded)
+    stream_end_s = max(item.time_s for item in decoded)
+    block, run, faulted = assembly.blocks[0], assembly.runs[0], assembly.trials[1]
+    stop = _trial_stop_time(faulted, 1, assembly.trials,
+                            _containing_block(faulted, assembly.blocks, stream_end_s), stream_end_s)
+    assert stop <= _block_stop_time(block) <= run.last_s < assembly.runs[1].start_s

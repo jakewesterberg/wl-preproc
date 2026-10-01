@@ -34,12 +34,12 @@ def join(trials: list[dict], record: RigRecord | None) -> tuple[dict[int, RigTri
     if record is None:
         return {}, ["no rig trial record (xcon/trials.jsonl)"]
     notes = list(record.problems)
-    counts = collections.Counter(trial.index for trial in record.trials)
-    by_index = {trial.index: trial for trial in record.trials if counts[trial.index] == 1}
-    repeated = sorted(index for index, count in counts.items() if count > 1)
+    counts = collections.Counter(trial.number for trial in record.trials)
+    by_number = {trial.number: trial for trial in record.trials if counts[trial.number] == 1}
+    repeated = sorted(number for number, count in counts.items() if count > 1)
     if repeated:
         notes.append(f"{len(repeated)} trial number(s) appear more than once in the rig record")
-    matched = {trial["trial_id"]: by_index[trial["trial_id"]] for trial in trials if trial["trial_id"] in by_index}
+    matched = {trial["trial_id"]: by_number[trial["trial_id"]] for trial in trials if trial["trial_id"] in by_number}
     unmatched = len(trials) - len(matched)
     if unmatched:
         notes.append(f"{unmatched} trial(s) have no single line in the rig record")

@@ -16,7 +16,7 @@ session with decode errors is a tier-D candidate that silence would hide.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from wl_preproc.contracts.events import (
     DecodeError,
@@ -49,7 +49,26 @@ class AssembledBlock:
     block_id: int
     task_type: int
     start_s: float
+    end_s: float | None  # its BLOCK_END, or None when it never closed
+    # The last event received while it was open: its BLOCK_END when it closed,
+    # otherwise the last code before the next BLOCK_START or the end of the
+    # stream. For a run that faulted -- wl-xcon sends no BLOCK_END then -- it
+    # is the tightest bound the recording gives on its end (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 2.3).
+    last_s: float
+
+
+@dataclass(frozen=True, slots=True)
+class AssembledRun:
+    """One run, measured as a block is: from `RUN_START` to `RUN_END`, or to
+    its last event when it faulted and sent no `RUN_END` (design spec
+    `2026-10-01-runs-and-trials-design.md` sections 2.1 and 2.3)."""
+
+    run_number: int
+    task_type: int
+    start_s: float
     end_s: float | None
+    last_s: float
 
 
 @dataclass
@@ -57,6 +76,7 @@ class Assembly:
     trials: list[AssembledTrial] = field(default_factory=list)
     blocks: list[AssembledBlock] = field(default_factory=list)
     errors: list[DecodeError] = field(default_factory=list)
+    runs: list[AssembledRun] = field(default_factory=list)
 
 
 def _u32(words: tuple[int, ...]) -> int:
@@ -72,6 +92,8 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
     open_trial_id: int | None = None
     open_outcome: str | None = None
     open_block: AssembledBlock | None = None
+    open_run: AssembledRun | None = None
+    last_s = 0.0  # the time of the last event before the one in hand
 
     def close_trial(end_s: float | None) -> None:
         nonlocal open_trial_start, open_trial_id, open_outcome
@@ -101,19 +123,33 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
                     open_trial_start = event.time_s
             elif event.escape is Escape.BLOCK_START:
                 if open_block is not None:
-                    result.blocks.append(open_block)
+                    result.blocks.append(replace(open_block, last_s=last_s))
                 open_block = AssembledBlock(
                     block_id=event.words[0],
                     task_type=event.words[1],
                     start_s=event.time_s,
                     end_s=None,
+                    last_s=event.time_s,
                 )
+            elif event.escape is Escape.RUN_START:
+                # A block lies inside its run. One still open here -- its run
+                # faulted and sent no BLOCK_END -- ends at its own last event,
+                # never at this run's start (design spec section 2.3).
+                if open_block is not None:
+                    result.blocks.append(replace(open_block, last_s=last_s))
+                    open_block = None
+                if open_run is not None:
+                    result.runs.append(replace(open_run, last_s=last_s))
+                open_run = AssembledRun(run_number=event.words[0], task_type=event.words[1], start_s=event.time_s,
+                                        end_s=None, last_s=event.time_s)
+            last_s = event.time_s
             continue
 
         if isinstance(event, SimpleEvent):
             try:
                 marker = Marker(event.code)
             except ValueError:
+                last_s = event.time_s
                 continue  # a task event, not a marker; Event rows keep it
             if marker is Marker.TRIAL_START:
                 close_trial(end_s=None)
@@ -123,17 +159,19 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
             elif marker is Marker.TRIAL_END:
                 close_trial(end_s=event.time_s)
             elif marker is Marker.BLOCK_END and open_block is not None:
-                result.blocks.append(
-                    AssembledBlock(
-                        block_id=open_block.block_id,
-                        task_type=open_block.task_type,
-                        start_s=open_block.start_s,
-                        end_s=event.time_s,
-                    )
-                )
+                result.blocks.append(replace(open_block, end_s=event.time_s, last_s=event.time_s))
                 open_block = None
+            elif marker is Marker.RUN_END and open_run is not None:
+                if open_block is not None:  # its BLOCK_END was lost; it ends with its run
+                    result.blocks.append(replace(open_block, last_s=last_s))
+                    open_block = None
+                result.runs.append(replace(open_run, end_s=event.time_s, last_s=event.time_s))
+                open_run = None
+            last_s = event.time_s
 
     close_trial(end_s=None)
     if open_block is not None:
-        result.blocks.append(open_block)
+        result.blocks.append(replace(open_block, last_s=last_s))
+    if open_run is not None:
+        result.runs.append(replace(open_run, last_s=last_s))
     return result

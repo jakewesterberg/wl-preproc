@@ -101,3 +101,15 @@ def test_markers_and_escapes_occupy_disjoint_ranges():
     mistaken for the start of a payload."""
     assert all(1 <= m.value <= 255 for m in Marker)
     assert all(e.value >= 0x8000 for e in Escape)
+
+
+def test_a_run_start_carries_its_number_and_task_and_a_run_ends_with_a_marker():
+    """Design spec `2026-10-01-runs-and-trials-design.md` section 2.1: the
+    run's start is escape 0x8006 in BLOCK_START's layout, and a run that ends
+    by design sends marker 4, beside BLOCK_END (3). Neither value may ever be
+    renumbered once a recording carries it."""
+    assert (Escape.RUN_START.value, Marker.RUN_END.value) == (0x8006, 4)
+    (start, end) = decode_stream(
+        stream([*encode_payload(Escape.RUN_START, [2, TaskTypeCode.RF_MAP.value]), Marker.RUN_END.value], 1.0))
+    assert (start.escape, start.words) == (Escape.RUN_START, (2, TaskTypeCode.RF_MAP.value))
+    assert end.code == Marker.RUN_END.value

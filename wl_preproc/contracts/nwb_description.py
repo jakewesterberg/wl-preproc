@@ -197,7 +197,9 @@ class NwbDescription(_Frozen):
     # Empty in version 1; piece 3 adds the processing summary (for example
     # the number of single units, and whether any narrow-waveform units).
     processing: dict[str, Any] = {}
-    # Why any trial's condition or settings are unknown, then what the file
-    # could not place or join about a probe.
+    # Why any trial's condition or settings are unknown, then which trials the
+    # recording strobed and the file does not hold (a repeated number, one too
+    # large to store), then what the file could not place or join about a
+    # probe.
     notes: list[str]
     checksums: Checksums
