@@ -556,6 +556,20 @@ requester chose to merge the same day; true when written.*
 >    restart). What wl.works must do is a new OPEN entry in
 >    `pending-wl-works-amendments.md`. See `docs/handoffs/2026-09-30-nwb-probes.md`.
 >
+>    **Runs and trials from a real wl-xcon session are BUILT on
+>    `spec/runs-and-trials` (2026-10-01), NOT merged as written** (spec
+>    `superpowers/specs/2026-10-01-runs-and-trials-design.md`), piece 1 of
+>    four. **The requester ruled the vocabulary that day: a run holds blocks,
+>    and a block is a stretch of trials under one block type.** Trials join
+>    the rig's record by wl-xcon's `trial_number` (XC-155). Runs are
+>    measured from a new `RUN_START` escape (0x8006) and `RUN_END` marker
+>    (4), into `core.Run`; blocks from `BLOCK_START` per block. A run or
+>    block that never closed keeps only its own trials. A repeated trial
+>    number keeps its first trial, and a number above 32,767 is left out;
+>    the description names both. **wl-xcon sends the new codes once they are
+>    on `main`, so tell it when this merges**, and XC-026 comes before
+>    January. See `docs/handoffs/2026-10-01-runs-and-trials.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

@@ -1,9 +1,30 @@
 # Amendments to wl-works
 
-**Six are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30.** The earlier two
+**Seven are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — measured runs, and what a block is now
+
+**Opened 2026-10-01**, answering ask 2 of wl.works' three asks back (its
+`docs/superpowers/specs/2026-09-30-january-canonical-nwb-design.md` §12, read on its `main` at
+`c8dc0613`). The requester accepted all three in principle on 2026-09-30. The landed-session list
+(ask 1) and per-probe block lists (ask 3) are designed next.
+
+- **Measured runs** come from a new `RUN_START` escape (`0x8006`, carrying the run number and task
+  code) and a new `RUN_END` marker (4), not from 4135/4136, and are held in `core.Run`
+  ([`specs/2026-10-01-runs-and-trials-design.md`](superpowers/specs/2026-10-01-runs-and-trials-design.md)).
+  The intent of ask 2 is met: runs measured on the recording's clock and numbered in session
+  order.
+- **A block is now a stretch of trials inside a run.** The requester ruled this in wl-xcon's
+  session on 2026-10-01, superseding the glossary row *"block = one run of one task"*.
+  wl.works' plan to create ELN blocks from measured runs, and to send each block's id as the run
+  number, is wl.works' to revise; wl-xcon is telling it the same.
+- **Until wl-xcon sends the new codes,** a real recording has no measured runs or blocks.
+  wl.works' grid should read that as *waiting*, not as an empty session.
 
 ---
 

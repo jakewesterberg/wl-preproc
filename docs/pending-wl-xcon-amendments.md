@@ -1,9 +1,52 @@
 # Amendments to wl-xcon
 
-**One is outstanding, opened 2026-09-29.** wl-xcon (formerly wl-expcontroller) is the rig's
+**Two are outstanding, opened 2026-09-29 and 2026-10-01.** wl-xcon (formerly wl-expcontroller) is the rig's
 experiment controller. What it asked of this repository is recorded in
 [`HANDOVER-wl-expcontroller.md`](../HANDOVER-wl-expcontroller.md) and in its own
 `docs/pending-wl-preproc-amendments.md`; this file is the other direction.
+
+---
+
+# OPEN — mark each run and each block, and resume after a crash
+
+**Opened 2026-10-01** with runs and trials
+([`specs/2026-10-01-runs-and-trials-design.md`](superpowers/specs/2026-10-01-runs-and-trials-design.md)),
+**January-critical.** A real wl-xcon recording gives this repository no measured runs or blocks:
+wl-xcon sends no `BLOCK_START`, and its `RUN_START`/`RUN_END` (4135/4136, provisional, in
+wl-xtasks' range) carry no run number. **All three asks were sent and accepted on 2026-10-01**,
+under the vocabulary the requester ruled in wl-xcon's session that day: a run holds blocks, and a
+block is a stretch of trials under one block type (spec §0).
+
+**The asks:**
+1. **Each block:** our `BLOCK_START` (`0x8002`) at each block's start, `(block in session from 1,
+   task code or 0)`, and `BLOCK_END` (marker 3) when it ends. wl-xcon accepted it per block and
+   is building it with its session-levels change (its
+   `docs/superpowers/plans/2026-10-01-session-levels.md`, on its branch `session-levels-design`).
+2. **Each run:** the new **`RUN_START` escape (`0x8006`)** at each run's start, `(run in session
+   from 1, task code or 0)`, and the new **`RUN_END` marker (4)** when a run ends by design. A run
+   that faults sends neither its block's `BLOCK_END` nor `RUN_END`. Allocated by this
+   repository under ADR-0007. **wl-xcon will send them once `contracts/events.py` carries them
+   on this repository's `main`**, since its CI pins every code against these enums: **tell it
+   when that lands.** The order is `RUN_START` → each block (`BLOCK_START`, its trials,
+   `BLOCK_END`) → `RUN_END`; 4135/4136 may stay, and are read by nothing here.
+3. **XC-026 before January**: a restarted session carries its run, block and trial numbers on, so
+   a recording never repeats one. Accepted.
+
+**What this repository does meanwhile,** built with that spec:
+- **Runs and blocks are measured** from those codes, runs into `core.Run`.
+- **A run or block that never closed** ends where the next starts, and its recorded stop is its
+  last event.
+- **A repeated trial number** keeps its first trial, and every repeat is named in the file's
+  description. Nothing is renumbered.
+
+**Its questions, answered the same day** (it said this closes its XC-198):
+- **Two wl-xcon sessions in one sync-box recording:** no. One recording holds one animal.
+- **A trial with no outcome:** it stores, measured, and its inferred stop stays inside its own
+  block.
+- **A trial number above 32,767:** MySQL refuses it (measured, 1264). Such trials are left out and
+  counted, and the rest are stored.
+- **A `TRIAL_NUMBER` cut by a crash:** the decoder's framing is frozen. One or two trials are lost
+  and the session falls to tier D; this is recorded as open beside its XC-199.
 
 ---
 
@@ -45,8 +88,16 @@ it cannot simply be that index."
    **record that number in `trials.jsonl`** beside the condition's name, so the name and the
    stream's number can be tied without a table kept anywhere else.
 
+**Ask 1 is DONE (2026-10-01).** XC-155 is built on wl-xcon's `main` at `eeec053`: every line of
+`trials.jsonl` carries `trial_number`, counted from 1 across the session and equal to the
+`TRIAL_NUMBER` payload. This repository keys each line by it since the runs-and-trials spec
+(§3.1, `events/rigtrials.py`). **Ask 2 stays open**: wl-xcon will emit `CONDITION` once conditions
+exist (its XC-150), numbered then (its XC-197).
+
 **What this repository does meanwhile.** It joins by trial number only; a trial the record does
 not name exactly once gets no condition and no settings, and the file's description says why
 (`nwb/conditions.py`). Nothing is guessed from trial order. **A record whose lines name a run is
 not joined at all** (`events/rigtrials.py`): a per-run `index` is not the session's trial number
 even where it is unique. Once this repository reads XC-155's field, such records join again.
+*True when written. Since 2026-10-01 a line carrying `trial_number` is joined by it; only a
+run-named line without one is left out.*

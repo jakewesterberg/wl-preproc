@@ -294,3 +294,34 @@ It also answers wl-xcon's questions, which it acknowledged closes its XC-198:
   run-named line without `trial_number` left unjoined.
 - **The NWB file and its description** carry the repeat and ceiling notes.
 - **The full suite runs once, on both interpreters.**
+
+## Amendments, 2026-10-01, made while proving the plan
+
+The plan (`plans/2026-10-01-runs-and-trials.md`) was proven in code before it was written. These
+settle what the sections above left open; §0 stands.
+
+1. **"The file's notes" are its description's `notes`** (§3.2, §3.4), as they are for conditions
+   and probes. The NWB file holds no notes field of its own. Its task-event table still carries
+   every strobed `TRIAL_NUMBER`, repeats and too-large numbers included.
+2. **A repeat or a too-large number lowers `TimingProvenance.trial_count_agreement` only where a
+   task file in the synthetic format exists.** That check compares the stored trials with the
+   file. No real wl-xcon session has one, so its agreement is null and its tier is unaffected; a
+   synthetic session with repeats falls to tier D. *When a reader of a real task file is built,
+   it must count strobed trials, not stored ones,* or a crashed session will fall to tier D for
+   its repeats.
+3. **The generator gains four fields** (§7):
+   - `unclosed_blocks`: block numbers whose `BLOCK_END` is not sent;
+   - `faulted_trials`: trial positions that send no outcome and no `TRIAL_END` and leave no rig
+     line, though they still use up their index in the run;
+   - `trial_numbers`: each trial's strobed number;
+   - `runs`: wrap each block in its own run.
+
+   `runs` is **off by default**, so every existing profile stays byte-identical. A run whose
+   block is unclosed sends no `RUN_END`.
+4. **The rig record's key is `RigTrial.number`**: `trial_number`, or `index` for a record from
+   before XC-155. `nwb/conditions.py` joins on it.
+5. **`_block_stop_time(block)` no longer takes the stream's end.** An unclosed block's stop is its
+   own last event (`AssembledBlock.last_s`), never the last event of a later run. A run's is the
+   same (`AssembledRun.last_s`).
+6. **An existing database needs `core.Run` created.** It is created when `core` is activated, and
+   no existing table changes shape.
