@@ -197,6 +197,11 @@ _JOBS_PATH = "/jobs"
 # path that takes a query string (`?since=<cursor>`).
 _NWB_PATH = "/nwb"
 _NWB_ACTIVE_PATH = "/nwb/active"
+# Landed sessions (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 2): the
+# other path that takes `?since=<cursor>`.
+_SESSIONS_PATH = "/sessions"
+_CURSOR_PATHS = frozenset({_NWB_PATH, _SESSIONS_PATH})
 
 # The two known paths, mapped to which HTTP method each one answers -- used
 # by both do_GET and do_POST (and do_PUT's five aliases) to decide 404 (path
@@ -361,6 +366,7 @@ def make_handler(
     accept_fn: Callable[[JobRequest], dict],
     nwb_list_fn: Callable[[int | None], dict] | None = None,
     nwb_active_fn: Callable[[ActiveSetRequest], dict] | None = None,
+    sessions_list_fn: Callable[[int | None], dict] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Build a `BaseHTTPRequestHandler` subclass closing over `token` and the
     two callables. A fresh class per call -- not a module-level singleton --
@@ -424,12 +430,14 @@ def make_handler(
         _accept_fn = staticmethod(accept_fn)
         _nwb_list_fn = staticmethod(nwb_list_fn) if nwb_list_fn is not None else None
         _nwb_active_fn = staticmethod(nwb_active_fn) if nwb_active_fn is not None else None
+        _sessions_list_fn = staticmethod(sessions_list_fn) if sessions_list_fn is not None else None
         # This handler's route table: the two fixed endpoints, plus the NWB
         # ones when their callables were given.
         _paths = {
             **_PATH_METHODS,
             **({_NWB_PATH: "GET"} if nwb_list_fn is not None else {}),
             **({_NWB_ACTIVE_PATH: "PUT"} if nwb_active_fn is not None else {}),
+            **({_SESSIONS_PATH: "GET"} if sessions_list_fn is not None else {}),
         }
 
         # Review Important 5: BaseHTTPRequestHandler's version_string() joins
@@ -635,9 +643,10 @@ def make_handler(
             """
             path, _, query = self.path.partition("?")
             expected = self._paths.get(path)
-            # A query string is `/nwb`'s alone; anywhere else it is a path
-            # this host does not answer, exactly as before `/nwb` existed.
-            if expected is None or (query and path != _NWB_PATH):
+            # A query string is `/nwb`'s and `/sessions`' alone; anywhere
+            # else it is a path this host does not answer, exactly as before
+            # `/nwb` existed.
+            if expected is None or (query and path not in _CURSOR_PATHS):
                 self._send_json(404, {"error": "not found"})
                 return 404
             if expected != method:
@@ -652,7 +661,10 @@ def make_handler(
             if self._route_or_none("GET") is not None:
                 return
             if self.path.partition("?")[0] == _NWB_PATH:
-                self._get_nwb()
+                self._get_since(self._nwb_list_fn)
+                return
+            if self.path.partition("?")[0] == _SESSIONS_PATH:
+                self._get_since(self._sessions_list_fn)
                 return
             # Otherwise only _HEALTH_PATH answers GET (see _PATH_METHODS).
             try:
@@ -786,16 +798,17 @@ def make_handler(
             else:
                 self._send_json(200, {"activation": result, "accepted": True})
 
-        def _get_nwb(self) -> None:
-            """`GET /nwb[?since=<cursor>]`: 200 with the listing; 422 when
-            `since` is anything but one non-negative integer."""
+        def _get_since(self, list_fn: Callable[[int | None], dict]) -> None:
+            """`GET /nwb` or `GET /sessions`, `[?since=<cursor>]`: 200 with
+            the listing; 422 when `since` is anything but one non-negative
+            integer."""
             query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
             values = query.get("since", [])
             if set(query) - {"since"} or len(values) > 1 or (values and not (values[0].isascii() and values[0].isdigit())):
                 self._send_json(422, {"error": "the only parameter is since, one non-negative integer"})
                 return
             try:
-                payload = self._nwb_list_fn(int(values[0]) if values else None)
+                payload = list_fn(int(values[0]) if values else None)
             except Exception as exc:  # noqa: BLE001 -- see module docstring's table
                 self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
                 return

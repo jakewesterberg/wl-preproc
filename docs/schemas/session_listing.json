@@ -1,0 +1,466 @@
+{
+  "$defs": {
+    "ListedBlock": {
+      "additionalProperties": false,
+      "description": "A measured block: consecutive trials under one block type, inside a\nrun. `block_number` is its number in the session, as `BLOCK_START`\nstrobes it; `block_in_run` its order in its run, from 1.",
+      "properties": {
+        "block_in_run": {
+          "title": "Block In Run",
+          "type": "integer"
+        },
+        "block_number": {
+          "title": "Block Number",
+          "type": "integer"
+        },
+        "block_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Block Type"
+        },
+        "closed": {
+          "title": "Closed",
+          "type": "boolean"
+        },
+        "end_s": {
+          "title": "End S",
+          "type": "number"
+        },
+        "n_trials": {
+          "title": "N Trials",
+          "type": "integer"
+        },
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "block_number",
+        "block_in_run",
+        "block_type",
+        "start_s",
+        "end_s",
+        "closed",
+        "n_trials"
+      ],
+      "title": "ListedBlock",
+      "type": "object"
+    },
+    "ListedFlag": {
+      "additionalProperties": false,
+      "description": "A fact wl.works shows beside the session as a hint. None blocks\nanything here. `run_number` and `block_number` say where, when it is one\nrun or one block.",
+      "properties": {
+        "block_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Block Number"
+        },
+        "code": {
+          "enum": [
+            "waiting_for_run_markers",
+            "repeated_run_number",
+            "repeated_block_number",
+            "run_without_block",
+            "bank_change_in_run",
+            "block_type_unknown",
+            "task_unknown",
+            "block_outside_runs"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "run_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Number"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ListedFlag",
+      "type": "object"
+    },
+    "ListedProbe": {
+      "additionalProperties": false,
+      "description": "One probe in one SpikeGLX segment, from `ephys.ProbeCensus`. Two\nsegments with the same `electrode_config_hash` for a serial share a bank\nsetting. `electrodes` are SpikeGLX electrode numbers (bank x 384 +\nchannel for the NP1.0 family), the saved channels only; `imro_table` is\nthe segment's `~imroTbl`, verbatim.",
+      "properties": {
+        "electrode_config_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Electrode Config Hash"
+        },
+        "electrodes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Electrodes"
+        },
+        "imro_table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Imro Table"
+        },
+        "n_electrodes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "N Electrodes"
+        },
+        "part_number": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Part Number"
+        },
+        "probe_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Probe Type"
+        },
+        "problem": {
+          "title": "Problem",
+          "type": "string"
+        },
+        "serial": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Serial"
+        },
+        "stream": {
+          "title": "Stream",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stream",
+        "serial",
+        "part_number",
+        "probe_type",
+        "electrode_config_hash",
+        "n_electrodes",
+        "electrodes",
+        "imro_table",
+        "problem"
+      ],
+      "title": "ListedProbe",
+      "type": "object"
+    },
+    "ListedRun": {
+      "additionalProperties": false,
+      "description": "A measured run (`core.Run`) with the rig's record of it\n(`core.RunRecord`). `segments` names, by barcode, the SpikeGLX segments\nit spans; each is listed once, in the session's `segments`.",
+      "properties": {
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/ListedBlock"
+          },
+          "title": "Blocks",
+          "type": "array"
+        },
+        "closed": {
+          "title": "Closed",
+          "type": "boolean"
+        },
+        "end_s": {
+          "title": "End S",
+          "type": "number"
+        },
+        "run_number": {
+          "title": "Run Number",
+          "type": "integer"
+        },
+        "segments": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        },
+        "stop_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stop Kind"
+        },
+        "stopped_because": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Stopped Because"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Task"
+        },
+        "task_code": {
+          "title": "Task Code",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_number",
+        "task_code",
+        "task",
+        "start_s",
+        "end_s",
+        "closed",
+        "stopped_because",
+        "stop_kind",
+        "segments",
+        "blocks"
+      ],
+      "title": "ListedRun",
+      "type": "object"
+    },
+    "ListedSegment": {
+      "additionalProperties": false,
+      "description": "One SpikeGLX file's extent on the recording's clock, and its probes.",
+      "properties": {
+        "end_s": {
+          "title": "End S",
+          "type": "number"
+        },
+        "probes": {
+          "items": {
+            "$ref": "#/$defs/ListedProbe"
+          },
+          "title": "Probes",
+          "type": "array"
+        },
+        "segment_barcode": {
+          "title": "Segment Barcode",
+          "type": "integer"
+        },
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "segment_barcode",
+        "start_s",
+        "end_s",
+        "probes"
+      ],
+      "title": "ListedSegment",
+      "type": "object"
+    },
+    "RejectedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "title": "File Path",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "system": {
+          "title": "System",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "file_path",
+        "reason"
+      ],
+      "title": "RejectedFile",
+      "type": "object"
+    },
+    "SessionEntry": {
+      "additionalProperties": false,
+      "description": "One landed session, as it stands now. `tier` is the timing tier, null\nuntil it is computed; D is quarantined, not published automatically.",
+      "properties": {
+        "flags": {
+          "items": {
+            "$ref": "#/$defs/ListedFlag"
+          },
+          "title": "Flags",
+          "type": "array"
+        },
+        "probes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Probes",
+          "type": "array"
+        },
+        "rejected_segments": {
+          "items": {
+            "$ref": "#/$defs/RejectedFile"
+          },
+          "title": "Rejected Segments",
+          "type": "array"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/ListedRun"
+          },
+          "title": "Runs",
+          "type": "array"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/ListedSegment"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "session_datetime": {
+          "format": "date-time",
+          "title": "Session Datetime",
+          "type": "string"
+        },
+        "session_name": {
+          "title": "Session Name",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "enum": [
+                "A",
+                "B",
+                "C",
+                "D"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tier"
+        }
+      },
+      "required": [
+        "subject",
+        "session_datetime",
+        "session_name",
+        "tier",
+        "rejected_segments",
+        "runs",
+        "segments",
+        "probes",
+        "flags"
+      ],
+      "title": "SessionEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "`GET /sessions?since=<cursor>`: every session whose entry changed after\nthe cursor, as it stands now, and the cursor to send next time. The\ncursor only increases.",
+  "properties": {
+    "cursor": {
+      "title": "Cursor",
+      "type": "integer"
+    },
+    "sessions": {
+      "items": {
+        "$ref": "#/$defs/SessionEntry"
+      },
+      "title": "Sessions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "cursor",
+    "sessions"
+  ],
+  "title": "SessionListing",
+  "type": "object"
+}

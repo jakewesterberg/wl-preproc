@@ -61,6 +61,20 @@ def test_a_session_without_run_markers_is_listed_waiting(listed):
     assert [flag["code"] for flag in entry["flags"]] == ["waiting_for_run_markers"]
 
 
+
+def test_get_sessions_lists_each_logged_session_as_it_stands_and_its_cursor(listed, prefix):
+    from wl_preproc.listing.entry import session_entry
+    from wl_preproc.responder.sessions import list_sessions
+    from wl_preproc.schema import ingest
+
+    listing = list_sessions(None, prefix=prefix)
+    assert listing["cursor"] == max(ingest.SessionChange.to_arrays("change_seq"))
+    by_subject = {entry["subject"]: entry for entry in listing["sessions"]}
+    for _recipe, key in listed.values():
+        assert by_subject[key["subject"]] == session_entry(key)
+    assert list_sessions(listing["cursor"], prefix=prefix) == {"cursor": listing["cursor"], "sessions": []}
+
+
 # -- The change log and the listing stage (section 2.1). Run after the
 # entries' tests: these append changes and restore what they change.
 
@@ -89,7 +103,7 @@ def test_an_unchanged_entry_is_not_logged_again(listed):
     assert {name: len(_changes(key)) for name, (_recipe, key) in listed.items()} == before
 
 
-def test_a_fact_that_arrives_later_lists_the_session_again(listed):
+def test_a_fact_that_arrives_later_lists_the_session_again(listed, prefix):
     """A rejected segment recorded after the first listing changes the entry,
     so that session alone is logged again; removing it logs it once more."""
     from wl_preproc.listing.stage import run_stage
@@ -98,7 +112,11 @@ def test_a_fact_that_arrives_later_lists_the_session_again(listed):
     _recipe, key = listed["runs"]
     _plain, other = listed["plain"]
     row = {**key, "system": "spikeglx", "file_path": "late/run_g9_t0.nidq.bin", "reason": "late"}
+    from wl_preproc.responder.sessions import list_sessions
+    from wl_preproc.schema import ingest
+
     before, other_before = len(_changes(key)), len(_changes(other))
+    cursor = max(ingest.SessionChange.to_arrays("change_seq"))
     core.RejectedSegment.insert1(row)
     try:
         run_stage()
@@ -107,6 +125,8 @@ def test_a_fact_that_arrives_later_lists_the_session_again(listed):
         (core.RejectedSegment & row).delete_quick()
     run_stage()
     assert len(_changes(key)) == before + 2
+    # A reader holding the cursor from before sees that session alone.
+    assert [entry["subject"] for entry in list_sessions(cursor, prefix=prefix)["sessions"]] == ["sllist1"]
 
 
 def test_a_pass_leaves_the_listing_to_a_process_holding_its_lock(listed, prefix):
