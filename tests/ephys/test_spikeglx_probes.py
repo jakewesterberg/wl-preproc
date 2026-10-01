@@ -129,3 +129,16 @@ def test_a_run_without_probes_has_none(tmp_path):
     for meta in nidq.parent.glob("*_imec0.*"):
         meta.unlink()
     assert read_run(nidq) == []
+
+
+def test_a_probe_keeps_its_imro_table_verbatim(tmp_path):
+    """wl.works compares a planned IMRO file with the recorded table using its
+    own reader (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 2.2), so the table is kept exactly as the `.meta` has it."""
+    from wl_preproc.ephys.spikeglx_probes import read_run
+
+    _recipe, nidq = _run(tmp_path, probe_bank=1)
+    (meta,) = nidq.parent.glob("*_imec0.ap.meta")
+    (line,) = [line for line in meta.read_text().splitlines() if line.startswith("~imroTbl=")]
+    (probe,) = read_run(nidq)
+    assert probe.imro_table == line.removeprefix("~imroTbl=")

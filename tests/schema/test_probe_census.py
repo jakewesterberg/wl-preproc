@@ -154,3 +154,24 @@ def test_a_run_mixing_a_placed_and_an_unplaced_probe_records_both(landed):
     assert _electrodes(placed) == [0, 1, 2, 3]
     assert (unplaced["stream"], unplaced["part_number"], unplaced["electrode_config_hash"]) == (
         "imec1", "NP9999", None)
+
+
+def test_each_probe_keeps_its_segments_imro_table(landed):
+    """The bank change at the restart is in the two segments' own tables."""
+    _recipe, key = landed["two"]
+    tables = [part["imro_table"] for part in _parts(key)]
+    assert all(table and table.startswith("(") for table in tables)
+    assert tables[0] != tables[2] and tables[1] == tables[3]
+
+
+
+def test_an_imro_table_longer_than_kept_is_a_problem():
+    """A table longer than the column would fail the segment on every pass;
+    it is left out and said instead."""
+    from wl_preproc.schema.ephys import IMRO_TABLE_MAX, kept_imro_table
+
+    assert kept_imro_table("(0,384)(0 0 0 500 250 1)") == ("(0,384)(0 0 0 500 250 1)", None)
+    assert kept_imro_table(None) == (None, None)
+    table, problem = kept_imro_table("(" * (IMRO_TABLE_MAX + 1))
+    assert table is None and problem == (f"the imroTbl is {IMRO_TABLE_MAX + 1} characters, longer than the "
+                                         f"{IMRO_TABLE_MAX} kept, so it is not kept")
