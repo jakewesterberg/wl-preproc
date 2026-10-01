@@ -169,3 +169,19 @@ def test_a_faulted_trial_has_no_line_in_the_rig_record(tmp_path):
 def test_a_fault_naming_nothing_the_session_has_is_refused(update, expect):
     with pytest.raises(ValueError, match=expect):
         _recipe(**update)
+
+
+def test_a_fixture_can_strobe_the_numbers_it_names():
+    """`trial_numbers` sets each trial's strobed TRIAL_NUMBER, so a fixture
+    can repeat one or exceed what element-event can store (design spec
+    `2026-10-01-runs-and-trials-design.md` section 7)."""
+    from wl_preproc.events.assemble import assemble
+
+    truth = build_timeline(_recipe(trial_numbers=[1, 2, 2, 40000]))
+    assert [trial.trial_id for trial in truth.trials] == [1, 2, 2, 40000]
+    assert [trial.trial_id for trial in assemble(decode_stream(list(truth.code_words))).trials] == [1, 2, 2, 40000]
+
+
+def test_trial_numbers_must_name_every_trial():
+    with pytest.raises(ValueError, match="trial_numbers names 3 trials, and the session has 4"):
+        _recipe(trial_numbers=[1, 2, 3])

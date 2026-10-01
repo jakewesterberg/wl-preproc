@@ -205,6 +205,10 @@ class SessionRecipe(BaseModel):
     # in the rig's record.
     unclosed_blocks: tuple[int, ...] = ()
     faulted_trials: tuple[int, ...] = ()
+    # Each trial's strobed TRIAL_NUMBER, in order, when given; otherwise 1, 2,
+    # 3, ... A fixture uses it to repeat a number, as a crash and restart
+    # without wl-xcon's XC-026 would, or to exceed element-event's smallint.
+    trial_numbers: tuple[int, ...] = ()
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and
@@ -376,6 +380,10 @@ class SessionRecipe(BaseModel):
         for trial in self.faulted_trials:
             if not 1 <= trial <= n_trials:
                 raise ValueError(f"faulted_trials names trial {trial}, and the session has {n_trials}")
+        if self.trial_numbers and len(self.trial_numbers) != n_trials:
+            raise ValueError(f"trial_numbers names {len(self.trial_numbers)} trials, and the session has {n_trials}")
+        if any(not 0 <= number < 2**32 for number in self.trial_numbers):
+            raise ValueError("trial_numbers must fit TRIAL_NUMBER's uint32")
         restart = self.spikeglx_restart
         banks = [(probe.part_number, probe.bank) for probe in self.extra_probes]
         if restart is not None and restart.probe_bank is not None:

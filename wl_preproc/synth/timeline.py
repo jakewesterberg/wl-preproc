@@ -120,6 +120,8 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
             _emit(words, block_start, word)
 
         for _ in range(block.n_trials):
+            if recipe.trial_numbers:
+                trial_id = recipe.trial_numbers[len(trials)]
             trial_start = cursor
             trial_end = cursor + block.trial_duration_s
             trials.append(

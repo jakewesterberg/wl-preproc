@@ -335,6 +335,15 @@ def _block_stop_time(block: AssembledBlock) -> float:
     return block.end_s if block.end_s is not None else block.last_s
 
 
+# element-event's `trial_id` is a smallint (`trial_id : smallint # trial
+# number (1-based indexing)`), and the stream's TRIAL_NUMBER is a uint32.
+# MySQL refuses a larger id ("Out of range value for column 'trial_id'",
+# 1264, measured 2026-10-01), which failed the whole batch. Such trials are
+# left out instead (design spec `2026-10-01-runs-and-trials-design.md`
+# section 3.4).
+TRIAL_ID_MAX = 32767
+
+
 def populate_session(key: dict, session_dir: Path) -> None:
     """Populate one session's `BehaviorRecording`, `EventType`, `Event`,
     `Trial`, `TrialType`, `Block` and `BlockTrial` from the sync box's decoded
@@ -474,7 +483,16 @@ def populate_session(key: dict, session_dir: Path) -> None:
     # need each trial's containing block.
     trial_rows: list[dict] = []
     block_trial_rows: list[dict] = []
+    stored: set[int] = set()
     for index, trial in enumerate(assembly.trials):
+        # The first trial with a number is stored and a repeat is not; a
+        # number element-event cannot hold is left out. Both stay in Event,
+        # where the file's notes find them (design spec
+        # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4).
+        # Nothing is renumbered.
+        if trial.trial_id in stored or trial.trial_id > TRIAL_ID_MAX:
+            continue
+        stored.add(trial.trial_id)
         containing_block = _containing_block(trial, assembly.blocks, stream_end_s)
         trial_rows.append(
             {

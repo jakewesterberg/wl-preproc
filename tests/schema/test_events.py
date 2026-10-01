@@ -491,3 +491,47 @@ def test_populate_session_stores_a_faulted_run_and_its_trial_with_no_outcome(eve
     block_one, block_two = (pipeline.trial.Block & key).to_dicts(order_by="block_id")
     assert faulted["trial_type"] is None
     assert faulted["trial_stop_time"] <= block_one["block_stop_time"] < block_two["block_start_time"]
+
+
+def test_a_hang_stores_with_no_outcome_and_its_recorded_end():
+    """wl-xcon's hang: no outcome marker, then TRIAL_END (design spec
+    `2026-10-01-runs-and-trials-design.md` section 3.1)."""
+    from wl_preproc.contracts.events import Escape, Marker, decode_stream, encode_payload
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.schema.events import _trial_stop_time
+
+    words = [Marker.TRIAL_START.value, *encode_payload(Escape.TRIAL_NUMBER, [0, 1]), Marker.TRIAL_END.value]
+    decoded = decode_stream(_stream_at_1ms(words))
+    (trial,) = assemble(decoded).trials
+    assert (trial.outcome, trial.end_s) == (None, 0.005)
+    assert _trial_stop_time(trial, 0, [trial], None, 0.005) == 0.005
+
+
+def test_populate_session_stores_the_first_of_a_repeated_number_and_none_too_large(events_activated, dj_conn,
+                                                                                  tmp_path):
+    """Design spec sections 3.2 and 3.4: the first trial with a number is
+    stored and its repeat is not; a number above element-event's smallint is
+    left out rather than failing the session; every strobed number stays in
+    `Event`, so both are recoverable for the file's notes."""
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": "rtnums1",
+                                           "trial_numbers": [1, 2, 2, 40000]})
+    truth = generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": "rtnums1", "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": "rtnums1", "session_datetime": datetime.datetime(2027, 3, 24, 9, 0)}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+
+    events.populate_session(key, tmp_path / recipe.session_id)
+
+    stored = (pipeline.trial.Trial & key).to_dicts(order_by="trial_id")
+    assert [row["trial_id"] for row in stored] == [1, 2]
+    assert stored[1]["trial_start_time"] == pytest.approx(truth.trials[1].start_s, abs=0.01)  # the first 2
+    strobed = sorted(int(value) for value in (pipeline.event.Event.Attribute & key
+                                              & {"attribute_name": "trial_id"}).to_arrays("attribute_value"))
+    assert strobed == [1, 2, 2, 40000]
