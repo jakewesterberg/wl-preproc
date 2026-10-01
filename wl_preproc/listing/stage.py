@@ -40,11 +40,15 @@ def run_stage() -> tuple[int, list[str]]:
     `daemon.run_once` does."""
     from wl_preproc.schema import ingest
 
+    try:
+        changes, keys = ingest.SessionChange.to_dicts(order_by="change_seq"), listable()
+    except Exception as exc:  # the daemon's later stages must still run
+        return 0, [f"SessionChange: the listing stage could not read the sessions: {type(exc).__name__}: {exc}"]
     last = {}
-    for row in ingest.SessionChange.to_dicts(order_by="change_seq"):
+    for row in changes:
         last[(row["subject"], row["session_datetime"])] = row["digest"]
     appended, errors = 0, []
-    for key in listable():
+    for key in keys:
         try:
             entry_digest = digest(session_entry(key))
             if last.get((key["subject"], key["session_datetime"])) != entry_digest:

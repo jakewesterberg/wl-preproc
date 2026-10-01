@@ -84,7 +84,8 @@
             "bank_change_in_run",
             "block_type_unknown",
             "task_unknown",
-            "block_outside_runs"
+            "block_outside_runs",
+            "rig_record_problem"
           ],
           "title": "Code",
           "type": "string"
@@ -309,18 +310,25 @@
     },
     "ListedSegment": {
       "additionalProperties": false,
-      "description": "One SpikeGLX file's extent on the recording's clock, and its probes.",
+      "description": "One SpikeGLX file's extent on the recording's clock, and its probes:\nnull until the probe census has read it, which is not the same as a run\nthat recorded no probe (`[]`).",
       "properties": {
         "end_s": {
           "title": "End S",
           "type": "number"
         },
         "probes": {
-          "items": {
-            "$ref": "#/$defs/ListedProbe"
-          },
-          "title": "Probes",
-          "type": "array"
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ListedProbe"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Probes"
         },
         "segment_barcode": {
           "title": "Segment Barcode",
@@ -366,7 +374,7 @@
     },
     "SessionEntry": {
       "additionalProperties": false,
-      "description": "One landed session, as it stands now. `tier` is the timing tier, null\nuntil it is computed; D is quarantined, not published automatically.",
+      "description": "One landed session, as it stands now. A naive `session_datetime` is\nUTC, as every one this host issues is. `tier` is the timing tier, null\nuntil it is computed; D is quarantined, not published automatically.",
       "properties": {
         "flags": {
           "items": {

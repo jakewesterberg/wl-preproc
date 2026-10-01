@@ -69,6 +69,9 @@ approved by the requester), and wl.works told the same day. **Ask 1 is BUILT** (
   numbers) and `imro_table` (the segment's `~imroTbl`, verbatim, for its montage-plan
   comparison); the serials; and its flags.
 - **The block type** comes from the rig record's `block`, joined by `trial_number`, as asked.
+- **Two refinements before vendoring** (the listing's deferred minors, 2026-10-01): a segment's
+  `probes` is null until the probe census has read it, and a new flag, `rig_record_problem`,
+  names what wl-xcon's run record could not supply.
 - **Asks 3 and 4, and item 5,** are the same spec's Plan B, which follows.
 
 ---

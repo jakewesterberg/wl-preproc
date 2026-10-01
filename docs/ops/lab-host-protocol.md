@@ -514,7 +514,7 @@ Authorization: Bearer <token>
   changes: a timing tier computed later, a probe census, a rejected segment. **Each entry is the
   session as it stands now.**
 - **Each session:**
-  - `subject`, `session_datetime`, and `session_name`, the rig's `YYYY-MM-DD_NN`;
+  - `subject`, `session_datetime` (naive, UTC), and `session_name`, the rig's `YYYY-MM-DD_NN`;
   - `tier`, the timing tier (`A` to `D`, `D` quarantined), or `null` until computed; and
     `rejected_segments`, each file this host could not use, with its reason;
   - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
@@ -527,14 +527,17 @@ Authorization: Bearer <token>
   - `segments`, each SpikeGLX file once: `segment_barcode`, `start_s`, `end_s`, and per probe its
     `serial`, `part_number`, `probe_type`, site map (`electrode_config_hash`, `n_electrodes`,
     `electrodes` as SpikeGLX electrode numbers), its `~imroTbl` verbatim as `imro_table`, and
-    any `problem`. **Runs and segments do not align**: a bank change needs a SpikeGLX restart,
+    any `problem`; `probes` is null until the probe census has read the file, and `[]` when it
+    recorded none. **Runs and segments do not align**: a bank change needs a SpikeGLX restart,
     which is a new segment, and a run need not stop for it;
   - `probes`, every serial the recording names;
   - `flags`, each a `code`, a `message`, and the `run_number` or `block_number` it is about:
     `waiting_for_run_markers` (no measured run yet), `repeated_run_number` and
     `repeated_block_number` (a crash restart before wl-xcon's XC-026; only the first is
     listed), `run_without_block`, `bank_change_in_run`, `block_type_unknown`, `task_unknown`,
-    and `block_outside_runs` (a block in no measured run: its run's `RUN_START` was lost).
+    `block_outside_runs` (a block in no measured run: its run's `RUN_START` was lost), and
+    `rig_record_problem` (what wl-xcon's run record could not supply, line by line, or its
+    absence).
     **None of them blocks anything here.**
 
 ---

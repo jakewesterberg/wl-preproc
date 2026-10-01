@@ -33,7 +33,7 @@ def _facts(**changes):
         segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 21.0}],
         census=[_probe(100, "a" * 32)],
         electrodes={("a" * 32, "NP1000"): [0, 1, 2]},
-        strobed_runs=[1, 2], strobed_blocks=[1, 2],
+        strobed_runs=[1, 2], strobed_blocks=[1, 2], censused=frozenset({100}), rig_problems=[],
     )
     return dataclasses.replace(facts, **changes)
 
@@ -94,7 +94,7 @@ def test_a_bank_change_inside_a_run_is_flagged_and_one_between_runs_is_not():
 
     inside = _facts(segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 15.0},
                               {"segment_barcode": 200, "start_s": 15.5, "end_s": 21.0}],
-                    census=[_probe(100, "a" * 32), _probe(200, "b" * 32)],
+                    census=[_probe(100, "a" * 32), _probe(200, "b" * 32)], censused=frozenset({100, 200}),
                     electrodes={("a" * 32, "NP1000"): [0, 1, 2], ("b" * 32, "NP1000"): [384, 385, 386]})
     entry = build_entry(inside)
     assert [run["segments"] for run in entry["runs"]] == [[100], [100, 200]]
@@ -148,7 +148,7 @@ def test_a_session_listed_before_its_timing_and_census_has_neither():
     session is listed now, and again when they are."""
     from wl_preproc.listing.entry import build_entry
 
-    entry = build_entry(_facts(tier=None, segments=[], census=[], electrodes={}))
+    entry = build_entry(_facts(tier=None, segments=[], census=[], electrodes={}, censused=frozenset()))
     assert (entry["tier"], entry["segments"], entry["probes"], entry["flags"]) == (None, [], [], [])
     assert [run["segments"] for run in entry["runs"]] == [[], []]
 
@@ -183,3 +183,24 @@ def test_what_was_never_recorded_is_unknown_and_the_flags_say_only_that():
     assert [flag["message"] for flag in entry["flags"]] == [
         "run 1 has no recorded task", "block 1 has no recorded block type",
         "run 2 has no recorded task", "block 2 has no recorded block type"]
+
+
+def test_a_segment_whose_census_was_not_read_has_no_probes_yet():
+    """Not read is not the same as no probe recorded (final review M4): its
+    probes are null, and it raises no bank change."""
+    from wl_preproc.listing.entry import build_entry
+
+    unread = build_entry(_facts(census=[], electrodes={}, censused=frozenset()))
+    assert unread["segments"][0]["probes"] is None
+    assert (unread["probes"], unread["flags"]) == ([], [])
+    assert build_entry(_facts(census=[], electrodes={}))["segments"][0]["probes"] == []
+
+
+def test_a_problem_reading_the_rigs_run_record_is_flagged():
+    """Kept by the event stage, so a run with no task says why (final review M2)."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_problems=["line 2: not JSON", "line 3: not a start or end row naming its run"]))
+    assert [(flag["code"], flag["message"]) for flag in entry["flags"]] == [
+        ("rig_record_problem", "the rig's run record: line 2: not JSON"),
+        ("rig_record_problem", "the rig's run record: line 3: not a start or end row naming its run")]

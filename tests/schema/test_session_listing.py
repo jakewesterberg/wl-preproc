@@ -151,3 +151,34 @@ def test_a_pass_leaves_the_listing_to_a_process_holding_its_lock(listed, prefix)
     assert len(_changes(key)) == before
     assert any(error.startswith("SessionChange: another wlpp process holds the listing lock")
                for error in report["errors"])
+
+
+
+def test_a_session_whose_entry_fails_is_named_in_the_error(listed, prefix, monkeypatch):
+    """GET /sessions still answers 500, which wl.works retries, and the error
+    names the session (final review M5)."""
+    from wl_preproc.listing import entry
+    from wl_preproc.responder.sessions import list_sessions
+
+    real = entry.session_entry
+
+    def broken(key):
+        if key["subject"] == "sllist2":
+            raise KeyError("imro_table")
+        return real(key)
+
+    monkeypatch.setattr(entry, "session_entry", broken)
+    with pytest.raises(RuntimeError, match=r"^session sllist2 at 2025-07-22T09:00:00: KeyError: 'imro_table'$"):
+        list_sessions(None, prefix=prefix)
+
+
+def test_a_stage_that_cannot_read_reports_it_instead_of_raising(listed, monkeypatch):
+    """So the daemon's later stages still run (final review M7)."""
+    from wl_preproc.listing import stage
+
+    def broken():
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(stage, "listable", broken)
+    assert stage.run_stage() == (0, ["SessionChange: the listing stage could not read the sessions: "
+                                     "RuntimeError: the database went away"])

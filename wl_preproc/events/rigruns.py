@@ -83,8 +83,15 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
             problems.append(f"line {number_of_line}: not a start or end row naming its run")
             continue
         # A start row and its end row share `run`; only the start row is
-        # sure to carry `run_in_session`, so the number is taken from it.
+        # sure to carry `run_in_session`, so the number is taken from it. A
+        # second row of either kind for one run is reported, and the first
+        # kept, as everywhere a number repeats here.
         run = fields.setdefault(row["run"], {"number": row["run"] + 1})
+        if row["event"] in run.setdefault("seen", set()):
+            problems.append(f"line {number_of_line}: run {row['run']} has a second {row['event']} row; "
+                            "the first is kept")
+            continue
+        run["seen"].add(row["event"])
         if row["event"] == "start":
             run["task"] = _text(row.get("task"))
             if _integer(row.get("run_in_session")):
