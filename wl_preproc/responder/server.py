@@ -143,6 +143,7 @@ from pathlib import Path
 
 from wl_preproc.responder import health, jobs
 from wl_preproc.responder import nwb as nwb_endpoints
+from wl_preproc.responder import sessions as sessions_endpoint
 from wl_preproc.responder.handler import ConflictError, make_handler
 from wl_preproc.schema import DEFAULT_PREFIX
 from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
@@ -228,8 +229,15 @@ def serve(
         with lock:
             return nwb_endpoints.set_active(request, prefix=prefix)
 
+    # GET /sessions (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 2),
+    # under the same lock.
+    def locked_sessions_list_fn(since):
+        with lock:
+            return sessions_endpoint.list_sessions(since, prefix=prefix)
+
     handler_cls = make_handler(token, locked_health_fn, locked_accept_fn, locked_nwb_list_fn,
-                               locked_nwb_active_fn)
+                               locked_nwb_active_fn, locked_sessions_list_fn)
     httpd = ThreadingHTTPServer(("", port), handler_cls)
     try:
         if ready is not None:

@@ -192,3 +192,32 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
     if Fault.MISMATCHED_RIG_LINE in recipe.faults:
         lines = mismatch_rig_line(lines)
     path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n", encoding="utf-8")
+
+
+def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
+    """Stands in for wl-xcon's `xcon/runs.jsonl` and `xcon/config.json`, for a
+    recipe whose blocks are wrapped in runs (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 2.3).
+
+    In the shape `wl_xcon/record.py::run_row` writes on wl-xcon's `main`
+    (read at `0d00a6c`): a start row with the task, and an end row with
+    `stopped_because` and `stop_kind`, each naming its 0-based `run`. wl-xcon
+    writes the end row on every way out (`taskd.py`, read at `c4ee20d`): a run
+    whose block is unclosed faulted, and its end row says so in `taskd.py`'s
+    words for a fault; the others are its words for a run that finished its
+    blocks."""
+    rows = []
+    for run_index, block in enumerate(truth.blocks):
+        spec = recipe.blocks[run_index]
+        rows.append({"event": "start", "run": run_index, "at": block.start_s, "task": spec.task_type.name.lower()})
+        if run_index + 1 in recipe.unclosed_blocks:
+            rows.append({"event": "end", "run": run_index, "at": block.end_s,
+                         "stopped_because": "fault, session aborted: RuntimeError: a synthetic fault",
+                         "stop_kind": "fault"})
+        else:
+            rows.append({"event": "end", "run": run_index, "at": block.end_s,
+                         "stopped_because": "every block is finished", "stop_kind": "completed"})
+    (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+                                         encoding="utf-8")
+    (xcon_dir / "config.json").write_text(json.dumps({"session_id": recipe.session_id, "subject": recipe.subject},
+                                                     sort_keys=True), encoding="utf-8")

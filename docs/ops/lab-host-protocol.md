@@ -493,6 +493,50 @@ read under the same `Content-Length` rules as `POST /jobs`. The answer is `202` 
 are kept: a dataset may be marked active before its files exist, and a file in the set
 publishes straight to the fast share.
 
+## `GET /sessions`
+
+*Added 2026-10-01 with the landed-session listing
+(`docs/superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md` section 2).*
+Lists every landed session whose entry changed after a cursor: its runs, the blocks inside them,
+the SpikeGLX segments and probes it recorded, and its flags. It is how wl.works learns a
+session's measured runs, to make the session's runs from them and to fire its canonical NWB.
+
+```
+GET /sessions?since=<cursor>
+Authorization: Bearer <token>
+```
+
+- **`since`** is optional, one non-negative integer, as for `GET /nwb`. Without it, every
+  listed session is listed.
+- **The response** is [`docs/schemas/session_listing.json`](../schemas/session_listing.json):
+  `{"cursor": <int>, "sessions": [...]}`. Send `cursor` as the next `since`; it only increases.
+- **A session is listed** once the daemon has read its event codes, and again whenever its entry
+  changes: a timing tier computed later, a probe census, a rejected segment. **Each entry is the
+  session as it stands now.**
+- **Each session:**
+  - `subject`, `session_datetime`, and `session_name`, the rig's `YYYY-MM-DD_NN`;
+  - `tier`, the timing tier (`A` to `D`, `D` quarantined), or `null` until computed; and
+    `rejected_segments`, each file this host could not use, with its reason;
+  - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
+    (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and
+    `end_s` on the recording's clock, `closed`, wl-xcon's `stopped_because` and `stop_kind`,
+    `segments` (the barcodes of the SpikeGLX segments it spans), and `blocks`;
+  - each block: `block_number` (in the session), `block_in_run`, `block_type`, `start_s`,
+    `end_s`, `closed` (null when never recorded, for a session read before 2026-10-01),
+    `n_trials`;
+  - `segments`, each SpikeGLX file once: `segment_barcode`, `start_s`, `end_s`, and per probe its
+    `serial`, `part_number`, `probe_type`, site map (`electrode_config_hash`, `n_electrodes`,
+    `electrodes` as SpikeGLX electrode numbers), its `~imroTbl` verbatim as `imro_table`, and
+    any `problem`. **Runs and segments do not align**: a bank change needs a SpikeGLX restart,
+    which is a new segment, and a run need not stop for it;
+  - `probes`, every serial the recording names;
+  - `flags`, each a `code`, a `message`, and the `run_number` or `block_number` it is about:
+    `waiting_for_run_markers` (no measured run yet), `repeated_run_number` and
+    `repeated_block_number` (a crash restart before wl-xcon's XC-026; only the first is
+    listed), `run_without_block`, `bank_change_in_run`, `block_type_unknown`, `task_unknown`,
+    and `block_outside_runs` (a block in no measured run: its run's `RUN_START` was lost).
+    **None of them blocks anything here.**
+
 ---
 
 ## Status codes
@@ -893,6 +937,7 @@ directory so a drifted export fails the build:
 - [`docs/schemas/nwb_listing.json`](../schemas/nwb_listing.json) and
   [`docs/schemas/nwb_description.json`](../schemas/nwb_description.json), `GET /nwb`
 - [`docs/schemas/active_set_request.json`](../schemas/active_set_request.json), `PUT /nwb/active`
+- [`docs/schemas/session_listing.json`](../schemas/session_listing.json), `GET /sessions`
 
 These are what wl.works' contract tests should validate against, and they are why this
 protocol needed no OpenAPI-generating web framework on the box that holds every session's

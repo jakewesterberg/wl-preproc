@@ -35,6 +35,10 @@ class RecordedProbe:
     part_number: str | None
     electrodes: tuple[int, ...] | None  # None when the sites cannot be mapped
     problem: str | None  # why something is missing, or None
+    # The `.meta`'s `~imroTbl`, verbatim, for wl.works to compare with a
+    # planned IMRO file with its own reader (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 2.2).
+    imro_table: str | None = None
 
 
 def _metas(nidq_bin: Path) -> list[Path]:
@@ -113,7 +117,7 @@ def read_probe(meta: Path) -> RecordedProbe:
                 else:
                     electrodes = placed
     return RecordedProbe(stream=stream, serial=serial, part_number=part_number, electrodes=electrodes,
-                         problem="; ".join(problems) or None)
+                         problem="; ".join(problems) or None, imro_table=fields.get("~imroTbl"))
 
 
 def read_run(nidq_bin: Path) -> list[RecordedProbe]:

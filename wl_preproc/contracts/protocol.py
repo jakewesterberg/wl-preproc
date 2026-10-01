@@ -350,3 +350,135 @@ class NwbListing(BaseModel):
 
     cursor: int
     files: list[NwbListingEntry]
+
+
+# -- Landed sessions: GET /sessions (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 2). --------
+
+ListedFlagCode = Literal[
+    "waiting_for_run_markers",
+    "repeated_run_number",
+    "repeated_block_number",
+    "run_without_block",
+    "bank_change_in_run",
+    "block_type_unknown",
+    "task_unknown",
+    "block_outside_runs",
+]
+
+
+class ListedFlag(BaseModel):
+    """A fact wl.works shows beside the session as a hint. None blocks
+    anything here. `run_number` and `block_number` say where, when it is one
+    run or one block."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: ListedFlagCode
+    message: str
+    run_number: int | None = None
+    block_number: int | None = None
+
+
+class ListedProbe(BaseModel):
+    """One probe in one SpikeGLX segment, from `ephys.ProbeCensus`. Two
+    segments with the same `electrode_config_hash` for a serial share a bank
+    setting. `electrodes` are SpikeGLX electrode numbers (bank x 384 +
+    channel for the NP1.0 family), the saved channels only; `imro_table` is
+    the segment's `~imroTbl`, verbatim."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stream: str
+    serial: str | None
+    part_number: str | None
+    probe_type: str | None
+    electrode_config_hash: str | None
+    n_electrodes: int | None
+    electrodes: list[int] | None
+    imro_table: str | None
+    problem: str
+
+
+class ListedSegment(BaseModel):
+    """One SpikeGLX file's extent on the recording's clock, and its probes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    segment_barcode: int
+    start_s: float
+    end_s: float
+    probes: list[ListedProbe]
+
+
+class ListedBlock(BaseModel):
+    """A measured block: consecutive trials under one block type, inside a
+    run. `block_number` is its number in the session, as `BLOCK_START`
+    strobes it; `block_in_run` its order in its run, from 1. `closed` is
+    null when it was never recorded: a session event-staged before
+    2026-10-01 kept no block closure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    block_number: int
+    block_in_run: int
+    block_type: str | None
+    start_s: float
+    end_s: float
+    closed: bool | None
+    n_trials: int
+
+
+class ListedRun(BaseModel):
+    """A measured run (`core.Run`) with the rig's record of it
+    (`core.RunRecord`). `segments` names, by barcode, the SpikeGLX segments
+    it spans; each is listed once, in the session's `segments`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_number: int
+    task_code: int
+    task: str | None
+    start_s: float
+    end_s: float
+    closed: bool
+    stopped_because: str | None
+    stop_kind: str | None
+    segments: list[int]
+    blocks: list[ListedBlock]
+
+
+class RejectedFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    system: str
+    file_path: str
+    reason: str
+
+
+class SessionEntry(BaseModel):
+    """One landed session, as it stands now. `tier` is the timing tier, null
+    until it is computed; D is quarantined, not published automatically."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject: str
+    session_datetime: datetime.datetime
+    session_name: str
+    tier: Literal["A", "B", "C", "D"] | None
+    rejected_segments: list[RejectedFile]
+    runs: list[ListedRun]
+    segments: list[ListedSegment]
+    probes: list[str]
+    flags: list[ListedFlag]
+
+
+class SessionListing(BaseModel):
+    """`GET /sessions?since=<cursor>`: every session whose entry changed after
+    the cursor, as it stands now, and the cursor to send next time. The
+    cursor only increases."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cursor: int
+    sessions: list[SessionEntry]

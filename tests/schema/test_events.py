@@ -597,3 +597,83 @@ def test_a_faulted_trial_stops_inside_its_own_run_when_runs_are_marked():
     stop = _trial_stop_time(faulted, 1, assembly.trials,
                             _containing_block(faulted, assembly.blocks, stream_end_s), stream_end_s)
     assert stop <= _block_stop_time(block) <= run.last_s < assembly.runs[1].start_s
+
+
+# -- What the event stage keeps from wl-xcon's record (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 2.3).
+
+
+def _populate_generated(tmp_path, subject, when, mutate=None, **update):
+    from wl_preproc.schema import pipeline
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "subject": subject, **update})
+    generate_session(tmp_path, recipe)
+    if mutate is not None:
+        mutate(tmp_path / recipe.session_id)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": subject, "sex": "M", "subject_birth_date": datetime.date(2020, 1, 1),
+                                      "subject_description": ""}, skip_duplicates=True)
+    key = {"subject": subject, "session_datetime": when}
+    pipeline.Session.insert1(key, skip_duplicates=True)
+    events.populate_session(key, tmp_path / recipe.session_id)
+    return recipe, key
+
+
+def _block_attributes(key, name):
+    from wl_preproc.schema import pipeline
+
+    rows = (pipeline.trial.Block.Attribute & key & {"attribute_name": name}).to_dicts()
+    return {row["block_id"]: row["attribute_value"] for row in rows}
+
+
+def test_populate_session_keeps_the_rig_record_of_each_run_and_each_blocks_facts(events_activated, dj_conn,
+                                                                                  tmp_path):
+    """Run 1 faulted (its block unclosed), and wl-xcon's end row says so; run
+    2 finished. Each block keeps whether it closed and the block type its
+    trials' lines name."""
+    from wl_preproc.schema import core
+
+    recipe, key = _populate_generated(tmp_path, "slrig1", datetime.datetime(2027, 7, 20, 9, 0),
+                                      runs=True, unclosed_blocks=[1])
+    records = (core.RunRecord & key).to_dicts(order_by="run_number")
+    assert [(row["run_number"], row["task"], row["stopped_because"], row["stop_kind"]) for row in records] == [
+        (1, recipe.blocks[0].task_type.name.lower(), "fault, session aborted: RuntimeError: a synthetic fault",
+         "fault"),
+        (2, recipe.blocks[1].task_type.name.lower(), "every block is finished", "completed")]
+    assert _block_attributes(key, "closed") == {1: "0", 2: "1"}
+    assert _block_attributes(key, "block_type") == {1: "block-1", 2: "block-2"}
+
+
+def test_a_block_whose_trials_name_two_types_has_none(events_activated, dj_conn, tmp_path):
+    """Nothing is guessed: block 1's second trial's line names another type."""
+    import json
+
+    def rename_one(session_dir):
+        path = session_dir / "xcon" / "trials.jsonl"
+        lines = [json.loads(line) for line in path.read_text().splitlines()]
+        lines[1]["block"] = "block-x"
+        path.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+
+    _recipe, key = _populate_generated(tmp_path, "slrig2", datetime.datetime(2027, 7, 21, 9, 0), mutate=rename_one)
+    assert _block_attributes(key, "block_type") == {2: "block-2"}
+
+
+def test_a_rig_value_longer_than_its_column_is_cut_not_a_failed_session(events_activated, dj_conn, tmp_path):
+    """A value too long for its column would fail the session's whole event
+    stage on every pass, so it is cut to the column."""
+    import json
+
+    from wl_preproc.schema import core
+
+    def long_task(session_dir):
+        path = session_dir / "xcon" / "runs.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["task"] = "t" * 300
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    _recipe, key = _populate_generated(tmp_path, "slrig3", datetime.datetime(2027, 7, 23, 9, 0), mutate=long_task,
+                                       runs=True)
+    assert (core.RunRecord & key & {"run_number": 1}).fetch1("task") == "t" * 255

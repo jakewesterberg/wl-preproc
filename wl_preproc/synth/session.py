@@ -15,6 +15,7 @@ from wl_preproc.synth.peripherals import (
     camera_frame_count,
     write_camera_sidecar,
     write_manifest,
+    write_rig_runs,
     write_rig_trials,
     write_task_file,
 )
@@ -63,6 +64,8 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
     # its folder beside them).
     layout.xcon_dir.mkdir(exist_ok=True)
     write_rig_trials(layout.xcon_dir / "trials.jsonl", recipe, truth)
+    if recipe.runs:
+        write_rig_runs(layout.xcon_dir, recipe, truth)
 
     rng = np.random.default_rng(recipe.seed + 2)
     finished_at = SYNTH_EPOCH + datetime.timedelta(seconds=recipe.duration_s)

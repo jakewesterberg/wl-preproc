@@ -1033,6 +1033,21 @@ def run_once(
     populated += linked
     errors.extend(link_errors)
 
+    # After the link stage and the computed tables, whose census, timing and
+    # segments it reads. Under its own lock: it is `GET /sessions`' one
+    # writer (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    # section 2.1).
+    from wl_preproc.listing.stage import run_stage as run_listing_stage
+    from wl_preproc.nwb import lock
+
+    try:
+        with lock.exclusive(prefix, "listing"):
+            listed, listing_errors = run_listing_stage()
+            populated += listed
+            errors.extend(listing_errors)
+    except lock.Busy as busy:
+        errors.append(f"SessionChange: {busy}")
+
     # The three NWB stages run under one database lock (`nwb/lock.py`): a
     # second wlpp process -- a pass outliving its cron interval, or `wlpp nwb
     # build` -- leaves them to the first and says so. `0`, not `None`, for a

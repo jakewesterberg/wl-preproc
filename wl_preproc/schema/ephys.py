@@ -240,6 +240,19 @@ class SegmentConfig(dj.Manual):
     """
 
 
+# `ProbeCensus.Probe.imro_table`'s width. A Neuropixels imroTbl names one
+# entry per channel, about 8,000 characters for 384 channels.
+IMRO_TABLE_MAX = 10240
+
+
+def kept_imro_table(table: str | None) -> tuple[str | None, str | None]:
+    """The table to keep, and a problem when it is too long to keep: a value
+    longer than its column would fail the segment on every pass."""
+    if table is not None and len(table) > IMRO_TABLE_MAX:
+        return None, f"the imroTbl is {len(table)} characters, longer than the {IMRO_TABLE_MAX} kept, so it is not kept"
+    return table, None
+
+
 @schema
 class ProbeCensus(dj.Computed):
     definition = """
@@ -273,6 +286,11 @@ class ProbeCensus(dj.Computed):
         part_number = null : varchar(32)
         -> [nullable] ElectrodeConfig
         problem = '' : varchar(1024)
+        # The segment's `~imroTbl`, verbatim from its `.meta` (design spec
+        # 2026-10-01-session-listing-and-run-requests-design.md section 2.2):
+        # wl.works compares a planned IMRO file with it. Null when absent, or
+        # longer than the column, which is then a problem.
+        imro_table = null : varchar(10240)
         """
 
     @property
@@ -311,8 +329,11 @@ class ProbeCensus(dj.Computed):
                     "electrode_config_hash": register_electrode_config(probe.part_number, list(probe.electrodes)),
                     "probe_type": probe.part_number,
                 }
+            imro_table, too_long = kept_imro_table(probe.imro_table)
+            problems += [too_long] if too_long else []
             parts.append({**key, "stream": probe.stream, "probe_serial": probe.serial,
-                          "part_number": probe.part_number, **config, "problem": "; ".join(problems)})
+                          "part_number": probe.part_number, **config, "problem": "; ".join(problems),
+                          "imro_table": imro_table})
         self.insert1({**key, "n_probes": len(parts)})
         self.Probe.insert(parts)
 

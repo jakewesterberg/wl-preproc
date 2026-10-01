@@ -88,6 +88,22 @@ class Ingestion(dj.Manual):
 
 
 @schema
+class SessionChange(dj.Manual):
+    definition = """
+    # Every change to a landed session's entry in GET /sessions (design spec
+    # 2026-10-01-session-listing-and-run-requests-design.md section 2.1),
+    # appended by the daemon's listing stage alone, under its lock, when the
+    # entry's digest differs from the session's last. The sequence only
+    # increases, and is GET /sessions' cursor. Key: (change_seq).
+    change_seq : int unsigned auto_increment
+    ---
+    -> pipeline.Session
+    digest     : char(64)     # sha256 of the entry's JSON, keys sorted
+    changed_at : datetime(6)
+    """
+
+
+@schema
 class Quarantine(dj.Manual):
     definition = f"""
     # A session directory that failed validation. Key: session_dir.

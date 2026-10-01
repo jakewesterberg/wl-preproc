@@ -151,3 +151,33 @@ def test_the_rig_record_has_wl_xcons_line_shape(tmp_path):
     assert record.problems == ()
     assert [trial.number for trial in record.trials] == [trial.trial_id for trial in truth.trials]
     assert {trial.condition for trial in record.trials} <= {"contrast-10", "contrast-25", "contrast-50", "contrast-100"}
+
+
+def test_the_run_record_has_wl_xcons_row_shape(tmp_path):
+    """With runs on, one start row and one end row per run, as wl-xcon's
+    `run_row` writes them (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 2.3). A
+    run whose block is unclosed faulted, and its end row says so."""
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.synth.peripherals import write_rig_runs
+    from wl_preproc.synth.recipe import SessionRecipe
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "unclosed_blocks": [1]})
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    record = read_rig_runs(tmp_path, recipe.subject)
+    assert record.problems == ()
+    assert [(run.number, run.task, run.stop_kind) for run in record.runs] == [
+        (1, recipe.blocks[0].task_type.name.lower(), "fault"),
+        (2, recipe.blocks[1].task_type.name.lower(), "completed")]
+    # `config.json` in the keys wl-xcon's `taskd.Session._fixed_config` names them (its `main`,
+    # read at `5f79afe`); the reader uses only `subject`.
+    config = json.loads((tmp_path / "xcon" / "config.json").read_text())
+    assert (config["session_id"], config["subject"]) == (recipe.session_id, recipe.subject)
+
+
+def test_a_session_without_runs_has_no_run_record(tmp_path):
+    from wl_preproc.synth.session import generate_session
+
+    generate_session(tmp_path, CI_RECIPE)
+    assert not list(tmp_path.rglob("runs.jsonl")) and not list(tmp_path.rglob("config.json"))
