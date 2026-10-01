@@ -58,6 +58,19 @@ only its landed-session poll writes. Its grid reads a landed session with no mea
    `animal_session_block` through `works_block_id`. They should join each run to
    `animal_session_run`. A dated note is added there; the code changes with the joint design.
 
+**Designed 2026-10-01** ([`specs/2026-10-01-session-listing-and-run-requests-design.md`](superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md),
+approved by the requester), and wl.works told the same day. **Ask 1 is BUILT** (its Plan A):
+`GET /sessions?since=<cursor>`, documented in `ops/lab-host-protocol.md` and exported as
+`docs/schemas/session_listing.json`. Vendor that schema once this is on `main`.
+- **Each session:** its key and rig session name; `tier` and `rejected_segments`; its runs, each
+  with wl-xcon's task and stop reason, the barcodes of the SpikeGLX segments it spans, and its
+  blocks (number in the session and in the run, block type, times, `closed`, trial count); the
+  segments once each, with every probe's serial, site map, `electrodes` (SpikeGLX electrode
+  numbers) and `imro_table` (the segment's `~imroTbl`, verbatim, for its montage-plan
+  comparison); the serials; and its flags.
+- **The block type** comes from the rig record's `block`, joined by `trial_number`, as asked.
+- **Asks 3 and 4, and item 5,** are the same spec's Plan B, which follows.
+
 ---
 
 # OPEN — wl.works fires the canonical NWB, and regenerates it by naming what it replaces

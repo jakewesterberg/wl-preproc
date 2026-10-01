@@ -170,6 +170,13 @@ status:
     only its own trials; and repeated or too-large trial numbers are named
     rather than dropped (design spec `2026-10-01-runs-and-trials-design.md`;
     handoff `docs/handoffs/2026-10-01-runs-and-trials.md`).
+    The landed-session listing, `GET /sessions`, is BUILT on
+    `spec/session-listing-and-run-requests` (2026-10-01, NOT merged as
+    written): each landed session's runs with wl-xcon's task and stop reason,
+    the blocks under each, the SpikeGLX segments with every probe's site map
+    and raw ~imroTbl, and its flags, re-listed whenever its entry changes
+    (design spec `2026-10-01-session-listing-and-run-requests-design.md`, Plan
+    A; handoff `docs/handoffs/2026-10-01-session-listing.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**

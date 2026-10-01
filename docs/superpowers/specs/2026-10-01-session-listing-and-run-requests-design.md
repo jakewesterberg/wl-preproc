@@ -310,3 +310,43 @@ Each flag is a code and a sentence, listed per session or per run:
   the retirements.
 
 Each is its own branch, merged on the requester's word.
+
+---
+
+## Amendments, 2026-10-01, made while proving Plan A
+
+Plan A (`plans/2026-10-01-session-listing.md`) was proven in code before it was written. These
+settle what the sections above left open; §0 stands.
+
+1. **Each SpikeGLX segment is listed once per session,** and each run names the barcodes of the
+   segments it spans (§2.2 listed them under each run). The information is the same, without
+   repeating a segment's sites under every run it touches.
+2. **`tier` and `rejected_segments` are fields, not flags** (§2.4): every entry has them, and a
+   flag is a finding that may or may not be there. `tier` is null until `TimingProvenance` is
+   computed.
+3. **A new flag, `block_outside_runs`**: a block in no measured run, when the session has runs.
+   Its run's `RUN_START` was lost, or it was strobed outside a run. With no runs, the session is
+   already `waiting_for_run_markers`, and the flag is not raised.
+4. **`electrodes` are SpikeGLX electrode numbers** for NP1015, NP1022, NP1030 and NP1032
+   (§8 item 8, measured with probeinterface 0.3.2: channel 0 in bank 2 is electrode 768, bank x
+   384 + channel). Only the saved channels are listed.
+5. **A block's closure is stored,** as a `trial.Block.Attribute` row `closed`, beside its
+   `block_type`: `trial.Block` held no closure, and the listing reports it.
+6. **A rig-record value longer than its column is cut to it,** and an `~imroTbl` longer than
+   10,240 characters is not kept and is named as the census probe's problem. Either, kept whole,
+   would fail its stage on every pass.
+7. **`runs.jsonl`'s rows carry no subject,** so its `config.json` is read: a record naming another
+   subject is not read. The generator writes both files only when its blocks are wrapped in runs.
+8. **The listing stage's changes count into the pass's `populated`,** as the link stage's do, and
+   its lock is `nwb/lock.py::exclusive(prefix, "listing")`, beside the NWB stages' lock.
+9. **§8's items for Plan A, answered:**
+   - **1:** `RUN_START`'s run number is `run` + 1: wl-xcon's session-levels spec calls `run` the
+     0-based run in session, and its start rows gain `run_in_session`, which is used when present;
+   - **2:** `trial.Block.Attribute` takes `block_type` and `closed` (`attribute_value` is
+     `varchar(2000)`);
+   - **5:** the rig's session name is the last part of `Ingestion.session_dir`; a generated
+     session's is its `session_id`;
+   - **6:** both named locks are taken with `GET_LOCK(name, 0)` and never waited for, so one
+     pass holding both cannot deadlock;
+   - **8:** as amendment 4.
+

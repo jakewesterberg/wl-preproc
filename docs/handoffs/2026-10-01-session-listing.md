@@ -1,0 +1,80 @@
+# The landed-session listing, `GET /sessions`
+
+**Plan A of pieces 2 and 3, designed together.** Piece 1, runs and trials, is merged
+(`b0f8b52`). Plan B, requests that name runs and the NWB description at version 3, follows; piece
+4, a metadata-only rebuild, after it.
+- **Branch:** `spec/session-listing-and-run-requests`, forked from `main` at `7e49cc9`.
+- **Spec:** `docs/superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md`
+  (`89ad4e9`, amended `03c6784` for wl.works' site-set note). It is amended again in this
+  branch's last commit.
+- **Plan:** `docs/superpowers/plans/2026-10-01-session-listing.md`.
+- **The requester's choices:** design the two pieces together; a canonical file keeps every run of
+  its montage; a repeated run number lists the first and flags the session; a derivative selects
+  whole runs.
+
+Every line of the plan was proven in a scratch worktree before the plan was written.
+
+---
+
+## 1. What was built
+
+- **wl-xcon's run record is read** (`events/rigruns.py`): each run's task from its start row, and
+  its stop reason from its end row, numbered by `run_in_session` or `run` + 1.
+- **The event stage keeps it**, in a new `core.RunRecord`, and each block's closure and block type
+  as `trial.Block.Attribute` rows, once, before the raw files are archived.
+- **The probe census keeps each segment's `~imroTbl` verbatim** (`ephys.ProbeCensus.Probe.imro_table`).
+- **One session's entry** (`listing/entry.py`): its runs, the blocks under each, the SpikeGLX
+  segments each spans with every probe's site map and table, its serials, `tier`,
+  `rejected_segments`, and eight flags. It is built from rows, so every flag is tested without a
+  database.
+- **The listing stage** (`listing/stage.py`) appends an `ingest.SessionChange` whenever an entry's
+  digest changes. It is the log's one writer, under its own named lock.
+- **`GET /sessions?since=<cursor>`** (`responder/sessions.py`) lists each changed session as it
+  stands now. It is documented in `ops/lab-host-protocol.md` and exported as
+  `docs/schemas/session_listing.json`.
+- **The generator** writes wl-xcon's run record and `config.json` when its blocks are wrapped in
+  runs.
+
+## 2. What the other repositories must do
+
+- **wl.works** (`pending-wl-works-amendments.md`): vendor `session_listing.json` once this is on
+  `main`. Compare a planned IMRO file with each segment's `imro_table`, using the reader it has
+  for both.
+- **wl-xcon** (`pending-wl-xcon-amendments.md`): nothing is asked. It is told which fields of
+  `runs.jsonl`, `config.json` and `trials.jsonl` are now read, so that it says so before renaming
+  one.
+
+## 3. Still open
+
+- **Plan B:** canonical requests that name runs, per-probe run lists, the check on arrival, the
+  NWB description at version 3, and the retirements of `core.Block` and `block_agreement`.
+- **A session deleted after it was listed** has no "removed" entry. `GET /nwb` leaves the same gap.
+- **No page size**, as for `GET /nwb`.
+- **A development database** redeclares `ephys.ProbeCensus`, which gains `imro_table`.
+
+## 4. The rulings
+
+Each is a dated amendment in the spec:
+1. **Segments are listed once per session,** and runs name theirs by barcode.
+2. **`tier` and `rejected_segments` are fields;** flags are findings.
+3. **A new flag, `block_outside_runs`.**
+4. **`electrodes` are SpikeGLX electrode numbers** for the four models wl.works reads.
+5. **A block's closure is stored.**
+6. **Over-long values are cut or named,** never a failed stage.
+7. **`config.json` stands in for the subject** the run rows lack.
+8. **The listing stage counts into `populated`,** under its own lock.
+9. **§8's items for Plan A, answered.**
+
+## 5. Measured
+
+- **Every task's failing run and passing runs matched the plan,** on this branch, in order:
+  7/11, 3/16, 3/18, 11/0, 4/2 and 10/19 failed/passed before each task's code; then 18 and 224,
+  19 and 30, 21 and 54 (1 deselected), 11 and 121, 6 and 31, and 29 and 396 passed after it.
+- **All 19 mutations were caught** by the tests the plan names.
+- **The full suite, once, with every task applied:** 2096 passed, 25 skipped, 1 deselected,
+  1 xfailed on 3.11, and 2095 passed, 27 skipped, 1 xfailed on 3.13. The plan adds 39 tests.
+- **`wl-check`:** `wl.yaml: no findings`. **`schemas export`:** one new file,
+  `docs/schemas/session_listing.json`.
+- **One ruling in execution:** the generated `config.json` named its session `session`, where
+  wl-xcon's `taskd` writes `session_id`. It was fixed in its own commit, with a test that failed
+  first.

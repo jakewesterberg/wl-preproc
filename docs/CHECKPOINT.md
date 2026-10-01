@@ -577,6 +577,19 @@ requester chose to merge the same day; true when written.*
 >    on `main`, so tell it when this merges**, and XC-026 comes before
 >    January. See `docs/handoffs/2026-10-01-runs-and-trials.md`.
 >
+>    **The landed-session listing, `GET /sessions` (Plan A of pieces 2
+>    and 3), is BUILT on `spec/session-listing-and-run-requests`
+>    (2026-10-01), NOT merged as written** (spec
+>    `superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md`).
+>    **The requester's decisions that day:** a canonical file keeps every run
+>    of its montage; a repeated run number lists the first and flags the
+>    session; a derivative selects whole runs. Each session lists its runs
+>    with wl-xcon's task and stop reason, the blocks under each, the SpikeGLX
+>    segments with every probe's site map and raw `~imroTbl`, and its flags;
+>    the daemon's listing stage logs a change whenever an entry changes.
+>    **Plan B, requests that name runs and the NWB description at version 3,
+>    follows.** See `docs/handoffs/2026-10-01-session-listing.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

@@ -48,6 +48,14 @@ block is a stretch of trials under one block type (spec §0).
 - **A `TRIAL_NUMBER` cut by a crash:** the decoder's framing is frozen. One or two trials are lost
   and the session falls to tier D; this is recorded as open beside its XC-199.
 
+**Noted, 2026-10-01: what this repository now reads from wl-xcon's record** (the session listing,
+[`specs/2026-10-01-session-listing-and-run-requests-design.md`](superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md)
+§2.3). Nothing is asked; **say so before renaming any of these:**
+- `xcon/runs.jsonl`: each row's `event` and `run`; the start row's `task` and, once it carries it,
+  `run_in_session`; the end row's `stopped_because` and `stop_kind`;
+- `xcon/config.json`: `subject`, since the run rows carry none;
+- `xcon/trials.jsonl`: `block`, each block's type, joined by `trial_number`.
+
 ---
 
 # OPEN — the stream must carry each trial's number and condition
