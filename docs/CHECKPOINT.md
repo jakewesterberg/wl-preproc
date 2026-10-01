@@ -1,24 +1,29 @@
 # Where this build actually is
 
-**Last updated 2026-10-01**, describing `main` at `8983ee5`, the merge of
-`spec/nwb-probes`: probes and areas in every NWB file and its description
-(handoff `handoffs/2026-09-30-nwb-probes.md`).
-- Proving it found and fixed a timebase defect: a restarted SpikeGLX run was
-  fitted under one intercept, so every bank change would have cost its session
-  its timing.
-- **wl.works answered with three asks back** (a landed-session list, runs from
-  wl-xcon's RUN_START/RUN_END, per-probe block lists). The requester accepted
-  all three in principle on 2026-09-30; they are designed next.
-- **wl-xcon built XC-155**: `xcon/trials.jsonl` lines carry `trial_number`, and
-  reading it is ours to build. It asks three questions (two wl-xcon sessions in
-  one sync-box recording; a trial with no outcome; `trial_id` above 32,767),
-  answered with that design.
+**Last updated 2026-10-01**, describing `main` at `b0f8b52`, the merge of
+`spec/runs-and-trials`: runs and trials from a real wl-xcon session, piece 1 of
+four (handoff `handoffs/2026-10-01-runs-and-trials.md`).
+- **The requester ruled the vocabulary:** a run holds blocks, and a block is a
+  stretch of trials under one block type. Runs are measured from a new
+  `RUN_START` escape (0x8006) and `RUN_END` marker (4) into `core.Run`.
+- **Its final review found a Critical, fixed before merge:** with runs marked,
+  a crashed run's open block ran to the next run's start, so a faulted trial's
+  stop crossed the gap between runs. A block now ends with its run.
+- **wl-xcon sends the new codes once they are on `main`, which they now are.**
+  XC-026 (a restart carries its numbers on) comes before January.
+- **wl.works revised its three asks** under the new vocabulary and added a
+  fourth (a canonical request asserts runs). See
+  `pending-wl-works-amendments.md`; they are the joint design of pieces 2 and 3.
 
-`8983ee5`'s tree is byte-identical to the tested branch head `39bdf37`: 2035
-passed on 3.11 and 2034 on 3.13 locally, 0 failed. CI read off `8983ee5` itself
-is green on both interpreters, 2028 passed on each with 33 skipped, and the
-manifest check is green (`gh run view 36824228829`). CI on later heads is
+`b0f8b52`'s tree is byte-identical to the tested branch head `7c02052`: 2057
+passed on 3.11 and 2056 on 3.13 locally, 0 failed. CI read off `b0f8b52` itself
+is green on both interpreters, 2050 passed on each with 33 skipped, and the
+manifest check is green (`gh run view 36852547804`). CI on later heads is
 recorded here only once read, not before.
+
+*This header named `8983ee5` (the probes-and-areas merge, CI green, 2028 passed
+on each interpreter, `36824228829`) until the runs-and-trials merge; true when
+written.*
 
 *This header named `f106bb2` (the lifecycle-minors merge, CI green, 1955 passed
 on each interpreter, `36718097838`) until the probes-and-areas merge; true when
@@ -557,7 +562,9 @@ requester chose to merge the same day; true when written.*
 >    `pending-wl-works-amendments.md`. See `docs/handoffs/2026-09-30-nwb-probes.md`.
 >
 >    **Runs and trials from a real wl-xcon session are BUILT on
->    `spec/runs-and-trials` (2026-10-01), NOT merged as written** (spec
+>    `spec/runs-and-trials` (2026-10-01), NOT merged as written** *(merged
+>    and pushed as `b0f8b52` the same day, after its final review's fix pass;
+>    CI green, 2050 passed on each interpreter)* (spec
 >    `superpowers/specs/2026-10-01-runs-and-trials-design.md`), piece 1 of
 >    four. **The requester ruled the vocabulary that day: a run holds blocks,
 >    and a block is a stretch of trials under one block type.** Trials join

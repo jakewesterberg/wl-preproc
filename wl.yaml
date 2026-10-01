@@ -162,7 +162,8 @@ status:
     `2026-09-30-nwb-probes-design.md`; handoff
     `docs/handoffs/2026-09-30-nwb-probes.md`).
     Runs and trials from a real wl-xcon session are BUILT on
-    `spec/runs-and-trials` (2026-10-01, NOT merged as written): trials join
+    `spec/runs-and-trials` (2026-10-01; merged and pushed as `b0f8b52` the
+    same day, CI green, after a final review's fix pass): trials join
     wl-xcon's record by `trial_number`; runs are measured from a new
     RUN_START escape (0x8006) and RUN_END marker (4) into `core.Run`, and
     blocks from BLOCK_START per block; a run or block that never closed keeps
@@ -475,6 +476,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `8983ee5` until the runs-and-trials merge `b0f8b52` on 2026-10-01 (CI
+  # green on `8983ee5`, run 36824228829); true when written.
   # Was `f106bb2` until the probes-and-areas merge `8983ee5` on 2026-10-01 (CI
   # green on `f106bb2`, run 36718097838); true when written.
   # Was `9fa7c1f` until the lifecycle-minors merge `f106bb2` on 2026-09-30 (CI
@@ -490,7 +493,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "8983ee5"
+  describes: "b0f8b52"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

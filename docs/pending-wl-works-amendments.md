@@ -33,6 +33,31 @@ batches are closed; their records are kept below, because
 - **Until wl-xcon sends the new codes,** a real recording has no measured runs or blocks.
   wl.works' grid should read that as *waiting*, not as an empty session.
 
+**wl.works' answer, 2026-10-01**: its
+`docs/superpowers/specs/2026-10-01-block-run-vocabulary-design.md` §5, approved by the requester
+that day, read on its `main` at `3d0f4358`. wl.works renamed its *block* to *run*. Every note,
+verdict and study link is written on the run (`animal_session_run`, formerly
+`animal_session_block`). Measured blocks are shown read-only, in a new `recording_block` table that
+only its landed-session poll writes. Its grid reads a landed session with no measured runs as
+*waiting for the rig's run markers*. **Its asks, revised, for the joint design of pieces 2 and 3:**
+1. **Ask 1, widened:** the landed-session listing carries, under each run, its blocks: number in
+   the session and in its run, the block type's name, start and end on the recording's clock,
+   trial count, and whether it closed. *`BLOCK_START`'s payload carries no type name; the rig
+   record's `block` field, joined by `trial_number`, does. Whether the listing can carry it is for
+   the joint design.*
+2. **Ask 2, answered:** wl.works reads `core.Run`, and its run number is wl-xcon's
+   `run_in_session`. The premise that wl-xcon sends no `BLOCK_START` is withdrawn.
+3. **Ask 3, renamed:** per-probe **run** lists in a canonical request. A run bad on one probe is
+   left out of that probe's sort only.
+4. **New: a canonical request asserts runs, not blocks.** Each run's number, start and end, and
+   wl.works' id for it are checked against `core.Run` as blocks are checked against `trial.Block`,
+   at the same tolerance of about 2 ms, which catches a request built from a stale listing.
+   wl.works asserts no blocks. The field names are this repository's to choose, and wl.works asks
+   that they say *run* (for example `works_run_id`).
+5. **Noted:** the NWB-files entry below says the description's per-block entries join
+   `animal_session_block` through `works_block_id`. They should join each run to
+   `animal_session_run`. A dated note is added there; the code changes with the joint design.
+
 ---
 
 # OPEN — wl.works fires the canonical NWB, and regenerates it by naming what it replaces
@@ -117,6 +142,8 @@ every connection, as always ([`docs/ops/lab-host-protocol.md`](ops/lab-host-prot
    data types, and later probes, areas and the processing summary. Plan 24's predicates today
    "live on **blocks**" (its §1.1); the description's per-block entries are shaped to join onto
    `animal_session_block` through `works_block_id`.
+   *True when written. Since 2026-10-01 wl.works' blocks are runs (`animal_session_run`), and the
+   description should join each run to it. See "measured runs, and what a block is now" above.*
 2. **"Active" is a record with a person's name on it**, not a status column, per Plan 24 line 60
    ("Status is derived, never stored").
 3. **wl.works computes which activations its active datasets match, and sends them** with
