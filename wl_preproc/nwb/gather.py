@@ -51,6 +51,10 @@ class Gathered:
     # `2026-09-30-nwb-probes-design.md` sections 3 and 5). See `_probes`.
     probes: list[dict] = dataclasses.field(default_factory=list)
     probe_notes: list[str] = dataclasses.field(default_factory=list)
+    # The trials the canonical trial list leaves out: a number strobed again,
+    # and one too large to store (design spec
+    # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4).
+    trial_notes: list[str] = dataclasses.field(default_factory=list)
 
 
 def _aware_utc(value: datetime.datetime) -> datetime.datetime:
@@ -234,6 +238,39 @@ def _events(blocks: BlockSet, session_key: dict) -> list[dict]:
             "condition": extra.get("condition") or None,
         })
     return events
+
+
+def _trial_notes(session_key: dict, blocks: BlockSet) -> list[str]:
+    """What the stored trials leave out, for this file's blocks (design spec
+    `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4). Read from
+    every strobed `TRIAL_NUMBER`, which `Event` keeps whether or not its trial
+    was stored: a number strobed again after its first, and one above
+    element-event's smallint `trial_id`."""
+    import collections
+
+    from wl_preproc.schema import pipeline
+    from wl_preproc.schema.events import TRIAL_ID_MAX
+
+    strobed = sorted(
+        (float(row["event_start_time"]), int(row["attribute_value"]))
+        for row in (pipeline.event.Event.Attribute & session_key
+                    & {"event_type": "TRIAL_NUMBER", "attribute_name": "trial_id"}).to_dicts())
+    counts = collections.Counter(number for _time_s, number in strobed)
+    inside = blocks.contains_instant([time_s for time_s, _number in strobed]) if strobed else []
+    seen, repeated, too_large = set(), set(), 0
+    for (_time_s, number), here in zip(strobed, inside, strict=True):
+        first = number not in seen
+        seen.add(number)
+        if here and number > TRIAL_ID_MAX:
+            too_large += 1
+        elif here and not first:
+            repeated.add(number)
+    notes = [f"trial number {number} appears {counts[number]} times in the recording; only the first is stored"
+             for number in sorted(repeated)]
+    if too_large:
+        notes.append(f"{too_large} trial(s) numbered above {TRIAL_ID_MAX:,} are not stored: element-event's "
+                     "trial_id holds no larger number")
+    return notes
 
 
 def _conditions(trials: list[dict], events: list[dict], blocks: list[dict], session_dir: Path,
@@ -605,4 +642,5 @@ def gather(activation_key: dict) -> Gathered:
         condition_notes=condition_notes,
         probes=probes,
         probe_notes=probe_notes,
+        trial_notes=_trial_notes(session_key, blocks),
     )

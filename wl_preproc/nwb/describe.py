@@ -102,7 +102,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
             "reference_source": session["clock"]["source"],
             "eye_usable_fraction": (eye or {}).get("usable_fraction") or {"left": None, "right": None},
         },
-        "notes": [*data.condition_notes, *data.probe_notes],
+        "notes": [*data.condition_notes, *data.trial_notes, *data.probe_notes],
         "checksums": {"algorithm": "sha256", "datasets": checksums},
     }
     return NwbDescription.model_validate(description).model_dump(mode="json")
