@@ -45,6 +45,8 @@ class SessionFacts:
     electrodes: dict[tuple[str, str], list[int]]  # (electrode_config_hash, probe_type) -> sorted electrodes
     strobed_runs: list[int]  # every RUN_START's run number, one per occurrence
     strobed_blocks: list[int]  # every BLOCK_START's block number, one per occurrence
+    censused: frozenset[int]  # the segments the probe census has read
+    rig_problems: list[str]  # what reading the rig's run record could not use (core.RunRecordProblem)
 
 
 def _repeats(numbers: list[int]) -> list[tuple[int, int]]:
@@ -69,6 +71,8 @@ def build_entry(facts: SessionFacts) -> dict:
         flags.append(_flag("repeated_block_number",
                            f"block number {number} appears {count} times in the recording; only the first is "
                            "listed", block_number=number))
+    for problem in facts.rig_problems:
+        flags.append(_flag("rig_record_problem", f"the rig's run record: {problem}"))
 
     probes_of = collections.defaultdict(list)
     for part in sorted(facts.census, key=lambda part: (part["segment_barcode"], part["stream"])):
@@ -82,7 +86,7 @@ def build_entry(facts: SessionFacts) -> dict:
         })
     segments = [
         {"segment_barcode": segment["segment_barcode"], "start_s": segment["start_s"], "end_s": segment["end_s"],
-         "probes": probes_of[segment["segment_barcode"]]}
+         "probes": probes_of[segment["segment_barcode"]] if segment["segment_barcode"] in facts.censused else None}
         for segment in sorted(facts.segments, key=lambda segment: segment["start_s"])
     ]
 
@@ -118,7 +122,7 @@ def build_entry(facts: SessionFacts) -> dict:
                                run_number=run["run_number"]))
         maps = collections.defaultdict(set)
         for segment in spanned:
-            for probe in segment["probes"]:
+            for probe in segment["probes"] or ():
                 if probe["serial"] and probe["electrode_config_hash"]:
                     maps[probe["serial"]].add(probe["electrode_config_hash"])
         for serial in sorted(serial for serial, found in maps.items() if len(found) > 1):
@@ -194,6 +198,8 @@ def gather_facts(session_key: dict) -> SessionFacts:
         electrodes=electrodes,
         strobed_runs=strobed("RUN_START", "run_number"),
         strobed_blocks=strobed("BLOCK_START", "block_id"),
+        censused=frozenset(int(barcode) for barcode in (ephys.ProbeCensus & session_key).to_arrays("segment_barcode")),
+        rig_problems=[row["problem"] for row in (core.RunRecordProblem & session_key).to_dicts(order_by="problem_number")],
     )
 
 

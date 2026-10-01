@@ -346,6 +346,11 @@ def _block_stop_time(block: AssembledBlock) -> float:
 TRIAL_ID_MAX = 32767
 
 
+# How many problems with the rig's run record are kept per session: a record
+# damaged on every line would otherwise flag every line.
+_RIG_PROBLEMS_KEPT = 20
+
+
 def _clip(value: str | None, width: int) -> str | None:
     """A rig-record value cut to its column: a value too long would fail the
     session's whole event stage on every pass."""
@@ -631,3 +636,15 @@ def populate_session(key: dict, session_dir: Path) -> None:
     ]
     if record_rows:
         core.RunRecord.insert(record_rows, skip_duplicates=True)
+    if rig_runs is not None:
+        problems = list(rig_runs.problems)
+    elif run_rows:
+        problems = ["the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]
+    else:
+        problems = []
+    if len(problems) > _RIG_PROBLEMS_KEPT:
+        problems = [*problems[:_RIG_PROBLEMS_KEPT - 1], f"and {len(problems) - _RIG_PROBLEMS_KEPT + 1} more"]
+    if problems:
+        core.RunRecordProblem.insert(
+            [{**session_key, "problem_number": number, "problem": _clip(problem, 1024)}
+             for number, problem in enumerate(problems, start=1)], skip_duplicates=True)

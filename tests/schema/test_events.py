@@ -659,6 +659,9 @@ def test_a_block_whose_trials_name_two_types_has_none(events_activated, dj_conn,
 
     _recipe, key = _populate_generated(tmp_path, "slrig2", datetime.datetime(2027, 7, 21, 9, 0), mutate=rename_one)
     assert _block_attributes(key, "block_type") == {2: "block-2"}
+    from wl_preproc.schema import core
+
+    assert len(core.RunRecordProblem & key) == 0  # no runs measured, so no run record is missing
 
 
 def test_a_rig_value_longer_than_its_column_is_cut_not_a_failed_session(events_activated, dj_conn, tmp_path):
@@ -677,3 +680,25 @@ def test_a_rig_value_longer_than_its_column_is_cut_not_a_failed_session(events_a
     _recipe, key = _populate_generated(tmp_path, "slrig3", datetime.datetime(2027, 7, 23, 9, 0), mutate=long_task,
                                        runs=True)
     assert (core.RunRecord & key & {"run_number": 1}).fetch1("task") == "t" * 255
+
+
+
+def test_problems_reading_the_rigs_run_record_are_kept(events_activated, dj_conn, tmp_path):
+    """A line the reader cannot use, and a session with measured runs and no
+    run record at all, are kept for the listing (final review M2)."""
+    from wl_preproc.schema import core
+
+    def one_bad_line(session_dir):
+        path = session_dir / "xcon" / "runs.jsonl"
+        path.write_text(path.read_text() + "{not json\n")
+
+    def no_record(session_dir):
+        (session_dir / "xcon" / "runs.jsonl").unlink()
+
+    _recipe, bad = _populate_generated(tmp_path / "bad", "slrig4", datetime.datetime(2027, 7, 24, 9, 0),
+                                       mutate=one_bad_line, runs=True)
+    _recipe, absent = _populate_generated(tmp_path / "absent", "slrig5", datetime.datetime(2027, 7, 25, 9, 0),
+                                          mutate=no_record, runs=True)
+    problems = lambda key: [row["problem"] for row in (core.RunRecordProblem & key).to_dicts(order_by="problem_number")]
+    assert problems(bad) == ["line 5: not JSON"]
+    assert problems(absent) == ["the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]

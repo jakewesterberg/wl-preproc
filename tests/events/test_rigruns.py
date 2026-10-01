@@ -78,3 +78,16 @@ def test_a_session_without_a_record_has_none(tmp_path):
     from wl_preproc.events.rigruns import read_rig_runs
 
     assert read_rig_runs(tmp_path, "pico") is None
+
+
+def test_a_run_named_twice_keeps_its_first_rows_and_says_so(tmp_path):
+    """The requester's decision 2, for the rig's own record: the first is
+    listed (final review M3)."""
+    from wl_preproc.events.rigruns import RigRun, read_rig_runs
+
+    rows = [_start(0, "rf_map"), _end(0, "every block is finished", "completed"),
+            _start(0, "fixation"), _end(0, "stopped by jw", "operator")]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    assert record.runs == (RigRun(1, "rf_map", "every block is finished", "completed"),)
+    assert record.problems == ("line 3: run 0 has a second start row; the first is kept",
+                               "line 4: run 0 has a second end row; the first is kept")

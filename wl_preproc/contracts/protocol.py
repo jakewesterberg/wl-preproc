@@ -364,6 +364,7 @@ ListedFlagCode = Literal[
     "block_type_unknown",
     "task_unknown",
     "block_outside_runs",
+    "rig_record_problem",
 ]
 
 
@@ -401,14 +402,16 @@ class ListedProbe(BaseModel):
 
 
 class ListedSegment(BaseModel):
-    """One SpikeGLX file's extent on the recording's clock, and its probes."""
+    """One SpikeGLX file's extent on the recording's clock, and its probes:
+    null until the probe census has read it, which is not the same as a run
+    that recorded no probe (`[]`)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     segment_barcode: int
     start_s: float
     end_s: float
-    probes: list[ListedProbe]
+    probes: list[ListedProbe] | None
 
 
 class ListedBlock(BaseModel):
@@ -457,7 +460,8 @@ class RejectedFile(BaseModel):
 
 
 class SessionEntry(BaseModel):
-    """One landed session, as it stands now. `tier` is the timing tier, null
+    """One landed session, as it stands now. A naive `session_datetime` is
+    UTC, as every one this host issues is. `tier` is the timing tier, null
     until it is computed; D is quarantined, not published automatically."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

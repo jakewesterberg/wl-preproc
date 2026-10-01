@@ -72,6 +72,21 @@ class RunRecord(dj.Manual):
 
 
 @schema
+class RunRecordProblem(dj.Manual):
+    definition = """
+    # What reading wl-xcon's run record could not use, kept by the event stage
+    # for the session listing (final review M2 of the listing): a line it
+    # could not read, a record of another animal, or no record at all for a
+    # session with measured runs. At most 20, the last saying how many more.
+    # Key: (subject, session_datetime, problem_number).
+    -> pipeline.Session
+    problem_number : smallint unsigned  # from 1, in the reader's order
+    ---
+    problem : varchar(1024)
+    """
+
+
+@schema
 class Block(dj.Manual):
     definition = """
     # One run of one task, mirroring wl.works animal_session_block.

@@ -99,3 +99,19 @@ Critical finding.
 
 - **The full suite after the fix pass:** 2098 passed, 25 skipped, 1 deselected, 1 xfailed on 3.11,
   and 2097 passed, 27 skipped, 1 xfailed on 3.13.
+
+## 7. The deferred minors, done (`fix/listing-minors`)
+
+Chosen by the requester on 2026-10-01, before wl.works vendors the schema:
+- **M4:** a segment the probe census has not read lists `probes: null`, not `[]`.
+- **M2:** what reading wl-xcon's run record could not use (a bad line, another animal's record, no
+  record for a session with runs) is kept in a new `core.RunRecordProblem`, at most 20 per
+  session, and flagged `rig_record_problem`.
+- **M3:** a run named twice in `runs.jsonl` keeps its first start and end rows, and each repeat is
+  a problem.
+- **M5:** `GET /sessions` still answers 500 when one entry fails, and now names the session.
+- **M7:** the listing stage reports a failure of its own reads instead of stopping the pass.
+- **M8:** the contract says a naive `session_datetime` is UTC.
+- **Left:** M6 (a too-long `~imroTbl` note can reach NWB probe notes; no lab probe comes near) and
+  M9 (every pass rebuilds every entry).
+
