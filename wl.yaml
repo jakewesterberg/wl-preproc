@@ -151,7 +151,8 @@ status:
     (design spec `2026-09-30-canonical-lifecycle-design.md`; handoff
     `docs/handoffs/2026-09-30-canonical-lifecycle.md`).
     Probes and areas, piece 3's hardware-free slice, are BUILT on
-    `spec/nwb-probes` (2026-09-30, NOT merged as written): a daemon stage
+    `spec/nwb-probes` (2026-09-30; merged and pushed as `8983ee5` on
+    2026-10-01, CI green, after a final review's fix pass): a daemon stage
     records each SpikeGLX probe from the recording's own .meta, accept()
     records each insertion's aim and latest area assignment from wl.works,
     each pass links the two, and every NWB file and its version-2
@@ -466,6 +467,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `f106bb2` until the probes-and-areas merge `8983ee5` on 2026-10-01 (CI
+  # green on `f106bb2`, run 36718097838); true when written.
   # Was `9fa7c1f` until the lifecycle-minors merge `f106bb2` on 2026-09-30 (CI
   # green on `9fa7c1f`, run 36704973720); true when written.
   # Was `1f02d59` until the canonical-lifecycle merge `9fa7c1f` on 2026-09-30
@@ -479,7 +482,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "f106bb2"
+  describes: "8983ee5"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

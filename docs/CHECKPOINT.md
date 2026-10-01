@@ -1,19 +1,28 @@
 # Where this build actually is
 
-**Last updated 2026-09-30**, describing `main` at `f106bb2`, the merge of
-`fix/lifecycle-minors`: the canonical lifecycle's deferred minors
-(handoff `handoffs/2026-09-30-canonical-lifecycle.md` §6).
-- It follows `9fa7c1f`, the canonical-lifecycle merge (piece 2b): CI green,
-  1944 passed on each interpreter, `gh run view 36704973720`.
-- **wl.works has taken on the three NWB-export asks.** They are queued as its
-  next brainstorm, and the requester confirmed them. See
-  `pending-wl-works-amendments.md`.
+**Last updated 2026-10-01**, describing `main` at `8983ee5`, the merge of
+`spec/nwb-probes`: probes and areas in every NWB file and its description
+(handoff `handoffs/2026-09-30-nwb-probes.md`).
+- Proving it found and fixed a timebase defect: a restarted SpikeGLX run was
+  fitted under one intercept, so every bank change would have cost its session
+  its timing.
+- **wl.works answered with three asks back** (a landed-session list, runs from
+  wl-xcon's RUN_START/RUN_END, per-probe block lists). The requester accepted
+  all three in principle on 2026-09-30; they are designed next.
+- **wl-xcon built XC-155**: `xcon/trials.jsonl` lines carry `trial_number`, and
+  reading it is ours to build. It asks three questions (two wl-xcon sessions in
+  one sync-box recording; a trial with no outcome; `trial_id` above 32,767),
+  answered with that design.
 
-`f106bb2`'s tree is byte-identical to the tested branch head `8c1712d`: 1956
-passed on 3.11 and 1955 on 3.13 locally, 0 failed. CI read off `f106bb2`
-itself is green on both interpreters, 1955 passed on each with 33 skipped,
-and the manifest check is green (`gh run view 36718097838`). CI on later
-heads is recorded here only once read, not before.
+`8983ee5`'s tree is byte-identical to the tested branch head `39bdf37`: 2035
+passed on 3.11 and 2034 on 3.13 locally, 0 failed. CI read off `8983ee5` itself
+is green on both interpreters, 2028 passed on each with 33 skipped, and the
+manifest check is green (`gh run view 36824228829`). CI on later heads is
+recorded here only once read, not before.
+
+*This header named `f106bb2` (the lifecycle-minors merge, CI green, 1955 passed
+on each interpreter, `36718097838`) until the probes-and-areas merge; true when
+written.*
 
 *This header named `9fa7c1f` (the canonical-lifecycle merge, CI green, 1944
 passed on each interpreter, `36704973720`) until the lifecycle-minors merge;
@@ -530,7 +539,9 @@ requester chose to merge the same day; true when written.*
 >    `docs/handoffs/2026-09-30-canonical-lifecycle.md`.
 >
 >    **Probes and areas in every NWB file (piece 3's hardware-free slice)
->    are BUILT on `spec/nwb-probes` (2026-09-30), NOT merged as written**
+>    are BUILT on `spec/nwb-probes` (2026-09-30), NOT merged as written** *(merged
+>    and pushed as `8983ee5` on 2026-10-01, after its final review's fix pass; CI
+>    green, 2028 passed on each interpreter)*
 >    (spec `superpowers/specs/2026-09-30-nwb-probes-design.md`). **The
 >    recording names the probe; wl.works says where it went** (the
 >    requester's decisions): a new daemon stage, `ephys.ProbeCensus`, reads
