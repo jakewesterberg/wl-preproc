@@ -1,25 +1,29 @@
 # Where this build actually is
 
-**Last updated 2026-10-01**, describing `main` at `b0f8b52`, the merge of
-`spec/runs-and-trials`: runs and trials from a real wl-xcon session, piece 1 of
-four (handoff `handoffs/2026-10-01-runs-and-trials.md`).
-- **The requester ruled the vocabulary:** a run holds blocks, and a block is a
-  stretch of trials under one block type. Runs are measured from a new
-  `RUN_START` escape (0x8006) and `RUN_END` marker (4) into `core.Run`.
-- **Its final review found a Critical, fixed before merge:** with runs marked,
-  a crashed run's open block ran to the next run's start, so a faulted trial's
-  stop crossed the gap between runs. A block now ends with its run.
-- **wl-xcon sends the new codes once they are on `main`, which they now are.**
-  XC-026 (a restart carries its numbers on) comes before January.
-- **wl.works revised its three asks** under the new vocabulary and added a
-  fourth (a canonical request asserts runs). See
-  `pending-wl-works-amendments.md`; they are the joint design of pieces 2 and 3.
+**Last updated 2026-10-01**, describing `main` at `eb1ff06`, the merge of
+`spec/session-listing-and-run-requests`: the landed-session listing,
+`GET /sessions`, Plan A of pieces 2 and 3 (handoff
+`handoffs/2026-10-01-session-listing.md`).
+- **Each landed session is listed** with its runs (wl-xcon's task and stop
+  reason), the blocks under each, the SpikeGLX segments with every probe's site
+  map and raw `~imroTbl`, and its flags. A daemon stage logs a change whenever
+  an entry changes.
+- **Its final review found no Critical;** two Important findings (a float32
+  block start falling out of its run; old sessions reported `closed: false`)
+  and one raised Minor (a faulted wl-xcon run does write an end row) were fixed
+  before merge.
+- **Plan B, canonical requests that name runs and the NWB description at
+  version 3, is next,** after a short branch of the listing's deferred minors.
 
-`b0f8b52`'s tree is byte-identical to the tested branch head `7c02052`: 2057
-passed on 3.11 and 2056 on 3.13 locally, 0 failed. CI read off `b0f8b52` itself
-is green on both interpreters, 2050 passed on each with 33 skipped, and the
-manifest check is green (`gh run view 36852547804`). CI on later heads is
+`eb1ff06`'s tree is byte-identical to the tested branch head `0ccb99b`: 2098
+passed on 3.11 and 2097 on 3.13 locally, 0 failed. CI read off `eb1ff06` itself
+is green on both interpreters, 2091 passed on each with 33 skipped, and the
+manifest check is green (`gh run view 36902548593`). CI on later heads is
 recorded here only once read, not before.
+
+*This header named `b0f8b52` (the runs-and-trials merge, CI green, 2050 passed
+on each interpreter, `36852547804`) until the session-listing merge; true when
+written.*
 
 *This header named `8983ee5` (the probes-and-areas merge, CI green, 2028 passed
 on each interpreter, `36824228829`) until the runs-and-trials merge; true when
@@ -579,7 +583,9 @@ requester chose to merge the same day; true when written.*
 >
 >    **The landed-session listing, `GET /sessions` (Plan A of pieces 2
 >    and 3), is BUILT on `spec/session-listing-and-run-requests`
->    (2026-10-01), NOT merged as written** (spec
+>    (2026-10-01), NOT merged as written** *(merged and pushed as `eb1ff06`
+>    the same day, after its final review's fix pass; CI green, 2091 passed
+>    on each interpreter)* (spec
 >    `superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md`).
 >    **The requester's decisions that day:** a canonical file keeps every run
 >    of its montage; a repeated run number lists the first and flags the

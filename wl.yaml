@@ -171,8 +171,9 @@ status:
     rather than dropped (design spec `2026-10-01-runs-and-trials-design.md`;
     handoff `docs/handoffs/2026-10-01-runs-and-trials.md`).
     The landed-session listing, `GET /sessions`, is BUILT on
-    `spec/session-listing-and-run-requests` (2026-10-01, NOT merged as
-    written): each landed session's runs with wl-xcon's task and stop reason,
+    `spec/session-listing-and-run-requests` (2026-10-01; merged and pushed as
+    `eb1ff06` the same day, CI green, after a final review's fix pass): each
+    landed session's runs with wl-xcon's task and stop reason,
     the blocks under each, the SpikeGLX segments with every probe's site map
     and raw ~imroTbl, and its flags, re-listed whenever its entry changes
     (design spec `2026-10-01-session-listing-and-run-requests-design.md`, Plan
@@ -483,6 +484,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `b0f8b52` until the session-listing merge `eb1ff06` on 2026-10-01 (CI
+  # green on `b0f8b52`, run 36852547804); true when written.
   # Was `8983ee5` until the runs-and-trials merge `b0f8b52` on 2026-10-01 (CI
   # green on `8983ee5`, run 36824228829); true when written.
   # Was `f106bb2` until the probes-and-areas merge `8983ee5` on 2026-10-01 (CI
@@ -500,7 +503,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "b0f8b52"
+  describes: "eb1ff06"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
