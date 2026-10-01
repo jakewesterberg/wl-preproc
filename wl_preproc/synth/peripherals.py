@@ -173,10 +173,12 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
     block), the trial's index within its run, and `trial_number`, counted
     across the session and equal to the stream's TRIAL_NUMBER."""
     lines, per_run = [], {}
-    for trial in truth.trials:
-        condition, params = rig_condition(trial.trial_id)
+    for position, trial in enumerate(truth.trials, start=1):
         index = per_run.get(trial.block_id, 0)
-        per_run[trial.block_id] = index + 1
+        per_run[trial.block_id] = index + 1  # a faulted trial still used its index
+        if position in recipe.faulted_trials:
+            continue  # a trial that faults leaves no line (wl-xcon, 2026-10-01)
+        condition, params = rig_condition(trial.trial_id)
         lines.append({
             "index": index,
             "run": trial.block_id - 1,

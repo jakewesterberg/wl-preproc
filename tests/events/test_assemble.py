@@ -90,3 +90,18 @@ def test_decode_errors_are_kept_rather_than_dropped():
     words = [(0.0, Escape.TRIAL_NUMBER.value), (0.001, 1), (0.002, 0xDEAD)]  # truncated: only 2 of the 3 required words follow the escape
     result = assemble.assemble(_stream(words))
     assert result.errors, "a decode error must reach the assembly's error list"
+
+
+def test_an_unclosed_block_records_its_last_event():
+    """A run that faults sends no BLOCK_END, so the next BLOCK_START finds it
+    open. Its last event is what the recording proves of its end (design
+    spec `2026-10-01-runs-and-trials-design.md` section 2.3)."""
+    words = [*encode_payload(Escape.BLOCK_START, [1, 0]), Marker.TRIAL_START.value,
+             *encode_payload(Escape.TRIAL_NUMBER, [0, 1]),
+             *encode_payload(Escape.BLOCK_START, [2, 0]), Marker.TRIAL_START.value,
+             *encode_payload(Escape.TRIAL_NUMBER, [0, 2]), Marker.TRIAL_END.value, Marker.BLOCK_END.value]
+    pairs = [(0.001 * i, word) for i, word in enumerate(words)]
+    first, second = assemble.assemble(_stream(pairs)).blocks
+    # A payload event is timed at its escape word: trial 1's TRIAL_NUMBER.
+    assert first.end_s is None and first.last_s == pairs[5][0]
+    assert second.end_s == second.last_s == pairs[-1][0]

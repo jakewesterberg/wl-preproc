@@ -16,7 +16,7 @@ session with decode errors is a tier-D candidate that silence would hide.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from wl_preproc.contracts.events import (
     DecodeError,
@@ -49,7 +49,13 @@ class AssembledBlock:
     block_id: int
     task_type: int
     start_s: float
-    end_s: float | None
+    end_s: float | None  # its BLOCK_END, or None when it never closed
+    # The last event received while it was open: its BLOCK_END when it closed,
+    # otherwise the last code before the next BLOCK_START or the end of the
+    # stream. For a run that faulted -- wl-xcon sends no BLOCK_END then -- it
+    # is the tightest bound the recording gives on its end (design spec
+    # `2026-10-01-runs-and-trials-design.md` section 2.3).
+    last_s: float
 
 
 @dataclass
@@ -72,6 +78,7 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
     open_trial_id: int | None = None
     open_outcome: str | None = None
     open_block: AssembledBlock | None = None
+    last_s = 0.0  # the time of the last event before the one in hand
 
     def close_trial(end_s: float | None) -> None:
         nonlocal open_trial_start, open_trial_id, open_outcome
@@ -101,19 +108,22 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
                     open_trial_start = event.time_s
             elif event.escape is Escape.BLOCK_START:
                 if open_block is not None:
-                    result.blocks.append(open_block)
+                    result.blocks.append(replace(open_block, last_s=last_s))
                 open_block = AssembledBlock(
                     block_id=event.words[0],
                     task_type=event.words[1],
                     start_s=event.time_s,
                     end_s=None,
+                    last_s=event.time_s,
                 )
+            last_s = event.time_s
             continue
 
         if isinstance(event, SimpleEvent):
             try:
                 marker = Marker(event.code)
             except ValueError:
+                last_s = event.time_s
                 continue  # a task event, not a marker; Event rows keep it
             if marker is Marker.TRIAL_START:
                 close_trial(end_s=None)
@@ -123,17 +133,11 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
             elif marker is Marker.TRIAL_END:
                 close_trial(end_s=event.time_s)
             elif marker is Marker.BLOCK_END and open_block is not None:
-                result.blocks.append(
-                    AssembledBlock(
-                        block_id=open_block.block_id,
-                        task_type=open_block.task_type,
-                        start_s=open_block.start_s,
-                        end_s=event.time_s,
-                    )
-                )
+                result.blocks.append(replace(open_block, end_s=event.time_s, last_s=event.time_s))
                 open_block = None
+            last_s = event.time_s
 
     close_trial(end_s=None)
     if open_block is not None:
-        result.blocks.append(open_block)
+        result.blocks.append(replace(open_block, last_s=last_s))
     return result

@@ -196,6 +196,15 @@ class SessionRecipe(BaseModel):
     # `2026-09-30-nwb-probes-design.md` section 7).
     extra_probes: tuple[ProbeSpec, ...] = ()
     spikeglx_restart: RestartSpec | None = None
+    # wl-xcon's fault shapes (design spec `2026-10-01-runs-and-trials-design.md`
+    # section 7), both empty by default so every existing profile is
+    # byte-identical. `unclosed_blocks`: block numbers (from 1) whose BLOCK_END
+    # is never sent, as a run that faults sends none. `faulted_trials`: trial
+    # positions (from 1, across the session) that send their TRIAL_START and
+    # number and then nothing -- no outcome, no TRIAL_END -- and leave no line
+    # in the rig's record.
+    unclosed_blocks: tuple[int, ...] = ()
+    faulted_trials: tuple[int, ...] = ()
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and
@@ -360,6 +369,13 @@ class SessionRecipe(BaseModel):
         duplicated = sorted({serial for serial in serials if serials.count(serial) > 1})
         if duplicated:
             raise ValueError(f"the run names serial {duplicated[0]} twice; one probe cannot be two streams")
+        for block in self.unclosed_blocks:
+            if not 1 <= block <= len(self.blocks):
+                raise ValueError(f"unclosed_blocks names block {block}, and the session has {len(self.blocks)}")
+        n_trials = sum(block.n_trials for block in self.blocks)
+        for trial in self.faulted_trials:
+            if not 1 <= trial <= n_trials:
+                raise ValueError(f"faulted_trials names trial {trial}, and the session has {n_trials}")
         restart = self.spikeglx_restart
         banks = [(probe.part_number, probe.bank) for probe in self.extra_probes]
         if restart is not None and restart.probe_bank is not None:

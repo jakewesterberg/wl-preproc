@@ -124,3 +124,48 @@ def test_code_words_never_overlap_on_the_bus():
     times = [t for t, _ in build_timeline(CI_RECIPE).code_words]
     assert times == sorted(times)
     assert len(set(times)) == len(times)
+
+
+# -- Runs that fault, and trials that fault (design spec
+# `2026-10-01-runs-and-trials-design.md` section 7): wl-xcon's own shapes.
+
+
+def _recipe(**update):
+    from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
+
+    return SessionRecipe.model_validate({**CI_RECIPE.model_dump(), **update})
+
+
+def test_an_unclosed_block_and_a_faulted_trial_send_what_wl_xcon_would():
+    """A run that faults sends no BLOCK_END; a trial that faults sends its
+    TRIAL_START and number, then no outcome and no TRIAL_END (wl-xcon's
+    message of 2026-10-01). The third trial is block 1's last."""
+    from wl_preproc.contracts.events import Marker
+
+    clean, faulted = build_timeline(_recipe()), build_timeline(_recipe(unclosed_blocks=[1], faulted_trials=[3]))
+    count = lambda truth, marker: sum(1 for _time, word in truth.code_words if word == marker.value)
+    assert count(clean, Marker.BLOCK_END) - count(faulted, Marker.BLOCK_END) == 1
+    assert count(clean, Marker.TRIAL_END) - count(faulted, Marker.TRIAL_END) == 1
+    assert count(clean, Marker.TRIAL_CORRECT) - count(faulted, Marker.TRIAL_CORRECT) == 1
+    assert count(clean, Marker.TRIAL_START) == count(faulted, Marker.TRIAL_START)
+
+
+def test_a_faulted_trial_has_no_line_in_the_rig_record(tmp_path):
+    import json
+
+    from wl_preproc.synth.peripherals import write_rig_trials
+
+    recipe = _recipe(faulted_trials=[3])
+    (tmp_path / "trials.jsonl").parent.mkdir(exist_ok=True)
+    write_rig_trials(tmp_path / "trials.jsonl", recipe, build_timeline(recipe))
+    numbers = [json.loads(line)["trial_number"] for line in (tmp_path / "trials.jsonl").read_text().splitlines()]
+    assert numbers == [1, 2, 4]
+
+
+@pytest.mark.parametrize("update, expect", [
+    ({"unclosed_blocks": [3]}, "unclosed_blocks names block 3"),
+    ({"faulted_trials": [5]}, "faulted_trials names trial 5"),
+])
+def test_a_fault_naming_nothing_the_session_has_is_refused(update, expect):
+    with pytest.raises(ValueError, match=expect):
+        _recipe(**update)

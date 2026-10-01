@@ -186,9 +186,19 @@ def _containing_block(
     `events/agreement.py`'s job, fed into tier resolution by Task 9, not this
     module's. So the containing block is recovered from the two assembled
     interval lists directly.
+
+    **A block that never closed ends where the next one starts** (design spec
+    `2026-10-01-runs-and-trials-design.md` section 2.3). A run that faults
+    sends no BLOCK_END (wl-xcon's rule), and reaching to the end of the
+    stream instead made it the first block holding every later trial's start.
     """
-    for block in blocks:
-        block_end = block.end_s if block.end_s is not None else stream_end_s
+    for position, block in enumerate(blocks):
+        if block.end_s is not None:
+            block_end = block.end_s
+        elif position + 1 < len(blocks):
+            block_end = blocks[position + 1].start_s
+        else:
+            block_end = stream_end_s
         if block.start_s <= trial.start_s < block_end:
             return block
     return None
@@ -252,6 +262,13 @@ def _trial_stop_time(
     4. The last event time in the whole decoded stream -- the only branch a
        trial truncated with nothing recorded after it can ever reach.
 
+    **Branches 3 and 4 are capped at the containing block's stop, closed or
+    not** (design spec `2026-10-01-runs-and-trials-design.md` section 3.3).
+    A trial that faults is in a run that faulted, which sent no BLOCK_END, so
+    branch 2 does not apply and the next trial is in the next run, after the
+    gap between runs. An unclosed block's stop is its last event, so the
+    inferred stop stays inside the trial's own run.
+
     **Fix round 3: branch 1 is exempt from the invariant below, and returns
     before reaching it.** `_containing_block` decides containment by START
     time alone (`block.start_s <= trial.start_s < block_end`), and -- as fix
@@ -291,6 +308,8 @@ def _trial_stop_time(
         stop = ordered_trials[trial_index + 1].start_s
     else:
         stop = stream_end_s
+    if containing_block is not None:
+        stop = min(stop, _block_stop_time(containing_block))
 
     if containing_block is not None and containing_block.end_s is not None:
         assert stop <= containing_block.end_s, (
@@ -302,17 +321,18 @@ def _trial_stop_time(
     return stop
 
 
-def _block_stop_time(block: AssembledBlock, stream_end_s: float) -> float:
-    """`block.end_s`, or the last known event time when `BLOCK_END` never
-    arrived.
+def _block_stop_time(block: AssembledBlock) -> float:
+    """`block.end_s`, or the block's own last event when `BLOCK_END` never
+    arrived: the tightest bound the recording gives (design spec
+    `2026-10-01-runs-and-trials-design.md` section 2.3). `block_stop_time` is
+    not nullable, so something concrete must be written however the run
+    ended.
 
-    Every block in this project's current fixtures DOES carry an explicit
-    `BLOCK_END` (checked in `synth/timeline.py`), so this path is defensive
-    rather than exercised today -- kept for the same reason `_trial_stop_time`
-    has one: `block_stop_time` is not nullable, so something concrete must be
-    written regardless of how the stream ended.
+    *This used to fall back to the last event of the whole stream, reasoning
+    that every fixture's blocks closed. A run that faults sends no BLOCK_END,
+    and the stream's last event is then in a later run.*
     """
-    return block.end_s if block.end_s is not None else stream_end_s
+    return block.end_s if block.end_s is not None else block.last_s
 
 
 def populate_session(key: dict, session_dir: Path) -> None:
@@ -483,7 +503,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
             **session_key,
             "block_id": block.block_id,
             "block_start_time": block.start_s,
-            "block_stop_time": _block_stop_time(block, stream_end_s),
+            "block_stop_time": _block_stop_time(block),
         }
         for block in assembly.blocks
     ]
