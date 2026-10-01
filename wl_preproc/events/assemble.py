@@ -132,6 +132,12 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
                     last_s=event.time_s,
                 )
             elif event.escape is Escape.RUN_START:
+                # A block lies inside its run. One still open here -- its run
+                # faulted and sent no BLOCK_END -- ends at its own last event,
+                # never at this run's start (design spec section 2.3).
+                if open_block is not None:
+                    result.blocks.append(replace(open_block, last_s=last_s))
+                    open_block = None
                 if open_run is not None:
                     result.runs.append(replace(open_run, last_s=last_s))
                 open_run = AssembledRun(run_number=event.words[0], task_type=event.words[1], start_s=event.time_s,
@@ -156,6 +162,9 @@ def assemble(events: list[DecodedEvent]) -> Assembly:
                 result.blocks.append(replace(open_block, end_s=event.time_s, last_s=event.time_s))
                 open_block = None
             elif marker is Marker.RUN_END and open_run is not None:
+                if open_block is not None:  # its BLOCK_END was lost; it ends with its run
+                    result.blocks.append(replace(open_block, last_s=last_s))
+                    open_block = None
                 result.runs.append(replace(open_run, end_s=event.time_s, last_s=event.time_s))
                 open_run = None
             last_s = event.time_s

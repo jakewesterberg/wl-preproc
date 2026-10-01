@@ -59,7 +59,7 @@ class Block(dj.Manual):
     # One run of one task, mirroring wl.works animal_session_block.
     # *True under the August glossary. Since 2026-10-01 the requester's
     # vocabulary makes a block a stretch of trials inside a run, and a run is
-    # `Run` below; wl.works is revising its own blocks to match.*
+    # `Run` above; revising wl.works' own blocks to match is wl.works'.*
     # start_s/end_s are WL.WORKS' ASSERTION, recorded here through accept() --
     # recording an assertion is not authoring it. Closed open item 9: block rows
     # are authored by wl.works' session planner and wl-preproc never writes

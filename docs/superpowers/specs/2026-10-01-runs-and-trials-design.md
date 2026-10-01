@@ -325,3 +325,22 @@ settle what the sections above left open; §0 stands.
    same (`AssembledRun.last_s`).
 6. **An existing database needs `core.Run` created.** It is created when `core` is activated, and
    no existing table changes shape.
+
+## Amendments, 2026-10-01, from the final review
+
+7. **A block lies inside its run.** A block still open at the next `RUN_START`, or at its own run's
+   `RUN_END` when its `BLOCK_END` was lost, ends there, at its own last event. Before this, an open
+   block's stop was the next run's `RUN_START`, so a faulted trial's inferred stop crossed the gap
+   between runs, the defect §2.3 exists to close (final review C1).
+8. **A repeated run or block number** (a crash restart before wl-xcon's XC-026) keeps its first
+   row in `core.Run` and `trial.Block`, as a trial does. Every occurrence's number stays in
+   `Event`: `RUN_START`'s run number and task code are now stored as `BLOCK_START`'s are. **Naming
+   a repeated run or block belongs to the session list (piece 2)**, which reports runs and blocks
+   to wl.works. *Cost:* until piece 2, a repeat is visible only in `Event`, and a later block's
+   trials are linked to the first block of that number (final review I2).
+9. **"Its last event" (§2.3) is any code strobed before the next run starts,** a manual reward
+   included: wl-xcon strobes `MANUAL_REWARD` (4134) outside a run too (its `taskd.py`,
+   `_manual_reward`). This is kept. This repository does not read task codes' meaning (ADR-0007),
+   and bounding a run by structure codes alone would cut a faulted trial's own task codes out of
+   its interval. *Cost:* a faulted run followed by manual rewards stops at the last reward before
+   the next run, inside the gap and never in the next run (final review I1).

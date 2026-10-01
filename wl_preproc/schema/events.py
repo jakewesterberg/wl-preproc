@@ -446,6 +446,19 @@ def populate_session(key: dict, session_dir: Path) -> None:
                 {**attribute_base, "attribute_name": "task_type",
                  "attribute_value": str(item.words[1])}
             )
+        elif item.escape is Escape.RUN_START:
+            # Kept per occurrence, as BLOCK_START's are: `core.Run` holds the
+            # first run with a number, and a repeat (a crash restart before
+            # wl-xcon's XC-026) stays recoverable here (design spec
+            # `2026-10-01-runs-and-trials-design.md` amendment 8).
+            attribute_rows.append(
+                {**attribute_base, "attribute_name": "run_number",
+                 "attribute_value": str(item.words[0])}
+            )
+            attribute_rows.append(
+                {**attribute_base, "attribute_name": "task_type",
+                 "attribute_value": str(item.words[1])}
+            )
         elif item.escape is Escape.CONDITION:
             # Never emitted by this project's synthetic generator today
             # (checked: synth/timeline.py builds no CONDITION payload); kept
