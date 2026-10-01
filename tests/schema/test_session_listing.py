@@ -59,3 +59,75 @@ def test_a_session_without_run_markers_is_listed_waiting(listed):
     entry = session_entry(key)
     assert entry["runs"] == []
     assert [flag["code"] for flag in entry["flags"]] == ["waiting_for_run_markers"]
+
+
+# -- The change log and the listing stage (section 2.1). Run after the
+# entries' tests: these append changes and restore what they change.
+
+
+def _changes(key):
+    from wl_preproc.schema import ingest
+
+    return (ingest.SessionChange & key).to_dicts(order_by="change_seq")
+
+
+def test_one_pass_logs_each_listed_session_once_with_its_entrys_digest(listed):
+    from wl_preproc.listing.entry import session_entry
+    from wl_preproc.listing.stage import digest
+
+    for _recipe, key in listed.values():
+        (change,) = _changes(key)
+        assert change["digest"] == digest(session_entry(key))
+
+
+def test_an_unchanged_entry_is_not_logged_again(listed):
+    from wl_preproc.listing.stage import run_stage
+
+    before = {name: len(_changes(key)) for name, (_recipe, key) in listed.items()}
+    _appended, errors = run_stage()
+    assert errors == []
+    assert {name: len(_changes(key)) for name, (_recipe, key) in listed.items()} == before
+
+
+def test_a_fact_that_arrives_later_lists_the_session_again(listed):
+    """A rejected segment recorded after the first listing changes the entry,
+    so that session alone is logged again; removing it logs it once more."""
+    from wl_preproc.listing.stage import run_stage
+    from wl_preproc.schema import core
+
+    _recipe, key = listed["runs"]
+    _plain, other = listed["plain"]
+    row = {**key, "system": "spikeglx", "file_path": "late/run_g9_t0.nidq.bin", "reason": "late"}
+    before, other_before = len(_changes(key)), len(_changes(other))
+    core.RejectedSegment.insert1(row)
+    try:
+        run_stage()
+        assert (len(_changes(key)), len(_changes(other))) == (before + 1, other_before)
+    finally:
+        (core.RejectedSegment & row).delete_quick()
+    run_stage()
+    assert len(_changes(key)) == before + 2
+
+
+def test_a_pass_leaves_the_listing_to_a_process_holding_its_lock(listed, prefix):
+    from tests.schema.test_request import _raw_connection
+    from wl_preproc import daemon
+    from wl_preproc.nwb.lock import lock_name
+    from wl_preproc.schema import core
+
+    _recipe, key = listed["runs"]
+    row = {**key, "system": "spikeglx", "file_path": "late/run_g8_t0.nidq.bin", "reason": "late"}
+    before = len(_changes(key))
+    core.RejectedSegment.insert1(row)
+    other = _raw_connection()
+    try:
+        with other.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0)", (lock_name(prefix, "listing"),))
+            assert cursor.fetchone()[0] == 1
+        report = daemon.run_once(prefix=prefix)
+    finally:
+        other.close()
+        (core.RejectedSegment & row).delete_quick()
+    assert len(_changes(key)) == before
+    assert any(error.startswith("SessionChange: another wlpp process holds the listing lock")
+               for error in report["errors"])
