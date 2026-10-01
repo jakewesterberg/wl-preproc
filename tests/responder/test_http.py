@@ -2043,3 +2043,42 @@ def test_make_handler_itself_refuses_a_non_ascii_token(tmp_path):
     # The ASCII neighbour still builds, so the guard is not simply refusing
     # everything.
     assert make_handler("en-dash-token", _health_ok, _unused) is not None
+
+
+def test_an_insertions_aim_and_assignment_arrive_over_http(start_server, landed_session, prefix):
+    """Design spec `2026-09-30-nwb-probes-design.md` section 7: the two new
+    fields over the true wire format, `asserted_at` as a JSON string."""
+    from wl_preproc.responder import jobs as jobs_module
+    from wl_preproc.schema import ephys
+
+    subject = "htpprb1"
+    naive_dt = datetime.datetime(2027, 6, 21, 9, 0)
+    landed_session(subject, naive_dt)
+    base = start_server(TOKEN, _health_ok, lambda request: jobs_module.accept(request, prefix=prefix))
+    payload = _real_job_payload(subject=subject, session_datetime_iso=naive_dt.replace(tzinfo=datetime.UTC).isoformat(),
+                                idempotency_key="htpprb1-k1")
+    payload["metadata"]["probes"] = [{
+        "serial": "19011110001", "insertion_number": 1,
+        "target": {"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+        "area_assignment": {"area": "V4d", "source": "at_rig", "asserted_at": "2027-06-21T10:15:00+02:00"},
+    }]
+
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+
+    assert status == 200, body
+    key = {"subject": subject, "session_datetime": naive_dt}
+    assert (ephys.InsertionReport & key).fetch1("target_area") == "V4d"
+    assert (ephys.AreaAssignment & key).fetch1("asserted_at") == datetime.datetime(2027, 6, 21, 8, 15)
+
+
+def test_a_partial_aim_is_refused_over_http(start_server):
+    """All three or none: an area without its atlas names no place."""
+    base = start_server(TOKEN, _health_ok, _unused)
+    payload = _valid_job_payload()
+    payload["metadata"]["probes"] = [{"serial": "19011110001", "insertion_number": 1,
+                                      "target": {"area": "V4d", "atlas": "CHARM"}}]
+
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+
+    assert status == 422
+    assert any(entry["loc"][-1] == "atlas_level" for entry in json.loads(body)["detail"])

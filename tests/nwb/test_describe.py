@@ -31,11 +31,12 @@ CHECKSUM = {"dataset_path": "/intervals/trials/start_time", "dtype": "float64", 
             "sha256": "0" * 64, "paired_with": ""}
 
 
-def _gathered(eye=None, notes=()):
+def _gathered(eye=None, notes=(), probes=(), probe_notes=()):
     from wl_preproc.nwb.gather import Gathered
 
     return Gathered(session=SESSION, systems=["ohdpi"], blocks=[BLOCK], trials=[{"trial_id": 1}],
-                    events=[{}, {}], timebase={}, eye=eye, conditions=[CONDITION], condition_notes=list(notes))
+                    events=[{}, {}], timebase={}, eye=eye, conditions=[CONDITION], condition_notes=list(notes),
+                    probes=list(probes), probe_notes=list(probe_notes))
 
 
 def test_the_description_of_a_file_without_eye_data():
@@ -43,7 +44,7 @@ def test_the_description_of_a_file_without_eye_data():
 
     out = describe(_gathered(notes=["no rig trial record (xcon/trials.jsonl)"]), status="written", n_critical=0,
                    checksums=[CHECKSUM], built_at=BUILT_AT)
-    assert out["schema_version"] == 1
+    assert out["schema_version"] == 2
     assert out["identity"]["identifier"] == SESSION["identifier"]
     assert (out["identity"]["rig"], out["identity"]["role"], out["identity"]["status"]) == ("rig-a", "canonical", "written")
     assert out["identity"]["pipeline"]["name"] == "wl-preproc"
@@ -85,3 +86,29 @@ def test_the_description_is_held_to_its_contract():
 
     with pytest.raises(ValidationError):
         describe(_gathered(), status="refused", n_critical=0, checksums=[], built_at=BUILT_AT)
+
+
+def test_each_probe_is_described_with_both_areas_and_where_its_label_came_from():
+    """Design spec `2026-09-30-nwb-probes-design.md` section 3.2: version 2
+    gives `probes` its shape, and the probe notes follow the condition
+    notes."""
+    from wl_preproc.nwb.describe import describe
+
+    assigned = {"serial": "19011110001", "probe_type": "NP1032", "insertion_number": 1, "trajectory_id": "T-1",
+                "target": {"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+                "assignment": {"area": "V4v", "source": "histology", "asserted_at": BUILT_AT},
+                "area_from": "assignment", "area": "V4v",
+                "electrodes": [{"electrode": 0, "shank": 0, "x": 11.0, "y": 0.0}]}
+    unknown = {"serial": "R-7", "probe_type": None, "insertion_number": None, "trajectory_id": None,
+               "target": None, "assignment": None, "area_from": "unknown", "area": "unknown", "electrodes": []}
+    out = describe(_gathered(notes=["a condition note"], probes=[assigned, unknown], probe_notes=["a probe note"]),
+                   status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
+    assert out["probes"] == [
+        {"serial": "19011110001", "probe_type": "NP1032", "insertion_number": 1, "trajectory_id": "T-1",
+         "n_electrodes": 1, "target": {"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+         "assignment": {"area": "V4v", "source": "histology", "asserted_at": "2026-09-29T12:00:00Z"},
+         "area_from": "assignment"},
+        {"serial": "R-7", "probe_type": None, "insertion_number": None, "trajectory_id": None, "n_electrodes": 0,
+         "target": None, "assignment": None, "area_from": "unknown"},
+    ]
+    assert out["notes"] == ["a condition note", "a probe note"]

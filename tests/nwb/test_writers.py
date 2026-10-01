@@ -232,3 +232,54 @@ def test_a_table_with_no_rows_writes(tmp_path):
     _path, io, nwb = _write(tmp_path, lambda nwb: add_task_events(nwb, []))
     with io:
         assert len(nwb.intervals["task_events"]) == 0
+
+
+# -- Probes and areas (design spec `2026-09-30-nwb-probes-design.md` section 3.1)
+
+
+def _probe(serial, **fields):
+    return {"serial": serial, "probe_type": "NP1000", "insertion_number": None, "trajectory_id": None,
+            "target": None, "assignment": None, "area_from": "unknown", "area": "unknown", "electrodes": [],
+            **fields}
+
+
+def test_a_probe_the_recording_does_not_name_has_no_model(tmp_path):
+    """An Intan probe is listed from wl.works' report alone (section 5)."""
+    from wl_preproc.nwb.probes import add_probes
+
+    intan = _probe("R-7", probe_type=None, insertion_number=3)
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_probes(nwb, [intan]))
+    with io:
+        device = nwb.devices["probe-R-7"]
+        assert (device.serial_number, device.model) == ("R-7", None)
+        assert nwb.electrode_groups["insertion-3"].location == "unknown"
+        assert nwb.electrodes is None  # no geometry, so no electrode table at all
+
+
+@pytest.mark.parametrize("source, words", [
+    ("histology", "assigned by histology: V4v"), ("functional_mapping", "assigned by functional mapping: V4v"),
+    ("waveform_depth", "assigned by waveform depth: V4v"), ("structural_imaging", "assigned by structural imaging: V4v"),
+    ("at_rig", "assigned at rig: V4v"), ("other", "assigned otherwise: V4v"),
+])
+def test_a_groups_description_names_both_areas(source, words):
+    from wl_preproc.nwb.probes import area_text
+
+    probe = _probe("1", target={"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+                   assignment={"area": "V4v", "source": source, "asserted_at": T0})
+    assert area_text(probe) == (f"target: V4d (CHARM, level 6); {words} (2026-09-28). "
+                                "The insertion's area, not depth-resolved.")
+    assert area_text(_probe("2")).startswith("no area reported")
+
+
+def test_a_serial_an_hdf5_name_cannot_hold_is_kept_whole_under_a_safe_name(tmp_path):
+    """The final review's M4: HDMF refuses `/` and `:` in an object's name,
+    and an Intan probe's serial comes from wl.works unchecked. The device
+    and group names are made safe; the serial itself is kept whole."""
+    from wl_preproc.nwb.probes import add_probes
+
+    odd = _probe("A1x32/5:mm", probe_type=None)
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_probes(nwb, [odd]))
+    with io:
+        assert list(nwb.devices) == ["probe-A1x32_5_mm"]
+        assert nwb.devices["probe-A1x32_5_mm"].serial_number == "A1x32/5:mm"
+        assert list(nwb.electrode_groups) == ["probe-A1x32_5_mm"]

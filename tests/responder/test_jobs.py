@@ -59,6 +59,7 @@ def _request(
     domain: str = "neural",
     experimenter: str = "jw",
     subject_details: dict | None = None,
+    probes: list[dict] | None = None,
 ) -> JobRequest:
     """A `JobRequest` naming `(montage_id, session_datetime)` in its
     selection, with `block_ids` present only when the caller supplies one --
@@ -77,7 +78,7 @@ def _request(
         metadata=MetadataBundle(
             blocks=blocks or [],
             montage_boundaries=montage_boundaries or [],
-            probes=[],
+            probes=probes or [],
             experimenter=experimenter,
             subject=subject,
             task_types=[],
@@ -1018,6 +1019,93 @@ def test_a_request_without_details_leaves_the_subject_alone(landed_session, pref
 
     assert (pipeline.subject.Subject & {"subject": subject}).fetch1() == before
     assert len(pipeline.subject.Subject.Species & {"subject": subject}) == 0
+
+
+# -- What wl.works reports about each insertion (design spec
+# 2026-09-30-nwb-probes-design.md section 2.2)
+
+def _probe(insertion_number, serial, **fields):
+    return {"serial": serial, "insertion_number": insertion_number, **fields}
+
+
+def test_every_insertion_wl_works_reports_is_recorded(landed_session, prefix):
+    """The aim, the trajectory and the latest assignment, per insertion, as
+    wl.works sent them. The serial is plain text: the probe may not have
+    been recorded yet."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import ephys
+
+    naive_dt = datetime.datetime(2027, 5, 11, 9, 0)
+    key = landed_session("jbprob01", naive_dt)
+    accept(_request(
+        subject="jbprob01", session_datetime=naive_dt.replace(tzinfo=datetime.UTC), idempotency_key="jbprob01-k1",
+        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+        probes=[
+            _probe(1, "19011110001", trajectory_id="T-7", target={"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
+                   area_assignment={"area": "V4v", "source": "at_rig",
+                                    "asserted_at": datetime.datetime(2027, 5, 11, 10, 0, 0, 250000,
+                                                                     tzinfo=datetime.UTC)}),
+            _probe(2, "19011110002"),
+        ],
+    ), prefix=prefix)
+
+    reports = (ephys.InsertionReport & key).to_dicts(order_by="insertion_number")
+    assert [(r["insertion_number"], r["probe_serial"], r["trajectory_id"], r["target_area"], r["target_atlas"],
+             r["target_atlas_level"]) for r in reports] == [
+        (1, "19011110001", "T-7", "V4d", "CHARM", 6), (2, "19011110002", None, None, None, None)]
+    (assigned,) = (ephys.AreaAssignment & key).to_dicts()
+    assert (assigned["insertion_number"], assigned["area"], assigned["source"]) == (1, "V4v", "at_rig")
+    # Naive UTC, to the microsecond: two assignments a second apart stay two.
+    assert assigned["asserted_at"] == datetime.datetime(2027, 5, 11, 10, 0, 0, 250000)
+
+
+def test_a_later_request_corrects_the_report_and_adds_the_assignment(landed_session, prefix):
+    """The latest request wins for the report, as for the subject's details;
+    assignments are append-only, as wl.works' own table is. An insertion a
+    later request does not mention is left alone: a request may name only
+    its own montage's insertions."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import ephys
+
+    naive_dt = datetime.datetime(2027, 5, 12, 9, 0)
+    key = landed_session("jbprob02", naive_dt)
+    first = {"area": "V4d", "source": "at_rig", "asserted_at": "2027-05-12T10:00:00Z"}
+    boundaries = [{"montage_id": m, "start_s": 12.0 * m, "end_s": 12.0 * (m + 1)} for m in range(3)]
+    for idempotency_key, montage_id, probes in (
+        ("jbprob02-k1", 0, [_probe(1, "19011110001", area_assignment=first), _probe(2, "19011110002")]),
+        ("jbprob02-k2", 1, [_probe(1, "19011110003", trajectory_id="T-8", area_assignment={
+            "area": "V4v", "source": "histology", "asserted_at": "2027-06-01T12:00:00Z"})]),
+        # A retry of the first: the report regresses, as the subject's details
+        # would, and its assignment is not recorded twice.
+        ("jbprob02-k1", 0, [_probe(1, "19011110001", area_assignment=first), _probe(2, "19011110002")]),
+        ("jbprob02-k3", 2, [_probe(1, "19011110003", trajectory_id="T-8")]),
+    ):
+        accept(_request(subject="jbprob02", session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                        idempotency_key=idempotency_key, montage_id=montage_id,
+                        montage_boundaries=boundaries, probes=probes),
+               prefix=prefix)
+
+    reports = (ephys.InsertionReport & key).to_dicts(order_by="insertion_number")
+    assert [(r["insertion_number"], r["probe_serial"], r["trajectory_id"]) for r in reports] == [
+        (1, "19011110003", "T-8"), (2, "19011110002", None)]
+    assigned = (ephys.AreaAssignment & key).to_dicts(order_by="asserted_at")
+    assert [(a["area"], a["source"]) for a in assigned] == [("V4d", "at_rig"), ("V4v", "histology")]
+
+
+def test_a_refused_request_records_no_report(landed_session, prefix):
+    """Every check runs before anything is written (review C1): a request
+    refused for its blocks leaves no report behind."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import ephys
+
+    naive_dt = datetime.datetime(2027, 5, 13, 9, 0)
+    key = landed_session("jbprob03", naive_dt)
+    with pytest.raises(ValueError):
+        accept(_request(subject="jbprob03", session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                        idempotency_key="jbprob03-k1", montage_id=4, probes=[_probe(1, "19011110001")]),
+               prefix=prefix)
+    ephys.activate(prefix=prefix)
+    assert not ephys.InsertionReport & key
 
 
 # -- The canonical lifecycle (design spec 2026-09-30-canonical-lifecycle-design.md section 3)

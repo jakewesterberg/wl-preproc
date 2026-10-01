@@ -46,6 +46,11 @@ class Gathered:
     # `2026-09-29-nwb-publishing-design.md` section 2.1).
     conditions: list[dict] = dataclasses.field(default_factory=list)
     condition_notes: list[str] = dataclasses.field(default_factory=list)
+    # Every probe the montage recorded or wl.works reported, and what the
+    # file says about any probe it cannot place or join (design spec
+    # `2026-09-30-nwb-probes-design.md` sections 3 and 5). See `_probes`.
+    probes: list[dict] = dataclasses.field(default_factory=list)
+    probe_notes: list[str] = dataclasses.field(default_factory=list)
 
 
 def _aware_utc(value: datetime.datetime) -> datetime.datetime:
@@ -99,7 +104,7 @@ def readiness(activation_key: dict) -> str | None:
     included, so no key waits forever by design. Only the paramsets the
     file reads are waited on: a key of another paramset, one that can only
     ever error say, must not hold every file back."""
-    from wl_preproc.schema import consensus, coverage, detect, timebase
+    from wl_preproc.schema import consensus, coverage, detect, ephys, timebase
     from wl_preproc.schema import eye as eye_schema
 
     session_key = {k: activation_key[k] for k in ("subject", "session_datetime")}
@@ -113,7 +118,10 @@ def readiness(activation_key: dict) -> str | None:
         consensus.DetectorAgreement: (f"validity_paramset_idx = {validity_idx} AND paramset_a IN ({detectors}) "
                                       f"AND paramset_b IN ({detectors})"),
     }
-    for table in (coverage.BlockCoverage, coverage.TrialCoverage, eye_schema.EyeCalibration,
+    # `ProbeCensus` for every SpikeGLX segment of the session, not only the
+    # montage's: a segment not yet read has no extent to place it by. A
+    # session with no SpikeGLX segment has nothing to wait for.
+    for table in (coverage.BlockCoverage, coverage.TrialCoverage, ephys.ProbeCensus, eye_schema.EyeCalibration,
                   detect.EyeValidity, detect.EyeDetection, consensus.DetectorAgreement):
         pending = (table().key_source & session_key & read.get(table, {})) - table.proj()
         if len(pending):
@@ -405,6 +413,130 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
                                 for eye in EYES}}
 
 
+def _electrodes(config_hash: str, probe_type: str) -> list[dict]:
+    """One configuration's sites, in the probe model's own frame (um)."""
+    from wl_preproc.schema import ephys
+
+    config = {"electrode_config_hash": config_hash, "probe_type": probe_type}
+    rows = ((ephys.ElectrodeConfig.Electrode & config) * ephys.ProbeType.Electrode).to_dicts(order_by="electrode")
+    return [{"electrode": int(row["electrode"]), "shank": int(row["shank"]), "x": float(row["x_coord"]),
+             "y": float(row["y_coord"])} for row in rows]
+
+
+def _probe(serial: str, probe_type: str | None, report: dict | None, electrodes: list[dict],
+           session_key: dict) -> dict:
+    """One probe's entry: what the recording says, and what wl.works' report
+    of its insertion adds. The label is the latest assignment, else the aim,
+    else `unknown` (the requester's decision 1 of 2026-09-30)."""
+    from wl_preproc.schema import ephys
+
+    target = assignment = None
+    if report is not None:
+        if report["target_area"] is not None:
+            target = {"area": report["target_area"], "atlas": report["target_atlas"],
+                      "atlas_level": int(report["target_atlas_level"])}
+        latest = (ephys.AreaAssignment & session_key & {"insertion_number": report["insertion_number"]}).to_dicts(
+            order_by="asserted_at DESC", limit=1)
+        if latest:
+            assignment = {"area": latest[0]["area"], "source": latest[0]["source"],
+                          "asserted_at": _aware_utc(latest[0]["asserted_at"])}
+    area_from = "assignment" if assignment else "target" if target else "unknown"
+    return {
+        "serial": serial,
+        "probe_type": probe_type,
+        "insertion_number": None if report is None else int(report["insertion_number"]),
+        "trajectory_id": None if report is None else report["trajectory_id"],
+        "target": target,
+        "assignment": assignment,
+        "area_from": area_from,
+        "area": {"assignment": (assignment or {}).get("area"), "target": (target or {}).get("area"),
+                 "unknown": "unknown"}[area_from],
+        "electrodes": electrodes,
+    }
+
+
+def _probes(key: dict, session_key: dict, block_rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Every probe the SpikeGLX segments under the file's blocks recorded, joined to
+    wl.works' report of its insertion by serial, and the notes the file
+    carries about what could not be placed or joined (design spec
+    `2026-09-30-nwb-probes-design.md` sections 3 and 5).
+
+    **Read from the tables the probes stage and `accept()` fill** --
+    `ProbeCensus`, `InsertionReport`, `AreaAssignment` -- rather than from
+    the linked `ProbeInsertion`/`SegmentConfig`: one path then covers a
+    joined probe and one that cannot be, and the linked tables hold the same
+    facts, joined for sorting.
+
+    `Refused` when one probe recorded two active-site maps under the file's
+    blocks: a bank change should have started a new montage (parent spec
+    section 8.3), so the montage is wrong, and a file across it would later
+    be sorted across it. **The segments are those the file's own blocks
+    overlap, not its whole montage's** (the final review's I1): a derivative
+    on one side of the change is recorded through one map and builds, which
+    is the remedy section 8.3 names for exactly this case."""
+    from wl_preproc.schema import core, ephys
+
+    segments = {
+        row["segment_barcode"]: row
+        for row in (core.Segment & session_key & {"system": "spikeglx"}).to_dicts()
+        if any(row["start_s"] < block["end_s"] and row["end_s"] > block["start_s"] for block in block_rows)
+    }
+    parts = [part for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
+             if part["segment_barcode"] in segments]
+    reports = (ephys.InsertionReport & session_key).to_dicts(order_by="insertion_number")
+    recorded_anywhere = {serial for serial in (ephys.ProbeCensus.Probe & session_key).to_arrays("probe_serial") if serial}
+    probes, notes, by_serial = [], [], {}
+    for part in parts:
+        if part["probe_serial"]:
+            by_serial.setdefault(part["probe_serial"], []).append(part)
+        else:
+            notes.append(f"{segments[part['segment_barcode']]['file_path']} {part['stream']}: {part['problem']}; the "
+                         "probe it recorded is unknown")
+    for serial, recorded in by_serial.items():
+        maps: dict[tuple, list[str]] = {}
+        for part in recorded:
+            if part["electrode_config_hash"] is not None:
+                maps.setdefault((part["electrode_config_hash"], part["probe_type"]), []).append(
+                    segments[part["segment_barcode"]]["file_path"])
+        if len(maps) > 1:
+            raise Refused(
+                f"probe {serial} recorded two active-site maps under this file's blocks of montage "
+                f"{key['montage_id']}, in "
+                + " and in ".join(", ".join(paths) for paths in maps.values())
+                + ": a bank change needs a new montage (parent spec section 8.3), and a file across it would be "
+                "sorted across it")
+        problems = sorted({part["problem"] for part in recorded if part["problem"]})
+        electrodes = _electrodes(*next(iter(maps))) if maps else []
+        if problems:
+            notes.append(f"probe {serial}: {'; '.join(problems)}"
+                         + ("" if electrodes else "; it has no electrodes in this file"))
+        mine = [report for report in reports if report["probe_serial"] == serial]
+        if len(mine) > 1:
+            notes.append(f"probe {serial} is reported for insertions "
+                         f"{' and '.join(str(report['insertion_number']) for report in mine)}, and which segments "
+                         "each covers is not known, so neither is joined and its area is unknown")
+        elif not mine:
+            notes.append(f"probe {serial} has no report from wl.works, so its insertion and area are unknown")
+        probes.append(_probe(serial, recorded[0]["part_number"], mine[0] if len(mine) == 1 else None, electrodes,
+                             session_key))
+    intan = bool(core.AcquisitionSystem & session_key & {"system": "rhs"})
+    unrecorded: dict[str, list[dict]] = {}
+    for report in reports:
+        if report["probe_serial"] not in recorded_anywhere:
+            unrecorded.setdefault(report["probe_serial"], []).append(report)
+    for serial, mine in unrecorded.items():
+        numbers = " and ".join(str(report["insertion_number"]) for report in mine)
+        if intan:
+            notes.append(f"probe {serial} (insertion {numbers}) is listed from wl.works' report alone: no SpikeGLX "
+                         "recording names it, and an Intan (RHS) header does not name its probe")
+            probes.append(_probe(serial, None, mine[0] if len(mine) == 1 else None, [], session_key))
+        else:
+            notes.append(f"insertion {numbers} names probe {serial}, which no recording in this session names, so "
+                         "the report is not joined")
+    probes.sort(key=lambda probe: (probe["insertion_number"] is None, probe["insertion_number"] or 0, probe["serial"]))
+    return probes, notes
+
+
 def gather(activation_key: dict) -> Gathered:
     """One activation's data, or `Refused` with the reason (section 10)."""
     from wl_preproc.schema import ingest, request, timebase
@@ -422,6 +554,7 @@ def gather(activation_key: dict) -> Gathered:
     if not block_rows:
         raise Refused(f"no blocks in the {activation['role']} activation's block set")
     blocks = BlockSet.of(block_rows)
+    probes, probe_notes = _probes(key, session_key, block_rows)
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     clock = _reference_time(session_dir, key["session_datetime"])
@@ -470,4 +603,6 @@ def gather(activation_key: dict) -> Gathered:
         eye=eye,
         conditions=conditions,
         condition_notes=condition_notes,
+        probes=probes,
+        probe_notes=probe_notes,
     )

@@ -441,6 +441,42 @@ def _record_subject_details(subject: str, details) -> None:
         )
 
 
+def _record_probe_reports(session_key: dict, probes, prefix: str) -> None:
+    """Every `metadata.probes` entry, as `ephys.InsertionReport` (the latest
+    request wins) and its assignment as an `ephys.AreaAssignment`
+    (append-only). Design spec `2026-09-30-nwb-probes-design.md` section
+    2.2."""
+    if not probes:
+        return
+    from wl_preproc.schema import ephys
+
+    ephys.activate(prefix=prefix)
+    for probe in probes:
+        target = probe.target
+        ephys.InsertionReport.insert1(
+            {
+                **session_key,
+                "insertion_number": probe.insertion_number,
+                "probe_serial": probe.serial,
+                "trajectory_id": probe.trajectory_id,
+                "target_area": target.area if target else None,
+                "target_atlas": target.atlas if target else None,
+                "target_atlas_level": target.atlas_level if target else None,
+            },
+            replace=True,
+        )
+        assignment = probe.area_assignment
+        if assignment is not None:
+            asserted_at = assignment.asserted_at
+            if asserted_at.tzinfo is not None:
+                asserted_at = asserted_at.astimezone(datetime.UTC).replace(tzinfo=None)
+            ephys.AreaAssignment.insert1(
+                {**session_key, "insertion_number": probe.insertion_number, "asserted_at": asserted_at,
+                 "area": assignment.area, "source": assignment.source},
+                skip_duplicates=True,
+            )
+
+
 def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     """A validated `JobRequest` becomes `Montage`/`Block`/`Request`/`Activation`
     rows. Design spec section 6.1. Returns the `Activation` primary key.
@@ -544,6 +580,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
 
     # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
     _record_subject_details(metadata.subject, metadata.subject_details)
+    _record_probe_reports(session_key, metadata.probes, prefix)
     if montage_rows:
         core.Montage.insert(montage_rows, skip_duplicates=True)
 

@@ -150,6 +150,16 @@ status:
     and invalid files rebuild themselves once the subject's details arrive
     (design spec `2026-09-30-canonical-lifecycle-design.md`; handoff
     `docs/handoffs/2026-09-30-canonical-lifecycle.md`).
+    Probes and areas, piece 3's hardware-free slice, are BUILT on
+    `spec/nwb-probes` (2026-09-30, NOT merged as written): a daemon stage
+    records each SpikeGLX probe from the recording's own .meta, accept()
+    records each insertion's aim and latest area assignment from wl.works,
+    each pass links the two, and every NWB file and its version-2
+    description name the probes, their electrodes and both areas. A bank
+    change inside a montage refuses the file. Proving it found the timebase
+    fitting a restarted system under one intercept, now fixed (design spec
+    `2026-09-30-nwb-probes-design.md`; handoff
+    `docs/handoffs/2026-09-30-nwb-probes.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**
@@ -696,6 +706,17 @@ third_party:
       both dependents' real constraints rather than restating zarr's own
       oddly-specific point exclusions, which this repository has no
       independent reason to assert.
+  - name: probeinterface
+    constraint: ">=0.3,<0.4"
+    why: >-
+      Electrode geometry by part number, from its bundled OFFLINE table
+      (build_neuropixels_probe; get_probe is an online lookup and never
+      used), since Phase 2a; and since the probes design (2026-09-30) the
+      probes stage maps each SpikeGLX run's imroTbl onto sites with its
+      read_spikeglx. A runtime dependency in pyproject.toml that this file
+      never declared. Below 0.4 because the site mapping was verified on
+      0.3.2 (NP1000 banks 0 and 1, NP1032 bank 2) and its errors on a bad
+      .meta measured there; a new minor may renumber contacts.
   - name: pynwb
     constraint: ">=4.1,<5"
     why: >-

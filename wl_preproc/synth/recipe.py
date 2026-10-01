@@ -132,6 +132,37 @@ class MontageSpec(BaseModel):
     end_s: float
 
 
+class ProbeSpec(BaseModel):
+    """A further probe in the same SpikeGLX run: `imec1`, `imec2`, ... in the
+    order given. It records the session's `n_ap_channels` channels, noise
+    only; planted units stay on `imec0`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    serial: str
+    part_number: str = "NP1000"
+    bank: int = Field(default=0, ge=0)
+
+    def sites(self, n_channels: int) -> list[dict]:
+        """The electrodes `n_channels` channels record at this bank, in channel
+        order (NP 1.0's imroTbl: electrode = bank * 384 + channel)."""
+        first = self.bank * 384
+        return electrode_rows(self.part_number)[first : first + n_channels]
+
+
+class RestartSpec(BaseModel):
+    """SpikeGLX stopped at `at_s` (session time) and started again `gap_s`
+    later, so the run after it is a second run, `<session_id>_g1_t0`, with
+    every stream in it. `probe_bank`, when given, is `imec0`'s bank after the
+    restart: a bank change needs one (parent spec section 5.2.1)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    at_s: float = Field(gt=0)
+    gap_s: float = Field(default=0.5, ge=0)
+    probe_bank: int | None = Field(default=None, ge=0)
+
+
 class SessionRecipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -150,6 +181,21 @@ class SessionRecipe(BaseModel):
     # lab's probe is NP1032, whose columns sit 103 um apart, and spec section 7
     # turns on a fixture being able to say so.
     probe_part_number: str = "NP1000"
+    # The probe's serial, as SpikeGLX writes it (`imDatPrb_sn`): wl.works'
+    # report of an insertion names the probe by it (design spec
+    # `2026-09-30-nwb-probes-design.md` section 2). Eleven digits, as IMEC's are.
+    probe_serial: str = "19011110001"
+    # Which bank of 384 the recorded channels sit in (NP 1.0's imroTbl:
+    # electrode = bank * 384 + channel). Nonzero is a partial bank selection,
+    # the case where reading the imroTbl rather than assuming the first sites
+    # is the whole point.
+    probe_bank: int = Field(default=0, ge=0)
+    # Further probes in the same run, and a restart. Both empty by default, so
+    # every existing profile is byte-identical; the probes design's census,
+    # linking and bank-change refusal need them (design spec
+    # `2026-09-30-nwb-probes-design.md` section 7).
+    extra_probes: tuple[ProbeSpec, ...] = ()
+    spikeglx_restart: RestartSpec | None = None
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and
@@ -215,6 +261,16 @@ class SessionRecipe(BaseModel):
     @property
     def duration_s(self) -> float:
         return sum(block.duration_s for block in self.blocks)
+
+    def probes(self) -> tuple[ProbeSpec, ...]:
+        """Every probe in the run, `imec0` first."""
+        first = ProbeSpec(serial=self.probe_serial, part_number=self.probe_part_number, bank=self.probe_bank)
+        return (first, *self.extra_probes)
+
+    def recorded_sites(self) -> list[dict]:
+        """The electrodes `imec0`'s channels record, in channel order:
+        `probe_bank`'s 384, from its first."""
+        return self.probes()[0].sites(self.n_ap_channels)
 
     # There is deliberately no resolved_channels() here. Defaulting the names was
     # tried on this object and put Intan's Port A convention on a device-neutral
@@ -286,12 +342,45 @@ class SessionRecipe(BaseModel):
             available = len(electrode_rows(self.probe_part_number))
         except UnknownProbeType as exc:
             raise ValueError(str(exc)) from exc
+        if self.probe_bank * 384 + self.n_ap_channels > available and self.n_ap_channels <= available:
+            raise ValueError(
+                f"probe_bank {self.probe_bank} with {self.n_ap_channels} channels needs electrodes up to "
+                f"{self.probe_bank * 384 + self.n_ap_channels - 1}, but {self.probe_part_number} has {available} sites"
+            )
         if self.n_ap_channels > available:
             raise ValueError(
                 f"n_ap_channels is {self.n_ap_channels} but "
                 f"{self.probe_part_number} has {available} sites; a recording "
                 "cannot have more channels than the probe has electrodes"
             )
+        if (self.extra_probes or self.spikeglx_restart) and "spikeglx" not in self.systems:
+            raise ValueError("extra_probes and spikeglx_restart describe a SpikeGLX run, and this session "
+                             "records no spikeglx")
+        serials = [probe.serial for probe in self.probes()]
+        duplicated = sorted({serial for serial in serials if serials.count(serial) > 1})
+        if duplicated:
+            raise ValueError(f"the run names serial {duplicated[0]} twice; one probe cannot be two streams")
+        restart = self.spikeglx_restart
+        banks = [(probe.part_number, probe.bank) for probe in self.extra_probes]
+        if restart is not None and restart.probe_bank is not None:
+            banks.append((self.probe_part_number, restart.probe_bank))
+        for part_number, bank in banks:
+            try:
+                sites = len(electrode_rows(part_number))
+            except UnknownProbeType as exc:
+                raise ValueError(str(exc)) from exc
+            if bank * 384 + self.n_ap_channels > sites:
+                raise ValueError(f"bank {bank} with {self.n_ap_channels} channels needs electrodes up to "
+                                 f"{bank * 384 + self.n_ap_channels - 1}, but {part_number} has {sites} sites")
+        if restart is not None:
+            if restart.at_s + restart.gap_s >= self.duration_s:
+                raise ValueError(f"the restart resumes at {restart.at_s + restart.gap_s} s, at or after the "
+                                 f"session ends at {self.duration_s} s; the second run would record nothing")
+            if restart.probe_bank not in (None, self.probe_bank) and self.n_units:
+                raise ValueError("a restart that changes bank with planted units would leave the units on the "
+                                 "first bank's sites while the second run's .meta names others")
+            if Fault.TRUNCATED_FILE in self.faults:
+                raise ValueError("TRUNCATED_FILE and a restart together: which run's file is cut is undefined")
         return self
 
 

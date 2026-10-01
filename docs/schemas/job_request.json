@@ -1,5 +1,72 @@
 {
   "$defs": {
+    "InsertionAreaAssignment": {
+      "additionalProperties": false,
+      "description": "The latest of wl.works' `insertion_area_assignment` rows for the\ninsertion: one area, who or what assigned it, and when. Plan 19's row\nlists no atlas column, so none is carried (section 4).",
+      "properties": {
+        "area": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Area",
+          "type": "string"
+        },
+        "asserted_at": {
+          "format": "date-time",
+          "title": "Asserted At",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "histology",
+            "functional_mapping",
+            "waveform_depth",
+            "structural_imaging",
+            "at_rig",
+            "other"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "area",
+        "source",
+        "asserted_at"
+      ],
+      "title": "InsertionAreaAssignment",
+      "type": "object"
+    },
+    "InsertionTarget": {
+      "additionalProperties": false,
+      "description": "The insertion's aim, as wl.works' `item_insertion` holds it:\n`targetArea`, `atlas` and `atlasLevel`, \"a copy of the plan's target\"\n(its Plan 19). All three or none (design spec\n`2026-09-30-nwb-probes-design.md` section 4): an area without its atlas\nnames no place.",
+      "properties": {
+        "area": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Area",
+          "type": "string"
+        },
+        "atlas": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Atlas",
+          "type": "string"
+        },
+        "atlas_level": {
+          "maximum": 255,
+          "minimum": 0,
+          "title": "Atlas Level",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "area",
+        "atlas",
+        "atlas_level"
+      ],
+      "title": "InsertionTarget",
+      "type": "object"
+    },
     "MetadataBundle": {
       "additionalProperties": false,
       "description": "Everything wl-preproc needs from the ELN, carried inbound with the request.",
@@ -95,6 +162,17 @@
       "additionalProperties": false,
       "description": "One penetration: which probe, which insertion, and which trajectory it\nran against. Section 11.2's payload block, verbatim: *\"probe serials +\ninsertions, trajectory_id per insertion\"*.",
       "properties": {
+        "area_assignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InsertionAreaAssignment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "insertion_number": {
           "maximum": 255,
           "minimum": 0,
@@ -105,6 +183,17 @@
           "maxLength": 32,
           "title": "Serial",
           "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InsertionTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "trajectory_id": {
           "anyOf": [

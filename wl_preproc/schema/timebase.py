@@ -135,7 +135,7 @@ class SystemTimebase(dj.Computed):
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
-        from wl_preproc.timebase.fit import fit_rate
+        from wl_preproc.timebase.fit import fit_rate_across
 
         session_dir = Path(
             (ingest.Ingestion & {k: key[k] for k in pipeline.Session.primary_key}).fetch1(
@@ -190,7 +190,7 @@ class SystemTimebase(dj.Computed):
 
         reference = segments.session_reference(session_dir)
         try:
-            fit = fit_rate(decoded, reference, nominal_rate_hz)
+            fit = fit_rate_across([scan.barcodes for scan in scans], reference, nominal_rate_hz)
         except ValueError:
             # Design spec section 10 names this as a failure path to exercise:
             # "a system with zero decodable barcodes". The row records that it

@@ -75,6 +75,16 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
             },
             "behaviour": {"trials": len(data.trials), "events": len(data.events)},
         },
+        "probes": [{
+            "serial": probe["serial"],
+            "probe_type": probe["probe_type"],
+            "insertion_number": probe["insertion_number"],
+            "trajectory_id": probe["trajectory_id"],
+            "n_electrodes": len(probe["electrodes"]),
+            "target": probe["target"],
+            "assignment": probe["assignment"],
+            "area_from": probe["area_from"],
+        } for probe in data.probes],
         "blocks": [{
             "block_id": block["block_id"],
             "works_block_id": block["works_block_id"],
@@ -92,7 +102,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
             "reference_source": session["clock"]["source"],
             "eye_usable_fraction": (eye or {}).get("usable_fraction") or {"left": None, "right": None},
         },
-        "notes": list(data.condition_notes),
+        "notes": [*data.condition_notes, *data.probe_notes],
         "checksums": {"algorithm": "sha256", "datasets": checksums},
     }
     return NwbDescription.model_validate(description).model_dump(mode="json")

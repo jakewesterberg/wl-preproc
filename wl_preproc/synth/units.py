@@ -74,7 +74,7 @@ def recording_sites(recipe) -> list[dict]:
         )
     if "rhs" in systems and "spikeglx" not in systems:
         return linear_sites(recipe.n_ap_channels)
-    return electrode_rows(recipe.probe_part_number)[: recipe.n_ap_channels]
+    return recipe.recorded_sites()
 
 
 # Absolute refractory period. A Poisson train without one produces intervals no
