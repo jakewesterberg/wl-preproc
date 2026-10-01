@@ -1,9 +1,11 @@
 # Where this build actually is
 
-**Last updated 2026-10-01**, describing `main` at `eb1ff06`, the merge of
+**Last updated 2026-10-01**, describing `main` at `63fd606`, the merge of
+`fix/listing-minors` (the listing's deferred minors, handoff
+`handoffs/2026-10-01-session-listing.md` §7), after `eb1ff06`, the merge of
 `spec/session-listing-and-run-requests`: the landed-session listing,
-`GET /sessions`, Plan A of pieces 2 and 3 (handoff
-`handoffs/2026-10-01-session-listing.md`).
+`GET /sessions`, Plan A of pieces 2 and 3. CI read off `63fd606` is green on
+both interpreters, 2097 passed on each (`gh run view 36910191677`).
 - **Each landed session is listed** with its runs (wl-xcon's task and stop
   reason), the blocks under each, the SpikeGLX segments with every probe's site
   map and raw `~imroTbl`, and its flags. A daemon stage logs a change whenever
@@ -13,7 +15,7 @@
   and one raised Minor (a faulted wl-xcon run does write an end row) were fixed
   before merge.
 - **Plan B, canonical requests that name runs and the NWB description at
-  version 3, is next,** after a short branch of the listing's deferred minors.
+  version 3, is next;** the listing's deferred minors are merged.
 
 `eb1ff06`'s tree is byte-identical to the tested branch head `0ccb99b`: 2098
 passed on 3.11 and 2097 on 3.13 locally, 0 failed. CI read off `eb1ff06` itself

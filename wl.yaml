@@ -484,6 +484,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `eb1ff06` until the listing-minors merge `63fd606` on 2026-10-01 (CI
+  # green on `eb1ff06`, run 36902548593); true when written.
   # Was `b0f8b52` until the session-listing merge `eb1ff06` on 2026-10-01 (CI
   # green on `b0f8b52`, run 36852547804); true when written.
   # Was `8983ee5` until the runs-and-trials merge `b0f8b52` on 2026-10-01 (CI
@@ -503,7 +505,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "eb1ff06"
+  describes: "63fd606"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
