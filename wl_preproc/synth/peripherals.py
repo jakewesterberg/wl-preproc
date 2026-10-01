@@ -213,5 +213,5 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
                          "stopped_because": "every block is finished", "stop_kind": "completed"})
     (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
                                          encoding="utf-8")
-    (xcon_dir / "config.json").write_text(json.dumps({"session": recipe.session_id, "subject": recipe.subject},
+    (xcon_dir / "config.json").write_text(json.dumps({"session_id": recipe.session_id, "subject": recipe.subject},
                                                      sort_keys=True), encoding="utf-8")

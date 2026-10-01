@@ -169,6 +169,10 @@ def test_the_run_record_has_wl_xcons_row_shape(tmp_path):
     assert [(run.number, run.task, run.stop_kind) for run in record.runs] == [
         (1, recipe.blocks[0].task_type.name.lower(), None),
         (2, recipe.blocks[1].task_type.name.lower(), "completed")]
+    # `config.json` in the keys wl-xcon's `taskd.Session._fixed_config` names them (its `main`,
+    # read at `5f79afe`); the reader uses only `subject`.
+    config = json.loads((tmp_path / "xcon" / "config.json").read_text())
+    assert (config["session_id"], config["subject"]) == (recipe.session_id, recipe.subject)
 
 
 def test_a_session_without_runs_has_no_run_record(tmp_path):
