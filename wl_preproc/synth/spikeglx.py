@@ -406,9 +406,18 @@ def write_nidq(
     # timeline.py's own spacing rule always does. Barcodes never need this;
     # code words do.
     session_span_s = code_word_span_s(recipe, truth, drift_ppm, STROBE_WIDTH_S)
-    n_samples = (
-        int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)
-        + SAMPLE_COUNT_ROUNDING_SLACK
+    strobes = [
+        (int(round((apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)), word)
+        for time_s, word in truth.code_words
+    ]
+    # One sample past the last strobe, low: the reader latches a word on its
+    # strobe's falling edge, and a span that ends where the last pulse ends
+    # leaves that pulse high to the file's end -- a word never latched. The
+    # span above kept CI_RECIPE's SESSION_END only by rounding, and a session
+    # whose blocks sit in runs lost it.
+    n_samples = max(
+        int((session_span_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ) + SAMPLE_COUNT_ROUNDING_SLACK,
+        max((sample + strobe_width for sample, _ in strobes), default=0) + 1,
     )
     control = np.zeros(n_samples, dtype=np.uint16)  # word 0: barcode + strobe
     data = np.zeros(n_samples, dtype=np.uint16)  # word 1: the 16 data lines
@@ -429,10 +438,7 @@ def write_nidq(
     # strobes merge into one long high with no falling edge between them and
     # the words become uncountable. Phase 1b shipped exactly that defect: a
     # 1 ms pulse at 1 ms spacing rendered 31 words as 5 countable edges.
-    for time_s, word in truth.code_words:
-        sample = int(
-            round((apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ)
-        )
+    for sample, word in strobes:
         if sample + strobe_width > n_samples:
             continue
         control[sample : sample + strobe_width] |= 1 << NIDQ_CODE_STROBE_XD_LINE

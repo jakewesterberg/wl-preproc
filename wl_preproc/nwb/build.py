@@ -12,7 +12,7 @@ from wl_preproc.nwb.describe import describe
 from wl_preproc.nwb.eye import add_eye_series, add_eye_tables
 from wl_preproc.nwb.eye_events import add_agreement, add_detections, add_sources
 from wl_preproc.nwb.gather import Refused, gather, readiness
-from wl_preproc.nwb.intervals import add_blocks, add_conditions, add_task_events, add_trials
+from wl_preproc.nwb.intervals import add_blocks, add_conditions, add_runs, add_task_events, add_trials
 from wl_preproc.nwb.probes import add_probes
 from wl_preproc.nwb.session import new_file
 from wl_preproc.nwb.timebase import add_timebase
@@ -64,7 +64,8 @@ def build(activation_key: dict, nwb_root: Path) -> BuildResult:
     except Refused as refusal:
         return BuildResult(status="refused", reason=str(refusal))
     nwb = new_file(data.session)
-    add_blocks(nwb, data.blocks, data.systems)
+    add_runs(nwb, data.runs, data.systems)
+    add_blocks(nwb, data.blocks)
     add_trials(nwb, data.trials, data.systems)
     add_conditions(nwb, data.conditions)
     add_task_events(nwb, data.events)

@@ -19,12 +19,15 @@ SESSION = {
     "subject": {"subject_id": "monk01", "species": "Macaca mulatta", "sex": "F",
                 "date_of_birth": datetime.date(2016, 3, 2)},
 }
-BLOCKS = [{"block_id": 1, "start_s": 0.0, "end_s": 30.0, "task_type": "rf_map", "works_block_id": "wb-1",
-           "measured_start_s": 0.5, "measured_stop_s": 29.5,
-           "coverage": {"ohdpi": ("full", 30.0), "spikeglx": ("partial", 12.0)}},
-          {"block_id": 2, "start_s": 30.0, "end_s": 60.0, "task_type": "search", "works_block_id": None,
-           "measured_start_s": None, "measured_stop_s": None, "coverage": {"ohdpi": ("full", 30.0)}}]
-TRIALS = [{"trial_id": 1, "start_s": 1.0, "stop_s": 3.0, "outcome": "correct", "block_id": 1,
+RUNS = [{"run_number": 1, "start_s": 0.0, "end_s": 30.0, "task_type": 2, "task": "rf_map", "works_run_id": "wr-1",
+         "closed": True, "coverage": {"ohdpi": ("full", 30.0), "spikeglx": ("partial", 12.0)}},
+        {"run_number": 2, "start_s": 30.0, "end_s": 60.0, "task_type": 0, "task": None, "works_run_id": None,
+         "closed": False, "coverage": {"ohdpi": ("full", 30.0)}}]
+BLOCKS = [{"block_number": 1, "run_number": 1, "block_in_run": 1, "block_type": "Bt1", "start_s": 0.5,
+           "stop_s": 29.5, "closed": True, "n_trials": 1},
+          {"block_number": 2, "run_number": 2, "block_in_run": 1, "block_type": None, "start_s": 30.5,
+           "stop_s": 59.5, "closed": None, "n_trials": 0}]
+TRIALS = [{"trial_id": 1, "start_s": 1.0, "stop_s": 3.0, "outcome": "correct", "run_number": 1, "block_id": 1,
            "coverage": {"ohdpi": ("full", 2.0)}}]
 EVENTS = [{"time_s": 1.0, "event_type": "TRIAL_START", "trial_id": 1, "block_id": None, "condition": None},
           {"time_s": 2.5, "event_type": "CODE_256", "trial_id": None, "block_id": None, "condition": None}]
@@ -54,24 +57,31 @@ def test_the_file_is_one_activation_on_session_time(tmp_path):
         assert nwb.subject.date_of_birth.date() == datetime.date(2016, 3, 2)
 
 
-def test_blocks_trials_and_events(tmp_path):
-    from wl_preproc.nwb.intervals import add_blocks, add_task_events, add_trials
+def test_runs_blocks_trials_and_events(tmp_path):
+    from wl_preproc.nwb.intervals import add_blocks, add_runs, add_task_events, add_trials
 
     def build(nwb):
-        add_blocks(nwb, BLOCKS, ["ohdpi", "spikeglx"])
+        add_runs(nwb, RUNS, ["ohdpi", "spikeglx"])
+        add_blocks(nwb, BLOCKS)
         add_trials(nwb, TRIALS, ["ohdpi"])
         add_task_events(nwb, EVENTS)
 
     _path, io, nwb = _write(tmp_path, build)
     with io:
+        runs = nwb.intervals["runs"].to_dataframe()
+        assert runs["run_number"].tolist() == [1, 2]
+        assert runs["works_run_id"].tolist() == ["wr-1", ""]
+        assert (runs["task"].tolist(), runs["task_code"].tolist(), runs["closed"].tolist()) == (
+            ["rf_map", ""], [2, 0], [True, False])
+        assert runs["coverage_spikeglx"].tolist() == ["partial", ""]
+        assert runs["covered_s_spikeglx"].iloc[0] == 12.0 and np.isnan(runs["covered_s_spikeglx"].iloc[1])
         blocks = nwb.intervals["blocks"].to_dataframe()
-        assert blocks["block_id"].tolist() == [1, 2]
-        assert blocks["works_block_id"].tolist() == ["wb-1", ""]
-        assert np.isnan(blocks["measured_start_time"].iloc[1])
-        assert blocks["coverage_spikeglx"].tolist() == ["partial", ""]
-        assert blocks["covered_s_spikeglx"].iloc[0] == 12.0 and np.isnan(blocks["covered_s_spikeglx"].iloc[1])
+        assert blocks[["block_number", "run_number", "block_in_run", "block_type", "closed", "n_trials"]].values.tolist() == [
+            [1, 1, 1, "Bt1", 1, 1], [2, 2, 1, "", -1, 0]]
+        assert blocks["start_time"].tolist() == [0.5, 30.5]
         trials = nwb.trials.to_dataframe()
-        assert trials[["trial_id", "outcome", "block_id", "coverage_ohdpi"]].iloc[0].tolist() == [1, "correct", 1, "full"]
+        assert trials[["trial_id", "outcome", "block_id", "run_number", "coverage_ohdpi"]].iloc[0].tolist() == [
+            1, "correct", 1, 1, "full"]
         events = nwb.intervals["task_events"].to_dataframe()
         assert events["start_time"].tolist() == events["stop_time"].tolist() == [1.0, 2.5]
         assert events["event_type"].tolist() == ["TRIAL_START", "CODE_256"]
@@ -283,3 +293,17 @@ def test_a_serial_an_hdf5_name_cannot_hold_is_kept_whole_under_a_safe_name(tmp_p
         assert list(nwb.devices) == ["probe-A1x32_5_mm"]
         assert nwb.devices["probe-A1x32_5_mm"].serial_number == "A1x32/5:mm"
         assert list(nwb.electrode_groups) == ["probe-A1x32_5_mm"]
+
+
+def test_runs_that_hold_no_block_add_no_block_table(tmp_path):
+    """A run that stopped before its first trial has no block; an empty
+    table is not written."""
+    from wl_preproc.nwb.intervals import add_blocks, add_runs
+
+    def build(nwb):
+        add_runs(nwb, RUNS[:1], ["ohdpi"])
+        add_blocks(nwb, [])
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        assert "blocks" not in nwb.intervals and "runs" in nwb.intervals

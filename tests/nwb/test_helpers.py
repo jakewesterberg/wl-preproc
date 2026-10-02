@@ -150,3 +150,24 @@ def test_findings_ranked_above_critical_also_block(tmp_path):
     with h5py.File(path, "w") as handle:
         handle["data"] = [1, 2, 3]
     assert n_critical(inspect_file(path)) >= 1
+
+
+def test_what_starts_just_after_its_run_is_in_it_however_it_was_stored():
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    amendment 11: a block's or trial's start is stored as float32, an
+    event's time as decimal(10, 4), a run's bounds as doubles. Either
+    rounding can put a start, or the RUN_START event lying exactly on the
+    run's start, before it; the run's bounds are rounded the same way."""
+    import numpy as np
+
+    from wl_preproc.events.runs import event_inside, run_of, starts_inside
+
+    block = float(np.float32(18000.124))  # stored 0.6 ms after a RUN_START at 18000.1234
+    assert block < 18000.1234 and starts_inside(block, 18000.1234, 18100.0)
+    assert run_of(block, [{"run_number": 7, "start_s": 18000.1234, "end_s": 18100.0}]) == 7
+    assert run_of(18200.0, [{"run_number": 7, "start_s": 18000.1234, "end_s": 18100.0}]) is None
+    # A RUN_START at 12.34564 s is stored as 12.3456, before it, and a RUN_END
+    # at 20.00006 s as 20.0001, after it: rounding to 0.1 ms moves each out.
+    run_start, run_stop = 12.34564, 20.00006
+    assert event_inside(12.3456, run_start, run_stop) and event_inside(20.0001, run_start, run_stop)
+    assert not event_inside(12.3455, run_start, run_stop) and not event_inside(20.0002, run_start, run_stop)

@@ -1282,17 +1282,13 @@ def test_a_replacement_of_anything_but_the_current_canonical_is_a_conflict(req, 
 
 def test_a_canonical_can_name_its_block_set(req, selection):
     """Section 3: how wl.works leaves out a bad block, on a first canonical
-    or a replacement. The builder reads the set from `ActivationBlock`."""
-    from wl_preproc.nwb.gather import _block_set
-
+    or a replacement, recorded in `ActivationBlock`. The builder reads a
+    file's runs now (`ActivationRun`), and the block paths go next."""
     first = req.submit("k-blocks-1", "neural", "wl_works", selection, {}, None, block_ids=[1, 3])
     replacement = req.submit_replacement("k-blocks-2", "neural", "wl_works", selection, {}, None,
                                          supersedes_activation_id=0, block_ids=[2])
-    session_key = {k: selection[k] for k in ("subject", "session_datetime")}
     for key, expected in ((first, [1, 3]), (replacement, [2])):
-        row = (req.Activation & key).fetch1()
         assert sorted(int(b) for b in (req.ActivationBlock & key).to_arrays("block_id")) == expected
-        assert [b["block_id"] for b in _block_set(key, row, session_key)] == expected
 
 
 def test_a_reused_key_for_another_replacement_is_key_reuse(req, selection):

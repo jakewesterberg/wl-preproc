@@ -9,7 +9,15 @@ import datetime
 
 import pytest
 
-from tests.schema.test_spikeglx_restart import RESTART, _session
+from tests.schema.test_spikeglx_restart import RESTART
+from tests.schema.test_spikeglx_restart import _session as _restart_session
+
+
+def _session(tmp_path_factory, mutate=None, **update):
+    """`test_spikeglx_restart.py::_session`, its blocks wrapped in runs: a
+    canonical request names the session's measured runs (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3)."""
+    return _restart_session(tmp_path_factory, mutate, runs=True, **update)
 
 _S1, _S2, _S3 = "19011110011", "19011110012", "19011110013"
 _AIM = {"area": "V4d", "atlas": "CHARM", "atlas_level": 6}
@@ -30,25 +38,25 @@ def _bad_part(directory):
         meta.write_text(meta.read_text().replace("imDatPrb_pn=NP1000", "imDatPrb_pn=NP9999"))
 
 
-def _canonical(daemon_module, prefix, key, idempotency_key, probes, block_ids=None):
-    """wl.works' canonical over the session's measured blocks, as
-    `tests/schema/test_nwb_build.py`'s fixture asks for it, then a pass.
-    With `block_ids`, a derivative over those blocks instead."""
+def _canonical(daemon_module, prefix, key, idempotency_key, probes, run_numbers=None):
+    """wl.works' canonical over the session's measured runs, as
+    `tests/schema/test_nwb_build.py`'s fixture asks for it, every probe's
+    sort covering every run, then a pass. With `run_numbers`, a derivative
+    over those runs instead."""
     from wl_preproc.contracts.protocol import JobRequest, MetadataBundle
     from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core
 
-    blocks = [{"block_id": index, "task_type": (pipeline.trial.Block.Attribute & row & {
-                   "attribute_name": "task_type"}).fetch1("attribute_value"),
-               "start_s": float(row["block_start_time"]), "end_s": float(row["block_stop_time"]),
-               "works_block_id": f"wb-{index}"}
-              for index, row in enumerate((pipeline.trial.Block & key).to_dicts(order_by="block_start_time"), 1)]
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+             "works_run_id": f"wr-{row['run_number']}"}
+            for row in (core.Run & key).to_dicts(order_by="run_number")]
+    every = {probe["serial"]: [run["run_number"] for run in runs] for probe in probes}
     activation = accept(JobRequest(
         domain="neural", parameters={}, idempotency_key=idempotency_key,
         selection={"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC), "montage_id": 0,
-                   **({} if block_ids is None else {"block_ids": block_ids})},
+                   **({"probe_runs": every} if run_numbers is None else {"run_numbers": run_numbers})},
         metadata=MetadataBundle(
-            blocks=blocks, montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 16.0}], probes=probes,
+            blocks=[], runs=runs, montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 16.0}], probes=probes,
             experimenter="jw", subject=key["subject"], task_types=[],
             subject_details={"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 2)}),
     ), prefix=prefix)
@@ -141,7 +149,7 @@ def test_an_intan_probe_is_listed_from_its_report_alone(daemon_module, prefix, t
     from wl_preproc.synth.session import generate_session
 
     recipe = CI_RECIPE.model_copy(update={"subject": "pnwb4", "session_id": "2025-06-25_01",
-                                          "systems": ("syncbox", "rhs")})
+                                          "systems": ("syncbox", "rhs"), "runs": True})
     root = tmp_path_factory.mktemp("pnwb4")
     generate_session(root, recipe)
     key = _land(root, recipe, datetime.datetime(2025, 6, 25, 9), acquisition_systems=("syncbox", "rhs"))
@@ -202,10 +210,11 @@ def test_a_bank_change_inside_a_montage_refuses_the_file(daemon_module, prefix, 
 
 def test_a_file_on_one_side_of_a_bank_change_builds(daemon_module, prefix, tmp_path_factory):
     """The final review's I1: a file's probes come from the segments its own
-    blocks overlap, not from its whole montage. A derivative before the bank
-    change is recorded through one site map and builds -- parent spec
-    section 8.3's remedy for a montage wl.works drew across a bank change --
-    and one whose blocks cross the change is refused, as the canonical is."""
+    runs overlap, not from its whole montage. A derivative of the run before
+    the bank change is recorded through one site map and builds -- parent
+    spec section 8.3's remedy for a montage wl.works drew across a bank
+    change -- and one whose run crosses the change is refused, as the
+    canonical is."""
     from pynwb import NWBHDF5IO
 
     from wl_preproc.nwb.build import build
@@ -213,8 +222,8 @@ def test_a_file_on_one_side_of_a_bank_change_builds(daemon_module, prefix, tmp_p
     _recipe, key = _session(tmp_path_factory, subject="pnwb6", session_id="2025-06-27_01", probe_serial="19011110019",
                             spikeglx_restart={**RESTART, "probe_bank": 1})
     daemon_module.run_once(prefix=prefix)
-    before = _canonical(daemon_module, prefix, key, "pnwb6-k1", [], block_ids=[1])
-    across = _canonical(daemon_module, prefix, key, "pnwb6-k2", [], block_ids=[2])
+    before = _canonical(daemon_module, prefix, key, "pnwb6-k1", [], run_numbers=[1])
+    across = _canonical(daemon_module, prefix, key, "pnwb6-k2", [], run_numbers=[2])
 
     built = build(before, tmp_path_factory.mktemp("nwb-before"))
     assert built.status == "written", (built.reason, built.findings)
@@ -242,12 +251,16 @@ def test_a_file_waits_for_the_census_of_its_session(three_probes):
 
 def test_the_description_lists_each_probe_and_says_what_it_could_not_place_or_join(built):
     """Section 3.2's entries and notes: an unknown part number, a probe with
-    no report, and a report that matches no recorded probe."""
+    no report, and a report that matches no recorded probe. Each probe's
+    sorted runs are its list from the request; the probe with no report has
+    none (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 4)."""
     probes = built.description["probes"]
     assert [(p["serial"], p["probe_type"], p["insertion_number"], p["trajectory_id"], p["n_electrodes"],
              p["area_from"]) for p in probes] == [
         (_S1, "NP1000", 1, "T-1", 4, "assignment"), (_S2, "NP1032", 2, None, 4, "target"),
         (_S3, "NP9999", None, None, 0, "unknown")]
+    assert [p["sorted_runs"] for p in probes] == [[1, 2], [1, 2], []]
     assert probes[0]["target"] == _AIM
     assert probes[0]["assignment"] == {"area": "V4v", "source": "at_rig", "asserted_at": "2025-06-22T11:00:00Z"}
     notes = built.description["notes"]
