@@ -209,6 +209,10 @@ def selection(req):
             {**key, "block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s},
             skip_duplicates=True,
         )
+        # The measured runs the same windows hold: ActivationRun's
+        # `-> core.Run` is a real foreign key too.
+        core.Run.insert1({**key, "run_number": block_id, "task_type": 0, "run_start_time": start_s,
+                          "run_stop_time": end_s, "closed": 1}, skip_duplicates=True)
     return {**key, "montage_id": montage_id}
 
 
@@ -1417,3 +1421,56 @@ def test_an_activation_keeps_its_runs_and_each_probes_runs(req):
     montage = {"subject", "session_datetime", "montage_id", "activation_id"}
     assert set(req.ActivationRun.primary_key) == montage | {"run_number"}
     assert set(req.ActivationProbeRun.primary_key) == montage | {"probe_serial", "run_number"}
+
+
+# -- Runs, alongside blocks until the block paths are retired (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
+
+
+def _runs_of(req, key):
+    return sorted(int(n) for n in (req.ActivationRun & key).to_arrays("run_number"))
+
+
+def _probe_runs_of(req, key):
+    return sorted((row["probe_serial"], row["run_number"]) for row in (req.ActivationProbeRun & key).to_dicts())
+
+
+def test_a_canonical_keeps_its_runs_and_each_probes_runs(req, selection):
+    key = req.submit("runs-canonical-1", "neural", "wl_works", selection, {}, None, run_numbers=[2, 1, 2],
+                     probe_runs={"19011110001": [1, 2], "19011110002": [2]})
+    assert _runs_of(req, key) == [1, 2]
+    assert _probe_runs_of(req, key) == [("19011110001", 1), ("19011110001", 2), ("19011110002", 2)]
+
+
+def test_a_replacement_keeps_its_own_runs(req, selection):
+    first = req.submit("runs-replaced-1", "neural", "wl_works", selection, {}, None, run_numbers=[1, 2, 3],
+                       probe_runs={"19011110001": [1, 2, 3]})
+    second = req.submit_replacement("runs-replaced-2", "neural", "wl_works", selection, {}, None,
+                                    supersedes_activation_id=first["activation_id"], run_numbers=[1, 2, 3],
+                                    probe_runs={"19011110001": [1, 3]})
+    assert second["activation_id"] != first["activation_id"]
+    assert _probe_runs_of(req, first) == [("19011110001", 1), ("19011110001", 2), ("19011110001", 3)]
+    assert _probe_runs_of(req, second) == [("19011110001", 1), ("19011110001", 3)]
+
+
+def test_a_derivative_is_its_run_set(req, selection):
+    """The requester's decision 3: a derivative selects whole runs, and its
+    identity is that set."""
+    one = req.submit_derivative("runs-deriv-1", "neural", "wl_works", selection, [], {}, None, run_numbers=[3, 2])
+    again = req.submit_derivative("runs-deriv-2", "neural", "wl_works", selection, [], {}, None, run_numbers=[2, 3])
+    other = req.submit_derivative("runs-deriv-3", "neural", "wl_works", selection, [], {}, None, run_numbers=[2])
+    assert one == again and other != one
+    assert (_runs_of(req, one), _runs_of(req, other)) == ([2, 3], [2])
+    assert len(req.ActivationBlock & one) == 0
+
+
+def test_the_selection_hash_separates_run_sets_and_leaves_block_hashes_as_they_were():
+    import hashlib
+    import json
+
+    from wl_preproc.schema.request import selection_hash
+
+    assert selection_hash("neural", [], [1, 2]) == selection_hash("neural", [], [2, 1, 2])
+    assert selection_hash("neural", [], [1, 2]) != selection_hash("neural", [], [1])
+    before = json.dumps({"task_type": "neural", "block_ids": [1, 2]}, sort_keys=True, separators=(",", ":"))
+    assert selection_hash("neural", [2, 1]) == hashlib.blake2b(before.encode(), digest_size=16).hexdigest()

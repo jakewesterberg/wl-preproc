@@ -218,7 +218,7 @@ class ActivationProbeRun(dj.Manual):
     """
 
 
-def selection_hash(task_type: str, block_ids: list[int]) -> str:
+def selection_hash(task_type: str, block_ids: list[int], run_numbers: list[int] | tuple[int, ...] = ()) -> str:
     """Content hash of a derivative's identity: its task type and block set.
 
     Sorted and de-duplicated first, because the block set is a *set*: two
@@ -268,12 +268,27 @@ def selection_hash(task_type: str, block_ids: list[int]) -> str:
     happens to existing `selection_hash` rows; it is not a one-line edit in
     either function.
     """
-    payload = json.dumps(
-        {"task_type": task_type, "block_ids": sorted(set(block_ids))},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    selected = {"task_type": task_type, "block_ids": sorted(set(block_ids))}
+    # A run set joins the hash only when there is one, so every block-only
+    # hash already on file is unchanged (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
+    if run_numbers:
+        selected["run_numbers"] = sorted(set(run_numbers))
+    payload = json.dumps(selected, sort_keys=True, separators=(",", ":"))
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _record_run_sets(key: dict, run_numbers, probe_runs: dict[str, list[int]] | None) -> None:
+    """The activation's runs, and the runs each probe's sort covers (design
+    spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.3),
+    written in the activation's own transaction."""
+    if run_numbers:
+        ActivationRun.insert([{**key, "run_number": number} for number in sorted(set(run_numbers))],
+                             skip_duplicates=True)
+    rows = [{**key, "probe_serial": serial, "run_number": number}
+            for serial, numbers in sorted((probe_runs or {}).items()) for number in sorted(set(numbers))]
+    if rows:
+        ActivationProbeRun.insert(rows, skip_duplicates=True)
 
 
 def _canonicalise(value):
@@ -444,6 +459,8 @@ def submit(
     payload: dict,
     requested_by: str | None = None,
     block_ids: list[int] | tuple[int, ...] = (),
+    run_numbers: list[int] | tuple[int, ...] = (),
+    probe_runs: dict[str, list[int]] | None = None,
 ) -> dict:
     """Record a request and the canonical activation it selects, atomically.
 
@@ -583,6 +600,7 @@ def submit(
                 [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))],
                 skip_duplicates=True,
             )
+        _record_run_sets(key, run_numbers, probe_runs)
         return key
 
 
@@ -665,6 +683,8 @@ def submit_replacement(
     *,
     supersedes_activation_id: int,
     block_ids: list[int] | tuple[int, ...] = (),
+    run_numbers: list[int] | tuple[int, ...] = (),
+    probe_runs: dict[str, list[int]] | None = None,
 ) -> dict:
     """Record a request and the canonical activation that replaces the
     montage's current one, `supersedes_activation_id`: at the montage's next free
@@ -780,6 +800,7 @@ def submit_replacement(
                 ActivationBlock.insert(
                     [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
                 )
+            _record_run_sets(key, run_numbers, probe_runs)
             return key
 
     try:
@@ -920,6 +941,7 @@ def submit_derivative(
     block_ids: list[int],
     payload: dict,
     requested_by: str | None = None,
+    run_numbers: list[int] | tuple[int, ...] = (),
 ) -> dict:
     """Record a request and the derivative activation its block set selects.
 
@@ -1073,7 +1095,7 @@ def submit_derivative(
             "one. Call it as its own unit of work; see submit()'s docstring."
         )
 
-    if not block_ids:
+    if not block_ids and not run_numbers:
         # Checked before opening the transaction, alongside the two guards
         # above: block_ids=[] is not a smaller selection, it is not a
         # selection at all. Without this, selection_hash("neural", [])
@@ -1082,9 +1104,9 @@ def submit_derivative(
         # rows, a derivative covering nothing, which section 8.3's "any
         # hand-picked subset" does not describe (review round 2, Minor).
         raise dj.DataJointError(
-            "submit_derivative() needs at least one block id: block_ids=[] "
-            "would create a derivative covering nothing, which is not a "
-            "valid selection."
+            "submit_derivative() needs at least one run or block id: an empty "
+            "selection would create a derivative covering nothing, which is "
+            "not a valid selection."
         )
 
     import datetime as _dt
@@ -1092,7 +1114,7 @@ def submit_derivative(
     montage_key = {
         k: selection[k] for k in ("subject", "session_datetime", "montage_id")
     }
-    digest = selection_hash(task_type, block_ids)
+    digest = selection_hash(task_type, block_ids, run_numbers)
     selection_key = {**montage_key, "selection_hash": digest}
 
     with dj.conn().transaction:
@@ -1190,9 +1212,11 @@ def submit_derivative(
                 "either sustained genuine contention or a stuck retry loop."
             )
 
-        ActivationBlock.insert(
-            [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
-        )
+        if block_ids:
+            ActivationBlock.insert(
+                [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
+            )
+        _record_run_sets(key, run_numbers, None)
         return key
 
 
