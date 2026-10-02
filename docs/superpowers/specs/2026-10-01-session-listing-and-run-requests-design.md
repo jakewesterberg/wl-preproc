@@ -369,3 +369,61 @@ settle what the sections above left open; §0 stands.
     a faulted run writes none are corrected (final review M1, raised to Important as a false claim
     about another repository).
 
+
+## Amendments, 2026-10-01, made while proving Plan B
+
+Plan B (`plans/2026-10-01-run-requests.md`) was proven in code before it was written. These
+settle what the sections above left open; §0 stands.
+
+13. **What a run holds is decided in each table's own precision,** in one place
+    (`events/runs.py`): a block's or a trial's start as float32, as `trial.Block` and
+    `trial.Trial` store it, and an event's as `decimal(10,4)`, as `event.Event` stores it, with
+    the run's bounds rounded the same way first. This is amendment 11's rule, extended to trials
+    and events; no block's run is stored at the event stage.
+14. **A trial belongs to the run its start lies in,** and a `RUN_START` event lying on its run's
+    start is in that run (§4: trials, events and eye data are trimmed to the runs' measured
+    intervals).
+15. **`/intervals/blocks` holds the measured blocks inside the file's runs,** and is left out
+    when they hold none. Its `closed` is 1, 0, or -1 for a closure never recorded (amendment 10);
+    the description's is true, false or null. `/intervals/runs` names each run's `works_run_id`,
+    task code and name, `closed` and each system's coverage.
+16. **The run check's tolerance is two code-word slots, 2 ms, at every magnitude**
+    (`events/agreement.py::RUN_AGREEMENT_TOLERANCE_S`). A run's times are doubles from
+    `core.Run` through the listing's JSON to wl.works' copy, so an honest request agrees exactly
+    and no float32 term is needed. The block check's derivation (`_BLOCK_START_MAX_SLOTS` and its
+    float32 half-ULP) goes with `block_agreement`, as §5 says of M1.
+17. **`metadata.blocks` stays in the contract, optional, deprecated and `maxItems: 0`.** A
+    non-empty one is refused by the contract itself, naming `metadata.runs`; an empty one, which
+    every request sent while the field was required, is accepted. `selection.block_ids`,
+    non-empty, is refused by `accept()`, naming `selection.run_numbers`. The contract's refusal
+    is pydantic's custom error: a raised `ValueError` is kept, as an object, in the error pydantic
+    reports, the `422` body could not serialise it, and the refusal went out as a `500`.
+18. **A canonical cannot name a subset of its montage's runs** (§3.2, decision 1):
+    `"role": "canonical"` with `run_numbers` is refused. The canonical lifecycle's "a canonical
+    names its block set" (its spec §3) is replaced by the per-probe lists.
+19. **`selection.probe_runs` names exactly the probes in `metadata.probes`,** each with only the
+    file's runs; a canonical with no probes needs none. A derivative's runs may have been
+    asserted by an earlier request: each must be in `metadata.runs` or `core.RunAssertion`.
+20. **A session with no measured run cannot be requested** (§3.2's `422`, *not yet ingested*),
+    so the probe-linking tests report an insertion after the event stage and before the census:
+    the earliest a report can now arrive.
+21. **A run with no length is `absent` in `RunCoverage`,** with 0 s: a run that faulted at once
+    would otherwise fail the coverage stage on every pass.
+22. **Fixture fixed:** the SpikeGLX generator ended the NI file exactly where the last strobe
+    ended, so the last word had no falling edge and was never latched. `CI_RECIPE` kept its
+    `SESSION_END` only by rounding; with runs on, `SESSION_END` moved to 15.002 s and was
+    dropped, `event_code_agreement` fell to 49/50, and the session read tier D. The buffer now
+    runs one low sample past the last strobe.
+23. **§8's items for Plan B, answered:**
+    - **3:** `core.Block` was read by `BlockCoverage`, `TimingProvenance.make()` and the
+      responder's window check; `ActivationBlock` by `nwb/gather.py`'s block set; all three
+      tables by `wlpp delete`'s map; `block_agreement` by `resolve_tier` alone. `wlpp report`
+      reads none of them: its tests' fixtures only wrote the column. Each reader moved to runs or
+      went with its table.
+    - **4:** `BlockCoverage.make()` intersected the block's interval with the system's
+      `Segment` extents through `timebase/coverage.py::classify_coverage`. `RunCoverage` does the
+      same over the measured run (and amendment 21).
+    - **7:** the description's `blocks` were written by `nwb/describe.py` and served as stored by
+      `GET /nwb`. Nothing in this repository read them but its tests, and wl.works' use of
+      them is recorded as still open on its side (`pending-wl-works-amendments.md`, "NWB
+      files", item 1).

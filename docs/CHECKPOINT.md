@@ -598,6 +598,19 @@ requester chose to merge the same day; true when written.*
 >    **Plan B, requests that name runs and the NWB description at version 3,
 >    follows.** See `docs/handoffs/2026-10-01-session-listing.md`.
 >
+>    **Requests that name runs, and the NWB description at version 3 (Plan B
+>    of pieces 2 and 3), are BUILT on `spec/run-requests` (2026-10-02), NOT
+>    merged as written** (the same spec). A canonical request asserts its
+>    montage's measured runs, each checked against `core.Run` within 2 ms as
+>    it arrives, and states each probe's runs in full; a derivative names
+>    whole runs. The NWB file is built from its runs: `/intervals/runs`, the
+>    measured blocks inside them, and a description at version 3 whose runs
+>    carry `works_run_id`. `core.Block`, `ActivationBlock`, `BlockCoverage`
+>    and `TimingProvenance.block_agreement` are retired; a development
+>    database redeclares `TimingProvenance`. **wl.works vendors
+>    `job_request.json` and `nwb_description.json` once this merges.** See
+>    `docs/handoffs/2026-10-01-run-requests.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked

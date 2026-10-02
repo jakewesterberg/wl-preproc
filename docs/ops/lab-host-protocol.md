@@ -314,12 +314,15 @@ than something one side can do quietly.
   "selection": {
     "session_datetime": "2027-06-01T09:00:00+00:00",
     "montage_id": 0,
-    "block_ids": [1, 2, 3]
+    "probe_runs": {"19011110001": [1, 2]}
   },
   "parameters": {},
   "idempotency_key": "6f1c2f8e-…",
   "metadata": {
-    "blocks": [],
+    "runs": [
+      {"run_number": 1, "start_s": 0.002, "end_s": 1803.5, "works_run_id": "asr-311"},
+      {"run_number": 2, "start_s": 1810.0, "end_s": 3604.25, "works_run_id": "asr-312"}
+    ],
     "montage_boundaries": [],
     "probes": [
       {
@@ -355,14 +358,28 @@ than something one side can do quietly.
   spellings — four whole-second (`+00:00`, `Z`, no offset, `11:00:00+02:00`) and six
   fractional (`.000`, `.123`, `.000123`, `.600`, `.999999`, and `.123` at `+02:00`) — every
   one `200` with `"session_datetime": "2027-08-04T09:00:00"`.
-  `block_ids`, when present and non-empty, makes the request a **derivative** activation
-  over that hand-picked block set; absent or empty makes it the **canonical** activation
-  for `(session, montage)`.
+  **A request names runs** (design spec
+  `2026-10-01-session-listing-and-run-requests-design.md` §3):
+  - `run_numbers`, when present and non-empty, makes the request a **derivative**
+    activation holding those whole runs, each measured, in the montage's window, and
+    asserted in `metadata.runs` (now or by an earlier request). Its identity is its task
+    type and its run set.
+  - Absent or empty, the request is the **canonical** activation for `(session, montage)`,
+    which holds **every measured run whose start lies in the montage's `[start_s, end_s)`
+    window**. Each must be asserted in `metadata.runs`.
+  - `probe_runs`, a canonical's only: for **every** probe in `metadata.probes`, keyed by
+    serial, the runs its sort covers, **stated in full** (the record is the run set each
+    probe resolved to, not the exclusions), and only the file's runs. An empty list leaves
+    that probe out of sorting. This is how a run bad on one probe is left out of that
+    probe's sort only.
+  - **`block_ids` is retired**, and so is `metadata.blocks`: a non-empty one is a `422`
+    naming its replacement.
+
   **Since the canonical lifecycle** (design spec `2026-09-30-canonical-lifecycle-design.md`
   §3), two optional keys say more:
-  - `"role": "canonical"` with `block_ids` asks for a canonical over those blocks. This is
-    how wl.works leaves out a bad block. `"role": "derivative"` means what `block_ids`
-    alone means.
+  - `"role": "canonical"` is the canonical above; a canonical cannot name a subset of its
+    montage's runs (`run_numbers` with it is a `422`). `"role": "derivative"` means what
+    `run_numbers` alone means, and needs them.
   - `"supersedes_activation_id": N`, with `"role": "canonical"`, is a **replacement**: a
     new canonical superseding `N`, which must be the montage's current canonical. The
     superseded file stays where it is, readable, and `GET /nwb` marks it. A replacement
@@ -372,11 +389,29 @@ than something one side can do quietly.
     one, returns the montage's **current** canonical.
 - **`metadata`** is the bundle this host needs from the ELN, and it is the reason this
   protocol works pull-only: everything wl-preproc needs arrives inbound with the request,
-  because this host cannot call wl.works to ask. `montage_boundaries` and `blocks` are
-  wl.works' own authored records; this host records them **if absent and never overwrites
-  them**, since a later request carrying corrected boundaries is wl.works correcting its
-  own record, which is its call to make explicitly rather than something to infer from
-  whichever payload arrived last.
+  because this host cannot call wl.works to ask. `montage_boundaries` is wl.works' own
+  authored record; this host records it **if absent and never overwrites it**, since a
+  later request carrying corrected boundaries is wl.works correcting its own record, which
+  is its call to make explicitly rather than something to infer from whichever payload
+  arrived last.
+- **`metadata.runs`** lists every run you hold for the session: `run_number`, `start_s` and
+  `end_s` — your copy of what `GET /sessions` listed, measured from the recording — and
+  `works_run_id`, your `animal_session_run` id. **Every run the file holds is checked
+  against this host's measured run as the request arrives**, start and end within 2 ms
+  (`events/agreement.py::RUN_AGREEMENT_TOLERANCE_S`); a copy of the listing agrees exactly.
+  - **A stale listing is a `422`**: a run this host did not measure, its times off, or a
+    measured run in the montage's window that the request does not assert. The message
+    names the run and ends *rebuild the request from a fresh GET /sessions*. Stop and show
+    it.
+  - **A session whose runs are not measured yet is a `422` that clears itself**: the event
+    stage has not read it, or the rig sent no run markers. Resend once `GET /sessions`
+    lists its runs.
+  - **A run already recorded under one `works_run_id` and named under another is a
+    `409`.** The two records disagree about which run it is; the first is kept.
+  - **A session with a repeated run number** (a crash restart before wl-xcon's XC-026) has
+    only the first of each measured, so a montage cannot include the restarted runs.
+  - An empty `metadata.blocks`, which every request sent while it was required, is
+    accepted and says nothing.
 - **`metadata.probes`** lists each insertion: its probe's `serial` and its
   `insertion_number`, with an optional `trajectory_id`, and, since the probes design
   (`2026-09-30-nwb-probes-design.md` §4), two more optional keys:
@@ -389,8 +424,8 @@ than something one side can do quietly.
     `asserted_at` is ISO-8601, like `session_datetime`, but is **kept to the
     microsecond**, since two assignments may fall in one second. There is no atlas key,
     because your assignment row lists no atlas column.
-  - **The latest request wins** for an insertion, unlike `blocks` and
-    `montage_boundaries`, and as for `subject_details`: you are the authority on where a
+  - **The latest request wins** for an insertion, unlike `montage_boundaries` and a run's
+    `works_run_id`, and as for `subject_details`: you are the authority on where a
     probe went. Assignments accumulate, as in your own table, and a request repeating one
     adds nothing. An insertion that a request does not mention is left as it was, so a
     request may name only its own montage's insertions.
@@ -465,12 +500,19 @@ Authorization: Bearer <token>
   - `placement`: `tier` (`fast` or `slow`), `host`, `share`, `path` relative to the share,
     and `n_bytes`, or `null` until published;
   - `description`: [`docs/schemas/nwb_description.json`](../schemas/nwb_description.json),
-    or `null` for a refused activation. **Version 2** (since the probes design,
-    `2026-09-30-nwb-probes-design.md` §3.2) gives `probes` its shape: each probe's
+    or `null` for a refused activation. **Version 3** (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` §4) replaces `blocks` with
+    `runs`, since version 2 allowed only additions and this renames and removes. Each run
+    of the file: `run_number`, `works_run_id` (join it to `animal_session_run`), `task`
+    (`code` and `name`), its `measured` interval, `closed`, `trials` (total and by
+    outcome), each system's `coverage`, its `conditions`, and its measured `blocks`
+    (`block_number`, `block_in_run`, `block_type`, `measured`, `closed`, `trials`). Each
+    probe also carries `sorted_runs`, its list from the request. **Version 2** (the probes
+    design, `2026-09-30-nwb-probes-design.md` §3.2) gave `probes` its shape: each probe's
     `serial`, `probe_type`, `insertion_number`, `trajectory_id`, `n_electrodes`, `target`
     and `assignment`, and `area_from`, which says whether the file's area label came from
-    the assignment, the aim, or neither. A file built before then says version 1 and has
-    no probes; read `schema_version`, and ignore fields you do not know.
+    the assignment, the aim, or neither. Read `schema_version`, and ignore fields you do
+    not know.
 
 A file changes when it is built, published, or moved between shares.
 
@@ -555,7 +597,7 @@ Every code this host can return, on any endpoint.
 | `404` | all | `{"error": "not found"}` | Path is not one of `/health`, `/jobs`, `/nwb`, `/nwb/active`; or a query string on any path but `/nwb`. | No |
 | `405` | all | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, `GET /nwb/active`, authenticated `PUT /health`. | No |
 | `408` | `POST /jobs`, `PUT /nwb/active` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
-| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content; or a replacement naming a canonical that is not the montage's current one. | **No — needs a human** |
+| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content; a replacement naming a canonical that is not the montage's current one; or a run named under a `works_run_id` other than the one recorded. | **No — needs a human** |
 | `414` | all | `{"error": "request line too long"}` | Over-long request line. | No |
 | `422` | `POST /jobs`, `PUT /nwb/active`, `GET /nwb` (a `since` that is not one non-negative integer) | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
 | `431` | all | `{"error": "request header fields too large"}` | Oversized header. | No |
@@ -582,14 +624,18 @@ arrive as ordinary responses with a status line, as does every other code above.
   documentation links stripped), including `extra_forbidden` for an unknown field.
 - **A well-formed request this host refuses**: a `selection` missing `session_datetime` or
   `montage_id`; a `session_datetime` that is not parseable ISO-8601 or is before year 1000;
-  an oversized `subject`; **a session this host has not ingested yet** (see below); a
-  `montage_id`, `block_id`, `task_type`, `works_block_id`, `start_s` or `end_s` that will
-  not fit its column; a `montage_id` with no boundary on record and none supplied in the
-  request either; a `block_ids` entry naming no block anywhere; a `block_ids` entry
-  naming a block outside its montage's `[start_s, end_s)` window; a `role` other than
-  `canonical` or `derivative`; `supersedes_activation_id` without `"role": "canonical"`,
-  or not a non-negative integer; or `"role": "derivative"` without `block_ids`. The
-  message names what was wrong.
+  an oversized `subject`; **a session this host has not ingested yet** (see below), or
+  whose runs it has not measured yet; a `montage_id` that will not fit its column; a
+  `montage_id` with no boundary on record and none supplied in the request either; **a
+  run that does not match the measured one** — not measured, its times more than 2 ms
+  off, a measured run in the window left unasserted, or a derivative's run outside the
+  window — whose message ends *rebuild the request from a fresh GET /sessions*; a
+  `probe_runs` that does not state every probe's runs, or names a run the file does not
+  hold; `run_numbers` on a canonical, or `probe_runs` on a derivative; the retired
+  `block_ids` or a non-empty `metadata.blocks`; a `role` other than `canonical` or
+  `derivative`; `supersedes_activation_id` without `"role": "canonical"`, or not a
+  non-negative integer; or `"role": "derivative"` without `run_numbers`. The message
+  names what was wrong.
 
 **A session this host has not ingested yet is a `422`, and it is the ordinary case.** You
 know a session exists from the ELN the moment it is created; this host knows it exists only
@@ -603,7 +649,7 @@ hours, sometimes overnight — a job posted for that session is refused:
 The full message, which is one line on the wire:
 
 > session `<subject>`/`<session_datetime>` is not yet on record on this host: no Session row
-> exists for it, so there is nothing to attach a montage, a block or a request to. wl.works
+> exists for it, so there is nothing to attach a montage, a run or a request to. wl.works
 > knows a session exists from the ELN before its data transfer lands here; until ingest has
 > landed it, this host cannot accept a job for it. Resend once the transfer has completed.
 
@@ -664,9 +710,12 @@ arrived late when in fact it arrived completely and something else was slow.
 
 ### `409` is not retryable, and that is the point
 
-`409 Conflict` has exactly one cause on this host: **an idempotency key was reused for
-materially different content.** The request cannot succeed as sent, and the remedy is a
-*new key*, which Plan 10 §6.1 puts outside the retry loop's power to produce — the key is
+`409 Conflict` has three causes on this host, and resending cures none of them: **an
+idempotency key reused for materially different content**; a replacement naming a canonical
+that is not the montage's current one; and **a run already recorded under one
+`works_run_id` named under another**, where the two records disagree about which run it is
+and a person must settle it. For the first, the request cannot succeed as sent, and the
+remedy is a *new key*, which Plan 10 §6.1 puts outside the retry loop's power to produce — the key is
 minted once when the confirmation dialog is accepted and reused across every retry of that
 intent, never regenerated per click.
 
