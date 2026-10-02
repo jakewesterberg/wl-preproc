@@ -217,14 +217,15 @@ def _runs(run_rows: list[dict], session_key: dict) -> list[dict]:
 def _blocks(run_rows: list[dict], session_key: dict) -> list[dict]:
     """The measured blocks inside the file's runs (`trial.Block`), each with
     its run, its order there, its block type and whether it closed."""
-    from wl_preproc.events.runs import run_of
+    from wl_preproc.events.runs import run_of, stored_doubles
     from wl_preproc.schema import pipeline
 
     attributes: dict = {}
     for row in (pipeline.trial.Block.Attribute & session_key).to_dicts():
         attributes.setdefault(row["block_id"], {})[row["attribute_name"]] = row["attribute_value"]
     out, order = [], {}
-    for row in sorted((pipeline.trial.Block & session_key).to_dicts(), key=lambda row: row["block_start_time"]):
+    stored = stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time")
+    for row in sorted(stored, key=lambda row: row["block_start_time"]):
         run_number = run_of(row["block_start_time"], run_rows)
         if run_number is None:
             continue
@@ -240,13 +241,13 @@ def _blocks(run_rows: list[dict], session_key: dict) -> list[dict]:
 def _trials(run_rows: list[dict], session_key: dict) -> list[dict]:
     """The trials whose start lies in one of the file's runs, each with its
     run and its measured block."""
-    from wl_preproc.events.runs import run_of
+    from wl_preproc.events.runs import run_of, stored_doubles
     from wl_preproc.schema import coverage, pipeline
 
     block_of = {row["trial_id"]: row["block_id"] for row in (pipeline.trial.BlockTrial & session_key).to_dicts()}
     cover = _coverage(coverage.TrialCoverage, "trial_id", session_key)
     trials = []
-    for row in (pipeline.trial.Trial & session_key).to_dicts():
+    for row in stored_doubles(pipeline.trial.Trial & session_key, "trial_start_time", "trial_stop_time"):
         run_number = run_of(row["trial_start_time"], run_rows)
         if run_number is None:
             continue

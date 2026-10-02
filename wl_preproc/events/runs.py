@@ -9,6 +9,12 @@ can put a start that lies just after its run's `RUN_START` -- or the
 run's bounds are rounded the same way first: rounding is monotonic, so
 anything that starts inside its run is found inside it, at any magnitude.
 The listing and the NWB builder both ask here, so they cannot disagree.
+
+**A FLOAT is read back as the double it stores** (`stored_doubles`). MySQL's
+text protocol, the one DataJoint reads through, returns a FLOAT to six
+significant digits: 18000.124, stored as 18000.123046875, comes back as
+18000.1, before a `RUN_START` at 18000.1234, and a 20 ms trial hours in comes
+back with no length. Measured against MySQL 8.0 (Plan B's final review, C1).
 """
 
 from __future__ import annotations
@@ -16,6 +22,18 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 
 import numpy as np
+
+
+def stored_doubles(query, *names: str) -> list[dict]:
+    """`query`'s rows, with each FLOAT attribute in `names` read as the double
+    MySQL stores, through `CAST(... AS DOUBLE)`, rather than the six
+    significant digits its text protocol returns."""
+    computed = {f"{name}_as_double": f"CAST({name} AS DOUBLE)" for name in names}
+    rows = query.proj(..., **computed).to_dicts()
+    for row in rows:
+        for name in names:
+            row[name] = row.pop(f"{name}_as_double")
+    return rows
 
 
 def starts_inside(start_s: float, run_start_s: float, run_stop_s: float) -> bool:

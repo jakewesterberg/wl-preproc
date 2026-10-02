@@ -113,9 +113,13 @@ class TrialCoverage(dj.Computed):
         and that is surfaced rather than caught. (`RunCoverage.make()` answers
         a zero-length run itself, because a faulted run can have one.)
         """
+        from wl_preproc.events.runs import stored_doubles
         from wl_preproc.timebase.coverage import classify_coverage
 
-        trial = (pipeline.trial.Trial & key).fetch1("trial_start_time", "trial_stop_time")
+        # Read as stored: six significant digits make a short trial hours in
+        # no length at all (`events/runs.py::stored_doubles`).
+        (row,) = stored_doubles(pipeline.trial.Trial & key, "trial_start_time", "trial_stop_time")
+        trial = (row["trial_start_time"], row["trial_stop_time"])
         extents = [
             (row["start_s"], row["end_s"])
             for row in (core.Segment & key).to_dicts()

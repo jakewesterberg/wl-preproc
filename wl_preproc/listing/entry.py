@@ -20,7 +20,7 @@ import dataclasses
 import datetime
 from pathlib import Path
 
-from wl_preproc.events.runs import starts_inside
+from wl_preproc.events.runs import starts_inside, stored_doubles
 
 from wl_preproc.contracts.protocol import SessionEntry
 
@@ -187,7 +187,7 @@ def gather_facts(session_key: dict) -> SessionFacts:
                   for row in (core.RejectedSegment & session_key).to_dicts()],
         runs=(core.Run & session_key).to_dicts(),
         records={row["run_number"]: row for row in (core.RunRecord & session_key).to_dicts()},
-        blocks=(pipeline.trial.Block & session_key).to_dicts(),
+        blocks=stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time"),
         block_attributes=dict(attributes),
         trial_counts=dict(collections.Counter(int(block_id) for block_id in
                                               (pipeline.trial.BlockTrial & session_key).to_arrays("block_id"))),
