@@ -19,14 +19,16 @@ asking to be believed. ``pipeline.Session`` (and, for ``TrialCoverage``,
 deleted by this preview, so neither appears in the graph.
 
 **This is not simply the brief's list with the direction flipped.** Its first
-draft ordered these nine tables as one flat list, sliced at ``from_stage``.
-That cannot be made correct by reordering: ``BlockCoverage`` depends on both
-``Block`` and ``AcquisitionSystem``, and ``ActivationBlock`` on both
-``Activation`` and ``Block``, so the tables form a DAG with real branches, not
-a chain. Deleting from ``AcquisitionSystem`` must not claim ``Block`` — a
-sibling, not a descendant — is affected, and deleting from ``Montage`` must
-not claim ``Segment`` is; no single linear order slices correctly for both.
-The fix computes each stage's actual dependency closure instead.
+draft ordered these tables as one flat list, sliced at ``from_stage``. That
+cannot be made correct by reordering: the tables form a DAG with real
+branches, not a chain. When the map held them, ``BlockCoverage`` depended on
+both ``Block`` and ``AcquisitionSystem`` and ``ActivationBlock`` on both
+``Activation`` and ``Block``; today ``Segment`` and ``RunCoverage`` share
+``AcquisitionSystem`` while ``Activation`` hangs from ``Montage``. Deleting
+from ``AcquisitionSystem`` must not claim ``Activation`` — a sibling, not a
+descendant — is affected, and deleting from ``Montage`` must not claim
+``Segment`` is; no single linear order slices correctly for both. The fix
+computes each stage's actual dependency closure instead.
 """
 
 from __future__ import annotations
@@ -37,7 +39,6 @@ from __future__ import annotations
 # relies on that instead of maintaining a second ordering by hand.
 _PARENTS: dict[str, tuple[str, ...]] = {
     "Montage": (),
-    "Block": (),
     "AcquisitionSystem": (),
     # `Request` is here because `Activation` names it, not because deleting a
     # request is a routine thing to want: the foreign key added on 2026-08-14
@@ -48,9 +49,15 @@ _PARENTS: dict[str, tuple[str, ...]] = {
     "Activation": ("Montage", "Request"),
     "Segment": ("AcquisitionSystem",),
     "RejectedSegment": ("AcquisitionSystem",),
-    "BlockCoverage": ("Block", "AcquisitionSystem"),
     "TrialCoverage": ("AcquisitionSystem",),
-    "ActivationBlock": ("Activation", "Block"),
+    # wl.works' asserted runs and the run sets of an activation (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
+    # Their other parent, the measured `core.Run`, is the event stage's and is
+    # not a stage here, so it is left out of the map like `pipeline.Session`.
+    "RunAssertion": (),
+    "RunCoverage": ("AcquisitionSystem",),
+    "ActivationRun": ("Activation",),
+    "ActivationProbeRun": ("Activation",),
 }
 
 
@@ -83,15 +90,16 @@ def _assert_known_tables_are_real() -> None:
 
     tables = {
         "Montage": core.Montage,
-        "Block": core.Block,
         "AcquisitionSystem": core.AcquisitionSystem,
         "Request": request.Request,
         "Activation": request.Activation,
         "Segment": core.Segment,
         "RejectedSegment": core.RejectedSegment,
-        "BlockCoverage": coverage.BlockCoverage,
         "TrialCoverage": coverage.TrialCoverage,
-        "ActivationBlock": request.ActivationBlock,
+        "RunAssertion": core.RunAssertion,
+        "RunCoverage": coverage.RunCoverage,
+        "ActivationRun": request.ActivationRun,
+        "ActivationProbeRun": request.ActivationProbeRun,
     }
     assert tables.keys() == _PARENTS.keys(), (
         "the stage-name graph and the real schema tables have drifted apart: "

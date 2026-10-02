@@ -492,9 +492,9 @@ def test_populate_writes_only_the_tables_this_phase_owns(
     written = {core.Segment, core.RejectedSegment, timebase.SystemTimebase}
     others = [
         core.Montage,
-        core.Block,
+        core.RunAssertion,
         core.AcquisitionSystem,
-        coverage.BlockCoverage,
+        coverage.RunCoverage,
         coverage.TrialCoverage,
         ingest.Ingestion,
         ingest.Quarantine,

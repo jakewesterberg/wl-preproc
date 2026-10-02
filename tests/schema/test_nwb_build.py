@@ -14,7 +14,6 @@ import pytest
 
 _SESSION_DATETIME = datetime.datetime(2025, 7, 20, 9, 0)
 _SUBJECT = "nwbstep1"
-_SPLIT_S = 7.5
 
 
 @pytest.fixture(scope="module")
@@ -27,32 +26,34 @@ def daemon_module(dj_conn, prefix):
     return daemon
 
 
-def _request(key, idempotency_key, montage, blocks, block_ids=None):
+def _request(key, idempotency_key, montage, runs, run_numbers=None):
     from wl_preproc.contracts.protocol import JobRequest, MetadataBundle
 
     selection = {"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC),
                  "montage_id": montage["montage_id"]}
-    if block_ids is not None:
-        selection["block_ids"] = block_ids
+    if run_numbers is not None:
+        selection["run_numbers"] = run_numbers
     return JobRequest(
         domain="neural", selection=selection, parameters={}, idempotency_key=idempotency_key,
         metadata=MetadataBundle(
-            blocks=blocks, montage_boundaries=[montage], probes=[], experimenter="jw", subject=key["subject"],
-            task_types=[], subject_details={"species": "Macaca mulatta", "sex": "F",
-                                            "date_of_birth": datetime.date(2016, 3, 2)},
+            blocks=[], runs=runs, montage_boundaries=[montage], probes=[], experimenter="jw",
+            subject=key["subject"], task_types=[],
+            subject_details={"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 2)},
         ),
     )
 
 
-def _derivative(session_key, blocks, prefix, block):
-    """The one-block derivative over `block`. `accept` returns the
-    activation it already holds for a block set, so every caller gets the
-    same one."""
+def _montage(runs):
+    return {"montage_id": 0, "start_s": 0.0, "end_s": max(r["end_s"] for r in runs) + 1.0}
+
+
+def _derivative(session_key, runs, prefix, run):
+    """The one-run derivative over `run`. `accept` returns the activation it
+    already holds for a run set, so every caller gets the same one."""
     from wl_preproc.responder.jobs import accept
 
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    return accept(_request(session_key, f"nwbstep1-block-{block['block_id']}", montage, blocks,
-                           block_ids=[block["block_id"]]), prefix=prefix)
+    return accept(_request(session_key, f"nwbstep1-run-{run['run_number']}", _montage(runs), runs,
+                           run_numbers=[run["run_number"]]), prefix=prefix)
 
 
 def _command(key, nwb_root, prefix):
@@ -64,49 +65,44 @@ def _command(key, nwb_root, prefix):
 @pytest.fixture(scope="module")
 def activation(daemon_module, prefix, tmp_path_factory):
     """`stepped_session`'s construction (tests/schema/test_detect_populate.py),
-    run through the daemon; then wl.works' job request for a canonical
-    activation over its measured blocks, as `responder/jobs.py::accept`
-    records it. The session's timing is computed before that request
-    arrives, as a daemon pass before wl.works asks would leave it. Date,
-    subject and seed checked unclaimed across `tests/` on 2026-09-28. In the
-    PAST, unlike most fixtures here: `nwbinspector` calls
-    a future `session_start_time` critical. Returns `(session_key,
-    activation_key, blocks)`."""
-    from tests.schema.test_detect_populate import _build_stepped_session
+    its five trials split into two blocks of three and two, each in its own
+    run, run through the daemon; then wl.works' job request for a canonical
+    activation over the montage's measured runs, as `responder/jobs.py::accept`
+    records it (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3). The session's timing is computed before that request arrives,
+    as a daemon pass before wl.works asks would leave it. Date, subject and
+    seed checked unclaimed across `tests/` on 2026-09-28. In the PAST, unlike
+    most fixtures here: `nwbinspector` calls a future `session_start_time`
+    critical. Returns `(session_key, activation_key, runs)`, the runs as
+    wl.works sends them."""
+    from tests.schema.test_detect_populate import TRIAL_DURATION_S, _build_stepped_session
+    from wl_preproc.contracts.events import TaskTypeCode
     from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core
 
+    split = [{"task_type": TaskTypeCode.RF_MAP, "n_trials": n, "trial_duration_s": TRIAL_DURATION_S} for n in (3, 2)]
     session_key, _segment, _onsets = _build_stepped_session(
         tmp_path_factory, dirname="nwbstep", session_id="2025-07-20_01", subject=_SUBJECT,
-        session_datetime=_SESSION_DATETIME, seed=720,
+        session_datetime=_SESSION_DATETIME, seed=720, recipe_update={"runs": True, "blocks": split},
     )
     daemon_module.run_once(prefix=prefix)
-    # The session has one measured block; wl.works asserts it as two, split at
-    # `_SPLIT_S`, which it is entitled to do. So a derivative over the second
-    # holds only half the session, and every trimming assertion can fail.
-    (measured,) = (pipeline.trial.Block & session_key).to_dicts()
-    task_type = (pipeline.trial.Block.Attribute & measured & {"attribute_name": "task_type"}).fetch1("attribute_value")
-    blocks = [
-        {"block_id": 1, "task_type": task_type, "start_s": float(measured["block_start_time"]), "end_s": _SPLIT_S,
-         "works_block_id": "wb-1"},
-        {"block_id": 2, "task_type": task_type, "start_s": _SPLIT_S, "end_s": float(measured["block_stop_time"]),
-         "works_block_id": "wb-2"},
-    ]
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    key = accept(_request(session_key, "nwbstep1-canonical", montage, blocks), prefix=prefix)
-    # The next pass computes what wl.works' blocks add: their coverage.
-    # *Added with the final review's I4: until then every file here was built
-    # before it, without block coverage, and nothing noticed; true when
-    # written.*
+    # Two measured runs, and every planted step is in the second, so a
+    # derivative over it holds only part of the session and every trimming
+    # assertion can fail.
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+             "works_run_id": f"wr-{row['run_number']}"}
+            for row in (core.Run & session_key).to_dicts(order_by="run_number")]
+    key = accept(_request(session_key, "nwbstep1-canonical", _montage(runs), runs), prefix=prefix)
+    # The next pass computes what the runs add: their coverage.
     daemon_module.run_once(prefix=prefix)
-    return session_key, key, blocks
+    return session_key, key, runs
 
 
 @pytest.fixture(scope="module")
 def built(activation, tmp_path_factory):
     from wl_preproc.nwb.build import build
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     return build(key, tmp_path_factory.mktemp("nwb"))
 
 
@@ -135,29 +131,36 @@ def test_a_synthetic_sessions_clock_falls_back_to_the_manifest(activation, built
     assert abs(built.clock["started_at_difference_s"]) > 60.0
 
 
-def test_blocks_trials_and_events_carry_the_tables_times(activation, built):
+def test_runs_blocks_trials_and_events_carry_the_tables_times(activation, built):
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 4: the file's runs are measured, with wl.works' ids; its blocks
+    are the measured ones inside them; each trial carries its run."""
     from pynwb import NWBHDF5IO
 
     from wl_preproc.schema import pipeline
 
-    session_key, _key, blocks = activation
+    session_key, _key, runs = activation
     with NWBHDF5IO(str(built.path), "r") as handle:
         nwb = handle.read()
-        stored = nwb.intervals["blocks"].to_dataframe()
-        assert stored["block_id"].tolist() == [1, 2]
-        assert stored["works_block_id"].tolist() == ["wb-1", "wb-2"]
-        assert stored["stop_time"].tolist() == [_SPLIT_S, blocks[1]["end_s"]]
+        stored = nwb.intervals["runs"].to_dataframe()
+        assert stored["run_number"].tolist() == [1, 2]
+        assert stored["works_run_id"].tolist() == ["wr-1", "wr-2"]
+        assert stored["stop_time"].tolist() == [run["end_s"] for run in runs]
+        blocks = nwb.intervals["blocks"].to_dataframe()
+        assert (blocks["block_number"].tolist(), blocks["run_number"].tolist(), blocks["n_trials"].tolist()) == (
+            [1, 2], [1, 2], [3, 2])
         trials = nwb.trials.to_dataframe()
         expected = sorted(float(r["trial_start_time"]) for r in (pipeline.trial.Trial & session_key).to_dicts())
         np.testing.assert_allclose(sorted(trials["start_time"]), expected)
-        # Every event inside a block, the block's end included (an event is
-        # an instant, and BLOCK_END sits exactly on it); SESSION_START and
-        # SESSION_END lie outside every block and are not this file's.
+        assert trials.sort_values("start_time")["run_number"].tolist() == [1, 1, 1, 2, 2]
+        # Every event inside a run, its ends included (an event is an
+        # instant, and RUN_START and RUN_END sit exactly on them);
+        # SESSION_START and SESSION_END lie outside every run.
         events = nwb.intervals["task_events"].to_dataframe()
         times = [float(r["event_start_time"]) for r in (pipeline.event.Event & session_key).to_dicts()]
-        inside = sorted(t for t in times if any(b["start_s"] <= t <= b["end_s"] for b in blocks))
+        inside = sorted(t for t in times if any(run["start_s"] <= t <= run["end_s"] for run in runs))
         np.testing.assert_allclose(sorted(events["start_time"]), inside)
-        assert "BLOCK_END" in set(events["event_type"])
+        assert {"RUN_START", "BLOCK_END", "RUN_END"} <= set(events["event_type"])
         assert not {"SESSION_START", "SESSION_END"} & set(events["event_type"])
 
 
@@ -194,9 +197,11 @@ def test_the_description_describes_the_file(activation, built):
     assert description["subject"]["age_days"] == (_SESSION_DATETIME.date() - datetime.date(2016, 3, 2)).days
     assert description["data_types"]["eye"] == {"gaze": ["left", "right"], "pupil": ["left", "right"]}
     assert len(description["data_types"]["eye_events"]["detectors"]) == 6
-    assert [block["block_id"] for block in description["blocks"]] == [1, 2]
-    assert all(block["task"]["name"] == "rf_map" for block in description["blocks"])
-    names = {condition["name"] for block in description["blocks"] for condition in block["conditions"]}
+    assert description["schema_version"] == 3
+    assert [(run["run_number"], run["works_run_id"]) for run in description["runs"]] == [(1, "wr-1"), (2, "wr-2")]
+    assert all(run["task"]["name"] == "rf_map" for run in description["runs"])
+    assert [[block["block_number"] for block in run["blocks"]] for run in description["runs"]] == [[1], [2]]
+    names = {condition["name"] for run in description["runs"] for condition in run["conditions"]}
     assert names and names <= {"contrast-10", "contrast-25", "contrast-50", "contrast-100"}
     assert description["checksums"]["datasets"] == built.checksums
     assert description["notes"] == []
@@ -225,7 +230,7 @@ def test_the_eye_is_on_session_time_and_every_detector_is_there(activation, buil
 def test_every_dataset_is_checksummed_and_a_rebuild_matches(activation, built, tmp_path_factory):
     from wl_preproc.nwb.build import build
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     with h5py.File(built.path) as handle:
         names = []
         handle.visititems(lambda name, obj: names.append("/" + name) if isinstance(obj, h5py.Dataset) else None)
@@ -271,23 +276,23 @@ def test_one_second_of_gaze_reads_a_small_fraction_of_the_file(built):
     assert source.served - opened < size / 10, (source.served - opened, size)
 
 
-def test_a_derivative_holds_only_its_own_block(activation, prefix, tmp_path_factory):
-    """Section 5: continuous samples and trial starts inside the block,
-    events inside it or on its end, and nothing from the other block."""
+def test_a_derivative_holds_only_its_own_run(activation, prefix, tmp_path_factory):
+    """Section 5: continuous samples and trial starts inside the run, events
+    inside it or on its ends, and nothing from the other run."""
     from pynwb import NWBHDF5IO
 
     from wl_preproc.nwb.build import build
     from wl_preproc.responder.jobs import accept
 
-    session_key, _key, blocks = activation
-    second = max(blocks, key=lambda b: b["start_s"])
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    key = accept(_request(session_key, "nwbstep1-derivative", montage, blocks, block_ids=[second["block_id"]]),
+    session_key, _key, runs = activation
+    second = max(runs, key=lambda r: r["start_s"])
+    montage = _montage(runs)
+    key = accept(_request(session_key, "nwbstep1-derivative", montage, runs, run_numbers=[second["run_number"]]),
                  prefix=prefix)
     result = build(key, tmp_path_factory.mktemp("nwb-derivative"))
     with NWBHDF5IO(str(result.path), "r") as handle:
         nwb = handle.read()
-        assert nwb.intervals["blocks"].to_dataframe()["block_id"].tolist() == [second["block_id"]]
+        assert nwb.intervals["runs"].to_dataframe()["run_number"].tolist() == [second["run_number"]]
         times = nwb.processing["behavior"]["EyeTracking"]["gaze_left"].timestamps[:]
         assert times.min() >= second["start_s"] and times.max() < second["end_s"]
         assert times.min() - second["start_s"] < 0.01
@@ -299,20 +304,20 @@ def test_a_derivative_holds_only_its_own_block(activation, prefix, tmp_path_fact
         assert ((runs >= second["start_s"]) & (runs < second["end_s"])).all()
 
 
-def test_a_run_that_crosses_its_blocks_end_keeps_its_true_end(activation, built, prefix, tmp_path_factory):
-    """Section 5: a detected run is kept when it starts in a block and is
-    never cut, so one that ends after its block keeps its true end. Every
-    planted step is in the second block, so for this one build wl.works'
-    boundary is moved into the middle of the first planted saccade, and
-    restored after."""
+def test_an_eye_event_that_crosses_its_runs_end_keeps_its_true_end(activation, built, prefix, tmp_path_factory):
+    """Section 5: a detected event is kept when it starts in a run and is
+    never cut, so one that ends after its run keeps its true end. Every
+    planted step is in the second run, so for this one build the measured
+    boundary between the runs is moved into the middle of the first planted
+    saccade, and restored after."""
     from pynwb import NWBHDF5IO
 
     from wl_preproc.nwb.build import build
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import core
 
-    session_key, _key, blocks = activation
-    first, second = sorted(blocks, key=lambda b: b["start_s"])
+    session_key, _key, runs = activation
+    first, second = sorted(runs, key=lambda r: r["start_s"])
     with NWBHDF5IO(str(built.path), "r") as handle:
         events = handle.read().processing["eye_events"]
         saccade = events["engbert_kliegl_left"].to_dataframe().sort_values("start_time").iloc[0]
@@ -326,16 +331,16 @@ def test_a_run_that_crosses_its_blocks_end_keeps_its_true_end(activation, built,
             if len(frame):
                 crossing[name] = list(zip(frame["start_time"], frame["stop_time"], strict=True))
     assert "engbert_kliegl_left" in crossing
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    key = accept(_request(session_key, "nwbstep1-first-block", montage, blocks, block_ids=[first["block_id"]]),
+    montage = _montage(runs)
+    key = accept(_request(session_key, "nwbstep1-first-run", montage, runs, run_numbers=[first["run_number"]]),
                  prefix=prefix)
-    core.Block.update1({**session_key, "block_id": first["block_id"], "end_s": split})
-    core.Block.update1({**session_key, "block_id": second["block_id"], "start_s": split})
+    core.Run.update1({**session_key, "run_number": first["run_number"], "run_stop_time": split})
+    core.Run.update1({**session_key, "run_number": second["run_number"], "run_start_time": split})
     try:
-        result = build(key, tmp_path_factory.mktemp("nwb-first-block"))
+        result = build(key, tmp_path_factory.mktemp("nwb-first-run"))
     finally:
-        core.Block.update1({**session_key, "block_id": first["block_id"], "end_s": first["end_s"]})
-        core.Block.update1({**session_key, "block_id": second["block_id"], "start_s": second["start_s"]})
+        core.Run.update1({**session_key, "run_number": first["run_number"], "run_stop_time": first["end_s"]})
+        core.Run.update1({**session_key, "run_number": second["run_number"], "run_start_time": second["start_s"]})
     with NWBHDF5IO(str(result.path), "r") as handle:
         events = handle.read().processing["eye_events"]
         for name, runs in crossing.items():
@@ -344,17 +349,22 @@ def test_a_run_that_crosses_its_blocks_end_keeps_its_true_end(activation, built,
                 assert kept.loc[kept["start_time"] == start, "stop_time"].tolist() == [stop], name
 
 
-def test_an_activation_with_no_blocks_is_refused(activation, prefix, tmp_path_factory):
+def test_an_activation_with_no_runs_is_refused(activation, tmp_path_factory):
+    """`accept()` refuses a montage whose window holds no measured run, so
+    such an activation is written here directly. It is left in place: the
+    daemon stage's test below finds it refused."""
     from wl_preproc.nwb.build import build
-    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
 
-    session_key, _key, blocks = activation
-    end = max(b["end_s"] for b in blocks) + 1.0
-    empty = {"montage_id": 1, "start_s": end, "end_s": end + 10.0}
-    key = accept(_request(session_key, "nwbstep1-empty", empty, []), prefix=prefix)
+    session_key, _key, runs = activation
+    end = max(r["end_s"] for r in runs) + 1.0
+    core.Montage.insert1({**session_key, "montage_id": 1, "start_s": end, "end_s": end + 10.0}, skip_duplicates=True)
+    key = {**session_key, "montage_id": 1, "activation_id": 0}
+    _lifecycle_rows(session_key, "nwbstep1-empty", [{"montage_id": 1, "activation_id": 0, "role": "canonical"}],
+                    runs=())
     result = build(key, tmp_path_factory.mktemp("nwb-empty"))
     assert (result.status, result.path) == ("refused", None)
-    assert "no blocks" in result.reason
+    assert "no runs" in result.reason
 
 
 def test_an_eye_without_calibration_is_left_out_and_the_rest_is_built(activation, monkeypatch, tmp_path_factory):
@@ -368,7 +378,7 @@ def test_an_eye_without_calibration_is_left_out_and_the_rest_is_built(activation
 
     real = eye_schema._map_from_row
     monkeypatch.setattr(eye_schema, "_map_from_row", lambda row: None if row["eye"] == "right" else real(row))
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     result = build(key, tmp_path_factory.mktemp("nwb-one-eye"))
     assert result.status == "written", result.findings
     with NWBHDF5IO(str(result.path), "r") as handle:
@@ -383,7 +393,7 @@ def test_an_eye_without_calibration_is_left_out_and_the_rest_is_built(activation
 
 def test_a_session_without_an_eye_recording_is_built_without_one(activation, monkeypatch, tmp_path_factory):
     """No ohDPI recording at all (`gather._eye` returns None): the file is
-    still the activation's blocks, trials, events and timing, with no eye
+    still the activation's runs, trials, events and timing, with no eye
     modules."""
     from pynwb import NWBHDF5IO
 
@@ -391,7 +401,7 @@ def test_a_session_without_an_eye_recording_is_built_without_one(activation, mon
     from wl_preproc.nwb.build import build
 
     monkeypatch.setattr(gather, "_eye", lambda *args: None)
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     result = build(key, tmp_path_factory.mktemp("nwb-no-eye"))
     assert result.status == "written", result.findings
     with NWBHDF5IO(str(result.path), "r") as handle:
@@ -407,7 +417,7 @@ def test_the_stage_skips_a_freed_session(activation, tmp_path_factory):
     from wl_preproc.nwb.build import run_stage
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     before = len(nwb_schema.NwbFile & session_key)
     recorded, errors = run_stage(tmp_path_factory.mktemp("nwb-freed"), freed=[session_key])
     # Nothing is recorded for this session (other sessions in the suite's
@@ -427,9 +437,9 @@ def test_the_command_builds_once_and_rebuilds_only_when_its_row_is_deleted(activ
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    key = accept(_request(session_key, "nwbstep1-command", montage, blocks, block_ids=[blocks[0]["block_id"]]),
+    session_key, _key, runs = activation
+    montage = _montage(runs)
+    key = accept(_request(session_key, "nwbstep1-command", montage, runs, run_numbers=[runs[0]["run_number"]]),
                  prefix=prefix)
     argv = ["nwb", "build", "--subject", key["subject"], "--session-datetime", key["session_datetime"].isoformat(),
             "--montage-id", str(key["montage_id"]), "--activation-id", str(key["activation_id"]),
@@ -458,7 +468,7 @@ def test_the_daemon_stage_records_every_activation(activation, daemon_module, pr
     assert daemon_module.run_once(prefix=prefix)["nwb"] is None
     report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-daemon"))
     assert not [e for e in report["errors"] if "NwbFile" in e], report["errors"]
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     rows = {(r["montage_id"], r["activation_id"]): r for r in (nwb_schema.NwbFile & session_key).to_dicts()}
     assert set(rows) == {(r["montage_id"], r["activation_id"]) for r in (request.Activation & session_key).to_dicts()}
     canonical = rows[(key["montage_id"], key["activation_id"])]
@@ -528,7 +538,7 @@ def test_the_daemon_publishes_every_written_file_to_the_slow_share(activation, d
     from wl_preproc.nwb.publish import current_placement, description_path, mismatches
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     slow = slow_share
     report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-publish-build"),
                                     nwb_slow=slow)
@@ -552,8 +562,8 @@ def test_publishing_skips_a_freed_session(activation, prefix, slow_share, tmp_pa
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _unrecord(key, slow_share)
     build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-freed-publish-build")))
     publish_module.run_publish(slow_share, freed=[session_key])
@@ -568,8 +578,8 @@ def test_a_publish_that_fails_verification_records_nothing_and_retries(activatio
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _unrecord(key, slow_share)
     build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-verify-build")))
     slow = slow_share
@@ -595,8 +605,8 @@ def test_publishing_never_overwrites_a_file_no_placement_records(activation, pre
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[0])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[0])
     _unrecord(key, slow_share)
     build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-overwrite-first")))
     publish_module.run_publish(slow_share)
@@ -620,7 +630,7 @@ def test_the_active_set_moves_a_file_to_the_fast_share_and_back_with_its_annotat
     from wl_preproc.nwb.publish import current_placement, description_path, run_placement
     from wl_preproc.schema import nwb as nwb_schema
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     _set_active(key)
     report = daemon_module.run_once(prefix=prefix, nwb_slow=slow_share, nwb_fast=fast_share)
     assert report["nwb_moved"] >= 1
@@ -646,7 +656,7 @@ def test_changed_written_once_data_stops_a_move(activation, slow_share, fast_sha
     stays where it is, and the report names the dataset."""
     from wl_preproc.nwb.publish import current_placement, run_placement
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     path = slow_share.local(current_placement(key)["path"])
     with h5py.File(path, "r+") as handle:
         original = handle["/intervals/trials/start_time"][0]
@@ -667,7 +677,7 @@ def test_the_fast_share_headroom_stops_a_move(activation, slow_share, fast_share
 
     from wl_preproc.nwb.publish import current_placement, run_placement
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     _set_active(key)
     try:
         _moved, errors = run_placement(slow_share, dataclasses.replace(fast_share, headroom_bytes=10**18))
@@ -684,7 +694,7 @@ def test_an_old_copy_that_could_not_be_deleted_is_removed_on_the_next_pass(activ
     live copy remains and a later move back is not stuck on a conflict."""
     from wl_preproc.nwb import publish as publish_module
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     old = slow_share.local(publish_module.current_placement(key)["path"])
     real = publish_module._remove_old_copy
 
@@ -713,7 +723,7 @@ def test_an_active_set_naming_a_refused_file_changes_nothing(activation, slow_sh
     from wl_preproc.nwb.publish import current_placement, run_placement, run_publish
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     refused = (nwb_schema.NwbFile & session_key & {"status": "refused"}).keys()
     assert refused
     _set_active(*refused)
@@ -731,7 +741,7 @@ def test_a_published_file_deleted_by_hand_is_reported_not_moved(activation, slow
     placement stays as recorded and every pass says so, by path."""
     from wl_preproc.nwb.publish import current_placement, run_placement
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     path = slow_share.local(current_placement(key)["path"])
     kept = path.read_bytes()
     path.unlink()
@@ -751,8 +761,8 @@ def test_an_active_activation_publishes_straight_to_the_fast_share(activation, p
     from wl_preproc.nwb import build as build_module
     from wl_preproc.nwb import publish as publish_module
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _unrecord(key, slow_share, fast_share)
     build_module.record(key, build_module.build(key, tmp_path_factory.mktemp("nwb-straight-to-fast")))
     _set_active(key)
@@ -773,7 +783,7 @@ def test_the_listing_and_the_active_set_through_the_responders_functions(activat
     from wl_preproc.responder.nwb import list_files, set_active
     from wl_preproc.schema import nwb as nwb_schema
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     identifier = (nwb_schema.NwbFile & key).fetch1("nwb_identifier")
     everything = list_files(None, prefix=prefix)
     (entry,) = [item for item in everything["files"] if item["identifier"] == identifier]
@@ -825,8 +835,8 @@ def test_a_rebuilt_row_takes_over_its_annotated_published_file_on_either_share(
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[0])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[0])
     _fresh(key, prefix, slow_share, fast_share, tmp_path_factory, f"nwb-takeover-{old_tier}")
     old_share, new_tier = (fast_share, "slow") if old_tier == "fast" else (slow_share, "fast")
     try:
@@ -860,8 +870,8 @@ def test_an_unrecorded_copy_with_other_data_on_the_other_share_is_refused(activa
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[0])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[0])
     _fresh(key, prefix, slow_share, fast_share, tmp_path_factory, "nwb-other-data")
     _set_active(key)
     try:
@@ -892,8 +902,8 @@ def test_the_sweep_deletes_only_a_leftover_its_history_records_beside_a_present_
 
     from wl_preproc.nwb import publish as publish_module
 
-    session_key, key, blocks = activation
-    stranger_key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, key, runs = activation
+    stranger_key = _derivative(session_key, runs, prefix, runs[-1])
     _fresh(stranger_key, prefix, slow_share, fast_share, tmp_path_factory, "nwb-stranger")
     publish_module.run_publish(slow_share, fast_share)
     stranger = _placed_path(fast_share, stranger_key)
@@ -924,7 +934,7 @@ def test_placement_moves_a_freed_sessions_file(activation, daemon_module, prefix
     from wl_preproc.archive import scratch
     from wl_preproc.nwb.publish import current_placement, run_placement
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     monkeypatch.setattr(scratch, "currently_freed", lambda *, prefix=None: [dict(session_key)])
     _set_active(key)
     try:
@@ -941,7 +951,7 @@ def test_a_published_file_missing_where_it_belongs_is_reported_each_pass(activat
     file is gone from it. Publishing's pass says so, by path."""
     from wl_preproc.nwb.publish import current_placement, run_publish
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     path = slow_share.local(current_placement(key)["path"])
     aside = path.with_name(path.name + ".aside")
     path.rename(aside)
@@ -960,8 +970,8 @@ def test_a_file_left_unrecorded_after_its_rename_is_adopted_next_pass(activation
     from wl_preproc.nwb import publish as publish_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _fresh(key, prefix, slow_share, fast_share, tmp_path_factory, "nwb-adopt")
     real = publish_module.write_description
 
@@ -991,8 +1001,8 @@ def test_a_share_that_is_not_mounted_is_not_published_to(activation, prefix, slo
     from wl_preproc.nwb.publish import NWB_DIR, Share
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _fresh(key, prefix, slow_share, fast_share, tmp_path_factory, f"nwb-unmounted-{state.replace(' ', '-')}")
     mount = tmp_path_factory.mktemp("nwb-unmounted")
     if state == "no mount point":
@@ -1011,7 +1021,7 @@ def test_an_unreachable_fast_share_fails_its_moves_not_the_pass(activation, daem
     still reaches the slow share, and the daemon pass goes on."""
     from wl_preproc.nwb.publish import Share, current_placement
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     gone = Share(tier="fast", mount=tmp_path_factory.mktemp("nwb-fast-down") / "gone", host="wl-nas", name="nvme")
     _set_active(key)
     try:
@@ -1043,7 +1053,7 @@ def test_a_file_changed_while_it_is_moved_is_not_moved(activation, monkeypatch, 
     move is abandoned instead, and retried when the file is still."""
     from wl_preproc.nwb import publish as publish_module
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     source = slow_share.local(publish_module.current_placement(key)["path"])
     real = publish_module.copy_verified
 
@@ -1069,7 +1079,7 @@ def test_a_leftover_annotated_after_its_move_is_left_for_a_person(activation, mo
     had it open, and they wrote to it. The next pass must not delete it."""
     from wl_preproc.nwb import publish as publish_module
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     old = slow_share.local(publish_module.current_placement(key)["path"])
     real = publish_module._remove_old_copy
 
@@ -1107,8 +1117,8 @@ def test_a_second_wlpp_process_leaves_the_nwb_stages_alone(activation, daemon_mo
     from wl_preproc.cli.main import main
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     _unrecord(key, slow_share, fast_share)
     other = pymysql.connect(host=dj.config["database.host"], port=int(dj.config["database.port"]),
                             user=dj.config["database.user"], password=dj.config["database.password"])
@@ -1139,7 +1149,7 @@ def test_a_superseded_activation_that_was_never_built_is_not_built(activation, p
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import request
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     now = datetime.datetime(2027, 6, 1, 12, 0)
     old = {**session_key, "montage_id": 1, "activation_id": 50}
     new = {**session_key, "montage_id": 1, "activation_id": 51}
@@ -1168,7 +1178,7 @@ def test_the_listing_marks_a_superseded_file_through_the_cursor(activation, pref
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import request
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     now = datetime.datetime(2027, 6, 1, 12, 0)
     old = {**session_key, "montage_id": 1, "activation_id": 60}
     new = {**session_key, "montage_id": 1, "activation_id": 61}
@@ -1205,8 +1215,8 @@ def test_an_invalid_file_is_rebuilt_once_its_missing_subject_details_arrive(acti
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import pipeline
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[0])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[0])
     _unrecord(key, slow_share, fast_share)
     birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
     pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
@@ -1226,9 +1236,9 @@ def test_an_invalid_file_is_rebuilt_once_its_missing_subject_details_arrive(acti
         pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": birth})
 
 
-def _lifecycle_rows(session_key, request_key, rows):
-    """`Activation` rows written directly, each over block 2; tests/ is
-    outside the supersedes guardrail's scan."""
+def _lifecycle_rows(session_key, request_key, rows, runs=(2,)):
+    """`Activation` rows written directly, each over `runs` (run 2 by
+    default); tests/ is outside the supersedes guardrail's scan."""
     from wl_preproc.schema import request
 
     now = datetime.datetime(2027, 6, 1, 12, 0)
@@ -1236,8 +1246,9 @@ def _lifecycle_rows(session_key, request_key, rows):
                              "payload": {}, "requested_at": now})
     for row in rows:
         request.Activation.insert1({"request_key": request_key, "created_at": now, **session_key, **row})
-        request.ActivationBlock.insert1({**session_key, "montage_id": row["montage_id"],
-                                         "activation_id": row["activation_id"], "block_id": 2})
+        for number in runs:
+            request.ActivationRun.insert1({**session_key, "montage_id": row["montage_id"],
+                                           "activation_id": row["activation_id"], "run_number": number})
 
 
 def _drop_lifecycle_rows(session_key, request_key, keys):
@@ -1262,7 +1273,7 @@ def test_an_invalid_row_the_stage_will_not_rebuild_survives_its_details_arriving
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import pipeline
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     old = {**session_key, "montage_id": 0, "activation_id": 90}
     new = {**session_key, "montage_id": 0, "activation_id": 91}
     rows = [{"montage_id": 0, "activation_id": 90, "role": "canonical"}]
@@ -1294,7 +1305,7 @@ def test_a_file_invalid_for_another_reason_is_not_rebuilt_every_pass(activation,
     import wl_preproc.nwb.build as build_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     key = {**session_key, "montage_id": 0, "activation_id": 97}
     _lifecycle_rows(session_key, "loop-invalid", [{"montage_id": 0, "activation_id": 97, "role": "derivative",
                                                    "selection_hash": "loop-invalid"}])
@@ -1319,7 +1330,7 @@ def test_the_invalid_check_reads_each_subject_once(activation, prefix, monkeypat
     from wl_preproc.nwb.build import build, record, resolved_invalid
     from wl_preproc.schema import pipeline
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     keys = [{**session_key, "montage_id": 0, "activation_id": i} for i in (80, 81)]
     _lifecycle_rows(session_key, "subject-once", [{"montage_id": 0, "activation_id": i, "role": "derivative",
                                                    "selection_hash": f"subject-once-{i}"} for i in (80, 81)])
@@ -1344,7 +1355,7 @@ def test_the_command_refuses_a_superseded_activation(activation, prefix, tmp_pat
     from wl_preproc.cli.main import main
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     old = {**session_key, "montage_id": 0, "activation_id": 70}
     new = {**session_key, "montage_id": 0, "activation_id": 71}
     _lifecycle_rows(session_key, "command-superseded", [
@@ -1364,7 +1375,7 @@ def test_an_activation_waiting_on_a_freed_session_is_reported(activation, prefix
     and each pass says so."""
     from wl_preproc.nwb.build import run_stage
 
-    session_key, _key, _blocks = activation
+    session_key, _key, _runs = activation
     key = {**session_key, "montage_id": 0, "activation_id": 75}
     _lifecycle_rows(session_key, "freed-waiting", [{"montage_id": 0, "activation_id": 75, "role": "derivative",
                                                     "selection_hash": "freed-waiting"}])
@@ -1384,11 +1395,11 @@ def test_one_failing_activation_does_not_stop_the_stage(activation, prefix, monk
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    montage = {"montage_id": 0, "start_s": 0.0, "end_s": max(b["end_s"] for b in blocks) + 1.0}
-    failing, fine = (accept(_request(session_key, f"nwbstep1-stage-{block['block_id']}", montage, blocks,
-                                     block_ids=[block["block_id"]]), prefix=prefix)
-                     for block in sorted(blocks, key=lambda b: b["start_s"]))
+    session_key, _key, runs = activation
+    montage = _montage(runs)
+    failing, fine = (accept(_request(session_key, f"nwbstep1-stage-{run['run_number']}", montage, runs,
+                                     run_numbers=[run["run_number"]]), prefix=prefix)
+                     for run in sorted(runs, key=lambda r: r["start_s"]))
     assert failing != fine
     for key in (failing, fine):
         (nwb_schema.NwbFile & key).delete(prompt=False)
@@ -1415,8 +1426,8 @@ def test_the_command_refuses_a_freed_session(activation, prefix, monkeypatch, tm
     from wl_preproc.cli.main import main
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     (nwb_schema.NwbFile & key).delete(prompt=False)
     monkeypatch.setattr(scratch, "currently_freed", lambda *, prefix=None: [dict(session_key)])
     assert main(_command(key, tmp_path_factory.mktemp("nwb-freed-command"), prefix)) == 1
@@ -1433,7 +1444,7 @@ def test_a_path_recorded_for_another_activation_is_refused(activation, prefix, m
     from wl_preproc.nwb import build as build_module
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, canonical, blocks = activation
+    session_key, canonical, runs = activation
     if not nwb_schema.NwbFile & canonical:
         build_module.record(canonical, build_module.build(canonical, tmp_path_factory.mktemp("nwb-canonical")))
     recorded = Path((nwb_schema.NwbFile & canonical).fetch1("path"))
@@ -1445,7 +1456,7 @@ def test_a_path_recorded_for_another_activation_is_refused(activation, prefix, m
         recorded.parent.mkdir(parents=True, exist_ok=True)
         recorded.write_bytes(b"another activation's file")
     before = recorded.read_bytes()
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    key = _derivative(session_key, runs, prefix, runs[-1])
     monkeypatch.setattr(build_module, "nwb_path", lambda *args: recorded)
     result = build_module.build(key, tmp_path_factory.mktemp("nwb-collision"))
     assert (result.status, result.path) == ("refused", None)
@@ -1453,52 +1464,53 @@ def test_a_path_recorded_for_another_activation_is_refused(activation, prefix, m
     assert recorded.read_bytes() == before
 
 
-def test_blocks_the_eye_recording_does_not_reach_are_built_without_eye_data(activation, prefix, tmp_path_factory):
-    """The final review's I2: an activation whose blocks hold no eye sample
+def test_runs_the_eye_recording_does_not_reach_are_built_without_eye_data(activation, prefix, tmp_path_factory):
+    """The final review's I2: an activation whose runs hold no eye sample
     (the tracker started late, or stopped early) is built without eye data,
-    and its description says so. For one build the first block is moved past
+    and its description says so. For one build the first run is moved past
     the end of the recording, and restored after."""
     from pynwb import NWBHDF5IO
 
     from wl_preproc.nwb.build import build
     from wl_preproc.schema import core
 
-    session_key, _key, blocks = activation
-    first = min(blocks, key=lambda b: b["start_s"])
-    past = max(b["end_s"] for b in blocks) + 2.0
-    key = _derivative(session_key, blocks, prefix, first)
-    core.Block.update1({**session_key, "block_id": first["block_id"], "start_s": past, "end_s": past + 1.0})
+    session_key, _key, runs = activation
+    first = min(runs, key=lambda r: r["start_s"])
+    past = max(r["end_s"] for r in runs) + 2.0
+    key = _derivative(session_key, runs, prefix, first)
+    core.Run.update1({**session_key, "run_number": first["run_number"], "run_start_time": past,
+                      "run_stop_time": past + 1.0})
     try:
         result = build(key, tmp_path_factory.mktemp("nwb-no-samples"))
     finally:
-        core.Block.update1({**session_key, "block_id": first["block_id"], "start_s": first["start_s"],
-                            "end_s": first["end_s"]})
+        core.Run.update1({**session_key, "run_number": first["run_number"], "run_start_time": first["start_s"],
+                          "run_stop_time": first["end_s"]})
     assert result.status == "written", (result.reason, result.findings)
     with NWBHDF5IO(str(result.path), "r") as handle:
         nwb = handle.read()
         assert "behavior" not in nwb.processing and "eye_events" not in nwb.processing
-        assert "no sample in these blocks" in nwb.session_description
+        assert "no sample in these runs" in nwb.session_description
 
 
 def test_the_stage_waits_for_upstream_keys_not_yet_computed(activation, prefix, tmp_path_factory):
     """The final review's I4(a): a key of this session that an upstream table
     has not computed yet (still to run, or errored) would leave the file
-    without it, recorded as final. One `BlockCoverage` row is held back, and
+    without it, recorded as final. One `RunCoverage` row is held back, and
     the stage waits until it is back."""
     from wl_preproc.nwb.build import run_stage
     from wl_preproc.schema import coverage
     from wl_preproc.schema import nwb as nwb_schema
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     (nwb_schema.NwbFile & key).delete(prompt=False)
-    saved = (coverage.BlockCoverage & session_key).to_dicts()[0]
-    (coverage.BlockCoverage & {k: saved[k] for k in coverage.BlockCoverage.primary_key}).delete(prompt=False)
+    saved = (coverage.RunCoverage & session_key).to_dicts()[0]
+    (coverage.RunCoverage & {k: saved[k] for k in coverage.RunCoverage.primary_key}).delete(prompt=False)
     try:
         run_stage(tmp_path_factory.mktemp("nwb-wait-upstream"))
         assert len(nwb_schema.NwbFile & key) == 0
     finally:
-        coverage.BlockCoverage.insert1(saved, allow_direct_insert=True)
+        coverage.RunCoverage.insert1(saved, allow_direct_insert=True)
     run_stage(tmp_path_factory.mktemp("nwb-wait-upstream-after"))
     assert (nwb_schema.NwbFile & key).fetch1("status") == "written"
 
@@ -1511,7 +1523,7 @@ def test_the_stage_waits_only_on_what_the_file_reads(activation, prefix):
     from wl_preproc.nwb.gather import readiness
     from wl_preproc.schema import detect, paramset
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     extra = paramset.register("eye_detection", {"detector": "not_a_detector_nwb_build"})
     try:
         assert len((detect.EyeDetection().key_source & session_key) - detect.EyeDetection.proj()) >= 1
@@ -1530,8 +1542,8 @@ def test_the_stage_waits_for_session_time_rather_than_refusing(activation, prefi
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import timebase
 
-    session_key, _key, blocks = activation
-    key = _derivative(session_key, blocks, prefix, blocks[-1])
+    session_key, _key, runs = activation
+    key = _derivative(session_key, runs, prefix, runs[-1])
     (nwb_schema.NwbFile & key).delete(prompt=False)
     saved = (timebase.TimingProvenance & session_key).fetch1()
     (timebase.TimingProvenance & session_key).delete(prompt=False)
@@ -1555,7 +1567,7 @@ def test_a_file_without_the_subjects_date_of_birth_is_invalid(activation, tmp_pa
     from wl_preproc.nwb.build import build
     from wl_preproc.schema import pipeline
 
-    _session_key, key, _blocks = activation
+    _session_key, key, _runs = activation
     birth = (pipeline.subject.Subject & {"subject": _SUBJECT}).fetch1("subject_birth_date")
     pipeline.subject.Subject.update1({"subject": _SUBJECT, "subject_birth_date": SUBJECT_BIRTH_DATE_UNKNOWN})
     try:
@@ -1568,13 +1580,13 @@ def test_a_file_without_the_subjects_date_of_birth_is_invalid(activation, tmp_pa
 
 def test_a_session_without_session_time_is_refused(activation, tmp_path_factory):
     """Section 10: no `TimingProvenance` row means no trustworthy session
-    time. The row is restored as it was, not recomputed: recomputing now
-    would compare wl.works' two asserted blocks with the one measured and
-    rightly fail the session to tier D (parent spec section 8.3.1)."""
+    time. The row is restored as it was, not recomputed.
+    *It said, until requests named runs, that recomputing would compare
+    wl.works' two asserted blocks with the one measured; true when written.*"""
     from wl_preproc.nwb.build import build
     from wl_preproc.schema import timebase
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     saved = (timebase.TimingProvenance & session_key).fetch1()
     (timebase.TimingProvenance & session_key).delete(prompt=False)
     try:
@@ -1591,7 +1603,7 @@ def test_a_session_at_timing_tier_d_is_refused(activation, tmp_path_factory):
     from wl_preproc.nwb.build import build
     from wl_preproc.schema import timebase
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     saved = (timebase.TimingProvenance & session_key).fetch1()
     (timebase.TimingProvenance & session_key).delete(prompt=False)
     timebase.TimingProvenance.insert1({**saved, "tier": "D"}, allow_direct_insert=True)
@@ -1610,7 +1622,7 @@ def test_a_session_with_two_ohdpi_segments_is_refused(activation, tmp_path_facto
     from wl_preproc.nwb.build import build
     from wl_preproc.schema import core
 
-    session_key, key, _blocks = activation
+    session_key, key, _runs = activation
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
     extra = {**segment, "segment_barcode": segment["segment_barcode"] + 1_000}
     core.Segment.insert1(extra, allow_direct_insert=True)

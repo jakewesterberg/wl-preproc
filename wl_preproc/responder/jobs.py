@@ -6,13 +6,16 @@ existed: 1c-1 narrowed `submit()` to canonical activations because it had no
 block set, and 1c-2 avoided `submit()` entirely because timebase and coverage
 populate from `Session` keys alone. **The answer was already in the frozen
 contract** (design spec section 1): `contracts.protocol.MetadataBundle`
-carries `blocks` and `montage_boundaries` inbound with EVERY request, and its
-own docstring says why -- "everything wl-preproc needs from the ELN arrives in
-the request payload." `core.Montage`'s own comment says it is "Sourced from
-wl.works `item_insertion` and nothing else", and `core.Block` carries
-`works_block_id` as the link. So recording them here is not measuring or
-guessing at a boundary; it is wl.works' own authored record, arriving by the
-exact route its frozen contract already describes.
+carries `montage_boundaries` -- and, since design spec
+`2026-10-01-session-listing-and-run-requests-design.md`, `runs` -- inbound
+with EVERY request, and its own docstring says why -- "everything wl-preproc
+needs from the ELN arrives in the request payload." `core.Montage`'s own
+comment says it is "Sourced from wl.works `item_insertion` and nothing else".
+So recording a montage here is not measuring or guessing at a boundary; it is
+wl.works' own authored record, arriving by the exact route its frozen
+contract already describes. A run is the other way round: `core.Run` is this
+host's measurement, and what arrives is wl.works' copy of it and its id for
+it, checked against the measurement and kept in `core.RunAssertion`.
 
 **Two corrections carried from Task 4's review, applied here rather than
 re-derived:**
@@ -22,39 +25,38 @@ re-derived:**
    raise -- DataJoint transactions do not nest -- and `submit()`'s own
    docstring says directly that neither the ingest watcher nor the responder
    may wrap it to bundle it with other writes. So `accept()` writes `Montage`
-   and `Block` as two independently idempotent, un-transacted inserts
+   and `RunAssertion` as two independently idempotent, un-transacted inserts
    (`skip_duplicates=True`, exactly `ingest/landing.py`'s own shape and
    reasoning -- "a partial run followed by a re-run converges on the same
    rows" without one), and only then calls `submit`/`submit_derivative`,
    which open and own their own transaction for the `Request`+`Activation`
    pair. See `test_accept_refuses_to_run_inside_a_transaction`.
-2. **`accept()` owns the montage window.** `ActivationBlock`'s own comment
-   names this module's function as "its first writer" and says it "owns
-   enforcing the window" between a montage's `[start_s, end_s)` and the
-   blocks a derivative selects -- a check `submit_derivative` itself does not
-   make (it has no `Montage`/`Block` timing to compare against; verified it
-   currently accepts a block at `[20.0, 24.0)` against a montage of
-   `[0.0, 12.0)`). See `_blocks_outside_window`.
+2. **`accept()` owns the montage window.** The window between a montage's
+   `[start_s, end_s)` and the runs a file holds is checked here -- a check
+   `submit_derivative` itself does not make, having no `Montage`/`Run`
+   timing to compare against. See `_check_runs`.
 
-**Existing `Montage`/`Block` rows are never overwritten.** Both inserts below
-use `skip_duplicates=True`: wl.works owns these records, and a later request
-naming different boundaries for a montage or block already on file is
-wl.works correcting its own record -- their call to make explicitly, not
-something to infer from whichever payload happened to arrive most recently.
+**Existing `Montage` rows are never overwritten.** The insert below uses
+`skip_duplicates=True`: wl.works owns this record, and a later request naming
+different boundaries for a montage already on file is wl.works correcting its
+own record -- their call to make explicitly, not something to infer from
+whichever payload happened to arrive most recently. A run already asserted
+under one `works_run_id` and named under another is a `RunIdConflict`, a
+`409`: the two disagree about which run it is.
 
 **Review round 1 (2026-08-16) found four more things, addressed here:**
 
 - **C1 -- validate before writing, not after.** The first draft inserted
-  `Montage`/`Block` and only THEN checked the window, so a rejected request
-  permanently planted the very row that caused its own rejection --
+  `Montage` and `Block` rows and only THEN checked the window, so a rejected
+  request permanently planted the very row that caused its own rejection --
   `skip_duplicates=True` then discarded every later correction, so the
   request that fixed the boundary was rejected too, citing the stale values
   it refused to replace. `accept()` now builds every candidate row, checks
-  montage-existence/window/unknown-block validity against those candidates
-  PLUS whatever is already on record, and only writes anything once every
-  check has passed -- so a rejected request leaves no residue at all. See
-  `test_a_rejected_request_leaves_no_montage_or_block_row_and_a_correction_
-  then_succeeds`.
+  montage existence and every run against those candidates PLUS whatever is
+  already on record, and only writes anything once every check has passed --
+  so a rejected request leaves no residue at all. See
+  `test_a_rejected_request_leaves_no_montage_or_run_assertion_and_a_
+  correction_then_succeeds`.
 - **C2 -- `selection["session_datetime"]` is coerced, not assumed to already
   be a `datetime`.** JSON has no datetime type and `docs/schemas/
   job_request.json` declares `selection` as a bare
@@ -81,17 +83,16 @@ something to infer from whichever payload happened to arrive most recently.
   matching `ingest/params.py`'s own stated convention** ("checked here,
   inside the validation step, rather than left for ... insert to discover as
   a raw `pymysql.err.DataError` -- which Task 8's watcher does not
-  special-case"). `montage_id`/`block_id` range, `task_type`/`works_block_id`
-  length, and `start_s`/`end_s` finiteness are all checked against the real
-  column bounds before any insert is attempted; `selection["block_ids"]`
-  naming an id with no `Block` anywhere (I4) raises `ValueError` rather than
-  being silently excluded from the window check.
+  special-case"). The `montage_id` range is checked against the real column
+  bound before any insert is attempted; the montage's and each run's own
+  bounds now live on `contracts.protocol.MontageBoundary` and `RunEntry`, so
+  a request breaking them cannot be built.
 
 **The whole-branch review (2026-08-16) found one more, fixed here:**
 
 - **C1 -- a job for a session this host has never ingested was a `500`,
   which the protocol document tells wl.works to retry forever.** `accept()`
-  validated montage existence, block existence, the window, subject length,
+  validated montage existence, the window, subject length,
   every column bound and the DATETIME floor -- but not that `Session`
   itself exists, so `core.Montage.insert` hit the foreign key and the
   resulting `IntegrityError` became a retryable `500`. Creating the session
@@ -99,13 +100,13 @@ something to infer from whichever payload happened to arrive most recently.
   `_require_landed_session` for the full reasoning, the measured
   before/after, and why the answer is `422` rather than `409`.
 
-**A design gap this task does not fix, recorded on the `Block` write below
-where it applies:** `core.Block`'s own comment says its boundaries are
-"decoded from event codes and cross-validated against those rows", and the
-frozen parent spec section 4.2 says the same -- `start_s`/`end_s` are
-specified as wl-preproc's own MEASUREMENT. This function instead writes
-wl.works' ASSERTED numbers into that same column, and `skip_duplicates`
-makes that permanent. Flagged, not solved, here.
+**A design gap this module once flagged is closed.** `core.Block` was
+specified as wl-preproc's own measurement, and this function wrote wl.works'
+asserted numbers into it, permanently. A request now asserts runs, which
+`core.Run` measures from the recording; what wl.works asserts is checked
+against that measurement as the request arrives and kept apart from it, in
+`core.RunAssertion` (design spec
+`2026-10-01-session-listing-and-run-requests-design.md` section 3).
 """
 
 from __future__ import annotations
@@ -113,7 +114,8 @@ from __future__ import annotations
 import datetime
 import math
 
-from wl_preproc.contracts.protocol import JobRequest, MontageBoundary
+from wl_preproc.contracts.protocol import JobRequest, MontageBoundary, ProbeEntry, RunEntry
+from wl_preproc.events import agreement
 from wl_preproc.ingest import landing
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.schema import request as schema_request
@@ -125,27 +127,24 @@ from wl_preproc.schema import request as schema_request
 _REQUIRED_SELECTION_KEYS = ("session_datetime", "montage_id")
 
 # Column bounds, read directly from wl_preproc/schema/core.py's declared
-# types -- neither `montage_id` nor `block_id` declares "unsigned" (unlike
-# core.Segment.segment_barcode's "int unsigned"), so both are SIGNED ranges.
+# types -- `montage_id` does not declare "unsigned" (unlike
+# core.Segment.segment_barcode's "int unsigned"), so its range is SIGNED.
 # Checked before any insert, matching ingest/params.py's own stated
 # convention for paramset_type/PARAMSET_TYPE_MAX_LEN: a value that is a
 # syntactically fine Python int/str can still be too big/long for the column
 # it is about to be inserted into, and finding that out from a raw
 # pymysql.err.DataError leaves Task 8's handler with an exception type its
 # documented ValueError/DataJointError contract does not cover -- confirmed
-# with each guard removed in turn against a live column: 1406 "Data too
-# long" (task_type, works_block_id), 1264 "Out of range value" (block_id),
-# and 1265 "Data truncated" (a non-finite float into start_s/end_s -- not
-# 1264, corrected here after actually reproducing it rather than assuming
-# the same errno as the integer case). None of the three appears in
-# DataJoint's MySQL adapter's translated-error list.
+# with each guard removed in turn against a live column, when this module
+# also wrote core.Block: 1406 "Data too long" (a string column), 1264 "Out of
+# range value" (an integer one), and 1265 "Data truncated" (a non-finite
+# float into a double -- not 1264, corrected after actually reproducing it
+# rather than assuming the same errno as the integer case). None of the three
+# appears in DataJoint's MySQL adapter's translated-error list.
 _MONTAGE_ID_RANGE = (-128, 127)  # core.Montage.montage_id : tinyint
 # request.Activation.activation_id : int, and a superseded one is never
 # negative: the allocator starts at 0.
 _ACTIVATION_ID_RANGE = (0, 2**31 - 1)
-_BLOCK_ID_RANGE = (-32768, 32767)  # core.Block.block_id : smallint
-_TASK_TYPE_MAX_LEN = 32  # core.Block.task_type : varchar(32)
-_WORKS_BLOCK_ID_MAX_LEN = 64  # core.Block.works_block_id : varchar(64)
 # MySQL's DATETIME floor. Python's own datetime.MINYEAR (1) is far below it,
 # and DataJoint's bare `datetime` column type validates nothing on its own.
 _DATETIME_MIN_YEAR = 1000
@@ -209,13 +208,15 @@ def _coerce_session_datetime(value) -> datetime.datetime:
     )
 
 
-def _lifecycle_role(selection: dict, block_ids: list) -> bool:
+def _lifecycle_role(selection: dict, run_numbers: list[int]) -> bool:
     """Whether the request asks for a canonical, from `selection`'s optional
     `role` and `supersedes_activation_id` (design spec
-    `2026-09-30-canonical-lifecycle-design.md` section 3). Without a `role`
-    a request means what it always meant: `block_ids` makes a derivative,
-    none a canonical over the whole montage. Raises `ValueError` (a `422`)
-    for the combinations section 3 refuses, before anything is written."""
+    `2026-09-30-canonical-lifecycle-design.md` section 3). Without a `role`,
+    `run_numbers` makes a derivative and none a canonical over the whole
+    montage, as `block_ids` did (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.1).
+    Raises `ValueError` (a `422`) for the combinations section 3 refuses,
+    before anything is written."""
     role = selection.get("role")
     if role not in (None, "canonical", "derivative"):
         raise ValueError(f"selection['role'] must be 'canonical' or 'derivative', got {role!r}")
@@ -228,9 +229,107 @@ def _lifecycle_role(selection: dict, block_ids: list) -> bool:
             )
         _reject_out_of_range_int(selection["supersedes_activation_id"],
                                  name="selection['supersedes_activation_id']", bounds=_ACTIVATION_ID_RANGE)
-    if role == "derivative" and not block_ids:
-        raise ValueError("selection['role'] 'derivative' needs block_ids: a derivative is its block set")
-    return role == "canonical" or (role is None and not block_ids)
+    if role == "derivative" and not run_numbers:
+        raise ValueError("selection['role'] 'derivative' needs run_numbers: a derivative is its run set")
+    return role == "canonical" or (role is None and not run_numbers)
+
+
+class RunIdConflict(Exception):
+    """A run already recorded under one wl.works id, named again under
+    another (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.2): the two disagree about which run this is, which resending
+    cannot fix. `server.py` answers it with a 409, as for a reused key."""
+
+
+_REBUILD = "rebuild the request from a fresh GET /sessions"
+
+
+def _run_numbers(value, *, name: str) -> list[int]:
+    if not isinstance(value, list) or any(isinstance(n, bool) or not isinstance(n, int) for n in value):
+        raise ValueError(f"{name} must be a list of run numbers, got {value!r}")
+    return value
+
+
+def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], run_numbers: list[int],
+                canonical: bool) -> tuple[list[int], list[dict]]:
+    """The file's runs, and the `core.RunAssertion` rows to record, after
+    checking every asserted run against the measured `core.Run` as the
+    request arrives (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.2).
+
+    A canonical holds every measured run whose start lies in its montage's
+    window, and each must be asserted here; a derivative holds the runs it
+    names, each measured, in the window, and asserted here or before."""
+    measured = {row["run_number"]: row for row in (core.Run & session_key).to_dicts()}
+    if not measured:
+        raise ValueError(
+            f"session {session_key['subject']}/{session_key['session_datetime'].isoformat()} has no measured "
+            "run on this host yet: its event codes are not yet read, or the rig sent no run markers. Resend "
+            "once GET /sessions lists its runs."
+        )
+    by_number: dict[int, RunEntry] = {}
+    for entry in asserted:
+        if entry.run_number in by_number:
+            raise ValueError(f"metadata.runs names run {entry.run_number} twice")
+        by_number[entry.run_number] = entry
+    rows = []
+    for number, entry in sorted(by_number.items()):
+        run = measured.get(number)
+        if run is None:
+            raise ValueError(f"run {number} is not a measured run of this session; {_REBUILD}")
+        for end, asserted_s, measured_s in (("start", entry.start_s, run["run_start_time"]),
+                                            ("end", entry.end_s, run["run_stop_time"])):
+            if abs(asserted_s - measured_s) > agreement.RUN_AGREEMENT_TOLERANCE_S:
+                raise ValueError(f"run {number}'s {end}, {asserted_s} s, is not the measured {measured_s} s; "
+                                 f"{_REBUILD}")
+        rows.append({**session_key, "run_number": number, "works_run_id": entry.works_run_id,
+                     "start_s": entry.start_s, "end_s": entry.end_s})
+    on_record = {row["run_number"]: row["works_run_id"] for row in (core.RunAssertion & session_key).to_dicts()}
+    for row in rows:
+        known = on_record.get(row["run_number"])
+        if known is not None and known != row["works_run_id"]:
+            raise RunIdConflict(f"run {row['run_number']} is recorded with works_run_id {known!r}; this request "
+                                f"names {row['works_run_id']!r}")
+    window = [number for number, run in sorted(measured.items())
+              if montage_row["start_s"] <= run["run_start_time"] < montage_row["end_s"]]
+    bounds = f"montage {montage_row['montage_id']}'s window [{montage_row['start_s']}, {montage_row['end_s']})"
+    if canonical:
+        if not window:
+            raise ValueError(f"{bounds} holds no measured run; {_REBUILD}")
+        missing = [number for number in window if number not in by_number]
+        if missing:
+            raise ValueError(f"measured run(s) {missing} lie in {bounds} and the request does not assert them; "
+                             f"{_REBUILD}")
+        return window, rows
+    named = sorted(set(run_numbers))
+    for problem, numbers in (("are not measured runs of this session", [n for n in named if n not in measured]),
+                             (f"outside {bounds}", [n for n in named if n in measured and n not in window]),
+                             ("asserted neither in metadata.runs nor before",
+                              [n for n in named if n not in by_number and n not in on_record])):
+        if numbers:
+            raise ValueError(f"selection names run(s) {numbers} {problem}; {_REBUILD}")
+    return named, rows
+
+
+def _check_probe_runs(probes: list[ProbeEntry], probe_runs, file_runs: list[int]) -> None:
+    """Every probe's runs are stated in full, and only the file's (design
+    spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.1;
+    wl.works' Plan 20 rule: the record is the run set each probe resolved
+    to, not the exclusions)."""
+    serials = sorted({probe.serial for probe in probes})
+    if probe_runs is None:
+        if serials:
+            raise ValueError(f"selection.probe_runs must give every probe's runs; metadata.probes names {serials}")
+        return
+    if not isinstance(probe_runs, dict) or any(not isinstance(serial, str) for serial in probe_runs):
+        raise ValueError(f"selection.probe_runs must map each probe's serial to its runs, got {probe_runs!r}")
+    if sorted(probe_runs) != serials:
+        raise ValueError(f"selection.probe_runs names {sorted(probe_runs)}, and metadata.probes names {serials}: "
+                         "every probe's runs are stated, and only theirs")
+    for serial, numbers in sorted(probe_runs.items()):
+        outside = sorted(set(_run_numbers(numbers, name=f"selection.probe_runs[{serial!r}]")) - set(file_runs))
+        if outside:
+            raise ValueError(f"probe {serial}'s runs {outside} are not among the file's runs {file_runs}")
 
 
 def _reject_out_of_range_int(value, *, name: str, bounds: tuple[int, int]) -> None:
@@ -239,22 +338,6 @@ def _reject_out_of_range_int(value, *, name: str, bounds: tuple[int, int]) -> No
         raise ValueError(f"{name} must be an integer, got {value!r}")
     if not (low <= value <= high):
         raise ValueError(f"{name}={value} is outside the column's range [{low}, {high}]")
-
-
-def _reject_oversized_str(value, *, name: str, max_len: int) -> None:
-    if not isinstance(value, str):
-        raise ValueError(f"{name} must be a string, got {value!r}")
-    if len(value) > max_len:
-        raise ValueError(
-            f"{name} is {len(value)} characters, over the {max_len}-character column limit"
-        )
-
-
-def _reject_non_finite(value, *, name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a number, got {value!r}")
-    if not math.isfinite(value):
-        raise ValueError(f"{name}={value} is not a finite number")
 
 
 def _require_landed_session(session_key: dict) -> None:
@@ -314,7 +397,7 @@ def _require_landed_session(session_key: dict) -> None:
             f"session {session_key['subject']}/"
             f"{session_key['session_datetime'].isoformat()} is not yet on "
             "record on this host: no Session row exists for it, so there is "
-            "nothing to attach a montage, a block or a request to. wl.works "
+            "nothing to attach a montage, a run or a request to. wl.works "
             "knows a session exists from the ELN before its data transfer "
             "lands here; until ingest has landed it, this host cannot accept "
             "a job for it. Resend once the transfer has completed."
@@ -346,77 +429,6 @@ def _build_montage_rows(
             "end_s": boundary.end_s,
         }
         for boundary in montage_boundaries
-    ]
-
-
-def _build_block_rows(session_key: dict, blocks: list[dict]) -> list[dict]:
-    """`Block` rows this request WOULD write -- validated, not yet inserted.
-    See `accept()`'s two-phase structure (review C1)."""
-    rows = []
-    for block in blocks:
-        b_block_id = block["block_id"]
-        _reject_out_of_range_int(
-            b_block_id, name="metadata.blocks[].block_id", bounds=_BLOCK_ID_RANGE
-        )
-        _reject_oversized_str(
-            block["task_type"], name="metadata.blocks[].task_type", max_len=_TASK_TYPE_MAX_LEN
-        )
-        _reject_non_finite(block["start_s"], name="metadata.blocks[].start_s")
-        _reject_non_finite(block["end_s"], name="metadata.blocks[].end_s")
-        works_block_id = block.get("works_block_id")
-        if works_block_id is not None:
-            _reject_oversized_str(
-                works_block_id,
-                name="metadata.blocks[].works_block_id",
-                max_len=_WORKS_BLOCK_ID_MAX_LEN,
-            )
-        rows.append(
-            {
-                **session_key,
-                "block_id": b_block_id,
-                "task_type": block["task_type"],
-                "start_s": block["start_s"],
-                "end_s": block["end_s"],
-                "works_block_id": works_block_id,
-            }
-        )
-    return rows
-
-
-def _effective_block_rows(
-    block_ids: list[int], *, session_key: dict, candidate_blocks: dict[int, dict]
-) -> tuple[dict[int, dict], list[int]]:
-    """For every id in `block_ids`: the `Block` row already on record, or --
-    when none exists yet -- the one this SAME request would insert (still
-    unwritten at this point; see `accept()`'s two-phase structure). Returns
-    `(found, unknown)` rather than raising, so `accept()` can tell "no Block
-    anywhere names this id" (review I4, its own `ValueError`) apart from "this
-    Block exists and is outside the window" instead of one case silently
-    hiding inside the other.
-    """
-    existing = {row["block_id"]: row for row in (core.Block & session_key).to_dicts()}
-    found: dict[int, dict] = {}
-    unknown: list[int] = []
-    for block_id in sorted(set(block_ids)):
-        row = existing.get(block_id) or candidate_blocks.get(block_id)
-        if row is None:
-            unknown.append(block_id)
-        else:
-            found[block_id] = row
-    return found, unknown
-
-
-def _blocks_outside_window(effective: dict[int, dict], montage_row: dict) -> list[str]:
-    """Every entry in `effective` whose own `[start_s, end_s)` is not fully
-    contained in the montage's. `ActivationBlock`'s own comment: a block the
-    montage does not cover in time is a block the sort must not cover
-    either, and nothing below the responder checks this (`submit_derivative`
-    has no `Montage` to compare against).
-    """
-    return [
-        f"block {block_id} [{row['start_s']}, {row['end_s']})"
-        for block_id, row in effective.items()
-        if row["start_s"] < montage_row["start_s"] or row["end_s"] > montage_row["end_s"]
     ]
 
 
@@ -478,25 +490,29 @@ def _record_probe_reports(session_key: dict, probes, prefix: str) -> None:
 
 
 def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
-    """A validated `JobRequest` becomes `Montage`/`Block`/`Request`/`Activation`
-    rows. Design spec section 6.1. Returns the `Activation` primary key.
+    """A validated `JobRequest` becomes `Montage`/`RunAssertion`/`Request`/
+    `Activation` rows, with the activation's runs and each probe's. Design
+    spec section 6.1, and design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.
+    Returns the `Activation` primary key.
 
     Raises `ValueError` for a request that cannot be honoured: a `selection`
-    missing `session_datetime` or `montage_id`; a `metadata.subject` longer
-    than `landing.SUBJECT_MAX_LEN`; a `session_datetime` that is neither a
+    missing `session_datetime` or `montage_id`; the retired
+    `selection.block_ids`; a `metadata.subject` longer than
+    `landing.SUBJECT_MAX_LEN`; a `session_datetime` that is neither a
     `datetime.datetime` nor a parseable ISO-8601 string; a
     `(subject, session_datetime)` with no `Session` row on this host yet
     (`_require_landed_session` -- the ordinary ELN-before-transfer case,
     which used to reach the database and come back as a `500` telling
-    wl.works to retry forever); a `montage_id`,
-    `block_id`, `task_type`, `works_block_id`, `start_s` or `end_s` that
-    cannot fit the column it would be written to; a `montage_id` with no
-    boundary on record and none supplied in this request either; a
-    `block_ids` entry naming no `Block` anywhere; or a `block_ids` entry
-    naming a block outside its montage's window. All of these are checked
+    wl.works to retry forever); a `montage_id` that cannot fit its column; a
+    `montage_id` with no boundary on record and none supplied in this request
+    either; or any run that does not match what this host measured
+    (`_check_runs`, `_check_probe_runs`). Raises `RunIdConflict` for a run
+    already asserted under another `works_run_id`. All of these are checked
     against BUILT-BUT-NOT-YET-WRITTEN candidate rows before anything is
     actually inserted (review C1): a rejected request leaves no `Montage` or
-    `Block` residue behind for a later, corrected request to trip over.
+    `RunAssertion` residue behind for a later, corrected request to trip
+    over.
 
     Session identity is `metadata.subject` plus `selection["session_datetime"]`,
     normalised through `landing.to_naive_utc` -- the one conversion every
@@ -507,17 +523,27 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     `selection`'s own `subject`, if wl.works ever sends one, is not read: the
     ELN's record of who this is is `metadata.subject`.
 
-    `selection["block_ids"]`, when present and non-empty, makes this a
-    derivative (`submit_derivative`); its absence, or an empty list, makes it
-    canonical (`submit`).
+    `selection["run_numbers"]`, when present and non-empty, makes this a
+    derivative holding those runs (`submit_derivative`); its absence, or an
+    empty list, makes it a canonical holding every measured run of its
+    montage, with each probe's runs in `selection["probe_runs"]` (`submit`).
     """
     selection = request.selection
     _require_selection_keys(selection)
-    # Before anything reads the database: a malformed lifecycle selection
-    # is the caller's to fix, whatever this host holds.
-    canonical = _lifecycle_role(selection, selection.get("block_ids") or [])
-
     metadata = request.metadata
+    # Before anything reads the database: a malformed selection is the
+    # caller's to fix, whatever this host holds.
+    if selection.get("block_ids"):
+        raise ValueError("selection.block_ids is retired: a derivative names its runs in selection.run_numbers, "
+                         "and a canonical holds every run of its montage, each probe's in selection.probe_runs")
+    run_numbers = _run_numbers(selection.get("run_numbers") or [], name="selection.run_numbers")
+    probe_runs = selection.get("probe_runs")
+    canonical = _lifecycle_role(selection, run_numbers)
+    if canonical and run_numbers:
+        raise ValueError("selection.run_numbers is a derivative's: a canonical holds every run of its montage")
+    if not canonical and probe_runs is not None:
+        raise ValueError("selection.probe_runs is a canonical's: a derivative's runs are its run_numbers")
+
     _reject_oversized_subject(metadata.subject)
 
     session_datetime = landing.to_naive_utc(_coerce_session_datetime(selection["session_datetime"]))
@@ -538,9 +564,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # (review C1). ----
 
     montage_rows = _build_montage_rows(session_key, metadata.montage_boundaries)
-    block_rows = _build_block_rows(session_key, metadata.blocks)
     candidate_montages = {row["montage_id"]: row for row in montage_rows}
-    candidate_blocks = {row["block_id"]: row for row in block_rows}
 
     schema_request.activate(prefix=prefix)
 
@@ -556,47 +580,23 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             "metadata.montage_boundaries did not supply one either"
         )
 
-    block_ids = selection.get("block_ids") or []
-
     # Correction 2: accept() owns the montage window (module docstring).
-    if block_ids:
-        effective, unknown = _effective_block_rows(
-            block_ids, session_key=session_key, candidate_blocks=candidate_blocks
-        )
-        if unknown:
-            raise ValueError(
-                "selection names block id(s) with no Block on record and "
-                f"none supplied in this request either: {unknown}"
-            )
-        offending = _blocks_outside_window(effective, montage_row)
-        if offending:
-            raise ValueError(
-                f"selection names block(s) outside montage {montage_id}'s window "
-                f"[{montage_row['start_s']}, {montage_row['end_s']}): " + "; ".join(offending)
-            )
+    file_runs, run_assertion_rows = _check_runs(session_key, montage_row, metadata.runs, run_numbers, canonical)
+    if canonical:
+        _check_probe_runs(metadata.probes, probe_runs, file_runs)
 
     # ---- Phase 2: every check above passed. Only now does anything get
     # written. ----
 
-    # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
     _record_subject_details(metadata.subject, metadata.subject_details)
     _record_probe_reports(session_key, metadata.probes, prefix)
+    # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
     if montage_rows:
         core.Montage.insert(montage_rows, skip_duplicates=True)
-
-    # Step 2: Block rows, insert-if-absent, works_block_id set -- the link
-    # back to wl.works' own authored row (core.Block's own comment).
-    #
-    # NOTE -- a design gap this task does not fix, flagged rather than
-    # solved: core.Block's own comment says its boundaries are "decoded from
-    # event codes and cross-validated against those rows", and the frozen
-    # parent spec section 4.2 says the same -- start_s/end_s are specified as
-    # wl-preproc's own MEASUREMENT. This writes wl.works' ASSERTED numbers
-    # into that same column instead, and skip_duplicates makes that
-    # permanent: 1c-4's decoder, when built, will find the slot already
-    # occupied by an asserted value rather than a decoded one.
-    if block_rows:
-        core.Block.insert(block_rows, skip_duplicates=True)
+    # Step 2: wl.works' id and copy of each run it asserts, insert-if-absent;
+    # `_check_runs` has already refused a run named under a second id.
+    if run_assertion_rows:
+        core.RunAssertion.insert(run_assertion_rows, skip_duplicates=True)
 
     # The payload stored as evidence ("the request as received", Request's
     # own comment). mode="json" -- this project's own existing convention in
@@ -629,9 +629,13 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             task_type=request.domain,
             origin="wl_works",
             selection=montage_key,
-            block_ids=list(block_ids),
+            run_numbers=file_runs,
             payload=payload,
             requested_by=metadata.experimenter,
+            # A derivative is the unit a sort runs over (decision 3), so each
+            # probe the request names covers all of its runs; the request
+            # states no per-probe list for one (Plan B's final review, I1).
+            probe_runs={probe.serial: file_runs for probe in metadata.probes},
         )
 
     if selection.get("supersedes_activation_id") is not None:
@@ -643,7 +647,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             payload=payload,
             requested_by=metadata.experimenter,
             supersedes_activation_id=selection["supersedes_activation_id"],
-            block_ids=list(block_ids),
+            run_numbers=file_runs,
+            probe_runs=probe_runs,
         )
     return schema_request.submit(
         idempotency_key=request.idempotency_key,
@@ -652,5 +657,6 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
         selection=montage_key,
         payload=payload,
         requested_by=metadata.experimenter,
-        block_ids=list(block_ids),
+        run_numbers=file_runs,
+        probe_runs=probe_runs,
     )

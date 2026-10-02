@@ -1,10 +1,13 @@
 # wl_preproc/schema/core.py
-"""The custom core tables: montages, blocks, acquisition systems and segments.
+"""The custom core tables: montages, runs, acquisition systems and segments.
 
-Segments and blocks are orthogonal and both are required (spec section 5.2.1).
-A block is one run of one task; a segment is one recording file's extent, forced
-by an RHS stim-parameter change, a crash or a restart. A block can span segments
-and a segment can span blocks, so neither is derivable from the other.
+Segments and runs are orthogonal and both are required (spec section 5.2.1).
+A run is one stretch of one task; a segment is one recording file's extent,
+forced by an RHS stim-parameter change, a crash or a restart. A run can span
+segments and a segment can span runs, so neither is derivable from the other.
+`core.Block`, wl.works' assertion of what was then called a block, is retired
+(design spec `2026-10-01-session-listing-and-run-requests-design.md` section
+5): a request asserts runs, kept in `RunAssertion`.
 """
 
 from __future__ import annotations
@@ -87,29 +90,20 @@ class RunRecordProblem(dj.Manual):
 
 
 @schema
-class Block(dj.Manual):
+class RunAssertion(dj.Manual):
     definition = """
-    # One run of one task, mirroring wl.works animal_session_block.
-    # *True under the August glossary. Since 2026-10-01 the requester's
-    # vocabulary makes a block a stretch of trials inside a run, and a run is
-    # `Run` above; revising wl.works' own blocks to match is wl.works'.*
-    # start_s/end_s are WL.WORKS' ASSERTION, recorded here through accept() --
-    # recording an assertion is not authoring it. Closed open item 9: block rows
-    # are authored by wl.works' session planner and wl-preproc never writes
-    # them; it cross-validates and quarantines on absence. The MEASURED boundary
-    # is a different quantity and lives in element-event's `trial.Block`, written
-    # by `schema/events.py::populate_session` (1c-5). This repo declares no table
-    # of its own for it: design spec section 5's adoption table assigns "Events,
-    # trials, blocks" to `element-event`. A disagreement between the two is its
-    # own tier-D condition on `timebase.TimingProvenance.block_agreement`, not a
-    # silent reconciliation. Key: (subject, session_datetime, block_id).
-    -> pipeline.Session
-    block_id : smallint
+    # wl.works' assertion of one measured run: its own id for the run, and the
+    # times it holds for it, recorded by accept() when a request names the
+    # run (design spec 2026-10-01-session-listing-and-run-requests-design.md
+    # section 3.3). Kept apart from the measured Run, against which accept()
+    # checks it as the request arrives. Recorded if absent; a request naming
+    # another id for the same run is refused. Key: (subject,
+    # session_datetime, run_number).
+    -> Run
     ---
-    task_type   : varchar(32)
-    start_s     : double
-    end_s       : double
-    works_block_id = null : varchar(64)  # the wl.works row this was matched to
+    works_run_id : varchar(64)  # wl.works' animal_session_run id
+    start_s      : double       # (s) session time, as wl.works holds it
+    end_s        : double
     """
 
 

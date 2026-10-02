@@ -178,6 +178,13 @@ status:
     and raw ~imroTbl, and its flags, re-listed whenever its entry changes
     (design spec `2026-10-01-session-listing-and-run-requests-design.md`, Plan
     A; handoff `docs/handoffs/2026-10-01-session-listing.md`).
+    Requests that name runs are BUILT on `spec/run-requests` (2026-10-02, NOT
+    merged as written): a canonical asserts its montage's measured runs, each
+    checked against core.Run within 2 ms as it arrives, with each probe's runs
+    stated in full; a derivative names whole runs; the NWB file is built from
+    its runs, with a description at version 3; and core.Block, ActivationBlock,
+    BlockCoverage and block_agreement are retired (the same spec, Plan B;
+    handoff `docs/handoffs/2026-10-01-run-requests.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**

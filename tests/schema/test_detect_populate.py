@@ -549,7 +549,7 @@ def daemon_module(dj_conn, prefix):
 
 def _build_stepped_session(
     tmp_path_factory, *, dirname, session_id, subject, session_datetime, seed,
-    after_generate=None, fixational_drift_px_per_sqrt_frame=0.0,
+    after_generate=None, fixational_drift_px_per_sqrt_frame=0.0, recipe_update=None,
 ):
     """The construction behind `stepped_session`, and -- without
     `after_generate` -- behind the mixed-eye fixtures below (`left_refused_
@@ -642,6 +642,10 @@ def _build_stepped_session(
         eye_fixations=tuple(detect_fixations),
         fixational_drift_px_per_sqrt_frame=fixational_drift_px_per_sqrt_frame,
     )
+    if recipe_update:
+        # The NWB builder's tests wrap these trials in runs (design spec
+        # `2026-10-01-session-listing-and-run-requests-design.md` section 4).
+        recipe = SessionRecipe.model_validate({**recipe.model_dump(), **recipe_update})
 
     root = tmp_path_factory.mktemp(dirname)
     truth = generate_session(root, recipe)

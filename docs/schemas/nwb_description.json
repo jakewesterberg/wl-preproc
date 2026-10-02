@@ -19,71 +19,6 @@
       "title": "Behaviour",
       "type": "object"
     },
-    "Block": {
-      "additionalProperties": false,
-      "properties": {
-        "asserted": {
-          "$ref": "#/$defs/Interval"
-        },
-        "block_id": {
-          "title": "Block Id",
-          "type": "integer"
-        },
-        "conditions": {
-          "items": {
-            "$ref": "#/$defs/Condition"
-          },
-          "title": "Conditions",
-          "type": "array"
-        },
-        "coverage": {
-          "additionalProperties": {
-            "$ref": "#/$defs/Coverage"
-          },
-          "title": "Coverage",
-          "type": "object"
-        },
-        "measured": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Interval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "task": {
-          "$ref": "#/$defs/Task"
-        },
-        "trials": {
-          "$ref": "#/$defs/TrialCounts"
-        },
-        "works_block_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Works Block Id"
-        }
-      },
-      "required": [
-        "block_id",
-        "works_block_id",
-        "task",
-        "asserted",
-        "measured",
-        "trials",
-        "coverage",
-        "conditions"
-      ],
-      "title": "Block",
-      "type": "object"
-    },
     "Checksums": {
       "additionalProperties": false,
       "properties": {
@@ -109,7 +44,7 @@
     },
     "Condition": {
       "additionalProperties": false,
-      "description": "One condition that ran in a block: by its name in the rig's record,\nwith the settings constant across its trials and a summary of those that\nvaried; or, without that record, by the stream's CONDITION number with\nsettings unknown (null).",
+      "description": "One condition that ran in a run: by its name in the rig's record,\nwith the settings constant across its trials and a summary of those that\nvaried; or, without that record, by the stream's CONDITION number with\nsettings unknown (null).",
       "properties": {
         "code": {
           "anyOf": [
@@ -594,6 +529,14 @@
           "title": "Serial",
           "type": "string"
         },
+        "sorted_runs": {
+          "default": [],
+          "items": {
+            "type": "integer"
+          },
+          "title": "Sorted Runs",
+          "type": "array"
+        },
         "target": {
           "anyOf": [
             {
@@ -698,6 +641,127 @@
       "title": "Quality",
       "type": "object"
     },
+    "Run": {
+      "additionalProperties": false,
+      "description": "One run the file holds, measured from the recording. `works_run_id`\njoins it to wl.works' `animal_session_run`.",
+      "properties": {
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/RunBlock"
+          },
+          "title": "Blocks",
+          "type": "array"
+        },
+        "closed": {
+          "title": "Closed",
+          "type": "boolean"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "title": "Conditions",
+          "type": "array"
+        },
+        "coverage": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Coverage"
+          },
+          "title": "Coverage",
+          "type": "object"
+        },
+        "measured": {
+          "$ref": "#/$defs/Interval"
+        },
+        "run_number": {
+          "title": "Run Number",
+          "type": "integer"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "trials": {
+          "$ref": "#/$defs/TrialCounts"
+        },
+        "works_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Works Run Id"
+        }
+      },
+      "required": [
+        "run_number",
+        "works_run_id",
+        "task",
+        "measured",
+        "closed",
+        "trials",
+        "coverage",
+        "conditions",
+        "blocks"
+      ],
+      "title": "Run",
+      "type": "object"
+    },
+    "RunBlock": {
+      "additionalProperties": false,
+      "description": "A measured block inside the run: consecutive trials under one block\ntype. `block_number` is its number in the session, as `BLOCK_START`\nstrobes it; `closed` is null when never recorded.",
+      "properties": {
+        "block_in_run": {
+          "title": "Block In Run",
+          "type": "integer"
+        },
+        "block_number": {
+          "title": "Block Number",
+          "type": "integer"
+        },
+        "block_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Block Type"
+        },
+        "closed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Closed"
+        },
+        "measured": {
+          "$ref": "#/$defs/Interval"
+        },
+        "trials": {
+          "title": "Trials",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "block_number",
+        "block_in_run",
+        "block_type",
+        "measured",
+        "closed",
+        "trials"
+      ],
+      "title": "RunBlock",
+      "type": "object"
+    },
     "SubjectInfo": {
       "additionalProperties": false,
       "properties": {
@@ -798,13 +862,6 @@
   },
   "additionalProperties": false,
   "properties": {
-    "blocks": {
-      "items": {
-        "$ref": "#/$defs/Block"
-      },
-      "title": "Blocks",
-      "type": "array"
-    },
     "checksums": {
       "$ref": "#/$defs/Checksums"
     },
@@ -838,9 +895,16 @@
     "quality": {
       "$ref": "#/$defs/Quality"
     },
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/Run"
+      },
+      "title": "Runs",
+      "type": "array"
+    },
     "schema_version": {
-      "const": 2,
-      "default": 2,
+      "const": 3,
+      "default": 3,
       "title": "Schema Version",
       "type": "integer"
     },
@@ -852,7 +916,7 @@
     "identity",
     "subject",
     "data_types",
-    "blocks",
+    "runs",
     "quality",
     "notes",
     "checksums"

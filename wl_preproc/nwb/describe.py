@@ -24,11 +24,14 @@ def _commit() -> str | None:
     return commit if out.returncode == 0 and len(commit) == 40 else None
 
 
-def _task(value) -> dict:
-    """A block's task type, by code and name. Lab-defined codes (100 and
-    up) have no name here; their code stands for it."""
+def _task(value, rig_name: str | None = None) -> dict:
+    """A run's task, by code and name: the rig's name for it when its record
+    gives one, else the code's name. Lab-defined codes (100 and up) have no
+    name here; their code stands for it."""
     from wl_preproc.contracts.events import TaskTypeCode
 
+    if rig_name:
+        return {"code": str(value), "name": rig_name}
     try:
         name = TaskTypeCode(int(value)).name.lower()
     except (TypeError, ValueError):
@@ -84,19 +87,27 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
             "target": probe["target"],
             "assignment": probe["assignment"],
             "area_from": probe["area_from"],
+            "sorted_runs": probe.get("sorted_runs", []),
         } for probe in data.probes],
-        "blocks": [{
-            "block_id": block["block_id"],
-            "works_block_id": block["works_block_id"],
-            "task": _task(block["task_type"]),
-            "asserted": {"start_s": block["start_s"], "stop_s": block["end_s"]},
-            "measured": None if block["measured_start_s"] is None else {
-                "start_s": block["measured_start_s"], "stop_s": block["measured_stop_s"]},
-            "trials": block["trials"],
+        "runs": [{
+            "run_number": run["run_number"],
+            "works_run_id": run["works_run_id"],
+            "task": _task(run["task_type"], run["task"]),
+            "measured": {"start_s": run["start_s"], "stop_s": run["end_s"]},
+            "closed": run["closed"],
+            "trials": run["trials"],
             "coverage": {system: {"coverage": verdict, "covered_s": covered}
-                         for system, (verdict, covered) in block["coverage"].items()},
-            "conditions": block["conditions"],
-        } for block in data.blocks],
+                         for system, (verdict, covered) in run["coverage"].items()},
+            "conditions": run["conditions"],
+            "blocks": [{
+                "block_number": block["block_number"],
+                "block_in_run": block["block_in_run"],
+                "block_type": block["block_type"],
+                "measured": {"start_s": block["start_s"], "stop_s": block["stop_s"]},
+                "closed": block["closed"],
+                "trials": block["n_trials"],
+            } for block in data.blocks if block["run_number"] == run["run_number"]],
+        } for run in data.runs],
         "quality": {
             "timing_tier": session["timing_tier"],
             "reference_source": session["clock"]["source"],

@@ -3,8 +3,11 @@ opening it. Frozen interface: exported to `docs/schemas/nwb_description.json`
 and checked in CI (design spec `2026-09-29-nwb-publishing-design.md`
 section 2).
 
-**Versioned and open.** `schema_version` is 2: version 2 gave `probes` its
-shape, each probe with both of its areas (design spec
+**Versioned and open.** `schema_version` is 3: version 3 replaced `blocks`
+with `runs`, each with `works_run_id` for wl.works' `animal_session_run` and
+the measured blocks inside it, and gave each probe its `sorted_runs` (design
+spec `2026-10-01-session-listing-and-run-requests-design.md` section 4).
+Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
 stimulation -- and never rename or remove one within a version. This side validates strictly (`extra="forbid"`), so what it publishes
@@ -22,7 +25,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class _Frozen(BaseModel):
@@ -94,7 +97,7 @@ class TrialCounts(_Frozen):
 
 
 class Condition(_Frozen):
-    """One condition that ran in a block: by its name in the rig's record,
+    """One condition that ran in a run: by its name in the rig's record,
     with the settings constant across its trials and a summary of those that
     varied; or, without that record, by the stream's CONDITION number with
     settings unknown (null)."""
@@ -121,15 +124,32 @@ class Task(_Frozen):
     name: str
 
 
-class Block(_Frozen):
-    block_id: int
-    works_block_id: str | None
+class RunBlock(_Frozen):
+    """A measured block inside the run: consecutive trials under one block
+    type. `block_number` is its number in the session, as `BLOCK_START`
+    strobes it; `closed` is null when never recorded."""
+
+    block_number: int
+    block_in_run: int
+    block_type: str | None
+    measured: Interval
+    closed: bool | None
+    trials: int
+
+
+class Run(_Frozen):
+    """One run the file holds, measured from the recording. `works_run_id`
+    joins it to wl.works' `animal_session_run`."""
+
+    run_number: int
+    works_run_id: str | None
     task: Task
-    asserted: Interval
-    measured: Interval | None
+    measured: Interval
+    closed: bool
     trials: TrialCounts
     coverage: dict[str, Coverage]
     conditions: list[Condition]
+    blocks: list[RunBlock]
 
 
 class Quality(_Frozen):
@@ -182,17 +202,21 @@ class ProbeInfo(_Frozen):
     target: ProbeTarget | None
     assignment: ProbeAssignment | None
     area_from: Literal["assignment", "target", "unknown"]
+    # The runs this probe's sort covers, as the request stated them (design
+    # spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.1);
+    # in a derivative, all of its runs (amendment 25).
+    sorted_runs: list[int] = []
 
 
 class NwbDescription(_Frozen):
-    schema_version: Literal[2] = SCHEMA_VERSION
+    schema_version: Literal[3] = SCHEMA_VERSION
     identity: Identity
     subject: SubjectInfo
     data_types: DataTypes
     # Every probe the file holds; empty in version 1. Areas are per
     # insertion: nothing yet produces a per-channel one.
     probes: list[ProbeInfo] = []
-    blocks: list[Block]
+    runs: list[Run]
     quality: Quality
     # Empty in version 1; piece 3 adds the processing summary (for example
     # the number of single units, and whether any narrow-waveform units).

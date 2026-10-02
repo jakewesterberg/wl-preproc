@@ -3,7 +3,7 @@
 
 **The one module in `wl_preproc/nwb/` that reads the database and the raw
 ohDPI file.** Everything it returns is plain data -- dicts, lists and arrays
-in session seconds, already trimmed to the activation's blocks (section 5) --
+in session seconds, already trimmed to the activation's runs (section 5) --
 so every writer is tested without either."""
 
 from __future__ import annotations
@@ -36,11 +36,14 @@ class Refused(Exception):
 class Gathered:
     session: dict
     systems: list[str]
+    # The file's runs, and the measured blocks inside them (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 4).
+    runs: list[dict]
     blocks: list[dict]
     trials: list[dict]
     events: list[dict]
     timebase: dict
-    eye: dict | None  # None: no ohDPI recording in the session, or no sample of it in the blocks
+    eye: dict | None  # None: no ohDPI recording in the session, or no sample of it in the runs
     # Every condition that ran in the file's trials, and why any trial's
     # condition or settings are unknown (design spec
     # `2026-09-29-nwb-publishing-design.md` section 2.1).
@@ -61,20 +64,32 @@ def _aware_utc(value: datetime.datetime) -> datetime.datetime:
     return value.replace(tzinfo=datetime.timezone.utc) if value.tzinfo is None else value
 
 
-def _block_set(activation_key: dict, activation: dict, session_key: dict) -> list[dict]:
+def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
+    """The file's runs (`request.ActivationRun`), measured (`core.Run`), with
+    wl.works' id for each and the rig's name for its task (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 4)."""
     from wl_preproc.schema import core, request
 
-    # A derivative always names its blocks; since the canonical lifecycle a
-    # canonical may too (design spec `2026-09-30-canonical-lifecycle-design.md`
-    # section 3). Without named blocks, a canonical takes its montage's.
-    named = request.ActivationBlock & activation_key
-    if activation["role"] == "derivative" or named:
-        rows = (core.Block & named.proj()).to_dicts()
-    else:
-        montage = (core.Montage & activation_key).fetch1()
-        rows = [row for row in (core.Block & session_key).to_dicts()
-                if montage["start_s"] <= row["start_s"] < montage["end_s"]]
+    numbers = {int(number) for number in (request.ActivationRun & activation_key).to_arrays("run_number")}
+    works = {row["run_number"]: row["works_run_id"] for row in (core.RunAssertion & session_key).to_dicts()}
+    tasks = {row["run_number"]: row["task"] for row in (core.RunRecord & session_key).to_dicts()}
+    rows = [{"run_number": row["run_number"], "start_s": float(row["run_start_time"]),
+             "end_s": float(row["run_stop_time"]), "task_type": row["task_type"], "task": tasks.get(row["run_number"]),
+             "works_run_id": works.get(row["run_number"]), "closed": bool(row["closed"])}
+            for row in (core.Run & session_key).to_dicts() if row["run_number"] in numbers]
     return sorted(rows, key=lambda row: row["start_s"])
+
+
+def _task_name(code, rig_name: str | None) -> str:
+    """The rig's name for a run's task, else its code's name, else the code."""
+    from wl_preproc.contracts.events import TaskTypeCode
+
+    if rig_name:
+        return rig_name
+    try:
+        return TaskTypeCode(int(code)).name.lower()
+    except (TypeError, ValueError):
+        return str(code)
 
 
 def identifier_for(activation_key: dict, session_id: str) -> str:
@@ -125,7 +140,7 @@ def readiness(activation_key: dict) -> str | None:
     # `ProbeCensus` for every SpikeGLX segment of the session, not only the
     # montage's: a segment not yet read has no extent to place it by. A
     # session with no SpikeGLX segment has nothing to wait for.
-    for table in (coverage.BlockCoverage, coverage.TrialCoverage, ephys.ProbeCensus, eye_schema.EyeCalibration,
+    for table in (coverage.RunCoverage, coverage.TrialCoverage, ephys.ProbeCensus, eye_schema.EyeCalibration,
                   detect.EyeValidity, detect.EyeDetection, consensus.DetectorAgreement):
         pending = (table().key_source & session_key & read.get(table, {})) - table.proj()
         if len(pending):
@@ -191,35 +206,62 @@ def _coverage(table, key_field: str, session_key: dict) -> dict:
     return by_item
 
 
-def _blocks(block_rows: list[dict], session_key: dict) -> list[dict]:
-    from wl_preproc.schema import coverage, pipeline
+def _runs(run_rows: list[dict], session_key: dict) -> list[dict]:
+    """The file's runs, each with its per-system coverage (`RunCoverage`)."""
+    from wl_preproc.schema import coverage
 
-    measured = {row["block_id"]: row for row in (pipeline.trial.Block & session_key).to_dicts()}
-    cover = _coverage(coverage.BlockCoverage, "block_id", session_key)
-    return [{
-        "block_id": row["block_id"], "start_s": float(row["start_s"]), "end_s": float(row["end_s"]),
-        "task_type": row["task_type"], "works_block_id": row["works_block_id"],
-        "measured_start_s": None if row["block_id"] not in measured else float(measured[row["block_id"]]["block_start_time"]),
-        "measured_stop_s": None if row["block_id"] not in measured else float(measured[row["block_id"]]["block_stop_time"]),
-        "coverage": cover.get(row["block_id"], {}),
-    } for row in block_rows]
+    cover = _coverage(coverage.RunCoverage, "run_number", session_key)
+    return [{**row, "coverage": cover.get(row["run_number"], {})} for row in run_rows]
 
 
-def _trials(blocks: BlockSet, session_key: dict) -> list[dict]:
+def _blocks(run_rows: list[dict], session_key: dict) -> list[dict]:
+    """The measured blocks inside the file's runs (`trial.Block`), each with
+    its run, its order there, its block type and whether it closed."""
+    from wl_preproc.events.runs import run_of, stored_doubles
+    from wl_preproc.schema import pipeline
+
+    attributes: dict = {}
+    for row in (pipeline.trial.Block.Attribute & session_key).to_dicts():
+        attributes.setdefault(row["block_id"], {})[row["attribute_name"]] = row["attribute_value"]
+    out, order = [], {}
+    stored = stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time")
+    for row in sorted(stored, key=lambda row: row["block_start_time"]):
+        run_number = run_of(row["block_start_time"], run_rows)
+        if run_number is None:
+            continue
+        order[run_number] = order.get(run_number, 0) + 1
+        found = attributes.get(row["block_id"], {})
+        out.append({"block_number": row["block_id"], "run_number": run_number, "block_in_run": order[run_number],
+                    "block_type": found.get("block_type"), "start_s": float(row["block_start_time"]),
+                    "stop_s": float(row["block_stop_time"]),
+                    "closed": None if "closed" not in found else found["closed"] == "1"})
+    return out
+
+
+def _trials(run_rows: list[dict], session_key: dict) -> list[dict]:
+    """The trials whose start lies in one of the file's runs, each with its
+    run and its measured block."""
+    from wl_preproc.events.runs import run_of, stored_doubles
     from wl_preproc.schema import coverage, pipeline
 
     block_of = {row["trial_id"]: row["block_id"] for row in (pipeline.trial.BlockTrial & session_key).to_dicts()}
     cover = _coverage(coverage.TrialCoverage, "trial_id", session_key)
-    rows = [row for row in (pipeline.trial.Trial & session_key).to_dicts()
-            if blocks.contains([row["trial_start_time"]])[0]]
-    return [{
-        "trial_id": row["trial_id"], "start_s": float(row["trial_start_time"]), "stop_s": float(row["trial_stop_time"]),
-        "outcome": row["trial_type"], "block_id": block_of.get(row["trial_id"]),
-        "coverage": cover.get(row["trial_id"], {}),
-    } for row in rows]
+    trials = []
+    for row in stored_doubles(pipeline.trial.Trial & session_key, "trial_start_time", "trial_stop_time"):
+        run_number = run_of(row["trial_start_time"], run_rows)
+        if run_number is None:
+            continue
+        trials.append({
+            "trial_id": row["trial_id"], "start_s": float(row["trial_start_time"]),
+            "stop_s": float(row["trial_stop_time"]), "outcome": row["trial_type"], "run_number": run_number,
+            "block_id": block_of.get(row["trial_id"]), "coverage": cover.get(row["trial_id"], {}),
+        })
+    return trials
 
 
-def _events(blocks: BlockSet, session_key: dict) -> list[dict]:
+def _events(run_rows: list[dict], session_key: dict) -> list[dict]:
+    """The task events inside one of the file's runs, its ends included."""
+    from wl_preproc.events.runs import event_inside
     from wl_preproc.schema import pipeline
 
     attributes: dict = {}
@@ -228,7 +270,7 @@ def _events(blocks: BlockSet, session_key: dict) -> list[dict]:
     events = []
     for row in (pipeline.event.Event & session_key).to_dicts():
         time_s = float(row["event_start_time"])
-        if not blocks.contains_instant([time_s])[0]:
+        if not any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows):
             continue
         extra = attributes.get((row["event_type"], row["event_start_time"]), {})
         events.append({
@@ -240,14 +282,15 @@ def _events(blocks: BlockSet, session_key: dict) -> list[dict]:
     return events
 
 
-def _trial_notes(session_key: dict, blocks: BlockSet) -> list[str]:
-    """What the stored trials leave out, for this file's blocks (design spec
+def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
+    """What the stored trials leave out, for this file's runs (design spec
     `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4). Read from
     every strobed `TRIAL_NUMBER`, which `Event` keeps whether or not its trial
     was stored: a number strobed again after its first, and one above
     element-event's smallint `trial_id`."""
     import collections
 
+    from wl_preproc.events.runs import event_inside
     from wl_preproc.schema import pipeline
     from wl_preproc.schema.events import TRIAL_ID_MAX
 
@@ -256,7 +299,8 @@ def _trial_notes(session_key: dict, blocks: BlockSet) -> list[str]:
         for row in (pipeline.event.Event.Attribute & session_key
                     & {"event_type": "TRIAL_NUMBER", "attribute_name": "trial_id"}).to_dicts())
     counts = collections.Counter(number for _time_s, number in strobed)
-    inside = blocks.contains_instant([time_s for time_s, _number in strobed]) if strobed else []
+    inside = [any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows)
+              for time_s, _number in strobed]
     seen, repeated, too_large = set(), set(), 0
     for (_time_s, number), here in zip(strobed, inside, strict=True):
         first = number not in seen
@@ -273,9 +317,9 @@ def _trial_notes(session_key: dict, blocks: BlockSet) -> list[str]:
     return notes
 
 
-def _conditions(trials: list[dict], events: list[dict], blocks: list[dict], session_dir: Path,
+def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
                 subject: str) -> tuple[list[dict], list[str]]:
-    """Each trial's condition and the settings that varied, and each block's
+    """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
     and 2.2). Returns the file's conditions and the notes on what did not
@@ -292,11 +336,11 @@ def _conditions(trials: list[dict], events: list[dict], blocks: list[dict], sess
     for position, trial in enumerate(trials):
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
-    for block in blocks:
-        inside = [trial for trial in trials if block["start_s"] <= trial["start_s"] < block["end_s"]]
+    for run in runs:
+        inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
-        block["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
-        block["conditions"] = block_conditions(inside, matched, codes)
+        run["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
+        run["conditions"] = block_conditions(inside, matched, codes)
     return block_conditions(trials, matched, codes), notes
 
 
@@ -492,8 +536,8 @@ def _probe(serial: str, probe_type: str | None, report: dict | None, electrodes:
     }
 
 
-def _probes(key: dict, session_key: dict, block_rows: list[dict]) -> tuple[list[dict], list[str]]:
-    """Every probe the SpikeGLX segments under the file's blocks recorded, joined to
+def _probes(key: dict, session_key: dict, run_rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Every probe the SpikeGLX segments under the file's runs recorded, joined to
     wl.works' report of its insertion by serial, and the notes the file
     carries about what could not be placed or joined (design spec
     `2026-09-30-nwb-probes-design.md` sections 3 and 5).
@@ -516,7 +560,7 @@ def _probes(key: dict, session_key: dict, block_rows: list[dict]) -> tuple[list[
     segments = {
         row["segment_barcode"]: row
         for row in (core.Segment & session_key & {"system": "spikeglx"}).to_dicts()
-        if any(row["start_s"] < block["end_s"] and row["end_s"] > block["start_s"] for block in block_rows)
+        if any(row["start_s"] < run["end_s"] and row["end_s"] > run["start_s"] for run in run_rows)
     }
     parts = [part for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
              if part["segment_barcode"] in segments]
@@ -537,7 +581,7 @@ def _probes(key: dict, session_key: dict, block_rows: list[dict]) -> tuple[list[
                     segments[part["segment_barcode"]]["file_path"])
         if len(maps) > 1:
             raise Refused(
-                f"probe {serial} recorded two active-site maps under this file's blocks of montage "
+                f"probe {serial} recorded two active-site maps under this file's runs of montage "
                 f"{key['montage_id']}, in "
                 + " and in ".join(", ".join(paths) for paths in maps.values())
                 + ": a bank change needs a new montage (parent spec section 8.3), and a file across it would be "
@@ -587,34 +631,42 @@ def gather(activation_key: dict) -> Gathered:
         raise Refused("no TimingProvenance row: the session has no session time yet")
     if provenance[0]["tier"] == "D":
         raise Refused("timing tier D: no trustworthy session time")
-    block_rows = _block_set(key, activation, session_key)
-    if not block_rows:
-        raise Refused(f"no blocks in the {activation['role']} activation's block set")
-    blocks = BlockSet.of(block_rows)
-    probes, probe_notes = _probes(key, session_key, block_rows)
+    run_rows = _run_set(key, session_key)
+    if not run_rows:
+        raise Refused(f"no runs in the {activation['role']} activation's run set")
+    extent = BlockSet.of(run_rows)
+    probes, probe_notes = _probes(key, session_key, run_rows)
+    sorted_runs: dict[str, list[int]] = {}
+    for row in (request.ActivationProbeRun & key).to_dicts(order_by=("probe_serial", "run_number")):
+        sorted_runs.setdefault(row["probe_serial"], []).append(row["run_number"])
+    for probe in probes:
+        probe["sorted_runs"] = sorted_runs.get(probe["serial"], [])
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     clock = _reference_time(session_dir, key["session_datetime"])
     validity_idx, detection_idx = _paramsets()
-    eye = _eye(session_key, session_dir, blocks, validity_idx, detection_idx)
+    eye = _eye(session_key, session_dir, extent, validity_idx, detection_idx)
     no_eye_samples = eye is not None and eye.get("no_samples", False)
     if no_eye_samples:
         eye = None
 
     session_id = session_dir.name
-    task_types = sorted({row["task_type"] for row in block_rows})
+    tasks = sorted({_task_name(row["task_type"], row["task"]) for row in run_rows})
     description = (f"wl-preproc {activation['role']} NWB for session {session_id}, montage {key['montage_id']}: "
-                   f"blocks {', '.join(str(row['block_id']) for row in block_rows)} ({', '.join(task_types)}).")
+                   f"runs {', '.join(str(row['run_number']) for row in run_rows)} ({', '.join(tasks)}).")
     if eye is not None and eye["missing_eyes"]:
         description += " No calibration for the " + " and ".join(eye["missing_eyes"]) + " eye, so its gaze is absent."
     if no_eye_samples:
-        description += " The eye recording has no sample in these blocks, so the file has no eye data."
+        description += " The eye recording has no sample in these runs, so the file has no eye data."
     requested_by = (request.Request & {"idempotency_key": activation["request_key"]}).fetch1("requested_by")
-    block_out = _blocks(block_rows, session_key)
-    systems = sorted({system for row in block_out for system in row["coverage"]})
-    trials = _trials(blocks, session_key)
-    events = _events(blocks, session_key)
-    conditions, condition_notes = _conditions(trials, events, block_out, session_dir, key["subject"])
+    run_out = _runs(run_rows, session_key)
+    systems = sorted({system for row in run_out for system in row["coverage"]})
+    trials = _trials(run_rows, session_key)
+    events = _events(run_rows, session_key)
+    blocks = _blocks(run_rows, session_key)
+    for block in blocks:
+        block["n_trials"] = sum(1 for trial in trials if trial["block_id"] == block["block_number"])
+    conditions, condition_notes = _conditions(trials, events, run_out, session_dir, key["subject"])
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),
@@ -633,7 +685,8 @@ def gather(activation_key: dict) -> Gathered:
             "clock": clock,
         },
         systems=systems,
-        blocks=block_out,
+        runs=run_out,
+        blocks=blocks,
         trials=trials,
         events=events,
         timebase=_timebase(session_key, provenance[0], clock),
@@ -642,5 +695,5 @@ def gather(activation_key: dict) -> Gathered:
         condition_notes=condition_notes,
         probes=probes,
         probe_notes=probe_notes,
-        trial_notes=_trial_notes(session_key, blocks),
+        trial_notes=_trial_notes(session_key, run_rows),
     )

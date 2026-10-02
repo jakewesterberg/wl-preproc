@@ -1,13 +1,13 @@
 """How much of an interval a system's segments actually cover.
 
-Section 5.2.1: a block partially covered by a probe is the state that matters --
-it is what wl.works asserts `block_neural_assertion` against, and what excludes
-a block from a sort. So `partial` is a first-class state and is **never**
+Section 5.2.1: a stretch partially covered by a probe is the state that
+matters -- it is what excludes it from a sort, and the stretch a file is built
+from is a measured run. So `partial` is a first-class state and is **never**
 collapsed into `absent`; section 4.6 states the same rule from the other side,
 that a recording which stopped mid-trial must never be silently treated as
 complete.
 
-Pure interval arithmetic: no DataJoint, no I/O. `coverage.BlockCoverage.make()`
+Pure interval arithmetic: no DataJoint, no I/O. `coverage.RunCoverage.make()`
 and 1c-5's `TrialCoverage.make()` both call this, so the rule has one
 definition rather than one per table.
 """

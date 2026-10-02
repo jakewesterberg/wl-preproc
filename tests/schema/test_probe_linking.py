@@ -27,22 +27,37 @@ def daemon_module(dj_conn, prefix):
     return daemon
 
 
-def _landed(tmp_path_factory, subject, session_id, **update):
-    _recipe, key = _session(tmp_path_factory, subject=subject, session_id=session_id, **update)
+def _measured(key):
+    """The session's runs read by the event stage, which runs before the
+    census in a daemon pass: a request names measured runs (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.2), so
+    the earliest a report can arrive is after this and before the census."""
+    from wl_preproc import daemon
+
+    daemon._populate_event_stage()
     return key
 
 
+def _landed(tmp_path_factory, subject, session_id, **update):
+    _recipe, key = _session(tmp_path_factory, subject=subject, session_id=session_id, runs=True, **update)
+    return _measured(key)
+
+
 def _report(key, idempotency_key, probes, prefix):
-    """wl.works' job request for the session's canonical, carrying `probes`.
-    A second one for the same montage returns the same activation, and its
-    report is recorded all the same."""
+    """wl.works' job request for the session's canonical, carrying `probes`,
+    each sorting every run. A second one for the same montage returns the
+    same activation, and its report is recorded all the same."""
     from wl_preproc.contracts.protocol import JobRequest, MetadataBundle
     from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
 
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+             "works_run_id": f"wr-{row['run_number']}"} for row in (core.Run & key).to_dicts(order_by="run_number")]
     return accept(JobRequest(
         domain="neural", parameters={}, idempotency_key=idempotency_key,
-        selection={"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC), "montage_id": 0},
-        metadata=MetadataBundle(blocks=[], montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 16.0}],
+        selection={"session_datetime": key["session_datetime"].replace(tzinfo=datetime.UTC), "montage_id": 0,
+                   "probe_runs": {probe["serial"]: [run["run_number"] for run in runs] for probe in probes}},
+        metadata=MetadataBundle(runs=runs, montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 16.0}],
                                 probes=probes, experimenter="jw", subject=key["subject"], task_types=[]),
     ), prefix=prefix)
 
@@ -143,8 +158,8 @@ def test_a_probe_without_geometry_is_not_linked(daemon_module, prefix, tmp_path_
     from tests.schema.test_probe_census import _unknown_type
 
     _recipe, key = _session(tmp_path_factory, _unknown_type, subject="plink7", session_id="2025-06-21_01",
-                            probe_serial="19011110004")
-    _report(key, "plink7-k1", [{"serial": "19011110004", "insertion_number": 1}], prefix)
+                            probe_serial="19011110004", runs=True)
+    _report(_measured(key), "plink7-k1", [{"serial": "19011110004", "insertion_number": 1}], prefix)
     daemon_module.run_once(prefix=prefix)
     assert _links(key) == {}
 

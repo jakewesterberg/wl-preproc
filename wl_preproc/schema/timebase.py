@@ -70,15 +70,13 @@ _TIER_ENUM = "enum('A','B','C','D')"
 # distinguish "checked, could not fit" from "not reached yet".
 _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
 
-# How close the measured block boundary must land to wl.works' own assertion
-# to count as agreeing used to be a fixed constant here (`1e-3`). Fix round 2:
-# that comment cited `timebase/segments.py`'s alignment durations as a
-# "chosen rather than derived" precedent -- wrong, since that module derives
-# its own numbers explicitly, and a real budget exists to derive this one
-# from too (`pipeline.trial.Block`'s float32 columns). Moved to
-# `events.agreement.block_agreement_tolerance_s`, which derives it from
-# float32 storage precision at the magnitude being compared -- see that
-# function's own docstring.
+# `TimingProvenance` once compared the measured block boundary with wl.works'
+# assertion of it (`block_agreement`), within a tolerance kept here and later
+# in `events.agreement`. Retired with `core.Block` (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 5): it was
+# computed once per session, before any request existed, so it never ran in
+# wl.works' flow. A request's runs are checked as it arrives instead
+# (`responder/jobs.py::_check_runs`).
 
 
 @schema
@@ -255,7 +253,6 @@ class TimingProvenance(dj.Computed):
     n_full_code_records        : int unsigned  # independent Pi/NI records that decoded content
     n_strobe_witnesses         : int unsigned  # RHS-style witnesses whose edge count matched
     decode_errors               : int unsigned  # DecodeErrors across every full-code record
-    block_agreement=null        : tinyint(1)  # measured trial.Block vs wl.works' core.Block; null unasserted
     """
 
     @property
@@ -277,11 +274,11 @@ class TimingProvenance(dj.Computed):
         record, the RHS strobe witness, and both cross-checks all need a
         SECOND, independent look at the raw files, which is exactly what
         `decode_errors`, `event_code_agreement`, the witness count, and
-        `trial_count_agreement`/`block_agreement` are for.
+        `trial_count_agreement` are for.
 
         **The pre-1c-5 timing check still forces D on its own, unconditionally,
         checked BEFORE `resolve_tier` is consulted at all.** None of
-        `TierInputs`' seven fields represents an alignment failure -- folding
+        `TierInputs`' six fields represents an alignment failure -- folding
         one into (say) `decode_errors` would corrupt a column whose whole
         point is to mean one specific, re-derivable thing.
 
@@ -296,7 +293,7 @@ class TimingProvenance(dj.Computed):
         it fires whenever ANY present system went unfitted -- the syncbox
         included. When the syncbox is the system that failed (`fit_status` of
         `no_recording` or `unfittable`, both reachable from
-        `SystemTimebase.make()`), `syncbox_fitted` is False and all seven
+        `SystemTimebase.make()`), `syncbox_fitted` is False and all six
         evidence columns keep their zero/`None` defaults, indistinguishable
         from a genuinely uncorroborated session. So the guarantee holds
         precisely when the failure is somewhere OTHER than the syncbox -- a
@@ -375,7 +372,7 @@ class TimingProvenance(dj.Computed):
         # measured input is still computed and stored even when [`failed`]
         # fires" -- which was false: that gate skipped the decode entirely
         # whenever `failed`, so a timing-failed session's row stored zeros
-        # and NULLs for every one of these seven columns, indistinguishable
+        # and NULLs for every one of these six columns, indistinguishable
         # from a genuinely uncorroborated one. Parent spec section 4.7's
         # re-derivability was lost exactly for the quarantined sessions a
         # human is most likely to actually go look at. `syncbox_fitted`
@@ -509,41 +506,6 @@ class TimingProvenance(dj.Computed):
                 )
                 camera_trigger_count = sidecar.frame_count - len(sidecar.dropped_frame_ids)
 
-        # -- block_agreement: the measured boundary (`trial.Block`) against
-        # wl.works' own assertion (`core.Block`). Design spec section 5: a
-        # disagreement here is its own tier-D condition, "not a silent
-        # reconciliation" -- `None` when wl.works asserted no blocks at all
-        # for this session (nothing to compare against; see `TierInputs.
-        # block_agreement`'s own comment for exactly how this parallels, and
-        # does not parallel, `trial_count_agreement`'s `None`). Matched by
-        # `block_id`, mirroring how `timebase/fit.py`'s own barcode matching
-        # is "by value, never by ordinal position". The tolerance itself is
-        # `agreement.block_agreement_tolerance_s` -- derived from float32
-        # storage precision at the magnitude actually being compared, not a
-        # fixed constant; see that function's own docstring (fix round 2).
-        asserted_blocks = {
-            row["block_id"]: (row["start_s"], row["end_s"])
-            for row in (core.Block & session_key).to_dicts()
-        }
-        block_agreement = None
-        if asserted_blocks:
-            measured_blocks = {
-                row["block_id"]: (row["block_start_time"], row["block_stop_time"])
-                for row in (pipeline.trial.Block & session_key).to_dicts()
-            }
-            block_agreement = all(
-                block_id in measured_blocks
-                and abs(measured_blocks[block_id][0] - asserted_start)
-                <= agreement.block_agreement_tolerance_s(
-                    measured_blocks[block_id][0], asserted_start
-                )
-                and abs(measured_blocks[block_id][1] - asserted_end)
-                <= agreement.block_agreement_tolerance_s(
-                    measured_blocks[block_id][1], asserted_end
-                )
-                for block_id, (asserted_start, asserted_end) in asserted_blocks.items()
-            )
-
         inputs = agreement.TierInputs(
             event_code_agreement=event_code_agreement,
             trial_count_agreement=trial_count_agreement,
@@ -551,7 +513,6 @@ class TimingProvenance(dj.Computed):
             n_full_code_records=n_full_code_records,
             n_strobe_witnesses=n_strobe_witnesses,
             decode_errors=decode_errors,
-            block_agreement=block_agreement,
         )
         tier = "D" if failed else agreement.resolve_tier(inputs)
 
@@ -587,7 +548,6 @@ class TimingProvenance(dj.Computed):
                 "n_full_code_records": n_full_code_records,
                 "n_strobe_witnesses": n_strobe_witnesses,
                 "decode_errors": decode_errors,
-                "block_agreement": block_agreement,
             }
         )
 

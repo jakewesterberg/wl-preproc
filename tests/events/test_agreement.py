@@ -34,28 +34,7 @@ def test_one_full_code_record_plus_a_witness_is_b():
 
 def test_one_full_code_record_alone_is_c():
     """"1 full-code record, cross-checked only against task file" -- behaviour-
-    only training, where the Pi is the sole recorder.
-
-    **`block_agreement=None` does not block C, unlike `trial_count_agreement
-    =None` -- fix round 2, folded in after deleting a duplicate test.** A
-    prior `test_c_requires_the_block_check_to_have_actually_happened`
-    asserted this exact property with `block_agreement=None` passed
-    explicitly, which is a no-op: `block_agreement` already defaults to
-    `None`, so that test's inputs were this one's verbatim and it killed no
-    mutant this one does not. Its own NAME also asserted the opposite of
-    what it checked -- it claimed C "requires" the block check, while its
-    body proved C does NOT require it -- copied from the genuinely-D
-    `..._task_file_check_...` test below without updating for the fact that
-    `block_agreement` and `trial_count_agreement` are NOT gated the same
-    way: `trial_count_agreement` is a precondition for C's OWN branch
-    (`n_full_code_records == 1 and trial_count_agreement is True`), so its
-    `None` fails that branch and falls through toward D; `block_agreement`
-    has no branch anywhere that requires it to be `True`, so its `None`
-    simply never fires the one D-check it participates in and this fixture
-    (which never sets it, leaving it `None`) reaches C exactly as it would
-    without `block_agreement` existing at all. See `resolve_tier`'s own
-    docstring for the fuller version of this distinction.
-    """
+    only training, where the Pi is the sole recorder."""
     assert agreement.resolve_tier(
         _inputs(n_full_code_records=1, n_strobe_witnesses=0, event_code_agreement=None)
     ) == "C"
@@ -96,39 +75,6 @@ def test_c_requires_the_task_file_check_to_have_actually_happened():
             event_code_agreement=None,
         )
     ) == "D"
-
-
-def test_block_disagreement_is_D_even_with_two_agreeing_full_code_records():
-    """Design spec section 5: "A disagreement between `trial.Block` (measured)
-    and `core.Block` (asserted) is a tier-D condition, not a silent
-    reconciliation." Overrides `block_agreement=False` only, everything else
-    at base (`n_full_code_records=2`, `event_code_agreement=1.0`,
-    `trial_count_agreement=True`) -- so this fixture would otherwise satisfy
-    tier A outright. Produces: two full-code records that genuinely agree, a
-    genuine task-file cross-check, and a genuine block-boundary disagreement.
-    `resolve_tier` must reach the `block_agreement is False` line specifically,
-    not merely land on D through some other guard -- confirmed by sabotage:
-    deleting that one `if` from `resolve_tier` turns this fixture's verdict
-    into "A", and nothing else in THIS file moves.
-
-    (Fix round 2 correction: this docstring previously also claimed "the
-    mutant survives every other test in this suite". Checked and false --
-    `tests/schema/test_timebase.py::
-    test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records`
-    exercises the identical `block_agreement is False` path end-to-end
-    through `TimingProvenance.make()` and would fail under the same
-    sabotage too. The claim was never verified against the whole suite, only
-    against this one file; narrowed to what was actually checked.)
-    """
-    assert agreement.resolve_tier(_inputs(block_agreement=False)) == "D"
-
-
-def test_block_agreement_true_does_not_block_tier_a():
-    """The positive case: `block_agreement=True` alongside every other tier-A
-    condition must still resolve to A -- a passing check must never be
-    mistaken for a gating one. Produces: two agreeing full-code records, a
-    genuine task-file cross-check, and a genuine, matching block boundary."""
-    assert agreement.resolve_tier(_inputs(block_agreement=True)) == "A"
 
 
 def test_no_full_code_record_at_all_is_D():
@@ -210,72 +156,6 @@ def test_code_agreement_tolerates_a_dropped_word_at_the_head():
     )
 
 
-def test_block_agreement_tolerance_is_derived_from_float32_precision_not_chosen():
-    """Fix round 2: a fixed `1e-3` tolerance in `TimingProvenance.make()`
-    cited `timebase/segments.py`'s alignment durations as precedent for
-    "chosen rather than derived" -- wrong, since that module derives its own
-    numbers explicitly ("consequences of the decoder"), and a real budget
-    exists to derive this one too. `pipeline.trial.Block` declares
-    `block_start_time`/`block_stop_time` as `float` (single precision,
-    confirmed directly against `element_event/trial.py`), so the MEASURED
-    side of a block-boundary comparison always carries up to one float32
-    half-ULP of pure storage rounding -- and that half-ULP grows with
-    magnitude, consuming a fixed 1 ms tolerance's entire budget by 4.5h into
-    a session and exceeding it past 9.1h.
-
-    A schema-level test at that duration would need to generate hours of
-    synthetic session data (`synth/recipe.py::BENCHMARK_RECIPE`'s own
-    comment: "tens of megabytes per generation" for a session far shorter
-    than this), so this tests the derivation function directly instead --
-    honest about testing the unit rather than quietly avoiding the regime
-    the schema-level fixtures never reach.
-
-    Produces: `true_end_s = 42345.678`, a magnitude in the same binade
-    `worst_drift_ppm`'s own review measured (past 32768s / 9.1h) and NOT
-    exactly float32-representable, so storing it in a `float` column
-    genuinely rounds it -- confirmed inline (`numpy.float32(true_end_s) !=
-    true_end_s`) rather than assumed. The resulting rounding error, 1.6875
-    ms, exceeds a fixed 1 ms tolerance outright (proving the fixed tolerance
-    would have wrongly quarantined this honestly-agreeing pair at tier D),
-    while the derived tolerance at this magnitude (3.90625 ms) comfortably
-    covers it. A genuine several-second disagreement at the same magnitude
-    is still correctly rejected, proving the derivation does not just grow
-    permissive without bound.
-    """
-    import numpy as np
-
-    true_end_s = 42345.678
-    stored_measured_end_s = float(np.float32(true_end_s))
-    rounding_error_s = abs(stored_measured_end_s - true_end_s)
-
-    assert rounding_error_s > 0.0, (
-        "this fixture must exercise genuine float32 rounding, not a value "
-        "that happens to already be exactly representable"
-    )
-
-    fixed_tolerance_s = 1e-3
-    assert rounding_error_s > fixed_tolerance_s, (
-        "this test's whole point is a magnitude where a fixed 1 ms tolerance "
-        f"is already insufficient for storage rounding alone: got "
-        f"{rounding_error_s}s"
-    )
-
-    derived = agreement.block_agreement_tolerance_s(stored_measured_end_s, true_end_s)
-    assert derived > fixed_tolerance_s
-    assert rounding_error_s <= derived, (
-        "the derived tolerance must cover pure storage rounding at this "
-        f"magnitude: error {rounding_error_s}s, tolerance {derived}s"
-    )
-
-    # And a genuine disagreement -- not storage rounding -- at the same
-    # magnitude must still be rejected: the derivation must not grow so
-    # permissive that it stops meaning anything.
-    genuinely_disagreeing = stored_measured_end_s + 1.0
-    assert abs(stored_measured_end_s - genuinely_disagreeing) > agreement.block_agreement_tolerance_s(
-        stored_measured_end_s, genuinely_disagreeing
-    )
-
-
 def test_min_code_word_slot_s_tracks_synth_timelines_spacing_or_flags_the_drift():
     """Fix round 4 (coordinator review): a drift detector, not a coupling.
 
@@ -293,18 +173,18 @@ def test_min_code_word_slot_s_tracks_synth_timelines_spacing_or_flags_the_drift(
     both without running that architecture backwards.
 
     **What this guards, concretely.** `events.agreement.
-    BLOCK_AGREEMENT_TOLERANCE_FLOOR_S` is derived from `MIN_CODE_WORD_SLOT_S`
-    as "one code-word slot's worth of transport quantization, doubled for
-    float32-rounding headroom" -- a derivation that is only true because
-    `MIN_CODE_WORD_SLOT_S` matches the ACTUAL slot spacing the synthetic
-    generator (this project's only behavioural-stack implementation) uses to
-    place code words. If `synth.timeline.CODE_WORD_SPACING_S` is ever
-    revised and `MIN_CODE_WORD_SLOT_S` is not updated to match, the floor
-    silently stops covering the ratchet `tests/schema/test_timebase.py::
-    provenance_session` measures (`block_start_time == 0.001`), and an
-    honestly agreeing session starts reading `block_agreement=False` and
-    getting quarantined at tier D -- silently, and in the single most
-    consequential surface this phase produces.
+    RUN_AGREEMENT_TOLERANCE_S` is two of `MIN_CODE_WORD_SLOT_S` -- "two
+    code-word slots", the "about 2 ms" design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.2 names
+    for the run check on arrival -- which is only a statement about the codes
+    because `MIN_CODE_WORD_SLOT_S` matches the ACTUAL slot spacing the
+    synthetic generator (this project's only behavioural-stack
+    implementation) uses to place code words. If `synth.timeline.
+    CODE_WORD_SPACING_S` is ever revised and `MIN_CODE_WORD_SLOT_S` is not
+    updated to match, the tolerance silently stops meaning what its comment
+    says. (It once also set the floor of `TimingProvenance.block_agreement`,
+    retired with `core.Block`, where a mismatch quarantined honest sessions
+    at tier D.)
 
     **This is a "decide, don't drift" gate, not a permanent lock.**
     Divergence is allowed: the production constant is meant to track a real
@@ -326,14 +206,20 @@ def test_min_code_word_slot_s_tracks_synth_timelines_spacing_or_flags_the_drift(
             "to track a real system's own code-word slot spacing once one "
             "is chosen, not to stay locked to the synthetic generator "
             "forever. But it must be a DECISION, not an accident: "
-            "block_agreement_tolerance_s's floor "
-            "(BLOCK_AGREEMENT_TOLERANCE_FLOOR_S) is derived from "
-            "MIN_CODE_WORD_SLOT_S as one code-word transport slot, and if "
-            "that no longer reflects the slot spacing a real boundary is "
-            "actually quantized to, the floor silently stops covering the "
-            "ratchet and an honestly agreeing session starts getting "
-            "quarantined at tier D. Whoever changed either constant must "
-            "re-derive BLOCK_AGREEMENT_TOLERANCE_FLOOR_S against the new "
-            "value (or explicitly confirm the old derivation still holds) "
-            "before this assertion is updated to match."
+            "RUN_AGREEMENT_TOLERANCE_S is two code-word transport slots, "
+            "and if MIN_CODE_WORD_SLOT_S no longer reflects the slot spacing "
+            "a real boundary is actually quantized to, that tolerance stops "
+            "meaning what its comment says. Whoever changed either constant "
+            "must re-decide RUN_AGREEMENT_TOLERANCE_S against the new value "
+            "(or explicitly confirm the old one still holds) before this "
+            "assertion is updated to match."
         )
+
+
+def test_a_run_agrees_within_two_code_word_slots():
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.2: an asserted run is checked against `core.Run` within about
+    2 ms. wl.works asserts its copy of `GET /sessions`' measured value, a
+    double end to end, so an honest request agrees exactly; the tolerance is
+    two code-word slots, as the retired block check's floor was."""
+    assert agreement.RUN_AGREEMENT_TOLERANCE_S == 2 * agreement.MIN_CODE_WORD_SLOT_S == 0.002

@@ -25,7 +25,7 @@ def test_derived_tables_are_computed_not_manual(schemas):
     core, coverage, _timebase = schemas
 
     assert issubclass(core.Segment, dj.Computed)
-    assert issubclass(coverage.BlockCoverage, dj.Computed)
+    assert issubclass(coverage.RunCoverage, dj.Computed)
     assert issubclass(coverage.TrialCoverage, dj.Computed)
 
 
@@ -102,20 +102,6 @@ def test_no_bare_longblob_in_the_new_schema_module(schemas):
     assert "longblob" not in timebase.TimingProvenance.definition
 
 
-def test_block_does_not_claim_to_decode_its_own_boundaries(schemas):
-    """Closed open item 9: block rows are authored by wl.works' session planner
-    and wl-preproc NEVER writes them — it cross-validates and quarantines on
-    absence. The column comment claimed the opposite mechanism ("boundaries are
-    decoded from event codes and cross-validated against those rows") for two
-    phases, and 1c-3 predicted the decoder would "find the slot occupied". It
-    resolved the other way: `accept()` was right and the comment was wrong.
-    """
-    core, _coverage, _timebase = schemas
-
-    assert "decoded from event codes" not in core.Block.definition
-    assert "wl.works" in core.Block.definition
-
-
 # --- TimingProvenance.make(). These need a landed, populated session. ---
 
 import datetime  # noqa: E402
@@ -125,8 +111,7 @@ import datetime  # noqa: E402
 def provenance_session(dj_conn, prefix, tmp_path_factory):
     """A landed `drift` session with every populate run, provenance last --
     including `events.populate_session`, which 1c-5 Task 9's tier resolution
-    now depends on for `trial_count_agreement` (codes vs task file) and
-    `block_agreement` (measured `trial.Block` vs asserted `core.Block`).
+    now depends on for `trial_count_agreement` (codes vs task file).
 
     Before Task 9 this fixture never called `events.populate_session` at all,
     because nothing here needed `pipeline.trial.Trial`/`trial.Block` to exist.
@@ -136,27 +121,6 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
     reason that has nothing to do with what each test actually exercises. Per
     "fix the fixture, not the spec" -- the fixture predates the dependency,
     not the design.
-
-    `core.Block` gets one row asserting the DRIFT recipe's own NOMINAL block
-    boundary independently -- `start_s=0.0`, `end_s=recipe.duration_s` --
-    NOT read back from `pipeline.trial.Block`. Fix round 2 tried the latter
-    after tightening `block_agreement_tolerance_s`'s floor made the nominal
-    assertion fail, but review (fix round 3) caught that this made
-    `block_agreement` compare a value against itself: `trial.Block`'s
-    columns are float32 and `core.Block`'s are double, so a float32 value
-    written into a double and read back is bit-exact, and the "positive
-    path" this fixture exists to exercise could never again detect any
-    disagreement. wl.works asserting the nominal boundary and the decoder
-    measuring it one code-word slot later (`timeline.py`'s own `_emit`
-    ratchets `BLOCK_START`'s escape word one slot past `SESSION_START`) is
-    not a fixture defect to route around -- it is exactly the real
-    relationship this fixture is supposed to model, and
-    `block_agreement_tolerance_s`'s floor is now derived from that same
-    one-slot transport quantization (see its own module-level comment), so
-    it absorbs the ratchet correctly without the fixture needing to already
-    know the measured answer. `test_block_agreement_true_has_teeth_against_a_
-    real_perturbation`, below, is what proves this path still has teeth
-    after the revert.
     """
     from wl_preproc.schema import core, coverage, events, ingest, pipeline, timebase
     from wl_preproc.synth.recipe import RECIPES
@@ -205,17 +169,6 @@ def provenance_session(dj_conn, prefix, tmp_path_factory):
         skip_duplicates=True,
     )
 
-    core.Block.insert1(
-        {
-            **session_key,
-            "block_id": 1,
-            "task_type": "rf_map",
-            "start_s": 0.0,
-            "end_s": recipe.duration_s,
-        },
-        skip_duplicates=True,
-    )
-
     timebase.SystemTimebase.populate()
     core.Segment.populate()
     events.populate_session(session_key, root / recipe.session_id)
@@ -237,14 +190,7 @@ def test_the_tier_resolves_to_a_once_two_full_code_records_genuinely_agree(
     so the two decode identically regardless of the NI's planted 18 ppm
     drift. `trial_count_agreement` is `True`: the task file and the decoded
     code stream both derive from the identical planted `GroundTruth.trials`.
-    `block_agreement` is `True` too -- but NOT because the two values match
-    exactly, which they provably do not. The fixture asserts one `core.Block`
-    row at the DRIFT recipe's NOMINAL boundary (`start_s=0.0`), while the
-    measured `trial.Block` starts one code-word slot later, at `0.001`: the
-    ratchet `provenance_session`'s own docstring describes. It agrees because
-    `block_agreement_tolerance_s`'s floor is derived from exactly that one-slot
-    transport quantization and absorbs it -- so this positive path exercises
-    the tolerance rather than bypassing it. Produces: tier A, by the
+    Produces: tier A, by the
     `n_full_code_records >= 2` branch, with none of the D guards tripped.
     """
     _core, _coverage, timebase = schemas
@@ -258,7 +204,6 @@ def test_the_tier_resolves_to_a_once_two_full_code_records_genuinely_agree(
     assert row["event_code_agreement"] == pytest.approx(1.0)
     assert row["decode_errors"] == 0
     assert row["trial_count_agreement"]
-    assert row["block_agreement"]
 
 
 def test_tier_d_is_fully_derivable_now(schemas, dj_conn, prefix, tmp_path):
@@ -354,10 +299,10 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
 
     **Fix round 1** (coordinator review): this test's own opening claim is
     "every input", but until this round it checked only the six columns that
-    predate 1c-5 Task 9 and none of the four `TierInputs` fields Task 9 added
-    -- `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`,
-    `block_agreement` -- which are exactly the evidence the re-derivability
-    clause is about. Extended to check all seven new columns (those four plus
+    predate 1c-5 Task 9 and none of the `TierInputs` fields Task 9 added
+    -- `event_code_agreement`, `trial_count_agreement`, `camera_trigger_count`
+    -- which are exactly the evidence the re-derivability clause is about.
+    Extended to check all six new columns (those three plus
     `n_full_code_records`, `n_strobe_witnesses`, `decode_errors`), and against
     values this test derives independently rather than merely checking the
     keys exist: `camera_trigger_count` against `synth.peripherals.
@@ -366,11 +311,12 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
     what the `drift` recipe's own topology implies -- two full-code records
     (`syncbox` + `spikeglx`) that must agree exactly regardless of the NI's
     planted drift, one valid `rhs` strobe witness, zero decode errors, and a
-    genuine (not merely non-`None`) trial-count and block-boundary match, both
-    of which this fixture's own `core.Block` insert and populated `Trial` rows
-    make true rather than assumed. Verified directly against a live run
-    before writing the literals below, per `provenance_session`'s current
-    state (`tests/schema/test_timebase.py`'s own module).
+    genuine (not merely non-`None`) trial-count match, which this fixture's
+    populated `Trial` rows make true rather than assumed. (A fourth Task 9
+    field, `block_agreement`, is retired with `core.Block`.) Verified directly
+    against a live run before writing the literals below, per
+    `provenance_session`'s current state (`tests/schema/test_timebase.py`'s
+    own module).
     """
     from wl_preproc.synth.peripherals import camera_frame_count
 
@@ -389,7 +335,7 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
         max(abs(ppm) for _s, ppm in recipe.system_drift_ppm), abs=300.0
     )
 
-    # -- The four TierInputs fields Task 9 added, and the tier's own
+    # -- The TierInputs fields Task 9 added, and the tier's own
     # derived-count fields: present AND holding what this session's real
     # topology implies, not merely non-null.
     assert row["n_full_code_records"] == 2, "syncbox + spikeglx, both present"
@@ -406,11 +352,6 @@ def test_provenance_stores_the_inputs_so_the_tier_can_be_re_derived(
     assert row["camera_trigger_count"] == camera_frame_count(recipe), (
         "no DROPPED_CAMERA_FRAMES fault on this recipe, so nothing should be "
         "subtracted from the full frame count"
-    )
-    assert row["block_agreement"], (
-        "this fixture's own core.Block row asserts the NOMINAL boundary "
-        "(start_s=0.0); the measured trial.Block starts one code-word slot "
-        "later at 0.001, inside the derived tolerance -- not an exact match"
     )
 
 
@@ -448,100 +389,6 @@ def test_the_tier_leaves_pending_once_the_three_inputs_exist(dj_conn, prefix):
             "pending_inputs must be empty once the tier is decided; it "
             f"still reads {row['pending_inputs']!r}"
         )
-
-
-def test_block_disagreement_forces_d_even_with_two_agreeing_full_code_records(
-    dj_conn, prefix, tmp_path
-):
-    """Design spec section 5: "A disagreement between `trial.Block` (measured)
-    and `core.Block` (asserted) is a tier-D condition, not a silent
-    reconciliation" -- proven end-to-end here, not only at
-    `resolve_tier`'s own unit level (`tests/events/test_agreement.py`).
-
-    One of the `ci` recipe's two blocks (RF_MAP: 3 trials * 3.0s, then
-    RESTING_DARK: 1 trial * 6.0s) genuinely spans `[0.0, 9.0)` -- fix round 2
-    correction: this docstring previously called it the recipe's "own single
-    block", which is wrong; `core.Block` instead asserts `end_s=999.0`, a
-    wl.works row that does not describe this session at all. Every other
-    input is
-    clean: `syncbox` + `spikeglx` give two agreeing full-code records (tier A
-    territory otherwise), and the task file's trial count matches the decoded
-    one exactly. Produces: `block_agreement=False`, and a tier of D despite
-    satisfying every other tier-A condition -- proving `block_agreement`
-    actually gates `TimingProvenance.make()`'s own resolved tier, not merely
-    `resolve_tier` in isolation.
-    """
-    import datetime
-
-    from wl_preproc.schema import core, events, ingest, pipeline, timebase
-    from wl_preproc.synth.recipe import RECIPES
-    from wl_preproc.synth.session import generate_session
-
-    ingest.activate(prefix=prefix)
-    events.activate(prefix=prefix)
-    recipe = RECIPES["ci"]
-    generate_session(tmp_path, recipe)
-    session_dir = tmp_path / recipe.session_id
-
-    pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
-        skip_duplicates=True,
-    )
-    pipeline.subject.Subject.insert1(
-        {
-            "subject": recipe.subject,
-            "sex": "M",
-            "subject_birth_date": datetime.date(2020, 1, 1),
-            "subject_description": "",
-        },
-        skip_duplicates=True,
-    )
-    session_key = {
-        "subject": recipe.subject,
-        "session_datetime": datetime.datetime(2027, 3, 23, 9, 0),
-    }
-    pipeline.Session.insert1(session_key, skip_duplicates=True)
-    ingest.Ingestion.insert1(
-        {
-            **session_key,
-            "ingested_at": datetime.datetime(2027, 3, 23, 19, 0),
-            "session_dir": str(session_dir),
-            "integrity": "verified",
-            "topology": {system: "present" for system in recipe.systems},
-            "manifest_hash": "blake3:test",
-        },
-        skip_duplicates=True,
-    )
-    core.AcquisitionSystem.insert(
-        [{**session_key, "system": system} for system in recipe.systems],
-        skip_duplicates=True,
-    )
-    core.Block.insert1(
-        {
-            **session_key,
-            "block_id": 1,
-            "task_type": "rf_map",
-            "start_s": 0.0,
-            "end_s": 999.0,  # disagrees with the measured trial.Block outright
-        },
-        skip_duplicates=True,
-    )
-
-    timebase.SystemTimebase.populate()
-    core.Segment.populate()
-    events.populate_session(session_key, session_dir)
-    timebase.TimingProvenance.populate()
-
-    row = (timebase.TimingProvenance & session_key).fetch1()
-    # `== 0`, not `is False`: a `tinyint(1)` column round-trips through
-    # DataJoint/pymysql as a plain Python int, not the `False` singleton, so
-    # an `is` comparison here would fail on genuinely correct data.
-    assert row["block_agreement"] == 0, row
-    assert row["tier"] == "D", row
-    assert row["n_full_code_records"] == 2, (
-        "this must be a genuine A-territory session apart from the block "
-        f"disagreement, or D proves nothing about block_agreement: {row}"
-    )
 
 
 def test_a_session_with_no_corroboration_at_all_resolves_to_d(
@@ -585,8 +432,8 @@ def test_a_session_with_no_corroboration_at_all_resolves_to_d(
     through the pre-existing timing-check fast path `test_tier_d_is_fully_
     derivable_now` covers. `n_full_code_records == 1` (only syncbox: no
     `spikeglx`, so no second record; no `rhs`, so `n_strobe_witnesses == 0`),
-    and `trial_count_agreement`/`event_code_agreement`/`camera_trigger_count`/
-    `block_agreement` are all `None` -- nothing corroborated this session,
+    and `trial_count_agreement`/`event_code_agreement`/`camera_trigger_count`
+    are all `None` -- nothing corroborated this session,
     which is the row's own evidence for why D is correct here, not merely
     that it is D.
     """
@@ -670,7 +517,6 @@ def test_a_session_with_no_corroboration_at_all_resolves_to_d(
     assert row["decode_errors"] == 0, row
     assert row["event_code_agreement"] is None, row
     assert row["trial_count_agreement"] is None, row
-    assert row["block_agreement"] is None, row
 
     assert row["tier"] == "D", (
         "one full-code record, no witness, no successful task-file check: "
@@ -678,115 +524,3 @@ def test_a_session_with_no_corroboration_at_all_resolves_to_d(
     )
 
 
-def test_block_agreement_true_has_teeth_against_a_real_perturbation(
-    schemas, dj_conn, prefix, tmp_path_factory
-):
-    """Fix round 3 (coordinator review): the positive path -- a `core.Block`
-    row that genuinely matches the measured boundary -- has to be able to
-    detect a real disagreement, not merely fail to crash. Reverting
-    `provenance_session`'s fixture to assert the nominal boundary
-    independently (rather than reading `pipeline.trial.Block` back, which
-    made the comparison bit-exact and therefore untestable) means that
-    session alone no longer proves this; this test does, with its own
-    session so it is not entangled with `provenance_session`'s module-scoped
-    cache.
-
-    Same `drift` recipe, same nominal assertion `provenance_session` uses
-    (`start_s=0.0`, `end_s=recipe.duration_s`) -- except `start_s` is
-    perturbed by `+0.1` s (100 ms), two orders of magnitude past
-    `block_agreement_tolerance_s`'s derived floor (2 ms at this small a
-    magnitude: one code-word slot, doubled for float32-rounding headroom).
-    100 ms is not a boundary case -- it is comfortably larger than the
-    tolerance in either direction this fixture could plausibly reach, so a
-    tier that does not move here means the positive path proves nothing.
-
-    Produces: every other input identical to a genuine tier-A session
-    (`syncbox` + `spikeglx` give two agreeing full-code records; `rhs` gives
-    a valid witness; the task file's trial count matches the decoded one
-    exactly) -- so the ONLY thing standing between this session and tier A
-    is the perturbed `start_s`. `block_agreement` must read `False` and the
-    tier must move to D.
-    """
-    from wl_preproc.schema import core, coverage, events, ingest, pipeline, timebase
-    from wl_preproc.synth.recipe import RECIPES
-    from wl_preproc.synth.session import generate_session
-
-    timebase.activate(prefix=prefix)
-    coverage.activate(prefix=prefix)
-    ingest.activate(prefix=prefix)
-    events.activate(prefix=prefix)
-
-    root = tmp_path_factory.mktemp("perturbed")
-    recipe = RECIPES["drift"]
-    generate_session(root, recipe)
-
-    pipeline.lab.Lab.insert1(
-        {"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
-        skip_duplicates=True,
-    )
-    pipeline.subject.Subject.insert1(
-        {
-            "subject": recipe.subject,
-            "sex": "M",
-            "subject_birth_date": datetime.date(2020, 1, 1),
-            "subject_description": "",
-        },
-        skip_duplicates=True,
-    )
-    session_key = {
-        "subject": recipe.subject,
-        "session_datetime": datetime.datetime(2027, 3, 26, 9, 0),
-    }
-    pipeline.Session.insert1(session_key, skip_duplicates=True)
-    ingest.Ingestion.insert1(
-        {
-            **session_key,
-            "ingested_at": datetime.datetime(2027, 3, 26, 19, 0),
-            "session_dir": str(root / recipe.session_id),
-            "integrity": "verified",
-            "topology": {system: "present" for system in recipe.systems},
-            "manifest_hash": "blake3:test",
-        },
-        skip_duplicates=True,
-    )
-    core.AcquisitionSystem.insert(
-        [{**session_key, "system": system} for system in recipe.systems],
-        skip_duplicates=True,
-    )
-    core.Block.insert1(
-        {
-            **session_key,
-            "block_id": 1,
-            "task_type": "rf_map",
-            "start_s": 0.0 + 0.1,  # perturbed: 100ms past the nominal 0.0
-            "end_s": recipe.duration_s,
-        },
-        skip_duplicates=True,
-    )
-
-    timebase.SystemTimebase.populate()
-    core.Segment.populate()
-    events.populate_session(session_key, root / recipe.session_id)
-    timebase.TimingProvenance.populate()
-
-    row = (timebase.TimingProvenance & session_key).fetch1()
-    assert row["n_full_code_records"] == 2, (
-        f"this must be genuine A-territory apart from the perturbation: {row}"
-    )
-    # block_agreement is computed independently of `failed` (gated on
-    # `syncbox_fitted` alone, per TimingProvenance.make()'s own comment), so
-    # this genuinely proves the 100ms perturbation was detected through the
-    # full production path.
-    assert row["block_agreement"] == 0, row
-    # Every system in `RECIPES["drift"]`, ohdpi included, now aligns
-    # (`n_systems_aligned == len(recipe.systems)`, checked directly while
-    # restoring this assertion), so `failed` is False and `tier` comes from
-    # `resolve_tier(inputs)` -- the `block_agreement` branch above, not the
-    # `tier = "D" if failed else ...` short-circuit. This is a genuine
-    # second, end-to-end check of the same branch
-    # tests/events/test_agreement.py's
-    # test_block_disagreement_is_D_even_with_two_agreeing_full_code_records
-    # and test_block_agreement_true_does_not_block_tier_a exercise directly.
-    assert row["tier"] == "D", (
-        f"a 100ms start_s perturbation must move the tier off A: {row}"
-    )

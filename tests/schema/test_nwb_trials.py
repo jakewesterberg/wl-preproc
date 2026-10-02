@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.schema.test_nwb_probes import _canonical
-from tests.schema.test_spikeglx_restart import _session
+from tests.schema.test_nwb_probes import _canonical, _session
 
 
 @pytest.fixture(scope="module")

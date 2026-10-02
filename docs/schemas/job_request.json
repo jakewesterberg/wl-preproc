@@ -72,10 +72,13 @@
       "description": "Everything wl-preproc needs from the ELN, carried inbound with the request.",
       "properties": {
         "blocks": {
+          "default": [],
+          "deprecated": true,
           "items": {
             "additionalProperties": true,
             "type": "object"
           },
+          "maxItems": 0,
           "title": "Blocks",
           "type": "array"
         },
@@ -95,6 +98,14 @@
             "$ref": "#/$defs/ProbeEntry"
           },
           "title": "Probes",
+          "type": "array"
+        },
+        "runs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunEntry"
+          },
+          "title": "Runs",
           "type": "array"
         },
         "subject": {
@@ -121,7 +132,6 @@
         }
       },
       "required": [
-        "blocks",
         "montage_boundaries",
         "probes",
         "experimenter",
@@ -214,6 +224,40 @@
         "insertion_number"
       ],
       "title": "ProbeEntry",
+      "type": "object"
+    },
+    "RunEntry": {
+      "additionalProperties": false,
+      "description": "One run wl.works holds for the session: its copy of a run `GET\n/sessions` listed, measured from the recording, and its own id for it\n(design spec `2026-10-01-session-listing-and-run-requests-design.md`\nsection 3.1). Checked against `core.Run` as the request arrives.",
+      "properties": {
+        "end_s": {
+          "title": "End S",
+          "type": "number"
+        },
+        "run_number": {
+          "maximum": 32767,
+          "minimum": 1,
+          "title": "Run Number",
+          "type": "integer"
+        },
+        "start_s": {
+          "title": "Start S",
+          "type": "number"
+        },
+        "works_run_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Works Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_number",
+        "start_s",
+        "end_s",
+        "works_run_id"
+      ],
+      "title": "RunEntry",
       "type": "object"
     },
     "SubjectDetails": {

@@ -72,7 +72,7 @@ def _computed_tables() -> list:
     """The computed tables, in dependency order.
 
     The ordering is load-bearing rather than tidy. ``Segment.make()`` needs its
-    system's rate to already exist and ``BlockCoverage.make()`` needs the
+    system's rate to already exist and ``RunCoverage.make()`` needs the
     segments — and neither dependency is expressed as a ``key_source``,
     deliberately: keying ``Segment`` off ``SystemTimebase`` would mean a system
     with no fit produced no rows at all, including the ``RejectedSegment`` rows
@@ -170,8 +170,9 @@ def _computed_tables() -> list:
         # names the run it reads (design spec `2026-09-30-nwb-probes-design.md`
         # section 2.1).
         ephys.ProbeCensus,
-        coverage.BlockCoverage,
-        # After `Segment` for exactly `BlockCoverage`'s reason -- it intersects
+        # After `Segment`, whose extents it intersects.
+        coverage.RunCoverage,
+        # After `Segment` for exactly `RunCoverage`'s reason -- it intersects
         # a trial's interval with this system's segment extents -- and after
         # `_populate_event_stage()`, which is what puts rows in the
         # `pipeline.trial.Trial` half of its `key_source`. `run_once` runs that

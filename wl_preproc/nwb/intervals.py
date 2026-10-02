@@ -1,5 +1,6 @@
-"""Blocks, trials and task events (design spec
-`2026-09-28-nwb-builder-design.md` section 3, `/intervals`)."""
+"""Runs, blocks, trials and task events (design spec
+`2026-09-28-nwb-builder-design.md` section 3, `/intervals`; runs since
+`2026-10-01-session-listing-and-run-requests-design.md` section 4)."""
 
 from __future__ import annotations
 
@@ -26,26 +27,54 @@ def _coverage_columns(rows: list[dict], systems: list[str]) -> list:
     return columns
 
 
-def add_blocks(nwb: NWBFile, blocks: list[dict], systems: list[str]) -> None:
-    """`/intervals/blocks`: the activation's blocks, their asserted
-    boundaries (`core.Block`) as start and stop, the measured ones
-    (`trial.Block`) beside them, and per-system coverage."""
+def add_runs(nwb: NWBFile, runs: list[dict], systems: list[str]) -> None:
+    """`/intervals/runs`: the activation's runs, measured from the recording's
+    `RUN_START` and `RUN_END`, with wl.works' id for each and per-system
+    coverage."""
+    rows = sorted(runs, key=lambda row: row["start_s"])
+    nwb.add_time_intervals(TimeIntervals(
+        name="runs",
+        description=("The activation's runs, measured from the recording: start and stop are the run's "
+                     "RUN_START and its RUN_END, or its last event when it faulted."),
+        columns=[
+            column("start_time", "Measured run start, session seconds.", [r["start_s"] for r in rows]),
+            column("stop_time", "Measured run stop, session seconds.", [r["end_s"] for r in rows]),
+            column("run_number", "The run's number in the session.", [r["run_number"] for r in rows]),
+            column("works_run_id", "wl.works' id for the run (its animal_session_run; '' if none).",
+                   [r["works_run_id"] or "" for r in rows]),
+            column("task_code", "The run's task code (0 until wl-xtasks allocates one).",
+                   [int(r["task_type"]) for r in rows]),
+            column("task", "The rig's name for the run's task ('' if its record names none).",
+                   [r["task"] or "" for r in rows]),
+            column("closed", "Whether a RUN_END arrived.", [bool(r["closed"]) for r in rows]),
+            *_coverage_columns(rows, systems),
+        ],
+    ))
+
+
+def add_blocks(nwb: NWBFile, blocks: list[dict]) -> None:
+    """`/intervals/blocks`: the measured blocks inside the activation's runs,
+    each with its run, its block type and whether it closed. None when the
+    runs hold no block."""
     rows = sorted(blocks, key=lambda row: row["start_s"])
+    if not rows:
+        return
     nwb.add_time_intervals(TimeIntervals(
         name="blocks",
-        description=("The activation's blocks: start and stop are the boundaries wl.works asserted "
-                     "(core.Block); measured_* are the boundaries decoded from the event codes."),
+        description=("The measured blocks inside the file's runs: consecutive trials under one block type, "
+                     "from BLOCK_START to BLOCK_END, or to the block's last event when its run faulted."),
         columns=[
-            column("start_time", "Asserted block start, session seconds.", [r["start_s"] for r in rows]),
-            column("stop_time", "Asserted block stop, session seconds.", [r["end_s"] for r in rows]),
-            column("block_id", "Block number.", [r["block_id"] for r in rows]),
-            column("task_type", "The block's task type.", [r["task_type"] for r in rows]),
-            column("works_block_id", "wl.works' own block id ('' until linked).", [r["works_block_id"] or "" for r in rows]),
-            column("measured_start_time", "Measured block start, session seconds (NaN if not decoded).",
-                   [np.nan if r["measured_start_s"] is None else r["measured_start_s"] for r in rows]),
-            column("measured_stop_time", "Measured block stop, session seconds (NaN if not decoded).",
-                   [np.nan if r["measured_stop_s"] is None else r["measured_stop_s"] for r in rows]),
-            *_coverage_columns(rows, systems),
+            column("start_time", "Measured block start, session seconds.", [r["start_s"] for r in rows]),
+            column("stop_time", "Measured block stop, session seconds.", [r["stop_s"] for r in rows]),
+            column("block_number", "The block's number in the session, as BLOCK_START strobed it.",
+                   [r["block_number"] for r in rows]),
+            column("run_number", "The run the block is inside.", [r["run_number"] for r in rows]),
+            column("block_in_run", "The block's order in its run, from 1.", [r["block_in_run"] for r in rows]),
+            column("block_type", "The rig's name for the block's type ('' if its record names none).",
+                   [r["block_type"] or "" for r in rows]),
+            column("closed", "1 when a BLOCK_END arrived, 0 when not, -1 when never recorded.",
+                   [-1 if r["closed"] is None else int(r["closed"]) for r in rows]),
+            column("n_trials", "The block's trials in this file.", [r["n_trials"] for r in rows]),
         ],
     ))
 
@@ -76,6 +105,7 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
             column("outcome", "correct, error, abort, fixation_break or no_response.", [r["outcome"] or "" for r in rows]),
             column("block_id", "The measured block the trial belongs to (-1 if none).",
                    [-1 if r["block_id"] is None else r["block_id"] for r in rows]),
+            column("run_number", "The run the trial belongs to.", [r["run_number"] for r in rows]),
             column("condition", ("The condition the trial ran under: its name in the rig's record "
                                  "(xcon/trials.jsonl), else the CONDITION number sent inside it, else ''."),
                    [r.get("condition", "") for r in rows]),

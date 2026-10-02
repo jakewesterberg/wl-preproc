@@ -72,7 +72,28 @@ approved by the requester), and wl.works told the same day. **Ask 1 is BUILT** (
 - **Two refinements before vendoring** (the listing's deferred minors, 2026-10-01): a segment's
   `probes` is null until the probe census has read it, and a new flag, `rig_record_problem`,
   names what wl-xcon's run record could not supply.
-- **Asks 3 and 4, and item 5,** are the same spec's Plan B, which follows.
+- **Asks 3 and 4, and item 5, are BUILT** (its Plan B, branch `spec/run-requests`). Vendor
+  `docs/schemas/job_request.json` and `docs/schemas/nwb_description.json` once it is on `main`:
+  - **A canonical request asserts runs**, in `metadata.runs` (`run_number`, `start_s`, `end_s`,
+    `works_run_id`), and holds every measured run whose start lies in its montage's window, each
+    asserted. A derivative names its runs in `selection.run_numbers`.
+  - **Each probe's runs** are `selection.probe_runs`, keyed by serial and stated in full for
+    every probe, as your Plan 20 §1.2 rule has it. A run bad on one probe is left out of that
+    probe's list only.
+  - **The check runs as the request arrives,** start and end within 2 ms of `core.Run`. The old
+    block check, `TimingProvenance.block_agreement`, was computed before any request existed, so
+    it never ran in your flow; it is retired with `core.Block`.
+  - **What the answers mean:** a `422` ending *rebuild the request from a fresh GET /sessions* is
+    a stale listing, so stop and show it. A `422` saying the session has no measured run yet
+    clears itself: resend once `GET /sessions` lists its runs. A `409` naming a run's
+    `works_run_id` means the two records disagree about which run it is: stop.
+  - **`metadata.blocks` and `selection.block_ids` are refused** with a `422` naming
+    `metadata.runs` and `selection.run_numbers`; an empty `metadata.blocks` is accepted. A
+    canonical can no longer name a subset of its montage's runs.
+  - **The NWB description is version 3:** `runs` replaces `blocks`. Each run carries
+    `works_run_id`, to join `animal_session_run`, with its task, interval, `closed`, trials,
+    coverage, conditions and measured blocks; each probe carries `sorted_runs` (in a
+    derivative, all of its runs).
 
 ---
 
@@ -91,6 +112,9 @@ it must not guess a montage (parent spec §8.3, "no insertion record → no cano
 **This repository's half is built.**
 - **A canonical request may name its block set:** `selection` gains `"role": "canonical"` with
   `block_ids`. Without `role`, a request means what it always meant.
+  *True when written. Since the run requests (2026-10-01) a canonical holds every run of its
+  montage, and a run bad on one probe is left out of that probe's `selection.probe_runs`;
+  `block_ids` is refused. See "measured runs, and what a block is now" above.*
 - **A replacement names what it supersedes:** `"role": "canonical"` with
   `"supersedes_activation_id": N`.
   - `N` must be the montage's current canonical.
@@ -113,6 +137,7 @@ it must not guess a montage (parent spec §8.3, "no insertion record → no cano
    wl.works'. A `422` naming a session this host has not ingested yet is the ordinary
    "not yet": retry it.
 2. **Leave out bad blocks** by sending `"role": "canonical"` with `block_ids`.
+   *Since 2026-10-01: leave a bad run out of each probe's `selection.probe_runs` instead.*
 3. **Regenerate with a replacement** naming the current canonical, and treat a `409` as a
    disagreement for a person.
 4. **Read `superseded_by`** in `GET /nwb`, alongside wl.works' own `supersedesId` and
@@ -146,6 +171,7 @@ every connection, as always ([`docs/ops/lab-host-protocol.md`](ops/lab-host-prot
   decide anything (its own Plan 20 §4.5 asks for exactly this). Per block it names the task, the
   conditions that ran with their stimulus settings and trial counts, and per-system coverage;
   per file, the subject, the data types present, the timing tier and the checksums.
+  *Since version 3 (2026-10-01) these are per run, each naming its `works_run_id`.*
 - **Checksums are `sha256`** of each written-once dataset's decoded contents, as Plan 24 §3.3 and
   its item 1 settle.
 - **`PUT /nwb/active`** takes the whole set of activations that belong on the fast share, every

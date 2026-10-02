@@ -11,15 +11,6 @@ def cov(dj_conn, prefix):
     return coverage
 
 
-def test_block_coverage_is_per_block_per_system(cov):
-    assert set(cov.BlockCoverage.primary_key) == {
-        "subject",
-        "session_datetime",
-        "block_id",
-        "system",
-    }
-
-
 def test_trial_coverage_is_per_trial_per_system(cov):
     assert set(cov.TrialCoverage.primary_key) == {
         "subject",
@@ -32,10 +23,10 @@ def test_trial_coverage_is_per_trial_per_system(cov):
 def test_trial_coverage_populates_a_row_for_every_trial_and_system(
     cov, dj_conn, prefix, tmp_path
 ):
-    """1c-5 Task 9: `TrialCoverage.make()` mirrors `BlockCoverage.make()`
-    exactly, calling the same `timebase.coverage.classify_coverage` rather
-    than a second interval rule (`tests/timebase/test_coverage_rules.py::
-    test_block_coverage_populates_a_row_for_every_block_and_system` is this
+    """1c-5 Task 9: `TrialCoverage.make()` calls the same
+    `timebase.coverage.classify_coverage` as `RunCoverage.make()` rather than
+    a second interval rule (`tests/timebase/test_coverage_rules.py::
+    test_run_coverage_populates_a_row_for_every_run_and_system` is this
     test's own sibling, for the other table).
 
     **What this fixture actually produces, checked rather than assumed:**
@@ -139,13 +130,17 @@ def test_coverage_states_are_exactly_full_partial_absent(cov, enum_values):
     satisfies, and which a fourth state added later — the thing that would
     actually collapse `partial` back into a spectrum — could not fail.
 
-    Both coverage tables are checked, not just BlockCoverage: they share
+    Both coverage tables are checked, not just one: they share
     `_COVERAGE_ENUM` today and that is exactly the assumption worth pinning.
     """
     expected = {"full", "partial", "absent"}
-    for table in (cov.BlockCoverage, cov.TrialCoverage):
+    for table in (cov.RunCoverage, cov.TrialCoverage):
         declared = table.heading["coverage"].type
         assert enum_values(declared) == expected, (
             f"{table.__name__}.coverage declares {enum_values(declared)}, "
             f"not exactly {expected}"
         )
+
+
+def test_run_coverage_is_per_run_per_system(cov):
+    assert set(cov.RunCoverage.primary_key) == {"subject", "session_datetime", "run_number", "system"}

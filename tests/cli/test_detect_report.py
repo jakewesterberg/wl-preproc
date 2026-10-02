@@ -211,7 +211,6 @@ def _land_session(
             "n_full_code_records": 0,
             "n_strobe_witnesses": 0,
             "decode_errors": 0,
-            "block_agreement": None,
         },
         allow_direct_insert=True,
         skip_duplicates=True,

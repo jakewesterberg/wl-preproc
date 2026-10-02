@@ -225,7 +225,6 @@ def _valid_job_payload() -> dict:
         "parameters": {},
         "idempotency_key": "http-probe-key-1",
         "metadata": {
-            "blocks": [],
             "montage_boundaries": [],
             "probes": [],
             "experimenter": "jw",
@@ -1409,16 +1408,22 @@ def test_nothing_ever_returns_a_traceback_regardless_of_input(start_server):
 # --------------------------------------------------------------------------
 
 
+# The runs the event stage measured for every session landed here, both in
+# montage 0's window [0, 12) (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 3).
+_RUNS = [(1, 0.0, 4.0), (2, 5.0, 11.0)]
+
+
 @pytest.fixture
 def landed_session(dj_conn, prefix):
     """A `(subject, session_datetime)` with Lab/Subject/Session already on
-    file -- the precondition `accept()` itself assumes (see
+    file, and its runs measured -- the precondition `accept()` itself assumes (see
     `tests/responder/test_jobs.py`'s fixture of the same name and shape;
     this is a local copy since pytest fixtures do not cross test modules
     without living in a shared `conftest.py`, and duplicating four lines
     here was judged cheaper than relocating a fixture Task 7 did not need
     to share)."""
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core, pipeline
     from wl_preproc.schema import request as schema_request
 
     schema_request.activate(prefix=prefix)
@@ -1437,9 +1442,11 @@ def landed_session(dj_conn, prefix):
             },
             skip_duplicates=True,
         )
-        pipeline.Session.insert1(
-            {"subject": subject, "session_datetime": session_datetime}, skip_duplicates=True
-        )
+        key = {"subject": subject, "session_datetime": session_datetime}
+        pipeline.Session.insert1(key, skip_duplicates=True)
+        core.Run.insert([{**key, "run_number": number, "task_type": 0, "run_start_time": start,
+                          "run_stop_time": stop, "closed": 1} for number, start, stop in _RUNS],
+                        skip_duplicates=True)
 
     return _land
 
@@ -1451,7 +1458,8 @@ def _real_job_payload(*, subject: str, session_datetime_iso: str, idempotency_ke
         "parameters": {},
         "idempotency_key": idempotency_key,
         "metadata": {
-            "blocks": [],
+            "runs": [{"run_number": number, "start_s": start, "end_s": stop, "works_run_id": f"wr-{number}"}
+                     for number, start, stop in _RUNS],
             "montage_boundaries": [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
             "probes": [],
             "experimenter": "jw",
@@ -2062,6 +2070,7 @@ def test_an_insertions_aim_and_assignment_arrive_over_http(start_server, landed_
         "target": {"area": "V4d", "atlas": "CHARM", "atlas_level": 6},
         "area_assignment": {"area": "V4d", "source": "at_rig", "asserted_at": "2027-06-21T10:15:00+02:00"},
     }]
+    payload["selection"]["probe_runs"] = {"19011110001": [1, 2]}
 
     status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
 
@@ -2069,6 +2078,21 @@ def test_an_insertions_aim_and_assignment_arrive_over_http(start_server, landed_
     key = {"subject": subject, "session_datetime": naive_dt}
     assert (ephys.InsertionReport & key).fetch1("target_area") == "V4d"
     assert (ephys.AreaAssignment & key).fetch1("asserted_at") == datetime.datetime(2027, 6, 21, 8, 15)
+
+
+def test_the_retired_blocks_are_refused_over_http_naming_metadata_runs(start_server):
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.1: a request still sending blocks is a 422 that says what
+    replaced them, before `accept()` is reached."""
+    base = start_server(TOKEN, _health_ok, _unused)
+    payload = _valid_job_payload()
+    payload["metadata"]["blocks"] = [{"block_id": 1, "task_type": "rf_map", "start_s": 0.0, "end_s": 4.0}]
+
+    status, body = _request(f"{base}/jobs", method="POST", token=TOKEN, body=payload)
+
+    assert status == 422
+    [entry] = json.loads(body)["detail"]
+    assert entry["loc"] == ["metadata", "blocks"] and "metadata.runs" in entry["msg"]
 
 
 def test_a_partial_aim_is_refused_over_http(start_server):

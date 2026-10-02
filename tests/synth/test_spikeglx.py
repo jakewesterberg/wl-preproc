@@ -248,6 +248,24 @@ def test_nidq_carries_the_code_words_not_only_the_barcode(tmp_path):
     assert [int(data[i]) for i in falling] == [word for _, word in truth.code_words]
 
 
+@pytest.mark.parametrize("runs", [False, True])
+def test_the_last_code_words_strobe_falls_before_the_file_ends(tmp_path, runs):
+    """The reader latches each word on its strobe's falling edge, so a strobe
+    still high at the file's last sample is a word the NI never latched. The
+    buffer once ended exactly where the last strobe did: CI_RECIPE's own
+    SESSION_END kept its edge only by rounding, and wrapping its blocks in
+    runs moved SESSION_END to 15.002 s, dropped it, and took a tier-A session
+    to D on an `event_code_agreement` of 49/50."""
+    from wl_preproc.events.extract import extract_nidq_words
+
+    recipe = CI_RECIPE.model_copy(update={"systems": ("syncbox", "spikeglx"), "runs": runs})
+    truth = build_timeline(recipe)
+    write_spikeglx(tmp_path, recipe, truth)
+
+    words = extract_nidq_words(tmp_path / f"{recipe.session_id}.nidq.bin").words
+    assert [code for _, code in words] == [word for _, word in truth.code_words]
+
+
 def test_geom_map_comes_from_the_probe_table_not_a_format_string(tmp_path):
     """The fabricated map alternated x between 16 and 48. Real NP1000
     electrodes 0-3 sit at (16,0), (48,0), (0,20), (32,20) -- four x values on a

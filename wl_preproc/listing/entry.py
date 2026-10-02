@@ -9,9 +9,8 @@ listing stage and `GET /sessions` both call it, so they cannot disagree.
 **A block belongs to the run its start lies in**, and a segment to every run
 it overlaps: runs and segments do not align, since a bank change needs a
 SpikeGLX restart and a run need not stop for one. A block's start is stored
-as a MySQL FLOAT (`trial.Block`), a run's as a double (`core.Run`), so the run
-is rounded to float32 before they are compared: rounding is monotonic, so a
-block that starts inside its run is found inside it at any magnitude.
+as a MySQL FLOAT and a run's as a double, so they are compared by
+`events/runs.py::starts_inside`, as the NWB builder compares them.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ import dataclasses
 import datetime
 from pathlib import Path
 
-import numpy as np
+from wl_preproc.events.runs import starts_inside, stored_doubles
 
 from wl_preproc.contracts.protocol import SessionEntry
 
@@ -96,8 +95,7 @@ def build_entry(facts: SessionFacts) -> dict:
         start, stop = run["run_start_time"], run["run_stop_time"]
         record = facts.records.get(run["run_number"], {})
         spanned = [segment for segment in segments if segment["start_s"] < stop and segment["end_s"] > start]
-        low, high = float(np.float32(start)), float(np.float32(stop))
-        blocks = sorted((block for block in facts.blocks if low <= block["block_start_time"] <= high),
+        blocks = sorted((block for block in facts.blocks if starts_inside(block["block_start_time"], start, stop)),
                         key=lambda block: block["block_start_time"])
         listed_blocks = []
         in_a_run.update(block["block_id"] for block in blocks)
@@ -189,7 +187,7 @@ def gather_facts(session_key: dict) -> SessionFacts:
                   for row in (core.RejectedSegment & session_key).to_dicts()],
         runs=(core.Run & session_key).to_dicts(),
         records={row["run_number"]: row for row in (core.RunRecord & session_key).to_dicts()},
-        blocks=(pipeline.trial.Block & session_key).to_dicts(),
+        blocks=stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time"),
         block_attributes=dict(attributes),
         trial_counts=dict(collections.Counter(int(block_id) for block_id in
                                               (pipeline.trial.BlockTrial & session_key).to_arrays("block_id"))),
