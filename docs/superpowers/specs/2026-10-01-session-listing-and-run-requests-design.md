@@ -427,3 +427,22 @@ settle what the sections above left open; §0 stands.
       `GET /nwb`. Nothing in this repository read them but its tests, and wl.works' use of
       them is recorded as still open on its side (`pending-wl-works-amendments.md`, "NWB
       files", item 1).
+
+## Amendments, 2026-10-02, from Plan B's final review
+
+24. **element-event's FLOAT times are read as the doubles they store**
+    (`events/runs.py::stored_doubles`, through `CAST(... AS DOUBLE)`). Amendment 13 modelled a
+    block's or trial's start as the float32 MySQL stores, but MySQL's text protocol, the one
+    DataJoint reads through, returns a FLOAT to six significant digits. Hours in, that read a
+    block stored at 18000.124 as 18000.1, before its run's `RUN_START` at 18000.1234: past about
+    1000 s a run's first block, and often its first trial, fell out of the NWB file and out of
+    its run in `GET /sessions`, with no note anywhere. The same read made a short trial hours in
+    zero seconds long, and `TrialCoverage` failed on it every pass. The NWB builder, the listing
+    and `TrialCoverage` now read through `stored_doubles`; amendment 13's float32 rule then holds
+    as written. `tests/schema/test_float_times_round_trip.py` writes a session through the
+    database at 18,000 s, which no test had done (final review C1).
+25. **A derivative's probes each cover all of its runs.** A derivative is the unit a sort runs
+    over (decision 3), and its request may not state per-probe lists (amendment 19), so each
+    probe in `metadata.probes` is recorded in `request.ActivationProbeRun` with the derivative's
+    whole run set. Recording none told the sorter, and the description's `sorted_runs`, that
+    every probe sorts nothing (final review I1).

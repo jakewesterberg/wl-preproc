@@ -203,7 +203,8 @@ class ProbeInfo(_Frozen):
     assignment: ProbeAssignment | None
     area_from: Literal["assignment", "target", "unknown"]
     # The runs this probe's sort covers, as the request stated them (design
-    # spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.1).
+    # spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.1);
+    # in a derivative, all of its runs (amendment 25).
     sorted_runs: list[int] = []
 
 

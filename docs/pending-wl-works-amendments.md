@@ -92,7 +92,8 @@ approved by the requester), and wl.works told the same day. **Ask 1 is BUILT** (
     canonical can no longer name a subset of its montage's runs.
   - **The NWB description is version 3:** `runs` replaces `blocks`. Each run carries
     `works_run_id`, to join `animal_session_run`, with its task, interval, `closed`, trials,
-    coverage, conditions and measured blocks; each probe carries `sorted_runs`.
+    coverage, conditions and measured blocks; each probe carries `sorted_runs` (in a
+    derivative, all of its runs).
 
 ---
 

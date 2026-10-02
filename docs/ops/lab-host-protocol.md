@@ -371,7 +371,8 @@ than something one side can do quietly.
     serial, the runs its sort covers, **stated in full** (the record is the run set each
     probe resolved to, not the exclusions), and only the file's runs. An empty list leaves
     that probe out of sorting. This is how a run bad on one probe is left out of that
-    probe's sort only.
+    probe's sort only. A derivative sends none: each probe it names covers all of its
+    runs.
   - **`block_ids` is retired**, and so is `metadata.blocks`: a non-empty one is a `422`
     naming its replacement.
 
@@ -507,7 +508,8 @@ Authorization: Bearer <token>
     (`code` and `name`), its `measured` interval, `closed`, `trials` (total and by
     outcome), each system's `coverage`, its `conditions`, and its measured `blocks`
     (`block_number`, `block_in_run`, `block_type`, `measured`, `closed`, `trials`). Each
-    probe also carries `sorted_runs`, its list from the request. **Version 2** (the probes
+    probe also carries `sorted_runs`, its list from the request (a derivative's: all of its
+    runs). **Version 2** (the probes
     design, `2026-09-30-nwb-probes-design.md` §3.2) gave `probes` its shape: each probe's
     `serial`, `probe_type`, `insertion_number`, `trajectory_id`, `n_electrodes`, `target`
     and `assignment`, and `area_from`, which says whether the file's area label came from
