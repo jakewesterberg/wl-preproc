@@ -67,12 +67,12 @@ class BlockSpec(BaseModel):
     # `ge=1`, not a bare `int`: a zero-trial block has zero duration, and
     # `timeline.py` still emits its `BLOCK_START` payload and its `BLOCK_END`
     # for it, so the block's MEASURED boundary lands several code-word slots
-    # away from a nominal `(0.0, 0.0)` -- far enough to trip
-    # `TimingProvenance.block_agreement` and quarantine an otherwise clean
-    # session at tier D. `events/agreement.py`'s `_BLOCK_START_MAX_SLOTS`
-    # derives its one-slot bound assuming at least one trial; this is where
-    # that assumption is enforced, and it is enforced here because a recipe is
-    # the only place a zero-trial block can be described at all.
+    # away from a nominal `(0.0, 0.0)` and displaces the block after it. That
+    # once quarantined a clean session at tier D through
+    # `TimingProvenance.block_agreement`, retired since (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 5); the
+    # generator's block timing still assumes a trial, and a recipe is the only
+    # place a zero-trial block can be described at all, so it is refused here.
     n_trials: int = Field(ge=1)
     trial_duration_s: float
     stim_per_trial: int = 0

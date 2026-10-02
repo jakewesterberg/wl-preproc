@@ -171,26 +171,6 @@ class Activation(dj.Manual):
 
 
 @schema
-class ActivationBlock(dj.Manual):
-    definition = """
-    # The block set this activation covers. Unit identity is a product of the
-    # sort, so two activations over different block sets produce genuinely
-    # different units and nothing may imply otherwise.
-    # Key: (subject, session_datetime, montage_id, activation_id, block_id).
-    # NOT ENFORCED HERE: both foreign keys reach the same Session, so a block
-    # is guaranteed to belong to the right session -- and to nothing narrower.
-    # Nothing stops pairing an activation with a block lying outside its
-    # montage's [start_s, end_s) window, which is a block the sort must not
-    # cover. The check needs Montage.start_s/end_s against Block.start_s/end_s
-    # and so cannot be a foreign key. Nothing writes this table in 1c-1; the
-    # responder (1c-3) is its first writer and owns enforcing the window.
-    -> Activation
-    -> core.Block
-    """
-
-
-
-@schema
 class ActivationRun(dj.Manual):
     definition = """
     # The runs this activation's file holds (design spec

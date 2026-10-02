@@ -398,9 +398,10 @@ def populate_session(key: dict, session_dir: Path) -> None:
     to it; every attribute value below is a stringified scalar written to
     `attribute_value` instead.
 
-    **`core.Block` is never written here.** It holds wl.works' own assertion,
-    authored elsewhere (spec section 8.3.1); this function writes only the
-    MEASURED boundary, into `trial.Block`.
+    **Nothing wl.works asserts is written here.** Its copy of a run lives in
+    `core.RunAssertion`, recorded by `responder/jobs.py::accept`; this
+    function writes only the MEASURED boundaries, into `trial.Block` and
+    `core.Run`.
     """
     session_key = {k: key[k] for k in pipeline.Session.primary_key}
 
@@ -563,9 +564,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
     if trial_rows:
         pipeline.trial.Trial.insert(trial_rows, allow_direct_insert=True, skip_duplicates=True)
 
-    # -- Block: the MEASURED boundary (design spec section 5). core.Block --
-    # wl.works' own ASSERTION -- is never written here or anywhere in this
-    # pipeline.
+    # -- Block: the MEASURED boundary (design spec section 5).
     block_rows = [
         {
             **session_key,

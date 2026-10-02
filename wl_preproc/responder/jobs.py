@@ -279,7 +279,7 @@ def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], 
             raise ValueError(f"run {number} is not a measured run of this session; {_REBUILD}")
         for end, asserted_s, measured_s in (("start", entry.start_s, run["run_start_time"]),
                                             ("end", entry.end_s, run["run_stop_time"])):
-            if abs(asserted_s - measured_s) > agreement.block_agreement_tolerance_s(measured_s, asserted_s):
+            if abs(asserted_s - measured_s) > agreement.RUN_AGREEMENT_TOLERANCE_S:
                 raise ValueError(f"run {number}'s {end}, {asserted_s} s, is not the measured {measured_s} s; "
                                  f"{_REBUILD}")
         rows.append({**session_key, "run_number": number, "works_run_id": entry.works_run_id,

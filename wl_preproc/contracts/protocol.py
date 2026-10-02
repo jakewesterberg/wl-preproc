@@ -213,8 +213,8 @@ class ProbeEntry(BaseModel):
     #
     # So this host records what arrived and infers nothing from its absence.
     # Null here means "no trajectory was supplied with this request" and NOT
-    # which of the reasons applies -- the same discipline as `core.Block`'s
-    # "recording an assertion is not authoring it".
+    # which of the reasons applies -- the discipline `core.RunAssertion` keeps
+    # for runs: recording an assertion is not authoring it.
     #
     # **It is not a quarantine condition, and must never be confused with one.**
     # Design spec section 8.3's "no insertion record -> no canonical" is about a

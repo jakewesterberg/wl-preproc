@@ -570,13 +570,13 @@ def test_computed_tables_is_no_longer_empty():
 
 def test_computed_tables_are_in_dependency_order():
     """Ordering is load-bearing rather than tidy. `Segment.make()` needs its
-    system's rate to already exist, and `BlockCoverage.make()` needs the
+    system's rate to already exist, and `RunCoverage.make()` needs the
     segments — and neither dependency is expressed as a `key_source`, precisely
     so that a system with no fit still records why (see `Segment.key_source`).
     So this list IS the ordering, and nothing else enforces it.
 
     `TrialCoverage` was added to the list in 1c-5's fix round and is asserted
-    after `Segment` for exactly `BlockCoverage`'s reason: its `make()`
+    after `Segment` for exactly `RunCoverage`'s reason: its `make()`
     intersects a trial's interval with `core.Segment`'s extents, so running it
     first would record a session as less covered than it is. That is the ONE
     ordering this test adds; its other dependency, `pipeline.trial.Trial`, is
@@ -591,7 +591,7 @@ def test_computed_tables_are_in_dependency_order():
     names = [table.__name__ for table in daemon._computed_tables()]
 
     assert names.index(timebase.SystemTimebase.__name__) < names.index(core.Segment.__name__)
-    assert names.index(core.Segment.__name__) < names.index(coverage.BlockCoverage.__name__)
+    assert names.index(core.Segment.__name__) < names.index(coverage.RunCoverage.__name__)
     assert names.index(core.Segment.__name__) < names.index(coverage.TrialCoverage.__name__)
     assert names.index(core.Segment.__name__) < names.index(
         timebase.TimingProvenance.__name__
@@ -626,7 +626,8 @@ def test_every_computed_table_is_a_daemon_stage():
     its table either.
 
     **What this test actually produces today:** seven discovered tables —
-    `core.Segment`, `coverage.BlockCoverage`, `coverage.TrialCoverage`,
+    `core.Segment`, `coverage.BlockCoverage` (since replaced by
+    `RunCoverage`), `coverage.TrialCoverage`,
     `eye.EyeCalibration`, `eye.EyeQuality`, `timebase.SystemTimebase`,
     `timebase.TimingProvenance` — an empty exemption set, and set equality
     with `_computed_tables()`. Confirmed to fail with `TrialCoverage` removed

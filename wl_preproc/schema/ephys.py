@@ -140,8 +140,9 @@ class ProbeInsertion(dj.Manual):
     # penetration for which no trajectory resource exists.
     #
     # This host does not distinguish them and must not try. Null means "no
-    # trajectory arrived with the request" and nothing further -- the same
-    # discipline as `core.Block`'s "recording an assertion is not authoring it".
+    # trajectory arrived with the request" and nothing further -- the
+    # discipline `core.RunAssertion` keeps for runs: recording an assertion is
+    # not authoring it.
     # wl-works' section 9 item 1 leaves the discrimination open on their side
     # and warns against "a null that means three things"; their item 2 is why
     # the no-planned-parent case is legitimate rather than an error.
@@ -395,7 +396,7 @@ class Clustering(dj.Manual):
         # reference this part instead, so an electrode a unit names must be one
         # of the electrodes its own sort declared.
         #
-        # NOT ENFORCED HERE, in the same sense ActivationBlock records: the
+        # NOT ENFORCED HERE, in the sense a foreign key cannot reach: the
         # master's `-> ElectrodeConfig` is BELOW its divider, so a part row
         # cannot inherit it into this key, and nothing at the database level
         # ties these rows to that configuration. Whatever populates this table

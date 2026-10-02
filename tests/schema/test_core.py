@@ -40,7 +40,6 @@ def a_session(core):
 def test_every_table_declares_and_documents_its_key(core):
     for table in (
         core.Montage,
-        core.Block,
         core.AcquisitionSystem,
         core.Segment,
         core.RejectedSegment,
@@ -64,42 +63,6 @@ def test_segment_is_keyed_on_system_and_barcode(core):
         "system",
         "segment_barcode",
     }
-
-
-def test_a_block_round_trips_with_and_without_works_block_id(core, a_session):
-    """`works_block_id = null : varchar(64)` is exercised in both directions: one
-    row that leaves it at its null default, one that sets it."""
-    core.Block.insert1(
-        {
-            **a_session,
-            "block_id": 1,
-            "task_type": "rf_map",
-            "start_s": 0.0,
-            "end_s": 300.0,
-        },
-        skip_duplicates=True,
-    )
-    core.Block.insert1(
-        {
-            **a_session,
-            "block_id": 2,
-            "task_type": "attention",
-            "start_s": 300.0,
-            "end_s": 900.0,
-            "works_block_id": "abc-123",
-        },
-        skip_duplicates=True,
-    )
-    without_id = (core.Block & {**a_session, "block_id": 1}).fetch1()
-    with_id = (core.Block & {**a_session, "block_id": 2}).fetch1()
-
-    assert without_id["task_type"] == "rf_map"
-    assert without_id["start_s"] == pytest.approx(0.0)
-    assert without_id["end_s"] == pytest.approx(300.0)
-    assert without_id["works_block_id"] is None
-
-    assert with_id["task_type"] == "attention"
-    assert with_id["works_block_id"] == "abc-123"
 
 
 def _segment_row(a_session, **overrides):
@@ -285,3 +248,21 @@ def test_a_run_assertion_is_keyed_on_its_measured_run_and_round_trips(core, a_se
         assert (core.RunAssertion & session).fetch1() == row
     finally:
         (core.RunAssertion & session).delete_quick()
+
+
+def test_what_runs_replaced_is_retired(dj_conn, prefix):
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 5: `core.Block` and `request.ActivationBlock` gave way to
+    `core.RunAssertion` and `request.ActivationRun`, `BlockCoverage` to
+    `RunCoverage`, and `TimingProvenance.block_agreement` -- computed before
+    any request existed, so it never ran in wl.works' flow -- to the run check
+    on arrival."""
+    from wl_preproc.events import agreement
+    from wl_preproc.schema import core as core_tables
+    from wl_preproc.schema import coverage, request, timebase
+
+    timebase.activate(prefix=prefix)
+    assert not hasattr(core_tables, "Block") and not hasattr(request, "ActivationBlock")
+    assert not hasattr(coverage, "BlockCoverage")
+    assert "block_agreement" not in timebase.TimingProvenance.heading.names
+    assert "block_agreement" not in agreement.TierInputs.__dataclass_fields__

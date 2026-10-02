@@ -202,11 +202,9 @@ def _timing(key, *, tier: str):
     by direct insert, not by `populate()`."
 
     The choice made here follows that same precedent, for a narrower reason
-    specific to this test. The recipe that reaches tier D honestly
-    (`tests/schema/test_timebase.py::test_block_disagreement_forces_d_even_
-    with_two_agreeing_full_code_records`) pulls in session generation, real
-    event decoding across the recipe's `syncbox` and `spikeglx` systems, and
-    a deliberately disagreeing `core.Block` row -- none of which has
+    specific to this test. A recipe that reaches tier D honestly pulls in
+    session generation, real event decoding across the recipe's `syncbox` and
+    `spikeglx` systems, and a deliberately broken input -- none of which has
     anything to do with the one comparison this module checks
     (`tier_rows[0] != "D"`). Routing through it would make a failure here
     just as likely to mean "the synthetic recipe changed shape" as "the
