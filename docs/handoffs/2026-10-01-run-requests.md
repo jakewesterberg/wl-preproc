@@ -94,3 +94,52 @@ Every count below was read off this branch's own runs on 2026-10-02, and each ma
   - 3.13: **2129 passed, 27 skipped, 1 xfailed**.
   - Both ran on `ec799e2` with these records uncommitted.
 - **`wl-check`:** `wl.yaml: no findings`.
+
+## 6. The final review
+
+A fresh Opus reviewer read the whole branch (`4be3f17..92b7e8f`) against the spec and the plan's
+Review Focus. It found **one Critical, two Important and six Minor**, and set nine behaviours aside.
+The Critical and both Important findings were fixed in one pass, each with a test that failed
+first:
+- **C1, fixed (`a617ed1`; amendment 24).** element-event's FLOAT block and trial times came back
+  from MySQL to six significant digits, not as the float32 amendment 13 modelled. Past about
+  1000 s, a run's first block, and often its first trial, fell out of the NWB file and out of
+  its run in `GET /sessions`, silently, and a short trial hours in read as zero seconds and
+  failed `TrialCoverage` on every pass. The suite missed it because every synthetic session is
+  under 100 s, and the Review Focus test checked the model, not the database. Now
+  `events/runs.py::stored_doubles` reads the times as stored. New:
+  `tests/schema/test_float_times_round_trip.py`, a session written through the database at
+  18,000 s; its 3 tests failed before the fix.
+- **I1, fixed (`30af152`; amendment 25).** A derivative recorded no per-probe runs, so its
+  description said every probe sorts nothing. Each probe the request names now covers the
+  derivative's whole run set. A ruling, since the spec was silent: decision 3 calls a derivative
+  the unit a sort runs over.
+- **I2, fixed (`313a4d8`).** Four refusals the spec requires had no test: a run asserted twice,
+  a canonical window with no measured run, and a derivative's run unasserted or unmeasured.
+  Each case now fails with its check removed, and each asserts that nothing was written.
+
+**The six Minor findings are deferred:**
+- M1: `RunAssertion` is written before `submit*()` can refuse with a `409`.
+- M2: one `works_run_id` named for two runs is not refused.
+- M3: data outside every measured run leaves the file with no note.
+- M4: documentation drift in the protocol, `pending-wl-works-amendments.md`,
+  `timebase/coverage.py` and `responder/server.py`.
+- M5: `_task_name` repeats `describe._task`.
+- M6: `event_inside` re-rounds each run's bounds per event.
+
+**What it set aside, and the rulings on it.**
+- **One became a finding:** the six-significant-digit trial times predate this branch, and are
+  fixed with C1.
+- **Eight stand, each for the reason given by the spec or the existing code:**
+  - a derivative's run is in the window by its start;
+  - a canonical without `supersedes` returns the current one, ignoring new lists;
+  - a session with no run markers is a `422` that wl.works keeps retrying;
+  - the 2 ms tolerance assumes doubles;
+  - a truly zero-length trial still stops `TrialCoverage`;
+  - `selection` stays free-form in the schema;
+  - `accept()` is serialised;
+  - a `NaN` in a `422` body predates this branch.
+
+**The full suite after the fixes, on `ac4fd77`:** 3.11, **2137 passed, 25 skipped, 1 deselected,
+1 xfailed**; 3.13, **2136 passed, 27 skipped, 1 xfailed**. Both are seven more than §5's run,
+the seven new tests, and both exited 0.
