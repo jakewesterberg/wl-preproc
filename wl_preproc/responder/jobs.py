@@ -113,7 +113,8 @@ from __future__ import annotations
 import datetime
 import math
 
-from wl_preproc.contracts.protocol import JobRequest, MontageBoundary
+from wl_preproc.contracts.protocol import JobRequest, MontageBoundary, ProbeEntry, RunEntry
+from wl_preproc.events import agreement
 from wl_preproc.ingest import landing
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.schema import request as schema_request
@@ -231,6 +232,104 @@ def _lifecycle_role(selection: dict, block_ids: list) -> bool:
     if role == "derivative" and not block_ids:
         raise ValueError("selection['role'] 'derivative' needs block_ids: a derivative is its block set")
     return role == "canonical" or (role is None and not block_ids)
+
+
+class RunIdConflict(Exception):
+    """A run already recorded under one wl.works id, named again under
+    another (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.2): the two disagree about which run this is, which resending
+    cannot fix. `server.py` answers it with a 409, as for a reused key."""
+
+
+_REBUILD = "rebuild the request from a fresh GET /sessions"
+
+
+def _run_numbers(value, *, name: str) -> list[int]:
+    if not isinstance(value, list) or any(isinstance(n, bool) or not isinstance(n, int) for n in value):
+        raise ValueError(f"{name} must be a list of run numbers, got {value!r}")
+    return value
+
+
+def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], run_numbers: list[int],
+                canonical: bool) -> tuple[list[int], list[dict]]:
+    """The file's runs, and the `core.RunAssertion` rows to record, after
+    checking every asserted run against the measured `core.Run` as the
+    request arrives (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.2).
+
+    A canonical holds every measured run whose start lies in its montage's
+    window, and each must be asserted here; a derivative holds the runs it
+    names, each measured, in the window, and asserted here or before."""
+    measured = {row["run_number"]: row for row in (core.Run & session_key).to_dicts()}
+    if not measured:
+        raise ValueError(
+            f"session {session_key['subject']}/{session_key['session_datetime'].isoformat()} has no measured "
+            "run on this host yet: its event codes are not yet read, or the rig sent no run markers. Resend "
+            "once GET /sessions lists its runs."
+        )
+    by_number: dict[int, RunEntry] = {}
+    for entry in asserted:
+        if entry.run_number in by_number:
+            raise ValueError(f"metadata.runs names run {entry.run_number} twice")
+        by_number[entry.run_number] = entry
+    rows = []
+    for number, entry in sorted(by_number.items()):
+        run = measured.get(number)
+        if run is None:
+            raise ValueError(f"run {number} is not a measured run of this session; {_REBUILD}")
+        for end, asserted_s, measured_s in (("start", entry.start_s, run["run_start_time"]),
+                                            ("end", entry.end_s, run["run_stop_time"])):
+            if abs(asserted_s - measured_s) > agreement.block_agreement_tolerance_s(measured_s, asserted_s):
+                raise ValueError(f"run {number}'s {end}, {asserted_s} s, is not the measured {measured_s} s; "
+                                 f"{_REBUILD}")
+        rows.append({**session_key, "run_number": number, "works_run_id": entry.works_run_id,
+                     "start_s": entry.start_s, "end_s": entry.end_s})
+    on_record = {row["run_number"]: row["works_run_id"] for row in (core.RunAssertion & session_key).to_dicts()}
+    for row in rows:
+        known = on_record.get(row["run_number"])
+        if known is not None and known != row["works_run_id"]:
+            raise RunIdConflict(f"run {row['run_number']} is recorded with works_run_id {known!r}; this request "
+                                f"names {row['works_run_id']!r}")
+    window = [number for number, run in sorted(measured.items())
+              if montage_row["start_s"] <= run["run_start_time"] < montage_row["end_s"]]
+    bounds = f"montage {montage_row['montage_id']}'s window [{montage_row['start_s']}, {montage_row['end_s']})"
+    if canonical:
+        if not window:
+            raise ValueError(f"{bounds} holds no measured run; {_REBUILD}")
+        missing = [number for number in window if number not in by_number]
+        if missing:
+            raise ValueError(f"measured run(s) {missing} lie in {bounds} and the request does not assert them; "
+                             f"{_REBUILD}")
+        return window, rows
+    named = sorted(set(run_numbers))
+    for problem, numbers in (("are not measured runs of this session", [n for n in named if n not in measured]),
+                             (f"outside {bounds}", [n for n in named if n in measured and n not in window]),
+                             ("asserted neither in metadata.runs nor before",
+                              [n for n in named if n not in by_number and n not in on_record])):
+        if numbers:
+            raise ValueError(f"selection names run(s) {numbers} {problem}; {_REBUILD}")
+    return named, rows
+
+
+def _check_probe_runs(probes: list[ProbeEntry], probe_runs, file_runs: list[int]) -> None:
+    """Every probe's runs are stated in full, and only the file's (design
+    spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.1;
+    wl.works' Plan 20 rule: the record is the run set each probe resolved
+    to, not the exclusions)."""
+    serials = sorted({probe.serial for probe in probes})
+    if probe_runs is None:
+        if serials:
+            raise ValueError(f"selection.probe_runs must give every probe's runs; metadata.probes names {serials}")
+        return
+    if not isinstance(probe_runs, dict) or any(not isinstance(serial, str) for serial in probe_runs):
+        raise ValueError(f"selection.probe_runs must map each probe's serial to its runs, got {probe_runs!r}")
+    if sorted(probe_runs) != serials:
+        raise ValueError(f"selection.probe_runs names {sorted(probe_runs)}, and metadata.probes names {serials}: "
+                         "every probe's runs are stated, and only theirs")
+    for serial, numbers in sorted(probe_runs.items()):
+        outside = sorted(set(_run_numbers(numbers, name=f"selection.probe_runs[{serial!r}]")) - set(file_runs))
+        if outside:
+            raise ValueError(f"probe {serial}'s runs {outside} are not among the file's runs {file_runs}")
 
 
 def _reject_out_of_range_int(value, *, name: str, bounds: tuple[int, int]) -> None:
@@ -513,11 +612,23 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     """
     selection = request.selection
     _require_selection_keys(selection)
-    # Before anything reads the database: a malformed lifecycle selection
-    # is the caller's to fix, whatever this host holds.
-    canonical = _lifecycle_role(selection, selection.get("block_ids") or [])
-
     metadata = request.metadata
+    # Before anything reads the database: a malformed lifecycle selection
+    # is the caller's to fix, whatever this host holds. A request names runs
+    # or blocks (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    # section 3.1).
+    run_numbers = _run_numbers(selection.get("run_numbers") or [], name="selection.run_numbers")
+    probe_runs = selection.get("probe_runs")
+    names_runs = bool(metadata.runs or run_numbers or probe_runs is not None)
+    if names_runs and (selection.get("block_ids") or metadata.blocks):
+        raise ValueError("a request names runs or blocks, not both: metadata.runs, selection.run_numbers and "
+                         "selection.probe_runs, or metadata.blocks and selection.block_ids")
+    canonical = _lifecycle_role(selection, selection.get("block_ids") or run_numbers)
+    if canonical and run_numbers:
+        raise ValueError("selection.run_numbers is a derivative's: a canonical holds every run of its montage")
+    if not canonical and probe_runs is not None:
+        raise ValueError("selection.probe_runs is a canonical's: a derivative's runs are its run_numbers")
+
     _reject_oversized_subject(metadata.subject)
 
     session_datetime = landing.to_naive_utc(_coerce_session_datetime(selection["session_datetime"]))
@@ -579,6 +690,12 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # written. ----
 
     # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
+    file_runs, run_assertion_rows = [], []
+    if names_runs:
+        file_runs, run_assertion_rows = _check_runs(session_key, montage_row, metadata.runs, run_numbers, canonical)
+        if canonical:
+            _check_probe_runs(metadata.probes, probe_runs, file_runs)
+
     _record_subject_details(metadata.subject, metadata.subject_details)
     _record_probe_reports(session_key, metadata.probes, prefix)
     if montage_rows:
@@ -597,6 +714,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # occupied by an asserted value rather than a decoded one.
     if block_rows:
         core.Block.insert(block_rows, skip_duplicates=True)
+    if run_assertion_rows:
+        core.RunAssertion.insert(run_assertion_rows, skip_duplicates=True)
 
     # The payload stored as evidence ("the request as received", Request's
     # own comment). mode="json" -- this project's own existing convention in
@@ -632,6 +751,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             block_ids=list(block_ids),
             payload=payload,
             requested_by=metadata.experimenter,
+            run_numbers=file_runs,
         )
 
     if selection.get("supersedes_activation_id") is not None:
@@ -644,6 +764,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             requested_by=metadata.experimenter,
             supersedes_activation_id=selection["supersedes_activation_id"],
             block_ids=list(block_ids),
+            run_numbers=file_runs,
+            probe_runs=probe_runs,
         )
     return schema_request.submit(
         idempotency_key=request.idempotency_key,
@@ -653,4 +775,6 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
         payload=payload,
         requested_by=metadata.experimenter,
         block_ids=list(block_ids),
+        run_numbers=file_runs,
+        probe_runs=probe_runs,
     )

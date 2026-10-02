@@ -170,7 +170,7 @@ def _translate_accept_errors(request, *, prefix: str) -> dict:
     """
     try:
         return jobs.accept(request, prefix=prefix)
-    except (KeyReuseError, SupersedeConflict) as exc:
+    except (KeyReuseError, SupersedeConflict, jobs.RunIdConflict) as exc:
         # Both are disagreements resending cannot fix: a reused key, or a
         # replacement naming a canonical that is no longer current (design
         # spec `2026-09-30-canonical-lifecycle-design.md` section 3).

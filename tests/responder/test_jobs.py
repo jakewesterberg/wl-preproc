@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 
 import pytest
 
@@ -1230,3 +1231,152 @@ def test_a_null_supersedes_is_absent(landed_session, prefix, selection):
     key = accept(_lifecycle_job("jblc006", when, f"jblc006-{len(selection)}", **selection), prefix=prefix)
     row = (schema_request.Activation & key).fetch1()
     assert (row["activation_id"], row["role"], row["supersedes"]) == (0, "canonical", None)
+
+
+# -- Requests that name runs (design spec
+# `2026-10-01-session-listing-and-run-requests-design.md` section 3). Run 3 lies
+# outside montage 0's window [0, 12).
+
+_RUNS = [(1, 0.0, 4.0), (2, 5.0, 11.0), (3, 13.0, 16.0)]
+_SERIAL = "19011110001"
+
+
+def _landed_with_runs(landed_session, subject: str, day: int, runs=_RUNS) -> dict:
+    from wl_preproc.schema import core
+
+    key = landed_session(subject, datetime.datetime(2027, 9, day, 9, 0))
+    core.Run.insert([{**key, "run_number": number, "task_type": 0, "run_start_time": start, "run_stop_time": stop,
+                      "closed": 1} for number, start, stop in runs], skip_duplicates=True)
+    return key
+
+
+def _runs_job(key: dict, idempotency_key: str, *, runs=_RUNS, ids: dict | None = None,
+              serials=(_SERIAL,), **selection) -> JobRequest:
+    return JobRequest(
+        domain="neural",
+        selection={"session_datetime": key["session_datetime"], "montage_id": 0, **selection},
+        parameters={},
+        idempotency_key=idempotency_key,
+        metadata=MetadataBundle(
+            blocks=[], montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
+            runs=[{"run_number": number, "start_s": start, "end_s": stop,
+                   "works_run_id": (ids or {}).get(number, f"wr-{number}")} for number, start, stop in runs],
+            probes=[{"serial": serial, "insertion_number": index} for index, serial in enumerate(serials, start=1)],
+            experimenter="jw", subject=key["subject"], task_types=[]),
+    )
+
+
+def _run_rows(table, key) -> list:
+    return sorted(tuple(row[name] for name in ("probe_serial", "run_number") if name in row)
+                  for row in (table & key).to_dicts())
+
+
+def test_a_canonical_naming_runs_records_them_and_holds_its_montages_runs(landed_session, prefix):
+    """The requester's decision 1: the file holds every measured run whose
+    start lies in the montage's window; each probe's list is its sort's."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob1", 1)
+    activation = accept(_runs_job(key, "runjob1-k1", probe_runs={_SERIAL: [1]}), prefix=prefix)
+    assert sorted((row["run_number"], row["works_run_id"]) for row in (core.RunAssertion & key).to_dicts()) == [
+        (1, "wr-1"), (2, "wr-2"), (3, "wr-3")]
+    assert _run_rows(schema_request.ActivationRun, activation) == [(1,), (2,)]
+    assert _run_rows(schema_request.ActivationProbeRun, activation) == [(_SERIAL, 1)]
+
+
+@pytest.mark.parametrize("runs, expect", [
+    ([(1, 0.01, 4.0), (2, 5.0, 11.0)], "run 1's start, 0.01 s, is not the measured 0.0 s"),
+    ([(1, 0.0, 4.0), (2, 5.0, 11.5)], "run 2's end, 11.5 s, is not the measured 11.0 s"),
+    ([(1, 0.0, 4.0), (2, 5.0, 11.0), (9, 20.0, 21.0)], "run 9 is not a measured run of this session"),
+    ([(1, 0.0, 4.0)], "measured run(s) [2] lie in montage 0's window"),
+])
+def test_a_request_from_a_stale_listing_is_a_run_mismatch_and_writes_nothing(landed_session, prefix, runs, expect):
+    """Checked as the request arrives, against `core.Run`, within about 2 ms
+    (design spec section 3.2): the reason names the run and says to rebuild."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob2", 2)
+    with pytest.raises(ValueError, match=re.escape(expect)) as refused:
+        accept(_runs_job(key, f"runjob2-{len(runs)}-{runs[-1][2]}", runs=runs, probe_runs={_SERIAL: [1]}),
+               prefix=prefix)
+    assert "rebuild the request from a fresh GET /sessions" in str(refused.value)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (0, 0)
+
+
+def test_a_run_asserted_again_under_another_id_is_a_conflict(landed_session, prefix):
+    """A 409, which wl.works stops on: the two disagree about which run this
+    is. Through the server's translation, as wl.works meets it."""
+    from wl_preproc.responder.handler import ConflictError
+    from wl_preproc.responder.jobs import RunIdConflict, accept
+    from wl_preproc.responder.server import _translate_accept_errors
+
+    key = _landed_with_runs(landed_session, "runjob3", 3)
+    accept(_runs_job(key, "runjob3-k1", probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    renamed = _runs_job(key, "runjob3-k2", ids={2: "wr-other"}, probe_runs={_SERIAL: [1, 2]})
+    with pytest.raises(RunIdConflict, match="run 2 is recorded with works_run_id 'wr-2'; this request names 'wr-other'"):
+        accept(renamed, prefix=prefix)
+    with pytest.raises(ConflictError):
+        _translate_accept_errors(renamed, prefix=prefix)
+
+
+def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):
+    """wl.works retries this one: the event stage has not read the session."""
+    from wl_preproc.responder.jobs import accept
+
+    key = landed_session("runjob4", datetime.datetime(2027, 9, 4, 9, 0))
+    with pytest.raises(ValueError, match="has no measured run on this host yet"):
+        accept(_runs_job(key, "runjob4-k1", probe_runs={_SERIAL: [1]}), prefix=prefix)
+
+
+@pytest.mark.parametrize("probe_runs, expect", [
+    (None, "selection.probe_runs must give every probe's runs"),
+    ({}, "selection.probe_runs names [], and metadata.probes names ['19011110001']"),
+    ({_SERIAL: [1], "19011110002": [1]}, "selection.probe_runs names ['19011110001', '19011110002']"),
+    ({_SERIAL: [3]}, "probe 19011110001's runs [3] are not among the file's runs [1, 2]"),
+    ({_SERIAL: ["1"]}, "selection.probe_runs['19011110001'] must be a list of run numbers"),
+])
+def test_each_probes_runs_are_stated_in_full_and_within_the_file(landed_session, prefix, probe_runs, expect):
+    """wl.works' Plan 20 rule: the record is the run set each probe resolved
+    to, so every probe's list is stated, and only the file's runs."""
+    from wl_preproc.responder.jobs import accept
+
+    key = _landed_with_runs(landed_session, "runjob5", 5)
+    selection = {} if probe_runs is None else {"probe_runs": probe_runs}
+    with pytest.raises(ValueError, match=re.escape(expect)):
+        accept(_runs_job(key, f"runjob5-{expect[:20]}", **selection), prefix=prefix)
+
+
+def test_a_derivative_names_its_runs(landed_session, prefix):
+    """The requester's decision 3."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob6", 6)
+    activation = accept(_runs_job(key, "runjob6-k1", run_numbers=[2]), prefix=prefix)
+    assert (schema_request.Activation & activation).fetch1("role") == "derivative"
+    assert _run_rows(schema_request.ActivationRun, activation) == [(2,)]
+
+
+@pytest.mark.parametrize("selection, blocks, expect", [
+    ({"block_ids": [1], "probe_runs": {_SERIAL: [1]}}, [], "a request names runs or blocks, not both"),
+    ({"probe_runs": {_SERIAL: [1]}}, [{"block_id": 1, "task_type": "x", "start_s": 0.0, "end_s": 4.0}],
+     "a request names runs or blocks, not both"),
+    ({"role": "canonical", "run_numbers": [1], "probe_runs": {_SERIAL: [1]}}, [],
+     "selection.run_numbers is a derivative's"),
+    ({"run_numbers": [2], "probe_runs": {_SERIAL: [2]}}, [], "selection.probe_runs is a canonical's"),
+    ({"run_numbers": ["2"]}, [], "selection.run_numbers must be a list of run numbers"),
+    ({"run_numbers": [3]}, [], "selection names run(s) [3] outside montage 0's window"),
+])
+def test_a_selection_that_mixes_or_misplaces_runs_is_refused(landed_session, prefix, selection, blocks, expect):
+    from wl_preproc.responder.jobs import accept
+
+    key = _landed_with_runs(landed_session, "runjob7", 7)
+    job = _runs_job(key, f"runjob7-{expect[:24]}", **selection)
+    if blocks:
+        job = job.model_copy(update={"metadata": job.metadata.model_copy(update={"blocks": blocks})})
+    with pytest.raises(ValueError, match=re.escape(expect)):
+        accept(job, prefix=prefix)

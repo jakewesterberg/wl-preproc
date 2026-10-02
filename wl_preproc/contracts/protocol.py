@@ -246,6 +246,20 @@ class SubjectDetails(BaseModel):
     date_of_birth: datetime.date | None = None
 
 
+class RunEntry(BaseModel):
+    """One run wl.works holds for the session: its copy of a run `GET
+    /sessions` listed, measured from the recording, and its own id for it
+    (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.1). Checked against `core.Run` as the request arrives."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_number: Annotated[int, Field(ge=1, le=32767)]  # core.Run.run_number : smallint, from 1
+    start_s: _SessionSeconds
+    end_s: _SessionSeconds
+    works_run_id: Annotated[str, Field(min_length=1, max_length=64)]  # core.RunAssertion : varchar(64)
+
+
 class MetadataBundle(BaseModel):
     """Everything wl-preproc needs from the ELN, carried inbound with the request."""
 
@@ -265,6 +279,9 @@ class MetadataBundle(BaseModel):
     subject: str
     task_types: list[str]
     subject_details: SubjectDetails | None = None
+    # Every run wl.works holds for the session (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 3.1).
+    runs: list[RunEntry] = []
 
 
 class JobRequest(BaseModel):
