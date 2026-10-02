@@ -171,6 +171,8 @@ def _computed_tables() -> list:
         # section 2.1).
         ephys.ProbeCensus,
         coverage.BlockCoverage,
+        # After `Segment`, whose extents it intersects, as `BlockCoverage`.
+        coverage.RunCoverage,
         # After `Segment` for exactly `BlockCoverage`'s reason -- it intersects
         # a trial's interval with this system's segment extents -- and after
         # `_populate_event_stage()`, which is what puts rows in the

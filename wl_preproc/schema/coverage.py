@@ -71,6 +71,45 @@ class BlockCoverage(dj.Computed):
 
 
 @schema
+class RunCoverage(dj.Computed):
+    definition = f"""
+    # How much of one measured run each system recorded (design spec
+    # 2026-10-01-session-listing-and-run-requests-design.md section 5): what
+    # BlockCoverage was for wl.works' asserted blocks, for the runs a file now
+    # holds. Key: (subject, session_datetime, run_number, system).
+    -> core.Run
+    -> core.AcquisitionSystem
+    ---
+    coverage  : {_COVERAGE_ENUM}
+    covered_s : double  # seconds of the run this system actually recorded
+    """
+
+    @property
+    def key_source(self):
+        """Every (run, system) pair of a session, whatever each system did:
+        the cross product, for `BlockCoverage.key_source`'s reason."""
+        return core.Run * core.AcquisitionSystem
+
+    def make(self, key: dict) -> None:
+        """Intersect this run's measured interval with this system's segment
+        extents, by the rule `BlockCoverage.make()` calls. A run that faulted
+        at once can have no length: it covers nothing, and is `absent` rather
+        than a failure on every pass."""
+        from wl_preproc.timebase.coverage import classify_coverage
+
+        run = (core.Run & key).fetch1("run_start_time", "run_stop_time")
+        if run[1] <= run[0]:
+            self.insert1({**key, "coverage": "absent", "covered_s": 0.0})
+            return
+        extents = [
+            (row["start_s"], row["end_s"])
+            for row in (core.Segment & key).to_dicts()
+        ]
+        state, covered_s = classify_coverage(run, extents)
+        self.insert1({**key, "coverage": state, "covered_s": covered_s})
+
+
+@schema
 class TrialCoverage(dj.Computed):
     definition = f"""
     # Coverage of one trial by one system. Trial comes from element-event's

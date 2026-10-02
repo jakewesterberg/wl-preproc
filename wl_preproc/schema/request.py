@@ -189,6 +189,35 @@ class ActivationBlock(dj.Manual):
     """
 
 
+
+@schema
+class ActivationRun(dj.Manual):
+    definition = """
+    # The runs this activation's file holds (design spec
+    # 2026-10-01-session-listing-and-run-requests-design.md section 3.3): a
+    # canonical's are its montage's measured runs, a derivative's the runs it
+    # names. Key: (subject, session_datetime, montage_id, activation_id,
+    # run_number).
+    -> Activation
+    -> core.Run
+    """
+
+
+@schema
+class ActivationProbeRun(dj.Manual):
+    definition = """
+    # The runs one probe's sort covers in this activation: a canonical's run
+    # set minus the runs wl.works marked bad on that probe, stated in full by
+    # the request (design spec 2026-10-01-session-listing-and-run-requests-design.md
+    # section 3.1). The sorter reads it; a probe with no row sorts nothing.
+    # Key: (subject, session_datetime, montage_id, activation_id,
+    # probe_serial, run_number).
+    -> Activation
+    probe_serial : varchar(32)
+    -> core.Run
+    """
+
+
 def selection_hash(task_type: str, block_ids: list[int]) -> str:
     """Content hash of a derivative's identity: its task type and block set.
 

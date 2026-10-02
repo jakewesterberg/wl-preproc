@@ -51,6 +51,14 @@ _PARENTS: dict[str, tuple[str, ...]] = {
     "BlockCoverage": ("Block", "AcquisitionSystem"),
     "TrialCoverage": ("AcquisitionSystem",),
     "ActivationBlock": ("Activation", "Block"),
+    # wl.works' asserted runs and the run sets of an activation (design spec
+    # `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
+    # Their other parent, the measured `core.Run`, is the event stage's and is
+    # not a stage here, so it is left out of the map like `pipeline.Session`.
+    "RunAssertion": (),
+    "RunCoverage": ("AcquisitionSystem",),
+    "ActivationRun": ("Activation",),
+    "ActivationProbeRun": ("Activation",),
 }
 
 
@@ -92,6 +100,10 @@ def _assert_known_tables_are_real() -> None:
         "BlockCoverage": coverage.BlockCoverage,
         "TrialCoverage": coverage.TrialCoverage,
         "ActivationBlock": request.ActivationBlock,
+        "RunAssertion": core.RunAssertion,
+        "RunCoverage": coverage.RunCoverage,
+        "ActivationRun": request.ActivationRun,
+        "ActivationProbeRun": request.ActivationProbeRun,
     }
     assert tables.keys() == _PARENTS.keys(), (
         "the stage-name graph and the real schema tables have drifted apart: "

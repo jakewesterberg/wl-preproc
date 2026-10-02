@@ -44,6 +44,7 @@ def test_every_table_declares_and_documents_its_key(core):
         core.AcquisitionSystem,
         core.Segment,
         core.RejectedSegment,
+        core.RunAssertion,
     ):
         assert table.primary_key, table.__name__
         assert table.definition.strip().startswith("#"), (
@@ -269,3 +270,18 @@ def test_rejected_segment_records_why(core, a_session):
         & {**a_session, "system": "rhs", "file_path": "rhs/2027-03-14_03_rhs/amplifier.dat"}
     ).fetch1()
     assert got["reason"] == "no decodable barcode"
+
+
+def test_a_run_assertion_is_keyed_on_its_measured_run_and_round_trips(core, a_session):
+    session = a_session
+    """wl.works' id for a measured run, and the times it holds for it (design
+    spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.3)."""
+    assert set(core.RunAssertion.primary_key) == {"subject", "session_datetime", "run_number"}
+    core.Run.insert1({**session, "run_number": 1, "task_type": 0, "run_start_time": 1.0, "run_stop_time": 9.0,
+                      "closed": 1}, skip_duplicates=True)
+    row = {**session, "run_number": 1, "works_run_id": "asr-77", "start_s": 1.0, "end_s": 9.0}
+    core.RunAssertion.insert1(row)
+    try:
+        assert (core.RunAssertion & session).fetch1() == row
+    finally:
+        (core.RunAssertion & session).delete_quick()

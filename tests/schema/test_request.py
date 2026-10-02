@@ -1409,3 +1409,11 @@ def test_a_failing_release_never_hides_the_refusal(req, selection, monkeypatch):
     monkeypatch.setattr(req, "_release_lock", broken)
     with pytest.raises(req.SupersedeConflict):
         req.submit_replacement("k-rel-3", "neural", "wl_works", selection, {}, None, supersedes_activation_id=0)
+
+
+def test_an_activation_keeps_its_runs_and_each_probes_runs(req):
+    """The file's runs, and the runs each probe's sort covers (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 3.3)."""
+    montage = {"subject", "session_datetime", "montage_id", "activation_id"}
+    assert set(req.ActivationRun.primary_key) == montage | {"run_number"}
+    assert set(req.ActivationProbeRun.primary_key) == montage | {"probe_serial", "run_number"}

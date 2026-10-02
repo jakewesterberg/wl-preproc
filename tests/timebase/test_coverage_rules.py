@@ -177,3 +177,53 @@ def test_block_coverage_populates_a_row_for_every_block_and_system(
     for system, row in outside.items():
         assert row["coverage"] == "absent", f"{system}: {row['coverage']}"
         assert row["covered_s"] == pytest.approx(0.0)
+
+
+
+def test_run_coverage_populates_a_row_for_every_run_and_system(dj_conn, prefix, tmp_path):
+    """As for blocks: the cross product, so a system that recorded none of a
+    run says `absent`. A run with no length, one that faulted at once, is
+    `absent` too, never a failure on every pass (design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` section 5)."""
+    import datetime
+
+    from wl_preproc.schema import core, coverage, ingest, pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.session import generate_session
+
+    coverage.activate(prefix=prefix)
+    timebase.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
+
+    recipe = RECIPES["drift"]
+    generate_session(tmp_path, recipe)
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": recipe.subject, "sex": "M",
+                                      "subject_birth_date": datetime.date(2020, 1, 1), "subject_description": ""},
+                                     skip_duplicates=True)
+    session_key = {"subject": recipe.subject, "session_datetime": datetime.datetime(2027, 7, 26, 9, 0)}
+    pipeline.Session.insert1(session_key, skip_duplicates=True)
+    ingest.Ingestion.insert1({**session_key, "ingested_at": datetime.datetime(2027, 7, 26, 19, 0),
+                              "session_dir": str(tmp_path / recipe.session_id), "integrity": "verified",
+                              "topology": {system: "present" for system in recipe.systems},
+                              "manifest_hash": "blake3:test"}, skip_duplicates=True)
+    core.AcquisitionSystem.insert([{**session_key, "system": system} for system in recipe.systems],
+                                  skip_duplicates=True)
+    core.Run.insert([
+        {**session_key, "run_number": 1, "task_type": 0, "run_start_time": 0.0, "run_stop_time": 10.0, "closed": 1},
+        {**session_key, "run_number": 2, "task_type": 0, "run_start_time": 1_000.0, "run_stop_time": 1_010.0,
+         "closed": 1},
+        {**session_key, "run_number": 3, "task_type": 0, "run_start_time": 5.0, "run_stop_time": 5.0, "closed": 0},
+    ], skip_duplicates=True)
+
+    timebase.SystemTimebase.populate()
+    core.Segment.populate()
+    coverage.RunCoverage.populate()
+
+    rows = (coverage.RunCoverage & session_key).to_dicts()
+    assert len(rows) == 3 * len(recipe.systems)
+    by_run = {number: {row["system"]: row["coverage"] for row in rows if row["run_number"] == number}
+              for number in (1, 2, 3)}
+    assert by_run[1] == {system: "full" for system in recipe.systems}
+    assert by_run[2] == by_run[3] == {system: "absent" for system in recipe.systems}

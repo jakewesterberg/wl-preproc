@@ -87,6 +87,24 @@ class RunRecordProblem(dj.Manual):
 
 
 @schema
+class RunAssertion(dj.Manual):
+    definition = """
+    # wl.works' assertion of one measured run: its own id for the run, and the
+    # times it holds for it, recorded by accept() when a request names the
+    # run (design spec 2026-10-01-session-listing-and-run-requests-design.md
+    # section 3.3). Kept apart from the measured Run, against which accept()
+    # checks it as the request arrives. Recorded if absent; a request naming
+    # another id for the same run is refused. Key: (subject,
+    # session_datetime, run_number).
+    -> Run
+    ---
+    works_run_id : varchar(64)  # wl.works' animal_session_run id
+    start_s      : double       # (s) session time, as wl.works holds it
+    end_s        : double
+    """
+
+
+@schema
 class Block(dj.Manual):
     definition = """
     # One run of one task, mirroring wl.works animal_session_block.

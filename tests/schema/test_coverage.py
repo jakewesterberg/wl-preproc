@@ -149,3 +149,7 @@ def test_coverage_states_are_exactly_full_partial_absent(cov, enum_values):
             f"{table.__name__}.coverage declares {enum_values(declared)}, "
             f"not exactly {expected}"
         )
+
+
+def test_run_coverage_is_per_run_per_system(cov):
+    assert set(cov.RunCoverage.primary_key) == {"subject", "session_datetime", "run_number", "system"}
