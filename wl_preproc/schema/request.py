@@ -189,7 +189,9 @@ class ActivationProbeRun(dj.Manual):
     # The runs one probe's sort covers in this activation: a canonical's run
     # set minus the runs wl.works marked bad on that probe, stated in full by
     # the request (design spec 2026-10-01-session-listing-and-run-requests-design.md
-    # section 3.1). The sorter reads it; a probe with no row sorts nothing.
+    # section 3.1); a derivative's, its whole run set for every probe its
+    # request names (amendment 25). The sorter reads it; a probe with no row
+    # sorts nothing.
     # Key: (subject, session_datetime, montage_id, activation_id,
     # probe_serial, run_number).
     -> Activation
@@ -904,6 +906,7 @@ def submit_derivative(
     run_numbers: list[int] | tuple[int, ...],
     payload: dict,
     requested_by: str | None = None,
+    probe_runs: dict[str, list[int]] | None = None,
 ) -> dict:
     """Record a request and the derivative activation its run set selects.
 
@@ -1028,7 +1031,9 @@ def submit_derivative(
     de-duplicated the same way ``selection_hash`` itself canonicalises
     ``run_numbers``, since ``ActivationRun`` carries no columns beyond its
     primary key: a run is either in the selection or it is not, and there
-    is nothing multiplicity could mean here.
+    is nothing multiplicity could mean here. And ``probe_runs``' rows in
+    ``ActivationProbeRun``, the runs each probe's sort covers, which the
+    responder states as the whole run set for every probe the request names.
 
     **A derivative never supersedes a canonical.** ``supersedes`` is written
     nowhere in this function, and nowhere else in this codebase. It exists on
@@ -1176,7 +1181,7 @@ def submit_derivative(
                 "either sustained genuine contention or a stuck retry loop."
             )
 
-        _record_run_sets(key, run_numbers, None)
+        _record_run_sets(key, run_numbers, probe_runs)
         return key
 
 

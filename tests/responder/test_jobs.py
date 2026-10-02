@@ -1056,14 +1056,19 @@ def test_each_probes_runs_are_stated_in_full_and_within_the_file(landed_session,
 
 
 def test_a_derivative_names_its_runs(landed_session, prefix):
-    """The requester's decision 3."""
+    """The requester's decision 3: a derivative selects whole runs, the unit
+    a sort runs over, so each probe the request names covers them all. With
+    no row, the sorter and the description would read that probe as sorting
+    nothing (Plan B's final review, I1)."""
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import request as schema_request
 
     key = _landed_with_runs(landed_session, "runjob6", 6)
-    activation = accept(_runs_job(key, "runjob6-k1", run_numbers=[2]), prefix=prefix)
+    activation = accept(_runs_job(key, "runjob6-k1", run_numbers=[2], serials=(_SERIAL, "19011110002")),
+                        prefix=prefix)
     assert (schema_request.Activation & activation).fetch1("role") == "derivative"
     assert _run_rows(schema_request.ActivationRun, activation) == [(2,)]
+    assert _run_rows(schema_request.ActivationProbeRun, activation) == [(_SERIAL, 2), ("19011110002", 2)]
 
 
 @pytest.mark.parametrize("selection, expect", [

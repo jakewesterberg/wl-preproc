@@ -632,6 +632,10 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             run_numbers=file_runs,
             payload=payload,
             requested_by=metadata.experimenter,
+            # A derivative is the unit a sort runs over (decision 3), so each
+            # probe the request names covers all of its runs; the request
+            # states no per-probe list for one (Plan B's final review, I1).
+            probe_runs={probe.serial: file_runs for probe in metadata.probes},
         )
 
     if selection.get("supersedes_activation_id") is not None:
