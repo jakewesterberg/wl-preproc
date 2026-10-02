@@ -1012,6 +1012,35 @@ def test_a_request_from_a_stale_listing_is_a_run_mismatch_and_writes_nothing(lan
     assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (0, 0)
 
 
+@pytest.mark.parametrize("subject, measured, runs, selection, expect", [
+    # Which copy, and which id, is wl.works'? Neither is guessed.
+    ("runjob10", _RUNS, _RUNS + [(1, 0.0, 4.0)], {"probe_runs": {_SERIAL: [1]}},
+     "metadata.runs names run 1 twice"),
+    # A canonical holds every measured run of its window, and this one has none.
+    ("runjob11", [(3, 13.0, 16.0)], [(3, 13.0, 16.0)], {"probe_runs": {_SERIAL: []}},
+     "montage 0's window [0.0, 12.0) holds no measured run"),
+    # Amendment 19: a derivative's run is asserted now or before; without that
+    # its file's run would carry no works_run_id to join.
+    ("runjob12", _RUNS, [(1, 0.0, 4.0), (3, 13.0, 16.0)], {"run_numbers": [2]},
+     "selection names run(s) [2] asserted neither in metadata.runs nor before"),
+    ("runjob13", _RUNS, _RUNS, {"run_numbers": [9]},
+     "selection names run(s) [9] are not measured runs of this session"),
+])
+def test_runs_that_cannot_be_held_as_asserted_are_refused_and_write_nothing(landed_session, prefix, subject,
+                                                                              measured, runs, selection, expect):
+    """Design spec section 3.2's refusals the stale-listing cases above do not
+    reach (Plan B's final review, I2): each is a 422 before anything is
+    written."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, subject, 10, runs=measured)
+    with pytest.raises(ValueError, match=re.escape(expect)):
+        accept(_runs_job(key, f"{subject}-k1", runs=runs, **selection), prefix=prefix)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (0, 0)
+
+
 def test_a_run_asserted_again_under_another_id_is_a_conflict(landed_session, prefix):
     """A 409, which wl.works stops on: the two disagree about which run this
     is. Through the server's translation, as wl.works meets it."""
