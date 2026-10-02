@@ -146,7 +146,7 @@ while time.monotonic() < deadline:
 try:
     result = request.submit_derivative(
         idempotency_key=os.environ["WLPP_KEY"], task_type="neural", origin="wl_works",
-        selection=selection, block_ids=json.loads(os.environ["WLPP_BLOCK_IDS"]), payload={},
+        selection=selection, run_numbers=json.loads(os.environ["WLPP_RUN_NUMBERS"]), payload={},
     )
     print("OK " + str(result["activation_id"]))
 except Exception as e:  # noqa: BLE001 -- must report ANY exception type back
@@ -198,20 +198,14 @@ def selection(req):
     montage_id = next(_montage_ids)
     core.Montage.insert1({**key, "montage_id": montage_id, "start_s": 0.0, "end_s": 12.0},
                          skip_duplicates=True)
-    # ActivationBlock's `-> core.Block` (request.py) is a real foreign key, so
-    # submit_derivative's block_ids must name rows that already exist. Three
-    # covers every block_ids value Task 4's tests use ([1, 2], [2, 1], [1, 3]).
+    # ActivationRun's `-> core.Run` (request.py) is a real foreign key, so
+    # submit_derivative's run_numbers must name rows that already exist. Three
+    # covers every run_numbers value these tests use ([1, 2], [2, 1], [1, 3]).
     # skip_duplicates=True because this fixture runs once per test but
     # (subject, session_datetime) -- unlike montage_id -- is the same tuple
-    # every time, so block_id 1-3 only actually get inserted on the first call.
-    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0)), start=1):
-        core.Block.insert1(
-            {**key, "block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s},
-            skip_duplicates=True,
-        )
-        # The measured runs the same windows hold: ActivationRun's
-        # `-> core.Run` is a real foreign key too.
-        core.Run.insert1({**key, "run_number": block_id, "task_type": 0, "run_start_time": start_s,
+    # every time, so runs 1-3 only actually get inserted on the first call.
+    for run_number, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0)), start=1):
+        core.Run.insert1({**key, "run_number": run_number, "task_type": 0, "run_start_time": start_s,
                           "run_stop_time": end_s, "closed": 1}, skip_duplicates=True)
     return {**key, "montage_id": montage_id}
 
@@ -490,7 +484,7 @@ def test_submit_always_produces_a_canonical_activation_at_id_zero(req, selection
     """submit() has no way to form a derivative: the dedupe above returns on
     ANY existing Activation for the selection, so the branch that would
     allocate a second activation_id is unreachable by construction, and a
-    derivative needs a block set this function's selection does not carry.
+    derivative needs a run set this function's selection does not carry.
     Pinned here so that the day someone widens the dedupe key (or the
     selection) to admit derivatives, this test fails loudly instead of the
     canonical-only assumption silently rotting."""
@@ -515,7 +509,7 @@ def test_submit_before_activate_raises_a_clear_error(req, selection, monkeypatch
 
 
 def test_selection_hash_is_order_independent():
-    """The block set is a set. Two requests naming the same blocks in a
+    """The run set is a set. Two requests naming the same runs in a
     different order are the same selection, and if they hash differently the
     dedupe in section 11.3 silently starts a second run."""
     from wl_preproc.schema.request import selection_hash
@@ -529,9 +523,9 @@ def test_selection_hash_separates_task_types():
     assert selection_hash("neural", [1, 2]) != selection_hash("export", [1, 2])
 
 
-def test_selection_hash_deduplicates_repeated_block_ids():
-    """The block set is a *set*: naming the same block twice is one block, not
-    two. A caller that accumulates block ids across, say, paginated results
+def test_selection_hash_deduplicates_repeated_run_numbers():
+    """The run set is a *set*: naming the same run twice is one run, not
+    two. A caller that accumulates run numbers across, say, paginated results
     and does not itself de-duplicate must still land on the same selection as
     one that does -- otherwise the same logical selection would silently carry
     two different identities depending on how the caller happened to build its
@@ -588,7 +582,7 @@ def test_a_derivative_gets_its_own_activation_id(selection, prefix):
     )
     derivative = request.submit_derivative(
         idempotency_key="dv-2", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
 
     assert derivative["activation_id"] != canonical["activation_id"]
@@ -616,27 +610,27 @@ def test_the_same_selection_returns_the_running_one(selection, prefix):
 
     first = request.submit_derivative(
         idempotency_key="dv-3", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
     second = request.submit_derivative(
         idempotency_key="dv-4", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[2, 1], payload={},
+        selection=selection, run_numbers=[2, 1], payload={},
     )
 
     assert second == first
     assert len(request.Activation & first) == 1
 
 
-def test_a_different_block_set_is_a_different_activation(selection, prefix):
+def test_a_different_run_set_is_a_different_activation(selection, prefix):
     from wl_preproc.schema import request
 
     a = request.submit_derivative(
         idempotency_key="dv-5", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
     b = request.submit_derivative(
         idempotency_key="dv-6", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 3], payload={},
+        selection=selection, run_numbers=[1, 3], payload={},
     )
 
     assert a != b
@@ -654,7 +648,7 @@ def test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero(sel
 
     derivative = request.submit_derivative(
         idempotency_key="dv-7", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1], payload={},
+        selection=selection, run_numbers=[1], payload={},
     )
     assert derivative["activation_id"] != 0
 
@@ -668,31 +662,31 @@ def test_a_derivative_before_any_canonical_does_not_claim_activation_id_zero(sel
 
 def test_a_retry_of_a_derivative_idempotency_key_returns_the_running_activation(selection, prefix):
     """The accept branch of the reuse check, now widened to also compare the
-    block set (see test_reusing_a_derivative_idempotency_key_for_a_different_
-    block_set_is_refused below): the identical key, resubmitted with the
-    identical block set, is still a retry and returns the same activation
+    run set (see test_reusing_a_derivative_idempotency_key_for_a_different_
+    run_set_is_refused below): the identical key, resubmitted with the
+    identical run set, is still a retry and returns the same activation
     rather than being refused."""
     from wl_preproc.schema import request
 
     first = request.submit_derivative(
         idempotency_key="dv-10", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
     second = request.submit_derivative(
         idempotency_key="dv-10", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
     assert first == second
     assert len(request.Request & {"idempotency_key": "dv-10"}) == 1
 
 
-def test_reusing_a_derivative_idempotency_key_for_a_different_block_set_is_refused(selection, prefix):
-    """The block set is part of "the same ask" for a derivative exactly as
+def test_reusing_a_derivative_idempotency_key_for_a_different_run_set_is_refused(selection, prefix):
+    """The run set is part of "the same ask" for a derivative exactly as
     the selection is for submit() (see
     test_reusing_an_idempotency_key_for_a_different_selection_is_refused
-    above): reusing a key with different block_ids is a collision, not a
+    above): reusing a key with different run_numbers is a collision, not a
     retry, and the running activation must not be handed back to a caller who
-    asked for different blocks.
+    asked for different runs.
 
     This covers the case where the key's OWN first submission is what
     produced the derivative Activation below (`first`, naming request_key=
@@ -710,13 +704,13 @@ def test_reusing_a_derivative_idempotency_key_for_a_different_block_set_is_refus
 
     first = request.submit_derivative(
         idempotency_key="dv-9", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
 
     with pytest.raises(dj.DataJointError, match="selection"):
         request.submit_derivative(
             idempotency_key="dv-9", task_type="neural", origin="wl_works",
-            selection=selection, block_ids=[1, 3], payload={},
+            selection=selection, run_numbers=[1, 3], payload={},
         )
 
     # the first ask's activation is unaffected, unmodified, and still the
@@ -746,7 +740,7 @@ def test_reusing_a_submit_key_for_a_derivative_is_refused(selection, prefix):
     with pytest.raises(dj.DataJointError, match="selection"):
         request.submit_derivative(
             idempotency_key="asym-1", task_type="neural", origin="cli",
-            selection=selection, block_ids=[1, 2], payload={},
+            selection=selection, run_numbers=[1, 2], payload={},
         )
 
     # the canonical is unaffected, and no derivative was created under this key
@@ -775,7 +769,7 @@ def test_reusing_a_derivative_key_for_submit_is_refused(selection, prefix):
 
     derivative = request.submit_derivative(
         idempotency_key="asym-2", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
 
     with pytest.raises(dj.DataJointError, match="selection"):
@@ -839,7 +833,7 @@ def test_a_concurrent_identical_selection_returns_the_rival_not_a_collision(sele
 
     result = request.submit_derivative(
         idempotency_key="race-a-mine", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
 
     assert calls["n"] == 1, "must return the rival's key on the FIRST collision, not retry past it"
@@ -856,7 +850,7 @@ def test_a_concurrent_identical_selection_returns_the_rival_not_a_collision(sele
 
 def test_a_concurrent_different_selection_retries_to_a_fresh_id(selection, prefix, monkeypatch):
     """Review round 2, Important 2, case (b) -- the likelier and more
-    consequential case: two researchers picking DIFFERENT block sets on one
+    consequential case: two researchers picking DIFFERENT run sets on one
     montage, racing for the same allocated id. Before this fix, this
     collision raised outright: the loser's legitimate, distinct submission
     was destroyed and its Activation never created at all. That is precisely
@@ -894,7 +888,7 @@ def test_a_concurrent_different_selection_retries_to_a_fresh_id(selection, prefi
 
     result = request.submit_derivative(
         idempotency_key="race-b-mine", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1, 2], payload={},
+        selection=selection, run_numbers=[1, 2], payload={},
     )
 
     assert calls["n"] == 2, "must retry exactly once past the simulated collision"
@@ -907,8 +901,8 @@ def test_a_concurrent_different_selection_retries_to_a_fresh_id(selection, prefi
     # BOTH activations exist -- the loser's legitimate, distinct submission
     # was not destroyed by the rival's collision
     assert len(request.Activation & {"role": "derivative"} & selection) == 2
-    # and its own ActivationBlock rows were written under the fresh id
-    assert len(request.ActivationBlock & result) == 2
+    # and its own ActivationRun rows were written under the fresh id
+    assert len(request.ActivationRun & result) == 2
 
 
 def test_derivative_allocation_gives_up_after_sustained_contention(selection, prefix, monkeypatch):
@@ -931,7 +925,7 @@ def test_derivative_allocation_gives_up_after_sustained_contention(selection, pr
     with pytest.raises(dj.DataJointError, match="exhausted"):
         request.submit_derivative(
             idempotency_key="race-c-mine", task_type="neural", origin="wl_works",
-            selection=selection, block_ids=[1, 2], payload={},
+            selection=selection, run_numbers=[1, 2], payload={},
         )
 
     # nothing was written for the exhausted submission -- rolled back whole
@@ -965,7 +959,7 @@ def test_locking_read_one_takes_a_record_only_lock_no_gap(selection, prefix):
 
     seed = request.submit_derivative(
         idempotency_key="lock-shape-seed", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[1], payload={},
+        selection=selection, run_numbers=[1], payload={},
     )
 
     conn = dj.conn()
@@ -1067,7 +1061,7 @@ def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, pref
             **env_base,
             "WLPP_WORKER_ID": str(i),
             "WLPP_KEY": f"deadlock-{i}",
-            "WLPP_BLOCK_IDS": json.dumps([i + 1]),  # three genuinely distinct selections
+            "WLPP_RUN_NUMBERS": json.dumps([i + 1]),  # three genuinely distinct selections
         }
         processes.append(
             subprocess.Popen(
@@ -1115,31 +1109,29 @@ def test_three_concurrent_derivative_submissions_do_not_deadlock(selection, pref
     )
 
 
-def test_activation_block_gets_one_row_per_distinct_block_id(selection, prefix):
-    """Review round 2, Important 4: the third of submit_derivative's three
-    documented differences -- writing ActivationBlock -- had zero test
-    coverage. Deleting the entire ActivationBlock.insert(...) call left the
-    suite at 29 passed; the only hit for ActivationBlock anywhere under
-    tests/ was a comment. Duplicated and unsorted on purpose, so this also
-    covers "duplicates collapse" and "the count matches", not just presence:
-    the written rows must mirror what selection_hash itself canonicalises
-    block_ids to (sorted(set(...))), or the two could silently disagree
-    about what "this selection" even contains."""
+def test_activation_run_gets_one_row_per_distinct_run_number(selection, prefix):
+    """Review round 2, Important 4, carried from ActivationBlock to
+    ActivationRun: the third of submit_derivative's three documented
+    differences is writing the run set. Duplicated and unsorted on purpose,
+    so this also covers "duplicates collapse" and "the count matches", not
+    just presence: the written rows must mirror what selection_hash itself
+    canonicalises run_numbers to (sorted(set(...))), or the two could
+    silently disagree about what "this selection" even contains."""
     from wl_preproc.schema import request
 
     key = request.submit_derivative(
         idempotency_key="ab-1", task_type="neural", origin="wl_works",
-        selection=selection, block_ids=[2, 1, 2, 1], payload={},
+        selection=selection, run_numbers=[2, 1, 2, 1], payload={},
     )
 
-    assert len(request.ActivationBlock & key) == 2, (
-        "duplicates must collapse to one row per distinct block id"
+    assert len(request.ActivationRun & key) == 2, (
+        "duplicates must collapse to one row per distinct run number"
     )
-    assert set((request.ActivationBlock & key).to_arrays("block_id")) == {1, 2}
+    assert set((request.ActivationRun & key).to_arrays("run_number")) == {1, 2}
 
 
-def test_an_empty_block_set_is_refused(selection, prefix):
-    """Review round 2, Minor: block_ids=[] would silently create a
+def test_an_empty_run_set_is_refused(selection, prefix):
+    """Review round 2, Minor: run_numbers=[] would silently create a
     role='derivative' Activation covering nothing -- selection_hash("neural",
     []) is a perfectly stable digest (it hashes an empty list like any
     other), so nothing else in this module would have caught it. Rejected
@@ -1148,10 +1140,10 @@ def test_an_empty_block_set_is_refused(selection, prefix):
 
     from wl_preproc.schema import request
 
-    with pytest.raises(dj.DataJointError, match="block"):
+    with pytest.raises(dj.DataJointError, match="at least one run number"):
         request.submit_derivative(
             idempotency_key="empty-1", task_type="neural", origin="wl_works",
-            selection=selection, block_ids=[], payload={},
+            selection=selection, run_numbers=[], payload={},
         )
 
     assert len(request.Request & {"idempotency_key": "empty-1"}) == 0
@@ -1171,7 +1163,7 @@ def test_submit_derivative_before_activate_raises_a_clear_error(req, selection, 
     with pytest.raises(dj.DataJointError, match="activate"):
         req.submit_derivative(
             idempotency_key="dv-guard-1", task_type="neural", origin="wl_works",
-            selection=selection, block_ids=[1, 2], payload={},
+            selection=selection, run_numbers=[1, 2], payload={},
         )
 
 
@@ -1187,7 +1179,7 @@ def test_submit_derivative_refuses_to_run_inside_a_transaction(req, selection):
         with pytest.raises(dj.DataJointError, match="do not nest"):
             req.submit_derivative(
                 idempotency_key="dv-guard-2", task_type="neural", origin="wl_works",
-                selection=selection, block_ids=[1, 2], payload={},
+                selection=selection, run_numbers=[1, 2], payload={},
             )
 
     # the outer transaction stayed usable and nothing was written
@@ -1278,17 +1270,6 @@ def test_a_replacement_of_anything_but_the_current_canonical_is_a_conflict(req, 
         req.submit_replacement(f"k-stale-4-{target}", "neural", "wl_works", selection, {}, None, supersedes_activation_id=named)
     assert not req.Request & {"idempotency_key": f"k-stale-4-{target}"}
     assert len(req.Activation & selection & "role = 'canonical'") == 2
-
-
-def test_a_canonical_can_name_its_block_set(req, selection):
-    """Section 3: how wl.works leaves out a bad block, on a first canonical
-    or a replacement, recorded in `ActivationBlock`. The builder reads a
-    file's runs now (`ActivationRun`), and the block paths go next."""
-    first = req.submit("k-blocks-1", "neural", "wl_works", selection, {}, None, block_ids=[1, 3])
-    replacement = req.submit_replacement("k-blocks-2", "neural", "wl_works", selection, {}, None,
-                                         supersedes_activation_id=0, block_ids=[2])
-    for key, expected in ((first, [1, 3]), (replacement, [2])):
-        assert sorted(int(b) for b in (req.ActivationBlock & key).to_arrays("block_id")) == expected
 
 
 def test_a_reused_key_for_another_replacement_is_key_reuse(req, selection):
@@ -1419,8 +1400,8 @@ def test_an_activation_keeps_its_runs_and_each_probes_runs(req):
     assert set(req.ActivationProbeRun.primary_key) == montage | {"probe_serial", "run_number"}
 
 
-# -- Runs, alongside blocks until the block paths are retired (design spec
-# `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
+# -- Runs (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+# section 3.3).
 
 
 def _runs_of(req, key):
@@ -1452,21 +1433,24 @@ def test_a_replacement_keeps_its_own_runs(req, selection):
 def test_a_derivative_is_its_run_set(req, selection):
     """The requester's decision 3: a derivative selects whole runs, and its
     identity is that set."""
-    one = req.submit_derivative("runs-deriv-1", "neural", "wl_works", selection, [], {}, None, run_numbers=[3, 2])
-    again = req.submit_derivative("runs-deriv-2", "neural", "wl_works", selection, [], {}, None, run_numbers=[2, 3])
-    other = req.submit_derivative("runs-deriv-3", "neural", "wl_works", selection, [], {}, None, run_numbers=[2])
+    one = req.submit_derivative("runs-deriv-1", "neural", "wl_works", selection, [3, 2], {}, None)
+    again = req.submit_derivative("runs-deriv-2", "neural", "wl_works", selection, [2, 3], {}, None)
+    other = req.submit_derivative("runs-deriv-3", "neural", "wl_works", selection, [2], {}, None)
     assert one == again and other != one
     assert (_runs_of(req, one), _runs_of(req, other)) == ([2, 3], [2])
-    assert len(req.ActivationBlock & one) == 0
 
 
-def test_the_selection_hash_separates_run_sets_and_leaves_block_hashes_as_they_were():
+def test_a_derivatives_identity_is_its_task_type_and_run_set():
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.3: the hash takes the task type and the sorted run numbers, as
+    it took block ids."""
     import hashlib
     import json
 
     from wl_preproc.schema.request import selection_hash
 
-    assert selection_hash("neural", [], [1, 2]) == selection_hash("neural", [], [2, 1, 2])
-    assert selection_hash("neural", [], [1, 2]) != selection_hash("neural", [], [1])
-    before = json.dumps({"task_type": "neural", "block_ids": [1, 2]}, sort_keys=True, separators=(",", ":"))
-    assert selection_hash("neural", [2, 1]) == hashlib.blake2b(before.encode(), digest_size=16).hexdigest()
+    assert selection_hash("neural", [1, 2]) == selection_hash("neural", [2, 1, 2])
+    assert selection_hash("neural", [1, 2]) != selection_hash("neural", [1])
+    assert selection_hash("neural", [1, 2]) != selection_hash("ephys", [1, 2])
+    expected = json.dumps({"task_type": "neural", "run_numbers": [1, 2]}, sort_keys=True, separators=(",", ":"))
+    assert selection_hash("neural", [2, 1]) == hashlib.blake2b(expected.encode(), digest_size=16).hexdigest()

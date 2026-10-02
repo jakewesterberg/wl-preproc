@@ -113,7 +113,7 @@ def test_job_request_carries_the_metadata_bundle():
         parameters={"clustering_paramset": "ks4_default"},
         idempotency_key="a1b2c3",
         metadata=MetadataBundle(
-            blocks=[{"block_id": 1, "task_type": "rf_map"}],
+            runs=[{"run_number": 1, "start_s": 0.0, "end_s": 1800.0, "works_run_id": "wr-1"}],
             montage_boundaries=[{"montage_id": 1, "start_s": 0.0, "end_s": 3600.0}],
             probes=[{"serial": "NP-1234", "insertion_number": 1}],
             experimenter="jw",
@@ -337,3 +337,20 @@ def test_a_run_entry_holds_a_measured_runs_number_times_and_wl_works_id(entry):
     RunEntry.model_validate({"run_number": 1, "start_s": 0.0, "end_s": 1.0, "works_run_id": "w"})
     with pytest.raises(ValidationError):
         RunEntry.model_validate(entry)
+
+
+def test_metadata_blocks_are_refused_naming_metadata_runs():
+    """Retired (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.1): a request asserts runs, and one still sending blocks is told
+    what replaced them, not that the field is unknown. An empty list, which
+    every request sent while the field was required, says nothing."""
+    import re
+
+    with pytest.raises(ValidationError, match=re.escape("metadata.blocks is retired: a request asserts its runs "
+                                                        "in metadata.runs")):
+        MetadataBundle.model_validate(_bundle(blocks=[{"block_id": 1, "task_type": "rf_map"}]))
+    assert MetadataBundle.model_validate(_bundle()).blocks == []
+    assert MetadataBundle.model_validate({k: v for k, v in _bundle().items() if k != "blocks"}).runs == []
+    schema = MetadataBundle.model_json_schema()
+    blocks = schema["properties"]["blocks"]
+    assert "blocks" not in schema["required"] and (blocks["maxItems"], blocks["deprecated"]) == (0, True)

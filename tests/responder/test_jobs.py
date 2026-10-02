@@ -10,24 +10,39 @@ import pytest
 
 from wl_preproc.contracts.protocol import JobRequest, MetadataBundle
 
+# The runs the event stage measured for every landed session here (design
+# spec `2026-10-01-session-listing-and-run-requests-design.md` section 3):
+# run 3 lies outside montage 0's window [0, 12), inside montage 1's [12, 24).
+_RUNS = [(1, 0.0, 4.0), (2, 5.0, 11.0), (3, 13.0, 16.0)]
+_SERIAL = "19011110001"
+
+
+def _asserted(runs=_RUNS, ids: dict | None = None) -> list[dict]:
+    """wl.works' copy of each run, as `GET /sessions` listed it, and its id."""
+    return [{"run_number": number, "start_s": start, "end_s": stop,
+             "works_run_id": (ids or {}).get(number, f"wr-{number}")} for number, start, stop in runs]
+
 
 @pytest.fixture
 def landed_session(dj_conn, prefix):
     """A `(subject, session_datetime)` with Lab/Subject/Session already on
-    file -- the state `ingest/landing.py`'s `land_session` would already have
-    produced before any job request naming this session could arrive.
+    file, and its runs measured -- the state `ingest/landing.py`'s
+    `land_session` and the event stage would already have produced before
+    any job request naming this session could arrive. `runs=()` leaves the
+    session landed and its runs not yet read.
 
     `accept()` (design spec section 6.1, steps 1-4) is scoped to
-    `Montage`/`Block`/`Request`/`Activation`; it is not what creates `Session`
-    or its `Subject` parent. Mirrors `tests/schema/test_request.py`'s own
-    `selection` fixture for the identical reason, stated there.
+    `Montage`/`RunAssertion`/`Request`/`Activation`; it is not what creates
+    `Session`, its `Subject` parent or its `Run` rows. Mirrors
+    `tests/schema/test_request.py`'s own `selection` fixture for the identical
+    reason, stated there.
     """
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core, pipeline
     from wl_preproc.schema import request as schema_request
 
     schema_request.activate(prefix=prefix)
 
-    def _land(subject: str, session_datetime: datetime.datetime) -> dict:
+    def _land(subject: str, session_datetime: datetime.datetime, runs=_RUNS) -> dict:
         pipeline.lab.Lab.insert1(
             {"lab": "wl", "lab_name": "W", "address": "y", "time_zone": "UTC"},
             skip_duplicates=True,
@@ -43,6 +58,10 @@ def landed_session(dj_conn, prefix):
         )
         key = {"subject": subject, "session_datetime": session_datetime}
         pipeline.Session.insert1(key, skip_duplicates=True)
+        if runs:
+            core.Run.insert([{**key, "run_number": number, "task_type": 0, "run_start_time": start,
+                              "run_stop_time": stop, "closed": 1} for number, start, stop in runs],
+                            skip_duplicates=True)
         return key
 
     return _land
@@ -55,29 +74,32 @@ def _request(
     idempotency_key: str,
     montage_id: int = 0,
     montage_boundaries: list[dict] | None = None,
-    blocks: list[dict] | None = None,
-    block_ids: list[int] | None = None,
+    runs=_RUNS,
+    run_numbers: list[int] | None = None,
     domain: str = "neural",
     experimenter: str = "jw",
     subject_details: dict | None = None,
     probes: list[dict] | None = None,
 ) -> JobRequest:
     """A `JobRequest` naming `(montage_id, session_datetime)` in its
-    selection, with `block_ids` present only when the caller supplies one --
-    an absent key and an empty list are both legal ways to ask for a
-    canonical activation, and callers exercising that distinction build the
-    dict directly rather than through this helper.
+    selection and asserting `runs`, with `run_numbers` present only when the
+    caller supplies one -- an absent key and an empty list are both legal
+    ways to ask for a canonical activation, and callers exercising that
+    distinction build the dict directly rather than through this helper. A
+    canonical's probes each sort no run unless a test says otherwise.
     """
     selection: dict = {"session_datetime": session_datetime, "montage_id": montage_id}
-    if block_ids is not None:
-        selection["block_ids"] = block_ids
+    if run_numbers is not None:
+        selection["run_numbers"] = run_numbers
+    elif probes:
+        selection["probe_runs"] = {probe["serial"]: [] for probe in probes}
     return JobRequest(
         domain=domain,
         selection=selection,
         parameters={},
         idempotency_key=idempotency_key,
         metadata=MetadataBundle(
-            blocks=blocks or [],
+            runs=_asserted(runs),
             montage_boundaries=montage_boundaries or [],
             probes=probes or [],
             experimenter=experimenter,
@@ -121,52 +143,13 @@ def test_accept_creates_montage_rows_from_metadata(landed_session, prefix):
     assert m1["start_s"] == pytest.approx(12.0)
     assert m1["end_s"] == pytest.approx(24.0)
     assert key["montage_id"] == 1
-    assert key["activation_id"] == 0  # no block_ids -> canonical
-
-
-def test_accept_creates_block_rows_with_works_block_id(landed_session, prefix):
-    from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import core
-
-    subject = "jbblk01"
-    naive_dt = datetime.datetime(2027, 5, 3, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbblk01-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "rf_map",
-                "start_s": 0.0,
-                "end_s": 4.0,
-                "works_block_id": "wb-1",
-            },
-            {"block_id": 2, "task_type": "attention", "start_s": 4.0, "end_s": 12.0},
-        ],
-    )
-
-    accept(job, prefix=prefix)
-
-    session_key = {"subject": subject, "session_datetime": naive_dt}
-    with_id = (core.Block & {**session_key, "block_id": 1}).fetch1()
-    without_id = (core.Block & {**session_key, "block_id": 2}).fetch1()
-    assert with_id["works_block_id"] == "wb-1"
-    assert with_id["task_type"] == "rf_map"
-    # a block dict that omits works_block_id leaves the column at its null
-    # default, exactly like a direct core.Block insert would (test_core.py's
-    # own test_a_block_round_trips_with_and_without_works_block_id)
-    assert without_id["works_block_id"] is None
-    assert without_id["task_type"] == "attention"
+    assert key["activation_id"] == 0  # no run_numbers -> canonical
 
 
 def test_accept_is_idempotent_on_the_same_key(landed_session, prefix):
     """A resubmission of the identical `JobRequest` (the same idempotency
     key, the same everything) must return the same Activation and must not
-    duplicate the Montage/Block rows or the Request row.
+    duplicate the Montage/RunAssertion rows or the Request row.
 
     The selection's `session_datetime` is timezone-aware here on purpose,
     not merely for realism: DataJoint's blob codec drops a datetime's tzinfo
@@ -195,15 +178,6 @@ def test_accept_is_idempotent_on_the_same_key(landed_session, prefix):
         montage_id=0,
         idempotency_key="jbidm01-k1",
         montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "rf_map",
-                "start_s": 0.0,
-                "end_s": 4.0,
-                "works_block_id": "wb-1",
-            }
-        ],
     )
 
     first = accept(job, prefix=prefix)
@@ -213,10 +187,10 @@ def test_accept_is_idempotent_on_the_same_key(landed_session, prefix):
     assert len(schema_request.Request & {"idempotency_key": "jbidm01-k1"}) == 1
     session_key = {"subject": subject, "session_datetime": naive_dt}
     assert len(core.Montage & {**session_key, "montage_id": 0}) == 1
-    assert len(core.Block & {**session_key, "block_id": 1}) == 1
+    assert len(core.RunAssertion & {**session_key, "run_number": 1}) == 1
 
 
-def test_no_block_ids_is_canonical_and_some_block_ids_is_derivative(landed_session, prefix):
+def test_no_run_numbers_is_canonical_and_some_run_numbers_is_derivative(landed_session, prefix):
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import request as schema_request
 
@@ -224,22 +198,6 @@ def test_no_block_ids_is_canonical_and_some_block_ids_is_derivative(landed_sessi
     naive_dt = datetime.datetime(2027, 5, 5, 9, 0)
     landed_session(subject, naive_dt)
     boundaries = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
-    blocks = [
-        {
-            "block_id": 1,
-            "task_type": "neural",
-            "start_s": 0.0,
-            "end_s": 4.0,
-            "works_block_id": "wb-1",
-        },
-        {
-            "block_id": 2,
-            "task_type": "neural",
-            "start_s": 4.0,
-            "end_s": 8.0,
-            "works_block_id": "wb-2",
-        },
-    ]
 
     canonical_job = _request(
         subject=subject,
@@ -247,7 +205,6 @@ def test_no_block_ids_is_canonical_and_some_block_ids_is_derivative(landed_sessi
         montage_id=0,
         idempotency_key="jbcd001-k1",
         montage_boundaries=boundaries,
-        blocks=blocks,
     )
     derivative_job = _request(
         subject=subject,
@@ -255,8 +212,7 @@ def test_no_block_ids_is_canonical_and_some_block_ids_is_derivative(landed_sessi
         montage_id=0,
         idempotency_key="jbcd001-k2",
         montage_boundaries=boundaries,
-        blocks=blocks,
-        block_ids=[1, 2],
+        run_numbers=[1, 2],
     )
 
     canonical_key = accept(canonical_job, prefix=prefix)
@@ -266,18 +222,16 @@ def test_no_block_ids_is_canonical_and_some_block_ids_is_derivative(landed_sessi
     assert (schema_request.Activation & canonical_key).fetch1("role") == "canonical"
     assert derivative_key["activation_id"] != 0
     assert (schema_request.Activation & derivative_key).fetch1("role") == "derivative"
-    assert len(schema_request.ActivationBlock & derivative_key) == 2
+    assert len(schema_request.ActivationRun & derivative_key) == 2
 
 
-def test_an_existing_montage_and_block_survive_a_request_naming_different_boundaries(
-    landed_session, prefix
-):
-    """Beyond the brief: wl.works owns `Montage`/`Block`. A second request
-    carrying different boundaries for a montage or block already on file is
-    wl.works correcting its own record, and that correction is their call to
-    make explicitly -- it is not this pipeline's to infer from whichever
-    payload happened to arrive most recently. So the second request's
-    boundaries are silently ignored, not applied.
+def test_an_existing_montage_survives_a_request_naming_different_boundaries(landed_session, prefix):
+    """Beyond the brief: wl.works owns `Montage`. A second request carrying
+    different boundaries for a montage already on file is wl.works
+    correcting its own record, and that correction is their call to make
+    explicitly -- it is not this pipeline's to infer from whichever payload
+    happened to arrive most recently. So the second request's boundaries are
+    silently ignored, not applied.
     """
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import core
@@ -292,134 +246,51 @@ def test_an_existing_montage_and_block_survive_a_request_naming_different_bounda
         montage_id=0,
         idempotency_key="jbkeep1-k1",
         montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "rf_map",
-                "start_s": 0.0,
-                "end_s": 4.0,
-                "works_block_id": "wb-1",
-            }
-        ],
     )
     accept(first_job, prefix=prefix)
 
     # A second request, under a DIFFERENT idempotency key (a distinct ask,
     # not a retry of the first), naming DIFFERENT boundaries for the SAME
-    # montage_id and block_id.
+    # montage_id.
     correction_job = _request(
         subject=subject,
         session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
         montage_id=0,
         idempotency_key="jbkeep1-k2",
         montage_boundaries=[{"montage_id": 0, "start_s": 100.0, "end_s": 200.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "attention",
-                "start_s": 100.0,
-                "end_s": 150.0,
-                "works_block_id": "wb-CORRECTED",
-            }
-        ],
     )
     accept(correction_job, prefix=prefix)
 
     session_key = {"subject": subject, "session_datetime": naive_dt}
     montage_row = (core.Montage & {**session_key, "montage_id": 0}).fetch1()
-    block_row = (core.Block & {**session_key, "block_id": 1}).fetch1()
 
     assert montage_row["start_s"] == pytest.approx(0.0)
     assert montage_row["end_s"] == pytest.approx(12.0)
-    assert block_row["task_type"] == "rf_map"
-    assert block_row["start_s"] == pytest.approx(0.0)
-    assert block_row["end_s"] == pytest.approx(4.0)
-    assert block_row["works_block_id"] == "wb-1"
-
-
-def test_accept_rejects_a_block_outside_its_montages_window(landed_session, prefix):
-    """`ActivationBlock`'s own comment: the responder is this window's first
-    writer and owns enforcing it. `submit_derivative` itself accepts a block
-    at [20.0, 24.0) against a montage of [0.0, 12.0) -- verified -- so this is
-    `accept()`'s own check, not inherited from the schema layer."""
-    from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import request as schema_request
-
-    subject = "jbwin01"
-    naive_dt = datetime.datetime(2027, 5, 9, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbwin01-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 9,
-                "task_type": "neural",
-                "start_s": 20.0,
-                "end_s": 24.0,
-                "works_block_id": "wb-9",
-            }
-        ],
-        block_ids=[9],
-    )
-
-    with pytest.raises(ValueError, match="block 9"):
-        accept(job, prefix=prefix)
-
-    assert len(schema_request.Request & {"idempotency_key": "jbwin01-k1"}) == 0
 
 
 def test_accept_treats_the_montage_window_as_half_open(landed_session, prefix):
-    """[start_s, end_s) -- a block ending exactly at the montage's end is
-    still fully covered; a block starting exactly where the montage ends is
-    not covered at all. Boundary conditions are exactly where an off-by-one
-    in the comparison would hide."""
+    """[start_s, end_s) -- a run starting inside the montage is the file's
+    even when it ends exactly at the montage's end; a run starting exactly
+    where the montage ends is not the file's at all. Boundary conditions are
+    exactly where an off-by-one in the comparison would hide."""
     from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
 
     subject = "jbedg01"
     naive_dt = datetime.datetime(2027, 5, 10, 9, 0)
-    landed_session(subject, naive_dt)
+    runs = [(1, 0.0, 4.0), (2, 8.0, 12.0), (3, 12.0, 16.0)]
+    landed_session(subject, naive_dt, runs=runs)
+    boundaries = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
 
-    ok_job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbedg01-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "neural",
-                "start_s": 8.0,
-                "end_s": 12.0,
-                "works_block_id": "wb-1",
-            }
-        ],
-        block_ids=[1],
-    )
-    accept(ok_job, prefix=prefix)  # must not raise -- [8, 12) is fully within [0, 12)
+    canonical = accept(_request(subject=subject, session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                                idempotency_key="jbedg01-k1", montage_boundaries=boundaries, runs=runs),
+                       prefix=prefix)
+    assert sorted(int(n) for n in (schema_request.ActivationRun & canonical).to_arrays("run_number")) == [1, 2]
 
-    touching_job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbedg01-k2",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 2,
-                "task_type": "neural",
-                "start_s": 12.0,
-                "end_s": 16.0,
-                "works_block_id": "wb-2",
-            }
-        ],
-        block_ids=[2],
-    )
-    with pytest.raises(ValueError, match="block 2"):
+    touching_job = _request(subject=subject, session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                            idempotency_key="jbedg01-k2", montage_boundaries=boundaries, runs=runs,
+                            run_numbers=[3])
+    with pytest.raises(ValueError, match=r"run\(s\) \[3\] outside montage 0's window"):
         accept(touching_job, prefix=prefix)
 
 
@@ -434,7 +305,7 @@ def test_accept_rejects_a_selection_missing_a_required_key(landed_session, prefi
         parameters={},
         idempotency_key="jbkey01-k1",
         metadata=MetadataBundle(
-            blocks=[],
+            runs=_asserted(),
             montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
             probes=[],
             experimenter="jw",
@@ -567,18 +438,17 @@ def test_session_datetime_is_normalised_through_to_naive_utc(landed_session, pre
 # territory the original 12 tests above could not reach. ---
 
 
-def test_a_rejected_request_leaves_no_montage_or_block_row_and_a_correction_then_succeeds(
+def test_a_rejected_request_leaves_no_montage_or_run_assertion_and_a_correction_then_succeeds(
     landed_session, prefix
 ):
-    """C1: validate before writing, not after. The first draft inserted
-    Montage/Block and only then checked the window, so a rejected request
-    permanently planted the very Block row that caused its own rejection --
+    """C1: validate before writing, not after. The first draft inserted the
+    request's rows and only then checked the window, so a rejected request
+    permanently planted the very rows that caused its own rejection --
     skip_duplicates=True then discarded every later correction, so the
-    request that FIXED the boundary was rejected too, citing the stale
-    values it refused to replace. Reproduces the reviewer's own two-request
-    scenario exactly: block 9 at [20, 24) against montage [0, 12) is
-    rejected, and a second request naming block 9 at the CORRECTED [2, 6)
-    must not still see the first, rejected [20, 24) permanently on file.
+    request that FIXED it was rejected too, citing the stale values it
+    refused to replace. Here a derivative naming run 3, outside montage
+    [0, 12), is rejected with its montage and its asserted runs unwritten,
+    and the corrected request naming run 1 then succeeds.
     """
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import core
@@ -587,59 +457,27 @@ def test_a_rejected_request_leaves_no_montage_or_block_row_and_a_correction_then
     subject = "jbres01"
     naive_dt = datetime.datetime(2027, 5, 14, 9, 0)
     landed_session(subject, naive_dt)
+    boundaries = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
 
-    bad_job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbres01-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 9,
-                "task_type": "GARBAGE",
-                "start_s": 20.0,
-                "end_s": 24.0,
-                "works_block_id": "wb-bad",
-            }
-        ],
-        block_ids=[9],
-    )
-    with pytest.raises(ValueError, match="block 9"):
+    bad_job = _request(subject=subject, session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                       idempotency_key="jbres01-k1", montage_boundaries=boundaries, run_numbers=[3])
+    with pytest.raises(ValueError, match="outside montage 0's window"):
         accept(bad_job, prefix=prefix)
 
     session_key = {"subject": subject, "session_datetime": naive_dt}
     assert len(core.Montage & {**session_key, "montage_id": 0}) == 0, (
         "a rejected request must not plant the Montage row it was rejected over"
     )
-    assert len(core.Block & {**session_key, "block_id": 9}) == 0, (
-        "a rejected request must not plant the Block row it was rejected over"
+    assert len(core.RunAssertion & session_key) == 0, (
+        "a rejected request must not plant the runs it asserted"
     )
     assert len(schema_request.Request & {"idempotency_key": "jbres01-k1"}) == 0
 
-    corrected_job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbres01-k2",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 9,
-                "task_type": "neural",
-                "start_s": 2.0,
-                "end_s": 6.0,
-                "works_block_id": "wb-good",
-            }
-        ],
-        block_ids=[9],
-    )
+    corrected_job = _request(subject=subject, session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
+                             idempotency_key="jbres01-k2", montage_boundaries=boundaries, run_numbers=[1])
     key = accept(corrected_job, prefix=prefix)  # must not raise
 
-    block_row = (core.Block & {**session_key, "block_id": 9}).fetch1()
-    assert block_row["task_type"] == "neural"
-    assert block_row["start_s"] == pytest.approx(2.0)
-    assert block_row["end_s"] == pytest.approx(6.0)
+    assert (core.RunAssertion & {**session_key, "run_number": 1}).fetch1("works_run_id") == "wr-1"
     assert (schema_request.Activation & key).fetch1("role") == "derivative"
 
 
@@ -720,7 +558,7 @@ def test_accept_normalises_an_aware_datetime_anywhere_in_the_stored_payload(
         parameters={"calibrated_on": aware_param},
         idempotency_key="jbpar01-k1",
         metadata=MetadataBundle(
-            blocks=[],
+            runs=_asserted(),
             montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
             probes=[],
             experimenter="jw",
@@ -765,74 +603,6 @@ def test_an_out_of_range_montage_id_is_refused_with_the_field_named(landed_sessi
         accept(job, prefix=prefix)
 
 
-def test_accept_rejects_an_out_of_range_block_id(landed_session, prefix):
-    """I2: `core.Block.block_id` is a signed `smallint` (-32768..32767)."""
-    from wl_preproc.responder.jobs import accept
-
-    subject = "jbrng02"
-    naive_dt = datetime.datetime(2027, 5, 18, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbrng02-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[{"block_id": 999999, "task_type": "neural", "start_s": 0.0, "end_s": 4.0}],
-    )
-
-    with pytest.raises(ValueError, match="block_id"):
-        accept(job, prefix=prefix)
-
-
-def test_accept_rejects_an_oversized_task_type(landed_session, prefix):
-    """I2: `core.Block.task_type` is `varchar(32)`."""
-    from wl_preproc.responder.jobs import accept
-
-    subject = "jbrng03"
-    naive_dt = datetime.datetime(2027, 5, 19, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbrng03-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[{"block_id": 1, "task_type": "x" * 33, "start_s": 0.0, "end_s": 4.0}],
-    )
-
-    with pytest.raises(ValueError, match="task_type"):
-        accept(job, prefix=prefix)
-
-
-def test_accept_rejects_an_oversized_works_block_id(landed_session, prefix):
-    """I2: `core.Block.works_block_id` is `varchar(64)`."""
-    from wl_preproc.responder.jobs import accept
-
-    subject = "jbrng04"
-    naive_dt = datetime.datetime(2027, 5, 20, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbrng04-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "neural",
-                "start_s": 0.0,
-                "end_s": 4.0,
-                "works_block_id": "x" * 65,
-            }
-        ],
-    )
-
-    with pytest.raises(ValueError, match="works_block_id"):
-        accept(job, prefix=prefix)
-
-
 def test_a_non_finite_start_s_or_end_s_is_refused_with_the_field_named(landed_session, prefix):
     """I2: `start_s`/`end_s` are `double` -- unbounded in magnitude for any
     realistic session-time-seconds value, but a non-finite float (here,
@@ -857,32 +627,6 @@ def test_a_non_finite_start_s_or_end_s_is_refused_with_the_field_named(landed_se
             montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": float("inf")}],
         )
         accept(job, prefix=prefix)
-
-
-def test_accept_rejects_an_unknown_block_id(landed_session, prefix):
-    """I4: a `block_ids` entry naming no `Block` anywhere -- neither already
-    on record nor supplied in this same request's `metadata.blocks` -- is a
-    `ValueError`, not silently excluded from the window check nor left to
-    surface later as `ActivationBlock`'s own foreign-key error."""
-    from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import request as schema_request
-
-    subject = "jbunk01"
-    naive_dt = datetime.datetime(2027, 5, 22, 9, 0)
-    landed_session(subject, naive_dt)
-    job = _request(
-        subject=subject,
-        session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
-        montage_id=0,
-        idempotency_key="jbunk01-k1",
-        montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        block_ids=[7],  # no Block anywhere named 7
-    )
-
-    with pytest.raises(ValueError, match="no Block on record"):
-        accept(job, prefix=prefix)
-
-    assert len(schema_request.Request & {"idempotency_key": "jbunk01-k1"}) == 0
 
 
 def test_accept_rejects_a_session_this_host_has_never_ingested(
@@ -932,23 +676,15 @@ def test_accept_rejects_a_session_this_host_has_never_ingested(
         montage_id=0,
         idempotency_key="jbnoses-k1",
         montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-        blocks=[
-            {
-                "block_id": 1,
-                "task_type": "rf_map",
-                "start_s": 0.0,
-                "end_s": 6.0,
-                "works_block_id": "wb-1",
-            }
-        ],
     )
 
     written_tables = [
         core.Montage,
-        core.Block,
+        core.RunAssertion,
         schema_request.Request,
         schema_request.Activation,
-        schema_request.ActivationBlock,
+        schema_request.ActivationRun,
+        schema_request.ActivationProbeRun,
         pipeline.Session,
     ]
     before = [table_snapshot(table) for table in written_tables]
@@ -1069,7 +805,8 @@ def test_a_later_request_corrects_the_report_and_adds_the_assignment(landed_sess
     from wl_preproc.schema import ephys
 
     naive_dt = datetime.datetime(2027, 5, 12, 9, 0)
-    key = landed_session("jbprob02", naive_dt)
+    runs = [*_RUNS, (4, 25.0, 30.0)]  # one run in each of the three montages
+    key = landed_session("jbprob02", naive_dt, runs=runs)
     first = {"area": "V4d", "source": "at_rig", "asserted_at": "2027-05-12T10:00:00Z"}
     boundaries = [{"montage_id": m, "start_s": 12.0 * m, "end_s": 12.0 * (m + 1)} for m in range(3)]
     for idempotency_key, montage_id, probes in (
@@ -1083,7 +820,7 @@ def test_a_later_request_corrects_the_report_and_adds_the_assignment(landed_sess
     ):
         accept(_request(subject="jbprob02", session_datetime=naive_dt.replace(tzinfo=datetime.UTC),
                         idempotency_key=idempotency_key, montage_id=montage_id,
-                        montage_boundaries=boundaries, probes=probes),
+                        montage_boundaries=boundaries, runs=runs, probes=probes),
                prefix=prefix)
 
     reports = (ephys.InsertionReport & key).to_dicts(order_by="insertion_number")
@@ -1095,7 +832,7 @@ def test_a_later_request_corrects_the_report_and_adds_the_assignment(landed_sess
 
 def test_a_refused_request_records_no_report(landed_session, prefix):
     """Every check runs before anything is written (review C1): a request
-    refused for its blocks leaves no report behind."""
+    refused for its montage leaves no report behind."""
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import ephys
 
@@ -1112,12 +849,6 @@ def test_a_refused_request_records_no_report(landed_session, prefix):
 # -- The canonical lifecycle (design spec 2026-09-30-canonical-lifecycle-design.md section 3)
 
 _LC_BOUNDARIES = [{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}]
-_LC_BLOCKS = [
-    {"block_id": block_id, "task_type": "neural", "start_s": start_s, "end_s": end_s, "works_block_id": None}
-    for block_id, (start_s, end_s) in enumerate(((0.0, 4.0), (4.0, 8.0), (8.0, 12.0), (12.0, 16.0)), start=1)
-]
-# Block 4 lies outside montage 0's window, [0, 12): named in a canonical's
-# block set, it is refused (the 2b final review's M2).
 
 
 def _lifecycle_job(subject, session_datetime, key, **selection) -> JobRequest:
@@ -1126,25 +857,9 @@ def _lifecycle_job(subject, session_datetime, key, **selection) -> JobRequest:
         selection={"session_datetime": session_datetime, "montage_id": 0, **selection},
         parameters={},
         idempotency_key=key,
-        metadata=MetadataBundle(blocks=_LC_BLOCKS, montage_boundaries=_LC_BOUNDARIES, probes=[],
+        metadata=MetadataBundle(runs=_asserted(), montage_boundaries=_LC_BOUNDARIES, probes=[],
                                 experimenter="jw", subject=subject, task_types=[]),
     )
-
-
-def test_a_canonical_request_can_name_its_block_set(landed_session, prefix):
-    """How wl.works leaves out a bad block: `role: canonical` with
-    `block_ids`. Without the role, `block_ids` still means a derivative."""
-    from wl_preproc.responder.jobs import accept
-    from wl_preproc.schema import request as schema_request
-
-    when = datetime.datetime(2027, 5, 20, 9, 0)
-    landed_session("jblc001", when)
-    key = accept(_lifecycle_job("jblc001", when, "jblc001-k1", role="canonical", block_ids=[1, 3]), prefix=prefix)
-    assert key["activation_id"] == 0
-    assert (schema_request.Activation & key).fetch1("role") == "canonical"
-    assert sorted(int(b) for b in (schema_request.ActivationBlock & key).to_arrays("block_id")) == [1, 3]
-    derivative = accept(_lifecycle_job("jblc001", when, "jblc001-k2", block_ids=[1, 3]), prefix=prefix)
-    assert (schema_request.Activation & derivative).fetch1("role") == "derivative"
 
 
 def test_a_replacement_request_supersedes_the_named_canonical(landed_session, prefix):
@@ -1154,8 +869,7 @@ def test_a_replacement_request_supersedes_the_named_canonical(landed_session, pr
     when = datetime.datetime(2027, 5, 20, 10, 0)
     landed_session("jblc002", when)
     first = accept(_lifecycle_job("jblc002", when, "jblc002-k1"), prefix=prefix)
-    job = _lifecycle_job("jblc002", when, "jblc002-k2", role="canonical", supersedes_activation_id=0,
-                         block_ids=[1, 2])
+    job = _lifecycle_job("jblc002", when, "jblc002-k2", role="canonical", supersedes_activation_id=0)
     replacement = accept(job, prefix=prefix)
     row = (schema_request.Activation & replacement).fetch1()
     assert (row["activation_id"], row["role"], row["supersedes"]) == (1, "canonical", first["activation_id"])
@@ -1180,18 +894,18 @@ def test_a_replacement_of_a_superseded_canonical_is_a_conflict(landed_session, p
 
 @pytest.mark.parametrize("selection", [
     {"supersedes_activation_id": 0},
-    {"role": "derivative", "supersedes_activation_id": 0, "block_ids": [1]},
+    {"role": "derivative", "supersedes_activation_id": 0, "run_numbers": [1]},
     {"role": "derivative"},
     {"role": "bogus"},
     {"role": "canonical", "supersedes_activation_id": -1},
     {"role": "canonical", "supersedes_activation_id": True},
     {"role": "canonical", "supersedes_activation_id": "0"},
-    {"role": "canonical", "block_ids": [99]},
-    {"role": "canonical", "block_ids": [4]},
+    {"role": "canonical", "run_numbers": [1]},
+    {"run_numbers": [3]},
 ])
 def test_a_selection_the_lifecycle_refuses_is_a_value_error(landed_session, prefix, selection):
     """Section 3's refusals, each a `422` over HTTP: only a canonical
-    supersedes, a derivative names its blocks, and an activation id is one
+    supersedes, a derivative names its runs, and an activation id is one
     non-negative integer."""
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import request as schema_request
@@ -1204,17 +918,18 @@ def test_a_selection_the_lifecycle_refuses_is_a_value_error(landed_session, pref
     assert not schema_request.Request & {"idempotency_key": key}
 
 
-def test_a_canonical_role_with_no_blocks_takes_the_whole_montage(landed_session, prefix):
-    """`role: canonical` with an empty `block_ids` is the plain canonical:
-    no named block set, so the builder takes every block in the montage."""
+def test_a_canonical_role_with_no_runs_named_takes_every_run_of_the_montage(landed_session, prefix):
+    """`role: canonical` with an empty `run_numbers` is the plain canonical:
+    the file holds every measured run of its montage (the requester's
+    decision 1 of 2026-10-01)."""
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import request as schema_request
 
     when = datetime.datetime(2027, 5, 20, 13, 0)
     landed_session("jblc005", when)
-    key = accept(_lifecycle_job("jblc005", when, "jblc005-k1", role="canonical", block_ids=[]), prefix=prefix)
+    key = accept(_lifecycle_job("jblc005", when, "jblc005-k1", role="canonical", run_numbers=[]), prefix=prefix)
     assert key["activation_id"] == 0 and (schema_request.Activation & key).fetch1("role") == "canonical"
-    assert not schema_request.ActivationBlock & key
+    assert sorted(int(n) for n in (schema_request.ActivationRun & key).to_arrays("run_number")) == [1, 2]
 
 
 @pytest.mark.parametrize("selection", [{"supersedes_activation_id": None},
@@ -1234,20 +949,12 @@ def test_a_null_supersedes_is_absent(landed_session, prefix, selection):
 
 
 # -- Requests that name runs (design spec
-# `2026-10-01-session-listing-and-run-requests-design.md` section 3). Run 3 lies
-# outside montage 0's window [0, 12).
-
-_RUNS = [(1, 0.0, 4.0), (2, 5.0, 11.0), (3, 13.0, 16.0)]
-_SERIAL = "19011110001"
+# `2026-10-01-session-listing-and-run-requests-design.md` section 3), with one
+# probe whose runs a canonical states.
 
 
 def _landed_with_runs(landed_session, subject: str, day: int, runs=_RUNS) -> dict:
-    from wl_preproc.schema import core
-
-    key = landed_session(subject, datetime.datetime(2027, 9, day, 9, 0))
-    core.Run.insert([{**key, "run_number": number, "task_type": 0, "run_start_time": start, "run_stop_time": stop,
-                      "closed": 1} for number, start, stop in runs], skip_duplicates=True)
-    return key
+    return landed_session(subject, datetime.datetime(2027, 9, day, 9, 0), runs=runs)
 
 
 def _runs_job(key: dict, idempotency_key: str, *, runs=_RUNS, ids: dict | None = None,
@@ -1258,9 +965,7 @@ def _runs_job(key: dict, idempotency_key: str, *, runs=_RUNS, ids: dict | None =
         parameters={},
         idempotency_key=idempotency_key,
         metadata=MetadataBundle(
-            blocks=[], montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}],
-            runs=[{"run_number": number, "start_s": start, "end_s": stop,
-                   "works_run_id": (ids or {}).get(number, f"wr-{number}")} for number, start, stop in runs],
+            montage_boundaries=[{"montage_id": 0, "start_s": 0.0, "end_s": 12.0}], runs=_asserted(runs, ids),
             probes=[{"serial": serial, "insertion_number": index} for index, serial in enumerate(serials, start=1)],
             experimenter="jw", subject=key["subject"], task_types=[]),
     )
@@ -1327,7 +1032,7 @@ def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):
     """wl.works retries this one: the event stage has not read the session."""
     from wl_preproc.responder.jobs import accept
 
-    key = landed_session("runjob4", datetime.datetime(2027, 9, 4, 9, 0))
+    key = landed_session("runjob4", datetime.datetime(2027, 9, 4, 9, 0), runs=())
     with pytest.raises(ValueError, match="has no measured run on this host yet"):
         accept(_runs_job(key, "runjob4-k1", probe_runs={_SERIAL: [1]}), prefix=prefix)
 
@@ -1361,22 +1066,35 @@ def test_a_derivative_names_its_runs(landed_session, prefix):
     assert _run_rows(schema_request.ActivationRun, activation) == [(2,)]
 
 
-@pytest.mark.parametrize("selection, blocks, expect", [
-    ({"block_ids": [1], "probe_runs": {_SERIAL: [1]}}, [], "a request names runs or blocks, not both"),
-    ({"probe_runs": {_SERIAL: [1]}}, [{"block_id": 1, "task_type": "x", "start_s": 0.0, "end_s": 4.0}],
-     "a request names runs or blocks, not both"),
-    ({"role": "canonical", "run_numbers": [1], "probe_runs": {_SERIAL: [1]}}, [],
-     "selection.run_numbers is a derivative's"),
-    ({"run_numbers": [2], "probe_runs": {_SERIAL: [2]}}, [], "selection.probe_runs is a canonical's"),
-    ({"run_numbers": ["2"]}, [], "selection.run_numbers must be a list of run numbers"),
-    ({"run_numbers": [3]}, [], "selection names run(s) [3] outside montage 0's window"),
+@pytest.mark.parametrize("selection, expect", [
+    ({"role": "canonical", "run_numbers": [1], "probe_runs": {_SERIAL: [1]}}, "selection.run_numbers is a derivative's"),
+    ({"run_numbers": [2], "probe_runs": {_SERIAL: [2]}}, "selection.probe_runs is a canonical's"),
+    ({"run_numbers": ["2"]}, "selection.run_numbers must be a list of run numbers"),
+    ({"run_numbers": [3]}, "selection names run(s) [3] outside montage 0's window"),
 ])
-def test_a_selection_that_mixes_or_misplaces_runs_is_refused(landed_session, prefix, selection, blocks, expect):
+def test_a_selection_that_misplaces_runs_is_refused(landed_session, prefix, selection, expect):
     from wl_preproc.responder.jobs import accept
 
     key = _landed_with_runs(landed_session, "runjob7", 7)
-    job = _runs_job(key, f"runjob7-{expect[:24]}", **selection)
-    if blocks:
-        job = job.model_copy(update={"metadata": job.metadata.model_copy(update={"blocks": blocks})})
     with pytest.raises(ValueError, match=re.escape(expect)):
-        accept(job, prefix=prefix)
+        accept(_runs_job(key, f"runjob7-{expect[:24]}", **selection), prefix=prefix)
+
+
+@pytest.mark.parametrize("selection, expect", [
+    ({"block_ids": [1], "probe_runs": {_SERIAL: [1]}},
+     "selection.block_ids is retired: a derivative names its runs in selection.run_numbers"),
+    ({"role": "canonical", "block_ids": [1, 2], "probe_runs": {_SERIAL: [1]}}, "selection.block_ids is retired"),
+    ({"role": "derivative"}, "selection['role'] 'derivative' needs run_numbers: a derivative is its run set"),
+])
+def test_the_retired_block_selection_is_refused_naming_its_replacement(landed_session, prefix, selection, expect):
+    """Design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.1: nothing but this repository's tests sent blocks, and a
+    request that still does is a 422 that says what replaced them."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob8", 8)
+    idempotency_key = f"runjob8-{sorted(selection)!r}"
+    with pytest.raises(ValueError, match=re.escape(expect)):
+        accept(_runs_job(key, idempotency_key, **selection), prefix=prefix)
+    assert not schema_request.Request & {"idempotency_key": idempotency_key}

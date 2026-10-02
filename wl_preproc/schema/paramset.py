@@ -80,7 +80,7 @@ def content_hash(params: dict) -> str:
     **`schema/request.py::selection_hash` is a second function with this
     same body, deliberately not merged with it. Read this before changing
     `digest_size`.** The two hash different things — a parameter mapping
-    here, a `(task_type, block_ids)` pair there — so one function taking
+    here, a `(task_type, run_numbers)` pair there — so one function taking
     both shapes would be the worse abstraction; what they must keep
     agreeing on is the primitive and the digest size. The columns they land
     in are sized differently, and that makes a bump break them in opposite

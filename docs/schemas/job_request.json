@@ -72,10 +72,13 @@
       "description": "Everything wl-preproc needs from the ELN, carried inbound with the request.",
       "properties": {
         "blocks": {
+          "default": [],
+          "deprecated": true,
           "items": {
             "additionalProperties": true,
             "type": "object"
           },
+          "maxItems": 0,
           "title": "Blocks",
           "type": "array"
         },
@@ -129,7 +132,6 @@
         }
       },
       "required": [
-        "blocks",
         "montage_boundaries",
         "probes",
         "experimenter",

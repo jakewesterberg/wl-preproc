@@ -16,6 +16,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 SCHEMA_VERSION = 1
 
@@ -265,14 +266,12 @@ class MetadataBundle(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # `blocks` is the third field of this shape and is deliberately still
-    # untyped -- not overlooked. The 2026-08-23 handoff verified exactly two
-    # holes in this payload, and this was not one of them; typing it is the same
-    # small piece of work as the two below (`responder/jobs.py::_build_block_rows`
-    # already carries the bounds), left as its own change rather than folded in
-    # unasked. Until then the exported contract is strict about two of its three
-    # list fields, which a reader of `docs/schemas/job_request.json` will notice.
-    blocks: list[dict[str, Any]]
+    # Retired (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    # section 3.1): a request asserts runs, in `runs` below. Kept in the shape
+    # only so a request still sending blocks is told what replaced them rather
+    # than that the field is unknown; an empty list, which every request sent
+    # while the field was required, says nothing and is accepted.
+    blocks: list[dict[str, Any]] = Field(default=[], json_schema_extra={"maxItems": 0, "deprecated": True})
     montage_boundaries: list[MontageBoundary]
     probes: list[ProbeEntry]
     experimenter: str
@@ -282,6 +281,19 @@ class MetadataBundle(BaseModel):
     # Every run wl.works holds for the session (design spec
     # `2026-10-01-session-listing-and-run-requests-design.md` section 3.1).
     runs: list[RunEntry] = []
+
+    @field_validator("blocks")
+    @classmethod
+    def _blocks_are_retired(cls, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # A `PydanticCustomError`, not a `ValueError`: pydantic keeps a
+        # raised `ValueError` itself in the error's `ctx`, which the `422`
+        # body (`responder/handler.py::_error_body`) cannot serialise, and
+        # the refusal went out as a `500`.
+        if blocks:
+            raise PydanticCustomError(
+                "retired_field", "metadata.blocks is retired: a request asserts its runs in metadata.runs, each "
+                "with its works_run_id, as GET /sessions lists them")
+        return blocks
 
 
 class JobRequest(BaseModel):

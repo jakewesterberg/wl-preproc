@@ -37,12 +37,12 @@ second ``activation_id`` is never allocated — every activation this function
 writes is ``activation_id=0``. That is correct for a canonical activation
 (parent spec section 8.3: exactly one current per (session, montage)) and
 wrong for a derivative (section 8.3: "any hand-picked subset… unbounded,
-additive"), which needs a real allocator and a block set to key on.
-``submit()``'s selection carries no block set, so it has no way to form a
+additive"), which needs a real allocator and a run set to key on.
+``submit()``'s selection carries no run set, so it has no way to form a
 derivative — accepting a ``role`` parameter here would silently hand back the
 canonical activation's key for any caller that asked for a derivative. So the
 parameter is gone rather than half-supported; making derivatives real belongs
-to the responder (design spec section 9.1), once it can supply a block set —
+to the responder (design spec section 9.1), once it can supply a run set —
 which is what ``submit_derivative``, below, does. Because a derivative can
 now exist on a selection with no canonical yet, the dedupe's own query is
 scoped to ``role="canonical"`` (added alongside ``submit_derivative`` —
@@ -147,7 +147,7 @@ class Activation(dj.Manual):
     created_at  : datetime
     supersedes = null : int     # a regenerated canonical points at the old one
     # Null for a canonical activation, whose identity is (session, montage)
-    # per section 8.3. Set for a derivative, whose identity is its block set --
+    # per section 8.3. Set for a derivative, whose identity is its run set --
     # which is why section 11.3's "a request whose (selection, task type) is
     # already in flight returns the running one" is a lookup here in the
     # common, uncontested case. The one exception: submit_derivative's
@@ -218,12 +218,14 @@ class ActivationProbeRun(dj.Manual):
     """
 
 
-def selection_hash(task_type: str, block_ids: list[int], run_numbers: list[int] | tuple[int, ...] = ()) -> str:
-    """Content hash of a derivative's identity: its task type and block set.
+def selection_hash(task_type: str, run_numbers: list[int] | tuple[int, ...]) -> str:
+    """Content hash of a derivative's identity: its task type and run set
+    (design spec `2026-10-01-session-listing-and-run-requests-design.md`
+    section 3.3; its block set until then).
 
-    Sorted and de-duplicated first, because the block set is a *set*: two
-    requests naming the same blocks in a different order, or naming the same
-    block twice, are the same selection, and hashing them differently would
+    Sorted and de-duplicated first, because the run set is a *set*: two
+    requests naming the same runs in a different order, or naming the same
+    run twice, are the same selection, and hashing them differently would
     start a second run for work already in flight (section 11.3). `set(...)`
     is what collapses a repeat; `sorted()` alone would not, since `[1, 1, 2]`
     is already sorted and stays three elements long.
@@ -240,7 +242,7 @@ def selection_hash(task_type: str, block_ids: list[int], run_numbers: list[int] 
     calls `paramset.content_hash(declared.params)` rather than
     reimplementing `json.dumps`'s argument list, precisely so the two cannot
     drift. Here they are two functions hashing two different things --
-    a parameter mapping there, a `(task_type, block_ids)` pair here -- so
+    a parameter mapping there, a `(task_type, run_numbers)` pair here -- so
     one function taking both shapes would be a worse abstraction than two
     that happen to agree. What they must keep agreeing on is `digest_size`,
     and the columns they land in do not make that symmetrical:
@@ -268,12 +270,7 @@ def selection_hash(task_type: str, block_ids: list[int], run_numbers: list[int] 
     happens to existing `selection_hash` rows; it is not a one-line edit in
     either function.
     """
-    selected = {"task_type": task_type, "block_ids": sorted(set(block_ids))}
-    # A run set joins the hash only when there is one, so every block-only
-    # hash already on file is unchanged (design spec
-    # `2026-10-01-session-listing-and-run-requests-design.md` section 3.3).
-    if run_numbers:
-        selected["run_numbers"] = sorted(set(run_numbers))
+    selected = {"task_type": task_type, "run_numbers": sorted(set(run_numbers))}
     payload = json.dumps(selected, sort_keys=True, separators=(",", ":"))
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
 
@@ -384,14 +381,14 @@ def _reject_key_reuse(
     compared against — i.e., when `produced` above is non-empty because
     THIS key's earlier call inserted a fresh derivative `Activation`, rather
     than deduping onto one created under a different key. In that case, a
-    later call under the same key naming a different block set is now
+    later call under the same key naming a different run set is now
     caught, not just a different session or montage.
 
     It does **not** close the residual the previous paragraph describes. If
     the key's first submission instead deduped onto a pre-existing
     derivative created by some OTHER key, no row names this key at all —
     `produced` is empty, exactly as above — and a second call under this key
-    with a *different* block set is silently accepted, allocating its own
+    with a *different* run set is silently accepted, allocating its own
     activation, rather than refused. That is the same hole the previous
     paragraph describes, for a derivative rather than a canonical, and this
     column alone cannot close it: closing it needs a selection recorded on
@@ -439,7 +436,7 @@ def _reject_key_reuse(
         # KeyReuseError's own docstring for why the distinction has to be a
         # type: responder/server.py's seam maps exactly this, and
         # SupersedeConflict, to 409; every other raise site in this file
-        # (not-activated, in_transaction, empty block_ids, allocation
+        # (not-activated, in_transaction, empty run_numbers, allocation
         # exhaustion, a replacement's lock) must stay 500.
         raise KeyReuseError(
             f"idempotency key {idempotency_key!r} is already recorded against a "
@@ -458,11 +455,11 @@ def submit(
     selection: dict,
     payload: dict,
     requested_by: str | None = None,
-    block_ids: list[int] | tuple[int, ...] = (),
     run_numbers: list[int] | tuple[int, ...] = (),
     probe_runs: dict[str, list[int]] | None = None,
 ) -> dict:
-    """Record a request and the canonical activation it selects, atomically.
+    """Record a request and the canonical activation it selects, atomically,
+    with its runs and each probe's (`_record_run_sets`).
 
     Returns the ``Activation`` key. Both rows land or neither does: a ``Request``
     without its ``Activation`` is an accepted request that will never run, which
@@ -591,15 +588,6 @@ def submit(
             },
             skip_duplicates=True,
         )
-        # A canonical that names its block set -- how wl.works leaves out a
-        # bad block (design spec `2026-09-30-canonical-lifecycle-design.md`
-        # section 3). Without one, the builder takes every block in the
-        # montage, as before.
-        if block_ids:
-            ActivationBlock.insert(
-                [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))],
-                skip_duplicates=True,
-            )
         _record_run_sets(key, run_numbers, probe_runs)
         return key
 
@@ -682,13 +670,12 @@ def submit_replacement(
     requested_by: str | None = None,
     *,
     supersedes_activation_id: int,
-    block_ids: list[int] | tuple[int, ...] = (),
     run_numbers: list[int] | tuple[int, ...] = (),
     probe_runs: dict[str, list[int]] | None = None,
 ) -> dict:
     """Record a request and the canonical activation that replaces the
     montage's current one, `supersedes_activation_id`: at the montage's next free
-    activation id, with `supersedes` set and, if given, its block set
+    activation id, with `supersedes` set, and its runs and each probe's
     (design spec `2026-09-30-canonical-lifecycle-design.md` section 3, case
     3). The superseded activation and its file are left exactly as they are.
 
@@ -795,10 +782,6 @@ def submit_replacement(
                 raise dj.DataJointError(
                     f"submit_replacement: exhausted {_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS} "
                     f"attempts to allocate an activation_id for {montage_key!r}"
-                )
-            if block_ids:
-                ActivationBlock.insert(
-                    [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
                 )
             _record_run_sets(key, run_numbers, probe_runs)
             return key
@@ -938,24 +921,25 @@ def submit_derivative(
     task_type: str,
     origin: str,
     selection: dict,
-    block_ids: list[int],
+    run_numbers: list[int] | tuple[int, ...],
     payload: dict,
     requested_by: str | None = None,
-    run_numbers: list[int] | tuple[int, ...] = (),
 ) -> dict:
-    """Record a request and the derivative activation its block set selects.
+    """Record a request and the derivative activation its run set selects.
 
     Mirrors ``submit()``'s structure — the activation guard, the no-nesting
     guard, ``_reject_key_reuse``, one transaction — and differs in exactly
     three places, below. See the module docstring's "``submit()`` only ever
     produces canonical activations" paragraph for why ``submit()`` itself
-    cannot do this: its selection carries no block set, so it has nothing to
+    cannot do this: its selection carries no run set, so it has nothing to
     key a derivative's identity on.
 
     **1. The dedupe is on the selection, not the key.**
-    ``digest = selection_hash(task_type, block_ids)`` is this derivative's
-    identity (parent spec section 8.3: a derivative's identity is its block
-    set, unlike a canonical's, which is its (session, montage)). Before
+    ``digest = selection_hash(task_type, run_numbers)`` is this derivative's
+    identity (parent spec section 8.3: a derivative's identity is its run
+    set -- its block set until design spec
+    `2026-10-01-session-listing-and-run-requests-design.md` -- unlike a
+    canonical's, which is its (session, montage)). Before
     inserting anything, an existing ``Activation`` already carrying that hash
     for this session and montage is returned as-is — section 11.3's "a
     request whose (selection, task type) is already in flight returns the
@@ -1060,10 +1044,10 @@ def submit_derivative(
     a derivative may legitimately be requested before any canonical exists.
 
     **3. What gets written.** ``role='derivative'``, ``selection_hash=digest``,
-    and one ``ActivationBlock`` row per distinct block id — sorted and
+    and one ``ActivationRun`` row per distinct run number — sorted and
     de-duplicated the same way ``selection_hash`` itself canonicalises
-    ``block_ids``, since ``ActivationBlock`` carries no columns beyond its
-    primary key: a block is either in the selection or it is not, and there
+    ``run_numbers``, since ``ActivationRun`` carries no columns beyond its
+    primary key: a run is either in the selection or it is not, and there
     is nothing multiplicity could mean here.
 
     **A derivative never supersedes a canonical.** ``supersedes`` is written
@@ -1075,7 +1059,7 @@ def submit_derivative(
     and no code path should ever write its ``supersedes``.
 
     Returns the ``Activation`` key. Reusing an ``idempotency_key`` for a
-    different request — now including one that names a different block set —
+    different request — now including one that names a different run set —
     raises ``DataJointError``; see ``_reject_key_reuse``.
     """
     if not schema.is_activated():
@@ -1095,16 +1079,16 @@ def submit_derivative(
             "one. Call it as its own unit of work; see submit()'s docstring."
         )
 
-    if not block_ids and not run_numbers:
+    if not run_numbers:
         # Checked before opening the transaction, alongside the two guards
-        # above: block_ids=[] is not a smaller selection, it is not a
+        # above: run_numbers=[] is not a smaller selection, it is not a
         # selection at all. Without this, selection_hash("neural", [])
         # still produces a stable digest, so it would silently succeed —
-        # writing a role='derivative' Activation with zero ActivationBlock
+        # writing a role='derivative' Activation with zero ActivationRun
         # rows, a derivative covering nothing, which section 8.3's "any
         # hand-picked subset" does not describe (review round 2, Minor).
         raise dj.DataJointError(
-            "submit_derivative() needs at least one run or block id: an empty "
+            "submit_derivative() needs at least one run number: an empty "
             "selection would create a derivative covering nothing, which is "
             "not a valid selection."
         )
@@ -1114,7 +1098,7 @@ def submit_derivative(
     montage_key = {
         k: selection[k] for k in ("subject", "session_datetime", "montage_id")
     }
-    digest = selection_hash(task_type, block_ids, run_numbers)
+    digest = selection_hash(task_type, run_numbers)
     selection_key = {**montage_key, "selection_hash": digest}
 
     with dj.conn().transaction:
@@ -1212,10 +1196,6 @@ def submit_derivative(
                 "either sustained genuine contention or a stuck retry loop."
             )
 
-        if block_ids:
-            ActivationBlock.insert(
-                [{**key, "block_id": block_id} for block_id in sorted(set(block_ids))]
-            )
         _record_run_sets(key, run_numbers, None)
         return key
 
