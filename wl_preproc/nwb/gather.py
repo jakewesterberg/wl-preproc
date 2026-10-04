@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from wl_preproc.nwb.describe import task_name
 from wl_preproc.nwb.trim import BlockSet
 
 MASK_LABELS = ("blink", "invalid")
@@ -78,18 +79,6 @@ def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
              "works_run_id": works.get(row["run_number"]), "closed": bool(row["closed"])}
             for row in (core.Run & session_key).to_dicts() if row["run_number"] in numbers]
     return sorted(rows, key=lambda row: row["start_s"])
-
-
-def _task_name(code, rig_name: str | None) -> str:
-    """The rig's name for a run's task, else its code's name, else the code."""
-    from wl_preproc.contracts.events import TaskTypeCode
-
-    if rig_name:
-        return rig_name
-    try:
-        return TaskTypeCode(int(code)).name.lower()
-    except (TypeError, ValueError):
-        return str(code)
 
 
 def identifier_for(activation_key: dict, session_id: str) -> str:
@@ -679,7 +668,7 @@ def gather(activation_key: dict) -> Gathered:
         eye = None
 
     session_id = session_dir.name
-    tasks = sorted({_task_name(row["task_type"], row["task"]) for row in run_rows})
+    tasks = sorted({task_name(row["task_type"], row["task"]) for row in run_rows})
     description = (f"wl-preproc {activation['role']} NWB for session {session_id}, montage {key['montage_id']}: "
                    f"runs {', '.join(str(row['run_number']) for row in run_rows)} ({', '.join(tasks)}).")
     if eye is not None and eye["missing_eyes"]:
