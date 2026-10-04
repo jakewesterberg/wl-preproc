@@ -165,3 +165,17 @@ their mutation checks:
   duplicated-id refusal.
 - **M5 (`e3adf14`):** one task-name rule, `nwb/describe.py::task_name`.
 - **M6 (`0d31368`):** each run's event bounds are rounded once, by `events/runs.py::event_bounds`.
+
+**The leftovers' review** (a fresh Opus reviewer, `ecd1616..99a5153`) found no Critical or
+Important and five Minor, all fixed on the same branch:
+- **A refused request's `Montage` rows** still landed before `submit*()` could refuse it, and a
+  `Montage` is never overwritten. They are now written with its run ids inside `submit*()`'s
+  transaction (`d535cdc`). A refused request's probe reports and subject details still apply,
+  since for those the latest request wins (spec amendment 26).
+- **Three of M1's write sites, and M3's FLOAT read and lower window bound, were unpinned:**
+  five mutants survived. `test_every_accepted_path_records_a_run_first_asserted_on_it` and an
+  18,000 s case in `tests/schema/test_nwb_outside_runs.py` now fail each of them (`3268d98`).
+- **Stale docstrings** in `responder/jobs.py`, `schema/request.py` and `nwb/gather.py`
+  (`d535cdc`).
+- **M2's and M3's rulings** are now spec amendments 26 and 27.
+
