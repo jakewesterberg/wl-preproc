@@ -250,16 +250,17 @@ def _trials(run_rows: list[dict], session_key: dict) -> list[dict]:
 
 def _events(run_rows: list[dict], session_key: dict) -> list[dict]:
     """The task events inside one of the file's runs, its ends included."""
-    from wl_preproc.events.runs import event_inside
+    from wl_preproc.events.runs import event_bounds
     from wl_preproc.schema import pipeline
 
+    bounds = [event_bounds(run["start_s"], run["end_s"]) for run in run_rows]
     attributes: dict = {}
     for row in (pipeline.event.Event.Attribute & session_key).to_dicts():
         attributes.setdefault((row["event_type"], row["event_start_time"]), {})[row["attribute_name"]] = row["attribute_value"]
     events = []
     for row in (pipeline.event.Event & session_key).to_dicts():
         time_s = float(row["event_start_time"])
-        if not any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows):
+        if not any(low <= time_s <= high for low, high in bounds):
             continue
         extra = attributes.get((row["event_type"], row["event_start_time"]), {})
         events.append({
@@ -279,7 +280,7 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
     element-event's smallint `trial_id`."""
     import collections
 
-    from wl_preproc.events.runs import event_inside
+    from wl_preproc.events.runs import event_bounds
     from wl_preproc.schema import pipeline
     from wl_preproc.schema.events import TRIAL_ID_MAX
 
@@ -288,8 +289,8 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
         for row in (pipeline.event.Event.Attribute & session_key
                     & {"event_type": "TRIAL_NUMBER", "attribute_name": "trial_id"}).to_dicts())
     counts = collections.Counter(number for _time_s, number in strobed)
-    inside = [any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows)
-              for time_s, _number in strobed]
+    bounds = [event_bounds(run["start_s"], run["end_s"]) for run in run_rows]
+    inside = [any(low <= time_s <= high for low, high in bounds) for time_s, _number in strobed]
     seen, repeated, too_large = set(), set(), 0
     for (_time_s, number), here in zip(strobed, inside, strict=True):
         first = number not in seen
