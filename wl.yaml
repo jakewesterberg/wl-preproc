@@ -178,8 +178,9 @@ status:
     and raw ~imroTbl, and its flags, re-listed whenever its entry changes
     (design spec `2026-10-01-session-listing-and-run-requests-design.md`, Plan
     A; handoff `docs/handoffs/2026-10-01-session-listing.md`).
-    Requests that name runs are BUILT on `spec/run-requests` (2026-10-02, NOT
-    merged as written): a canonical asserts its montage's measured runs, each
+    Requests that name runs are BUILT on `spec/run-requests` (2026-10-02;
+    merged and pushed as `ecd1616` the same day, CI green, after a final
+    review's fix pass): a canonical asserts its montage's measured runs, each
     checked against core.Run within 2 ms as it arrives, with each probe's runs
     stated in full; a derivative names whole runs; the NWB file is built from
     its runs, with a description at version 3; and core.Block, ActivationBlock,
@@ -491,6 +492,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `63fd606` until the run-requests merge `ecd1616` on 2026-10-02 (CI
+  # green on `63fd606`, run 36910191677); true when written.
   # Was `eb1ff06` until the listing-minors merge `63fd606` on 2026-10-01 (CI
   # green on `eb1ff06`, run 36902548593); true when written.
   # Was `b0f8b52` until the session-listing merge `eb1ff06` on 2026-10-01 (CI
@@ -512,7 +515,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "63fd606"
+  describes: "ecd1616"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

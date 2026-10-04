@@ -1,27 +1,41 @@
 # Where this build actually is
 
-**Last updated 2026-10-01**, describing `main` at `63fd606`, the merge of
-`fix/listing-minors` (the listing's deferred minors, handoff
-`handoffs/2026-10-01-session-listing.md` §7), after `eb1ff06`, the merge of
-`spec/session-listing-and-run-requests`: the landed-session listing,
-`GET /sessions`, Plan A of pieces 2 and 3. CI read off `63fd606` is green on
-both interpreters, 2097 passed on each (`gh run view 36910191677`).
-- **Each landed session is listed** with its runs (wl-xcon's task and stop
-  reason), the blocks under each, the SpikeGLX segments with every probe's site
-  map and raw `~imroTbl`, and its flags. A daemon stage logs a change whenever
-  an entry changes.
-- **Its final review found no Critical;** two Important findings (a float32
-  block start falling out of its run; old sessions reported `closed: false`)
-  and one raised Minor (a faulted wl-xcon run does write an end row) were fixed
-  before merge.
-- **Plan B, canonical requests that name runs and the NWB description at
-  version 3, is next;** the listing's deferred minors are merged.
+**Last updated 2026-10-04**, describing `main` at `ecd1616`, the merge of
+`spec/run-requests`: canonical requests that name runs, and the NWB
+description at version 3, Plan B of pieces 2 and 3 (handoff
+`handoffs/2026-10-01-run-requests.md`). CI read off `ecd1616` is green on both
+interpreters, 2130 passed on each with 33 skipped, and the manifest check is
+green (`gh run view 37048465105`).
+- **A canonical request asserts its montage's measured runs,** each checked
+  against `core.Run` within 2 ms as it arrives, and states each probe's runs
+  in full; a derivative names whole runs, and each of its probes covers them.
+  A stale listing is a `422` naming the run, a run named under a second
+  `works_run_id` a `409`.
+- **The NWB file is built from its runs:** `/intervals/runs`, the measured
+  blocks inside them, and a description at version 3 whose runs carry
+  `works_run_id`. `core.Block`, `ActivationBlock`, `BlockCoverage` and
+  `TimingProvenance.block_agreement` are retired; a development database
+  redeclares `TimingProvenance`.
+- **Its final review found one Critical,** fixed before merge with a test that
+  failed first: element-event's FLOAT block and trial times are read from
+  MySQL to six significant digits, so past about 1000 s a run's first block
+  and often its first trial fell out of the file and the listing. They are now
+  read as stored (`events/runs.py::stored_doubles`, spec amendment 24). Two
+  Important findings were fixed too; six Minor are deferred (handoff §6).
+- **wl.works vendors `job_request.json` and `nwb_description.json` now.**
+  Piece 4, the metadata-only rebuild, is next.
 
-`eb1ff06`'s tree is byte-identical to the tested branch head `0ccb99b`: 2098
-passed on 3.11 and 2097 on 3.13 locally, 0 failed. CI read off `eb1ff06` itself
-is green on both interpreters, 2091 passed on each with 33 skipped, and the
-manifest check is green (`gh run view 36902548593`). CI on later heads is
-recorded here only once read, not before.
+`ecd1616`'s tree differs from the tested `ac4fd77` only by the handoff's text,
+which no test reads: 2137 passed on 3.11 and 2136 on 3.13 locally, 0 failed.
+CI on later heads is recorded here only once read, not before.
+
+*This header named `63fd606` (the listing-minors merge, CI green, 2097 passed
+on each interpreter, `36910191677`) until the run-requests merge; true when
+written.*
+
+*This header named `eb1ff06` (the session-listing merge, CI green, 2091 passed
+on each interpreter, `36902548593`) until the listing-minors merge; true when
+written.*
 
 *This header named `b0f8b52` (the runs-and-trials merge, CI green, 2050 passed
 on each interpreter, `36852547804`) until the session-listing merge; true when
@@ -600,7 +614,9 @@ requester chose to merge the same day; true when written.*
 >
 >    **Requests that name runs, and the NWB description at version 3 (Plan B
 >    of pieces 2 and 3), are BUILT on `spec/run-requests` (2026-10-02), NOT
->    merged as written** (the same spec). A canonical request asserts its
+>    merged as written** *(merged and pushed as `ecd1616` the same day, after
+>    its final review's fix pass; CI green, 2130 passed on each interpreter)*
+>    (the same spec). A canonical request asserts its
 >    montage's measured runs, each checked against `core.Run` within 2 ms as
 >    it arrives, and states each probe's runs in full; a derivative names
 >    whole runs. The NWB file is built from its runs: `/intervals/runs`, the
