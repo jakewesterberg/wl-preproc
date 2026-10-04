@@ -364,14 +364,13 @@ def test_accept_refuses_to_run_inside_a_transaction(landed_session, prefix):
     fire -- mirroring `tests/schema/test_request.py::
     test_submit_refuses_to_run_inside_a_transaction`.
 
-    The Montage insert-if-absent step, run before `submit()` is ever reached,
-    still lands as part of the CALLER's still-open transaction -- proving why
-    `accept()` itself must never be the one to open it: only the Request/
-    Activation pair, which `submit()`'s own guard refuses, is what's absent
-    here. That is the intended, safe shape (module docstring, correction 1):
-    the Montage write is idempotent on its own, so a caller who makes this
-    mistake and then retries `accept()` correctly, outside any transaction,
-    still converges on the same rows.
+    Nothing of the request lands: its `Montage` rows, like its run ids, are
+    written inside `submit()`'s own transaction, which its guard refuses to
+    open here, so a caller who makes this mistake and then retries `accept()`
+    correctly, outside any transaction, writes them then. *It said, until the
+    leftovers' review moved the Montage write into `submit()`, that the
+    Montage row still landed here, in the caller's transaction; true when
+    written.*
     """
     import datajoint as dj
 
@@ -397,7 +396,7 @@ def test_accept_refuses_to_run_inside_a_transaction(landed_session, prefix):
 
     assert len(schema_request.Request & {"idempotency_key": "jbtxn01-k1"}) == 0
     session_key = {"subject": subject, "session_datetime": naive_dt}
-    assert len(core.Montage & {**session_key, "montage_id": 0}) == 1
+    assert len(core.Montage & {**session_key, "montage_id": 0}) == 0
 
 
 def test_session_datetime_is_normalised_through_to_naive_utc(landed_session, prefix):
@@ -1082,11 +1081,14 @@ def test_one_works_run_id_for_two_runs_is_refused(landed_session, prefix):
 
 
 @pytest.mark.parametrize("refusal", ["key_reuse", "supersede"])
-def test_a_request_refused_with_a_409_records_none_of_its_runs(landed_session, prefix, refusal):
-    """A refused request leaves no `RunAssertion` behind (the plan's Global
-    Constraint; Plan B's final review, M1): its run ids are recorded in the
-    same transaction as its `Request` and `Activation`, so a 409 from
-    `submit*()` rolls them back with them."""
+def test_a_request_refused_with_a_409_records_none_of_its_runs_or_montages(landed_session, prefix, refusal):
+    """A refused request leaves no `RunAssertion` or `Montage` behind (the
+    plan's Global Constraint; Plan B's final review, M1, and the leftovers'
+    review): both are recorded in the same transaction as its `Request` and
+    `Activation`, so a 409 from `submit*()` rolls them back with them. A
+    `Montage` is never overwritten, so one recorded from a refused request
+    would fix that montage's boundaries for good."""
+    from wl_preproc.contracts.protocol import MontageBoundary
     from wl_preproc.responder.jobs import accept
     from wl_preproc.schema import core
     from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
@@ -1100,9 +1102,13 @@ def test_a_request_refused_with_a_409_records_none_of_its_runs(landed_session, p
         refused = _runs_job(key, f"{subject}-k2", role="canonical", supersedes_activation_id=7,
                             probe_runs={_SERIAL: [1, 2]})
         raised = SupersedeConflict
+    another = [*refused.metadata.montage_boundaries, MontageBoundary(montage_id=1, start_s=12.0, end_s=99.0)]
+    refused = refused.model_copy(update={"metadata": refused.metadata.model_copy(
+        update={"montage_boundaries": another})})
     with pytest.raises(raised):
         accept(refused, prefix=prefix)
     assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2]
+    assert sorted(int(n) for n in (core.Montage & key).to_arrays("montage_id")) == [0]
 
 
 @pytest.mark.parametrize("path", ["replacement", "canonical_dedupe", "derivative_dedupe"])

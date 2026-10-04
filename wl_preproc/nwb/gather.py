@@ -57,7 +57,9 @@ class Gathered:
     probe_notes: list[str] = dataclasses.field(default_factory=list)
     # The trials the canonical trial list leaves out: a number strobed again,
     # and one too large to store (design spec
-    # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4).
+    # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4); and, in a
+    # canonical, the trials and blocks that start in its montage's window but
+    # in no measured run (`_outside_runs_notes`).
     trial_notes: list[str] = dataclasses.field(default_factory=list)
 
 
