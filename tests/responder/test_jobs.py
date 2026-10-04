@@ -1105,6 +1105,31 @@ def test_a_request_refused_with_a_409_records_none_of_its_runs(landed_session, p
     assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2]
 
 
+@pytest.mark.parametrize("path", ["replacement", "canonical_dedupe", "derivative_dedupe"])
+def test_every_accepted_path_records_a_run_first_asserted_on_it(landed_session, prefix, path):
+    """`submit*()` records a request's run ids on each of its success paths
+    (Plan B's final review, M1): a replacement, a second canonical under a
+    new key, and a repeated derivative, each the first request to assert run
+    3. A path that skipped it would refuse a later derivative of run 3 as
+    "asserted neither in metadata.runs nor before" (the leftovers' review)."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+
+    subject = {"replacement": "runjob17", "canonical_dedupe": "runjob18", "derivative_dedupe": "runjob19"}[path]
+    key = _landed_with_runs(landed_session, subject, 17)
+    accept(_runs_job(key, f"{subject}-k1", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    if path == "derivative_dedupe":
+        accept(_runs_job(key, f"{subject}-k2", runs=_RUNS[:2], run_numbers=[1]), prefix=prefix)
+        again = _runs_job(key, f"{subject}-k3", run_numbers=[1])
+    elif path == "replacement":
+        again = _runs_job(key, f"{subject}-k3", role="canonical", supersedes_activation_id=0,
+                          probe_runs={_SERIAL: [1, 2]})
+    else:
+        again = _runs_job(key, f"{subject}-k3", probe_runs={_SERIAL: [1, 2]})
+    accept(again, prefix=prefix)
+    assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2, 3]
+
+
 def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):
     """wl.works retries this one: the event stage has not read the session."""
     from wl_preproc.responder.jobs import accept
