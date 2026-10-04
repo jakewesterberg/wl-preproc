@@ -1081,6 +1081,30 @@ def test_one_works_run_id_for_two_runs_is_refused(landed_session, prefix):
     assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (2, before)
 
 
+@pytest.mark.parametrize("refusal", ["key_reuse", "supersede"])
+def test_a_request_refused_with_a_409_records_none_of_its_runs(landed_session, prefix, refusal):
+    """A refused request leaves no `RunAssertion` behind (the plan's Global
+    Constraint; Plan B's final review, M1): its run ids are recorded in the
+    same transaction as its `Request` and `Activation`, so a 409 from
+    `submit*()` rolls them back with them."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
+
+    subject = {"key_reuse": "runjob15", "supersede": "runjob16"}[refusal]
+    key = _landed_with_runs(landed_session, subject, 15)
+    accept(_runs_job(key, f"{subject}-k1", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    if refusal == "key_reuse":
+        refused, raised = _runs_job(key, f"{subject}-k1", probe_runs={_SERIAL: [1, 2]}), KeyReuseError
+    else:
+        refused = _runs_job(key, f"{subject}-k2", role="canonical", supersedes_activation_id=7,
+                            probe_runs={_SERIAL: [1, 2]})
+        raised = SupersedeConflict
+    with pytest.raises(raised):
+        accept(refused, prefix=prefix)
+    assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2]
+
+
 def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):
     """wl.works retries this one: the event stage has not read the session."""
     from wl_preproc.responder.jobs import accept

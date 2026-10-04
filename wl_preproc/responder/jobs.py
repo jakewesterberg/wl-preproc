@@ -25,12 +25,15 @@ re-derived:**
    raise -- DataJoint transactions do not nest -- and `submit()`'s own
    docstring says directly that neither the ingest watcher nor the responder
    may wrap it to bundle it with other writes. So `accept()` writes `Montage`
-   and `RunAssertion` as two independently idempotent, un-transacted inserts
+   as an independently idempotent, un-transacted insert
    (`skip_duplicates=True`, exactly `ingest/landing.py`'s own shape and
    reasoning -- "a partial run followed by a re-run converges on the same
    rows" without one), and only then calls `submit`/`submit_derivative`,
    which open and own their own transaction for the `Request`+`Activation`
-   pair. See `test_accept_refuses_to_run_inside_a_transaction`.
+   pair. See `test_accept_refuses_to_run_inside_a_transaction`. The
+   `RunAssertion` rows it builds are handed to `submit*()` and written inside
+   that transaction, so a request refused there with a 409 records none of
+   them (Plan B's final review, M1).
 2. **`accept()` owns the montage window.** The window between a montage's
    `[start_s, end_s)` and the runs a file holds is checked here -- a check
    `submit_derivative` itself does not make, having no `Montage`/`Run`
@@ -605,10 +608,10 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
     if montage_rows:
         core.Montage.insert(montage_rows, skip_duplicates=True)
-    # Step 2: wl.works' id and copy of each run it asserts, insert-if-absent;
-    # `_check_runs` has already refused a run named under a second id.
-    if run_assertion_rows:
-        core.RunAssertion.insert(run_assertion_rows, skip_duplicates=True)
+    # Step 2, wl.works' id and copy of each run it asserts, is written by
+    # `submit*()` inside its own transaction, so a request it refuses (a 409)
+    # records none of them; `_check_runs` has already refused a run named
+    # under a second id.
 
     # The payload stored as evidence ("the request as received", Request's
     # own comment). mode="json" -- this project's own existing convention in
@@ -648,6 +651,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             # probe the request names covers all of its runs; the request
             # states no per-probe list for one (Plan B's final review, I1).
             probe_runs={probe.serial: file_runs for probe in metadata.probes},
+            run_assertions=run_assertion_rows,
         )
 
     if selection.get("supersedes_activation_id") is not None:
@@ -661,6 +665,7 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             supersedes_activation_id=selection["supersedes_activation_id"],
             run_numbers=file_runs,
             probe_runs=probe_runs,
+            run_assertions=run_assertion_rows,
         )
     return schema_request.submit(
         idempotency_key=request.idempotency_key,
@@ -671,4 +676,5 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
         requested_by=metadata.experimenter,
         run_numbers=file_runs,
         probe_runs=probe_runs,
+        run_assertions=run_assertion_rows,
     )

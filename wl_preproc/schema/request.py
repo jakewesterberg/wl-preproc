@@ -257,6 +257,16 @@ def selection_hash(task_type: str, run_numbers: list[int] | tuple[int, ...]) -> 
     return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
 
 
+def _record_run_assertions(rows) -> None:
+    """wl.works' id and copy of each run the request asserts
+    (`core.RunAssertion`, built and checked by `responder/jobs.py::_check_runs`),
+    insert-if-absent, inside the submission's own transaction: a request
+    refused there, by key reuse or a stale supersede, records none of them
+    (Plan B's final review, M1)."""
+    if rows:
+        core.RunAssertion.insert(list(rows), skip_duplicates=True)
+
+
 def _record_run_sets(key: dict, run_numbers, probe_runs: dict[str, list[int]] | None) -> None:
     """The activation's runs, and the runs each probe's sort covers (design
     spec `2026-10-01-session-listing-and-run-requests-design.md` section 3.3),
@@ -439,6 +449,7 @@ def submit(
     requested_by: str | None = None,
     run_numbers: list[int] | tuple[int, ...] = (),
     probe_runs: dict[str, list[int]] | None = None,
+    run_assertions: list[dict] | tuple[dict, ...] = (),
 ) -> dict:
     """Record a request and the canonical activation it selects, atomically,
     with its runs and each probe's (`_record_run_sets`).
@@ -556,6 +567,7 @@ def submit(
         # The CURRENT canonical, not any canonical row: once a replacement
         # exists the montage has two, and a fetch1() here raised (design
         # spec `2026-09-30-canonical-lifecycle-design.md` section 3, case 2).
+        _record_run_assertions(run_assertions)
         existing = current_canonical(selection_key)
         if existing is not None:
             return {k: existing[k] for k in Activation.primary_key}
@@ -654,6 +666,7 @@ def submit_replacement(
     supersedes_activation_id: int,
     run_numbers: list[int] | tuple[int, ...] = (),
     probe_runs: dict[str, list[int]] | None = None,
+    run_assertions: list[dict] | tuple[dict, ...] = (),
 ) -> dict:
     """Record a request and the canonical activation that replaces the
     montage's current one, `supersedes_activation_id`: at the montage's next free
@@ -741,6 +754,7 @@ def submit_replacement(
                         "requested_at": _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None),
                     }
                 )
+            _record_run_assertions(run_assertions)
             used = (Activation & montage_key).to_arrays("activation_id")
             activation_id = int(max(used) + 1) if len(used) else 1
             for _ in range(_MAX_DERIVATIVE_ALLOCATE_ATTEMPTS):
@@ -907,6 +921,7 @@ def submit_derivative(
     payload: dict,
     requested_by: str | None = None,
     probe_runs: dict[str, list[int]] | None = None,
+    run_assertions: list[dict] | tuple[dict, ...] = (),
 ) -> dict:
     """Record a request and the derivative activation its run set selects.
 
@@ -1119,6 +1134,7 @@ def submit_derivative(
                 }
             )
 
+        _record_run_assertions(run_assertions)
         existing = Activation & selection_key
         if existing:
             # One fetch1() for the whole row rather than one per key
