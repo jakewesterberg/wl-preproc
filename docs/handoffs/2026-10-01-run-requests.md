@@ -179,3 +179,7 @@ Important and five Minor, all fixed on the same branch:
   (`d535cdc`).
 - **M2's and M3's rulings** are now spec amendments 26 and 27.
 
+
+**The full suite on `fe0fe09`,** the branch head after the review's fixes: 3.11, **2147 passed,
+25 skipped, 1 deselected, 1 xfailed**; 3.13, **2146 passed, 27 skipped, 1 xfailed**. That is ten
+more than §6's run, the branch's new tests, and both exited 0.
