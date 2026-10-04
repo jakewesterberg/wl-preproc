@@ -1057,6 +1057,30 @@ def test_a_run_asserted_again_under_another_id_is_a_conflict(landed_session, pre
         _translate_accept_errors(renamed, prefix=prefix)
 
 
+def test_one_works_run_id_for_two_runs_is_refused(landed_session, prefix):
+    """An `animal_session_run` records the one measured run it came from, so
+    one id naming two runs would join two of the file's runs to one row in
+    wl.works (Plan B's final review, M2). In one request it is a 422; against
+    an id already recorded for another run of the session, a 409, as for a
+    run named under a second id. Neither writes anything."""
+    from wl_preproc.responder.jobs import RunIdConflict, accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob14", 14)
+    with pytest.raises(ValueError, match=re.escape("metadata.runs names works_run_id 'wr-x' for runs 1 and 2")):
+        accept(_runs_job(key, "runjob14-k1", ids={1: "wr-x", 2: "wr-x"}, probe_runs={_SERIAL: [1]}), prefix=prefix)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (0, 0)
+
+    accept(_runs_job(key, "runjob14-k2", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    before = len(schema_request.Activation & key)
+    reused = _runs_job(key, "runjob14-k3", runs=_RUNS[2:], ids={3: "wr-1"}, run_numbers=[2])
+    with pytest.raises(RunIdConflict, match=re.escape("works_run_id 'wr-1' is recorded for run 1; this request "
+                                                      "names it for run 3")):
+        accept(reused, prefix=prefix)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (2, before)
+
+
 def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):
     """wl.works retries this one: the event stage has not read the session."""
     from wl_preproc.responder.jobs import accept

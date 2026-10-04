@@ -272,6 +272,14 @@ def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], 
         if entry.run_number in by_number:
             raise ValueError(f"metadata.runs names run {entry.run_number} twice")
         by_number[entry.run_number] = entry
+    # An `animal_session_run` records the one measured run it came from, so
+    # one id never names two runs (Plan B's final review, M2).
+    named_for: dict[str, int] = {}
+    for number, entry in sorted(by_number.items()):
+        if entry.works_run_id in named_for:
+            raise ValueError(f"metadata.runs names works_run_id {entry.works_run_id!r} for runs "
+                             f"{named_for[entry.works_run_id]} and {number}")
+        named_for[entry.works_run_id] = number
     rows = []
     for number, entry in sorted(by_number.items()):
         run = measured.get(number)
@@ -290,6 +298,10 @@ def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], 
         if known is not None and known != row["works_run_id"]:
             raise RunIdConflict(f"run {row['run_number']} is recorded with works_run_id {known!r}; this request "
                                 f"names {row['works_run_id']!r}")
+        for number, works_run_id in sorted(on_record.items()):
+            if works_run_id == row["works_run_id"] and number != row["run_number"]:
+                raise RunIdConflict(f"works_run_id {works_run_id!r} is recorded for run {number}; this request "
+                                    f"names it for run {row['run_number']}")
     window = [number for number, run in sorted(measured.items())
               if montage_row["start_s"] <= run["run_start_time"] < montage_row["end_s"]]
     bounds = f"montage {montage_row['montage_id']}'s window [{montage_row['start_s']}, {montage_row['end_s']})"
