@@ -317,6 +317,34 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
     return notes
 
 
+def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
+    """What a canonical leaves out because it lies in no measured run: the
+    trials and blocks whose start lies in its montage's window but in no run
+    of the session (Plan B's final review, M3). `GET /sessions` flags the
+    same blocks `block_outside_runs`. A derivative names its runs and claims
+    nothing else, so it carries no such note."""
+    if role != "canonical":
+        return []
+    from wl_preproc.events.runs import run_of, stored_doubles
+    from wl_preproc.schema import core, pipeline
+
+    montage = (core.Montage & {name: key[name] for name in ("subject", "session_datetime", "montage_id")}).fetch1()
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"]}
+            for row in (core.Run & session_key).to_dicts()]
+
+    def outside(table, name: str) -> int:
+        return sum(1 for row in stored_doubles(table & session_key, name)
+                   if montage["start_s"] <= row[name] < montage["end_s"] and run_of(row[name], runs) is None)
+
+    trials = outside(pipeline.trial.Trial, "trial_start_time")
+    blocks = outside(pipeline.trial.Block, "block_start_time")
+    if not trials and not blocks:
+        return []
+    return [f"{trials} trial(s) and {blocks} block(s) start in montage {key['montage_id']}'s window but in no "
+            "measured run, so the file leaves them out: their run's RUN_START was lost, or they were strobed "
+            "outside a run"]
+
+
 def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
                 subject: str) -> tuple[list[dict], list[str]]:
     """Each trial's condition and the settings that varied, and each run's
@@ -695,5 +723,5 @@ def gather(activation_key: dict) -> Gathered:
         condition_notes=condition_notes,
         probes=probes,
         probe_notes=probe_notes,
-        trial_notes=_trial_notes(session_key, run_rows),
+        trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
     )
