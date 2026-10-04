@@ -30,6 +30,9 @@ batches are closed; their records are kept below, because
   run's `RUN_START`, and block numbers part from run numbers once a run stops before its first
   trial, which uses no block number in wl-xcon's session-levels plan (on its branch
   `session-levels-design`).
+  *True when written. Since the run requests (merged `ecd1616`, 2026-10-02) a request asserts
+  runs, each checked against `core.Run` as it arrives; `block_agreement` is retired with
+  `core.Block`.*
 - **Until wl-xcon sends the new codes,** a real recording has no measured runs or blocks.
   wl.works' grid should read that as *waiting*, not as an empty session.
 
