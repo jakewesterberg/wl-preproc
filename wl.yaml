@@ -32,10 +32,12 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free, in the order the
-    requester chose on 2026-10-05: (1) piece 4's seven deferred minors (handoff
-    docs/handoffs/2026-10-05-subject-corrections.md section 6); (2) the session
-    listing's deferred minors M6 and M9; (3) U'n'Eye, the one detector not
-    written (it wants a GPU); (4) a session-date allocator for the test suite.
+    requester chose on 2026-10-05: (1) the session listing's deferred minors
+    M6 and M9, with the NWB stages' per-file placement lookups, being built on
+    fix/listing-minors-pass-cost, not merged; (2) U'n'Eye, the one detector
+    not written (it wants a GPU); (3) a session-date allocator for the test
+    suite. Piece 4's seven deferred minors are merged (a32394d); M4 is left
+    open by the requester's choice.
     Other repositories': wl.works vendors job_request.json and
     nwb_description.json at its build 20b-1; wl-xcon's XC-026 lets restarted
     runs into a canonical; a development database alters NwbChange.kind and
@@ -80,6 +82,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `6f5ddbe` until the subject-corrections-minors merge `a32394d` on
+  # 2026-10-05 (CI green on `6f5ddbe`, run 37307075826); true when written.
   # Was `762c17d` until the subject-corrections merge `6f5ddbe` on 2026-10-05
   # (CI green on `762c17d`, run 37274614661); true when written.
   # Was `ecd1616` until the run-requests-minors merge `762c17d` on 2026-10-05
@@ -107,7 +111,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "6f5ddbe"
+  describes: "a32394d"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

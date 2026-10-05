@@ -1,27 +1,28 @@
 # Where this build actually is
 
-**Last updated 2026-10-05**, describing `main` at `6f5ddbe`, the merge of
-`spec/subject-corrections`: subject corrections in files already built, piece 4
-of four (handoff `handoffs/2026-10-05-subject-corrections.md`). CI read off
-`6f5ddbe` is green on both interpreters, 2167 passed on each with 33 skipped,
-and the manifest check is green (`gh run view 37307075826`).
-- **A corrected species, sex or date of birth reaches every file already
-  built** for the animal, published or not, in the daemon's next pass after
-  the request that carries it: a copy is patched, checked and swapped in, the
-  lab's annotations kept, with a note of the change in the file and its
-  description. `GET /nwb` lists each corrected file again.
-- **Its final review found no Critical;** three Important and four Minor
-  re-graded Important were fixed before merge, each with a test that failed
-  first (spec amendments 6–10); seven Minor are deferred (handoff §6).
+**Last updated 2026-10-05**, describing `main` at `a32394d`, the merge of
+`fix/subject-corrections-minors`: piece 4's seven deferred minors and the
+fixes from their review (handoff `handoffs/2026-10-05-subject-corrections.md`
+§7 and §8). CI read off `a32394d` is green on both interpreters, 2177 passed
+on each with 33 skipped, and the manifest check is green
+(`gh run view 37352455155`).
+- **Subject corrections, piece 4 of four,** were merged as `6f5ddbe` (CI green,
+  2167 passed on each, `37307075826`): a corrected species, sex or date of
+  birth reaches every file already built for the animal, published or not,
+  with a note of the change in the file and its description.
+- **Its minors are fixed,** among them a read-only file that failed on every
+  pass and a full fast share that held back a records-only catch-up; M4 is
+  left open by the requester's choice (handoff §7).
 - **A development database alters `NwbChange.kind`** to add `corrected`; until
   it does, the stage corrects nothing and names the statement (handoff §3).
 - **All four pieces that make a real wl-xcon recording usable are merged,**
   and with them everything wl.works asked of this repository for January.
 
-`6f5ddbe`'s tree differs from the tested `c34e145` only by the handoff's text
-and the merge of the last pointer commit, which no test reads: 2174 passed on
-3.11 and 2173 on 3.13 locally, 0 failed. CI on later heads is recorded here
-only once read, not before.
+CI on later heads is recorded here only once read, not before.
+
+*This header named `6f5ddbe` (the subject-corrections merge, CI green, 2167
+passed on each interpreter, `37307075826`) until the subject-corrections-minors
+merge; true when written.*
 
 *This header named `762c17d` (the run-requests-minors merge, CI green, 2140
 passed on each interpreter, `37274614661`) until the subject-corrections merge;
@@ -147,12 +148,16 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. Piece 4's seven deferred minors (`handoffs/2026-10-05-subject-corrections.md` §6).
-> 2. The session listing's deferred minors M6 and M9
->    (`handoffs/2026-10-01-session-listing.md` §7).
-> 3. U'n'Eye, the one detector not written; it wants a GPU.
-> 4. A session-date allocator for the test suite: every database-backed
+> 1. The session listing's deferred minors M6 and M9
+>    (`handoffs/2026-10-01-session-listing.md` §7), with the NWB stages'
+>    per-file placement lookups (`handoffs/2026-10-05-subject-corrections.md`
+>    §8, M-e): being built on `fix/listing-minors-pass-cost`, not merged.
+> 2. U'n'Eye, the one detector not written; it wants a GPU.
+> 3. A session-date allocator for the test suite: every database-backed
 >    fixture still picks an unclaimed subject and date by hand.
+>
+> Piece 4's seven deferred minors are merged (`a32394d`); M4 is left open by
+> the requester's choice.
 >
 > **Other repositories' to act on:**
 > - **wl.works** vendors `job_request.json` and `nwb_description.json` at its
