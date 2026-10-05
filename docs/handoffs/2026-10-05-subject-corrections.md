@@ -182,7 +182,8 @@ this branch made. All were fixed, each with a test that failed first, run alone 
 - **M-e:** comments and text: the daemon's "three NWB stages", the lock's docstring, §1's stage
   order, amendment 12's account of a publish's leftover, and §7's count. Deferred: a pass makes
   three sweeps of `current_placement` per published file (clearing, `missing_copies`, placement),
-  where one query would serve all three.
+  where one query would serve all three. Done on `fix/listing-minors-pass-cost`
+  (`handoffs/2026-10-01-session-listing.md` §8): one read per stage.
 
 **Set aside by the reviewer, and standing:** a silent reconnect dropping the MySQL named lock
 (pre-existing; the effect is a failed, retried operation); a lab member's own file named exactly
