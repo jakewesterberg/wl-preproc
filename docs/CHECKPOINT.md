@@ -1,11 +1,12 @@
 # Where this build actually is
 
-**Last updated 2026-10-04**, describing `main` at `ecd1616`, the merge of
+**Last updated 2026-10-05**, describing `main` at `762c17d`, the merge of
+`fix/run-requests-minors` (Plan B's six deferred minors and its review's five,
+handoff `handoffs/2026-10-01-run-requests.md` §7), after `ecd1616`, the merge of
 `spec/run-requests`: canonical requests that name runs, and the NWB
-description at version 3, Plan B of pieces 2 and 3 (handoff
-`handoffs/2026-10-01-run-requests.md`). CI read off `ecd1616` is green on both
-interpreters, 2130 passed on each with 33 skipped, and the manifest check is
-green (`gh run view 37048465105`).
+description at version 3, Plan B of pieces 2 and 3. CI read off `762c17d` is
+green on both interpreters, 2140 passed on each with 33 skipped, and the
+manifest check is green (`gh run view 37274614661`).
 - **A canonical request asserts its montage's measured runs,** each checked
   against `core.Run` within 2 ms as it arrives, and states each probe's runs
   in full; a derivative names whole runs, and each of its probes covers them.
@@ -22,12 +23,23 @@ green (`gh run view 37048465105`).
   and often its first trial fell out of the file and the listing. They are now
   read as stored (`events/runs.py::stored_doubles`, spec amendment 24). Two
   Important findings were fixed too; six Minor are deferred (handoff §6).
+- **The minors merge** refuses one `works_run_id` for two runs, writes a
+  request's montages and run ids inside `submit*()`'s transaction (a 409
+  leaves neither), and has a canonical's description name the trials and
+  blocks that lie in no measured run (spec amendments 26 and 27).
 - **wl.works vendors `job_request.json` and `nwb_description.json` now.**
-  Piece 4, the metadata-only rebuild, is next.
+  Piece 4, subject corrections in published files, is next: its spec is
+  `superpowers/specs/2026-10-05-subject-corrections-design.md`, on
+  `spec/subject-corrections`, awaiting the requester's review.
 
-`ecd1616`'s tree differs from the tested `ac4fd77` only by the handoff's text,
-which no test reads: 2137 passed on 3.11 and 2136 on 3.13 locally, 0 failed.
+`762c17d`'s tree differs from the tested `fe0fe09` only by the handoff's text,
+which no test reads: 2147 passed on 3.11 and 2146 on 3.13 locally, 0 failed.
+`ecd1616`'s differed from the tested `ac4fd77` the same way (2137 and 2136).
 CI on later heads is recorded here only once read, not before.
+
+*This header named `ecd1616` (the run-requests merge, CI green, 2130 passed on
+each interpreter, `37048465105`) until the run-requests-minors merge; true
+when written.*
 
 *This header named `63fd606` (the listing-minors merge, CI green, 2097 passed
 on each interpreter, `36910191677`) until the run-requests merge; true when
