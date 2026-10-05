@@ -93,7 +93,9 @@ class NwbChange(dj.Manual):
 @schema
 class NwbPlacement(dj.Manual):
     definition = """
-    # Where an activation's file is, one row per publish or move: append-only,
+    # Where an activation's file is, one row per publish, move or correction
+    # (which records the same place again, design spec
+    # `2026-10-05-subject-corrections-design.md`): append-only,
     # and the latest row for an activation is where the file is now (design
     # spec `2026-09-29-nwb-publishing-design.md` section 9). `path` is
     # relative to the share, the triple wl.works' Plan 23 section 10.1 names.

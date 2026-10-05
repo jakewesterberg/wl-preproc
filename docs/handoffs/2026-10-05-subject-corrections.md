@@ -29,8 +29,9 @@ Every line of the plan was proven in a scratch branch before the plan was writte
   - recorded in one transaction: the description, the subject's checksums, the size, and a
     `corrected` change with the placement again;
   - its description file rewritten beside it.
-- **The daemon's stage** (`correct.run_corrections`) runs after building, publishing and
-  placement, under the NWB lock, and reports `nwb_corrected`.
+- **The daemon's stage** (`correct.run_corrections`) runs under the NWB lock and reports
+  `nwb_corrected`: after building, publishing and placement as merged, and after building and
+  before publishing and placement since §7 (spec amendment 11).
 - **The placement sweep** dates a move by its own change, not by a correction since.
 - **`publish.record_change`** splits into `insert_change`, so a correction's change lands in the
   transaction that records it.
@@ -125,3 +126,70 @@ person writes beginning `Corrected `.
 **The full suite after the fixes, on `c34e145`:** 3.11, **2174 passed, 25 skipped, 1 deselected,
 1 xfailed**; 3.13, **2173 passed, 27 skipped, 1 xfailed**. That is six more than §5's run, the
 fix pass's tests, and both exited 0.
+
+## 7. The deferred minors, done (branch `fix/subject-corrections-minors`, 2026-10-05)
+
+The requester chose to clear §6's Minor findings next. Six were fixed in `01e8c6a`, five of them
+with a test that failed first, run alone, and M10 a comment (spec amendments 11–13):
+- **M3:** corrections run before publishing and placement, so a correction a crash left
+  unrecorded is recorded before either checks the file.
+  `test_a_correction_a_crash_left_unrecorded_does_not_stop_a_move`.
+- **M1:** a corrected file keeps its permissions. `test_a_corrected_file_keeps_its_permissions`.
+- **M9 (in part):** a file already holding the details is not copied.
+  `test_a_file_already_holding_the_details_is_not_copied`.
+- **M6:** leftover `.partial` copies are cleared, wherever a file has been.
+  `test_leftover_copies_are_cleared_wherever_a_file_has_been`.
+- **M11:** an unreachable share is reported once, with how many files it holds back.
+  `test_an_unreachable_share_is_reported_once_not_per_file`.
+- **M10:** `NwbPlacement`'s comment names corrections.
+
+**Two are left as they are, for the requester to overrule:**
+- **M4, a file corrected while its records are not.** A swap succeeds and its records do not —
+  the description file's write on the NAS fails (it comes before the commit, amendment 8), or the
+  database fails between the swap and the commit — and the animal's details then revert before
+  the next pass brings the records up (a pass an unreachable share can also hold back). The file
+  then holds the newer details, its records and description the older, and nothing finds it
+  stale. **It is silent for a file at rest:** only a move or an adoption compares the subject's
+  checksums, and then refuses with `ChangedData`, naming them. Its most likely cause, a database
+  without `corrected`, is now refused before any swap (amendment 9). A real fix needs a pending
+  marker recorded before the swap, a schema change. *Until the minors' review this said it was
+  never silent; true when written of a file being moved, not of one at rest.*
+- **M9's other half, `stale_files` reading every written file's description each pass,** about
+  75 KB each on the fixture. Avoiding it needs the subject's details kept beside the description,
+  a schema change, or a per-subject record of the details last seen. It is worth doing if a pass
+  grows slow with the number of files.
+
+## 8. The minors' review
+
+A fresh Opus reviewer read §7's branch (`e3675ae..ca139a4`) with live probes. It found the reorder
+sound, and **one Important and four Minor**, the first Minor re-graded Important as a regression
+this branch made. All were fixed, each with a test that failed first, run alone (spec amendment
+14):
+- **I-1:** the fast share's headroom check stood before the records-only catch-up, so a file
+  there that a crash left corrected and unrecorded stayed unrecorded, and placement reported it
+  as changed data: what amendment 11 removed.
+  `test_a_full_fast_share_does_not_hold_back_records_only_catch_up`.
+- **M-a, re-graded:** the copy took the live file's mode before it was patched, so a read-only
+  file failed on every pass, and the lab's group was lost.
+  `test_a_read_only_file_is_corrected_and_stays_read_only`,
+  `test_a_corrected_file_keeps_its_group`.
+- **M-b:** one leftover that could not be removed stopped the clearing, and the scratch half of
+  it was untested. `test_one_leftover_that_will_not_go_does_not_keep_the_others`.
+- **M-c:** a share not given to the pass was reported per file.
+  `test_a_share_not_configured_is_reported_once_not_per_file`.
+- **M-d:** §7's account of M4 said it was never silent; it is, for a file at rest. Corrected
+  there, and M4 stays open for the requester.
+- **M-e:** comments and text: the daemon's "three NWB stages", the lock's docstring, §1's stage
+  order, amendment 12's account of a publish's leftover, and §7's count. Deferred: a pass makes
+  three sweeps of `current_placement` per published file (clearing, `missing_copies`, placement),
+  where one query would serve all three.
+
+**Set aside by the reviewer, and standing:** a silent reconnect dropping the MySQL named lock
+(pre-existing; the effect is a failed, retried operation); a lab member's own file named exactly
+`<identifier>.nwb.partial`; odd placement paths, which only `share.relative` writes; and the
+description briefly carrying a note its adopted file lacks, as before this branch.
+
+
+**The full suite on `d3a4cf1`,** §7's branch with the review's fixes: 3.11, **2184 passed, 25
+skipped, 1 deselected, 1 xfailed**; 3.13, **2183 passed, 27 skipped, 1 xfailed**. That is ten more
+than §6's run, the branch's new tests, and both exited 0.

@@ -1,5 +1,5 @@
-"""One wlpp process at a time builds, publishes and moves NWB files (the
-final review of NWB publishing, M4).
+"""One wlpp process at a time builds, corrects, publishes and moves NWB files
+(the final review of NWB publishing, M4).
 
 `daemon.run_once`'s own docstring says nothing enforces a single runner, and
 a cron pass that copies 25 GB files over the network can outlive its
