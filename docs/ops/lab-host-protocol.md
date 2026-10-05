@@ -397,9 +397,12 @@ than something one side can do quietly.
   arrived last.
 - **`metadata.runs`** lists every run you hold for the session: `run_number`, `start_s` and
   `end_s` — your copy of what `GET /sessions` listed, measured from the recording — and
-  `works_run_id`, your `animal_session_run` id. **Every run the file holds is checked
-  against this host's measured run as the request arrives**, start and end within 2 ms
-  (`events/agreement.py::RUN_AGREEMENT_TOLERANCE_S`); a copy of the listing agrees exactly.
+  `works_run_id`, your `animal_session_run` id. **Every run in `metadata.runs` is checked
+  against this host's measured run as the request arrives**, whether or not the file holds
+  it, start and end within 2 ms (`events/agreement.py::RUN_AGREEMENT_TOLERANCE_S`); a copy
+  of the listing agrees exactly, and a stale copy of a run outside the file is refused too.
+  One `works_run_id` names one run: the same id for two runs is a `422` within a request,
+  and a `409` against an id already recorded for another run of the session.
   - **A stale listing is a `422`**: a run this host did not measure, its times off, or a
     measured run in the montage's window that the request does not assert. The message
     names the run and ends *rebuild the request from a fresh GET /sessions*. Stop and show
@@ -599,7 +602,7 @@ Every code this host can return, on any endpoint.
 | `404` | all | `{"error": "not found"}` | Path is not one of `/health`, `/jobs`, `/nwb`, `/nwb/active`; or a query string on any path but `/nwb`. | No |
 | `405` | all | `{"error": "method not allowed"}` | Known path, wrong verb — `GET /jobs`, `POST /health`, `GET /nwb/active`, authenticated `PUT /health`. | No |
 | `408` | `POST /jobs`, `PUT /nwb/active` | `{"error": "request timed out"}` | The declared body never fully arrived. | **Yes** |
-| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content; a replacement naming a canonical that is not the montage's current one; or a run named under a `works_run_id` other than the one recorded. | **No — needs a human** |
+| `409` | `POST /jobs` | `{"error": "<what differed>"}` | Idempotency key reused for materially different content; a replacement naming a canonical that is not the montage's current one; or a run named under a `works_run_id` other than the one recorded, or a `works_run_id` recorded for another run. | **No — needs a human** |
 | `414` | all | `{"error": "request line too long"}` | Over-long request line. | No |
 | `422` | `POST /jobs`, `PUT /nwb/active`, `GET /nwb` (a `since` that is not one non-negative integer) | `{"error": "…"}` or `{"error": "invalid request body", "detail": […]}` | The request is malformed, or asks for something this host cannot do — **including naming a session it has not ingested yet**. | No — fix and resend; for a not-yet-ingested session, resend once the transfer lands |
 | `431` | all | `{"error": "request header fields too large"}` | Oversized header. | No |
@@ -715,8 +718,8 @@ arrived late when in fact it arrived completely and something else was slow.
 `409 Conflict` has three causes on this host, and resending cures none of them: **an
 idempotency key reused for materially different content**; a replacement naming a canonical
 that is not the montage's current one; and **a run already recorded under one
-`works_run_id` named under another**, where the two records disagree about which run it is
-and a person must settle it. For the first, the request cannot succeed as sent, and the
+`works_run_id` named under another**, or an id already recorded for one run named for
+another, where the two records disagree about which run it is and a person must settle it. For the first, the request cannot succeed as sent, and the
 remedy is a *new key*, which Plan 10 §6.1 puts outside the retry loop's power to produce — the key is
 minted once when the confirmation dialog is accepted and reused across every retry of that
 intent, never regenerated per click.

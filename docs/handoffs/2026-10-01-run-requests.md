@@ -143,3 +143,43 @@ first:
 **The full suite after the fixes, on `ac4fd77`:** 3.11, **2137 passed, 25 skipped, 1 deselected,
 1 xfailed**; 3.13, **2136 passed, 27 skipped, 1 xfailed**. Both are seven more than §5's run,
 the seven new tests, and both exited 0.
+
+## 7. The deferred minors, done (branch `fix/run-requests-minors`, 2026-10-04)
+
+The requester chose to clear all six of §6's Minor findings before piece 4. Each was fixed with
+a test that failed first, or, for the two refactors, kept green by the existing tests and by
+their mutation checks:
+- **M1 (`36f1131`):** a request's `RunAssertion` rows are written inside `submit*()`'s own
+  transaction, so a request refused with a `409` (key reuse, a stale supersede) records none of
+  them. `test_a_request_refused_with_a_409_records_none_of_its_runs`.
+- **M2 (`2f51c97`):** one `works_run_id` naming two runs is refused: a `422` within a request,
+  a `409` against an id already recorded for another run of the session. Not checked across
+  sessions; the existing tests reuse ids such as `wr-1` across sessions, and a clash across
+  sessions could only be a defect on wl.works' side.
+  `test_one_works_run_id_for_two_runs_is_refused`.
+- **M3 (`f0d26e5`):** a canonical's description says how many trials and blocks start in its
+  montage's window but in no measured run, which the file leaves out. A derivative claims only
+  its runs and says nothing. `tests/schema/test_nwb_outside_runs.py` and
+  `test_a_trial_in_no_run_is_named_in_the_canonicals_description`.
+- **M4 (`176a0cb`):** the four stale passages, and the protocol's 409 table, now state the
+  duplicated-id refusal.
+- **M5 (`e3adf14`):** one task-name rule, `nwb/describe.py::task_name`.
+- **M6 (`0d31368`):** each run's event bounds are rounded once, by `events/runs.py::event_bounds`.
+
+**The leftovers' review** (a fresh Opus reviewer, `ecd1616..99a5153`) found no Critical or
+Important and five Minor, all fixed on the same branch:
+- **A refused request's `Montage` rows** still landed before `submit*()` could refuse it, and a
+  `Montage` is never overwritten. They are now written with its run ids inside `submit*()`'s
+  transaction (`d535cdc`). A refused request's probe reports and subject details still apply,
+  since for those the latest request wins (spec amendment 26).
+- **Three of M1's write sites, and M3's FLOAT read and lower window bound, were unpinned:**
+  five mutants survived. `test_every_accepted_path_records_a_run_first_asserted_on_it` and an
+  18,000 s case in `tests/schema/test_nwb_outside_runs.py` now fail each of them (`3268d98`).
+- **Stale docstrings** in `responder/jobs.py`, `schema/request.py` and `nwb/gather.py`
+  (`d535cdc`).
+- **M2's and M3's rulings** are now spec amendments 26 and 27.
+
+
+**The full suite on `fe0fe09`,** the branch head after the review's fixes: 3.11, **2147 passed,
+25 skipped, 1 deselected, 1 xfailed**; 3.13, **2146 passed, 27 skipped, 1 xfailed**. That is ten
+more than §6's run, the branch's new tests, and both exited 0.

@@ -1632,3 +1632,27 @@ def test_a_session_with_two_ohdpi_segments_is_refused(activation, tmp_path_facto
         assert "2 ohDPI segments" in result.reason
     finally:
         (core.Segment & {k: extra[k] for k in core.Segment.primary_key}).delete(prompt=False)
+
+
+def test_a_trial_in_no_run_is_named_in_the_canonicals_description(activation, tmp_path_factory):
+    """Plan B's final review, M3: a canonical says what it leaves out because
+    it lies in no measured run. For one build a trial is planted between the
+    two runs, inside the montage's window, and removed after."""
+    from wl_preproc.nwb.build import build
+    from wl_preproc.schema import pipeline
+
+    session_key, key, runs = activation
+    first, second = sorted(runs, key=lambda r: r["start_s"])
+    gap = (first["end_s"] + second["start_s"]) / 2
+    assert first["end_s"] < gap < second["start_s"]
+    planted = {**session_key, "trial_id": 999}
+    pipeline.trial.Trial.insert1({**planted, "trial_start_time": gap, "trial_stop_time": gap + 0.001},
+                                 allow_direct_insert=True)
+    try:
+        result = build(key, tmp_path_factory.mktemp("nwb-outside-runs"))
+    finally:
+        (pipeline.trial.Trial & planted).delete_quick()
+    assert result.status == "written", (result.reason, result.findings)
+    assert [note for note in result.description["notes"] if "in no measured run" in note] == [
+        "1 trial(s) and 0 block(s) start in montage 0's window but in no measured run, so the file leaves them "
+        "out: their run's RUN_START was lost, or they were strobed outside a run"]

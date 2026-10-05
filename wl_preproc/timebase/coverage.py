@@ -60,8 +60,11 @@ def classify_coverage(
     Raises on a zero-length block. Coverage is a fraction of the block's own
     duration, so a zero-length one has none -- and both plausible answers are
     wrong in opposite directions: `full` says nothing is missing, `absent` says
-    nothing was recorded. The row is malformed, and wl.works authored it
-    (spec section 9), so it is surfaced rather than absorbed.
+    nothing was recorded. The row is malformed, and it is surfaced rather than
+    absorbed: `RunCoverage.make()` answers a run with no length itself, since a
+    faulted run can have one, and a trial's times are measured, so one with no
+    length is a defect upstream. *It said, until requests named runs, that
+    wl.works authored the row (spec section 9); true when written.*
     """
     block_start, block_end = block
     duration_s = block_end - block_start

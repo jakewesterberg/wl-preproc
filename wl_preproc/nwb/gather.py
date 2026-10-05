@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from wl_preproc.nwb.describe import task_name
 from wl_preproc.nwb.trim import BlockSet
 
 MASK_LABELS = ("blink", "invalid")
@@ -56,7 +57,9 @@ class Gathered:
     probe_notes: list[str] = dataclasses.field(default_factory=list)
     # The trials the canonical trial list leaves out: a number strobed again,
     # and one too large to store (design spec
-    # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4).
+    # `2026-10-01-runs-and-trials-design.md` sections 3.2 and 3.4); and, in a
+    # canonical, the trials and blocks that start in its montage's window but
+    # in no measured run (`_outside_runs_notes`).
     trial_notes: list[str] = dataclasses.field(default_factory=list)
 
 
@@ -78,18 +81,6 @@ def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
              "works_run_id": works.get(row["run_number"]), "closed": bool(row["closed"])}
             for row in (core.Run & session_key).to_dicts() if row["run_number"] in numbers]
     return sorted(rows, key=lambda row: row["start_s"])
-
-
-def _task_name(code, rig_name: str | None) -> str:
-    """The rig's name for a run's task, else its code's name, else the code."""
-    from wl_preproc.contracts.events import TaskTypeCode
-
-    if rig_name:
-        return rig_name
-    try:
-        return TaskTypeCode(int(code)).name.lower()
-    except (TypeError, ValueError):
-        return str(code)
 
 
 def identifier_for(activation_key: dict, session_id: str) -> str:
@@ -261,16 +252,17 @@ def _trials(run_rows: list[dict], session_key: dict) -> list[dict]:
 
 def _events(run_rows: list[dict], session_key: dict) -> list[dict]:
     """The task events inside one of the file's runs, its ends included."""
-    from wl_preproc.events.runs import event_inside
+    from wl_preproc.events.runs import event_bounds
     from wl_preproc.schema import pipeline
 
+    bounds = [event_bounds(run["start_s"], run["end_s"]) for run in run_rows]
     attributes: dict = {}
     for row in (pipeline.event.Event.Attribute & session_key).to_dicts():
         attributes.setdefault((row["event_type"], row["event_start_time"]), {})[row["attribute_name"]] = row["attribute_value"]
     events = []
     for row in (pipeline.event.Event & session_key).to_dicts():
         time_s = float(row["event_start_time"])
-        if not any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows):
+        if not any(low <= time_s <= high for low, high in bounds):
             continue
         extra = attributes.get((row["event_type"], row["event_start_time"]), {})
         events.append({
@@ -290,7 +282,7 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
     element-event's smallint `trial_id`."""
     import collections
 
-    from wl_preproc.events.runs import event_inside
+    from wl_preproc.events.runs import event_bounds
     from wl_preproc.schema import pipeline
     from wl_preproc.schema.events import TRIAL_ID_MAX
 
@@ -299,8 +291,8 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
         for row in (pipeline.event.Event.Attribute & session_key
                     & {"event_type": "TRIAL_NUMBER", "attribute_name": "trial_id"}).to_dicts())
     counts = collections.Counter(number for _time_s, number in strobed)
-    inside = [any(event_inside(time_s, run["start_s"], run["end_s"]) for run in run_rows)
-              for time_s, _number in strobed]
+    bounds = [event_bounds(run["start_s"], run["end_s"]) for run in run_rows]
+    inside = [any(low <= time_s <= high for low, high in bounds) for time_s, _number in strobed]
     seen, repeated, too_large = set(), set(), 0
     for (_time_s, number), here in zip(strobed, inside, strict=True):
         first = number not in seen
@@ -315,6 +307,34 @@ def _trial_notes(session_key: dict, run_rows: list[dict]) -> list[str]:
         notes.append(f"{too_large} trial(s) numbered above {TRIAL_ID_MAX:,} are not stored: element-event's "
                      "trial_id holds no larger number")
     return notes
+
+
+def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
+    """What a canonical leaves out because it lies in no measured run: the
+    trials and blocks whose start lies in its montage's window but in no run
+    of the session (Plan B's final review, M3). `GET /sessions` flags the
+    same blocks `block_outside_runs`. A derivative names its runs and claims
+    nothing else, so it carries no such note."""
+    if role != "canonical":
+        return []
+    from wl_preproc.events.runs import run_of, stored_doubles
+    from wl_preproc.schema import core, pipeline
+
+    montage = (core.Montage & {name: key[name] for name in ("subject", "session_datetime", "montage_id")}).fetch1()
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"]}
+            for row in (core.Run & session_key).to_dicts()]
+
+    def outside(table, name: str) -> int:
+        return sum(1 for row in stored_doubles(table & session_key, name)
+                   if montage["start_s"] <= row[name] < montage["end_s"] and run_of(row[name], runs) is None)
+
+    trials = outside(pipeline.trial.Trial, "trial_start_time")
+    blocks = outside(pipeline.trial.Block, "block_start_time")
+    if not trials and not blocks:
+        return []
+    return [f"{trials} trial(s) and {blocks} block(s) start in montage {key['montage_id']}'s window but in no "
+            "measured run, so the file leaves them out: their run's RUN_START was lost, or they were strobed "
+            "outside a run"]
 
 
 def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
@@ -651,7 +671,7 @@ def gather(activation_key: dict) -> Gathered:
         eye = None
 
     session_id = session_dir.name
-    tasks = sorted({_task_name(row["task_type"], row["task"]) for row in run_rows})
+    tasks = sorted({task_name(row["task_type"], row["task"]) for row in run_rows})
     description = (f"wl-preproc {activation['role']} NWB for session {session_id}, montage {key['montage_id']}: "
                    f"runs {', '.join(str(row['run_number']) for row in run_rows)} ({', '.join(tasks)}).")
     if eye is not None and eye["missing_eyes"]:
@@ -695,5 +715,5 @@ def gather(activation_key: dict) -> Gathered:
         condition_notes=condition_notes,
         probes=probes,
         probe_notes=probe_notes,
-        trial_notes=_trial_notes(session_key, run_rows),
+        trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
     )

@@ -24,25 +24,28 @@ re-derived:**
    `submit_derivative()` each already guard on `dj.conn().in_transaction` and
    raise -- DataJoint transactions do not nest -- and `submit()`'s own
    docstring says directly that neither the ingest watcher nor the responder
-   may wrap it to bundle it with other writes. So `accept()` writes `Montage`
-   and `RunAssertion` as two independently idempotent, un-transacted inserts
-   (`skip_duplicates=True`, exactly `ingest/landing.py`'s own shape and
-   reasoning -- "a partial run followed by a re-run converges on the same
-   rows" without one), and only then calls `submit`/`submit_derivative`,
-   which open and own their own transaction for the `Request`+`Activation`
-   pair. See `test_accept_refuses_to_run_inside_a_transaction`.
+   may wrap it to bundle it with other writes. So `accept()` builds and
+   checks the `Montage` and `RunAssertion` rows and hands them to
+   `submit*()`, which writes them, insert-if-absent, inside the transaction it
+   opens and owns for the `Request`+`Activation` pair: a request refused there
+   with a 409 records none of them (Plan B's final review, M1, and the
+   leftovers' review). See `test_accept_refuses_to_run_inside_a_transaction`.
+   *Until then `accept()` wrote `Montage` itself, as an un-transacted
+   insert-if-absent before calling `submit*()`; true when written.*
 2. **`accept()` owns the montage window.** The window between a montage's
    `[start_s, end_s)` and the runs a file holds is checked here -- a check
    `submit_derivative` itself does not make, having no `Montage`/`Run`
    timing to compare against. See `_check_runs`.
 
-**Existing `Montage` rows are never overwritten.** The insert below uses
+**Existing `Montage` rows are never overwritten.** `submit*()`'s insert uses
 `skip_duplicates=True`: wl.works owns this record, and a later request naming
 different boundaries for a montage already on file is wl.works correcting its
 own record -- their call to make explicitly, not something to infer from
 whichever payload happened to arrive most recently. A run already asserted
-under one `works_run_id` and named under another is a `RunIdConflict`, a
-`409`: the two disagree about which run it is.
+under one `works_run_id` and named under another, or an id already recorded
+for one run named for another, is a `RunIdConflict`, a `409`: the two
+disagree about which run it is. The same id for two runs within one request
+is a `422`.
 
 **Review round 1 (2026-08-16) found four more things, addressed here:**
 
@@ -237,8 +240,10 @@ def _lifecycle_role(selection: dict, run_numbers: list[int]) -> bool:
 class RunIdConflict(Exception):
     """A run already recorded under one wl.works id, named again under
     another (design spec `2026-10-01-session-listing-and-run-requests-design.md`
-    section 3.2): the two disagree about which run this is, which resending
-    cannot fix. `server.py` answers it with a 409, as for a reused key."""
+    section 3.2), or an id already recorded for one run of the session named
+    for another (its amendment 26): the two disagree about which run this
+    is, which resending cannot fix. `server.py` answers it with a 409, as for
+    a reused key."""
 
 
 _REBUILD = "rebuild the request from a fresh GET /sessions"
@@ -272,6 +277,14 @@ def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], 
         if entry.run_number in by_number:
             raise ValueError(f"metadata.runs names run {entry.run_number} twice")
         by_number[entry.run_number] = entry
+    # An `animal_session_run` records the one measured run it came from, so
+    # one id never names two runs (Plan B's final review, M2).
+    named_for: dict[str, int] = {}
+    for number, entry in sorted(by_number.items()):
+        if entry.works_run_id in named_for:
+            raise ValueError(f"metadata.runs names works_run_id {entry.works_run_id!r} for runs "
+                             f"{named_for[entry.works_run_id]} and {number}")
+        named_for[entry.works_run_id] = number
     rows = []
     for number, entry in sorted(by_number.items()):
         run = measured.get(number)
@@ -290,6 +303,10 @@ def _check_runs(session_key: dict, montage_row: dict, asserted: list[RunEntry], 
         if known is not None and known != row["works_run_id"]:
             raise RunIdConflict(f"run {row['run_number']} is recorded with works_run_id {known!r}; this request "
                                 f"names {row['works_run_id']!r}")
+        for number, works_run_id in sorted(on_record.items()):
+            if works_run_id == row["works_run_id"] and number != row["run_number"]:
+                raise RunIdConflict(f"works_run_id {works_run_id!r} is recorded for run {number}; this request "
+                                    f"names it for run {row['run_number']}")
     window = [number for number, run in sorted(measured.items())
               if montage_row["start_s"] <= run["run_start_time"] < montage_row["end_s"]]
     bounds = f"montage {montage_row['montage_id']}'s window [{montage_row['start_s']}, {montage_row['end_s']})"
@@ -507,8 +524,9 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
     wl.works to retry forever); a `montage_id` that cannot fit its column; a
     `montage_id` with no boundary on record and none supplied in this request
     either; or any run that does not match what this host measured
-    (`_check_runs`, `_check_probe_runs`). Raises `RunIdConflict` for a run
-    already asserted under another `works_run_id`. All of these are checked
+    (`_check_runs`, `_check_probe_runs`), including one `works_run_id`
+    named for two runs. Raises `RunIdConflict` for a run already asserted
+    under another `works_run_id`, or an id already recorded for another run. All of these are checked
     against BUILT-BUT-NOT-YET-WRITTEN candidate rows before anything is
     actually inserted (review C1): a rejected request leaves no `Montage` or
     `RunAssertion` residue behind for a later, corrected request to trip
@@ -590,13 +608,11 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
 
     _record_subject_details(metadata.subject, metadata.subject_details)
     _record_probe_reports(session_key, metadata.probes, prefix)
-    # Step 1 (design spec section 6.1): Montage rows, insert-if-absent.
-    if montage_rows:
-        core.Montage.insert(montage_rows, skip_duplicates=True)
-    # Step 2: wl.works' id and copy of each run it asserts, insert-if-absent;
-    # `_check_runs` has already refused a run named under a second id.
-    if run_assertion_rows:
-        core.RunAssertion.insert(run_assertion_rows, skip_duplicates=True)
+    # Steps 1 and 2 (design spec section 6.1): the Montage rows, and wl.works'
+    # id and copy of each run it asserts, insert-if-absent, are written by
+    # `submit*()` inside its own transaction, so a request it refuses (a 409)
+    # records none of them; `_check_runs` has already refused a run named
+    # under a second id.
 
     # The payload stored as evidence ("the request as received", Request's
     # own comment). mode="json" -- this project's own existing convention in
@@ -636,6 +652,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             # probe the request names covers all of its runs; the request
             # states no per-probe list for one (Plan B's final review, I1).
             probe_runs={probe.serial: file_runs for probe in metadata.probes},
+            montages=montage_rows,
+            run_assertions=run_assertion_rows,
         )
 
     if selection.get("supersedes_activation_id") is not None:
@@ -649,6 +667,8 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
             supersedes_activation_id=selection["supersedes_activation_id"],
             run_numbers=file_runs,
             probe_runs=probe_runs,
+            montages=montage_rows,
+            run_assertions=run_assertion_rows,
         )
     return schema_request.submit(
         idempotency_key=request.idempotency_key,
@@ -659,4 +679,6 @@ def accept(request: JobRequest, prefix: str = DEFAULT_PREFIX) -> dict:
         requested_by=metadata.experimenter,
         run_numbers=file_runs,
         probe_runs=probe_runs,
+        montages=montage_rows,
+        run_assertions=run_assertion_rows,
     )

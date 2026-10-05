@@ -56,8 +56,15 @@ def _as_event_time(value_s: float) -> float:
     return float(Decimal(repr(float(value_s))).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
+def event_bounds(run_start_s: float, run_stop_s: float) -> tuple[float, float]:
+    """A run's double bounds rounded as `event.Event` stores a time, once, for
+    comparing a session's events with them."""
+    return _as_event_time(run_start_s), _as_event_time(run_stop_s)
+
+
 def event_inside(time_s: float, run_start_s: float, run_stop_s: float) -> bool:
     """Whether an `event.Event` time lies in a run's double bounds, both ends
     included: an event is an instant, and `RUN_START`/`RUN_END` sit exactly
     on them."""
-    return _as_event_time(run_start_s) <= time_s <= _as_event_time(run_stop_s)
+    low, high = event_bounds(run_start_s, run_stop_s)
+    return low <= time_s <= high

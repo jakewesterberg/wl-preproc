@@ -171,9 +171,11 @@ def _translate_accept_errors(request, *, prefix: str) -> dict:
     try:
         return jobs.accept(request, prefix=prefix)
     except (KeyReuseError, SupersedeConflict, jobs.RunIdConflict) as exc:
-        # Both are disagreements resending cannot fix: a reused key, or a
+        # Each is a disagreement resending cannot fix: a reused key; a
         # replacement naming a canonical that is no longer current (design
-        # spec `2026-09-30-canonical-lifecycle-design.md` section 3).
+        # spec `2026-09-30-canonical-lifecycle-design.md` section 3); or a run
+        # and a `works_run_id` the request pairs differently from the record
+        # (`RunIdConflict`).
         raise ConflictError(str(exc)) from exc
 
 

@@ -364,14 +364,13 @@ def test_accept_refuses_to_run_inside_a_transaction(landed_session, prefix):
     fire -- mirroring `tests/schema/test_request.py::
     test_submit_refuses_to_run_inside_a_transaction`.
 
-    The Montage insert-if-absent step, run before `submit()` is ever reached,
-    still lands as part of the CALLER's still-open transaction -- proving why
-    `accept()` itself must never be the one to open it: only the Request/
-    Activation pair, which `submit()`'s own guard refuses, is what's absent
-    here. That is the intended, safe shape (module docstring, correction 1):
-    the Montage write is idempotent on its own, so a caller who makes this
-    mistake and then retries `accept()` correctly, outside any transaction,
-    still converges on the same rows.
+    Nothing of the request lands: its `Montage` rows, like its run ids, are
+    written inside `submit()`'s own transaction, which its guard refuses to
+    open here, so a caller who makes this mistake and then retries `accept()`
+    correctly, outside any transaction, writes them then. *It said, until the
+    leftovers' review moved the Montage write into `submit()`, that the
+    Montage row still landed here, in the caller's transaction; true when
+    written.*
     """
     import datajoint as dj
 
@@ -397,7 +396,7 @@ def test_accept_refuses_to_run_inside_a_transaction(landed_session, prefix):
 
     assert len(schema_request.Request & {"idempotency_key": "jbtxn01-k1"}) == 0
     session_key = {"subject": subject, "session_datetime": naive_dt}
-    assert len(core.Montage & {**session_key, "montage_id": 0}) == 1
+    assert len(core.Montage & {**session_key, "montage_id": 0}) == 0
 
 
 def test_session_datetime_is_normalised_through_to_naive_utc(landed_session, prefix):
@@ -1055,6 +1054,86 @@ def test_a_run_asserted_again_under_another_id_is_a_conflict(landed_session, pre
         accept(renamed, prefix=prefix)
     with pytest.raises(ConflictError):
         _translate_accept_errors(renamed, prefix=prefix)
+
+
+def test_one_works_run_id_for_two_runs_is_refused(landed_session, prefix):
+    """An `animal_session_run` records the one measured run it came from, so
+    one id naming two runs would join two of the file's runs to one row in
+    wl.works (Plan B's final review, M2). In one request it is a 422; against
+    an id already recorded for another run of the session, a 409, as for a
+    run named under a second id. Neither writes anything."""
+    from wl_preproc.responder.jobs import RunIdConflict, accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import request as schema_request
+
+    key = _landed_with_runs(landed_session, "runjob14", 14)
+    with pytest.raises(ValueError, match=re.escape("metadata.runs names works_run_id 'wr-x' for runs 1 and 2")):
+        accept(_runs_job(key, "runjob14-k1", ids={1: "wr-x", 2: "wr-x"}, probe_runs={_SERIAL: [1]}), prefix=prefix)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (0, 0)
+
+    accept(_runs_job(key, "runjob14-k2", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    before = len(schema_request.Activation & key)
+    reused = _runs_job(key, "runjob14-k3", runs=_RUNS[2:], ids={3: "wr-1"}, run_numbers=[2])
+    with pytest.raises(RunIdConflict, match=re.escape("works_run_id 'wr-1' is recorded for run 1; this request "
+                                                      "names it for run 3")):
+        accept(reused, prefix=prefix)
+    assert (len(core.RunAssertion & key), len(schema_request.Activation & key)) == (2, before)
+
+
+@pytest.mark.parametrize("refusal", ["key_reuse", "supersede"])
+def test_a_request_refused_with_a_409_records_none_of_its_runs_or_montages(landed_session, prefix, refusal):
+    """A refused request leaves no `RunAssertion` or `Montage` behind (the
+    plan's Global Constraint; Plan B's final review, M1, and the leftovers'
+    review): both are recorded in the same transaction as its `Request` and
+    `Activation`, so a 409 from `submit*()` rolls them back with them. A
+    `Montage` is never overwritten, so one recorded from a refused request
+    would fix that montage's boundaries for good."""
+    from wl_preproc.contracts.protocol import MontageBoundary
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema.request import KeyReuseError, SupersedeConflict
+
+    subject = {"key_reuse": "runjob15", "supersede": "runjob16"}[refusal]
+    key = _landed_with_runs(landed_session, subject, 15)
+    accept(_runs_job(key, f"{subject}-k1", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    if refusal == "key_reuse":
+        refused, raised = _runs_job(key, f"{subject}-k1", probe_runs={_SERIAL: [1, 2]}), KeyReuseError
+    else:
+        refused = _runs_job(key, f"{subject}-k2", role="canonical", supersedes_activation_id=7,
+                            probe_runs={_SERIAL: [1, 2]})
+        raised = SupersedeConflict
+    another = [*refused.metadata.montage_boundaries, MontageBoundary(montage_id=1, start_s=12.0, end_s=99.0)]
+    refused = refused.model_copy(update={"metadata": refused.metadata.model_copy(
+        update={"montage_boundaries": another})})
+    with pytest.raises(raised):
+        accept(refused, prefix=prefix)
+    assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2]
+    assert sorted(int(n) for n in (core.Montage & key).to_arrays("montage_id")) == [0]
+
+
+@pytest.mark.parametrize("path", ["replacement", "canonical_dedupe", "derivative_dedupe"])
+def test_every_accepted_path_records_a_run_first_asserted_on_it(landed_session, prefix, path):
+    """`submit*()` records a request's run ids on each of its success paths
+    (Plan B's final review, M1): a replacement, a second canonical under a
+    new key, and a repeated derivative, each the first request to assert run
+    3. A path that skipped it would refuse a later derivative of run 3 as
+    "asserted neither in metadata.runs nor before" (the leftovers' review)."""
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+
+    subject = {"replacement": "runjob17", "canonical_dedupe": "runjob18", "derivative_dedupe": "runjob19"}[path]
+    key = _landed_with_runs(landed_session, subject, 17)
+    accept(_runs_job(key, f"{subject}-k1", runs=_RUNS[:2], probe_runs={_SERIAL: [1, 2]}), prefix=prefix)
+    if path == "derivative_dedupe":
+        accept(_runs_job(key, f"{subject}-k2", runs=_RUNS[:2], run_numbers=[1]), prefix=prefix)
+        again = _runs_job(key, f"{subject}-k3", run_numbers=[1])
+    elif path == "replacement":
+        again = _runs_job(key, f"{subject}-k3", role="canonical", supersedes_activation_id=0,
+                          probe_runs={_SERIAL: [1, 2]})
+    else:
+        again = _runs_job(key, f"{subject}-k3", probe_runs={_SERIAL: [1, 2]})
+    accept(again, prefix=prefix)
+    assert sorted(int(n) for n in (core.RunAssertion & key).to_arrays("run_number")) == [1, 2, 3]
 
 
 def test_runs_not_yet_measured_are_not_yet_ingested(landed_session, prefix):

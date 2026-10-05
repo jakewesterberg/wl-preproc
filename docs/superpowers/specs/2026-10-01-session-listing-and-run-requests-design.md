@@ -446,3 +446,24 @@ settle what the sections above left open; §0 stands.
     probe in `metadata.probes` is recorded in `request.ActivationProbeRun` with the derivative's
     whole run set. Recording none told the sorter, and the description's `sorted_runs`, that
     every probe sorts nothing (final review I1).
+
+## Amendments, 2026-10-04, from Plan B's deferred minors
+
+26. **What a request asserts is recorded in the same transaction as its `Request` and
+    `Activation`, and one `works_run_id` names one run.**
+    - `submit*()` writes the request's `Montage` rows and `RunAssertion` rows itself, so a request
+      it refuses with a `409` (key reuse, a stale supersede) records none of them. Before this, a
+      montage first named in a refused request kept that request's boundaries for good, since a
+      `Montage` is never overwritten.
+    - An `animal_session_run` records the one measured run it came from, so the same id for two
+      runs is refused: a `422` within a request, a `409` (`RunIdConflict`) against an id already
+      recorded for another run of the session. It is not checked across sessions; only a defect
+      on wl.works' side could produce that.
+    - A refused request's probe reports and subject details still apply: for those the latest
+      request wins, as §3.1 and the probes design say, and wl.works is the authority on both.
+27. **A canonical's description names what it leaves out because it lies in no measured run:**
+    how many trials and blocks start in its montage's window but in no run of the session (a run
+    whose `RUN_START` was lost, or codes strobed outside a run). `GET /sessions` flags the same
+    blocks `block_outside_runs`. A derivative names its runs and claims nothing else, so it
+    carries no such note.
+

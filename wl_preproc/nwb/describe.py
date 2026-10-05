@@ -24,19 +24,24 @@ def _commit() -> str | None:
     return commit if out.returncode == 0 and len(commit) == 40 else None
 
 
-def _task(value, rig_name: str | None = None) -> dict:
-    """A run's task, by code and name: the rig's name for it when its record
-    gives one, else the code's name. Lab-defined codes (100 and up) have no
-    name here; their code stands for it."""
+def task_name(code, rig_name: str | None = None) -> str:
+    """A run's task name: the rig's name for it when its record gives one,
+    else the code's name. Lab-defined codes (100 and up) have no name here;
+    their code stands for it. The file's session description names its runs'
+    tasks by this too (`gather.py`)."""
     from wl_preproc.contracts.events import TaskTypeCode
 
     if rig_name:
-        return {"code": str(value), "name": rig_name}
+        return rig_name
     try:
-        name = TaskTypeCode(int(value)).name.lower()
+        return TaskTypeCode(int(code)).name.lower()
     except (TypeError, ValueError):
-        name = str(value)
-    return {"code": str(value), "name": name}
+        return str(code)
+
+
+def _task(value, rig_name: str | None = None) -> dict:
+    """A run's task, by code and name (`task_name`)."""
+    return {"code": str(value), "name": task_name(value, rig_name)}
 
 
 def _age_days(date_of_birth: datetime.date | None, session_datetime: datetime.datetime) -> int | None:
