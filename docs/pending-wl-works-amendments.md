@@ -23,8 +23,12 @@ the requester's decisions of 2026-10-05.
   line such as *"Corrected 2026-11-02: date of birth 2016-03-02 → 2016-03-01."*
 - **`GET /nwb` lists each corrected file again** past your cursor, with its new `subject`. Nothing
   in the listing or description contracts changes; the description stays at version 3.
-- **A correction that clears a date of birth is not written:** a file without one fails
-  validation, so it keeps the details it has.
+- **A request that leaves the date of birth out does not clear it:** the one on record stays,
+  and the request's other details are still corrected.
+- **A correction changes four checksums,** those of `/general/subject/species`, `sex`,
+  `date_of_birth` and `description`, which the description lists with the file's written-once
+  datasets; every other checksum stays as built. A manifest that froze the file's checksums (your
+  Plan 24 §3.3) sees a correction there, and only there.
 - **What to amend on your side:** §7's *"A file already published keeps the details it was built
   with, and the only fix wl.works can ask wl-preproc for today is a full replacement"* is no longer
   true once this merges; the animal's *"N files built with earlier details"* falls to zero within a

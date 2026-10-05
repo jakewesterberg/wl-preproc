@@ -44,13 +44,20 @@ Every line of the plan was proven in a scratch branch before the plan was writte
 
 ## 3. Still open
 
-- **A development database** alters `NwbChange.kind` to add `corrected`. No real database exists
-  yet.
+- **A development database** alters `NwbChange.kind` to add `corrected`; until it does, the stage
+  corrects nothing and names the statement (spec amendment 9). No real database exists yet. With
+  `<prefix>` the database prefix:
+
+  ```sql
+  ALTER TABLE `<prefix>nwb`.`nwb_change` MODIFY kind
+    enum('built','published','moved','superseded','corrected') NOT NULL
+    COMMENT ':enum(''built'',''published'',''moved'',''superseded'',''corrected''):';
+  ```
 - **The swap on the NAS's own mounts** is untested, as publishing's and placement's renames are.
 
 ## 4. The rulings
 
-The spec's amendments 1 to 5, made while proving the plan.
+The spec's amendments 1 to 5, made while proving the plan, and 6 to 10, from the final review (§6).
 
 ## 5. What execution measured
 

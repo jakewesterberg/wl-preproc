@@ -238,3 +238,31 @@ These settle what the sections above left open; §0 stands.
    recorded anyway: the placement's `n_bytes` for a published file, `NwbFile.n_bytes` for one in
    scratch.
 
+---
+
+## Amendments, 2026-10-05, from the final review
+
+6. **A correction rewrites exactly four datasets,** `/general/subject/species`, `sex`,
+   `date_of_birth` and `description` (`correct.SUBJECT_DATASETS`), and takes only their checksums
+   into the records, read from the file. Every other dataset under the subject is checked as
+   written-once data like any other: a changed `subject_id` stops the correction, and a dataset the
+   lab appended under the subject is the lab's, never recorded (final review I2).
+7. **Publishing adopts a file whose four subject datasets differ from the row's:** a file corrected
+   since it was placed, or a row rebuilt or corrected since, is still the activation's own. Its
+   subject records are taken from the file, so a correction brings it up to the current details if
+   they differ. Without this, `wlpp nwb build`'s remedy after a correction, and a publish that
+   failed after its rename, were refused on every pass (final review I1).
+8. **The description beside a published file is written before the records,** so a failure there
+   leaves the file stale and the next pass writes it; and **the copy is flushed before the live
+   file's stamp is checked,** so a write landing during the flush stops the swap rather than being
+   lost under it (final review I3 and M2).
+9. **The stage checks `NwbChange.kind` before correcting anything.** A database declared before
+   `corrected` would refuse each correction's records after its swap, on every pass. Without the
+   value, nothing is corrected, and the stage names the statement that adds it, the column's
+   comment kept as DataJoint declares it (final review M5).
+10. **§5's row for a date of birth now unknown describes no request.** `_record_subject_details`
+    keeps the date of birth on record when a request leaves it out, so wl.works cannot clear one;
+    the row's refusal is reachable only by a database edited by hand, and its other details are
+    corrected as usual. A correction changes the four datasets' checksums, which the description
+    lists with the written-once ones; wl.works is told so (final review M7 and M8).
+
