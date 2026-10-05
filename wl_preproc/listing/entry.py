@@ -1,10 +1,12 @@
 """One landed session's entry in `GET /sessions` (design spec
 `2026-10-01-session-listing-and-run-requests-design.md` sections 2.2 and 2.4).
 
-**Gathered, then built.** `gather_facts` reads the database into plain rows;
-`build_entry` turns them into the entry, with no database, so every flag is
-tested on rows made by hand. `session_entry` is the two together, and the
-listing stage and `GET /sessions` both call it, so they cannot disagree.
+**Gathered, then built.** `gather_all` reads the database into plain rows,
+each table once for every session asked for; `build_entry` turns one
+session's rows into its entry, with no database, so every flag is tested on
+rows made by hand. The listing stage and `GET /sessions` both build entries
+this way, and `session_entry` is the two for one session, so they cannot
+disagree.
 
 **A block belongs to the run its start lies in**, and a segment to every run
 it overlaps: runs and segments do not align, since a bank change needs a
@@ -156,49 +158,92 @@ def build_entry(facts: SessionFacts) -> dict:
     return SessionEntry.model_validate(entry).model_dump(mode="json")
 
 
-def gather_facts(session_key: dict) -> SessionFacts:
-    """One session's facts, read from the database."""
+def _session(row: dict) -> tuple[str, datetime.datetime]:
+    return row["subject"], row["session_datetime"]
+
+
+def _by_session(rows) -> collections.defaultdict:
+    grouped = collections.defaultdict(list)
+    for row in rows:
+        grouped[_session(row)].append(row)
+    return grouped
+
+
+def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionFacts]:
+    """The facts of each of `keys`' sessions that has landed, by `(subject,
+    session_datetime)`, read from the database. Each table is read once for
+    all of them: every daemon pass builds every listed session's entry, and
+    reading each table once per session grew with the lab (the listing's
+    M9)."""
     from wl_preproc.schema import core, ephys, ingest, pipeline, timebase
 
-    session_key = {name: session_key[name] for name in ("subject", "session_datetime")}
-    tiers = (timebase.TimingProvenance & session_key).to_arrays("tier")
-    attributes = collections.defaultdict(dict)
-    for row in (pipeline.trial.Block.Attribute & session_key).to_dicts():
-        attributes[row["block_id"]][row["attribute_name"]] = row["attribute_value"]
-    census = (ephys.ProbeCensus.Probe & session_key).to_dicts()
-    electrodes = {}
-    for part in census:
-        config = (part["electrode_config_hash"], part["probe_type"])
-        if part["electrode_config_hash"] and config not in electrodes:
-            restriction = {"electrode_config_hash": config[0], "probe_type": config[1]}
-            electrodes[config] = sorted(int(e) for e in (ephys.ElectrodeConfig.Electrode & restriction)
-                                        .to_arrays("electrode"))
+    keys = [{name: key[name] for name in ("subject", "session_datetime")} for key in keys]
+    if not keys:
+        return {}
+    tiers = {_session(row): row["tier"] for row in (timebase.TimingProvenance & keys).proj("tier").to_dicts()}
+    attributes = collections.defaultdict(lambda: collections.defaultdict(dict))
+    for row in (pipeline.trial.Block.Attribute & keys).to_dicts():
+        attributes[_session(row)][row["block_id"]][row["attribute_name"]] = row["attribute_value"]
+    census = _by_session((ephys.ProbeCensus.Probe & keys).to_dicts())
+    configs = sorted({(part["electrode_config_hash"], part["probe_type"])
+                      for parts in census.values() for part in parts if part["electrode_config_hash"]})
+    electrodes = collections.defaultdict(list)
+    if configs:
+        restriction = [{"electrode_config_hash": config_hash, "probe_type": probe_type}
+                       for config_hash, probe_type in configs]
+        for row in (ephys.ElectrodeConfig.Electrode & restriction).to_dicts():
+            electrodes[(row["electrode_config_hash"], row["probe_type"])].append(int(row["electrode"]))
 
-    def strobed(event_type: str, name: str) -> list[int]:
-        rows = pipeline.event.Event.Attribute & session_key & {"event_type": event_type, "attribute_name": name}
-        return [int(value) for value in rows.to_arrays("attribute_value")]
+    def strobed(event_type: str, name: str) -> collections.defaultdict:
+        rows = pipeline.event.Event.Attribute & keys & {"event_type": event_type, "attribute_name": name}
+        numbers = collections.defaultdict(list)
+        for row in rows.proj("attribute_value").to_dicts():
+            numbers[_session(row)].append(int(row["attribute_value"]))
+        return numbers
 
-    return SessionFacts(
-        subject=session_key["subject"],
-        session_datetime=session_key["session_datetime"],
-        session_name=Path((ingest.Ingestion & session_key).fetch1("session_dir")).name,
-        tier=str(tiers[0]) if len(tiers) else None,
-        rejected=[{"system": row["system"], "file_path": row["file_path"], "reason": row["reason"]}
-                  for row in (core.RejectedSegment & session_key).to_dicts()],
-        runs=(core.Run & session_key).to_dicts(),
-        records={row["run_number"]: row for row in (core.RunRecord & session_key).to_dicts()},
-        blocks=stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time"),
-        block_attributes=dict(attributes),
-        trial_counts=dict(collections.Counter(int(block_id) for block_id in
-                                              (pipeline.trial.BlockTrial & session_key).to_arrays("block_id"))),
-        segments=(core.Segment & session_key & {"system": "spikeglx"}).to_dicts(),
-        census=census,
-        electrodes=electrodes,
-        strobed_runs=strobed("RUN_START", "run_number"),
-        strobed_blocks=strobed("BLOCK_START", "block_id"),
-        censused=frozenset(int(barcode) for barcode in (ephys.ProbeCensus & session_key).to_arrays("segment_barcode")),
-        rig_problems=[row["problem"] for row in (core.RunRecordProblem & session_key).to_dicts(order_by="problem_number")],
-    )
+    trials = collections.defaultdict(dict)
+    for row in (pipeline.trial.Block & keys).aggr(pipeline.trial.BlockTrial, n_trials="count(*)").to_dicts():
+        trials[_session(row)][int(row["block_id"])] = int(row["n_trials"])
+    rejected = _by_session((core.RejectedSegment & keys).to_dicts())
+    runs = _by_session((core.Run & keys).to_dicts())
+    records = _by_session((core.RunRecord & keys).to_dicts())
+    blocks = _by_session(stored_doubles(pipeline.trial.Block & keys, "block_start_time", "block_stop_time"))
+    segments = _by_session((core.Segment & keys & {"system": "spikeglx"}).to_dicts())
+    strobed_runs, strobed_blocks = strobed("RUN_START", "run_number"), strobed("BLOCK_START", "block_id")
+    censused = _by_session((ephys.ProbeCensus & keys).proj().to_dicts())
+    rig_problems = _by_session((core.RunRecordProblem & keys).to_dicts(order_by="problem_number"))
+    facts = {}
+    for ingestion in (ingest.Ingestion & keys).proj("session_dir").to_dicts():
+        session = _session(ingestion)
+        mine = census.get(session, [])
+        facts[session] = SessionFacts(
+            subject=session[0],
+            session_datetime=session[1],
+            session_name=Path(ingestion["session_dir"]).name,
+            tier=str(tiers[session]) if session in tiers else None,
+            rejected=[{"system": row["system"], "file_path": row["file_path"], "reason": row["reason"]}
+                      for row in rejected.get(session, [])],
+            runs=runs.get(session, []),
+            records={row["run_number"]: row for row in records.get(session, [])},
+            blocks=blocks.get(session, []),
+            block_attributes=dict(attributes.get(session, {})),
+            trial_counts=trials.get(session, {}),
+            segments=segments.get(session, []),
+            census=mine,
+            electrodes={config: sorted(electrodes[config]) for config in
+                        {(part["electrode_config_hash"], part["probe_type"]) for part in mine
+                         if part["electrode_config_hash"]}},
+            strobed_runs=strobed_runs.get(session, []),
+            strobed_blocks=strobed_blocks.get(session, []),
+            censused=frozenset(int(row["segment_barcode"]) for row in censused.get(session, [])),
+            rig_problems=[row["problem"] for row in rig_problems.get(session, [])],
+        )
+    return facts
+
+
+def gather_facts(session_key: dict) -> SessionFacts:
+    """One session's facts, read from the database."""
+    return gather_all([session_key])[(session_key["subject"], session_key["session_datetime"])]
 
 
 def session_entry(session_key: dict) -> dict:

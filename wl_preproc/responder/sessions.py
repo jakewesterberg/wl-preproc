@@ -4,7 +4,8 @@
 `handler.py` owns HTTP and imports no DataJoint; this module owns the
 database, as `nwb.py` does for `GET /nwb`. **It never writes**: the daemon's
 listing stage is `ingest.SessionChange`'s one writer. An entry is the session
-as it stands now, assembled by the same `session_entry` the stage hashes.
+as it stands now, assembled as the stage assembles the entries it hashes:
+each table read once for every session listed, then one entry per session.
 """
 
 from __future__ import annotations
@@ -27,10 +28,11 @@ def list_sessions(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
         session = (change["subject"], change["session_datetime"])
         latest[session] = max(latest.get(session, 0), change["change_seq"])
     cursor = max(latest.values(), default=since or 0)
+    facts = entry.gather_all([{"subject": subject, "session_datetime": moment} for subject, moment in latest])
     sessions = []
     for (subject, moment), _seq in sorted(latest.items(), key=lambda item: item[1]):
         try:
-            sessions.append(entry.session_entry({"subject": subject, "session_datetime": moment}))
+            sessions.append(entry.build_entry(facts[(subject, moment)]))
         except Exception as exc:
             # Still a 500, which wl.works retries; naming the session is what
             # lets someone fix it (final review M5).

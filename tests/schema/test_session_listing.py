@@ -160,14 +160,14 @@ def test_a_session_whose_entry_fails_is_named_in_the_error(listed, prefix, monke
     from wl_preproc.listing import entry
     from wl_preproc.responder.sessions import list_sessions
 
-    real = entry.session_entry
+    real = entry.build_entry
 
-    def broken(key):
-        if key["subject"] == "sllist2":
+    def broken(facts):
+        if facts.subject == "sllist2":
             raise KeyError("imro_table")
-        return real(key)
+        return real(facts)
 
-    monkeypatch.setattr(entry, "session_entry", broken)
+    monkeypatch.setattr(entry, "build_entry", broken)
     with pytest.raises(RuntimeError, match=r"^session sllist2 at 2025-07-22T09:00:00: KeyError: 'imro_table'$"):
         list_sessions(None, prefix=prefix)
 
@@ -182,3 +182,62 @@ def test_a_stage_that_cannot_read_reports_it_instead_of_raising(listed, monkeypa
     monkeypatch.setattr(stage, "listable", broken)
     assert stage.run_stage() == (0, ["SessionChange: the listing stage could not read the sessions: "
                                      "RuntimeError: the database went away"])
+
+
+# -- What a pass costs (the listing's M9). Every pass builds every listed
+# session's entry, so its reads must not grow with the sessions it lists.
+
+
+def _reads(monkeypatch, call) -> int:
+    """How many SELECTs `call()` sends."""
+    import datajoint as dj
+
+    connection = dj.conn()
+    real, sent = connection.query, []
+
+    def counting(query, *args, **kwargs):
+        sent.append(query)
+        return real(query, *args, **kwargs)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(connection, "query", counting)
+        call()
+    return sum(query.lstrip().upper().startswith("SELECT") for query in sent)
+
+
+def test_the_stage_reads_each_table_once_however_many_sessions_it_lists(listed, monkeypatch):
+    from wl_preproc.listing import stage
+
+    keys = [key for _recipe, key in listed.values()]
+
+    def stage_over(chosen):
+        def call():
+            with monkeypatch.context() as patched:
+                patched.setattr(stage, "listable", lambda: chosen)
+                assert stage.run_stage()[1] == []
+        return call
+
+    _reads(monkeypatch, stage_over(keys))  # DataJoint reads each table's heading once
+    assert _reads(monkeypatch, stage_over(keys[:1])) == _reads(monkeypatch, stage_over(keys))
+
+
+def test_get_sessions_reads_each_table_once_however_many_sessions_it_lists(listed, prefix, monkeypatch):
+    """The cursors are chosen from the change log so that one, then two,
+    sessions changed after them."""
+    from wl_preproc.responder.sessions import list_sessions
+    from wl_preproc.schema import ingest
+
+    changes = ingest.SessionChange.to_dicts(order_by="change_seq DESC")
+    after, seen = {}, set()
+    for change in changes:
+        seen.add((change["subject"], change["session_datetime"]))
+        after.setdefault(len(seen), change["change_seq"] - 1)
+    assert {1, 2} <= set(after)
+
+    def listing_since(since, sessions):
+        def call():
+            assert len(list_sessions(since, prefix=prefix)["sessions"]) == sessions
+        return call
+
+    _reads(monkeypatch, listing_since(after[2], 2))
+    assert _reads(monkeypatch, listing_since(after[1], 1)) == _reads(monkeypatch, listing_since(after[2], 2))

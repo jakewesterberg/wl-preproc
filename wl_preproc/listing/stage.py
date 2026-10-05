@@ -2,7 +2,8 @@
 `2026-10-01-session-listing-and-run-requests-design.md` section 2.1).
 
 **A change is logged when a session's entry changes.** Every pass assembles
-the entry of every session the event stage has done, hashes it, and appends
+the entry of every session the event stage has done, from one read of each
+table for all of them (the listing's M9), hashes it, and appends
 an `ingest.SessionChange` when the hash differs from the session's last. So a
 fact that arrives later -- a timing tier, a probe census -- lists the session
 again, without the stage that produced it knowing about the listing.
@@ -18,7 +19,7 @@ import datetime
 import hashlib
 import json
 
-from wl_preproc.listing.entry import session_entry
+from wl_preproc.listing.entry import build_entry, gather_all
 
 
 def digest(entry: dict) -> str:
@@ -42,6 +43,7 @@ def run_stage() -> tuple[int, list[str]]:
 
     try:
         changes, keys = ingest.SessionChange.to_dicts(order_by="change_seq"), listable()
+        facts = gather_all(keys)
     except Exception as exc:  # the daemon's later stages must still run
         return 0, [f"SessionChange: the listing stage could not read the sessions: {type(exc).__name__}: {exc}"]
     last = {}
@@ -50,7 +52,7 @@ def run_stage() -> tuple[int, list[str]]:
     appended, errors = 0, []
     for key in keys:
         try:
-            entry_digest = digest(session_entry(key))
+            entry_digest = digest(build_entry(facts[(key["subject"], key["session_datetime"])]))
             if last.get((key["subject"], key["session_datetime"])) != entry_digest:
                 ingest.SessionChange.insert1({**key, "digest": entry_digest, "changed_at": _now()})
                 appended += 1
