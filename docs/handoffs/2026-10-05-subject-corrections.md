@@ -189,3 +189,7 @@ this branch made. All were fixed, each with a test that failed first, run alone 
 `<identifier>.nwb.partial`; odd placement paths, which only `share.relative` writes; and the
 description briefly carrying a note its adopted file lacks, as before this branch.
 
+
+**The full suite on `d3a4cf1`,** §7's branch with the review's fixes: 3.11, **2184 passed, 25
+skipped, 1 deselected, 1 xfailed**; 3.13, **2183 passed, 27 skipped, 1 xfailed**. That is ten more
+than §6's run, the branch's new tests, and both exited 0.
