@@ -182,6 +182,30 @@ def table_snapshot():
     return snapshot
 
 
+@pytest.fixture
+def selects(monkeypatch):
+    """How many SELECTs a call sends through DataJoint's connection: for a
+    stage that visits every session or file each pass, whose reads must not
+    grow with how many it visits (the listing's M9). Call it once first to
+    warm it up: DataJoint reads each table's heading on first use."""
+    import datajoint as dj
+
+    def count(call) -> int:
+        connection = dj.conn()
+        real, sent = connection.query, []
+
+        def counting(query, *args, **kwargs):
+            sent.append(query)
+            return real(query, *args, **kwargs)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(connection, "query", counting)
+            call()
+        return sum(query.lstrip().upper().startswith("SELECT") for query in sent)
+
+    return count
+
+
 @pytest.fixture(scope="session")
 def deep_equal():
     """`==` that does not choke on a NumPy array anywhere inside a snapshot.

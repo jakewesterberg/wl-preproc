@@ -188,24 +188,7 @@ def test_a_stage_that_cannot_read_reports_it_instead_of_raising(listed, monkeypa
 # session's entry, so its reads must not grow with the sessions it lists.
 
 
-def _reads(monkeypatch, call) -> int:
-    """How many SELECTs `call()` sends."""
-    import datajoint as dj
-
-    connection = dj.conn()
-    real, sent = connection.query, []
-
-    def counting(query, *args, **kwargs):
-        sent.append(query)
-        return real(query, *args, **kwargs)
-
-    with monkeypatch.context() as patched:
-        patched.setattr(connection, "query", counting)
-        call()
-    return sum(query.lstrip().upper().startswith("SELECT") for query in sent)
-
-
-def test_the_stage_reads_each_table_once_however_many_sessions_it_lists(listed, monkeypatch):
+def test_the_stage_reads_each_table_once_however_many_sessions_it_lists(listed, monkeypatch, selects):
     from wl_preproc.listing import stage
 
     keys = [key for _recipe, key in listed.values()]
@@ -217,11 +200,11 @@ def test_the_stage_reads_each_table_once_however_many_sessions_it_lists(listed, 
                 assert stage.run_stage()[1] == []
         return call
 
-    _reads(monkeypatch, stage_over(keys))  # DataJoint reads each table's heading once
-    assert _reads(monkeypatch, stage_over(keys[:1])) == _reads(monkeypatch, stage_over(keys))
+    selects(stage_over(keys))
+    assert selects(stage_over(keys[:1])) == selects(stage_over(keys))
 
 
-def test_get_sessions_reads_each_table_once_however_many_sessions_it_lists(listed, prefix, monkeypatch):
+def test_get_sessions_reads_each_table_once_however_many_sessions_it_lists(listed, prefix, selects):
     """The cursors are chosen from the change log so that one, then two,
     sessions changed after them."""
     from wl_preproc.responder.sessions import list_sessions
@@ -239,5 +222,5 @@ def test_get_sessions_reads_each_table_once_however_many_sessions_it_lists(liste
             assert len(list_sessions(since, prefix=prefix)["sessions"]) == sessions
         return call
 
-    _reads(monkeypatch, listing_since(after[2], 2))
-    assert _reads(monkeypatch, listing_since(after[1], 1)) == _reads(monkeypatch, listing_since(after[2], 2))
+    selects(listing_since(after[2], 2))
+    assert selects(listing_since(after[1], 1)) == selects(listing_since(after[2], 2))

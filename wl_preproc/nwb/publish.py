@@ -23,6 +23,7 @@ makes once: an unmounted mount point is an empty directory, or none (I3)."""
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import datetime
 import json
@@ -160,13 +161,27 @@ def write_description(nwb_path: Path, description: dict) -> None:
             partial.unlink()
 
 
+def placement_history(keys: list[dict] | None = None) -> dict[tuple, list[dict]]:
+    """Every place each activation's file has been, oldest first, by
+    `activation_tuple`: each `NwbPlacement` with its change, for `keys`, or
+    for every activation when None, in one read. The stages that visit every
+    published file each pass read it once, not once per file."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    if keys is not None and not keys:
+        return {}
+    joined = nwb_schema.NwbPlacement * nwb_schema.NwbChange
+    history = collections.defaultdict(list)
+    for row in sorted((joined if keys is None else joined & [key_of(key) for key in keys]).to_dicts(),
+                      key=lambda row: row["change_seq"]):
+        history[activation_tuple(row)].append(row)
+    return dict(history)
+
+
 def placements(key: dict) -> list[dict]:
     """Every place an activation's file has been, oldest first: each
     `NwbPlacement` with its change."""
-    from wl_preproc.schema import nwb as nwb_schema
-
-    rows = (nwb_schema.NwbPlacement * nwb_schema.NwbChange & key_of(key)).to_dicts()
-    return sorted(rows, key=lambda row: row["change_seq"])
+    return placement_history([key]).get(activation_tuple(key), [])
 
 
 def current_placement(key: dict) -> dict | None:
@@ -301,10 +316,10 @@ def missing_copies(shares: dict[str, Share | None]) -> list[str]:
     """Every published file whose current copy is not on its share, by path:
     reported each pass, whatever else happens to it (design spec section 5's
     amendment; the final review's I1)."""
-    reports = []
+    reports, history = [], placement_history()
     for key in _published().keys():
         try:
-            placement = current_placement(key)
+            placement = history.get(activation_tuple(key), [None])[-1]
             share = shares.get(placement["tier"]) if placement is not None else None
             if share is not None and not share.local(placement["path"]).exists():
                 reports.append(f"NwbPlacement {key}: {share.local(placement['path'])}: the published file is "
@@ -386,18 +401,20 @@ def _remove_old_copy(path: Path) -> None:
     description_path(path).unlink(missing_ok=True)
 
 
-def _sweep(key: dict, placement: dict, shares: dict[str, Share]) -> str | None:
+def _sweep(history: list[dict], shares: dict[str, Share]) -> str | None:
     """One live copy: a copy on the other share is the leftover of a move
     whose old copy could not be deleted then, and is removed now -- only if
     an earlier placement of this activation put it there, the current copy
     is present, and nobody wrote to it after the move was recorded.
-    Anything else is left for a person, and the report says why."""
+    Anything else is left for a person, and the report says why. `history`
+    is the activation's placements, oldest first (`placement_history`)."""
+    placement = history[-1]
     other_tier = "fast" if placement["tier"] == "slow" else "slow"
     other = shares[other_tier].local(placement["path"])
     if not (other.exists() or description_path(other).exists()):
         return None
     recorded = any(row["change_seq"] < placement["change_seq"] and row["tier"] == other_tier
-                   and row["path"] == placement["path"] for row in placements(key))
+                   and row["path"] == placement["path"] for row in history)
     if not recorded:
         return f"{other}: a copy no placement of this activation put there; left for a person"
     current = shares[placement["tier"]].local(placement["path"])
@@ -406,7 +423,7 @@ def _sweep(key: dict, placement: dict, shares: dict[str, Share]) -> str | None:
     # Dated by the change that put the file where it is, never by a
     # correction that recorded its placement again since (design spec
     # `2026-10-05-subject-corrections-design.md`).
-    placed = [row for row in placements(key) if row["kind"] in ("published", "moved")]
+    placed = [row for row in history if row["kind"] in ("published", "moved")]
     moved_at = placed[-1]["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp()
     if other.exists() and other.stat().st_mtime > moved_at:
         return f"{other}: written to after the file was moved from it; left for a person"
@@ -424,13 +441,16 @@ def run_placement(slow: Share, fast: Share) -> tuple[int, list[str]]:
             return 0, [f"NwbPlacement: {reason}; nothing moved"]
     wanted_fast = active_keys()
     shares = {"slow": slow, "fast": fast}
-    moved, errors = 0, []
+    moved, errors, every = 0, [], placement_history()
     for key in _published().keys():
         try:
-            placement = current_placement(key)
-            if placement is None:
+            # Read before this pass moves anything: a move appends to its own
+            # file's history alone, after that file's turn.
+            history = every.get(activation_tuple(key))
+            if not history:
                 continue
-            report = _sweep(key, placement, shares)
+            placement = history[-1]
+            report = _sweep(history, shares)
             if report is not None:
                 errors.append(f"NwbPlacement {key}: {report}")
                 continue

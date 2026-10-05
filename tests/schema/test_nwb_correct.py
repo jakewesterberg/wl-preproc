@@ -933,3 +933,38 @@ def test_a_share_not_configured_is_reported_once_not_per_file(published, shares)
     finally:
         _set_birth(_BIRTH)
         run_corrections(shares["slow"], shares["fast"])
+
+
+def test_the_stages_that_visit_every_published_file_read_its_placements_once(published, daemon_module, prefix,
+                                                                              shares, monkeypatch, selects):
+    """Clearing leftovers, reporting missing copies and placement each visit
+    every published file every pass, so their reads must not grow with the
+    files: each reads where every file is in one query, not one per file."""
+    from tests.schema.test_nwb_build import _montage, _request
+    from wl_preproc.nwb import publish
+    from wl_preproc.nwb.correct import _clear_partials
+    from wl_preproc.responder.jobs import accept
+
+    # A second published file, whatever ran first: `accept` returns the
+    # derivative it already holds for this run set.
+    session_key, _key, runs, root = published
+    accept(_request(session_key, "nwbfix1-derivative", _montage(runs), runs, run_numbers=[runs[-1]["run_number"]]),
+           prefix=prefix)
+    daemon_module.run_once(prefix=prefix, nwb_root=root, nwb_slow=shares["slow"], nwb_fast=shares["fast"])
+    real = publish._published
+    keys = (real() & {"subject": _SUBJECT}).keys()
+    assert len(keys) >= 2
+
+    def over(chosen, stage):
+        def call():
+            with monkeypatch.context() as patched:
+                patched.setattr(publish, "_published", lambda: real() & chosen)
+                stage()
+        return call
+
+    stages = {"clearing leftovers": lambda: _clear_partials(shares),
+              "missing copies": lambda: publish.missing_copies(shares),
+              "placement": lambda: publish.run_placement(shares["slow"], shares["fast"])}
+    for name, stage in stages.items():
+        selects(over(keys, stage))
+        assert selects(over(keys[:1], stage)) == selects(over(keys, stage)), name
