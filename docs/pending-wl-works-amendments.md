@@ -1,9 +1,34 @@
 # Amendments to wl-works
 
-**Seven are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01.** The earlier two
+**Eight are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — subject corrections reach every file already built
+
+**Opened 2026-10-05**, answering the open question wl.works' January canonical-NWB spec left for this
+repository (`docs/superpowers/specs/2026-09-30-january-canonical-nwb-design.md` §7 and §12, read on
+its `main` at `4a994ee3`): *"a metadata-only rebuild of a published file whose subject details were
+corrected"*. Spec
+[`specs/2026-10-05-subject-corrections-design.md`](superpowers/specs/2026-10-05-subject-corrections-design.md),
+the requester's decisions of 2026-10-05.
+
+- **A correction you send is written into every file already built for that animal,** published or
+  not, canonical or derivative, current or superseded, in the daemon pass after the request that
+  carries it. Nothing is re-sorted, and the lab's annotations in the files are kept.
+- **Each corrected file says so.** Its subject's description, and its description's `notes`, gain a
+  line such as *"Corrected 2026-11-02: date of birth 2016-03-02 → 2016-03-01."*
+- **`GET /nwb` lists each corrected file again** past your cursor, with its new `subject`. Nothing
+  in the listing or description contracts changes; the description stays at version 3.
+- **A correction that clears a date of birth is not written:** a file without one fails
+  validation, so it keeps the details it has.
+- **What to amend on your side:** §7's *"A file already published keeps the details it was built
+  with, and the only fix wl.works can ask wl-preproc for today is a full replacement"* is no longer
+  true once this merges; the animal's *"N files built with earlier details"* falls to zero within a
+  pass of the request that carries the correction. Nothing new is asked of you.
 
 ---
 

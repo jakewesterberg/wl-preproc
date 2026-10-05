@@ -201,3 +201,40 @@ Each is reported per file, and none stops the pass or another file.
 - **Each failure in §5,** with the live file untouched and the failure reported.
 - **`invalid` files** are still rebuilt as before, and never corrected.
 - **The full suite once,** on both interpreters, at the end.
+
+---
+
+## Amendments, 2026-10-05, made while proving the plan
+
+The plan (`plans/2026-10-05-subject-corrections.md`) was proven in code before it was written.
+These settle what the sections above left open; §0 stands.
+
+1. **§7's items, answered:**
+   - **1:** h5py rewrites the subject's text datasets of a file pynwb wrote, and pynwb reads the
+     file afterwards. A dataset the file lacks (a species first known now) is created with the
+     string type pynwb uses, and one now unknown is removed.
+   - **2:** the patch changes exactly the subject datasets whose values differ, and the
+     description: for a date of birth alone, `date_of_birth` and `description`.
+   - **3:** `nwbinspector` does not rate a date of birth after the session's start as critical, so
+     the validator's row in §5 is for a missing date of birth, which §5 refuses before copying,
+     and for anything else a check may find.
+   - **4:** `publish.current_placement` is the latest placement, so the one recorded with
+     `corrected` (same share and path) becomes current.
+   - **5:** `publish.write_description` writes by way of `.partial` and `os.replace`, atomically.
+   - **6:** the swap is `os.replace`, as publishing's and placement's renames into place are.
+     Untested on the NAS's mounts, as they are.
+2. **The placement sweep dates a move by its own change.** A copy left on the other share by a
+   move is deleted only if nobody wrote to it after the move. The sweep read that time from the
+   current placement, which a correction now records again, later; a leftover written to between
+   the move and the correction looked older than the move and was deleted. It now reads the time
+   of the latest `published` or `moved` change.
+3. **The description's notes follow the file's by count:** the correction lines the file carries
+   past those the description already has. The same correction made twice is noted twice, and a
+   pass after a crash that followed the swap records the note the crashed pass wrote, once.
+4. **The daemon reports `nwb_corrected`,** `None` with neither the builder's root nor a share
+   configured, and `0` when another wlpp process holds the NWB lock. Its failures are prefixed
+   `NwbCorrection`. A file not yet published in a freed session waits, as publishing does.
+5. **A correction did not change the file's size** in the small file measured; the size is
+   recorded anyway: the placement's `n_bytes` for a published file, `NwbFile.n_bytes` for one in
+   scratch.
+
