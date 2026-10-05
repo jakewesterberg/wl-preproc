@@ -16,6 +16,8 @@ or on fetch -- measured at 31,488 float32 values becoming 488 bytes.
 
 from __future__ import annotations
 
+import re
+
 import datajoint as dj
 
 from wl_preproc.ephys import geometry
@@ -252,6 +254,18 @@ def kept_imro_table(table: str | None) -> tuple[str | None, str | None]:
     if table is not None and len(table) > IMRO_TABLE_MAX:
         return None, f"the imroTbl is {len(table)} characters, longer than the {IMRO_TABLE_MAX} kept, so it is not kept"
     return table, None
+
+
+# `kept_imro_table`'s note, which the census puts last in a probe's problem.
+_NOT_KEPT = re.compile(r"(?:^|; )the imroTbl is \d+ characters, longer than the \d+ kept, so it is not kept$")
+
+
+def probe_problem(problem: str) -> str:
+    """A probe's census problem without `kept_imro_table`'s note. The note
+    says what the session listing lacks, not what is wrong with the probe,
+    whose sites are read from the .meta's whole table all the same; an NWB
+    file's probe notes leave it out (the session listing's M6)."""
+    return _NOT_KEPT.sub("", problem)
 
 
 @schema

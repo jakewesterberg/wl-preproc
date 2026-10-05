@@ -115,3 +115,60 @@ Chosen by the requester on 2026-10-01, before wl.works vendors the schema:
 - **Left:** M6 (a too-long `~imroTbl` note can reach NWB probe notes; no lab probe comes near) and
   M9 (every pass rebuilds every entry).
 
+
+## 8. The last deferred minors, and what a pass costs (`fix/listing-minors-pass-cost`)
+
+Chosen by the requester on 2026-10-05, with the repeated placement lookups piece 4's minors'
+review deferred (`handoffs/2026-10-05-subject-corrections.md` §8, M-e). Each fix has a test that
+failed first, and each passes run alone.
+- **M6** (spec amendment 28): the census's note that a probe's `~imroTbl` was too long to keep no
+  longer reaches the NWB file's probe notes; the listing still carries it.
+  `test_an_imro_table_too_long_to_keep_is_not_a_probe_note`, which runs its census pass with the
+  kept width lowered, since no lab probe's table comes near it, and
+  `test_a_probes_problem_without_the_note_that_its_imro_table_was_not_kept`.
+- **M9** (spec amendment 29): a listing pass, and `GET /sessions`, read each table once for all
+  their sessions. Before, the stage sent about fifteen SELECTs per session; one session or two now
+  cost the same. `test_the_stage_reads_each_table_once_however_many_sessions_it_lists`,
+  `test_get_sessions_reads_each_table_once_however_many_sessions_it_lists`. The entries'
+  digests were checked against the old per-session reading on the ten sessions five test modules
+  land, with rig-record problems inserted out of order and a block holding no trial, so no
+  session is listed again at deploy.
+- **The placement lookups:** clearing leftovers, reporting missing copies and placement each
+  visit every published file every pass, and each looked up its placement with a query per file.
+  Each now reads every file's placements once (`nwb/publish.py::placement_history`), and
+  `GET /nwb` shares that read. It is one read per stage, not one for all three: corrections and
+  publishing write placements that the stages after them must see.
+  `test_the_stages_that_visit_every_published_file_read_its_placements_once`, which publishes a
+  second file of its own, so it does not depend on the tests before it. Reverting any one of the
+  three loops to a query per file fails it, each under its own stage's name.
+- **The read counter** is a shared fixture, `selects` in `tests/conftest.py`: SELECTs sent
+  through DataJoint's connection, warmed once for the tables' headings.
+- **Left as it is:** corrections look up a placement per stale file. Stale files appear only after
+  a subject correction, so that loop does not grow with the lab.
+
+**The branch's review.** One fresh Opus reviewer read the whole branch and ran scratch tests
+against its own database.
+- **Critical, fixed:** trials were counted with DataJoint's `aggr`, which keeps every block
+  through a LEFT JOIN, so `count(*)` listed a block holding no trial with one. Such a block is
+  real: a run stopped, or every trial in it refused, after its `BLOCK_START`. It also made every
+  such session's digest change at deploy. The count is now over the blocks a trial is stored in.
+  The equivalence check had missed it because none of its sessions held such a block; it was
+  rerun with one. `test_a_block_with_no_stored_trial_lists_none`.
+- **Minor, fixed (M1):** one session's facts were looked up by the exact key passed, so a time
+  given as text raised `KeyError`. The database finds the session again, and a session that has
+  not landed is named. `test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares`.
+- **Minor, recorded (M2):** a failed read now fails the stage's listing for the pass, reported
+  once, where before a failed read of one session's rows was that session's error. The reads
+  convert only values this pipeline writes. Spec amendment 29 says so.
+- **Minor, left (M3):** the listing's read-count test relies on both of its sessions having a
+  probe census, since the electrode read is skipped when no session has one. It can fail
+  falsely if the fixture changes, never pass falsely.
+- **Checked and sound by the reviewer:** every DataJoint fetch goes through `Connection.query`,
+  so `selects` sees it; `run_placement`'s snapshot is written only by a move of the file whose
+  turn it is; `missing_copies` and the clearing read after the writes before them; M6's pattern
+  matches only the census's own note.
+
+
+**The full suite on `3f2a987`,** the branch with the review's fixes: 3.11, **2191 passed, 25 skipped,
+1 deselected, 1 xfailed**; 3.13, **2190 passed, 27 skipped, 1 xfailed**. That is seven more than
+piece 4's minors' run, the branch's seven new tests, and both exited 0.

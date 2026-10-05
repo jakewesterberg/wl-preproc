@@ -26,7 +26,7 @@ def _key_json(key: dict) -> dict:
 def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
     """Every activation whose file changed after `since` (all of them when
     None): its status, where its file is now, and its description."""
-    from wl_preproc.nwb.publish import activation_tuple, key_of
+    from wl_preproc.nwb.publish import activation_tuple, key_of, placement_history
     from wl_preproc.schema import nwb as nwb_schema
     from wl_preproc.schema import request as request_schema
 
@@ -48,11 +48,7 @@ def list_files(since: int | None, prefix: str = DEFAULT_PREFIX) -> dict:
         for row in (request_schema.Activation & montages & "supersedes IS NOT NULL").to_dicts():
             successor[(row["subject"], row["session_datetime"], row["montage_id"], row["supersedes"])] = \
                 row["activation_id"]
-    latest = {}
-    for placement in ((nwb_schema.NwbPlacement * nwb_schema.NwbChange & keys).to_dicts() if keys else []):
-        held = latest.get(activation_tuple(placement))
-        if held is None or placement["change_seq"] > held["change_seq"]:
-            latest[activation_tuple(placement)] = placement
+    latest = {activation: history[-1] for activation, history in placement_history(keys).items()}
     files = []
     for moment in sorted(rows):
         row, placement, key = rows[moment], latest.get(moment), key_of(rows[moment])

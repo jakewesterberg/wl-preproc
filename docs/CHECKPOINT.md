@@ -148,16 +148,14 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. The session listing's deferred minors M6 and M9
->    (`handoffs/2026-10-01-session-listing.md` §7), with the NWB stages'
->    per-file placement lookups (`handoffs/2026-10-05-subject-corrections.md`
->    §8, M-e): being built on `fix/listing-minors-pass-cost`, not merged.
-> 2. U'n'Eye, the one detector not written; it wants a GPU.
-> 3. A session-date allocator for the test suite: every database-backed
+> 1. U'n'Eye, the one detector not written; it wants a GPU.
+> 2. A session-date allocator for the test suite: every database-backed
 >    fixture still picks an unclaimed subject and date by hand.
 >
-> Piece 4's seven deferred minors are merged (`a32394d`); M4 is left open by
-> the requester's choice.
+> Done: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
+> requester's choice), and the session listing's minors M6 and M9 with the NWB
+> stages' per-file placement lookups, merged from
+> `fix/listing-minors-pass-cost` (`handoffs/2026-10-01-session-listing.md` §8).
 >
 > **Other repositories' to act on:**
 > - **wl.works** vendors `job_request.json` and `nwb_description.json` at its

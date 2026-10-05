@@ -467,3 +467,20 @@ settle what the sections above left open; §0 stands.
     blocks `block_outside_runs`. A derivative names its runs and claims nothing else, so it
     carries no such note.
 
+
+## Amendments, 2026-10-05, from Plan A's last deferred minors
+
+28. **The census's note that an `~imroTbl` was too long to keep stays out of the NWB file**
+    (amendment 6, final review M6). It says what the listing lacks, not what is wrong with the
+    probe, whose sites are read from the `.meta`'s whole table all the same. The listing still
+    carries it as the probe's `problem`; the NWB builder leaves it out of that probe's notes
+    (`schema/ephys.py::probe_problem`).
+29. **A pass reads each table once for every listed session** (§2.1, final review M9). The
+    listing stage and `GET /sessions` gather their sessions' rows together, one query per table
+    (`listing/entry.py::gather_all`), and build each entry alone, so a failure building one
+    session's entry is still reported as that session's. A failed read fails the stage's
+    listing for the pass and is reported once, as a failed read of the change log already was
+    (M7). Trials are counted in the database, over the blocks a trial is stored in; a block
+    with none lists 0. The entries are unchanged: their digests matched the per-session
+    reading's for the ten sessions five test modules land, with rig-record problems inserted
+    out of order and a block holding no trial.

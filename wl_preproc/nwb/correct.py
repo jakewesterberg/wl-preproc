@@ -323,13 +323,13 @@ def _clear_partials(shares: dict) -> list[str]:
     overwritten by its retry). One that cannot be removed is reported and
     the rest are still cleared (the minors' review, M-b). Returns the
     reports."""
-    from wl_preproc.nwb.publish import _published, current_placement, description_path
+    from wl_preproc.nwb.publish import _published, activation_tuple, description_path, placement_history
     from wl_preproc.schema import nwb as nwb_schema
 
-    leftovers = []
+    leftovers, history = [], placement_history()
     reachable = [share for share in shares.values() if share.unreachable() is None]
     for key in _published().keys():
-        placement = current_placement(key)
+        placement = history.get(activation_tuple(key), [None])[-1]
         for share in reachable if placement is not None else ():
             path = share.local(placement["path"])
             leftovers += [beside.with_name(beside.name + ".partial") for beside in (path, description_path(path))]

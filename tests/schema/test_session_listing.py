@@ -52,6 +52,17 @@ def test_an_entry_reads_what_the_daemon_measured(listed):
     assert [(flag["code"], flag["run_number"]) for flag in entry["flags"]] == [("bank_change_in_run", 2)]
 
 
+def test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares(listed):
+    """Its time as text too, as the per-session reading took it (the M9
+    review's M1); a session that has not landed is named."""
+    from wl_preproc.listing.entry import session_entry
+
+    _recipe, key = listed["runs"]
+    assert session_entry({**key, "session_datetime": key["session_datetime"].isoformat(sep=" ")}) == session_entry(key)
+    with pytest.raises(LookupError, match="^no landed session sllist1 at 2001-07-21 09:00:00$"):
+        session_entry({**key, "session_datetime": key["session_datetime"].replace(year=2001)})
+
+
 def test_a_session_without_run_markers_is_listed_waiting(listed):
     from wl_preproc.listing.entry import session_entry
 
@@ -59,6 +70,28 @@ def test_a_session_without_run_markers_is_listed_waiting(listed):
     entry = session_entry(key)
     assert entry["runs"] == []
     assert [flag["code"] for flag in entry["flags"]] == ["waiting_for_run_markers"]
+
+
+def test_a_block_with_no_stored_trial_lists_none(listed):
+    """Its BLOCK_START was strobed, and its run stopped, or every trial in it
+    was refused, before a trial was stored. Trials are counted in the
+    database (the listing's M9), where a count over a join that keeps every
+    block counts one for a block it matched to nothing (the M9 review's C1).
+    Removed again before the change log's tests."""
+    from wl_preproc.listing.entry import session_entry
+    from wl_preproc.schema import core, pipeline
+
+    _recipe, key = listed["runs"]
+    run = (core.Run & key & {"run_number": 2}).fetch1()
+    start = (run["run_start_time"] + run["run_stop_time"]) / 2
+    block = {**key, "block_id": 77}
+    pipeline.trial.Block.insert1({**block, "block_start_time": start, "block_stop_time": start + 0.01},
+                                 allow_direct_insert=True)
+    try:
+        (second,) = [run for run in session_entry(key)["runs"] if run["run_number"] == 2]
+        assert [(block["block_number"], block["n_trials"]) for block in second["blocks"]] == [(2, 1), (77, 0)]
+    finally:
+        (pipeline.trial.Block & block).delete_quick()
 
 
 
@@ -160,14 +193,14 @@ def test_a_session_whose_entry_fails_is_named_in_the_error(listed, prefix, monke
     from wl_preproc.listing import entry
     from wl_preproc.responder.sessions import list_sessions
 
-    real = entry.session_entry
+    real = entry.build_entry
 
-    def broken(key):
-        if key["subject"] == "sllist2":
+    def broken(facts):
+        if facts.subject == "sllist2":
             raise KeyError("imro_table")
-        return real(key)
+        return real(facts)
 
-    monkeypatch.setattr(entry, "session_entry", broken)
+    monkeypatch.setattr(entry, "build_entry", broken)
     with pytest.raises(RuntimeError, match=r"^session sllist2 at 2025-07-22T09:00:00: KeyError: 'imro_table'$"):
         list_sessions(None, prefix=prefix)
 
@@ -182,3 +215,45 @@ def test_a_stage_that_cannot_read_reports_it_instead_of_raising(listed, monkeypa
     monkeypatch.setattr(stage, "listable", broken)
     assert stage.run_stage() == (0, ["SessionChange: the listing stage could not read the sessions: "
                                      "RuntimeError: the database went away"])
+
+
+# -- What a pass costs (the listing's M9). Every pass builds every listed
+# session's entry, so its reads must not grow with the sessions it lists.
+
+
+def test_the_stage_reads_each_table_once_however_many_sessions_it_lists(listed, monkeypatch, selects):
+    from wl_preproc.listing import stage
+
+    keys = [key for _recipe, key in listed.values()]
+
+    def stage_over(chosen):
+        def call():
+            with monkeypatch.context() as patched:
+                patched.setattr(stage, "listable", lambda: chosen)
+                assert stage.run_stage()[1] == []
+        return call
+
+    selects(stage_over(keys))
+    assert selects(stage_over(keys[:1])) == selects(stage_over(keys))
+
+
+def test_get_sessions_reads_each_table_once_however_many_sessions_it_lists(listed, prefix, selects):
+    """The cursors are chosen from the change log so that one, then two,
+    sessions changed after them."""
+    from wl_preproc.responder.sessions import list_sessions
+    from wl_preproc.schema import ingest
+
+    changes = ingest.SessionChange.to_dicts(order_by="change_seq DESC")
+    after, seen = {}, set()
+    for change in changes:
+        seen.add((change["subject"], change["session_datetime"]))
+        after.setdefault(len(seen), change["change_seq"] - 1)
+    assert {1, 2} <= set(after)
+
+    def listing_since(since, sessions):
+        def call():
+            assert len(list_sessions(since, prefix=prefix)["sessions"]) == sessions
+        return call
+
+    selects(listing_since(after[2], 2))
+    assert selects(listing_since(after[1], 1)) == selects(listing_since(after[2], 2))

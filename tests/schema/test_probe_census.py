@@ -175,3 +175,15 @@ def test_an_imro_table_longer_than_kept_is_a_problem():
     table, problem = kept_imro_table("(" * (IMRO_TABLE_MAX + 1))
     assert table is None and problem == (f"the imroTbl is {IMRO_TABLE_MAX + 1} characters, longer than the "
                                          f"{IMRO_TABLE_MAX} kept, so it is not kept")
+
+
+def test_a_probes_problem_without_the_note_that_its_imro_table_was_not_kept():
+    """The session listing's M6: the note says what the listing lacks, not
+    what is wrong with the probe, and the census puts it last."""
+    from wl_preproc.schema.ephys import kept_imro_table, probe_problem
+
+    _table, note = kept_imro_table("(" * 20000)
+    assert probe_problem(note) == ""
+    assert probe_problem(f"the .meta names no serial (imDatPrb_sn); {note}") == "the .meta names no serial (imDatPrb_sn)"
+    assert probe_problem("the .meta names no serial (imDatPrb_sn)") == "the .meta names no serial (imDatPrb_sn)"
+    assert probe_problem("") == ""
