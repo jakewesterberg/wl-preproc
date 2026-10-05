@@ -168,3 +168,7 @@ against its own database.
   turn it is; `missing_copies` and the clearing read after the writes before them; M6's pattern
   matches only the census's own note.
 
+
+**The full suite on `3f2a987`,** the branch with the review's fixes: 3.11, **2191 passed, 25 skipped,
+1 deselected, 1 xfailed**; 3.13, **2190 passed, 27 skipped, 1 xfailed**. That is seven more than
+piece 4's minors' run, the branch's seven new tests, and both exited 0.
