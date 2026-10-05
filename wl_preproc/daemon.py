@@ -1072,6 +1072,26 @@ def run_once(
                 nwb_built, nwb_errors = run_stage(nwb_root, freed=currently_freed(prefix=prefix))
                 errors.extend(nwb_errors)
 
+            # Subject corrections (design spec
+            # `2026-10-05-subject-corrections-design.md`): every written file
+            # whose subject's details changed, corrected where it is, after
+            # building and before publishing and placement, so a correction a
+            # crash left unrecorded is recorded before either checks the file
+            # (its amendment 11). `None` with neither the builder's root nor a
+            # share configured: there is no file to correct.
+            if nwb_root is None and nwb_slow is None:
+                nwb_corrected = None
+            else:
+                from wl_preproc.nwb.correct import run_corrections
+
+                try:
+                    nwb_corrected, correction_errors = run_corrections(
+                        nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+                    errors.extend(correction_errors)
+                except Exception as exc:  # a failing stage must not stop the others
+                    nwb_corrected = 0
+                    errors.append(f"NwbCorrection: corrections failed: {exc}")
+
             # Publishing (design spec `2026-09-29-nwb-publishing-design.md` section
             # 4): opt-in on the slow share, a `publish.Share`. `None` when absent.
             if nwb_slow is None:
@@ -1103,24 +1123,6 @@ def run_once(
                 except Exception as exc:  # a failing stage must not stop the others
                     nwb_moved = 0
                     errors.append(f"NwbPlacement: placement failed: {exc}")
-
-            # Subject corrections (design spec
-            # `2026-10-05-subject-corrections-design.md`): every written file
-            # whose subject's details changed, corrected where it is, after
-            # building, publishing and placement. `None` with neither the
-            # builder's root nor a share configured: there is no file to correct.
-            if nwb_root is None and nwb_slow is None:
-                nwb_corrected = None
-            else:
-                from wl_preproc.nwb.correct import run_corrections
-
-                try:
-                    nwb_corrected, correction_errors = run_corrections(
-                        nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
-                    errors.extend(correction_errors)
-                except Exception as exc:  # a failing stage must not stop the others
-                    nwb_corrected = 0
-                    errors.append(f"NwbCorrection: corrections failed: {exc}")
     except Busy as busy:
         nwb_built = None if nwb_root is None else 0
         nwb_published = None if nwb_slow is None else 0

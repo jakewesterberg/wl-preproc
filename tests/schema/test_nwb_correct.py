@@ -710,3 +710,112 @@ def test_a_file_left_by_a_failed_publish_is_adopted_after_its_scratch_copy_was_c
         assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 1) and not _is_stale(key)
     finally:
         _restore(key, shares)
+
+
+# -- Piece 4's deferred minors (handoff `2026-10-05-subject-corrections.md` §6).
+
+def test_a_corrected_file_keeps_its_permissions(published, shares):
+    """M1: the lab may have opened a published file to its group; the copy
+    swapped in keeps the live file's mode, not the copy's default."""
+    from wl_preproc.nwb.correct import correct
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    mode = live.stat().st_mode
+    live.chmod(0o660)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        correct(key, shares, _DAY)
+        assert live.stat().st_mode & 0o777 == 0o660
+    finally:
+        _restore(key, shares)
+        live.chmod(mode & 0o777)
+
+
+def test_an_unreachable_share_is_reported_once_not_per_file(published, shares, tmp_path_factory):
+    """M11: as publishing and placement say it, once per pass, with the
+    number of files it holds back."""
+    from wl_preproc.nwb.correct import run_corrections
+    from wl_preproc.nwb.publish import Share
+
+    gone = Share(tier="slow", mount=tmp_path_factory.mktemp("nwbfix-gone-slow") / "gone", host="wl-nas", name="hdd")
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        _corrected, errors = run_corrections(gone, shares["fast"])
+        reached = [error for error in errors if "not reachable" in error]
+        assert len(reached) == 1 and reached[0].startswith("NwbCorrection: the slow share is not reachable")
+        assert "file(s) on it not corrected" in reached[0]
+    finally:
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_file_already_holding_the_details_is_not_copied(published, shares, monkeypatch):
+    """M9: a pass after a crash that followed the swap has only records to
+    bring up; it does not copy a file that may be gigabytes."""
+    import shutil
+
+    from wl_preproc.nwb import correct as correct_module
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    new = {"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 1)}
+    _set_birth(new["date_of_birth"])
+    try:
+        correct_module.patch_subject(live, new, _DAY)
+
+        def no_copy(*args, **kwargs):
+            raise AssertionError("the file was copied")
+
+        monkeypatch.setattr(shutil, "copyfile", no_copy)
+        assert correct_module.correct(key, shares, _DAY) is None
+        assert not _is_stale(key)
+    finally:
+        monkeypatch.undo()
+        _restore(key, shares)
+
+
+def test_leftover_copies_are_cleared_wherever_a_file_has_been(published, shares):
+    """M6: a `.partial` a crash left -- beside a file, beside where it was
+    before a move, or beside its description -- is cleared by the next pass,
+    under the NWB lock, where no copy is in progress."""
+    from wl_preproc.nwb.correct import run_corrections
+    from wl_preproc.nwb.publish import current_placement, description_path
+
+    _session_key, key, _runs, _root = published
+    placement = current_placement(key)
+    left = [shares["slow"].local(placement["path"] + ".partial"),
+            shares["fast"].local(placement["path"] + ".partial"),
+            description_path(shares["slow"].local(placement["path"])).with_suffix(".json.partial")]
+    for path in left:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"left by a crash")
+    run_corrections(shares["slow"], shares["fast"])
+    assert [path for path in left if path.exists()] == []
+
+
+def test_a_correction_a_crash_left_unrecorded_does_not_stop_a_move(published, shares, daemon_module, prefix):
+    """M3: after a crash that followed the swap, the file holds new subject
+    details its records do not. Corrections now run before publishing and
+    placement, so the records are brought up first and a move due that pass
+    goes ahead, rather than being reported as changed data."""
+    from tests.schema.test_nwb_build import _set_active
+    from wl_preproc.nwb.correct import patch_subject
+    from wl_preproc.nwb.publish import current_placement
+
+    _session_key, key, _runs, root = published
+    passes = {"nwb_root": root, "nwb_slow": shares["slow"], "nwb_fast": shares["fast"]}
+    new = {"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 1)}
+    _set_birth(new["date_of_birth"])
+    patch_subject(_live(key, shares), new, _DAY)
+    _set_active(key)
+    try:
+        report = daemon_module.run_once(prefix=prefix, **passes)
+        assert not [error for error in report["errors"] if "changed on the NAS" in error], report["errors"]
+        assert current_placement(key)["tier"] == "fast" and not _is_stale(key)
+    finally:
+        _set_active()
+        _set_birth(_BIRTH)
+        daemon_module.run_once(prefix=prefix, **passes)
+        daemon_module.run_once(prefix=prefix, **passes)
+    assert current_placement(key)["tier"] == "slow"

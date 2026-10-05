@@ -176,12 +176,21 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     live, placement = _live(key, row, shares)
     if not live.exists():
         raise FileNotFoundError(f"{live}: the file is missing; not corrected")
+    if file_subject(live) == current:
+        # A pass after a crash that followed the swap: only the records are
+        # behind, and the file, perhaps gigabytes, is not copied (the final
+        # review's M9).
+        _record(key, row, live, placement)
+        return None
     checksums = (nwb_schema.NwbFile.Dataset & key).to_dicts()
     _subjects, others = _subject_paths(checksums)
     before = _stamp(live)
     partial = live.with_name(live.name + ".partial")
     try:
         shutil.copyfile(live, partial)
+        # The lab may have opened the file to its group: the copy swapped in
+        # keeps the live file's mode (the final review's M1).
+        shutil.copymode(live, partial)
         note = patch_subject(partial, current, day)
         changed = mismatches(partial, others)
         if changed:
@@ -287,12 +296,36 @@ def _change_kinds() -> str:
     return dj.conn().query(f"SHOW COLUMNS FROM {nwb_schema.NwbChange.full_table_name} LIKE 'kind'").fetchone()[1]
 
 
+def _clear_partials(shares: dict) -> None:
+    """Every `.partial` a crash left beside a file or its description, at
+    each published file's path on every reachable share and beside each
+    written file's scratch copy (the final review's M6). The NWB stages
+    alone write `.partial` names, under the NWB lock, so one found while the
+    lock is held is a leftover: of a correction, a publish or a move."""
+    from wl_preproc.nwb.publish import _published, current_placement, description_path
+    from wl_preproc.schema import nwb as nwb_schema
+
+    reachable = [share for share in shares.values() if share.unreachable() is None]
+    for key in _published().keys():
+        placement = current_placement(key)
+        for share in reachable if placement is not None else ():
+            path = share.local(placement["path"])
+            for beside in (path, description_path(path)):
+                beside.with_name(beside.name + ".partial").unlink(missing_ok=True)
+    for row in (nwb_schema.NwbFile & {"status": "written"}).proj("path").to_dicts():
+        if row["path"]:
+            Path(row["path"] + ".partial").unlink(missing_ok=True)
+
+
 def run_corrections(slow, fast=None, freed: list[dict] | None = None,
                     day: datetime.date | None = None) -> tuple[int, list[str]]:
     """The daemon's correction stage (spec section 2): every stale written
-    file, corrected where it is. A file not yet published in a freed session
-    waits, as publishing does. A failure is reported per file and retried
-    next pass; it never stops another file. Returns `(corrected, failures)`."""
+    file, corrected where it is, after building and before publishing and
+    placement (amendment 11). A file not yet published in a freed session
+    waits, as publishing does. Leftover `.partial` copies are cleared first.
+    A share that is not reachable is reported once, with the number of files
+    it holds back; any other failure is reported per file and retried next
+    pass, and never stops another file. Returns `(corrected, failures)`."""
     from wl_preproc.nwb.publish import current_placement
 
     freed = freed or []
@@ -317,13 +350,27 @@ def run_corrections(slow, fast=None, freed: list[dict] | None = None,
     except Exception as exc:  # the daemon's other stages must still run
         return 0, [f"NwbCorrection: {exc}"]
     corrected, errors = 0, []
+    try:
+        _clear_partials(shares)
+    except Exception as exc:  # the corrections below must still run
+        errors.append(f"NwbCorrection: clearing leftover copies: {exc}")
+    # Said once per share, as publishing and placement say it, not once per
+    # file it holds back (the final review's M11).
+    down = {tier: reason for tier, share in shares.items() if (reason := share.unreachable()) is not None}
+    held_back = dict.fromkeys(down, 0)
     for key in stale:
         try:
             session = {"subject": key["subject"], "session_datetime": key["session_datetime"]}
-            if session in freed and current_placement(key) is None:
+            placement = current_placement(key)
+            if session in freed and placement is None:
+                continue
+            if placement is not None and placement["tier"] in down:
+                held_back[placement["tier"]] += 1
                 continue
             correct(key, shares, day)
             corrected += 1
         except Exception as exc:  # one file must not stop the others; retried next pass
             errors.append(f"NwbCorrection {key}: {exc}")
+    errors.extend(f"NwbCorrection: {down[tier]}; {count} file(s) on it not corrected"
+                  for tier, count in held_back.items() if count)
     return corrected, errors
