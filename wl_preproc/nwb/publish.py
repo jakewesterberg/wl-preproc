@@ -176,20 +176,28 @@ def current_placement(key: dict) -> dict | None:
     return rows[-1] if rows else None
 
 
+def insert_change(key: dict, kind: str, placement: dict | None = None) -> int:
+    """One `NwbChange`, and its `NwbPlacement` when it placed a file, inside
+    the caller's transaction (`record_change`, or a correction's records:
+    `correct.py`). Returns the change's sequence number."""
+    import datajoint as dj
+
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.NwbChange.insert1({**key_of(key), "kind": kind, "changed_at": _now()})
+    sequence = int(dj.conn().query("SELECT LAST_INSERT_ID()").fetchone()[0])
+    if placement is not None:
+        nwb_schema.NwbPlacement.insert1({"change_seq": sequence, **placement})
+    return sequence
+
+
 def record_change(key: dict, kind: str, placement: dict | None = None) -> int:
     """One `NwbChange`, and its `NwbPlacement` when it moved a file, in one
     transaction. Returns the change's sequence number."""
     import datajoint as dj
 
-    from wl_preproc.schema import nwb as nwb_schema
-
-    connection = dj.conn()
-    with connection.transaction:
-        nwb_schema.NwbChange.insert1({**key_of(key), "kind": kind, "changed_at": _now()})
-        sequence = int(connection.query("SELECT LAST_INSERT_ID()").fetchone()[0])
-        if placement is not None:
-            nwb_schema.NwbPlacement.insert1({"change_seq": sequence, **placement})
-    return sequence
+    with dj.conn().transaction:
+        return insert_change(key, kind, placement)
 
 
 def active_keys() -> set[tuple]:

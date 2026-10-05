@@ -10,16 +10,33 @@ the copy. Only the subject's datasets change, with a note of what did."""
 
 from __future__ import annotations
 
+import copy
 import datetime
+import os
+import shutil
 from pathlib import Path
 
 import h5py
+
+from wl_preproc.nwb.validate import inspect_file, n_critical
 
 SUBJECT = "/general/subject"
 # The details a correction may change, in the order its note names them, with
 # the words it uses. The subject's description carries the note.
 _DETAILS = (("species", "species"), ("sex", "sex"), ("date_of_birth", "date of birth"))
 _ENCODING = {"species": "utf-8", "sex": "utf-8", "date_of_birth": "ascii", "description": "utf-8"}
+
+
+class CorrectionRefused(Exception):
+    """A correction this pass will not make (spec section 5): the share is
+    not there or is full, the subject's date of birth is now unknown, or the
+    corrected copy fails validation. The file keeps the details it has, and
+    each pass says so."""
+
+
+class ChangedWhileCorrecting(Exception):
+    """The live file changed while it was copied: someone is writing to it.
+    The copy is dropped and nothing recorded; the next pass tries again."""
 
 
 def stale_files() -> list[dict]:
@@ -102,3 +119,123 @@ def patch_subject(path: Path, new: dict, day: datetime.date) -> str | None:
         stated = subject["description"][()].decode() if "description" in subject else ""
         _write(subject, "description", f"{stated}\n{note}" if stated else note)
     return note
+
+
+def _key(row: dict) -> dict:
+    return {k: row[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
+
+
+def _live(key: dict, row: dict, shares: dict) -> tuple[Path, dict | None]:
+    """Where the file is now, and its placement: on its share once
+    published, in scratch until then."""
+    from wl_preproc.nwb.publish import current_placement
+
+    placement = current_placement(key)
+    if placement is None:
+        return Path(row["path"]), None
+    share = shares.get(placement["tier"])
+    if share is None:
+        raise CorrectionRefused(f"the {placement['tier']} share is not configured; not corrected")
+    if reason := share.unreachable():
+        raise CorrectionRefused(f"{reason}; not corrected")
+    live = share.local(placement["path"])
+    if placement["tier"] == "fast" and live.exists() and not share.has_room(live.stat().st_size):
+        raise CorrectionRefused("the fast share is at its headroom; not corrected")
+    return live, placement
+
+
+def _subject_paths(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """`rows` split into the subject's datasets and the rest."""
+    inside = [row for row in rows if row["dataset_path"].startswith(SUBJECT + "/")]
+    return inside, [row for row in rows if not row["dataset_path"].startswith(SUBJECT + "/")]
+
+
+def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
+    """Correct one stale file where it is (spec section 3): copy, patch,
+    check, swap, record, and rewrite the description beside it. `shares`
+    maps a tier to its `publish.Share`. Returns the note, or None when the
+    file already held the details and only its records were brought up to
+    them. Raises `CorrectionRefused`, `ChangedWhileCorrecting` or
+    `publish.ChangedData`, leaving the live file as it was."""
+    from wl_preproc.nwb.gather import _subject
+    from wl_preproc.nwb.publish import ChangedData, _stamp, mismatches
+    from wl_preproc.schema import nwb as nwb_schema
+
+    key = _key(key)
+    row = (nwb_schema.NwbFile & key).fetch1()
+    current = _subject(key["subject"])
+    current = {field: current[field] for field, _words in _DETAILS}
+    if current["date_of_birth"] is None:
+        raise CorrectionRefused("the subject's date of birth is now unknown, and a file without one fails "
+                                "validation; it keeps the details it has")
+    live, placement = _live(key, row, shares)
+    if not live.exists():
+        raise FileNotFoundError(f"{live}: the file is missing; not corrected")
+    checksums = (nwb_schema.NwbFile.Dataset & key).to_dicts()
+    _subjects, others = _subject_paths(checksums)
+    before = _stamp(live)
+    partial = live.with_name(live.name + ".partial")
+    try:
+        shutil.copyfile(live, partial)
+        note = patch_subject(partial, current, day)
+        changed = mismatches(partial, others)
+        if changed:
+            raise ChangedData(f"{live}: {len(changed)} written-once dataset(s) changed, first {changed[0]}; "
+                              "not corrected")
+        if note is not None and (critical := n_critical(inspect_file(partial))):
+            raise CorrectionRefused(f"{live}: the corrected copy has {critical} critical nwbinspector "
+                                    "finding(s); not corrected")
+        if _stamp(live) != before:
+            raise ChangedWhileCorrecting(f"{live}: changed while it was being corrected (someone is writing "
+                                         "to it); tried again next pass")
+        if note is not None:
+            with open(partial, "rb+") as handle:
+                os.fsync(handle.fileno())
+            os.replace(partial, live)
+    finally:
+        partial.unlink(missing_ok=True)
+    _record(key, row, live, placement, current)
+    return note
+
+
+def _record(key: dict, row: dict, live: Path, placement: dict | None, current: dict) -> None:
+    """The records brought up to the file (spec section 3, steps 5 and 6),
+    in one transaction: the description's subject and notes, the subject's
+    checksums, the size, and a `corrected` change -- with the placement
+    again, same share and path, for a published file. Then the description
+    beside a published file."""
+    import datajoint as dj
+
+    from wl_preproc.contracts.nwb_description import NwbDescription
+    from wl_preproc.nwb.checksums import dataset_checksums
+    from wl_preproc.nwb.describe import _age_days
+    from wl_preproc.nwb.publish import insert_change, write_description
+    from wl_preproc.schema import nwb as nwb_schema
+
+    born = current["date_of_birth"]
+    description = copy.deepcopy(row["description"])
+    description["subject"] = {"species": current["species"], "sex": current["sex"],
+                              "date_of_birth": born.isoformat(), "age_days": _age_days(born, key["session_datetime"])}
+    with h5py.File(live, "r") as handle:
+        stated = handle[SUBJECT]["description"][()].decode() if "description" in handle[SUBJECT] else ""
+    # The file's correction lines past those the description already has,
+    # counted rather than compared, so the same correction twice is noted
+    # twice; read from the file, so a pass after a crash that followed the
+    # swap records the note the crashed pass wrote.
+    corrections = [line for line in stated.split("\n") if line.startswith("Corrected ")]
+    recorded = sum(1 for note in description["notes"] if note.startswith("Corrected "))
+    description["notes"] = [*description["notes"], *corrections[recorded:]]
+    fresh, _rest = _subject_paths(dataset_checksums(live))
+    _old, kept = _subject_paths(description["checksums"]["datasets"])
+    description["checksums"]["datasets"] = sorted([*kept, *fresh], key=lambda item: item["dataset_path"])
+    description = NwbDescription.model_validate(description).model_dump(mode="json")
+    n_bytes = live.stat().st_size
+    with dj.conn().transaction:
+        nwb_schema.NwbFile.update1({**key, "description": description,
+                                    **({} if placement is not None else {"n_bytes": n_bytes})})
+        (nwb_schema.NwbFile.Dataset & key & f"dataset_path LIKE '{SUBJECT}/%'").delete_quick()
+        nwb_schema.NwbFile.Dataset.insert({**key, **item} for item in fresh)
+        insert_change(key, "corrected", None if placement is None else {
+            **{field: placement[field] for field in ("tier", "host", "share", "path")}, "n_bytes": n_bytes})
+    if placement is not None:
+        write_description(live, description)
