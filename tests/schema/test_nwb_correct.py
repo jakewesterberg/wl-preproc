@@ -500,3 +500,213 @@ def test_a_leftover_written_after_its_move_is_kept_though_the_file_was_corrected
         _set_active()
         publish_module.run_placement(shares["slow"], shares["fast"])
     assert publish_module.current_placement(key)["tier"] == "slow"
+
+
+# -- The final review's fixes.
+
+def test_only_the_four_subject_datasets_are_spared_or_taken_into_the_records(published, shares):
+    """Final review I2: a correction rewrites four datasets and no others. A
+    changed `subject_id`, which the build wrote once, stops it; a dataset the
+    lab appended under the subject is not taken into the records, so the lab
+    may change it again without a move refusing the file."""
+    import h5py
+
+    from wl_preproc.nwb.correct import correct
+    from wl_preproc.nwb.publish import ChangedData, mismatches
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    with h5py.File(live, "r+") as handle:
+        original = handle["general/subject/subject_id"][()].decode()
+        handle["general/subject/subject_id"][()] = "someone-else"
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with pytest.raises(ChangedData, match="subject_id"):
+            correct(key, shares, _DAY)
+    finally:
+        with h5py.File(live, "r+") as handle:
+            handle["general/subject/subject_id"][()] = original
+        _set_birth(_BIRTH)
+    with h5py.File(live, "r+") as handle:
+        handle["general/subject"].create_dataset("weight", data="8.1 kg")
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        correct(key, shares, _DAY)
+        recorded = (nwb_schema.NwbFile.Dataset & key).to_dicts()
+        described = (nwb_schema.NwbFile & key).fetch1("description")["checksums"]["datasets"]
+        assert "/general/subject/weight" not in {row["dataset_path"] for row in recorded + described}
+        with h5py.File(live, "r+") as handle:
+            handle["general/subject/weight"][()] = "8.4 kg"
+        assert mismatches(live, recorded) == []
+    finally:
+        _restore(key, shares)
+        with h5py.File(live, "r+") as handle:
+            del handle["general/subject/weight"]
+
+
+def test_a_description_file_that_could_not_be_written_is_written_next_pass(published, shares, monkeypatch):
+    """Final review I3: the description beside a published file is written
+    before the records, so a failure leaves the file stale and the next pass
+    writes it (spec section 5: retried next pass)."""
+    import json
+
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import run_corrections
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    real = publish_module.write_description
+
+    def failing(path, description):
+        raise OSError("[Errno 5] Input/output error")
+
+    monkeypatch.setattr(publish_module, "write_description", failing)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert [error for error in errors if "Input/output error" in error]
+        monkeypatch.setattr(publish_module, "write_description", real)
+        run_corrections(shares["slow"], shares["fast"])
+        described = json.loads(publish_module.description_path(live).read_text())
+        assert described["subject"]["date_of_birth"] == "2016-03-01"
+    finally:
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_write_while_the_copy_is_flushed_stops_the_swap(published, shares, monkeypatch):
+    """Final review M2: the copy is flushed before the live file's stamp is
+    checked, so a write landing during the flush is seen and the copy
+    dropped, rather than swapped over what was written."""
+    import os
+
+    from wl_preproc.nwb import correct as correct_module
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    real = os.fsync
+
+    def written_meanwhile(descriptor):
+        real(descriptor)
+        with open(live, "ab") as handle:
+            handle.write(b"\0")
+
+    monkeypatch.setattr(correct_module.os, "fsync", written_meanwhile)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with pytest.raises(correct_module.ChangedWhileCorrecting):
+            correct_module.correct(key, shares, _DAY)
+    finally:
+        monkeypatch.undo()
+        with open(live, "r+b") as handle:  # the byte appended above, removed
+            handle.truncate(live.stat().st_size - 1)
+        _set_birth(_BIRTH)
+    assert correct_module.file_subject(live)["date_of_birth"] == _BIRTH
+
+
+def test_a_database_without_the_corrected_kind_corrects_nothing_and_says_how_to_fix_it(
+        published, shares, monkeypatch):
+    """Final review M5: a development database declared before `corrected`
+    would fail each correction's records after its swap, every pass. The
+    stage checks the column first, swaps nothing, and names the statement."""
+    from wl_preproc.nwb import correct as correct_module
+
+    _session_key, key, _runs, _root = published
+    assert "'corrected'" in correct_module._change_kinds()
+    monkeypatch.setattr(correct_module, "_change_kinds",
+                        lambda: "enum('built','published','moved','superseded')")
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        corrected, errors = correct_module.run_corrections(shares["slow"], shares["fast"])
+        assert corrected == 0
+        (error,) = [error for error in errors if "ALTER TABLE" in error and "'corrected'" in error]
+        assert correct_module.file_subject(_live(key, shares))["date_of_birth"] == _BIRTH
+    finally:
+        _set_birth(_BIRTH)
+    # The statement it names is the column as this branch declares it: on a
+    # database that already has it, running it changes nothing.
+    import datajoint as dj
+
+    from wl_preproc.schema import nwb as nwb_schema
+
+    show = f"SHOW FULL COLUMNS FROM {nwb_schema.NwbChange.full_table_name} LIKE 'kind'"
+    before = dj.conn().query(show).fetchone()
+    dj.conn().query(error[error.index("ALTER TABLE"):])
+    assert dj.conn().query(show).fetchone() == before
+
+
+def test_a_rebuilt_row_takes_over_its_corrected_published_file(published, shares, daemon_module, prefix):
+    """Final review I1(a): `wlpp nwb build`'s remedy -- delete the row and
+    rebuild -- after a correction. The rebuild carries no correction note, so
+    the published file's subject differs from it; the file is still this
+    activation's, annotations and all, and is adopted, its subject records
+    taken from it. The montage's current canonical: a superseded activation
+    is never rebuilt (canonical-lifecycle spec section 4), and an earlier
+    test here replaced the fixture's."""
+    import h5py
+
+    from wl_preproc.nwb.correct import correct, run_corrections
+    from wl_preproc.nwb.publish import current_placement
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema.request import current_canonical
+
+    session_key, _key, _runs, root = published
+    montage = {"subject": session_key["subject"], "session_datetime": session_key["session_datetime"], "montage_id": 0}
+    key = {k: current_canonical(montage)[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
+    live = _live(key, shares)
+    _annotate(live)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        correct(key, shares, _DAY)
+        (nwb_schema.NwbFile & key).delete(prompt=False)
+        report = daemon_module.run_once(prefix=prefix, nwb_root=root, nwb_slow=shares["slow"],
+                                        nwb_fast=shares["fast"])
+        assert not [error for error in report["errors"] if "not overwritten" in error], report["errors"]
+        assert current_placement(key) is not None and _live(key, shares) == live
+        with h5py.File(live, "r") as handle:
+            assert handle[_ANNOTATION][()] == b"seen by JW"
+        notes = (nwb_schema.NwbFile & key).fetch1("description")["notes"]
+        assert notes and notes[-1].startswith("Corrected ") and not _is_stale(key)
+    finally:
+        # The pass corrected every file of the animal, so all go back.
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_file_left_by_a_failed_publish_is_adopted_after_its_scratch_copy_was_corrected(published, shares):
+    """Final review I1(b): a publish renamed the file onto its share and
+    failed before recording it; the correction stage then corrected the
+    scratch copy and its records. The next publishing pass adopts the shared
+    file all the same -- its subject records taken from it -- and the next
+    correction brings it up to the current details."""
+    import shutil
+    from pathlib import Path
+
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import file_subject, run_corrections
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    assert file_subject(live)["date_of_birth"] == _BIRTH and not _is_stale(key)
+    scratch = Path((nwb_schema.NwbFile & key).fetch1("path"))
+    scratch.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(live, scratch)
+    # What a publish that failed after its rename leaves: the file on the
+    # share, its scratch copy, and no placement recorded.
+    (nwb_schema.NwbChange & key & "kind IN ('published', 'moved', 'corrected')").delete(prompt=False)
+    assert publish_module.current_placement(key) is None
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        run_corrections(shares["slow"], shares["fast"])
+        assert file_subject(scratch)["date_of_birth"] == datetime.date(2016, 3, 1)
+        _published, errors = publish_module.run_publish(shares["slow"], shares["fast"])
+        assert not [error for error in errors if "not overwritten" in error], errors
+        assert publish_module.current_placement(key) is not None and _live(key, shares) == live
+        assert _is_stale(key)
+        run_corrections(shares["slow"], shares["fast"])
+        assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 1) and not _is_stale(key)
+    finally:
+        _restore(key, shares)

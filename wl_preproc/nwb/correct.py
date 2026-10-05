@@ -21,6 +21,11 @@ import h5py
 from wl_preproc.nwb.validate import inspect_file, n_critical
 
 SUBJECT = "/general/subject"
+# The four datasets a correction rewrites, and the only ones it may: every
+# other dataset under the subject -- `subject_id`, written once by the build,
+# or one the lab appended -- is not a correction's to change or to record
+# (the final review's I2).
+SUBJECT_DATASETS = frozenset(f"{SUBJECT}/{name}" for name in ("species", "sex", "date_of_birth", "description"))
 # The details a correction may change, in the order its note names them, with
 # the words it uses. The subject's description carries the note.
 _DETAILS = (("species", "species"), ("sex", "sex"), ("date_of_birth", "date of birth"))
@@ -145,9 +150,9 @@ def _live(key: dict, row: dict, shares: dict) -> tuple[Path, dict | None]:
 
 
 def _subject_paths(rows: list[dict]) -> tuple[list[dict], list[dict]]:
-    """`rows` split into the subject's datasets and the rest."""
-    inside = [row for row in rows if row["dataset_path"].startswith(SUBJECT + "/")]
-    return inside, [row for row in rows if not row["dataset_path"].startswith(SUBJECT + "/")]
+    """`rows` split into the four datasets a correction rewrites and the rest."""
+    inside = [row for row in rows if row["dataset_path"] in SUBJECT_DATASETS]
+    return inside, [row for row in rows if row["dataset_path"] not in SUBJECT_DATASETS]
 
 
 def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
@@ -185,60 +190,101 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
         if note is not None and (critical := n_critical(inspect_file(partial))):
             raise CorrectionRefused(f"{live}: the corrected copy has {critical} critical nwbinspector "
                                     "finding(s); not corrected")
+        if note is not None:
+            with open(partial, "rb+") as handle:
+                os.fsync(handle.fileno())
+        # Checked after the copy is flushed, so a write landing during the
+        # flush is seen rather than lost under the swap (the final review's M2).
         if _stamp(live) != before:
             raise ChangedWhileCorrecting(f"{live}: changed while it was being corrected (someone is writing "
                                          "to it); tried again next pass")
         if note is not None:
-            with open(partial, "rb+") as handle:
-                os.fsync(handle.fileno())
             os.replace(partial, live)
     finally:
         partial.unlink(missing_ok=True)
-    _record(key, row, live, placement, current)
+    _record(key, row, live, placement)
     return note
 
 
-def _record(key: dict, row: dict, live: Path, placement: dict | None, current: dict) -> None:
-    """The records brought up to the file (spec section 3, steps 5 and 6),
-    in one transaction: the description's subject and notes, the subject's
-    checksums, the size, and a `corrected` change -- with the placement
-    again, same share and path, for a published file. Then the description
-    beside a published file."""
-    import datajoint as dj
-
+def subject_records(key: dict, description: dict, path: Path) -> tuple[dict, list[dict]]:
+    """A description and the four subject datasets' checksums brought up to
+    the file at `path`: its subject as the file holds it (with `age_days`),
+    its correction lines past those the description already has, and the
+    four checksums. Read from the file, so a pass after a crash that
+    followed the swap records the note the crashed pass wrote. Shared by a
+    correction's records and by publishing when it adopts a file a
+    correction may have changed (`publish._adopt`, the final review's I1)."""
     from wl_preproc.contracts.nwb_description import NwbDescription
     from wl_preproc.nwb.checksums import dataset_checksums
     from wl_preproc.nwb.describe import _age_days
-    from wl_preproc.nwb.publish import insert_change, write_description
+
+    held = file_subject(path)
+    born = held["date_of_birth"]
+    described = copy.deepcopy(description)
+    described["subject"] = {"species": held["species"], "sex": held["sex"],
+                            "date_of_birth": None if born is None else born.isoformat(),
+                            "age_days": _age_days(born, key["session_datetime"])}
+    with h5py.File(path, "r") as handle:
+        stated = handle[SUBJECT]["description"][()].decode() if "description" in handle[SUBJECT] else ""
+    # Counted rather than compared, so the same correction twice is noted
+    # twice.
+    corrections = [line for line in stated.split("\n") if line.startswith("Corrected ")]
+    recorded = sum(1 for note in described["notes"] if note.startswith("Corrected "))
+    described["notes"] = [*described["notes"], *corrections[recorded:]]
+    fresh = dataset_checksums(path, only=SUBJECT_DATASETS)
+    _old, kept = _subject_paths(described["checksums"]["datasets"])
+    described["checksums"]["datasets"] = sorted([*kept, *fresh], key=lambda item: item["dataset_path"])
+    return NwbDescription.model_validate(described).model_dump(mode="json"), fresh
+
+
+def write_subject_records(key: dict, description: dict, fresh: list[dict], change: dict | None = None,
+                          n_bytes: int | None = None) -> None:
+    """`subject_records`' result into the records, in one transaction: the
+    description, the four datasets' `NwbFile.Dataset` rows, the scratch
+    copy's size when given, and -- for a correction -- its `corrected`
+    change, with `change` as its placement (or `{}` for none)."""
+    import datajoint as dj
+
+    from wl_preproc.nwb.publish import insert_change
     from wl_preproc.schema import nwb as nwb_schema
 
-    born = current["date_of_birth"]
-    description = copy.deepcopy(row["description"])
-    description["subject"] = {"species": current["species"], "sex": current["sex"],
-                              "date_of_birth": born.isoformat(), "age_days": _age_days(born, key["session_datetime"])}
-    with h5py.File(live, "r") as handle:
-        stated = handle[SUBJECT]["description"][()].decode() if "description" in handle[SUBJECT] else ""
-    # The file's correction lines past those the description already has,
-    # counted rather than compared, so the same correction twice is noted
-    # twice; read from the file, so a pass after a crash that followed the
-    # swap records the note the crashed pass wrote.
-    corrections = [line for line in stated.split("\n") if line.startswith("Corrected ")]
-    recorded = sum(1 for note in description["notes"] if note.startswith("Corrected "))
-    description["notes"] = [*description["notes"], *corrections[recorded:]]
-    fresh, _rest = _subject_paths(dataset_checksums(live))
-    _old, kept = _subject_paths(description["checksums"]["datasets"])
-    description["checksums"]["datasets"] = sorted([*kept, *fresh], key=lambda item: item["dataset_path"])
-    description = NwbDescription.model_validate(description).model_dump(mode="json")
-    n_bytes = live.stat().st_size
     with dj.conn().transaction:
         nwb_schema.NwbFile.update1({**key, "description": description,
-                                    **({} if placement is not None else {"n_bytes": n_bytes})})
-        (nwb_schema.NwbFile.Dataset & key & f"dataset_path LIKE '{SUBJECT}/%'").delete_quick()
+                                    **({} if n_bytes is None else {"n_bytes": n_bytes})})
+        (nwb_schema.NwbFile.Dataset & key & [{"dataset_path": path} for path in SUBJECT_DATASETS]).delete_quick()
         nwb_schema.NwbFile.Dataset.insert({**key, **item} for item in fresh)
-        insert_change(key, "corrected", None if placement is None else {
-            **{field: placement[field] for field in ("tier", "host", "share", "path")}, "n_bytes": n_bytes})
+        if change is not None:
+            insert_change(key, "corrected", change or None)
+
+
+def _record(key: dict, row: dict, live: Path, placement: dict | None) -> None:
+    """The records brought up to the file (spec section 3, steps 5 and 6):
+    the description beside a published file first, then, in one
+    transaction, the description's subject and notes, the four checksums,
+    the size, and a `corrected` change -- with the placement again, same
+    share and path, for a published file. Written in that order, a failed
+    description file leaves the records stale, so the next pass writes it
+    (the final review's I3)."""
+    from wl_preproc.nwb.publish import write_description
+
+    description, fresh = subject_records(key, row["description"], live)
+    n_bytes = live.stat().st_size
     if placement is not None:
         write_description(live, description)
+    again = {} if placement is None else {
+        **{field: placement[field] for field in ("tier", "host", "share", "path")}, "n_bytes": n_bytes}
+    write_subject_records(key, description, fresh, change=again, n_bytes=n_bytes if placement is None else None)
+
+
+def _change_kinds() -> str:
+    """`NwbChange.kind`'s type as the database declares it now. A database
+    declared before `corrected` would refuse each correction's records after
+    its swap, on every pass (the final review's M5)."""
+    import datajoint as dj
+
+    from wl_preproc.schema import nwb as nwb_schema
+
+    return dj.conn().query(f"SHOW COLUMNS FROM {nwb_schema.NwbChange.full_table_name} LIKE 'kind'").fetchone()[1]
 
 
 def run_corrections(slow, fast=None, freed: list[dict] | None = None,
@@ -252,6 +298,20 @@ def run_corrections(slow, fast=None, freed: list[dict] | None = None,
     freed = freed or []
     day = day or datetime.datetime.now(datetime.timezone.utc).date()
     shares = {tier: share for tier, share in (("slow", slow), ("fast", fast)) if share is not None}
+    try:
+        kinds = _change_kinds()
+    except Exception as exc:  # the daemon's other stages must still run
+        return 0, [f"NwbCorrection: {exc}"]
+    if "'corrected'" not in kinds:
+        from wl_preproc.schema import nwb as nwb_schema
+
+        table = nwb_schema.NwbChange.full_table_name
+        kind = "enum('built','published','moved','superseded','corrected')"
+        # DataJoint keeps the declared type in the column's comment.
+        comment = f":{kind}:".replace("'", "''")
+        return 0, [f"NwbCorrection: {table}.kind is {kinds}, without 'corrected': a database declared before "
+                   "subject corrections; nothing is corrected until it is altered: ALTER TABLE "
+                   f"{table} MODIFY kind {kind} NOT NULL COMMENT '{comment}'"]
     try:
         stale = stale_files()
     except Exception as exc:  # the daemon's other stages must still run

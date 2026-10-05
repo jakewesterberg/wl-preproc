@@ -238,12 +238,24 @@ def _adopt(key: dict, target: Path, share: Share, checksums: list[dict], descrip
     """A file already at this activation's path that no placement records:
     its own, if every written-once dataset is this row's -- left by a
     publish that failed after the rename, or by a row deleted and rebuilt.
-    Taken over where it is, annotations and all; refused otherwise."""
-    bad = mismatches(target, checksums)
+    Taken over where it is, annotations and all; refused otherwise.
+
+    The four subject datasets a correction rewrites are not compared: a file
+    corrected since it was placed, or a row rebuilt or corrected since,
+    differs there and is still this activation's. Its subject records are
+    taken from the file, so a correction brings it up to the current details
+    if they differ (design spec `2026-10-05-subject-corrections-design.md`,
+    the final review's I1)."""
+    from wl_preproc.nwb.correct import SUBJECT_DATASETS, subject_records, write_subject_records
+
+    bad = mismatches(target, [row for row in checksums if row["dataset_path"] not in SUBJECT_DATASETS])
     if bad:
         raise PublishConflict(f"{target} already exists with other written-once data ({len(bad)} dataset(s), "
                               f"first {bad[0]}) and no placement of this activation records it; not overwritten")
-    write_description(target, description)
+    adopted, fresh = subject_records(key, description, target)
+    if adopted != description:
+        write_subject_records(key, adopted, fresh)
+    write_description(target, adopted)
     return {"tier": share.tier, "host": share.host, "share": share.name,
             "path": target.relative_to(share.mount).as_posix(), "n_bytes": target.stat().st_size}
 
