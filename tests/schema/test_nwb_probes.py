@@ -189,6 +189,31 @@ def test_a_meta_naming_no_serial_is_noted_by_its_segment(daemon_module, prefix, 
                                 "probe it recorded is unknown"]
 
 
+def test_an_imro_table_too_long_to_keep_is_not_a_probe_note(daemon_module, prefix, tmp_path_factory, monkeypatch):
+    """The session listing's M6: the census's note that a probe's imroTbl was
+    too long to keep stays in the census, for the listing, and stays out of
+    the file. Its sites are read from the .meta's whole table all the same,
+    so nothing is wrong with the probe. No lab probe's table comes near the
+    width kept, and the synthetic table records four channels, so the census
+    pass runs with a width shorter than any table."""
+    from wl_preproc.nwb.gather import gather
+    from wl_preproc.schema import ephys
+
+    _recipe, key = _session(tmp_path_factory, subject="pnwb7", session_id="2025-06-20_01", probe_serial="19011110020")
+    with monkeypatch.context() as narrower:
+        narrower.setattr(ephys, "IMRO_TABLE_MAX", 10)
+        daemon_module.run_once(prefix=prefix)
+    parts = (ephys.ProbeCensus.Probe & key).to_dicts()
+    assert parts and all(part["problem"].endswith("so it is not kept") and part["electrode_config_hash"]
+                         for part in parts)
+    activation = _canonical(daemon_module, prefix, key, "pnwb7-k1",
+                            [{"serial": "19011110020", "insertion_number": 1, "target": _AIM}])
+
+    data = gather(activation)
+    assert [probe["serial"] for probe in data.probes] == ["19011110020"]
+    assert data.probe_notes == []
+
+
 def test_a_bank_change_inside_a_montage_refuses_the_file(daemon_module, prefix, tmp_path_factory):
     """Section 5's one refusing case: a file across it would later be
     sorted across it. The reason names both segments."""

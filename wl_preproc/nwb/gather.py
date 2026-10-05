@@ -592,7 +592,8 @@ def _probes(key: dict, session_key: dict, run_rows: list[dict]) -> tuple[list[di
         for row in (core.Segment & session_key & {"system": "spikeglx"}).to_dicts()
         if any(row["start_s"] < run["end_s"] and row["end_s"] > run["start_s"] for run in run_rows)
     }
-    parts = [part for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
+    parts = [{**part, "problem": ephys.probe_problem(part["problem"])}
+             for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
              if part["segment_barcode"] in segments]
     reports = (ephys.InsertionReport & session_key).to_dicts(order_by="insertion_number")
     recorded_anywhere = {serial for serial in (ephys.ProbeCensus.Probe & session_key).to_arrays("probe_serial") if serial}
