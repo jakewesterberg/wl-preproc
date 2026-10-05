@@ -52,6 +52,17 @@ def test_an_entry_reads_what_the_daemon_measured(listed):
     assert [(flag["code"], flag["run_number"]) for flag in entry["flags"]] == [("bank_change_in_run", 2)]
 
 
+def test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares(listed):
+    """Its time as text too, as the per-session reading took it (the M9
+    review's M1); a session that has not landed is named."""
+    from wl_preproc.listing.entry import session_entry
+
+    _recipe, key = listed["runs"]
+    assert session_entry({**key, "session_datetime": key["session_datetime"].isoformat(sep=" ")}) == session_entry(key)
+    with pytest.raises(LookupError, match="^no landed session sllist1 at 2001-07-21 09:00:00$"):
+        session_entry({**key, "session_datetime": key["session_datetime"].replace(year=2001)})
+
+
 def test_a_session_without_run_markers_is_listed_waiting(listed):
     from wl_preproc.listing.entry import session_entry
 
@@ -59,6 +70,28 @@ def test_a_session_without_run_markers_is_listed_waiting(listed):
     entry = session_entry(key)
     assert entry["runs"] == []
     assert [flag["code"] for flag in entry["flags"]] == ["waiting_for_run_markers"]
+
+
+def test_a_block_with_no_stored_trial_lists_none(listed):
+    """Its BLOCK_START was strobed, and its run stopped, or every trial in it
+    was refused, before a trial was stored. Trials are counted in the
+    database (the listing's M9), where a count over a join that keeps every
+    block counts one for a block it matched to nothing (the M9 review's C1).
+    Removed again before the change log's tests."""
+    from wl_preproc.listing.entry import session_entry
+    from wl_preproc.schema import core, pipeline
+
+    _recipe, key = listed["runs"]
+    run = (core.Run & key & {"run_number": 2}).fetch1()
+    start = (run["run_start_time"] + run["run_stop_time"]) / 2
+    block = {**key, "block_id": 77}
+    pipeline.trial.Block.insert1({**block, "block_start_time": start, "block_stop_time": start + 0.01},
+                                 allow_direct_insert=True)
+    try:
+        (second,) = [run for run in session_entry(key)["runs"] if run["run_number"] == 2]
+        assert [(block["block_number"], block["n_trials"]) for block in second["blocks"]] == [(2, 1), (77, 0)]
+    finally:
+        (pipeline.trial.Block & block).delete_quick()
 
 
 

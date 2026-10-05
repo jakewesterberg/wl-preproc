@@ -131,8 +131,8 @@ failed first, and each passes run alone.
   cost the same. `test_the_stage_reads_each_table_once_however_many_sessions_it_lists`,
   `test_get_sessions_reads_each_table_once_however_many_sessions_it_lists`. The entries'
   digests were checked against the old per-session reading on the ten sessions five test modules
-  land, and again with rig-record problems inserted out of order, so no session is listed again
-  at deploy.
+  land, with rig-record problems inserted out of order and a block holding no trial, so no
+  session is listed again at deploy.
 - **The placement lookups:** clearing leftovers, reporting missing copies and placement each
   visit every published file every pass, and each looked up its placement with a query per file.
   Each now reads every file's placements once (`nwb/publish.py::placement_history`), and
@@ -145,3 +145,26 @@ failed first, and each passes run alone.
   through DataJoint's connection, warmed once for the tables' headings.
 - **Left as it is:** corrections look up a placement per stale file. Stale files appear only after
   a subject correction, so that loop does not grow with the lab.
+
+**The branch's review.** One fresh Opus reviewer read the whole branch and ran scratch tests
+against its own database.
+- **Critical, fixed:** trials were counted with DataJoint's `aggr`, which keeps every block
+  through a LEFT JOIN, so `count(*)` listed a block holding no trial with one. Such a block is
+  real: a run stopped, or every trial in it refused, after its `BLOCK_START`. It also made every
+  such session's digest change at deploy. The count is now over the blocks a trial is stored in.
+  The equivalence check had missed it because none of its sessions held such a block; it was
+  rerun with one. `test_a_block_with_no_stored_trial_lists_none`.
+- **Minor, fixed (M1):** one session's facts were looked up by the exact key passed, so a time
+  given as text raised `KeyError`. The database finds the session again, and a session that has
+  not landed is named. `test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares`.
+- **Minor, recorded (M2):** a failed read now fails the stage's listing for the pass, reported
+  once, where before a failed read of one session's rows was that session's error. The reads
+  convert only values this pipeline writes. Spec amendment 29 says so.
+- **Minor, left (M3):** the listing's read-count test relies on both of its sessions having a
+  probe census, since the electrode read is skipped when no session has one. It can fail
+  falsely if the fixture changes, never pass falsely.
+- **Checked and sound by the reviewer:** every DataJoint fetch goes through `Connection.query`,
+  so `selects` sees it; `run_placement`'s snapshot is written only by a move of the file whose
+  turn it is; `missing_copies` and the clearing read after the writes before them; M6's pattern
+  matches only the census's own note.
+

@@ -201,8 +201,12 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
             numbers[_session(row)].append(int(row["attribute_value"]))
         return numbers
 
+    # Only the blocks a trial is stored in: `aggr` otherwise keeps every block
+    # through a LEFT JOIN, and `count(*)` counts its one unmatched row (the
+    # M9 review's C1). A block with none is listed with 0.
     trials = collections.defaultdict(dict)
-    for row in (pipeline.trial.Block & keys).aggr(pipeline.trial.BlockTrial, n_trials="count(*)").to_dicts():
+    for row in (pipeline.trial.Block & keys).aggr(pipeline.trial.BlockTrial, n_trials="count(*)",
+                                                  exclude_nonmatching=True).to_dicts():
         trials[_session(row)][int(row["block_id"])] = int(row["n_trials"])
     rejected = _by_session((core.RejectedSegment & keys).to_dicts())
     runs = _by_session((core.Run & keys).to_dicts())
@@ -242,8 +246,13 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
 
 
 def gather_facts(session_key: dict) -> SessionFacts:
-    """One session's facts, read from the database."""
-    return gather_all([session_key])[(session_key["subject"], session_key["session_datetime"])]
+    """One session's facts, read from the database. The session is found by
+    the database, so its key may name its time in any form MySQL compares
+    (the M9 review's M1)."""
+    found = list(gather_all([session_key]).values())
+    if len(found) != 1:
+        raise LookupError(f"no landed session {session_key['subject']} at {session_key['session_datetime']}")
+    return found[0]
 
 
 def session_entry(session_key: dict) -> dict:

@@ -477,7 +477,10 @@ settle what the sections above left open; §0 stands.
     (`schema/ephys.py::probe_problem`).
 29. **A pass reads each table once for every listed session** (§2.1, final review M9). The
     listing stage and `GET /sessions` gather their sessions' rows together, one query per table
-    (`listing/entry.py::gather_all`), and build each entry alone, so one session's failure is
-    still reported as its own. Trials are counted in the database. The entries are unchanged:
-    their digests matched the per-session reading's for the ten sessions five test modules land,
-    and again with rig-record problems inserted out of order.
+    (`listing/entry.py::gather_all`), and build each entry alone, so a failure building one
+    session's entry is still reported as that session's. A failed read fails the stage's
+    listing for the pass and is reported once, as a failed read of the change log already was
+    (M7). Trials are counted in the database, over the blocks a trial is stored in; a block
+    with none lists 0. The entries are unchanged: their digests matched the per-session
+    reading's for the ten sessions five test modules land, with rig-record problems inserted
+    out of order and a block holding no trial.
