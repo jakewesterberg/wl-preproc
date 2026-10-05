@@ -82,7 +82,10 @@ class NwbChange(dj.Manual):
     change_seq : int unsigned auto_increment
     ---
     -> NwbFile
-    kind : enum('built','published','moved','superseded')
+    # `corrected`: the subject's details rewritten in place (design spec
+    # `2026-10-05-subject-corrections-design.md`); a development database
+    # alters this enum.
+    kind : enum('built','published','moved','superseded','corrected')
     changed_at : datetime(6)
     """
 

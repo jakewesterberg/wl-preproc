@@ -766,6 +766,10 @@ def main(argv: list[str] | None = None) -> int:
             print("nwb moved: skipped (no --nwb-fast-root)")
         else:
             print(f"nwb moved: {report['nwb_moved']}")
+        if report["nwb_corrected"] is None:
+            print("nwb corrected: skipped (no --nwb-root or --nwb-slow-root)")
+        else:
+            print(f"nwb corrected: {report['nwb_corrected']}")
         if report["errors"]:
             print("errors:")
             for err in report["errors"]:

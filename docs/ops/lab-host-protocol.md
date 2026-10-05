@@ -519,7 +519,16 @@ Authorization: Bearer <token>
     the assignment, the aim, or neither. Read `schema_version`, and ignore fields you do
     not know.
 
-A file changes when it is built, published, or moved between shares.
+A file changes when it is built, published, moved between shares, or **its subject's details are
+corrected** (design spec `2026-10-05-subject-corrections-design.md`): a request that carries an
+animal's corrected species, sex or date of birth has every file already built for that animal
+rewritten in place within the daemon's next pass, its annotations kept. Its `description` then
+carries the new `subject`, and its `notes` a line such as *"Corrected 2026-11-02: date of birth
+2016-03-02 → 2016-03-01."* A request that leaves the date of birth out does not clear it: the one
+on record stays, and the request's other details are still corrected. A correction changes the
+checksums of the subject's four datasets (`/general/subject/species`, `sex`, `date_of_birth` and
+`description`), which `description.checksums` lists with the file's written-once data; every other
+checksum stays as built.
 
 ## `PUT /nwb/active`
 

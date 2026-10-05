@@ -190,6 +190,16 @@ def _subject(subject_id: str) -> dict:
     }
 
 
+def described_subject(subject_id: str) -> dict:
+    """The subject's current details as a file's description states them --
+    `species`, `sex`, and `date_of_birth` as ISO text or None -- for comparing
+    with what a file was built with (`build.resolved_invalid`,
+    `correct.stale_files`)."""
+    current = _subject(subject_id)
+    return {"species": current["species"], "sex": current["sex"],
+            "date_of_birth": None if current["date_of_birth"] is None else current["date_of_birth"].isoformat()}
+
+
 def _coverage(table, key_field: str, session_key: dict) -> dict:
     by_item: dict = {}
     for row in (table & session_key).to_dicts():

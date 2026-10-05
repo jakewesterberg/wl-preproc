@@ -176,20 +176,28 @@ def current_placement(key: dict) -> dict | None:
     return rows[-1] if rows else None
 
 
+def insert_change(key: dict, kind: str, placement: dict | None = None) -> int:
+    """One `NwbChange`, and its `NwbPlacement` when it placed a file, inside
+    the caller's transaction (`record_change`, or a correction's records:
+    `correct.py`). Returns the change's sequence number."""
+    import datajoint as dj
+
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.NwbChange.insert1({**key_of(key), "kind": kind, "changed_at": _now()})
+    sequence = int(dj.conn().query("SELECT LAST_INSERT_ID()").fetchone()[0])
+    if placement is not None:
+        nwb_schema.NwbPlacement.insert1({"change_seq": sequence, **placement})
+    return sequence
+
+
 def record_change(key: dict, kind: str, placement: dict | None = None) -> int:
     """One `NwbChange`, and its `NwbPlacement` when it moved a file, in one
     transaction. Returns the change's sequence number."""
     import datajoint as dj
 
-    from wl_preproc.schema import nwb as nwb_schema
-
-    connection = dj.conn()
-    with connection.transaction:
-        nwb_schema.NwbChange.insert1({**key_of(key), "kind": kind, "changed_at": _now()})
-        sequence = int(connection.query("SELECT LAST_INSERT_ID()").fetchone()[0])
-        if placement is not None:
-            nwb_schema.NwbPlacement.insert1({"change_seq": sequence, **placement})
-    return sequence
+    with dj.conn().transaction:
+        return insert_change(key, kind, placement)
 
 
 def active_keys() -> set[tuple]:
@@ -230,12 +238,24 @@ def _adopt(key: dict, target: Path, share: Share, checksums: list[dict], descrip
     """A file already at this activation's path that no placement records:
     its own, if every written-once dataset is this row's -- left by a
     publish that failed after the rename, or by a row deleted and rebuilt.
-    Taken over where it is, annotations and all; refused otherwise."""
-    bad = mismatches(target, checksums)
+    Taken over where it is, annotations and all; refused otherwise.
+
+    The four subject datasets a correction rewrites are not compared: a file
+    corrected since it was placed, or a row rebuilt or corrected since,
+    differs there and is still this activation's. Its subject records are
+    taken from the file, so a correction brings it up to the current details
+    if they differ (design spec `2026-10-05-subject-corrections-design.md`,
+    the final review's I1)."""
+    from wl_preproc.nwb.correct import SUBJECT_DATASETS, subject_records, write_subject_records
+
+    bad = mismatches(target, [row for row in checksums if row["dataset_path"] not in SUBJECT_DATASETS])
     if bad:
         raise PublishConflict(f"{target} already exists with other written-once data ({len(bad)} dataset(s), "
                               f"first {bad[0]}) and no placement of this activation records it; not overwritten")
-    write_description(target, description)
+    adopted, fresh = subject_records(key, description, target)
+    if adopted != description:
+        write_subject_records(key, adopted, fresh)
+    write_description(target, adopted)
     return {"tier": share.tier, "host": share.host, "share": share.name,
             "path": target.relative_to(share.mount).as_posix(), "n_bytes": target.stat().st_size}
 
@@ -383,7 +403,11 @@ def _sweep(key: dict, placement: dict, shares: dict[str, Share]) -> str | None:
     current = shares[placement["tier"]].local(placement["path"])
     if not current.exists():
         return f"{other}: left in place, because the current copy {current} is missing"
-    moved_at = placement["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp()
+    # Dated by the change that put the file where it is, never by a
+    # correction that recorded its placement again since (design spec
+    # `2026-10-05-subject-corrections-design.md`).
+    placed = [row for row in placements(key) if row["kind"] in ("published", "moved")]
+    moved_at = placed[-1]["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp()
     if other.exists() and other.stat().st_mtime > moved_at:
         return f"{other}: written to after the file was moved from it; left for a person"
     _remove_old_copy(other)

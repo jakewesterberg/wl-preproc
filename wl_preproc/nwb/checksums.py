@@ -36,16 +36,17 @@ def _content_bytes(dataset: h5py.Dataset) -> bytes:
     return np.ascontiguousarray(values).tobytes()
 
 
-def dataset_checksums(path: Path) -> list[dict]:
+def dataset_checksums(path: Path, only: frozenset[str] | set[str] | None = None) -> list[dict]:
     """One row per dataset: `dataset_path`, `dtype`, `shape`, `sha256` and
-    `paired_with` (a ragged column's other half, '' otherwise)."""
+    `paired_with` (a ragged column's other half, '' otherwise); with `only`,
+    just those datasets, without reading the rest."""
     rows = []
     with h5py.File(path, "r") as handle:
         names = []
         handle.visititems(lambda name, obj: names.append("/" + name) if isinstance(obj, h5py.Dataset) else None)
         present = set(names)
         for name in sorted(names):
-            if name.startswith(_SKIPPED):
+            if name.startswith(_SKIPPED) or (only is not None and name not in only):
                 continue
             dataset = handle[name]
             if name.endswith("_index"):

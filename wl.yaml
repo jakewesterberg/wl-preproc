@@ -186,6 +186,13 @@ status:
     its runs, with a description at version 3; and core.Block, ActivationBlock,
     BlockCoverage and block_agreement are retired (the same spec, Plan B;
     handoff `docs/handoffs/2026-10-01-run-requests.md`).
+    Subject corrections in built files are BUILT on `spec/subject-corrections`
+    (2026-10-05, NOT merged as written): a request bringing an animal's
+    corrected species, sex or date of birth has every written file of that
+    animal corrected in place in the daemon's next pass, annotations kept,
+    with a note of the change (design spec
+    `2026-10-05-subject-corrections-design.md`; handoff
+    `docs/handoffs/2026-10-05-subject-corrections.md`).
   next: >-
     **Hardware status as of 2026-09-19, stated by the requester at session
     close: the rig is NOT ready and the compute machine is NOT assembled.**

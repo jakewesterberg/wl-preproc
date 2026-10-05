@@ -168,7 +168,7 @@ def resolved_invalid() -> list[dict]:
     `responder/jobs.py::_record_subject_details` keeps no timestamp. A
     rebuild that is still invalid now matches, so it is not rebuilt again
     until the details change once more."""
-    from wl_preproc.nwb.gather import _subject
+    from wl_preproc.nwb.gather import described_subject
     from wl_preproc.schema import nwb as nwb_schema
 
     resolved, subjects = [], {}
@@ -177,10 +177,8 @@ def resolved_invalid() -> list[dict]:
         # review's M5): every real file is invalid until wl.works sends
         # subject details.
         if row["subject"] not in subjects:
-            subjects[row["subject"]] = _subject(row["subject"])
-        current = subjects[row["subject"]]
-        now = {"species": current["species"], "sex": current["sex"],
-               "date_of_birth": None if current["date_of_birth"] is None else current["date_of_birth"].isoformat()}
+            subjects[row["subject"]] = described_subject(row["subject"])
+        now = subjects[row["subject"]]
         built_with = (row["description"] or {}).get("subject") or {}
         if {field: built_with.get(field) for field in now} != now:
             resolved.append({k: row[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")})

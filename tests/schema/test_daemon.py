@@ -270,10 +270,13 @@ def test_run_once_reports_what_it_did(daemon_env, prefix, tmp_path):
     first = daemon_env.run_once(prefix=prefix)
     baseline = daemon_env.run_once(prefix=prefix)
 
-    # `nwb` joined 2026-09-28 (design spec `2026-09-28-nwb-builder-design.md`).
+    # `nwb` joined 2026-09-28 (design spec `2026-09-28-nwb-builder-design.md`),
+    # `nwb_corrected` 2026-10-05 (`2026-10-05-subject-corrections-design.md`).
     assert set(baseline) == {
-        "populated", "errors", "stale_jobs_reaped", "archived", "nwb", "nwb_published", "nwb_moved", "freed_skipped"
+        "populated", "errors", "stale_jobs_reaped", "archived", "nwb", "nwb_published", "nwb_moved",
+        "nwb_corrected", "freed_skipped"
     }
+    assert baseline["nwb_corrected"] is None
     assert isinstance(baseline["freed_skipped"], int)
     assert baseline["populated"] == first["populated"], (
         "the daemon does not reach a steady state: two consecutive idle passes "
@@ -358,6 +361,7 @@ def test_daemon_cli_still_works_with_no_archival_flags(prefix, dj_conn, capsys):
 
     assert exit_code == 0
     assert "archived: skipped" in out
+    assert "nwb corrected: skipped (no --nwb-root or --nwb-slow-root)" in out
 
 
 # Every probe below is declared inside `core.schema`, not a standalone one:

@@ -639,6 +639,17 @@ requester chose to merge the same day; true when written.*
 >    `job_request.json` and `nwb_description.json` once this merges.** See
 >    `docs/handoffs/2026-10-01-run-requests.md`.
 >
+>    **Subject corrections in built files (piece 4) are BUILT on
+>    `spec/subject-corrections` (2026-10-05), NOT merged as written** (spec
+>    `superpowers/specs/2026-10-05-subject-corrections-design.md`). When a
+>    request brings an animal's corrected species, sex or date of birth, the
+>    daemon's next pass corrects every written file of that animal where it
+>    is: a copy is patched, checked (other checksums, the live file unchanged,
+>    `nwbinspector`) and swapped in, annotations kept, with a note of the
+>    change in the file and its description; `GET /nwb` lists it again.
+>    `NwbChange.kind` gains `corrected`, so a development database alters that
+>    enum. See `docs/handoffs/2026-10-05-subject-corrections.md`.
+>
 > **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
 > items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
 > in place of a "finding H2" no document named) and all six parked
