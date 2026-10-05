@@ -1,41 +1,31 @@
 # Where this build actually is
 
-**Last updated 2026-10-05**, describing `main` at `762c17d`, the merge of
-`fix/run-requests-minors` (Plan B's six deferred minors and its review's five,
-handoff `handoffs/2026-10-01-run-requests.md` §7), after `ecd1616`, the merge of
-`spec/run-requests`: canonical requests that name runs, and the NWB
-description at version 3, Plan B of pieces 2 and 3. CI read off `762c17d` is
-green on both interpreters, 2140 passed on each with 33 skipped, and the
-manifest check is green (`gh run view 37274614661`).
-- **A canonical request asserts its montage's measured runs,** each checked
-  against `core.Run` within 2 ms as it arrives, and states each probe's runs
-  in full; a derivative names whole runs, and each of its probes covers them.
-  A stale listing is a `422` naming the run, a run named under a second
-  `works_run_id` a `409`.
-- **The NWB file is built from its runs:** `/intervals/runs`, the measured
-  blocks inside them, and a description at version 3 whose runs carry
-  `works_run_id`. `core.Block`, `ActivationBlock`, `BlockCoverage` and
-  `TimingProvenance.block_agreement` are retired; a development database
-  redeclares `TimingProvenance`.
-- **Its final review found one Critical,** fixed before merge with a test that
-  failed first: element-event's FLOAT block and trial times are read from
-  MySQL to six significant digits, so past about 1000 s a run's first block
-  and often its first trial fell out of the file and the listing. They are now
-  read as stored (`events/runs.py::stored_doubles`, spec amendment 24). Two
-  Important findings were fixed too; six Minor are deferred (handoff §6).
-- **The minors merge** refuses one `works_run_id` for two runs, writes a
-  request's montages and run ids inside `submit*()`'s transaction (a 409
-  leaves neither), and has a canonical's description name the trials and
-  blocks that lie in no measured run (spec amendments 26 and 27).
-- **wl.works vendors `job_request.json` and `nwb_description.json` now.**
-  Piece 4, subject corrections in published files, is next: its spec is
-  `superpowers/specs/2026-10-05-subject-corrections-design.md`, on
-  `spec/subject-corrections`, awaiting the requester's review.
+**Last updated 2026-10-05**, describing `main` at `6f5ddbe`, the merge of
+`spec/subject-corrections`: subject corrections in files already built, piece 4
+of four (handoff `handoffs/2026-10-05-subject-corrections.md`). CI read off
+`6f5ddbe` is green on both interpreters, 2167 passed on each with 33 skipped,
+and the manifest check is green (`gh run view 37307075826`).
+- **A corrected species, sex or date of birth reaches every file already
+  built** for the animal, published or not, in the daemon's next pass after
+  the request that carries it: a copy is patched, checked and swapped in, the
+  lab's annotations kept, with a note of the change in the file and its
+  description. `GET /nwb` lists each corrected file again.
+- **Its final review found no Critical;** three Important and four Minor
+  re-graded Important were fixed before merge, each with a test that failed
+  first (spec amendments 6–10); seven Minor are deferred (handoff §6).
+- **A development database alters `NwbChange.kind`** to add `corrected`; until
+  it does, the stage corrects nothing and names the statement (handoff §3).
+- **All four pieces that make a real wl-xcon recording usable are merged,**
+  and with them everything wl.works asked of this repository for January.
 
-`762c17d`'s tree differs from the tested `fe0fe09` only by the handoff's text,
-which no test reads: 2147 passed on 3.11 and 2146 on 3.13 locally, 0 failed.
-`ecd1616`'s differed from the tested `ac4fd77` the same way (2137 and 2136).
-CI on later heads is recorded here only once read, not before.
+`6f5ddbe`'s tree differs from the tested `c34e145` only by the handoff's text
+and the merge of the last pointer commit, which no test reads: 2174 passed on
+3.11 and 2173 on 3.13 locally, 0 failed. CI on later heads is recorded here
+only once read, not before.
+
+*This header named `762c17d` (the run-requests-minors merge, CI green, 2140
+passed on each interpreter, `37274614661`) until the subject-corrections merge;
+true when written.*
 
 *This header named `ecd1616` (the run-requests merge, CI green, 2130 passed on
 each interpreter, `37048465105`) until the run-requests-minors merge; true
