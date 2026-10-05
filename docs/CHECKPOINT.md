@@ -115,549 +115,61 @@ requester chose to merge the same day; true when written.*
 
 > ## Start here next session
 >
-> **Hardware status, stated by the requester at session close on 2026-09-19:
-> the rig is NOT ready and the compute machine is NOT assembled.** Both of the
-> highest-value items this session surfaced are therefore blocked on
-> something nobody here can unblock, and **the next session is hardware-free
-> code development.** Do not re-derive this; ask whether it has changed.
+> *Rewritten 2026-10-05. Until then this block was a running log begun
+> 2026-09-19, 545 lines by the end; it is in git at
+> `817c204:docs/CHECKPOINT.md`, lines 116–660; true when written.*
 >
-> **Blocked on the rig — raise it again when the rig runs.** The barcode and
-> timebase alignment path has never been exercised against real data and
-> cannot be with the recording this lab has (see the finding below). A few
-> minutes of recording with the sync box live would validate the whole
-> timebase chain before January. It is the cheapest large risk reduction
-> available and it is not a code task.
+> **Where things stand.** All four pieces that make a real wl-xcon recording
+> usable here are merged, and with them everything wl.works asked of this
+> repository for January's canonical NWBs:
+> - runs and trials from wl-xcon's codes (`b0f8b52`);
+> - the landed-session listing, `GET /sessions` (`eb1ff06`, its minors `63fd606`);
+> - requests that name runs, and the NWB description at version 3 (`ecd1616`,
+>   its minors `762c17d`);
+> - subject corrections in files already built (`6f5ddbe`).
 >
-> **Blocked on the compute machine.** All of Phase 2b. If the machine has
-> been assembled since, Phase 2b outranks everything on the hardware-free
-> list — its window is Oct–Nov and it is the bulk of the pipeline.
+> Before them, and merged: the NWB builder, publishing to the NAS shares and
+> the canonical lifecycle (Phase 3 pieces 1, 2a and 2b), probes and areas in
+> the file, the eye subsystem with calibration and six saccade detectors,
+> archival with rehydration, and ingest with the timebase. "What is built",
+> below, and `handoffs/` have each piece.
 >
-> **Otherwise, pick up in this order:**
+> **Hardware: ask whether it has changed.** It had not on 2026-10-05: the
+> requester chose hardware-free work that day.
+> - **The rig.** The barcode and timebase alignment path has never met real
+>   data, and cannot with the recording the lab has, which carries no wl-sync
+>   barcodes (below). A few minutes of recording with the sync box live would
+>   test the whole timing chain before January: the cheapest large risk
+>   reduction there is, and not a code task.
+> - **The compute machine.** Spike sorting waits on it: Phase 2b, and the NWB
+>   export's units (the sorter will read each probe's runs from
+>   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
+>   every hardware-free item once the machine exists.
 >
-> 1. **Rehydration is BUILT, verified and MERGED as `5cd0c79`** (2026-09-26,
->    from `spec/rehydration`; the one residual it merged with — a
->    `TimingProvenance` row alone did not prove every system's clock fit had
->    landed, so a failed or crashed per-system `SystemTimebase` key on a
->    force-freed session could later write a permanent `no_recording` — is
->    closed by `fix/timing-resolved-every-system`, which makes
->    `timing_resolved` also require a `SystemTimebase` row for every
->    `core.AcquisitionSystem`;
->    Task 8: 1467 passed/11 skipped/1 deselected/1 xfailed on 3.11, 1466
->    passed/13 skipped/1 xfailed on 3.13, 13/13 mutations caught; after the
->    whole-branch review's fix wave, 1471 passed/11 skipped/1 deselected/1
->    xfailed on 3.11 and 1470 passed/13 skipped/1 xfailed on 3.13): `wlpp
->    rehydrate` restores a reclaimed session byte for byte to its recorded
->    path, and `wlpp reclaim --no-dry-run --confirm <session> --nas-root
->    <mount>` now deletes, behind a proof against the NAS copy. Reclaim also
->    refuses to free any file the archive does not hold as it is now,
->    same-size changes included (the whole-branch review: DONE markers
->    against the recorded digests, every unchecksummed file hashed against
->    the archive; a rig-checksummed file edited in place without its marker
->    updated is still not detected). A sixth condition,
->    `canonical_nwb_present`, fails until Phase 3, so **every real
->    reclamation needs a recorded force until NWB export exists**. A
->    seventh, `timing_resolved`, is safety and no force clears it: a
->    session is never freed before its timebase stages ran on its real
->    files, because they read an absent directory as an absent device and
->    would record a permanent tier D. **Decided by the requester and built
->    2026-09-26: the daemon skips a freed session, every stage, until it is rehydrated (`archive/scratch.py::currently_freed`, read in `daemon.run_once` before every stage).** So a freed session no longer
->    meets new job errors, false rows from an absence-tolerant stage, or a
->    later session landing at its path being read in its place
->    (`tests/schema/test_daemon_skips_freed_sessions.py`). Work never
->    attempted while it was freed is done on the first pass after
->    rehydration; a key that had already failed before the freeing stays
->    parked until cleared by hand (the spec's third amendment has the one
->    DataJoint side-effect exception). `run_once` reports how many sessions
->    it skipped (`freed_skipped`). *Until then this
->    item described those as what a freed session meets, with the skip an
->    open decision; true when written.* **The streaming archive writer is
->    built too (2026-09-26):** `store.write_store` reads each bulk stream
->    through one reused chunk-sized buffer and writes one stored chunk at a
->    time, and every other file in 16 MiB blocks, so a real session can be
->    archived in a few GB of memory, never a ~166 GB file; a file that
->    changes size mid-write is an error, not a padded copy, and it no longer
->    crashes on a stream with no samples, and a stream wider than 512
->    channels gets shorter chunks. *Until then this said the writer read each file whole and
->    that no real session could be archived yet; true when written.* The
->    `stim.dat` finding (rehydration spec §12) has its amendment too, in the
->    archival design's §1: it is bulk in raw size — as large as
->    `amplifier.dat` — and stays verbatim, because it streams now and its
->    stimulation words are almost all zero (synthetic: 2,988,368 bytes store
->    as 542). Unmeasured on a real RHS session, as is `dcamplifier.dat`;
->    storing either as a typed array is the change if a real one costs real
->    space.
-> 2. **Bayesian microsaccade detection is BUILT and MERGED** (`cfd6765`,
->    pushed 2026-09-27; CI green from `3312725`; below). U'n'Eye is the
->    remaining unwritten detector; it wants the GPU, so it stays blocked.
+> **Hardware-free, in the order the requester chose on 2026-10-05:**
+> 1. Piece 4's seven deferred minors (`handoffs/2026-10-05-subject-corrections.md` §6).
+> 2. The session listing's deferred minors M6 and M9
+>    (`handoffs/2026-10-01-session-listing.md` §7).
+> 3. U'n'Eye, the one detector not written; it wants a GPU.
+> 4. A session-date allocator for the test suite: every database-backed
+>    fixture still picks an unclaimed subject and date by hand.
 >
->    **Saccade geometry is BUILT on `spec/saccade-geometry` (2026-09-28), NOT
->    merged as written** *(merged and pushed the same day as `a8d26da`; CI
->    green)* (spec `superpowers/specs/2026-09-28-saccade-geometry-
->    design.md`; the requester's choice of 2026-09-27).
->    - **What it stores.** Every stored saccade and microsaccade row, for
->      every detector, now carries `start_x_deg`, `start_y_deg`, `end_x_deg`,
->      `end_y_deg` and `direction_deg`.
->    - **How they are computed.** They are the gaze at the two samples its
->      amplitude reads, so the amplitude is exactly their distance. They are
->      computed once, in `measure.py`, under each detector's rule: NSLR's
->      landing sample and BMD's take-off sample.
->    - **The direction convention.** Degrees counterclockwise from
->      rightward, in the calibrated frame (positive x rightward, y upward),
->      which is the task code's frame for target positions. It is NULL for a
->      zero displacement.
->    - **Measured**, on the left eye's trace: on the stepped session (BMD on
->      its drifting copy; NSLR not held below 1°), every held detector's
->      stored direction for a planted step was within 1.8° of the planted
->      direction on the two steps above 1°, and within 10.7° on the 0.7°
->      step. The test allows 3° and 15°.
->
->    *Until 2026-09-28 this item named the geometry as next; true when
->    written.*
->
->    *Until 2026-09-27 this item opened "Bayesian microsaccade detection.
->    Real code, hardware-free, and it matters as a SACCADE detector", as the
->    one method built for the sub-1° regime NSLR does not cover; true when
->    written.*
->
->    Still open: the conjunction's one-sample duration floor is now
->    inherited by three millisecond- or no-duration detectors, Nyström–
->    Holmqvist, REMoDNaV and NSLR. It is a cross-detector decision, still open.
->    *Measured 2026-09-27 (the NSLR conjunction round): Otero-Millan's
->    conjunction floor is one sample too, since its params declare no
->    `min_duration_samples`. So the floor is shared by four detectors, not
->    three.* *BMD's conjunction has the one-sample floor too (BMD spec §4 and
->    §8 item 8), so five detectors now share it.*
->
->    *Decided 2026-09-28 (the requester) and merged as `cadef7e`: a
->    two-eye event is at least as long as the
->    detector's own declared minimum -- Engbert–Kliegl's 6 samples,
->    Nyström–Holmqvist's and REMoDNaV's 10 ms, counted as they count it (5
->    samples at 498.55 Hz) -- and never a single sample, for any detector
->    (`schema/detect.py::_min_duration_samples`; handoff
->    `2026-09-28-conjunction-floor.md`).*
->
->    *Until 2026-09-27 this item also named NSLR here, alongside Bayesian
->    microsaccade detection, gave U'n'Eye as the third unwritten detector, and
->    named the floor as inherited by two detectors; true when written.*
->
->    **REMoDNaV is BUILT on `spec/remodnav` (2026-09-26), NOT merged as
->    written.** It is the fourth registered detector, and the first real
->    producer of `pursuit`, stored binocularly through `daemon.run_once()`
->    (`test_a_binocular_slow_ramp_produces_a_pursuit_conjunction_run`). What
->    it measured:
->    - **Fidelity.** Given the oracle's own signals, it labels every sample
->      as `remodnav` 1.1.2 does in all five synthetic cases (500 Hz seeds
->      1–3, 1000 Hz seeds 4–5), and both nulls fail that check.
->    - **End to end on the reference recording** (leading 120,000-sample
->      slice, p99→15° scale, 498.55 Hz, scipy 1.17.1; ours on the shared
->      estimator and mask, the oracle on its own preprocessing):
->      - saccades 519 vs the oracle's 574 (left) and 488 vs 565 (right);
->      - kappa left / right: saccade 0.764 / 0.724, PSO 0.391 / 0.438,
->        fixation 0.823 / 0.816, pursuit 0.267 / −0.008;
->      - the whole recording, 1,177,799 samples per eye, classifies in
->        2.5 s / 2.6 s.
->    - **Against the paper's human coders** (Andersson et al. 2017):
->      - the harness reproduces the coders' own Table 3 agreement within
->        ±0.006 on all 9 cells, over 34 files;
->      - it reproduces the oracle's within ±0.05 on all 18 cells, over 33
->        files, and within 0.005 out of suite on scipy 1.13.1, over all 34;
->      - ours is at or above the oracle on every saccade cell.
->
->      One file is excluded because the installed oracle cannot run it on
->      scipy ≥ 1.17. The exclusion is bounded by a test and diagnosed.
->    - **A finding about the paper.** It says it applied the Zemblys et al.
->      (2018) label correction; the script that computed its Table 3 never
->      loads it.
->    - **All-detector invariants held with no ruling needed**: planted onsets
->      are within 1 sample, and the consensus suite now runs C(4,2) = 6
->      pairs.
->    - **A finding that bears on macaque data.** REMoDNaV reads a moderate
->      pursuit as trains of short saccades when holds dominate a recording,
->      and the oracle does the same (spec §8 item 6). So the pursuit fixture
->      runs at 2.1 °/s, 5% above the pursuit threshold, a narrow margin.
->
->    `docs/handoffs/2026-09-26-remodnav-built.md` has the account, the four
->    rulings and what is still deferred.
->
->    *Until then this item named NSLR, REMoDNaV (the detector, not the PyPI
->    oracle) and Bayesian microsaccade detection as unwritten; true when
->    written.*
->
->    **NSLR-HMM is BUILT on `spec/nslr` (2026-09-27), NOT merged as written.**
->    It is the fifth registered detector, and the only one that never
->    differentiates: it fits gaze as a continuous chain of straight segments
->    and classifies whole segments, rather than thresholding a velocity
->    signal. What it measured:
->    - **Fidelity.** Reproduced operation for operation against the authors'
->      own `nslr`/`nslr-hmm` (numba-compiled, no `fastmath`), it matches
->      their split indices, endpoints, features, Viterbi paths and every
->      sample's label exactly on synthetic traces, on both interpreters.
->    - **End to end on the reference recording.** Each eye's first
->      5,000-sample gap-free stretch classifies identically to the
->      reference, both eyes, both interpreters. The full recording
->      (1,177,799 samples) classifies in 38.3 s (left) / 33.3 s (right) per
->      eye. Over the first 120,000 samples: 505 saccades left / 478 right,
->      against REMoDNaV's 519 / 488 (saccade kappa 0.453 / 0.421) and
->      Nyström–Holmqvist's 568 / 569 (kappa 0.364 / 0.315) — fewer and lower
->      kappa than either, consistent with treating slow sub-degree movement
->      as fixation.
->
->      *Corrected 2026-09-27, by the final whole-branch review: "fewer" is
->      true of that 120,000-sample slice and false over the whole
->      recording. Over all 1,177,799 samples NSLR stores more saccade rows
->      than either: 5,786 left / 5,216 right, against REMoDNaV's 4,814 /
->      4,493 and Nyström–Holmqvist's 5,009 / 5,123. 55% of its left-eye
->      saccade rows and 64% of its right-eye rows are shorter than 10 ms.*
->    - **Against the paper's human coders** (Andersson et al. 2017), pooled
->      over the 34 "data used in the article" files: the harness first
->      reproduces Table 1's Human column (saccade 0.898/0.90, fixation
->      0.813/0.81, pursuit 0.791/0.79, PSO 0.733/0.73) and then NSLR's own
->      column (0.826/0.82, 0.535/0.51, 0.460/0.42, 0.556/0.53) — both within
->      their stated bands, identical on both interpreters.
->    - **The requester's ruling (2026-09-27): keep NSLR as published, do not
->      use it for movements under about 1°, and note it may need retuning.**
->      On the shared stepped-session fixture NSLR segments the planted
->      0.75°/16 ms step exactly (18 ms) and calls it fixation — at ~42°/s,
->      2.5 sd below the published saccade class and forbidden from PSO by the
->      transition structure. The authors' own reference gives identical
->      labels on the same trace: the published model's limit, not a
->      reimplementation defect. `_NOT_USED_BELOW_1_DEG` in
->      `tests/schema/test_detect_populate.py` names it; a supervised refit on
->      hand-labelled monkey data is the route past it, out of scope here.
->      This raises the value of Bayesian microsaccade detection (item 2
->      above): it is the one method the parent spec's §3.1 table built for
->      exactly this sub-1° regime.
->    - **The final whole-branch review's fix wave (2026-09-27).**
->      - *The requester's decision on what an NSLR saccade row measures.*
->        NSLR's runs end one sample before the eye lands, so the shared
->        `measure` missed the last step of every NSLR saccade row, and read
->        a one-sample run as exactly 0.0° (542 left / 666 right on the
->        reference recording).
->        Now, for its per-eye saccade runs only, a run of 10 ms or more is
->        measured to where the eye lands, and a briefer one is stored with
->        no amplitude or peak velocity. After the fix, 3,186 left / 3,355
->        right rows are stored unmeasured. The landing rule is declared on
->        NSLR's registry entry and the 10 ms floor in its paramset
->        (`min_measured_saccade_ms`). Every other detector's stored rows
->        are unchanged, shown by test and by a before/after dump.
->      - *Non-finite gaze.* One NaN made NSLR's pooled noise NaN for the
->        whole eye. `detect_nslr` now withholds non-finite gaze, and a
->        capped noise estimate warns.
->      - *Open for the requester, recorded and not changed:* the shared
->        validity mask passes NaN as usable for every detector (NSLR spec
->        §8 item 6); and NSLR's conjunction, which the decision does not
->        cover, still stores 219 one-sample saccade rows at 0.0° on the
->        reference recording (NSLR spec §8 item 4).
->
->        *The conjunction half is superseded 2026-09-27, the same day (true
->        when written): the requester applied the 10 ms floor to NSLR's
->        conjunction too. 2,023 of its 3,230 conjunction saccade rows are
->        now stored unmeasured, and none is at 0.0°. Every other detector's
->        rows are unchanged. The shared-mask item stays open, and so does
->        whether a conjunction needs a minimum event duration at all.*
->
->        *The shared-mask half is resolved too, 2026-09-27 (true when
->        written): the requester chose it next, and the mask gained a sixth
->        criterion, `non_finite` (parent spec §2), which withholds a sample
->        whose gaze, velocity or quality flag is not finite, for every
->        detector, with its own `frac_non_finite` column. The reference
->        recording has no such value, so its mask is unchanged. Whether a
->        conjunction needs a minimum event duration stays open.*
->
->    `docs/handoffs/2026-09-27-nslr-built.md` has the account, every ruling
->    and what is still deferred.
->
->    **Bayesian microsaccade detection (BMD) is BUILT on `spec/bmd`
->    (2026-09-27), NOT merged as written.** *Merged and pushed the same day
->    as `cfd6765`; CI green from `3312725`.* It is the sixth registered
->    detector: a hidden semi-Markov model of fixation, sampled by
->    Metropolis–Hastings (Mihali, van Opheusden & Ma 2017). The requester has
->    the authors' permission to use their C++ for testing; it is built by the
->    tests and never committed or shipped. What it measured:
->    - **Fidelity.** Every change point of every sample, and the settings at
->      every iteration, match the authors' stored example and a patched build
->      of their code:
->      - 1 kHz and 500 Hz simulations, the latter with the speed caps;
->      - exactly repeated positions;
->      - a 5,000-sample stretch of each eye of the reference recording, at
->        498.55 Hz.
->
->      Two nulls fail the check. Both halves of CI's comparison were proven
->      on x86-64 Ubuntu before CI ran.
->    - **Its own table.** The likelihood's table of log A is computed here
->      from its formula, not taken from the authors; BMD's probabilities are
->      identical either way.
->    - **In the pipeline** (the requester's design):
->      - Engbert–Kliegl's saccades are removed first and stored as BMD's
->        `saccade`;
->      - BMD analyses the fixation stretches between them, with settings
->        pooled per 1-minute block;
->      - its microsaccades are measured from their take-off sample, on each
->        eye's own trace.
->    - **The reference recording** (p99→15° scale): 261–308 s left /
->      280–363 s right for the whole recording, over three runs; 13 to 18
->      minutes per eye for a two-hour session. Over the first 120,000
->      samples, after the size split below: 1.24 / 1.25 microsaccades per
->      second, and microsaccade kappa against Engbert–Kliegl 0.522 / 0.512.
->      Before it, 1.35 / 1.43 and 0.569 on both eyes.
->    - **The paper's claim** on its own simulated data holds: at measurement
->      noise 0.06, BMD's hit rate is 0.979 against Engbert–Kliegl's 0.103.
->    - **A drifting synthetic eye, for BMD only (the requester's choice).**
->      On the still synthetic eye every other detector is held to, BMD split
->      a 0.75° step into three. So it is held to the planted steps on a copy
->      of the stepped session with the reference recording's drift. It
->      finds every step, with one extra detection in 15.6 s.
->    - **A finding about Otero-Millan, unexplained** (BMD spec §8 item 7).
->      Given the same drift over the whole session, Otero-Millan reported
->      about 40 microsaccades on one eye; on pure synthetic drift, none. Its
->      rate on the real recording is within its band. So the five existing
->      detectors keep the still sessions.
->    - **The final whole-branch review, and the requester's three decisions
->      (2026-09-27).**
->      - *Fixed:* a perfectly still trace raised an error at the production
->        settings (the motor noise reached exactly 0, and the port took
->        Python's `log` where the reference takes C's). Spec §5.2's pooled
->        grid-search check was missing; it is now held to a direct
->        computation. Comments in `schema/detect.py` still called BMD
->        unwritten.
->      - *BMD's own events are split by size:* about 1 in 10 of its
->        "microsaccades" on the recording were 1° or more, up to 7.7°. They
->        are now stored as saccades, as every other detector would.
->      - *The Engbert–Kliegl↔BMD agreement leaves out the saccades BMD
->        copies from Engbert–Kliegl*, which the two agree on by construction.
->      - *BMD runs on every session*, as registered; to be revisited once the
->        compute machine exists.
->    - **CI's first run on GitHub** (`36350804753`, on `cfd6765`) failed three
->      fidelity tests. The authors' code reads past a vector's end, which
->      behaves differently under Linux's allocator, and glibc prints a NaN as
->      `-nan`. Both are fixed in the test harness, and proven on x86-64 Linux
->      in a container (spec §1.10 item 2).
->
->    `docs/handoffs/2026-09-27-bmd-built.md` has the account, every ruling
->    and what is still deferred.
-> 3. **DONE 2026-09-26: `_KIND_OF` moved from `schema/detect.py` to
->    `eye/detect/labels.py`** as `KIND_OF`, `NOT_INTERSECTED`, `kind_of` and
->    `UnknownLabelKind`. The conjunction and the eye-validation tests now use
->    one definition; the restated copy in `tests/eye/detect/
->    test_nystrom_holmqvist_validation.py` is gone, and the kind-map tests
->    moved to `tests/eye/detect/test_labels.py`, so the 3.13 cross-check
->    (no DataJoint) runs them too.
-> 4. **DONE 2026-09-28: which of the 225/337 unmatched saccades are real.**
->    Mostly not a disagreement at all. Nyström–Holmqvist's one-eye-only
->    saccades, sorted by what the other eye was doing:
->    - the other eye's data was withheld: 121 / 169;
->    - it had a saccade within 20 ms: 19 / 12;
->    - it moved too but went undetected: 32 / 104;
->    - it did not move: 53 / 52.
->
->    Half is missing data, mostly at blink edges; the still-eye events are
->    noise. Real saccades the binocular rule loses come to about 1% (left)
->    and 2.2% (right). Pinned by `test_why_one_eye_alone_detects_a_saccade`;
->    see `docs/handoffs/2026-09-28-why-one-eye-alone.md`.
->
->    **Corrected the same day: those were Nyström–Holmqvist's raw output,
->    which labelled blinks as saccades.** Its saccade edges walked into
->    withheld samples: 10% (left) and 19% (right) of its saccades. The
->    requester chose a guard in `registry.Detector.detect`, built on
->    `fix/runs-stay-on-usable-data` and NOT merged as written.
->    *Merged 2026-09-28 as `978a3a3`: CI green on both interpreters, 1733
->    passed on each with 31 skipped (`gh run view 36415852458`), and the
->    manifest check green. The measurement itself merged earlier the same
->    day as `a80e061`, CI green.*
->    - It trims a run with withheld samples at its ends, drops one spanning
->      a withheld stretch, and drops a glissade whose saccade was dropped or
->      end-trimmed.
->    - After the guard: the saccade cost is 14.7% / 9.8%; unmatched is 676 /
->      420, of which missing data is 542 / 185; real saccades lost are about
->      1.5% / 4.0%.
->    - No other detector emitted a run over withheld samples, so only
->      Nyström–Holmqvist's stored rows change.
->
->    See `docs/handoffs/2026-09-28-runs-stay-on-usable-data.md`.
->
->    *Until 2026-09-28 this item asked the question; true when written.*
->
->    **The both-eyes trace now falls back to the usable eye (the requester's
->    decisions of 2026-09-28), MERGED as `dda2de3`.** Where only one eye is usable, it takes that eye's
->    labels. An event the other eye could not see whole is kept whole, as
->    the eye that saw it: 587 left and 205 right saccades for
->    Nyström–Holmqvist, and 193–1,277 per eye for the other detectors.
->    `EyeDetection.Source` records which eye each stretch came from. The
->    final review found the plan's rule split an event the other eye lost
->    mid-flight into two rows; fixed before merge. See
->    `docs/handoffs/2026-09-28-both-eyes-fallback.md`.
->
->    *Until then this paragraph said the both-eyes trace holds no event
->    where one eye is missing, and labels that gap from the left eye's mask
->    alone; true when written.*
->
->    **Tracker glitches are repaired before anything reads the gaze (the
->    requester's decision of 2026-09-28), MERGED as `f7095aa`.** Gaze that leaves and returns in under 10 ms,
->    each jump faster than the mask's 1000 °/s sample to sample, had passed
->    the mask. It sat inside 1–20% of each detector's saccades and put them
->    far above the main sequence. It is now replaced by the straight line
->    across it, and `EyeValidity.frac_glitch_repaired` stores the share per
->    eye: 0.93% and 0.76% on the reference recording. See
->    `docs/handoffs/2026-09-28-gaze-glitches.md`.
->
->    **Three lab packages were renamed (the requester, 2026-09-28):**
->    wl-expcontroller is wl-xcon, wl-expviz is wl-xviz and wl-exptasks is
->    wl-xtasks. The session folder the controller writes is now `xcon/`
->    (`contracts/paths.py::XCON_DIRNAME`), and `eye/expcontroller.py` is
->    `eye/xcon.py`. Current code, config and docs take the new names; dated
->    documents, including `HANDOVER-wl-expcontroller.md`, keep the old ones.
->    MERGED as `0aa4928`. wl-xcon's writer switches to `xcon/` only once
->    this is on `main`, and was told the merge commit.
->
->    **The NWB builder is BUILT on `spec/nwb-builder` (2026-09-29), NOT
->    merged as written** *(merged and pushed as `a8e1642` the same day; CI
->    green, 1828 passed on each interpreter)* (piece 1 of Phase 3's NWB export; spec
->    `superpowers/specs/2026-09-28-nwb-builder-design.md`). It writes one
->    activation's file to `{nwb_root}/{subject}/{session_id}/{identifier}.nwb`
->    once the session's computed tables are complete, opt-in with `wlpp
->    daemon --nwb-root` or run by `wlpp nwb build`, and records it in
->    `nwb.NwbFile` with a checksum per dataset. **A file is `invalid`
->    until wl.works sends the subject's date of birth**: `nwbinspector` rates
->    its absence CRITICAL (the OPEN entry in
->    `pending-wl-works-amendments.md`). `canonical_nwb_present` stays `False`
->    until piece 2, publication, so a real reclamation still needs a
->    recorded force *(true when written; real since `d63be54`)*. See `docs/handoffs/2026-09-28-nwb-builder.md`.
->
->    **NWB publishing (piece 2a) is BUILT on `spec/nwb-publishing`
->    (2026-09-29), NOT merged as written** *(merged and pushed as `d63be54`
->    the same day; CI green, 1899 passed on each interpreter)* (spec
->    `superpowers/specs/2026-09-29-nwb-publishing-design.md`). Every file is
->    built with a description beside it, `<identifier>.json`, for wl.works'
->    dataset builder: its tasks, conditions by stimulus settings, data types
->    and quality. Written files are published to the NAS's slow share, moved
->    to and from the fast share by `PUT /nwb/active`, and listed with their
->    place and description by `GET /nwb`. `canonical_nwb_present` is now
->    real. **The rig emits no `TRIAL_NUMBER`, so a real session gives no
->    trials**: the OPEN entry in `pending-wl-xcon-amendments.md`, filed by
->    wl-xcon as its XC-155. Until this repository reads XC-155's join field,
->    a trial record whose lines name a run is not joined at all. The final
->    review found two Critical and five Important issues, all fixed with
->    tests (handoff §8). The Critical ones: a rebuilt row could delete an
->    annotated published copy, and placement skipped freed sessions. **Each
->    share needs its `nwb/` folder made once by hand**; wlpp never writes to
->    a share without one. See `docs/handoffs/2026-09-29-nwb-publishing.md`.
->
->    **The raw archive now writes only to a mounted share** (2026-09-29, on
->    `fix/archive-share-marker`, NOT merged as written; *merged and pushed as
->    `7075799` the same day, CI green, 1903 passed on each interpreter*). The review above
->    found that the old code archived onto an unmounted mount point. **The
->    archive share needs a `.wlpp-archive-share` marker at its root, placed
->    once by hand**; without it the daemon archives nothing and says why,
->    and `wlpp archive` refuses (the archive spec §3's amendment).
->
->    **The canonical lifecycle (piece 2b) is BUILT on
->    `spec/canonical-lifecycle` (2026-09-30), NOT merged as written** *(merged
->    and pushed as `9fa7c1f` the same day, after its final review's fix pass;
->    CI green, 1944 passed on each interpreter)* (spec
->    `superpowers/specs/2026-09-30-canonical-lifecycle-design.md`). **wl.works
->    fires every canonical** (the requester's decision): it runs the 12-hour
->    clock, waits on its ELN, and regenerates by sending a replacement that
->    names the canonical it supersedes. wl-preproc honours the replacement
->    under a per-montage lock, keeps the old file readable, marks it
->    `superseded_by` in `GET /nwb`, and counts only the current canonical for
->    reclamation. **An `invalid` file rebuilds itself** once the subject
->    details it lacked arrive. What wl.works must do is the new OPEN entry in
->    `pending-wl-works-amendments.md`. See
->    `docs/handoffs/2026-09-30-canonical-lifecycle.md`.
->
->    **Probes and areas in every NWB file (piece 3's hardware-free slice)
->    are BUILT on `spec/nwb-probes` (2026-09-30), NOT merged as written** *(merged
->    and pushed as `8983ee5` on 2026-10-01, after its final review's fix pass; CI
->    green, 2028 passed on each interpreter)*
->    (spec `superpowers/specs/2026-09-30-nwb-probes-design.md`). **The
->    recording names the probe; wl.works says where it went** (the
->    requester's decisions): a new daemon stage, `ephys.ProbeCensus`, reads
->    each SpikeGLX run's `.meta`; `accept()` records each insertion's aim and
->    latest area assignment; each pass links the two into Phase 2a's
->    `ProbeInsertion`, `InsertionLocation` and `SegmentConfig`; and every file
->    names its probes, a row per active site, with both areas. A bank change
->    inside a montage refuses the file. The description is version 2.
->    **Proving it found a timebase defect, fixed here:** a restarted system's
->    rate was fitted under one intercept, so every bank change on the rig
->    would have cost its session its timing (−951,278 ppm on a synthetic
->    restart). What wl.works must do is a new OPEN entry in
->    `pending-wl-works-amendments.md`. See `docs/handoffs/2026-09-30-nwb-probes.md`.
->
->    **Runs and trials from a real wl-xcon session are BUILT on
->    `spec/runs-and-trials` (2026-10-01), NOT merged as written** *(merged
->    and pushed as `b0f8b52` the same day, after its final review's fix pass;
->    CI green, 2050 passed on each interpreter)* (spec
->    `superpowers/specs/2026-10-01-runs-and-trials-design.md`), piece 1 of
->    four. **The requester ruled the vocabulary that day: a run holds blocks,
->    and a block is a stretch of trials under one block type.** Trials join
->    the rig's record by wl-xcon's `trial_number` (XC-155). Runs are
->    measured from a new `RUN_START` escape (0x8006) and `RUN_END` marker
->    (4), into `core.Run`; blocks from `BLOCK_START` per block. A run or
->    block that never closed keeps only its own trials. A repeated trial
->    number keeps its first trial, and a number above 32,767 is left out;
->    the description names both. **wl-xcon sends the new codes once they are
->    on `main`, so tell it when this merges**, and XC-026 comes before
->    January. See `docs/handoffs/2026-10-01-runs-and-trials.md`.
->
->    **The landed-session listing, `GET /sessions` (Plan A of pieces 2
->    and 3), is BUILT on `spec/session-listing-and-run-requests`
->    (2026-10-01), NOT merged as written** *(merged and pushed as `eb1ff06`
->    the same day, after its final review's fix pass; CI green, 2091 passed
->    on each interpreter)* (spec
->    `superpowers/specs/2026-10-01-session-listing-and-run-requests-design.md`).
->    **The requester's decisions that day:** a canonical file keeps every run
->    of its montage; a repeated run number lists the first and flags the
->    session; a derivative selects whole runs. Each session lists its runs
->    with wl-xcon's task and stop reason, the blocks under each, the SpikeGLX
->    segments with every probe's site map and raw `~imroTbl`, and its flags;
->    the daemon's listing stage logs a change whenever an entry changes.
->    **Plan B, requests that name runs and the NWB description at version 3,
->    follows.** See `docs/handoffs/2026-10-01-session-listing.md`.
->
->    **Requests that name runs, and the NWB description at version 3 (Plan B
->    of pieces 2 and 3), are BUILT on `spec/run-requests` (2026-10-02), NOT
->    merged as written** *(merged and pushed as `ecd1616` the same day, after
->    its final review's fix pass; CI green, 2130 passed on each interpreter)*
->    (the same spec). A canonical request asserts its
->    montage's measured runs, each checked against `core.Run` within 2 ms as
->    it arrives, and states each probe's runs in full; a derivative names
->    whole runs. The NWB file is built from its runs: `/intervals/runs`, the
->    measured blocks inside them, and a description at version 3 whose runs
->    carry `works_run_id`. `core.Block`, `ActivationBlock`, `BlockCoverage`
->    and `TimingProvenance.block_agreement` are retired; a development
->    database redeclares `TimingProvenance`. **wl.works vendors
->    `job_request.json` and `nwb_description.json` once this merges.** See
->    `docs/handoffs/2026-10-01-run-requests.md`.
->
->    **Subject corrections in built files (piece 4) are BUILT on
->    `spec/subject-corrections` (2026-10-05), NOT merged as written** (spec
->    `superpowers/specs/2026-10-05-subject-corrections-design.md`). When a
->    request brings an animal's corrected species, sex or date of birth, the
->    daemon's next pass corrects every written file of that animal where it
->    is: a copy is patched, checked (other checksums, the live file unchanged,
->    `nwbinspector`) and swapped in, annotations kept, with a note of the
->    change in the file and its description; `GET /nwb` lists it again.
->    `NwbChange.kind` gains `corrected`, so a development database alters that
->    enum. See `docs/handoffs/2026-10-05-subject-corrections.md`.
->
-> **Deferred minors: DONE 2026-09-26, both lists.** The gap-aware branch's
-> items 1–3 (`8af4278`; `eye/detect/validity.py` now cites commit `7d4a00f`
-> in place of a "finding H2" no document named) and all six parked
-> rehydration follow-ups (the last three in `d4f390c`, which also gave
-> `wlpp rehydrate` and `wlpp hold` a `--session-datetime` for one subject
-> recorded twice at one path). One item remains open and is not a minor to
-> ride along: **the suite has no session-date allocator** (gap-aware
-> handoff, item 4), so a new database-backed test can collide with another
-> file's session; every new fixture so far has picked an unclaimed date by
-> hand. *Until then this paragraph listed the gap-aware minors as open;
-> true when written.*
+> **Other repositories' to act on:**
+> - **wl.works** vendors `job_request.json` and `nwb_description.json` at its
+>   build 20b-1, and has the subject-corrections entry in
+>   `pending-wl-works-amendments.md` to read.
+> - **wl-xcon's XC-026:** until it lands, a crash restart reuses run numbers,
+>   and the restarted runs cannot go into a canonical.
+> - **A development database** needs `NwbChange.kind` altered (subject
+>   corrections, handoff §3) and `TimingProvenance` redeclared (run requests,
+>   handoff §3). No real database exists yet.
 >
 > **A priority the code does not imply**, stated by the requester on
-> 2026-09-19: **glissades are peripheral.** Three recent rounds were
-> pso-motivated — Nyström–Holmqvist was chosen because it is the pso-capable
-> detector, and the conjunction-shape spec was rewritten around storing
-> `pso`. That work is correct and stands, but its weight in these documents
-> overstates its weight to the lab. Read eye findings saccade-first.
+> 2026-09-19: **glissades are peripheral.** Three rounds were pso-motivated —
+> Nyström–Holmqvist was chosen because it is the pso-capable detector, and the
+> conjunction-shape spec was rewritten around storing `pso`. That work is
+> correct and stands, but its weight in these documents overstates its weight
+> to the lab. Read eye findings saccade-first.
 
 *This header named `d30cbc6` and the branch tip `f9e02c7` while the work was
 unmerged. Both were true when written. The branch merged as `f5fb642`, two
