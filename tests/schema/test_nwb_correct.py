@@ -819,3 +819,117 @@ def test_a_correction_a_crash_left_unrecorded_does_not_stop_a_move(published, sh
         daemon_module.run_once(prefix=prefix, **passes)
         daemon_module.run_once(prefix=prefix, **passes)
     assert current_placement(key)["tier"] == "slow"
+
+
+# -- The minors' review.
+
+def test_a_full_fast_share_does_not_hold_back_records_only_catch_up(published, shares):
+    """Review I-1: a file on the fast share that already holds the details
+    needs no copy, so no headroom; its records are brought up even when the
+    fast share is at its headroom, and the move off it is not blocked."""
+    from tests.schema.test_nwb_build import _set_active
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import correct, patch_subject
+    from wl_preproc.nwb.publish import Share
+
+    _session_key, key, _runs, _root = published
+    _set_active(key)
+    publish_module.run_placement(shares["slow"], shares["fast"])
+    live = _live(key, shares)
+    assert publish_module.current_placement(key)["tier"] == "fast"
+    new = {"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 1)}
+    _set_birth(new["date_of_birth"])
+    full = Share(tier="fast", mount=shares["fast"].mount, host="wl-nas", name="nvme", headroom_bytes=10**18)
+    try:
+        patch_subject(live, new, _DAY)
+        assert correct(key, {"slow": shares["slow"], "fast": full}, _DAY) is None
+        assert not _is_stale(key)
+    finally:
+        _restore(key, shares)
+        _set_active()
+        publish_module.run_placement(shares["slow"], shares["fast"])
+    assert publish_module.current_placement(key)["tier"] == "slow"
+
+
+def test_a_read_only_file_is_corrected_and_stays_read_only(published, shares):
+    """Review M-a: the copy is patched with its own default mode, and takes
+    the live file's only as it is swapped in, so a file a person made read
+    only is corrected, and stays read only."""
+    from wl_preproc.nwb.correct import correct, file_subject
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    mode = live.stat().st_mode & 0o777
+    live.chmod(0o444)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        correct(key, shares, _DAY)
+        assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 1)
+        assert live.stat().st_mode & 0o777 == 0o444
+    finally:
+        live.chmod(0o644)
+        _restore(key, shares)
+        live.chmod(mode)
+
+
+def test_a_corrected_file_keeps_its_group(published, shares):
+    """Review M-a: a file opened to the lab's group keeps that group."""
+    import os
+
+    from wl_preproc.nwb.correct import correct
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    others = [group for group in os.getgroups() if group != live.stat().st_gid]
+    if not others:
+        pytest.skip("this user belongs to no second group to give the file")
+    group = live.stat().st_gid
+    os.chown(live, -1, others[0])
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        correct(key, shares, _DAY)
+        assert live.stat().st_gid == others[0]
+    finally:
+        _restore(key, shares)
+        os.chown(live, -1, group)
+
+
+def test_one_leftover_that_will_not_go_does_not_keep_the_others(published, shares):
+    """Review M-b: clearing goes on past a leftover it cannot remove, says
+    which, and clears beside scratch copies too."""
+    from pathlib import Path
+
+    from wl_preproc.nwb.correct import run_corrections
+    from wl_preproc.nwb.publish import current_placement
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    path = current_placement(key)["path"]
+    stuck = shares["slow"].local(path + ".partial")
+    stuck.mkdir()
+    left = [shares["fast"].local(path + ".partial"),
+            Path((nwb_schema.NwbFile & key).fetch1("path") + ".partial")]
+    for leftover in left:
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_bytes(b"left by a crash")
+    try:
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert [leftover for leftover in left if leftover.exists()] == []
+        assert [error for error in errors if str(stuck) in error]
+    finally:
+        stuck.rmdir()
+
+
+def test_a_share_not_configured_is_reported_once_not_per_file(published, shares):
+    """Review M-c: as for a share that is not reachable (M11)."""
+    from wl_preproc.nwb.correct import run_corrections
+
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        _corrected, errors = run_corrections(None, None)
+        configured = [error for error in errors if "not configured" in error]
+        assert len(configured) == 1 and configured[0].startswith("NwbCorrection: the slow share is not configured")
+        assert "file(s) on it not corrected" in configured[0]
+    finally:
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])

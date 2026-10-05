@@ -1049,7 +1049,8 @@ def run_once(
     except lock.Busy as busy:
         errors.append(f"SessionChange: {busy}")
 
-    # The three NWB stages run under one database lock (`nwb/lock.py`): a
+    # The four NWB stages -- building, corrections, publishing and placement --
+    # run under one database lock (`nwb/lock.py`): a
     # second wlpp process -- a pass outliving its cron interval, or `wlpp nwb
     # build` -- leaves them to the first and says so. `0`, not `None`, for a
     # configured stage skipped that way.

@@ -14,6 +14,7 @@ import copy
 import datetime
 import os
 import shutil
+import stat
 from pathlib import Path
 
 import h5py
@@ -130,23 +131,37 @@ def _key(row: dict) -> dict:
     return {k: row[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
 
 
-def _live(key: dict, row: dict, shares: dict) -> tuple[Path, dict | None]:
-    """Where the file is now, and its placement: on its share once
-    published, in scratch until then."""
+def _live(key: dict, row: dict, shares: dict) -> tuple[Path, dict | None, object]:
+    """Where the file is now, its placement and its share: on its share once
+    published, in scratch (no placement, no share) until then."""
     from wl_preproc.nwb.publish import current_placement
 
     placement = current_placement(key)
     if placement is None:
-        return Path(row["path"]), None
+        return Path(row["path"]), None, None
     share = shares.get(placement["tier"])
     if share is None:
         raise CorrectionRefused(f"the {placement['tier']} share is not configured; not corrected")
     if reason := share.unreachable():
         raise CorrectionRefused(f"{reason}; not corrected")
-    live = share.local(placement["path"])
-    if placement["tier"] == "fast" and live.exists() and not share.has_room(live.stat().st_size):
-        raise CorrectionRefused("the fast share is at its headroom; not corrected")
-    return live, placement
+    return share.local(placement["path"]), placement, share
+
+
+def _keep_access(live: Path, partial: Path) -> None:
+    """The live file's mode and group onto the copy, just before it is
+    swapped in: the copy is patched first with its own default mode, so a
+    file a person made read only is still corrected and stays read only, and
+    one opened to the lab's group keeps it (the minors' review, M-a). Best
+    effort: a mount that refuses a chmod or chown does not stop a correction."""
+    status = live.stat()
+    try:
+        os.chmod(partial, stat.S_IMODE(status.st_mode))
+    except OSError:
+        pass
+    try:
+        os.chown(partial, -1, status.st_gid)
+    except OSError:
+        pass
 
 
 def _subject_paths(rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -173,7 +188,7 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     if current["date_of_birth"] is None:
         raise CorrectionRefused("the subject's date of birth is now unknown, and a file without one fails "
                                 "validation; it keeps the details it has")
-    live, placement = _live(key, row, shares)
+    live, placement, share = _live(key, row, shares)
     if not live.exists():
         raise FileNotFoundError(f"{live}: the file is missing; not corrected")
     if file_subject(live) == current:
@@ -182,15 +197,16 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
         # review's M9).
         _record(key, row, live, placement)
         return None
+    # Only a copy needs room: the records-only catch-up above goes ahead on a
+    # fast share at its headroom (the minors' review, I-1).
+    if placement is not None and placement["tier"] == "fast" and not share.has_room(live.stat().st_size):
+        raise CorrectionRefused("the fast share is at its headroom; not corrected")
     checksums = (nwb_schema.NwbFile.Dataset & key).to_dicts()
     _subjects, others = _subject_paths(checksums)
     before = _stamp(live)
     partial = live.with_name(live.name + ".partial")
     try:
         shutil.copyfile(live, partial)
-        # The lab may have opened the file to its group: the copy swapped in
-        # keeps the live file's mode (the final review's M1).
-        shutil.copymode(live, partial)
         note = patch_subject(partial, current, day)
         changed = mismatches(partial, others)
         if changed:
@@ -208,6 +224,7 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
             raise ChangedWhileCorrecting(f"{live}: changed while it was being corrected (someone is writing "
                                          "to it); tried again next pass")
         if note is not None:
+            _keep_access(live, partial)
             os.replace(partial, live)
     finally:
         partial.unlink(missing_ok=True)
@@ -296,25 +313,35 @@ def _change_kinds() -> str:
     return dj.conn().query(f"SHOW COLUMNS FROM {nwb_schema.NwbChange.full_table_name} LIKE 'kind'").fetchone()[1]
 
 
-def _clear_partials(shares: dict) -> None:
+def _clear_partials(shares: dict) -> list[str]:
     """Every `.partial` a crash left beside a file or its description, at
     each published file's path on every reachable share and beside each
     written file's scratch copy (the final review's M6). The NWB stages
     alone write `.partial` names, under the NWB lock, so one found while the
-    lock is held is a leftover: of a correction, a publish or a move."""
+    lock is held is a leftover: of a correction, of a move, or of a publish
+    once that file is recorded (a first publish's own leftover is
+    overwritten by its retry). One that cannot be removed is reported and
+    the rest are still cleared (the minors' review, M-b). Returns the
+    reports."""
     from wl_preproc.nwb.publish import _published, current_placement, description_path
     from wl_preproc.schema import nwb as nwb_schema
 
+    leftovers = []
     reachable = [share for share in shares.values() if share.unreachable() is None]
     for key in _published().keys():
         placement = current_placement(key)
         for share in reachable if placement is not None else ():
             path = share.local(placement["path"])
-            for beside in (path, description_path(path)):
-                beside.with_name(beside.name + ".partial").unlink(missing_ok=True)
-    for row in (nwb_schema.NwbFile & {"status": "written"}).proj("path").to_dicts():
-        if row["path"]:
-            Path(row["path"] + ".partial").unlink(missing_ok=True)
+            leftovers += [beside.with_name(beside.name + ".partial") for beside in (path, description_path(path))]
+    leftovers += [Path(row["path"] + ".partial")
+                  for row in (nwb_schema.NwbFile & {"status": "written"}).proj("path").to_dicts() if row["path"]]
+    reports = []
+    for leftover in leftovers:
+        try:
+            leftover.unlink(missing_ok=True)
+        except OSError as exc:
+            reports.append(f"NwbCorrection: {leftover}: a leftover copy that could not be removed: {exc}")
+    return reports
 
 
 def run_corrections(slow, fast=None, freed: list[dict] | None = None,
@@ -351,12 +378,15 @@ def run_corrections(slow, fast=None, freed: list[dict] | None = None,
         return 0, [f"NwbCorrection: {exc}"]
     corrected, errors = 0, []
     try:
-        _clear_partials(shares)
+        errors += _clear_partials(shares)
     except Exception as exc:  # the corrections below must still run
         errors.append(f"NwbCorrection: clearing leftover copies: {exc}")
     # Said once per share, as publishing and placement say it, not once per
-    # file it holds back (the final review's M11).
+    # file it holds back: a share not reachable (the final review's M11), or
+    # one a file is placed on that this pass was not given (the minors'
+    # review, M-c).
     down = {tier: reason for tier, share in shares.items() if (reason := share.unreachable()) is not None}
+    down.update({tier: f"the {tier} share is not configured" for tier in ("slow", "fast") if tier not in shares})
     held_back = dict.fromkeys(down, 0)
     for key in stale:
         try:
