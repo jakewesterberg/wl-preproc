@@ -391,7 +391,11 @@ def _sweep(key: dict, placement: dict, shares: dict[str, Share]) -> str | None:
     current = shares[placement["tier"]].local(placement["path"])
     if not current.exists():
         return f"{other}: left in place, because the current copy {current} is missing"
-    moved_at = placement["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp()
+    # Dated by the change that put the file where it is, never by a
+    # correction that recorded its placement again since (design spec
+    # `2026-10-05-subject-corrections-design.md`).
+    placed = [row for row in placements(key) if row["kind"] in ("published", "moved")]
+    moved_at = placed[-1]["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp()
     if other.exists() and other.stat().st_mtime > moved_at:
         return f"{other}: written to after the file was moved from it; left for a person"
     _remove_old_copy(other)

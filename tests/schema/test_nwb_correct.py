@@ -368,3 +368,135 @@ def test_an_unreachable_share_fails_the_file(published, tmp_path_factory):
             correct(key, {"slow": gone}, _DAY)
     finally:
         _set_birth(_BIRTH)
+
+
+# -- The daemon's stage (spec section 2), and what one share's history means
+# for its leftovers once a file is corrected.
+
+def _written_of_subject() -> int:
+    from wl_preproc.schema import nwb as nwb_schema
+
+    return len(nwb_schema.NwbFile & {"subject": _SUBJECT, "status": "written"})
+
+
+def test_a_daemon_pass_corrects_every_stale_file_and_says_how_many(published, daemon_module, prefix, shares):
+    from wl_preproc.nwb.correct import file_subject, stale_files
+
+    _session_key, key, _runs, root = published
+    passes = {"nwb_root": root, "nwb_slow": shares["slow"], "nwb_fast": shares["fast"]}
+    daemon_module.run_once(prefix=prefix, **passes)  # anything still waiting is published first
+    written = _written_of_subject()  # with the earlier tests, its replacement and derivatives too
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        report = daemon_module.run_once(prefix=prefix, **passes)
+        assert report["nwb_corrected"] == written, report["errors"]
+        assert not [error for error in report["errors"] if "NwbCorrection" in error]
+        assert not [stale for stale in stale_files() if stale["subject"] == _SUBJECT]
+        assert file_subject(_live(key, shares))["date_of_birth"] == datetime.date(2016, 3, 1)
+    finally:
+        _set_birth(_BIRTH)
+        assert daemon_module.run_once(prefix=prefix, **passes)["nwb_corrected"] == written
+    assert daemon_module.run_once(prefix=prefix, **passes)["nwb_corrected"] == 0
+
+
+def test_one_failing_file_does_not_stop_the_others(published, shares, monkeypatch):
+    from wl_preproc.nwb import correct as correct_module
+
+    _session_key, key, _runs, _root = published
+    real = correct_module.correct
+
+    def failing(each, shares_, day):
+        if each == key:
+            raise OSError("the share refused the copy")
+        return real(each, shares_, day)
+
+    monkeypatch.setattr(correct_module, "correct", failing)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        corrected, errors = correct_module.run_corrections(shares["slow"], shares["fast"])
+        assert corrected == _written_of_subject() - 1
+        assert [error for error in errors if "the share refused the copy" in error and error.startswith(
+            "NwbCorrection ")]
+    finally:
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        correct_module.run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_file_not_yet_published_in_a_freed_session_waits(published, daemon_module, prefix, shares):
+    """As publishing does, the stage leaves a file still in scratch alone
+    while its session is freed (spec amendment 4); once it is not, the file
+    is corrected."""
+    from pathlib import Path
+
+    from tests.schema.test_nwb_build import _montage, _request
+    from wl_preproc.nwb.correct import file_subject, run_corrections
+    from wl_preproc.nwb.publish import current_placement
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import nwb as nwb_schema
+
+    session_key, _key, runs, root = published
+    waiting = accept(_request(session_key, "nwbfix1-freed", _montage(runs), runs,
+                              run_numbers=[run["run_number"] for run in runs]), prefix=prefix)
+    daemon_module.run_once(prefix=prefix, nwb_root=root)
+    path = Path((nwb_schema.NwbFile & waiting).fetch1("path"))
+    assert current_placement(waiting) is None
+    session = {"subject": session_key["subject"], "session_datetime": session_key["session_datetime"]}
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        run_corrections(shares["slow"], shares["fast"], freed=[session])
+        assert file_subject(path)["date_of_birth"] == _BIRTH and _is_stale(waiting)
+        run_corrections(shares["slow"], shares["fast"])
+        assert file_subject(path)["date_of_birth"] == datetime.date(2016, 3, 1)
+    finally:
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_leftover_written_after_its_move_is_kept_though_the_file_was_corrected_since(
+        published, shares, prefix, monkeypatch):
+    """A move whose old copy could not be deleted leaves it for the sweep,
+    which deletes it only if nobody wrote to it after the move. A correction
+    records the placement again, later; the sweep still dates the move by
+    the move, not by the correction. On the fast share, a correction also
+    respects its headroom (spec section 3, step 1)."""
+    import os
+
+    from tests.schema.test_nwb_build import _set_active
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import CorrectionRefused, correct
+    from wl_preproc.nwb.publish import Share
+
+    _session_key, key, _runs, _root = published
+    old = _live(key, shares)
+    real = publish_module._remove_old_copy
+
+    def in_use(path):
+        raise PermissionError(f"{path} is in use")
+
+    monkeypatch.setattr(publish_module, "_remove_old_copy", in_use)
+    _set_active(key)
+    try:
+        publish_module.run_placement(shares["slow"], shares["fast"])
+        monkeypatch.setattr(publish_module, "_remove_old_copy", real)
+        moved = publish_module.current_placement(key)
+        assert moved["tier"] == "fast" and old.exists()
+        written_at = moved["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp() + 0.001
+        os.utime(old, (written_at, written_at))  # someone wrote to the old copy after the move
+        _set_birth(datetime.date(2016, 3, 1))
+        full = Share(tier="fast", mount=shares["fast"].mount, host="wl-nas", name="nvme", headroom_bytes=10**18)
+        with pytest.raises(CorrectionRefused, match="headroom"):
+            correct(key, {"slow": shares["slow"], "fast": full}, _DAY)
+        correct(key, shares, _DAY)
+        _moved, errors = publish_module.run_placement(shares["slow"], shares["fast"])
+        assert old.exists()
+        assert [error for error in errors if "written to after the file was moved from it" in error]
+    finally:
+        monkeypatch.setattr(publish_module, "_remove_old_copy", real)
+        _set_birth(_BIRTH)
+        correct(key, shares, _DAY)
+        old.unlink(missing_ok=True)
+        publish_module.description_path(old).unlink(missing_ok=True)
+        _set_active()
+        publish_module.run_placement(shares["slow"], shares["fast"])
+    assert publish_module.current_placement(key)["tier"] == "slow"

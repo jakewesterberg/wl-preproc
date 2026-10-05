@@ -1129,7 +1129,7 @@ def test_a_second_wlpp_process_leaves_the_nwb_stages_alone(activation, daemon_mo
         report = daemon_module.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("nwb-locked"),
                                         nwb_slow=slow_share, nwb_fast=fast_share)
         assert [e for e in report["errors"] if "another wlpp process" in e], report["errors"]
-        assert (report["nwb"], report["nwb_published"], report["nwb_moved"]) == (0, 0, 0)
+        assert (report["nwb"], report["nwb_published"], report["nwb_moved"], report["nwb_corrected"]) == (0, 0, 0, 0)
         assert not nwb_schema.NwbFile & key
         assert main(_command(key, tmp_path_factory.mktemp("nwb-locked-command"), prefix)) == 1
         assert "another wlpp process" in capsys.readouterr().out

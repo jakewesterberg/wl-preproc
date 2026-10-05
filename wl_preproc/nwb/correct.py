@@ -239,3 +239,31 @@ def _record(key: dict, row: dict, live: Path, placement: dict | None, current: d
             **{field: placement[field] for field in ("tier", "host", "share", "path")}, "n_bytes": n_bytes})
     if placement is not None:
         write_description(live, description)
+
+
+def run_corrections(slow, fast=None, freed: list[dict] | None = None,
+                    day: datetime.date | None = None) -> tuple[int, list[str]]:
+    """The daemon's correction stage (spec section 2): every stale written
+    file, corrected where it is. A file not yet published in a freed session
+    waits, as publishing does. A failure is reported per file and retried
+    next pass; it never stops another file. Returns `(corrected, failures)`."""
+    from wl_preproc.nwb.publish import current_placement
+
+    freed = freed or []
+    day = day or datetime.datetime.now(datetime.timezone.utc).date()
+    shares = {tier: share for tier, share in (("slow", slow), ("fast", fast)) if share is not None}
+    try:
+        stale = stale_files()
+    except Exception as exc:  # the daemon's other stages must still run
+        return 0, [f"NwbCorrection: {exc}"]
+    corrected, errors = 0, []
+    for key in stale:
+        try:
+            session = {"subject": key["subject"], "session_datetime": key["session_datetime"]}
+            if session in freed and current_placement(key) is None:
+                continue
+            correct(key, shares, day)
+            corrected += 1
+        except Exception as exc:  # one file must not stop the others; retried next pass
+            errors.append(f"NwbCorrection {key}: {exc}")
+    return corrected, errors

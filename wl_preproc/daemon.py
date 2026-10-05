@@ -1058,6 +1058,7 @@ def run_once(
     nwb_built: int | None = None
     nwb_published: int | None = None
     nwb_moved: int | None = None
+    nwb_corrected: int | None = None
     try:
         with exclusive(prefix) if nwb_root is not None or nwb_slow is not None else contextlib.nullcontext():
             # The NWB builder (design spec `2026-09-28-nwb-builder-design.md` section
@@ -1102,10 +1103,29 @@ def run_once(
                 except Exception as exc:  # a failing stage must not stop the others
                     nwb_moved = 0
                     errors.append(f"NwbPlacement: placement failed: {exc}")
+
+            # Subject corrections (design spec
+            # `2026-10-05-subject-corrections-design.md`): every written file
+            # whose subject's details changed, corrected where it is, after
+            # building, publishing and placement. `None` with neither the
+            # builder's root nor a share configured: there is no file to correct.
+            if nwb_root is None and nwb_slow is None:
+                nwb_corrected = None
+            else:
+                from wl_preproc.nwb.correct import run_corrections
+
+                try:
+                    nwb_corrected, correction_errors = run_corrections(
+                        nwb_slow, nwb_fast, freed=currently_freed(prefix=prefix))
+                    errors.extend(correction_errors)
+                except Exception as exc:  # a failing stage must not stop the others
+                    nwb_corrected = 0
+                    errors.append(f"NwbCorrection: corrections failed: {exc}")
     except Busy as busy:
         nwb_built = None if nwb_root is None else 0
         nwb_published = None if nwb_slow is None else 0
         nwb_moved = None if nwb_slow is None or nwb_fast is None else 0
+        nwb_corrected = None if nwb_root is None and nwb_slow is None else 0
         errors.append(f"NwbPlacement: {busy}")
 
     archived: int | None
@@ -1125,6 +1145,7 @@ def run_once(
         "nwb": nwb_built,
         "nwb_published": nwb_published,
         "nwb_moved": nwb_moved,
+        "nwb_corrected": nwb_corrected,
         # How many sessions were freed, and so skipped, when the pass began --
         # a count, so a skip never reads as an all-clear.
         "freed_skipped": freed_skipped,
