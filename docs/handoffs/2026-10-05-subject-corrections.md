@@ -125,3 +125,32 @@ person writes beginning `Corrected `.
 **The full suite after the fixes, on `c34e145`:** 3.11, **2174 passed, 25 skipped, 1 deselected,
 1 xfailed**; 3.13, **2173 passed, 27 skipped, 1 xfailed**. That is six more than §5's run, the
 fix pass's tests, and both exited 0.
+
+## 7. The deferred minors, done (branch `fix/subject-corrections-minors`, 2026-10-05)
+
+The requester chose to clear §6's Minor findings next. Five were fixed in `01e8c6a`, each with a
+test that failed first, run alone (spec amendments 11–13):
+- **M3:** corrections run before publishing and placement, so a correction a crash left
+  unrecorded is recorded before either checks the file.
+  `test_a_correction_a_crash_left_unrecorded_does_not_stop_a_move`.
+- **M1:** a corrected file keeps its permissions. `test_a_corrected_file_keeps_its_permissions`.
+- **M9 (in part):** a file already holding the details is not copied.
+  `test_a_file_already_holding_the_details_is_not_copied`.
+- **M6:** leftover `.partial` copies are cleared, wherever a file has been.
+  `test_leftover_copies_are_cleared_wherever_a_file_has_been`.
+- **M11:** an unreachable share is reported once, with how many files it holds back.
+  `test_an_unreachable_share_is_reported_once_not_per_file`.
+- **M10:** `NwbPlacement`'s comment names corrections.
+
+**Two are left as they are, for the requester to overrule:**
+- **M4, a file corrected while its records are not, if the records fail after a swap and the
+  details then revert.** Its realistic cause was a database without `corrected`, which the stage
+  now refuses before swapping (amendment 9). What remains needs a database failure in the instant
+  between the swap and the commit, then a revert before the next pass. It is not silent if it
+  happens: the file's subject datasets no longer match their records, so every move of it is
+  refused with `ChangedData`, naming them, for a person.
+- **M9's other half, `stale_files` reading every written file's description each pass,** about
+  75 KB each on the fixture. Avoiding it needs the subject's details kept beside the description,
+  a schema change, or a per-subject record of the details last seen. It is worth doing if a pass
+  grows slow with the number of files.
+

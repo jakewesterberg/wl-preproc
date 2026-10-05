@@ -266,3 +266,21 @@ These settle what the sections above left open; §0 stands.
     corrected as usual. A correction changes the four datasets' checksums, which the description
     lists with the written-once ones; wl.works is told so (final review M7 and M8).
 
+---
+
+## Amendments, 2026-10-05, from the deferred minors
+
+11. **Corrections run after building and before publishing and placement** (§2 said after all
+    three). After a crash that followed a swap, the file holds new subject details its records do
+    not; placement's move compared every recorded checksum and reported the subject's datasets as
+    changed data, and publishing's copy failed its verification, until the correction stage
+    recorded them later in the same pass. Recorded first, nothing is reported (minor M3).
+12. **The stage clears every `.partial` a crash left** beside a published file's path on each
+    reachable share, beside its description, and beside a written file's scratch copy, before it
+    corrects anything. The NWB stages alone write `.partial` names, under the NWB lock, so one found
+    while the lock is held is a leftover of a correction, a publish or a move (minor M6).
+13. **Smaller rules:** the copy swapped in keeps the live file's permissions (M1); a file that
+    already holds the current details has only its records brought up, and is not copied (M9); a
+    share that is not reachable is reported once per pass, with the number of files it holds back
+    (M11).
+
