@@ -19,11 +19,12 @@ import pytest
 RESTART = {"at_s": 11.0, "gap_s": 0.5}
 
 
-def _session(tmp_path_factory, mutate=None, **update):
-    """A CI-shaped SpikeGLX session, generated and hand-landed at 09:00 on
-    its `session_id`'s own date (`test_eye_populate.py::_land`), as the NWB
-    builder's own tests land theirs. `mutate` edits the SpikeGLX directory
-    before landing. Returns `(recipe, session_key)`."""
+def _session(tmp_path_factory, mutate=None, *, session_datetime=None, **update):
+    """A CI-shaped SpikeGLX session, generated and hand-landed at
+    `session_datetime`, or at 09:00 on its `session_id`'s own date
+    (`test_eye_populate.py::_land`), as the NWB builder's own tests land
+    theirs. `mutate` edits the SpikeGLX directory before landing. Returns
+    `(recipe, session_key)`."""
     from tests.schema.test_eye_populate import _land
     from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
     from wl_preproc.synth.session import generate_session
@@ -34,7 +35,7 @@ def _session(tmp_path_factory, mutate=None, **update):
     generate_session(root, recipe)
     if mutate is not None:
         mutate(root / recipe.session_id / "spikeglx")
-    when = datetime.datetime.fromisoformat(recipe.session_id[:10]).replace(hour=9)
+    when = session_datetime or datetime.datetime.fromisoformat(recipe.session_id[:10]).replace(hour=9)
     return recipe, _land(root, recipe, when, acquisition_systems=("syncbox", "spikeglx"))
 
 

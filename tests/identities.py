@@ -13,11 +13,20 @@ checked unclaimed across `tests/`; these need no check.
     serial = new_serial()                    # 19099000001, say
     key = animal.key("canonical")            # an idempotency key
 
-Pass the fields to the helper that lands the session, e.g.
-`test_spikeglx_restart.py::_session(tmp_path_factory, subject=first.subject,
-session_id=first.session_id, probe_serial=serial)`; `first.key` restricts to
-it. A default day is in the past, since nwbinspector calls a future session
+Pass every field to the helper that lands the session, its time included:
+`test_spikeglx_restart.py::_session(tmp_path_factory,
+session_datetime=again.session_datetime, subject=again.subject,
+session_id=again.session_id, probe_serial=serial)`. `again.key` is then its
+key. `_session` given no time lands at 09:00 on the id's date, so a day's
+second session would land on its first, silently (the identities review's
+I1); `_land`, `_plant`, `_build_stepped_session` and `_populate_generated`
+each take the time. Sessions landed through the real watcher (`scan_once`)
+are not these: it dates every recipe at `SYNTH_EPOCH`.
+
+A default day is in the past, since nwbinspector calls a future session
 start critical; a test needing a particular day, past or future, passes `on`.
+A day before an animal's birth date (`_land` writes 2020-01-01) gives a
+negative age.
 
 **The series are reserved:** `test_identities.py` fails on any test that
 writes one of their values by hand. Each pytest process has its own database,
@@ -34,10 +43,16 @@ import itertools
 
 from wl_preproc.ingest.landing import SUBJECT_MAX_LEN
 
+if __name__ != "tests.identities":
+    # Under another name it would be a second module counting again from one,
+    # handing out what this one already has (the identities review's M1).
+    raise ImportError(f"tests/identities.py imported as {__name__}: import it as tests.identities")
+
 PREFIX = "zz"
 SERIAL_PREFIX = "19099"
 # The first animal's first day: after `_land`'s birth date (2020-01-01), so
-# every age is positive, and far enough back for thousands of animals.
+# every age is positive. Each animal starts a day later, so the default days
+# reach today after about a thousand animals in one run.
 FIRST_DAY = datetime.date(2024, 1, 1)
 
 _animals = itertools.count(1)
@@ -69,15 +84,17 @@ class Animal:
     def session(self, on: datetime.date | None = None) -> Session:
         """A new session: on `on`, or on the next day this animal has none.
         The first session of a day is `<date>_01` at 09:00, the next `_02` at
-        10:00."""
+        10:00, up to 15."""
         if on is None:
             on = self.first_day
             while self._per_day[on]:
                 on += datetime.timedelta(days=1)
             if on >= datetime.datetime.now(datetime.UTC).date():
                 raise RuntimeError(f"no past day is left for {self.subject}'s next session")
-        self._per_day[on] += 1
-        number = self._per_day[on]
+        number = self._per_day[on] + 1
+        if 8 + number > 23:
+            raise RuntimeError(f"{on} holds 15 sessions already for {self.subject}, 09:00 to 23:00")
+        self._per_day[on] = number
         return Session(subject=self.subject, session_id=f"{on.isoformat()}_{number:02d}",
                        session_datetime=datetime.datetime.combine(on, datetime.time(8 + number)))
 

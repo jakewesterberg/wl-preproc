@@ -3,6 +3,7 @@ other test names, its sessions, probe serials and request keys."""
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import itertools
 import re
@@ -52,10 +53,36 @@ def test_a_session_on_a_day_already_used_is_an_hour_later_with_the_next_number()
     assert later.date not in (first.date, future.date) and later.session_id.endswith("_01")
 
 
-def test_the_series_stops_before_it_reaches_today(monkeypatch):
-    monkeypatch.setattr(identities, "_animals", itertools.count(10_000))
+def test_the_series_stops_before_it_reaches_today():
+    """Yesterday is the last default day (the identities review's M2)."""
+    today = datetime.datetime.now(datetime.UTC).date()
+    animal = identities.new_animal()
+    last = dataclasses.replace(animal, first_day=today - datetime.timedelta(days=1)).session()
+    assert last.date == today - datetime.timedelta(days=1)
     with pytest.raises(RuntimeError, match="no past day is left"):
-        identities.new_animal().session()
+        dataclasses.replace(animal, first_day=today).session()
+
+
+def test_a_day_holds_fifteen_sessions_and_a_sixteenth_is_refused_without_using_a_slot():
+    """09:00 to 23:00 (the identities review's M3)."""
+    animal = identities.new_animal()
+    day = animal.session().date
+    assert [animal.session(on=day).session_datetime.hour for _ in range(14)] == list(range(10, 24))
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="holds 15 sessions already"):
+            animal.session(on=day)
+
+
+def test_the_helper_is_one_module_with_one_series():
+    """Imported under another name, it would count again from one (the
+    identities review's M1)."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("identities", Path(identities.__file__))
+    with pytest.raises(ImportError, match="import it as tests.identities"):
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    assert "identities" not in sys.modules
 
 
 def test_serials_are_new_and_in_the_reserved_range():
@@ -82,19 +109,24 @@ def test_no_test_writes_a_reserved_identity_by_hand():
 
 
 def test_fresh_identities_land_as_sessions_of_their_own(dj_conn, prefix, tmp_path_factory):
-    """Through the landing helper most database tests use: two sessions of
-    one animal and one of another, each its own session with its own files."""
+    """Through the landing helper most database tests use: three sessions of
+    one animal, two of them on one day, and one of another, each its own
+    session with its own files. The helper is given each session's time: it
+    would otherwise land a day's second session at 09:00, on its first (the
+    identities review's I1)."""
     from tests.schema.test_spikeglx_restart import _session
     from wl_preproc import daemon
     from wl_preproc.schema import ingest, pipeline
 
     daemon.activate_all(prefix=prefix)
     first_animal, second_animal = identities.new_animal(), identities.new_animal()
-    wanted = [first_animal.session(), first_animal.session(), second_animal.session()]
+    first = first_animal.session()
+    wanted = [first, first_animal.session(on=first.date), first_animal.session(), second_animal.session()]
     for session in wanted:
-        _recipe, key = _session(tmp_path_factory, subject=session.subject, session_id=session.session_id,
+        _recipe, key = _session(tmp_path_factory, session_datetime=session.session_datetime,
+                                subject=session.subject, session_id=session.session_id,
                                 probe_serial=identities.new_serial())
         assert key == session.key
     landed = (ingest.Ingestion & [session.key for session in wanted]).to_dicts()
-    assert len(landed) == len(pipeline.Session & [session.key for session in wanted]) == 3
-    assert len({row["session_dir"] for row in landed}) == 3
+    assert len(landed) == len(pipeline.Session & [session.key for session in wanted]) == 4
+    assert {Path(row["session_dir"]).name for row in landed} == {session.session_id for session in wanted}

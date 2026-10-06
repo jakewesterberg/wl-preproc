@@ -28,10 +28,15 @@ A survey of the suite on 2026-10-06 found what a test's identity touches:
 `tests/identities.py`, used as its docstring shows:
 - **`new_animal()`:** `zz` and six digits, the subject column's full width, so no name holds
   another. No existing test's animal could be held in one either (checked).
-- **`Animal.session(on=None)`:** with no `on`, the next past day the animal has no session on.
-  It is `<date>_01` at 09:00, which is what `test_spikeglx_restart.py::_session` derives from
-  the id. A day already used gives `_02` at 10:00, and so on. `on` names a day, past or future.
-  The series raises before a default day reaches today.
+- **`Animal.session(on=None)`:** with no `on`, the next past day the animal has no session on,
+  at 09:00, named `<date>_01`. A day already used gives `_02` at 10:00, and so on, up to 15
+  sessions a day. `on` names a day, past or future. The series raises before a default day
+  reaches today.
+- **Landing it:** pass every field, the time included. `test_spikeglx_restart.py::_session`
+  now takes `session_datetime=`; given none, it still lands at 09:00 on the id's date. `_land`,
+  `_plant`, `_build_stepped_session` and `_populate_generated` already took the time. Sessions
+  landed through the real watcher (`scan_once`) are dated `SYNTH_EPOCH` whatever their recipe,
+  so they are not these.
 - **`Animal.key(name)`:** a request key named for the animal.
 - **`new_serial()`:** `19099` and six digits.
 - **A counter per process is enough:** each pytest process starts its own container. The one
@@ -52,6 +57,31 @@ of them would risk breaking tests for no gain. New tests use the helper.
   - keys are named for their animal.
 - **The guard:** `test_no_test_writes_a_reserved_identity_by_hand` scans `tests/` for a reserved
   name or serial written by hand. Planting one of each in a scratch file failed it, naming both.
-- **The proof:** `test_fresh_identities_land_as_sessions_of_their_own` lands two sessions of one
-  animal and one of another through `_session`. Each is its own `pipeline.Session` with its own
-  files.
+- **The proof:** `test_fresh_identities_land_as_sessions_of_their_own` lands three sessions of
+  one animal, two of them on one day, and one of another, through `_session`. Each is its own
+  `pipeline.Session` with its own files.
+
+## 4. The review
+
+One fresh Opus reviewer read the branch and ran scratch copies. No Critical.
+- **Important, fixed (I1):** `_session` always landed at 09:00 on the id's date, so a day's
+  second session (`_02`, 10:00) landed on the first's key and its files were dropped, silently:
+  the failure this helper exists to prevent. The proof landed only first sessions. `_session`
+  now takes the session's time, the proof lands a same-day pair, and the docstring says which
+  helpers take the time and that the watcher's sessions are not these.
+- **Minor, fixed:**
+  - **M1:** imported as `identities` rather than `tests.identities`, the module would be a
+    second copy counting again from one. It now refuses to import under another name.
+  - **M2:** the test of the series' end did not pin the boundary. It now checks that yesterday
+    is given and today refused; changing `>=` to `>` fails it.
+  - **M3:** a sixteenth session on one day raised a bare `ValueError` after using up its slot.
+    It now raises a named error first.
+  - **M4:** the comment claimed room for thousands of animals; it is about a thousand. A day
+    before an animal's birth date giving a negative age is now said in the docstring.
+- **Checked and sound by the reviewer:**
+  - no file under `tests/` holds a reserved value, and no existing subject fits inside one;
+  - the `c5_` and `h1_` subprocesses use their own prefixes;
+  - no plugin reorders or reruns tests;
+  - comparing with the UTC date is safe;
+  - the proof's sessions disturb no later module's whole-database pass, checked with it run
+    both before and after those modules.
