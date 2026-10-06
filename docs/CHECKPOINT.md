@@ -1,24 +1,29 @@
 # Where this build actually is
 
-**Last updated 2026-10-05**, describing `main` at `a32394d`, the merge of
-`fix/subject-corrections-minors`: piece 4's seven deferred minors and the
-fixes from their review (handoff `handoffs/2026-10-05-subject-corrections.md`
-§7 and §8). CI read off `a32394d` is green on both interpreters, 2177 passed
-on each with 33 skipped, and the manifest check is green
-(`gh run view 37352455155`).
-- **Subject corrections, piece 4 of four,** were merged as `6f5ddbe` (CI green,
-  2167 passed on each, `37307075826`): a corrected species, sex or date of
-  birth reaches every file already built for the animal, published or not,
-  with a note of the change in the file and its description.
-- **Its minors are fixed,** among them a read-only file that failed on every
-  pass and a full fast share that held back a records-only catch-up; M4 is
-  left open by the requester's choice (handoff §7).
-- **A development database alters `NwbChange.kind`** to add `corrected`; until
-  it does, the stage corrects nothing and names the statement (handoff §3).
+**Last updated 2026-10-06**, describing `main` at `7cfc852`, the merge of
+`fix/listing-minors-pass-cost`: the session listing's last deferred minors and
+what a daemon pass costs (handoff `handoffs/2026-10-01-session-listing.md` §8).
+CI read off `7cfc852` is green on both interpreters, 2184 passed on each with
+33 skipped, and the manifest check is green (`gh run view 37375521346`).
+- **A pass reads each table once, not once per session or file:** the listing
+  stage and `GET /sessions` gather every session's rows together, and the NWB
+  stages that visit every published file read every placement in one query.
+  The listing's entries are unchanged, so no session is listed again.
+- **The census's note that a probe's imroTbl was too long to keep** stays out
+  of the NWB file's probe notes; the listing still carries it.
+- **Its review found one Critical,** fixed before merge: a block holding no
+  trial was counted as holding one.
+- **Subject corrections, piece 4 of four, and their minors are merged**
+  (`6f5ddbe`, `a32394d`); a development database alters `NwbChange.kind` to
+  add `corrected` (handoff `handoffs/2026-10-05-subject-corrections.md` §3).
 - **All four pieces that make a real wl-xcon recording usable are merged,**
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `a32394d` (the subject-corrections-minors merge, CI green,
+2177 passed on each interpreter, `37352455155`) until the listing-minors-pass-cost
+merge; true when written.*
 
 *This header named `6f5ddbe` (the subject-corrections merge, CI green, 2167
 passed on each interpreter, `37307075826`) until the subject-corrections-minors

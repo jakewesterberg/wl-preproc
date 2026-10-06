@@ -82,6 +82,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `a32394d` until the listing-minors-pass-cost merge `7cfc852` on
+  # 2026-10-05 (CI green on `a32394d`, run 37352455155); true when written.
   # Was `6f5ddbe` until the subject-corrections-minors merge `a32394d` on
   # 2026-10-05 (CI green on `6f5ddbe`, run 37307075826); true when written.
   # Was `762c17d` until the subject-corrections merge `6f5ddbe` on 2026-10-05
@@ -111,7 +113,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "a32394d"
+  describes: "7cfc852"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
