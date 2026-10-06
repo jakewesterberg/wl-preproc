@@ -1,25 +1,25 @@
 # Where this build actually is
 
-**Last updated 2026-10-06**, describing `main` at `7cfc852`, the merge of
-`fix/listing-minors-pass-cost`: the session listing's last deferred minors and
-what a daemon pass costs (handoff `handoffs/2026-10-01-session-listing.md` §8).
-CI read off `7cfc852` is green on both interpreters, 2184 passed on each with
-33 skipped, and the manifest check is green (`gh run view 37375521346`).
-- **A pass reads each table once, not once per session or file:** the listing
-  stage and `GET /sessions` gather every session's rows together, and the NWB
-  stages that visit every published file read every placement in one query.
-  The listing's entries are unchanged, so no session is listed again.
-- **The census's note that a probe's imroTbl was too long to keep** stays out
-  of the NWB file's probe notes; the listing still carries it.
-- **Its review found one Critical,** fixed before merge: a block holding no
-  trial was counted as holding one.
-- **Subject corrections, piece 4 of four, and their minors are merged**
-  (`6f5ddbe`, `a32394d`); a development database alters `NwbChange.kind` to
-  add `corrected` (handoff `handoffs/2026-10-05-subject-corrections.md` §3).
+**Last updated 2026-10-06**, describing `main` at `a9982f3`, the merge of
+`feat/test-identities`: fresh identities for database-backed tests (handoff
+`handoffs/2026-10-06-test-identities.md`). CI read off `a9982f3` is green on
+both interpreters, 2194 passed on each with 33 skipped, and the manifest check
+is green (`gh run view 37442837339`).
+- **A new database test takes its animal, sessions, probe serials and request
+  keys from `tests/identities.py`** instead of picking them by hand; a guard
+  fails any test that writes a reserved value. Existing tests keep theirs.
+- **The listing's last minors and a pass's reads** were merged before it
+  (`7cfc852`, handoff `handoffs/2026-10-01-session-listing.md` §8).
+- **U'n'Eye needs no GPU:** a check on 2026-10-06 ran its pretrained network
+  in 1.4 s per recording on the CPU. Its design addendum is on `spec/uneye`.
 - **All four pieces that make a real wl-xcon recording usable are merged,**
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `7cfc852` (the listing-minors-pass-cost merge, CI green,
+2184 passed on each interpreter, `37375521346`) until the test-identities
+merge; true when written.*
 
 *This header named `a32394d` (the subject-corrections-minors merge, CI green,
 2177 passed on each interpreter, `37352455155`) until the listing-minors-pass-cost
@@ -153,9 +153,11 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. U'n'Eye, the one detector not written. It wants a GPU for speed; its
->    published pretrained network may run on the CPU (not yet checked), and
->    fine-tuning it to the DPI tracker waits for hand-labelled lab data.
+> 1. U'n'Eye, the one detector not written. Its pretrained network runs on
+>    the CPU in 1.4 s per recording (checked 2026-10-06), so it needs no GPU;
+>    its design addendum is on `spec/uneye`
+>    (`specs/2026-10-06-uneye-design.md`), a plan next. Fine-tuning it to the
+>    DPI tracker waits for hand-labelled lab data.
 >
 > Done: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
 > requester's choice); the session listing's minors M6 and M9 with the NWB

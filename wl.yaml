@@ -32,8 +32,10 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free, in the order the
-    requester chose on 2026-10-05: U'n'Eye, the one detector not written (it
-    wants a GPU for speed; fine-tuning waits for hand-labelled lab data).
+    requester chose on 2026-10-05: U'n'Eye, the one detector not written. A
+    check on 2026-10-06 found it needs no GPU (1.4 s per recording on the
+    CPU); its design addendum is on spec/uneye, a plan next. Fine-tuning
+    waits for hand-labelled lab data.
     Done: piece 4's seven deferred minors (a32394d; M4 is left open by the
     requester's choice); the session listing's minors M6 and M9 with the NWB
     stages' per-file placement lookups (7cfc852); and fresh identities for
@@ -83,6 +85,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `7cfc852` until the test-identities merge `a9982f3` on 2026-10-06
+  # (CI green on `7cfc852`, run 37375521346); true when written.
   # Was `a32394d` until the listing-minors-pass-cost merge `7cfc852` on
   # 2026-10-05 (CI green on `a32394d`, run 37352455155); true when written.
   # Was `6f5ddbe` until the subject-corrections-minors merge `a32394d` on
@@ -114,7 +118,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "7cfc852"
+  describes: "a9982f3"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
