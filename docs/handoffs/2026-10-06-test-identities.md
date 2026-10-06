@@ -85,3 +85,7 @@ One fresh Opus reviewer read the branch and ran scratch copies. No Critical.
   - comparing with the UTC date is safe;
   - the proof's sessions disturb no later module's whole-database pass, checked with it run
     both before and after those modules.
+
+**The full suite on `c8cfdea`,** the branch with the review's fixes: 3.11, **2201 passed, 25 skipped,
+1 deselected, 1 xfailed**; 3.13, **2200 passed, 27 skipped, 1 xfailed**. That is ten more than
+the listing-minors branch's run, this branch's ten new tests, and both exited 0.
