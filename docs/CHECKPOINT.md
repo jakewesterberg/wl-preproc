@@ -153,14 +153,18 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. U'n'Eye, the one detector not written; it wants a GPU.
-> 2. A session-date allocator for the test suite: every database-backed
->    fixture still picks an unclaimed subject and date by hand.
+> 1. U'n'Eye, the one detector not written. It wants a GPU for speed; its
+>    published pretrained network may run on the CPU (not yet checked), and
+>    fine-tuning it to the DPI tracker waits for hand-labelled lab data.
 >
 > Done: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
-> requester's choice), and the session listing's minors M6 and M9 with the NWB
-> stages' per-file placement lookups, merged from
-> `fix/listing-minors-pass-cost` (`handoffs/2026-10-01-session-listing.md` §8).
+> requester's choice); the session listing's minors M6 and M9 with the NWB
+> stages' per-file placement lookups (`7cfc852`,
+> `handoffs/2026-10-01-session-listing.md` §8); and fresh identities for
+> database-backed tests, merged from `feat/test-identities`
+> (`handoffs/2026-10-06-test-identities.md`): a new test takes its animal,
+> sessions, serials and request keys from `tests/identities.py` instead of
+> picking them by hand.
 >
 > **Other repositories' to act on:**
 > - **wl.works** vendors `job_request.json` and `nwb_description.json` at its

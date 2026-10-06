@@ -32,12 +32,13 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free, in the order the
-    requester chose on 2026-10-05: (1) U'n'Eye, the one detector not written
-    (it wants a GPU); (2) a session-date allocator for the test suite. Done:
-    piece 4's seven deferred minors (a32394d; M4 is left open by the
-    requester's choice), and the session listing's minors M6 and M9 with the
-    NWB stages' per-file placement lookups, merged from
-    fix/listing-minors-pass-cost.
+    requester chose on 2026-10-05: U'n'Eye, the one detector not written (it
+    wants a GPU for speed; fine-tuning waits for hand-labelled lab data).
+    Done: piece 4's seven deferred minors (a32394d; M4 is left open by the
+    requester's choice); the session listing's minors M6 and M9 with the NWB
+    stages' per-file placement lookups (7cfc852); and fresh identities for
+    database-backed tests (tests/identities.py), merged from
+    feat/test-identities.
     Other repositories': wl.works vendors job_request.json and
     nwb_description.json at its build 20b-1; wl-xcon's XC-026 lets restarted
     runs into a canonical; a development database alters NwbChange.kind and
