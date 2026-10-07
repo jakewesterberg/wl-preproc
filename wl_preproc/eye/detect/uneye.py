@@ -26,6 +26,7 @@ Journal of Neurophysiology, 121(2), 646-661. 10.1152/jn.00601.2018
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,7 +73,25 @@ DEFAULT_UNEYE_PARAMS = UneyeParams(weights="weights_dataset3", min_saccade_durat
 
 def _network(params: UneyeParams, fs_hz: float):
     """U'n'Eye's classifier for `params`, held to the CPU. torch is imported
-    here, not at the top: importing the registry must not need it."""
+    here, not at the top: importing the registry must not need it.
+
+    **It refuses to start where numba already runs on OpenMP.** torch brings
+    its own OpenMP runtime, and with numba's beside it U'n'Eye's first
+    convolution waits for ever, silently (design spec amendment 6). `bmd.py`
+    keeps BMD's kernels off OpenMP; this turns any other route to the hang,
+    such as numba code that ran before BMD was imported, into an error. numba
+    is read only if already imported, never imported here."""
+    numba = sys.modules.get("numba")
+    if numba is not None:
+        try:
+            layer = numba.threading_layer()
+        except ValueError:  # no parallel kernel has run in this process yet
+            layer = None
+        if layer == "omp":
+            raise RuntimeError(
+                "numba runs its parallel kernels on OpenMP in this process, and U'n'Eye's torch would load "
+                "a second OpenMP runtime and hang (design spec amendment 6). Set "
+                "numba.config.THREADING_LAYER = 'workqueue' before any parallel kernel runs, as bmd.py does.")
     from wl_preproc.eye.vendor.uneye.classifier import DNN
 
     network = DNN(weights_name=str(_TRAINING / params.weights), sampfreq=fs_hz,

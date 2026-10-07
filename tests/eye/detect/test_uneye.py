@@ -96,6 +96,43 @@ def test_the_network_stays_on_the_cpu_when_a_gpu_is_reported(monkeypatch):
     assert _detect(gaze) == expected
 
 
+class _Numba:
+    """Stands in for numba as `_network` reads it: its threading layer, or
+    the ValueError numba raises before any parallel kernel has run."""
+
+    def __init__(self, layer):
+        self.layer = layer
+
+    def threading_layer(self):
+        if self.layer is None:
+            raise ValueError("Threading layer is not initialized.")
+        return self.layer
+
+
+def test_the_network_refuses_to_start_beside_numbas_openmp(monkeypatch):
+    """Amendment 6's hang, turned into an error however the process got
+    there (the U'n'Eye review's minor 4). With numba's kernels on an OpenMP
+    runtime of their own, torch's would be a second, and U'n'Eye's first
+    convolution would wait for ever."""
+    import sys
+
+    from wl_preproc.eye.detect.uneye import _network
+
+    monkeypatch.setitem(sys.modules, "numba", _Numba("omp"))
+    with pytest.raises(RuntimeError, match="OpenMP"):
+        _network(DEFAULT_UNEYE_PARAMS, FS_HZ)
+
+
+@pytest.mark.parametrize("layer", ["workqueue", "tbb", None])
+def test_the_network_starts_beside_any_other_threading_layer(monkeypatch, layer):
+    import sys
+
+    from wl_preproc.eye.detect.uneye import _network
+
+    monkeypatch.setitem(sys.modules, "numba", _Numba(layer))
+    assert _network(DEFAULT_UNEYE_PARAMS, FS_HZ).use_gpu is False
+
+
 def test_only_a_copied_two_class_network_can_be_chosen():
     from wl_preproc.eye.detect.uneye import _TRAINING
 
