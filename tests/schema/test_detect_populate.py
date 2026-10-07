@@ -138,6 +138,17 @@ _NOT_USED_BELOW_1_DEG = frozenset({"nslr"})
 # authors' code is proven exactly, elsewhere.
 _HELD_ON_A_DRIFTING_EYE = frozenset({"bmd"})
 
+# Detectors that also report the fixational wobble this module's synthetic
+# noise makes during a hold. U'n'Eye's default network was trained at 500 Hz
+# on very small microsaccades, and calls a 0.1 deg wobble one (design spec
+# `2026-10-06-uneye-design.md` section 5; the requester chose that network on
+# 2026-10-06). Measured on `stepped_session`: one, at sample 6962, 0.10 deg
+# over 16 ms, with every planted step found within 1 sample. Each is held to
+# every planted step at its time, and each extra event must stay under
+# `_FIXATIONAL_WOBBLE_MAX_DEG`, so a missed or misplaced step still fails.
+_ALSO_FINDS_FIXATIONAL_WOBBLE = frozenset({"uneye"})
+_FIXATIONAL_WOBBLE_MAX_DEG = 0.2
+
 # A step in the RIGHT eye's own raw trace ALONE, edited directly into the
 # generated file after the fact (`test_eye_populate.py::lossy_quality_
 # session`'s own technique -- split each affected line by column, replace
@@ -1141,14 +1152,22 @@ def test_a_planted_step_is_detected_at_its_planted_time(stepped_session):
         "below-1-deg miss this test asserts for excluded detectors is vacuous"
     )
 
-    assert _HELD_ON_A_DRIFTING_EYE <= set(_detector_names())
+    assert (_HELD_ON_A_DRIFTING_EYE | _ALSO_FINDS_FIXATIONAL_WOBBLE) <= set(_detector_names())
     for name in _detector_names():
         if name in _HELD_ON_A_DRIFTING_EYE:
             continue  # held on a drifting eye instead, below
         runs = (
             detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector(name)}
         ).to_dicts(order_by="run_index")
-        onsets = [r["run_start"] for r in runs if r["label"] in ("saccade", "microsaccade")]
+        events = [r for r in runs if r["label"] in ("saccade", "microsaccade")]
+        onsets = [r["run_start"] for r in events]
+
+        if name in _ALSO_FINDS_FIXATIONAL_WOBBLE:
+            for want in planted_onsets:
+                assert sum(abs(got - want) <= 5 for got in onsets) == 1, name
+            extras = [r for r in events if not any(abs(r["run_start"] - want) <= 5 for want in planted_onsets)]
+            assert all(r["amplitude_deg"] < _FIXATIONAL_WOBBLE_MAX_DEG for r in extras), (name, extras)
+            continue
 
         if name in _NOT_USED_BELOW_1_DEG:
             held_onsets = [
@@ -1659,11 +1678,26 @@ def test_reliability_survives_the_run_re_derivation(stepped_session):
     assert all(-1.0 <= r["reliability"] <= 1.0 for r in events if r["reliability"] is not None)
 
 
+def test_uneyes_own_saccades_carry_its_mean_saccade_probability(stepped_session):
+    """U'n'Eye's reliability is the network's mean saccade probability over
+    the run (design spec `2026-10-06-uneye-design.md` section 3), carried
+    through the run re-derivation: 0.5 to 1 on every saccade it stored
+    here, none of them merged across a gap (a merged run can carry less:
+    amendment 7)."""
+    from wl_preproc.schema import detect
+
+    session_key, _report, _ = stepped_session
+    rows = (detect.EyeDetection.Run & {**session_key, "trace": "left", **_detector("uneye")}).to_dicts()
+    events = [r for r in rows if r["label"] == "saccade"]
+    assert events
+    assert all(r["reliability"] is not None and 0.5 <= r["reliability"] <= 1.0 for r in events)
+
+
 def test_a_detector_with_no_reliability_stores_none_rather_than_a_number(stepped_session):
     """The other half of the column's meaning. `reliability` is nullable
-    because six of the seven planned detectors have no such index -- a stored
+    because four of the seven detectors have no such index -- a stored
     number there for Engbert-Kliegl would be invented, and would make the
-    column unreadable for the one detector that does compute one."""
+    column unreadable for the detectors that do compute one."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session
@@ -2232,7 +2266,7 @@ def test_a_detector_declaring_no_minimum_duration_gets_two_samples():
 
 @pytest.mark.parametrize("detector_name, floor", [
     ("engbert_kliegl", 6), ("otero_millan", 2), ("nystrom_holmqvist", 5),
-    ("remodnav", 5), ("nslr", 2), ("bmd", 2),
+    ("remodnav", 5), ("nslr", 2), ("bmd", 2), ("uneye", 3),
 ])
 def test_each_detectors_two_eye_floor_is_its_own_minimum_and_never_one_sample(detector_name, floor):
     """The requester's decision of 2026-09-28: a two-eye event is at least

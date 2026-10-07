@@ -1,6 +1,7 @@
 """`processing/eye_events`: every detector's events (design spec
 `2026-09-28-nwb-builder-design.md` section 3; the requester's decision: all
-six detectors, each labelled)."""
+six detectors, each labelled -- every registered detector, seven since
+U'n'Eye, 2026-10-06)."""
 
 from __future__ import annotations
 

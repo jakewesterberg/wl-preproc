@@ -27,9 +27,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install PyTorch, CPU only
+        # Before the package, so the uneye extra finds it rather than resolving
+        # PyPI's default CUDA build (pyproject.toml's note on PyTorch). U'n'Eye
+        # runs on the CPU wherever it runs (design spec
+        # 2026-10-06-uneye-design.md sections 3 and 4).
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install
         # wl-sync resolves from its public git URL declared in pyproject.
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,uneye]"
 
       - name: Fetch the NSLR reference (test-time only, AGPL-3.0, never installed)
         # Design spec 2026-09-27-nslr-design.md section 7: the authors' own

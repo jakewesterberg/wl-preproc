@@ -189,6 +189,7 @@ def test_the_description_describes_the_file(activation, built):
     """Design spec `2026-09-29-nwb-publishing-design.md` section 2, on the
     synthetic session: what is in the file, by what actually ran."""
     from wl_preproc.contracts.nwb_description import NwbDescription
+    from wl_preproc.eye.detect.registry import DETECTORS
 
     description = built.description
     NwbDescription.model_validate(description)
@@ -196,7 +197,7 @@ def test_the_description_describes_the_file(activation, built):
     assert (description["identity"]["rig"], description["identity"]["role"]) == ("rig-a", "canonical")
     assert description["subject"]["age_days"] == (_SESSION_DATETIME.date() - datetime.date(2016, 3, 2)).days
     assert description["data_types"]["eye"] == {"gaze": ["left", "right"], "pupil": ["left", "right"]}
-    assert len(description["data_types"]["eye_events"]["detectors"]) == 6
+    assert description["data_types"]["eye_events"]["detectors"] == sorted(DETECTORS)
     assert description["schema_version"] == 3
     assert [(run["run_number"], run["works_run_id"]) for run in description["runs"]] == [(1, "wr-1"), (2, "wr-2")]
     assert all(run["task"]["name"] == "rf_map" for run in description["runs"])
