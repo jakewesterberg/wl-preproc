@@ -33,9 +33,11 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free: the requester's list
-    of 2026-10-05 is done; ask what comes next. Open and small: the U'n'Eye
-    review's four deferred minors (docs/handoffs/2026-10-06-uneye.md section
-    6) and M4. Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    of 2026-10-05 is done; ask what comes next. Open and small: M4, and the
+    U'n'Eye minors branch's three deferred minors
+    (docs/handoffs/2026-10-06-uneye.md section 7). The U'n'Eye review's four
+    minors are fixed (22dbb70). Fine-tuning U'n'Eye waits for hand-labelled
+    lab data.
     Done: U'n'Eye, the seventh detector (5b41770), on the CPU, with the
     500 Hz network and a 20 ms merge gap. Before it: piece 4's seven
     deferred minors (a32394d; M4 is left open by the
@@ -87,6 +89,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `5b41770` until the U'n'Eye-minors merge `22dbb70` on 2026-10-07 (CI
+  # green on `5b41770`, run 37595275228); true when written.
   # Was `a9982f3` until the U'n'Eye merge `5b41770` on 2026-10-07 (CI green
   # on `a9982f3`, run 37442837339); true when written.
   # Was `7cfc852` until the test-identities merge `a9982f3` on 2026-10-06
@@ -122,7 +126,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "5b41770"
+  describes: "22dbb70"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

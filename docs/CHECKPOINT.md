@@ -1,23 +1,32 @@
 # Where this build actually is
 
-**Last updated 2026-10-07**, describing `main` at `5b41770`, the merge of
-`spec/uneye`: U'n'Eye, the seventh saccade detector (handoff
-`handoffs/2026-10-06-uneye.md`). CI read off `5b41770` is green on both
-interpreters, 2213 passed on each with 36 skipped, the first CI run to install
-torch (CPU), and the manifest check is green (`gh run view 37595275228`).
-- **U'n'Eye runs from its authors' own code and trained networks,** copied at
-  `f97ca88`, always on the CPU. Its defaults are the requester's: the network
-  trained at 500 Hz, and a 20 ms merge gap, without which it split a quarter
-  of large saccades into several (spec amendments 1 and 7).
-- **BMD's numba kernels now run on numba's own thread pool:** beside torch's,
-  a second OpenMP runtime hung U'n'Eye with no error (amendment 6).
-- **Its review left four minors,** deferred (handoff §6).
+**Last updated 2026-10-07**, describing `main` at `22dbb70`, the merge of
+`fix/uneye-minors`: the U'n'Eye review's four deferred minors (handoff
+`handoffs/2026-10-06-uneye.md` §7). CI read off `22dbb70` is green on both
+interpreters, 2225 passed on each with 36 skipped, and the manifest check is
+green (`gh run view 37609431704`).
+- **`wlpp daemon` refuses a pass, and `wlpp doctor` fails, while U'n'Eye's
+  code cannot load on the host,** each naming the install that fixes it.
+  Otherwise its jobs would error quietly and every NWB wait on them.
+- **U'n'Eye stops with an error rather than hang where numba already runs on
+  OpenMP;** tested against real numba, on CI's Linux too.
+- **U'n'Eye itself was merged just before** (`5b41770`, CI green):
+  - **it runs from its authors' own code and trained networks,** copied at
+    `f97ca88`, always on the CPU. Its defaults are the requester's: the
+    network trained at 500 Hz, and a 20 ms merge gap, without which it split
+    a quarter of large saccades into several (spec amendments 1 and 7);
+  - **BMD's numba kernels run on numba's own thread pool:** beside torch's,
+    a second OpenMP runtime hung U'n'Eye with no error (amendment 6).
 - **Fresh identities for database-backed tests** were merged before it
   (`a9982f3`, `tests/identities.py`).
 - **All four pieces that make a real wl-xcon recording usable are merged,**
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `5b41770` (the U'n'Eye merge, CI green, 2213 passed on each
+interpreter, `37595275228`) until the U'n'Eye-minors merge; true when
+written.*
 
 *This header named `a9982f3` (the test-identities merge, CI green, 2194 passed
 on each interpreter, `37442837339`) until the U'n'Eye merge; true when
@@ -160,9 +169,11 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free:** the list the requester chose on 2026-10-05 is done. Ask
-> what comes next. Open and small: the U'n'Eye review's four deferred minors
-> (`handoffs/2026-10-06-uneye.md` §6), and M4 (left open by his choice).
-> Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+> what comes next. Open and small: M4 (left open by his choice), and the
+> U'n'Eye minors branch's own three deferred minors
+> (`handoffs/2026-10-06-uneye.md` §7). The U'n'Eye review's four minors are
+> fixed (`22dbb70`). Fine-tuning U'n'Eye to the DPI tracker waits for
+> hand-labelled lab data.
 >
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
