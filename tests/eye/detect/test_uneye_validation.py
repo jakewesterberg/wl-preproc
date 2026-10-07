@@ -1,6 +1,6 @@
 """U'n'Eye's default network against human coders, at 500 Hz (design spec
-`2026-10-06-uneye-design.md` section 3): the evidence the requester chose it
-on, on 2026-10-06.
+`2026-10-06-uneye-design.md` amendments 1, 3 and 7): the evidence the
+requester chose it and its merge gap on, on 2026-10-06 and 2026-10-07.
 
 The Andersson et al. (2017) recordings, each coded by two people (MN and
 RA): video-tracker data from people viewing dots, images and videos, at

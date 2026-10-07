@@ -43,7 +43,8 @@ MIN_PIECE_SAMPLES = 25
 
 @dataclass(frozen=True, slots=True)
 class UneyeParams:
-    """U'n'Eye's settings (design spec section 3).
+    """U'n'Eye's settings (design spec section 3; the defaults, amendments 1
+    and 7).
     - `weights`: one of `NETWORKS`. The paramset records which network
       produced a row.
     - `min_saccade_duration_ms`: U'n'Eye's `min_sacc_dur`. The name is the
@@ -70,9 +71,42 @@ class UneyeParams:
 DEFAULT_UNEYE_PARAMS = UneyeParams(weights="weights_dataset3", min_saccade_duration_ms=6, min_saccade_gap_ms=20)
 
 
+def unavailable() -> str | None:
+    """Why U'n'Eye cannot run on this host, or None. Its own code is imported
+    as its jobs import it, so a broken install is caught as well as a missing
+    one. Loads torch: called to check, never at import."""
+    try:
+        from wl_preproc.eye.vendor.uneye.classifier import DNN  # noqa: F401
+    except Exception as exc:
+        return (f"its code does not import here ({type(exc).__name__}: {exc}). Install torch if it is missing, from "
+                "the index the comment above pyproject.toml's `uneye` extra names (cu126 on the preprocessing "
+                "server, cpu elsewhere), then the `uneye` extra")
+    return None
+
+
 def _network(params: UneyeParams, fs_hz: float):
     """U'n'Eye's classifier for `params`, held to the CPU. torch is imported
-    here, not at the top: importing the registry must not need it."""
+    here, not at the top: importing the registry must not need it.
+
+    **It refuses to start where numba chose OpenMP before it ran.** torch
+    brings its own OpenMP runtime, and with numba's beside it U'n'Eye's first
+    convolution waits for ever, silently (design spec
+    `2026-10-06-uneye-design.md` amendment 6). `bmd.py` keeps BMD's kernels
+    off OpenMP; this turns the hang into an error where numba code ran on
+    OpenMP before U'n'Eye, such as code run before BMD was imported. It
+    cannot see numba choosing OpenMP after torch has loaded."""
+    import numba
+
+    try:
+        layer = numba.threading_layer()
+    except ValueError:  # no parallel kernel has run in this process yet
+        layer = None
+    if layer == "omp":
+        raise RuntimeError(
+            "numba runs its parallel kernels on OpenMP in this process, and U'n'Eye's torch would load a "
+            "second OpenMP runtime and hang (design spec 2026-10-06-uneye-design.md, amendment 6). In a fresh "
+            "process, set numba.config.THREADING_LAYER = 'workqueue' before any parallel kernel runs, as bmd.py "
+            "does.")
     from wl_preproc.eye.vendor.uneye.classifier import DNN
 
     network = DNN(weights_name=str(_TRAINING / params.weights), sampfreq=fs_hz,

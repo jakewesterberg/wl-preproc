@@ -26,6 +26,7 @@ above would otherwise have a hole exactly one trace wide.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -41,6 +42,7 @@ from wl_preproc.eye.detect.nystrom_holmqvist import (
 from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS, detect_otero_millan
 from wl_preproc.eye.detect.remodnav import DEFAULT_REMODNAV_PARAMS, detect_remodnav
 from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, detect_uneye
+from wl_preproc.eye.detect.uneye import unavailable as uneye_unavailable
 
 
 class DetectorNotRegistered(KeyError):
@@ -137,6 +139,14 @@ class Detector:
     # requester's decision of 2026-09-27 (BMD design spec section 4, final
     # review I4). None for every other detector.
     copies_saccades_from: str | None = None
+    # **Why it cannot run on this host, or None:** for a detector that needs
+    # more than the core install, U'n'Eye alone (its `uneye` extra). It loads
+    # those libraries, so it is called only to check, never at import.
+    # `wlpp daemon` refuses a pass while a detector is unavailable, and `wlpp
+    # doctor` fails it (the U'n'Eye review's minor 3): otherwise its jobs
+    # error quietly and every NWB waits on them for ever. None for the six
+    # detectors reimplemented here.
+    unavailable: Callable[[], str | None] | None = None
 
     def detect(
         self,
@@ -332,8 +342,17 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE}),
         run=detect_uneye,
         defaults=DEFAULT_UNEYE_PARAMS,
+        unavailable=uneye_unavailable,
     ),
 }
+
+
+def unavailable_detectors() -> dict[str, str]:
+    """Each registered detector that cannot run on this host, with why and
+    the install that fixes it. Loads U'n'Eye's libraries, torch among them:
+    a check, called by `wlpp daemon` and `wlpp doctor`, never at import."""
+    reasons = {name: detector.unavailable() for name, detector in DETECTORS.items() if detector.unavailable}
+    return {name: reason for name, reason in reasons.items() if reason}
 
 
 def get_detector(name: str) -> Detector:

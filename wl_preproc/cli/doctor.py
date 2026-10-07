@@ -117,4 +117,14 @@ def run_checks() -> list[str]:
     except Exception as exc:
         report("stale jobs", False, str(exc)[:80])
 
+    # Imports each detector's own code as its jobs would, so torch loads here
+    # on a host that has it, and a broken install fails as a missing one does.
+    try:
+        from wl_preproc.eye.detect import registry
+
+        unavailable = registry.unavailable_detectors()
+        report("detector libraries", not unavailable, "; ".join(f"{name}: {why}" for name, why in unavailable.items()))
+    except Exception as exc:
+        report("detector libraries", False, str(exc)[:80])
+
     return failures

@@ -43,6 +43,29 @@ def test_the_registry_imports_without_torch():
     assert result.stdout.strip() == "False"
 
 
+def test_only_uneye_can_be_unavailable_on_a_host():
+    """What `wlpp daemon` and `wlpp doctor` check (the U'n'Eye review's minor
+    3): U'n'Eye needs its `uneye` extra; the six detectors reimplemented here
+    need nothing beyond the core install."""
+    assert {name for name, detector in DETECTORS.items() if detector.unavailable} == {"uneye"}
+
+
+def test_an_unavailable_detector_is_named_with_why_and_the_fix(monkeypatch):
+    """U'n'Eye's own code is imported as its jobs import it, so a broken
+    install is caught as well as a missing one. Simulated by making that
+    import fail, as a missing torch would."""
+    import sys
+
+    from wl_preproc.eye.detect import registry
+
+    assert registry.unavailable_detectors() == {}
+    monkeypatch.setitem(sys.modules, "wl_preproc.eye.vendor.uneye.classifier", None)
+    unavailable = registry.unavailable_detectors()
+    assert list(unavailable) == ["uneye"]
+    assert "ModuleNotFoundError" in unavailable["uneye"]
+    assert "pyproject.toml" in unavailable["uneye"] and "uneye` extra" in unavailable["uneye"]
+
+
 def test_bmd_leaves_torch_the_only_openmp_runtime():
     """BMD's numba kernels run on numba's own thread pool even where the
     environment asks numba for OpenMP, and U'n'Eye then runs in the same

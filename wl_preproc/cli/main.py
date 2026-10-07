@@ -738,6 +738,17 @@ def main(argv: list[str] | None = None) -> int:
                 shares[tier] = Share(tier=tier, mount=root, host=args.host, name=name, headroom_bytes=headroom)
         if "fast" in shares and "slow" not in shares:
             parser.error("--nwb-fast-root needs --nwb-slow-root: the slow share is every file's long-term home")
+        from wl_preproc.eye.detect import registry
+
+        # A registered detector without its libraries errors on every job,
+        # quietly, and every NWB then waits on it for ever (the U'n'Eye
+        # review's minor 3). A half-installed host is stopped before a pass,
+        # with the install that fixes it, rather than left to run around it.
+        unavailable = registry.unavailable_detectors()
+        if unavailable:
+            for name, why in unavailable.items():
+                print(f"refusing to run: {name}: {why}")
+            return 1
         report = run_once(
             prefix=args.prefix, nas_root=args.nas_root, host=args.host, share=args.share,
             nwb_root=args.nwb_root, nwb_slow=shares.get("slow"), nwb_fast=shares.get("fast"),
