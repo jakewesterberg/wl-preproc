@@ -123,6 +123,45 @@ def test_the_network_refuses_to_start_beside_numbas_openmp(monkeypatch):
         _network(DEFAULT_UNEYE_PARAMS, FS_HZ)
 
 
+def test_the_network_refuses_to_start_beside_real_numba_on_openmp():
+    """The same, with numba itself: a parallel kernel on OpenMP, run before
+    U'n'Eye and without BMD's setting. Skipped where numba cannot load
+    OpenMP (this machine's 3.11 venv). In a fresh interpreter, whose
+    threading layer is not yet chosen."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = """
+import numba, numpy as np
+
+@numba.njit(parallel=True)
+def roots(x):
+    out = np.empty_like(x)
+    for i in numba.prange(x.size):
+        out[i] = np.sqrt(x[i])
+    return out
+
+try:
+    roots(np.arange(1e3))
+except ValueError:
+    print("no OpenMP")
+    raise SystemExit
+from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, _network
+try:
+    _network(DEFAULT_UNEYE_PARAMS, 498.55)
+    print("started")
+except RuntimeError:
+    print("refused")
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=True,
+                            cwd=Path(__file__).resolve().parents[3], env={**os.environ, "NUMBA_THREADING_LAYER": "omp"})
+    if result.stdout.strip() == "no OpenMP":
+        pytest.skip("numba cannot load OpenMP here")
+    assert result.stdout.strip() == "refused"
+
+
 @pytest.mark.parametrize("layer", ["workqueue", "tbb", None])
 def test_the_network_starts_beside_any_other_threading_layer(monkeypatch, layer):
     import sys

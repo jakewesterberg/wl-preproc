@@ -52,15 +52,6 @@ def headroom_after(path: str, extra_bytes: int) -> bool:
     return (free - extra_bytes) // 2**30 >= _MIN_SCRATCH_FREE_GIB
 
 
-def missing_libraries_detail(missing: dict[str, list[str]]) -> str:
-    """What `registry.missing_libraries` found, and the install that fixes
-    it, in one line: shared by `wlpp doctor` and `wlpp daemon`'s refusal."""
-    return "; ".join(
-        f"{name} needs {', '.join(libraries)}: install torch first, from the index pyproject.toml's "
-        f"`{name}` extra names, then `pip install -e '.[{name}]'`"
-        for name, libraries in missing.items())
-
-
 def run_checks() -> list[str]:
     """Run each check, print a line per check, and return the failures."""
     failures: list[str] = []
@@ -126,10 +117,14 @@ def run_checks() -> list[str]:
     except Exception as exc:
         report("stale jobs", False, str(exc)[:80])
 
-    # Looked for, not imported: a host with torch is not made to load it here.
-    from wl_preproc.eye.detect import registry
+    # Imports each detector's own code as its jobs would, so torch loads here
+    # on a host that has it, and a broken install fails as a missing one does.
+    try:
+        from wl_preproc.eye.detect import registry
 
-    missing = registry.missing_libraries()
-    report("detector libraries", not missing, missing_libraries_detail(missing))
+        unavailable = registry.unavailable_detectors()
+        report("detector libraries", not unavailable, "; ".join(f"{name}: {why}" for name, why in unavailable.items()))
+    except Exception as exc:
+        report("detector libraries", False, str(exc)[:80])
 
     return failures

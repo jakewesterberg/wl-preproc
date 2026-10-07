@@ -86,6 +86,8 @@ The wrapper is `wl_preproc/eye/detect/uneye.py`, a `DetectFn` like the other six
 - **Output:** each maximal run of samples U'n'Eye labels 1 is a `saccade` run.
   - Its `reliability` is the network's mean saccade probability over the run: the softmax output
     for class 1, from 0.5 to 1 with U'n'Eye's default merge setting.
+    *Superseded by amendment 7: at the 20 ms default, 0 to 1, and 0.5 to 1 only for a run found
+    whole.*
   - This is a third meaning for that column, beside Otero-Millan's index and BMD's posterior. The
     column's comment in `schema/detect.py` is extended to say so.
 - **torch is imported only when the detector runs,** inside the wrapper's function. Importing
