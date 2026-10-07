@@ -225,6 +225,21 @@ dev = [
     "testcontainers[mysql]>=4.15,<5",
     "remodnav==1.1.2",
 ]
+# U'n'Eye's network (design spec `2026-10-06-uneye-design.md` section 4): the
+# libraries its copied code, `wl_preproc/eye/vendor/uneye/`, imports. An extra
+# rather than core dependencies because of the note on PyTorch above: a plain
+# resolve picks a build that cannot run on the preprocessing server's Pascal
+# GPU. **Install torch first, from the right index**, and this extra then finds
+# it: the server's container from cu126, CI and workstations from
+# https://download.pytorch.org/whl/cpu. U'n'Eye runs on the CPU wherever it
+# runs. Unpinned: it is 2020 code, measured only on torch 2.13 and 2.14, so a
+# floor would be invented.
+uneye = [
+    "torch",
+    "scikit-image",
+    "scikit-learn",
+    "matplotlib",
+]
 
 [project.scripts]
 wlpp = "wl_preproc.cli.main:main"
@@ -235,6 +250,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["wl_preproc*"]
+
+# U'n'Eye's trained networks and their notes, which are not Python and so are
+# not packaged without this (design spec `2026-10-06-uneye-design.md` section 2).
+[tool.setuptools.package-data]
+"wl_preproc.eye.vendor.uneye" = ["PROVENANCE.md", "training/notes.md", "training/weights_*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
