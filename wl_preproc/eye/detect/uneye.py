@@ -44,7 +44,8 @@ MIN_PIECE_SAMPLES = 25
 
 @dataclass(frozen=True, slots=True)
 class UneyeParams:
-    """U'n'Eye's settings (design spec section 3).
+    """U'n'Eye's settings (design spec section 3; the defaults, amendments 1
+    and 7).
     - `weights`: one of `NETWORKS`. The paramset records which network
       produced a row.
     - `min_saccade_duration_ms`: U'n'Eye's `min_sacc_dur`. The name is the

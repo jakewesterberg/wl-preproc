@@ -96,12 +96,14 @@ The wrapper is `wl_preproc/eye/detect/uneye.py`, a `DetectFn` like the other six
 - `weights`, default `"weights_1+2+3"`, one of the five copied networks. Any other name is
   refused when the params are built. The paramset records which network produced a row, as §8
   rules.
+  *Superseded by amendment 1: the default is `weights_dataset3`.*
 - `min_saccade_duration_ms`, default 6: U'n'Eye's `min_sacc_dur`.
   - The name is the one the conjunction floor reads (`schema/detect.py::_min_duration_samples`).
     The floor counts it as `round(6 x 498.55 / 1000)` = 3 samples.
   - U'n'Eye itself truncates the same 6 ms to 2 samples (`int(6 / (1000 / fs))`), so the floor,
     not U'n'Eye, governs two-eye events. Recorded so the difference is not mistaken for a defect.
 - `min_saccade_gap_ms`, default 1: U'n'Eye's `min_sacc_dist`. At 1, U'n'Eye merges nothing.
+  *Superseded by amendment 7: the default is 20.*
 
 `fs_hz` is passed to U'n'Eye as `sampfreq` and used only for those two durations.
 
@@ -126,6 +128,7 @@ and `matplotlib`, unpinned. These are the libraries the copied code imports.
 **`wl.yaml`** gains `third_party` entries:
 - `torch`, `scikit-image`, `scikit-learn` and `matplotlib`, each `where: serv` with a `why`
   naming U'n'Eye, following `kilosort`'s precedent;
+  *superseded by amendment 2: no `where`;*
 - `uneye`, `pinned_at` the full commit, with a `why` saying it is copied rather than installed,
   and pointing to `PROVENANCE.md`.
 
@@ -164,6 +167,8 @@ settles §10 against §11 item 2's conditional.
 - **No validation test on the reference recording**, unlike the reimplemented detectors. Those
   validate a reimplementation against its authors' code; U'n'Eye is the authors' code, and the
   fidelity test covers the wrapper.
+  *Superseded by amendments 3 and 7: a validation test on the Andersson recordings pins the
+  default network and its merge gap.*
 
 ## 6. Not in scope
 

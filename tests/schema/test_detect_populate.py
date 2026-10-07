@@ -141,8 +141,8 @@ _HELD_ON_A_DRIFTING_EYE = frozenset({"bmd"})
 # Detectors that also report the fixational wobble this module's synthetic
 # noise makes during a hold. U'n'Eye's default network was trained at 500 Hz
 # on very small microsaccades, and calls a 0.1 deg wobble one (design spec
-# `2026-10-06-uneye-design.md` section 5; the requester chose that network on
-# 2026-10-06). Measured on `stepped_session`: one, at sample 6962, 0.10 deg
+# `2026-10-06-uneye-design.md` amendment 4; the requester chose that network
+# on 2026-10-06). Measured on `stepped_session`: one, at sample 6962, 0.10 deg
 # over 16 ms, with every planted step found within 1 sample. Each is held to
 # every planted step at its time, and each extra event must stay under
 # `_FIXATIONAL_WOBBLE_MAX_DEG`, so a missed or misplaced step still fails.
