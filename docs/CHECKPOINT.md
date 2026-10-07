@@ -1,21 +1,27 @@
 # Where this build actually is
 
-**Last updated 2026-10-06**, describing `main` at `a9982f3`, the merge of
-`feat/test-identities`: fresh identities for database-backed tests (handoff
-`handoffs/2026-10-06-test-identities.md`). CI read off `a9982f3` is green on
-both interpreters, 2194 passed on each with 33 skipped, and the manifest check
-is green (`gh run view 37442837339`).
-- **A new database test takes its animal, sessions, probe serials and request
-  keys from `tests/identities.py`** instead of picking them by hand; a guard
-  fails any test that writes a reserved value. Existing tests keep theirs.
-- **The listing's last minors and a pass's reads** were merged before it
-  (`7cfc852`, handoff `handoffs/2026-10-01-session-listing.md` §8).
-- **U'n'Eye needs no GPU:** a check on 2026-10-06 ran its pretrained network
-  in 1.4 s per recording on the CPU. Its design addendum is on `spec/uneye`.
+**Last updated 2026-10-07**, describing `main` at `5b41770`, the merge of
+`spec/uneye`: U'n'Eye, the seventh saccade detector (handoff
+`handoffs/2026-10-06-uneye.md`). CI read off `5b41770` is green on both
+interpreters, 2213 passed on each with 36 skipped, the first CI run to install
+torch (CPU), and the manifest check is green (`gh run view 37595275228`).
+- **U'n'Eye runs from its authors' own code and trained networks,** copied at
+  `f97ca88`, always on the CPU. Its defaults are the requester's: the network
+  trained at 500 Hz, and a 20 ms merge gap, without which it split a quarter
+  of large saccades into several (spec amendments 1 and 7).
+- **BMD's numba kernels now run on numba's own thread pool:** beside torch's,
+  a second OpenMP runtime hung U'n'Eye with no error (amendment 6).
+- **Its review left four minors,** deferred (handoff §6).
+- **Fresh identities for database-backed tests** were merged before it
+  (`a9982f3`, `tests/identities.py`).
 - **All four pieces that make a real wl-xcon recording usable are merged,**
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `a9982f3` (the test-identities merge, CI green, 2194 passed
+on each interpreter, `37442837339`) until the U'n'Eye merge; true when
+written.*
 
 *This header named `7cfc852` (the listing-minors-pass-cost merge, CI green,
 2184 passed on each interpreter, `37375521346`) until the test-identities
@@ -136,7 +142,8 @@ requester chose to merge the same day; true when written.*
 >
 > Before them, and merged: the NWB builder, publishing to the NAS shares and
 > the canonical lifecycle (Phase 3 pieces 1, 2a and 2b), probes and areas in
-> the file, the eye subsystem with calibration and six saccade detectors,
+> the file, the eye subsystem with calibration and six saccade detectors (a
+> seventh, U'n'Eye, merged after them: `5b41770`),
 > archival with rehydration, and ingest with the timebase. "What is built",
 > below, and `handoffs/` have each piece.
 >
@@ -152,18 +159,17 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
-> **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. U'n'Eye, the seventh detector: built on `spec/uneye`, not merged
->    (`handoffs/2026-10-06-uneye.md`). Its authors' code and five networks
->    are copied; it runs on the CPU, 1.4 s per recording; its default network
->    is `weights_dataset3`, the requester's choice of 2026-10-06. Next: the
->    whole-branch review, then the merge question. Fine-tuning it to the DPI
->    tracker waits for hand-labelled lab data.
+> **Hardware-free:** the list the requester chose on 2026-10-05 is done. Ask
+> what comes next. Open and small: the U'n'Eye review's four deferred minors
+> (`handoffs/2026-10-06-uneye.md` §6), and M4 (left open by his choice).
+> Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
->    *Until it was built this item said its design addendum was on
->    `spec/uneye`, a plan next; true when written.*
+> *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
+> not merged; true when written.*
 >
-> Done: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
+> Done: U'n'Eye, the seventh detector (`5b41770`): its authors' code and
+> five networks, on the CPU, with the 500 Hz network and a 20 ms merge gap.
+> Before it: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
 > requester's choice); the session listing's minors M6 and M9 with the NWB
 > stages' per-file placement lookups (`7cfc852`,
 > `handoffs/2026-10-01-session-listing.md` §8); and fresh identities for
