@@ -153,11 +153,15 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free, in the order the requester chose on 2026-10-05:**
-> 1. U'n'Eye, the one detector not written. Its pretrained network runs on
->    the CPU in 1.4 s per recording (checked 2026-10-06), so it needs no GPU;
->    its design addendum is on `spec/uneye`
->    (`specs/2026-10-06-uneye-design.md`), a plan next. Fine-tuning it to the
->    DPI tracker waits for hand-labelled lab data.
+> 1. U'n'Eye, the seventh detector: built on `spec/uneye`, not merged
+>    (`handoffs/2026-10-06-uneye.md`). Its authors' code and five networks
+>    are copied; it runs on the CPU, 1.4 s per recording; its default network
+>    is `weights_dataset3`, the requester's choice of 2026-10-06. Next: the
+>    whole-branch review, then the merge question. Fine-tuning it to the DPI
+>    tracker waits for hand-labelled lab data.
+>
+>    *Until it was built this item said its design addendum was on
+>    `spec/uneye`, a plan next; true when written.*
 >
 > Done: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
 > requester's choice); the session listing's minors M6 and M9 with the NWB

@@ -32,9 +32,10 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free, in the order the
-    requester chose on 2026-10-05: U'n'Eye, the one detector not written. A
-    check on 2026-10-06 found it needs no GPU (1.4 s per recording on the
-    CPU); its design addendum is on spec/uneye, a plan next. Fine-tuning
+    requester chose on 2026-10-05: U'n'Eye, the seventh detector, built on
+    spec/uneye and not merged (docs/handoffs/2026-10-06-uneye.md); its
+    whole-branch review, then the merge question. It runs on the CPU, 1.4 s
+    per recording, with weights_dataset3 as its default network. Fine-tuning
     waits for hand-labelled lab data.
     Done: piece 4's seven deferred minors (a32394d; M4 is left open by the
     requester's choice); the session listing's minors M6 and M9 with the NWB

@@ -180,3 +180,65 @@ settles §10 against §11 item 2's conditional.
 2. **§8, the copy:** one import line changed and recorded; five of the six networks copied (§2).
 3. **§10 and §11 item 2:** CPU inference is seconds, U'n'Eye runs in CI on both interpreters, and
    it has no `slow` marker.
+
+---
+
+## Amendments, 2026-10-06, made while proving the plan
+
+1. **The default network is `weights_dataset3`, not `weights_1+2+3`:** the requester's decision of
+   2026-10-06, made on these measurements.
+   - **Synthetic gaze at the rig's 498.55 Hz,** 40 saccades per amplitude: `weights_1+2+3` found
+     29 of 40 at 5 deg and 14 of 40 at 10 and 15 deg, splitting many. `weights_dataset3`, the
+     network trained at 500 Hz, found 40 of 40 at every amplitude from 0.3 to 15 deg.
+   - **The Andersson et al. (2017) human-coded recordings** (500 Hz, video tracker, people), none
+     of which any copied network was trained on, as scored through the wrapper:
+     - `weights_dataset3` found 530 of coder MN's 541 saccades and 538 of RA's 548 (98%), with 886
+       and 872 detections overlapping none of theirs;
+     - `weights_1+2+3` found 386 and 390 (71%), with fewer extras.
+   - **Also measured, not chosen:**
+     - `weights_1+2+3` on the trace upsampled to 1000 Hz found 89%, with the best per-sample
+       agreement with the coders;
+     - the other three networks did worse.
+   - **The cost of the choice** is more extra detections: the network was trained on very small
+     microsaccades, and calls some fixational wobble a saccade (amendment 4).
+2. **`wl.yaml`'s new entries have no `where`, where §4 said `where: serv`.**
+   - wl-orchestrator's `stack_for` (`wl_orchestrator/thirdparty.py`, read at `d8b9ccb`) gives an
+     entry with `where` only to the machine classes it names.
+   - The test suite runs U'n'Eye, so the workstations this package builds on
+     (`builds_on: [dws, mws]`) need its libraries as much as the server does.
+   - kilosort can be `where: serv` because its test is excluded.
+   - No entry reaches a rig, which this package neither runs nor builds on.
+3. **A validation test on the Andersson recordings, where §5 said none.** The default rests on
+   that evidence, so `tests/eye/detect/test_uneye_validation.py` pins it:
+   - the default finds at least 95% of each coder's saccades;
+   - it leads `weights_1+2+3` by at least 20 points.
+   Gated on `WLPP_ANDERSSON_DATA`, like the other detectors' tests on that dataset.
+4. **The planted-step database test allows U'n'Eye's fixational wobble.**
+   - §5 anticipated an exemption for onsets. Instead, the onsets were within 1 sample of every
+     planted step, and the network reported one extra event during a hold: 0.10 deg over 16 ms,
+     on noise of about 0.03 deg.
+   - U'n'Eye is held to every planted step at its time, and each extra event must stay under
+     0.2 deg (`_ALSO_FINDS_FIXATIONAL_WOBBLE` in `tests/schema/test_detect_populate.py`).
+5. **torch was measured at 2.13.0 on 3.11 and 2.14.1 on 3.13.** Results are identical on the
+   synthetic trace of §1.
+6. **BMD's numba kernels run on numba's own thread pool, so torch's OpenMP runtime is the only
+   one in a process.** §3 did not foresee the interaction.
+   - **Found by the proof's full suite on 3.13,** which hung for seven hours in U'n'Eye's first
+     convolution after BMD's tests. That venv is built on Anaconda's Python, so numba loaded
+     Anaconda's OpenMP runtime for BMD's `parallel=True` kernels, beside torch's own.
+   - **It hung rather than failed:** scikit-learn, which U'n'Eye's copy imports before torch, sets
+     `KMP_DUPLICATE_LIB_OK`, the setting OpenMP's own error message calls unsafe. Without it,
+     importing torch aborts.
+   - **In the daemon,** which runs every detector in one process, that would be a session stuck
+     with no error, on any machine where numba finds an OpenMP runtime of its own.
+   - **`bmd.py` sets `numba.config.THREADING_LAYER = "workqueue"`,** the pool the 3.11 venv had
+     always used, since numba finds no OpenMP runtime there.
+     - BMD's two kernels compute each sample on its own, so its results cannot change, and its
+       tests against its authors' C++ pass on both interpreters with the setting.
+     - U'n'Eye's speed is unchanged: torch keeps all its threads.
+   - **`test_bmd_leaves_torch_the_only_openmp_runtime`** runs BMD's setting, a parallel kernel and
+     U'n'Eye in a fresh process, with the environment asking numba for OpenMP. Without the setting
+     it fails on 3.11 and hangs on 3.13 until its 120 s timeout.
+   - **The repository met this class before,** with kilosort and faiss
+     (`tests/ephys/test_kilosort_defaults_split_units.py`). There too it was removed by keeping a
+     second runtime from running, not by `KMP_DUPLICATE_LIB_OK`.
