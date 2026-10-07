@@ -414,8 +414,9 @@ class EyeDetection(dj.Computed):
         # Bayesian microsaccade detection found itself, its mean posterior
         # probability of a microsaccade (0.5 to 1; BMD design spec section
         # 3.4); and for a U'n'Eye saccade, its network's mean saccade
-        # probability (0.5 to 1; U'n'Eye design spec section 3) -- three
-        # quantities, not one scale. Null for every other detector --
+        # probability (0.5 to 1, or less for a run merged across a gap;
+        # U'n'Eye design spec section 3, amendment 7) -- three quantities,
+        # not one scale. Null for every other detector --
         # declared now because the migration window closes January.
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double

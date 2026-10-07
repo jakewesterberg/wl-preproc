@@ -242,3 +242,48 @@ settles §10 against §11 item 2's conditional.
    - **The repository met this class before,** with kilosort and faiss
      (`tests/ephys/test_kilosort_defaults_split_units.py`). There too it was removed by keeping a
      second runtime from running, not by `KMP_DUPLICATE_LIB_OK`.
+
+## Amendment, 2026-10-07, made in the whole-branch review
+
+7. **The default merge gap is 20 ms, not upstream's 1:** the requester's decision of 2026-10-07,
+   made on the splits, then confirmed with the duration cost in view. The review measured what
+   amendment 1's evidence could not see.
+   - **Counting any overlap hides splits.** A coded saccade split into two runs counts as found,
+     and its fragments count as neither missed nor extra. Amendment 1 said `weights_1+2+3` splits
+     large saccades. On the Andersson recordings, at the 1 ms gap, the default does too.
+   - **Measured on 2026-10-07** through `detect_uneye`, per coder (MN; RA), on their coded
+     saccades of 6 deg or more (177; 169). "Long" counts single runs over twice the coded
+     duration; "duration" is a single run's median duration over the coded one:
+
+| Setting | Split into 2+ runs | One run under half the coded amplitude | Long | Duration | Coded saccades found | Extra detections |
+|---|---|---|---|---|---|---|
+| `weights_dataset3`, 1 ms | 44; 48 | 18; 17 | 5; 2 | 0.83; 0.80 | 530 of 541; 538 of 548 | 886; 872 |
+| `weights_dataset3`, 10 ms | 19; 23 | 16; 16 | 11; 8 | 1.00; 1.00 | 531; 538 | 737; 729 |
+| `weights_dataset3`, 15 ms | 10; 11 | 17; 17 | 18; 15 | 1.11; 1.10 | 532; 540 | 664; 661 |
+| **`weights_dataset3`, 20 ms (default)** | **3; 3** | **14; 13** | **31; 25** | **1.24; 1.18** | **533; 541** | **583; 584** |
+| `weights_dataset3`, 40 ms | 1; 2 | 11; 9 | 54; 50 | 1.52; 1.48 | 534; 542 | 390; 390 |
+| `weights_1+2+3`, 1 ms | 23; 22 | 46; 43 | | | 386; 390 | 412; 409 |
+| Engbert-Kliegl (registered defaults) | 3; 2 | 0; 1 | 6; 3 | 1.06; 1.05 | 464; 464 | 97; 93 |
+| REMoDNaV (registered defaults) | 0; 0 | 0; 0 | 10; 5 | 1.16; 1.11 | 516; 513 | 28; 32 |
+
+   - **Why 20 ms:** a split stores one saccade as several, each with part of its amplitude, so
+     counts and amplitudes go wrong. A long run keeps both right. The requester reads eye
+     findings saccade-first and holds glissades peripheral. Two real saccades are rarely under
+     20 ms apart, so at that gap merging joins pieces of one saccade.
+   - **What 20 ms costs:**
+     - **Stored durations run long:** a median 1.2 times the coded duration, and 16% of large
+       saccades over twice it, against 2 to 6% for Engbert-Kliegl and REMoDNaV. The overhang is
+       mostly the glissade, which the coders label apart: about half of these runs run on into a
+       coded glissade.
+     - **A merged run's reliability can fall below 0.5,** where the network called the gap's
+       samples fixation: 8 of 1,112 detected saccades on these recordings. The range is therefore
+       0 to 1, and 0.5 to 1 only for a run found whole.
+   - **Unchanged by the gap:**
+     - On 840 planted saccades of 0.3 to 15 deg, 838 onsets are within 5 samples at both gaps.
+     - U'n'Eye still stores some large saccades short: 14 and 13 single runs under half the coded
+       amplitude, against at most 1 for Engbert-Kliegl and REMoDNaV. On planted saccades of 5 and
+       10 deg its runs end early, storing a median 0.85 of the planted amplitude at either gap.
+       The median on the coded recordings is 0.94.
+   - **`test_the_default_keeps_a_large_saccade_whole`** in `test_uneye_validation.py` pins the
+     split: at most 5% of each coder's saccades of 6 deg or more may be split. At 1 ms it fails,
+     at 44 of 177 and 48 of 169.

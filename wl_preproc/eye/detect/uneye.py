@@ -9,11 +9,13 @@ paper (saccade-detection design spec section 8; design spec
 `DetectFn`.
 
 **The default network is `weights_dataset3`,** the one trained at 500 Hz,
-the rig's rate: the requester's decision of 2026-10-06. On the Andersson et
-al. (2017) human-coded recordings, at 500 Hz, it found 98% of the coders'
-saccades, where `weights_1+2+3`, upstream's most general network, found 70%
-(design spec section 3). **None of the five was trained on a dual-Purkinje
-tracker.** Until a network is fine-tuned on the lab's hand-labelled data
+the rig's rate, **with a 20 ms merge gap:** the requester's decisions of
+2026-10-06 and 2026-10-07 (design spec amendments 1 and 7). On the Andersson
+et al. (2017) human-coded recordings, at 500 Hz, it found 98% of the coders'
+saccades, where `weights_1+2+3`, upstream's most general network, found 71%.
+At upstream's 1 ms gap it split a quarter of their saccades of 6 deg or more
+into several smaller ones; at 20 ms, 2%. **None of the five was trained on a
+dual-Purkinje tracker.** Until a network is fine-tuned on the lab's hand-labelled data
 (after January: saccade-detection design spec section 11 item 7, section
 12), U'n'Eye's rows are provisional.
 
@@ -49,8 +51,10 @@ class UneyeParams:
       _min_duration_samples`), which counts it as `round(ms * fs / 1000)`:
       3 samples at the rig's 498.55 Hz, where U'n'Eye itself truncates the
       same 6 ms to 2. The floor, not U'n'Eye, governs two-eye events.
-    - `min_saccade_gap_ms`: U'n'Eye's `min_sacc_dist`. At 1, it merges
-      nothing.
+    - `min_saccade_gap_ms`: U'n'Eye's `min_sacc_dist`: detections closer
+      than this are merged into one. At 1, upstream's default, it merges
+      nothing. The default, 20, keeps a large saccade whole, and two real
+      saccades are rarely that close (amendment 7).
 
     Durations are in milliseconds, the repository's convention."""
 
@@ -63,7 +67,7 @@ class UneyeParams:
             raise ValueError(f"U'n'Eye has no network {self.weights!r}; have {list(NETWORKS)}")
 
 
-DEFAULT_UNEYE_PARAMS = UneyeParams(weights="weights_dataset3", min_saccade_duration_ms=6, min_saccade_gap_ms=1)
+DEFAULT_UNEYE_PARAMS = UneyeParams(weights="weights_dataset3", min_saccade_duration_ms=6, min_saccade_gap_ms=20)
 
 
 def _network(params: UneyeParams, fs_hz: float):
@@ -100,7 +104,8 @@ def detect_uneye(
       refuses shorter input; the shared insert calls it fixation.
     - **The velocity is ignored.** U'n'Eye differentiates the gaze itself.
     - **A run's reliability** is the network's mean saccade probability over
-      it, from 0.5 to 1 with nothing merged.
+      it: 0.5 to 1 for a run the network found whole, and possibly less for
+      one merged across a gap, whose samples there it called fixation.
     """
     usable = np.array([entry is None for entry in available], dtype=bool)
     usable &= np.isfinite(np.asarray(gaze_deg, dtype=float)).all(axis=1)

@@ -23,6 +23,9 @@ from wl_preproc.eye.detect.labels import Label, true_runs
 from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, UneyeParams, detect_uneye
 
 SACCADE_CODE = 2
+#: Coded saccades this large or larger are the ones a split would misreport
+#: most: one saccade stored as several, each smaller (amendment 7).
+LARGE_DEG = 6.0
 
 
 @pytest.fixture(scope="module")
@@ -66,10 +69,40 @@ def _scores(recordings, params) -> dict[str, tuple[int, int, int]]:
     return scores
 
 
+def _splits(recordings, params) -> dict[str, tuple[int, int]]:
+    """Per coder: (coded saccades of `LARGE_DEG` or more, how many of them
+    two or more detected saccades overlap). Overlap alone cannot see a split,
+    since every fragment overlaps the coded saccade."""
+    detected = [detect_uneye(gaze, np.zeros_like(gaze), available, fs, params)
+                for gaze, available, fs, _coders in recordings]
+    splits = {}
+    for coder in ("MN", "RA"):
+        large = split = 0
+        for runs, (gaze, _available, _fs, coders) in zip(detected, recordings, strict=True):
+            for start, stop in true_runs(coders[coder] == SACCADE_CODE):
+                if not float(np.hypot(*(gaze[stop - 1] - gaze[start]))) >= LARGE_DEG:
+                    continue
+                large += 1
+                split += sum(run.start < stop and run.stop > start for run in runs) >= 2
+        splits[coder] = (large, split)
+    return splits
+
+
+def test_the_default_keeps_a_large_saccade_whole(andersson):
+    """A coded saccade of 6 deg or more is stored as one saccade, not as
+    several smaller ones (amendment 7). Measured on 2026-10-07 at the 20 ms
+    merge gap: 3 of MN's 177 and 3 of RA's 169 split, against 44 and 48 at
+    upstream's 1 ms."""
+    splits = _splits(andersson, DEFAULT_UNEYE_PARAMS)
+    for coder, (large, split) in splits.items():
+        assert split / large <= 0.05, (coder, splits)
+
+
 def test_the_default_network_finds_nearly_every_coded_saccade(andersson):
-    """Measured on 2026-10-06: 530 of MN's 541 coded saccades and 538 of
-    RA's 548, 98% for each, with 886 and 872 detected saccades overlapping
-    none of theirs."""
+    """Measured on 2026-10-07 at the 20 ms merge gap: 533 of MN's 541 coded
+    saccades and 541 of RA's 548, 99% for each, with 583 and 584 detected
+    saccades overlapping none of theirs (at 1 ms: 530 and 538, with 886 and
+    872)."""
     scores = _scores(andersson, DEFAULT_UNEYE_PARAMS)
     for coder, (found, missed, _extra) in scores.items():
         assert found / (found + missed) >= 0.95, (coder, scores)

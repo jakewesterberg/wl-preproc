@@ -1681,7 +1681,9 @@ def test_reliability_survives_the_run_re_derivation(stepped_session):
 def test_uneyes_own_saccades_carry_its_mean_saccade_probability(stepped_session):
     """U'n'Eye's reliability is the network's mean saccade probability over
     the run (design spec `2026-10-06-uneye-design.md` section 3), carried
-    through the run re-derivation: 0.5 to 1 on every saccade it stored."""
+    through the run re-derivation: 0.5 to 1 on every saccade it stored
+    here, none of them merged across a gap (a merged run can carry less:
+    amendment 7)."""
     from wl_preproc.schema import detect
 
     session_key, _report, _ = stepped_session

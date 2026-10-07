@@ -22,7 +22,8 @@ def test_planted_saccades_are_found_at_their_onsets():
     """Every planted saccade, 0.5 to 10 deg, and nothing else, each starting
     within 5 samples (10 ms) of its planted onset: the tolerance the database
     test holds every detector to. Measured over 840 planted saccades of 0.3
-    to 15 deg, the default network put 838 within it."""
+    to 15 deg, the default network put 838 within it, at upstream's 1 ms
+    merge gap and at the default 20 ms alike."""
     gaze, onsets = planted(AMPLITUDES_DEG)
     runs = _detect(gaze)
     assert [run.label for run in runs] == [Label.SACCADE] * len(onsets)
