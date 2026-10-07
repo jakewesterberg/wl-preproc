@@ -132,7 +132,7 @@ def test_delete_accepts_a_matching_confirmation():
 def test_doctor_runs_and_reports_checks():
     result = _run("doctor")
     combined = result.stdout + result.stderr
-    for check in ("database", "scratch", "stale jobs"):
+    for check in ("database", "scratch", "stale jobs", "detector libraries"):
         assert check.lower() in combined.lower(), check
 
 

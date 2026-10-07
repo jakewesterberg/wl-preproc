@@ -33,14 +33,35 @@ def test_uneye_is_registered_and_declares_saccade_alone():
 
 def test_the_registry_imports_without_torch():
     """Every detector module is imported there, and a machine that never runs
-    detection need not have torch (design spec section 3). In a fresh
-    interpreter, since this one may already hold it."""
+    detection need not have torch (design spec section 3). Checking for the
+    detectors' libraries does not import them either. In a fresh interpreter,
+    since this one may already hold it."""
     import subprocess
     import sys
 
-    code = "import sys, wl_preproc.eye.detect.registry; print('torch' in sys.modules)"
+    code = ("import sys, wl_preproc.eye.detect.registry as registry; registry.missing_libraries(); "
+            "print('torch' in sys.modules)")
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "False"
+
+
+def test_only_uneye_needs_libraries_beyond_the_core_install():
+    """What `wlpp daemon` and `wlpp doctor` check for (the U'n'Eye review's
+    minor 3): the `uneye` extra's libraries, by the names they import as."""
+    assert {name: detector.requires for name, detector in DETECTORS.items() if detector.requires} == {
+        "uneye": ("torch", "skimage", "sklearn", "matplotlib")}
+
+
+def test_a_missing_library_is_named_under_its_detector(monkeypatch):
+    import importlib.util
+
+    from wl_preproc.eye.detect import registry
+
+    assert registry.missing_libraries() == {}
+    found = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *args: None if name in ("torch", "sklearn") else found(name, *args))
+    assert registry.missing_libraries() == {"uneye": ["torch", "sklearn"]}
 
 
 def test_bmd_leaves_torch_the_only_openmp_runtime():

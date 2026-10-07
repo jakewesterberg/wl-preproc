@@ -26,6 +26,7 @@ above would otherwise have a hole exactly one trace wide.
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -137,6 +138,12 @@ class Detector:
     # requester's decision of 2026-09-27 (BMD design spec section 4, final
     # review I4). None for every other detector.
     copies_saccades_from: str | None = None
+    # **The libraries it needs beyond the core install,** by the names they
+    # import as: U'n'Eye's `uneye` extra, and nothing for the six detectors
+    # reimplemented here. `wlpp daemon` refuses a pass while one is missing,
+    # and `wlpp doctor` fails it (the U'n'Eye review's minor 3): otherwise the
+    # detector's jobs error quietly and every NWB waits on them for ever.
+    requires: tuple[str, ...] = ()
 
     def detect(
         self,
@@ -332,8 +339,18 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE}),
         run=detect_uneye,
         defaults=DEFAULT_UNEYE_PARAMS,
+        requires=("torch", "skimage", "sklearn", "matplotlib"),
     ),
 }
+
+
+def missing_libraries() -> dict[str, list[str]]:
+    """Each registered detector whose `requires` names a library this host
+    lacks, with the libraries it lacks. Looked for, never imported, so
+    asking does not load torch."""
+    missing = {name: [library for library in detector.requires if importlib.util.find_spec(library) is None]
+               for name, detector in DETECTORS.items()}
+    return {name: libraries for name, libraries in missing.items() if libraries}
 
 
 def get_detector(name: str) -> Detector:

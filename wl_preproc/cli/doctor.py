@@ -52,6 +52,15 @@ def headroom_after(path: str, extra_bytes: int) -> bool:
     return (free - extra_bytes) // 2**30 >= _MIN_SCRATCH_FREE_GIB
 
 
+def missing_libraries_detail(missing: dict[str, list[str]]) -> str:
+    """What `registry.missing_libraries` found, and the install that fixes
+    it, in one line: shared by `wlpp doctor` and `wlpp daemon`'s refusal."""
+    return "; ".join(
+        f"{name} needs {', '.join(libraries)}: install torch first, from the index pyproject.toml's "
+        f"`{name}` extra names, then `pip install -e '.[{name}]'`"
+        for name, libraries in missing.items())
+
+
 def run_checks() -> list[str]:
     """Run each check, print a line per check, and return the failures."""
     failures: list[str] = []
@@ -116,5 +125,11 @@ def run_checks() -> list[str]:
             report("stale jobs", n == 0, f"{n} stale reservation(s) found")
     except Exception as exc:
         report("stale jobs", False, str(exc)[:80])
+
+    # Looked for, not imported: a host with torch is not made to load it here.
+    from wl_preproc.eye.detect import registry
+
+    missing = registry.missing_libraries()
+    report("detector libraries", not missing, missing_libraries_detail(missing))
 
     return failures
