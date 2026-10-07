@@ -410,12 +410,13 @@ class EyeDetection(dj.Computed):
         # measurements; every other label leaves them NULL. So does a saccade
         # run too brief for its detector's paramset to measure (NSLR's
         # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
-        # `reliability` is Otero-Millan's per-detection index, and for an
-        # event Bayesian microsaccade detection found itself its mean
-        # posterior probability of a microsaccade (0.5 to 1; BMD design spec
-        # section 3.4) -- a different quantity on a different scale. Null for
-        # every detector that has neither -- declared now because the
-        # migration window closes January.
+        # `reliability` is Otero-Millan's per-detection index; for an event
+        # Bayesian microsaccade detection found itself, its mean posterior
+        # probability of a microsaccade (0.5 to 1; BMD design spec section
+        # 3.4); and for a U'n'Eye saccade, its network's mean saccade
+        # probability (0.5 to 1; U'n'Eye design spec section 3) -- three
+        # quantities, not one scale. Null for every other detector --
+        # declared now because the migration window closes January.
         amplitude_deg=null       : double
         peak_velocity_deg_s=null : double
         reliability=null         : double
@@ -760,7 +761,7 @@ class EyeDetection(dj.Computed):
         requester. Superseded by the requester's decision that day; true
         when written.*
 
-        Five of the six registered detectors make that second measurement
+        Six of the seven registered detectors make that second measurement
         redundant on their own: `labels.py::true_runs` only ever
         returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
         so two of `intervals` are always separated by at least one sample
@@ -779,7 +780,15 @@ class EyeDetection(dj.Computed):
         the probability, always cover a stretch's first and last samples.
         Two stretches are always separated by at least one sample that is a
         copied Engbert-Kliegl saccade or unclaimed. So BMD never emits two
-        adjacent runs with the same label either.
+        adjacent runs with the same label either. U'n'Eye's runs within a
+        piece come from `true_runs`, so they are maximal, and its pieces are
+        the maximal stretches the mask offers with finite gaze, so two are
+        always separated by at least one sample no run claims. So U'n'Eye
+        never emits two adjacent runs with the same label either.
+
+        *Until U'n'Eye was registered (2026-10-06, `spec/uneye`) this said
+        "Five of the six registered detectors" and did not mention U'n'Eye;
+        true when written.*
 
         *Until BMD was registered (2026-09-27, `spec/bmd`) this said "Four of
         the five registered detectors" and did not mention BMD; true when
@@ -1615,8 +1624,8 @@ def _params_for(detector, params: dict):
     threshold. `OteroMillanParams` declares it for the same reason: reading
     that detector's reference on 2026-09-01 corrected its vocabulary from
     `microsaccade` alone to the same split, so it too consumes the shared
-    cut. U'n'Eye, whose declared vocabulary is `saccade` alone, will declare
-    no such field and be handed no such value -- a detector with no
+    cut. U'n'Eye, whose declared vocabulary is `saccade` alone, declares no
+    such field and is handed no such value -- a detector with no
     amplitude-derived labels is never forced to accept a parameter it has no
     use for. Declaring the field is the detector's statement that it
     consumes a shared key, not a claim to own one.

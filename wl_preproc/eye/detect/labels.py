@@ -132,12 +132,13 @@ class Run:
     start: int
     stop: int
     label: Label
-    #: Otero-Millan's per-detection silhouette (design spec section 5), or,
-    #: on an event Bayesian microsaccade detection found itself, its mean
-    #: posterior probability of a microsaccade (0.5 to 1; BMD design spec
-    #: section 3.4) -- a different quantity on a different scale. `None` for
-    #: every other detector and for every run this subsystem reconstructs
-    #: rather than detects. Defaulted so `Run(start, stop, label)` keeps
+    #: Otero-Millan's per-detection silhouette (design spec section 5); on an
+    #: event Bayesian microsaccade detection found itself, its mean posterior
+    #: probability of a microsaccade (0.5 to 1; BMD design spec section 3.4);
+    #: or on a U'n'Eye saccade, its network's mean saccade probability (0.5
+    #: to 1; U'n'Eye design spec section 3) -- three quantities, not one
+    #: scale. `None` for every other detector and for every run this
+    #: subsystem reconstructs rather than detects. Defaulted so `Run(start, stop, label)` keeps
     #: working everywhere -- `runs_from_labels` builds runs from a label array
     #: and has no reliability to give them.
     #:

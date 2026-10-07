@@ -40,6 +40,7 @@ from wl_preproc.eye.detect.nystrom_holmqvist import (
 )
 from wl_preproc.eye.detect.otero_millan import DEFAULT_OM_PARAMS, detect_otero_millan
 from wl_preproc.eye.detect.remodnav import DEFAULT_REMODNAV_PARAMS, detect_remodnav
+from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, detect_uneye
 
 
 class DetectorNotRegistered(KeyError):
@@ -317,6 +318,20 @@ DETECTORS: dict[str, Detector] = {
         defaults=DEFAULT_BMD_PARAMS,
         runs_start_after_takeoff=True,
         copies_saccades_from="engbert_kliegl",
+    ),
+    # **U'n'Eye** (design spec `2026-10-06-uneye-design.md`), the only
+    # detector copied rather than reimplemented: its authors' code and trained
+    # networks are in `wl_preproc/eye/vendor/uneye/`. It labels saccades
+    # alone, never splitting off microsaccades, so its conjunction takes the
+    # degenerate branch. Its `min_saccade_duration_ms` gives its conjunction a
+    # floor of 3 samples at the rig's rate. Its saccades carry the network's
+    # mean saccade probability as reliability. It runs on the CPU, and torch
+    # is imported only when it runs.
+    "uneye": Detector(
+        name="uneye",
+        vocabulary=frozenset({Label.SACCADE}),
+        run=detect_uneye,
+        defaults=DEFAULT_UNEYE_PARAMS,
     ),
 }
 

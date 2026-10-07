@@ -16,8 +16,70 @@ def test_engbert_kliegl_is_registered_and_declares_its_vocabulary():
 
 
 def test_an_unregistered_name_is_refused_by_name():
-    with pytest.raises(DetectorNotRegistered, match="uneye"):
-        get_detector("uneye")
+    with pytest.raises(DetectorNotRegistered, match="no_such_detector"):
+        get_detector("no_such_detector")
+
+
+def test_uneye_is_registered_and_declares_saccade_alone():
+    """It does not split saccades from microsaccades (design spec
+    `2026-10-06-uneye-design.md` section 3), and its defaults are its own."""
+    from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, detect_uneye
+
+    detector = get_detector("uneye")
+    assert (detector.vocabulary, detector.run, detector.defaults) == (
+        frozenset({Label.SACCADE}), detect_uneye, DEFAULT_UNEYE_PARAMS)
+    assert not (detector.runs_end_before_landing or detector.runs_start_after_takeoff or detector.copies_saccades_from)
+
+
+def test_the_registry_imports_without_torch():
+    """Every detector module is imported there, and a machine that never runs
+    detection need not have torch (design spec section 3). In a fresh
+    interpreter, since this one may already hold it."""
+    import subprocess
+    import sys
+
+    code = "import sys, wl_preproc.eye.detect.registry; print('torch' in sys.modules)"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "False"
+
+
+def test_bmd_leaves_torch_the_only_openmp_runtime():
+    """BMD's numba kernels run on numba's own thread pool even where the
+    environment asks numba for OpenMP, and U'n'Eye then runs in the same
+    process (design spec amendment 6).
+
+    With a second OpenMP runtime loaded, U'n'Eye's first convolution waits
+    forever: scikit-learn, which U'n'Eye's copy imports before torch, sets
+    `KMP_DUPLICATE_LIB_OK`, so the duplicate hangs rather than fails. The
+    proof's suite on an Anaconda-based 3.13 hung seven hours on it. In a
+    fresh interpreter, since this one may already have chosen its threading
+    layer."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = """
+import numba, numpy as np
+import wl_preproc.eye.detect.bmd
+from tests.eye.detect._uneye_traces import FS_HZ, all_usable, planted
+from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, detect_uneye
+
+@numba.njit(parallel=True)
+def roots(x):
+    out = np.empty_like(x)
+    for i in numba.prange(x.size):
+        out[i] = np.sqrt(x[i])
+    return out
+
+roots(np.arange(1e6))
+gaze, onsets = planted((5.0,) * 4)
+runs = detect_uneye(gaze, np.zeros_like(gaze), all_usable(len(gaze)), FS_HZ, DEFAULT_UNEYE_PARAMS)
+print(numba.threading_layer(), len(runs) == len(onsets))
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=True,
+                            cwd=Path(__file__).resolve().parents[3], env={**os.environ, "NUMBA_THREADING_LAYER": "omp"})
+    assert result.stdout.split() == ["workqueue", "True"]
 
 
 def test_every_registered_vocabulary_is_a_subset_of_the_label_enum():
@@ -73,7 +135,8 @@ def test_a_detector_emitting_an_undeclared_label_is_rejected():
 
     Four of the seven planned detectors declare vocabularies including `pso`,
     `pursuit` or `fixation` (design spec section 3.1), so this is the check
-    that keeps six unwritten detectors honest about what they emit.
+    that keeps each of them honest about what it emits. (Until 2026-10-06
+    this said "six unwritten detectors"; all seven are written now.)
     """
     from wl_preproc.eye.detect.labels import Run
     from wl_preproc.eye.detect.registry import UndeclaredLabel
