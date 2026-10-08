@@ -1,16 +1,25 @@
 # Where this build actually is
 
-**Last updated 2026-10-07**, describing `main` at `22dbb70`, the merge of
-`fix/uneye-minors`: the U'n'Eye review's four deferred minors (handoff
-`handoffs/2026-10-06-uneye.md` §7). CI read off `22dbb70` is green on both
-interpreters, 2225 passed on each with 36 skipped, and the manifest check is
-green (`gh run view 37609431704`).
-- **`wlpp daemon` refuses a pass, and `wlpp doctor` fails, while U'n'Eye's
-  code cannot load on the host,** each naming the install that fixes it.
-  Otherwise its jobs would error quietly and every NWB wait on them.
-- **U'n'Eye stops with an error rather than hang where numba already runs on
-  OpenMP;** tested against real numba, on CI's Linux too.
-- **U'n'Eye itself was merged just before** (`5b41770`, CI green):
+**Last updated 2026-10-08**, describing `main` at `ff8aeb9`, the merge of
+`spec/main-sequence`: the saccade main sequence and vigor (spec
+`specs/2026-10-07-main-sequence-design.md`, handoff
+`handoffs/2026-10-07-main-sequence.md`). CI read off `ff8aeb9` is green on both
+interpreters, 2262 passed on each with 36 skipped, and the manifest check is
+green (`gh run view 37747737452`).
+- **Each detection trace gets a main-sequence fit:** each eye and the
+  both-eyes trace, under every detector, from saccades of 1 deg and up. A fit
+  is refused with its reason when there are too few saccades, too narrow a
+  range of sizes, or V_max or C cannot be pinned down (spec amendment 1).
+- **Each block and each condition gets a gain** against its session's own
+  curve. Conditions are keyed by their place in the block, since MySQL's
+  collation would merge names differing only in case (amendment 4).
+- **The daily report shows saccade vigor per session per eye:** every
+  detector's figure against the same animal's earlier sessions, computed when
+  the report is built.
+- **U'n'Eye's four review minors were merged before it** (`22dbb70`, CI
+  green): `wlpp daemon` and `wlpp doctor` name a missing install, and U'n'Eye
+  stops with an error rather than hang beside numba's OpenMP.
+- **U'n'Eye itself was merged before them** (`5b41770`, CI green):
   - **it runs from its authors' own code and trained networks,** copied at
     `f97ca88`, always on the CPU. Its defaults are the requester's: the
     network trained at 500 Hz, and a 20 ms merge gap, without which it split
@@ -23,6 +32,10 @@ green (`gh run view 37609431704`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `22dbb70` (the U'n'Eye-minors merge, CI green, 2225 passed
+on each interpreter, `37609431704`) until the main-sequence merge; true when
+written.*
 
 *This header named `5b41770` (the U'n'Eye merge, CI green, 2213 passed on each
 interpreter, `37595275228`) until the U'n'Eye-minors merge; true when
@@ -168,15 +181,15 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
-> **Hardware-free:** the saccade main sequence and vigor (the saccade spec's
-> §6.5), the requester's choice of 2026-10-07: built on `spec/main-sequence`,
-> not merged (`handoffs/2026-10-07-main-sequence.md`). Each detection trace's
-> session fit, each block's and condition's gain against it, and the report's
-> vigor line, per eye and detector. Next: the whole-branch review, then the
-> merge question. Open and small: M4 (left open by the requester's choice),
-> and the U'n'Eye minors branch's own three deferred minors
-> (`handoffs/2026-10-06-uneye.md` §7). Fine-tuning U'n'Eye to the DPI tracker
-> waits for hand-labelled lab data.
+> **Hardware-free:** the requester's choice of 2026-10-07, the saccade main
+> sequence and vigor, is merged (`ff8aeb9`). Ask what comes next. Open and
+> small: M4 (left open by the requester's choice), the U'n'Eye minors
+> branch's own three deferred minors (`handoffs/2026-10-06-uneye.md` §7), and
+> the main sequence's four (`handoffs/2026-10-07-main-sequence.md` §6).
+> Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-08 this named the main sequence and vigor as built on
+> `spec/main-sequence` and not merged; true when written.*
 >
 > *Until 2026-10-08 this said the requester's list of 2026-10-05 was done, and
 > to ask what comes next; true when written.*
@@ -184,9 +197,11 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: U'n'Eye, the seventh detector (`5b41770`): its authors' code and
+> Done: the saccade main sequence and vigor (`ff8aeb9`): each detection
+> trace's fit, each block's and condition's gain, and the report's vigor line.
+> Before it, U'n'Eye, the seventh detector (`5b41770`): its authors' code and
 > five networks, on the CPU, with the 500 Hz network and a 20 ms merge gap.
-> Before it: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
+> Before that: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
 > requester's choice); the session listing's minors M6 and M9 with the NWB
 > stages' per-file placement lookups (`7cfc852`,
 > `handoffs/2026-10-01-session-listing.md` §8); and fresh identities for
