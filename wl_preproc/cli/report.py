@@ -1022,6 +1022,72 @@ def _agreement_line(row: dict, detector_names: dict[int, str]) -> str:
     )
 
 
+
+def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
+    """`### Saccade vigor per session per eye (24 h)`'s lines (main-sequence
+    design spec `2026-10-07-main-sequence-design.md` section 5): for each
+    session in `ingested_keys`, each eye and each validity and fit paramset,
+    every detector's vigor against the same animal's earlier sessions.
+
+    **Computed here, never stored**: the history grows with every session.
+    Not in `gather_readings`, for `_detection_rows`' reason.
+
+    A detector's figure is `main_sequence.vigor` over this session's saccades,
+    picked as its fit picked them (`schema/main_sequence.py::selected_runs`,
+    with the row's own `fs_hz`), against the earlier sessions' computed fits.
+    In its place: "detection refused", "not computed yet" where no row exists,
+    or `vigor`'s own reason. The both-eyes trace is left out (the requester's
+    decision of 2026-10-07)."""
+    from wl_preproc.eye.detect.main_sequence import Curve, MainSequenceParams, SessionFit, vigor
+    from wl_preproc.schema import detect as detect_schema
+    from wl_preproc.schema import main_sequence
+    from wl_preproc.schema import paramset as paramset_schema
+
+    main_sequence.activate(prefix=prefix)
+    table = main_sequence.SaccadeMainSequence
+    names = {row["paramset_idx"]: row["params"]["detector"]
+             for row in (paramset_schema.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()}
+    fit_params = {row["paramset_idx"]: MainSequenceParams(**row["params"])
+                  for row in (paramset_schema.ParamSet & {"paramset_type": "main_sequence"}).to_dicts()}
+
+    def figure(detection: dict, fit_idx: int) -> str:
+        if detection["status"] == "refused":
+            return "detection refused"
+        key = {**{name: detection[name] for name in detect_schema.EyeDetection.primary_key},
+               "fit_paramset_type": "main_sequence", "fit_paramset_idx": fit_idx}
+        rows = (table & key).to_dicts()
+        if not rows:
+            return "not computed yet"
+        params = fit_params[fit_idx]
+        runs = main_sequence.selected_runs(
+            (detect_schema.EyeDetection.Run & {name: detection[name] for name in detect_schema.EyeDetection.primary_key}
+             & 'label in ("saccade", "microsaccade")').to_dicts(order_by="run_index"), rows[0]["fs_hz"], params)
+        earlier = (table & {name: value for name, value in key.items() if name != "session_datetime"}
+                   & f"session_datetime < '{detection['session_datetime']:%Y-%m-%d %H:%M:%S}'"
+                   & 'fit_status = "computed"').to_dicts()
+        history = [SessionFit(Curve(row["v_max_deg_s"], row["saturation_deg"]), row["n_saccades"],
+                              row["amplitude_min_deg"], row["amplitude_max_deg"], row["v_max_se_deg_s"],
+                              row["saturation_se_deg"], row["r_squared"], "") for row in earlier]
+        result = vigor([run["amplitude_deg"] for run in runs], [run["peak_velocity_deg_s"] for run in runs],
+                       history, params)
+        return result.reason if result.value is None else f"{result.value:.0%} ({result.n_history} earlier)"
+
+    lines = []
+    for subject, session_datetime in sorted(ingested_keys):
+        detections = (detect_schema.EyeDetection & {"subject": subject, "session_datetime": session_datetime}
+                      & 'trace in ("left", "right")').to_dicts()
+        groups: dict = {}
+        for detection in detections:
+            for fit_idx in sorted(fit_params):
+                groups.setdefault((detection["trace"], detection["validity_paramset_idx"], fit_idx), []).append(
+                    detection)
+        for (trace, validity_idx, fit_idx), members in sorted(groups.items()):
+            figures = ", ".join(f"`{names[detection['paramset_idx']]}` {figure(detection, fit_idx)}"
+                                for detection in sorted(members, key=lambda row: row["paramset_idx"]))
+            lines.append(f"- `{subject}` @ {session_datetime:%Y-%m-%d %H:%M} — {trace} (validity paramset "
+                         f"{validity_idx}, fit paramset {fit_idx}): {figures}")
+    return lines
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:
     """Everything both renderings need, computed once.
@@ -1729,6 +1795,13 @@ def build_report(
         # render identically to a report that stopped computing agreement.
         "- none"
     ]
+
+    # Main-sequence design spec section 5: each eye's vigor against the same
+    # animal's earlier sessions, every detector on one line. Windowed to the
+    # 24 h `ingested_keys` the per-session lists above use.
+    vigor_lines = _vigor_lines(ingested_keys, prefix=prefix)
+    lines += ["", f"### Saccade vigor per session per eye (24 h) — {len(vigor_lines)}", ""]
+    lines += vigor_lines or ["- none"]
 
     lines += ["", "## Not yet reported", ""]
     lines += [f"- **{name}** — {why}" for name, why in _NOT_YET_REPORTED]
