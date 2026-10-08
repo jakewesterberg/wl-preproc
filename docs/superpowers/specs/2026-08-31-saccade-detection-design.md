@@ -1016,6 +1016,13 @@ for it, sitting beside the pairwise rows. It is the number an untuned U'n'Eye
 will drag down, and the pairwise Engbert–Kliegl ↔ Otero-Millan row is what
 stays readable when it does.
 
+> **Amended 2026-10-08 by `2026-10-08-seven-way-agreement-design.md`.** The blended score is
+> Krippendorff's α across all registered detectors, per trace and glissade convention, in the
+> vocabulary all of them share (`{saccade, fixation}` today), a detector that copies another's
+> saccades abstaining on them (the requester's decision). Measured on the reference recording,
+> untuned U'n'Eye pulls it down by 0.006–0.015, and it falls from 0.68 to 0.44 under added noise
+> the validity mask does not catch (that document's §1).
+
 ---
 
 ## 6.5 Saccade vigor
@@ -1176,6 +1183,10 @@ closed for calibration, and it is fixed the same way: correct the fixture.
 > `fit_paramset_idx`). It stores standard errors and the recording rate durations were counted
 > at. `.Block` and `.Condition` hold a gain, its saccade count and size range, and a status and
 > reason, not a fit.
+>
+> **Amended 2026-10-08 by `2026-10-08-seven-way-agreement-design.md`** (its §3).
+> `DetectionQuality` is keyed per session, trace, validity paramset, metric, vocabulary and
+> `pso_as`, and holds `value`, `n_samples_compared` and the detectors blended.
 
 Every one is a `dj.Computed` and every one joins `daemon._computed_tables()` —
 the sweep that exists because `TrialCoverage` was once missing from it and
@@ -1238,6 +1249,10 @@ A detection section beside the existing eye section, showing the **pairwise**
 agreement rows per detector pair, the sessions whose detection was refused
 with their stated reasons, and the fraction of each session's samples labelled
 `invalid` or `blink`.
+
+> **Amended 2026-10-08 by `2026-10-08-seven-way-agreement-design.md`** (its §5). The section
+> also shows each session's seven-way agreement per eye, under both glissade conventions, beside
+> the median of the same animal's earlier sessions (the requester's decision).
 
 **Per session and per EYE**, not pooled across the two. `EyeValidity` is keyed
 per eye and the pooled figure hides the case the number exists to surface: one
