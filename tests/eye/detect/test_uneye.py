@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import types
+
 import numpy as np
 import pytest
 
@@ -98,10 +100,12 @@ def test_the_network_stays_on_the_cpu_when_a_gpu_is_reported(monkeypatch):
 
 class _Numba:
     """Stands in for numba as `_network` reads it: its threading layer, or
-    the ValueError numba raises before any parallel kernel has run."""
+    the ValueError numba raises before any parallel kernel has run, and the
+    config its next parallel kernel will choose a layer from."""
 
     def __init__(self, layer):
         self.layer = layer
+        self.config = types.SimpleNamespace(THREADING_LAYER="omp")
 
     def threading_layer(self):
         if self.layer is None:
@@ -164,12 +168,53 @@ except RuntimeError:
 
 @pytest.mark.parametrize("layer", ["workqueue", "tbb", None])
 def test_the_network_starts_beside_any_other_threading_layer(monkeypatch, layer):
+    """And it pins numba's later parallel kernels to numba's own thread pool,
+    in its config and in the environment numba re-reads, before torch loads
+    (amendment 8)."""
+    import os
     import sys
 
     from wl_preproc.eye.detect.uneye import _network
 
-    monkeypatch.setitem(sys.modules, "numba", _Numba(layer))
+    numba = _Numba(layer)
+    monkeypatch.setitem(sys.modules, "numba", numba)
+    monkeypatch.setenv("NUMBA_THREADING_LAYER", "omp")
     assert _network(DEFAULT_UNEYE_PARAMS, FS_HZ).use_gpu is False
+    assert (numba.config.THREADING_LAYER, os.environ["NUMBA_THREADING_LAYER"]) == ("workqueue", "workqueue")
+
+
+def test_a_numba_kernel_compiled_after_uneye_stays_off_openmp():
+    """With torch loaded, a parallel kernel that chooses OpenMP crashed the
+    process where OpenMP loads (the U'n'Eye-minors review measured a
+    SIGSEGV), and failed for want of it where it does not. U'n'Eye now pins
+    the layer before torch loads (amendment 8). In a fresh interpreter,
+    whose threading layer is not yet chosen."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = """
+import numba, numpy as np
+from tests.eye.detect._uneye_traces import FS_HZ, all_usable, planted
+from wl_preproc.eye.detect.uneye import DEFAULT_UNEYE_PARAMS, detect_uneye
+
+gaze, onsets = planted((5.0,) * 4)
+runs = detect_uneye(gaze, np.zeros_like(gaze), all_usable(len(gaze)), FS_HZ, DEFAULT_UNEYE_PARAMS)
+
+@numba.njit(parallel=True)
+def roots(x):
+    out = np.empty_like(x)
+    for i in numba.prange(x.size):
+        out[i] = np.sqrt(x[i])
+    return out
+
+roots(np.arange(1e6))
+print(numba.threading_layer(), len(runs) == len(onsets))
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120,
+                            cwd=Path(__file__).resolve().parents[3], env={**os.environ, "NUMBA_THREADING_LAYER": "omp"})
+    assert result.stdout.split() == ["workqueue", "True"], (result.returncode, result.stderr[-2000:])
 
 
 def test_only_a_copied_two_class_network_can_be_chosen():

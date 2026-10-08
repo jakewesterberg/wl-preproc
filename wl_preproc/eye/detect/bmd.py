@@ -40,13 +40,14 @@ from wl_preproc.eye.detect.bmd_table import LogATable, compute_table, lookup
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams, detect_engbert_kliegl
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, classify, measure_event_run
+from wl_preproc.eye.detect.numba_threads import keep_off_openmp
 
 # `_grid_up` and `_grid_down` run on numba's own thread pool, never on an
 # OpenMP runtime of numba's: U'n'Eye's torch brings its own, and with two in
 # one process its first convolution waits forever (U'n'Eye design spec,
-# amendment 6). Set before either kernel first runs. Each computes every
-# sample on its own, so their results cannot depend on it.
-numba.config.THREADING_LAYER = "workqueue"
+# amendments 6 and 8). Set before either kernel first runs. Each computes
+# every sample on its own, so their results cannot depend on it.
+keep_off_openmp()
 
 LN2PI = 1.83787706641  # `bmd.cpp` 13, the reference's own rounded constant
 LN2 = 0.69314718056  # `bmd.cpp` 14
