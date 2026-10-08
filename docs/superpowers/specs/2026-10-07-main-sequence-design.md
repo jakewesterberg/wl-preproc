@@ -226,7 +226,7 @@ Count first, then range, the order the parent's §6.5.2 set to mirror `eye/calib
   (`events/rigtrials.py::read_rig_trials`, joined by `nwb/conditions.py::join`), otherwise the
   stream's `CONDITION` number, as text (`nwb/conditions.py::stream_codes`). A trial with neither,
   or with a name longer than 255 characters, has no condition. A saccade between trials counts
-  toward its block only.
+  toward its block only. *Amendment 5 holds a condition to its block's own span.*
 - **Session times** come from `eye.row_session_times`, and block and trial times through
   `events/runs.py::stored_doubles` (MySQL `FLOAT` reads come back to six significant digits).
 - **The gain** is the median, over the group's saccades, of `peak_velocity / curve(amplitude)`
@@ -380,3 +380,13 @@ Each carries a dated pointer in the parent:
    good. The key is now `condition_index`, the condition's place among its block's conditions
    sorted by name, from 1. `condition` is a column beside it; a restriction on it by name still
    compares under the collation.
+
+## Amendment, 2026-10-08, fixing the main sequence's deferred minors
+
+5. **A condition holds only the saccades inside its own block** (§4.3). A trial whose `TRIAL_END`
+   comes after its `BLOCK_END`, an ordinary rig pattern (`schema/events.py::_trial_stop_time`),
+   counted the saccades in its tail toward its condition in its block, though they fall outside
+   that block, and toward the next block's gain as well. Each condition's saccades are now those
+   of its trials that also start inside its block: a saccade in such a tail counts toward the
+   block it falls in, with no condition. The whole-branch review's minor 1; the requester approved
+   the fix on 2026-10-08.

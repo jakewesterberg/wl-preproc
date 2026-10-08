@@ -1060,7 +1060,8 @@ seven disagreeing about individual events.
 > reference recording, a two-parameter fit over a block's or a condition's 20–100 saccades is
 > 12–55% wrong at the median, so **only the session is fitted**. Blocks and conditions store a
 > gain against the session's own curve (the requester's decision). The session fit's guard adds
-> a middle-80% size range and a non-converging fit, and stores standard errors. Saccades are
+> a middle-80% size range, and refuses a fit whose V_max or C is not known to within half (that
+> document's amendment 1); it stores standard errors. Saccades are
 > selected by size, from 1°, which replaces the microsaccade switch below, and lasting at most
 > 150 ms. The fit paramset is in the key. The per-detector measurement asked for below is that
 > document's §1. Read it before this section.
