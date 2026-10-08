@@ -9,11 +9,11 @@ skipped, and the manifest check is green (`gh run view 37787193207`).
   `TRIAL_END` comes after its `BLOCK_END` no longer counts its tail toward its
   condition. The four paths the review named untested are tested.
 - **U'n'Eye's three deferred minors were merged just before** (`7dcf37f`, CI
-  green): numba is kept off OpenMP for the whole process,** in its config and in the
+  green): numba is kept off OpenMP for the whole process, in its config and in the
   environment it re-reads: BMD pins it at import, and U'n'Eye before torch
   loads, so a numba kernel launched after U'n'Eye no longer crashes the
   process; and the `wlpp doctor` tests open no database.
-- **The saccade main sequence and vigor were merged just before** (`ff8aeb9`,
+- **The saccade main sequence and vigor were merged before them** (`ff8aeb9`,
   CI green; spec `specs/2026-10-07-main-sequence-design.md`, handoff
   `handoffs/2026-10-07-main-sequence.md`):
   - **each detection trace gets a main-sequence fit:** each eye and the
