@@ -239,7 +239,9 @@ settles §10 against §11 item 2's conditional.
    - **In the daemon,** which runs every detector in one process, that would be a session stuck
      with no error, on any machine where numba finds an OpenMP runtime of its own.
    - **`bmd.py` sets `numba.config.THREADING_LAYER = "workqueue"`,** the pool the 3.11 venv had
-     always used, since numba finds no OpenMP runtime there.
+     always used, since numba finds no OpenMP runtime there. *Amendment 8 moves the setting into
+     `numba_threads.keep_off_openmp()`, which sets the environment variable too, and U'n'Eye calls
+     it as well.*
      - BMD's two kernels compute each sample on its own, so its results cannot change, and its
        tests against its authors' C++ pass on both interpreters with the setting.
      - U'n'Eye's speed is unchanged: torch keeps all its threads.
@@ -294,3 +296,23 @@ settles §10 against §11 item 2's conditional.
    - **`test_the_default_keeps_a_large_saccade_whole`** in `test_uneye_validation.py` pins the
      split: at most 5% of each coder's saccades of 6 deg or more may be split. At 1 ms it fails,
      at 44 of 177 and 48 of 169.
+
+## Amendment, 2026-10-08, fixing the U'n'Eye-minors branch's deferred minors
+
+8. **numba is kept off OpenMP for the whole process, from whichever of BMD and U'n'Eye loads
+   first.** The requester approved the design on 2026-10-08.
+   - **The setting was undone by an environment change.** numba re-reads its environment at its
+     next compile once a `NUMBA_*` variable has changed, overwriting its config. Measured: with
+     the environment asking for OpenMP, BMD imported and then one variable changed, the next
+     parallel kernel ran on OpenMP on 3.13 and failed for want of it on 3.11.
+   - **U'n'Eye could not see numba choose OpenMP after torch loaded,** and that crashed the
+     process: signal 11, on 3.13.
+   - **`wl_preproc/eye/detect/numba_threads.py::keep_off_openmp()`** sets both numba's config and
+     `NUMBA_THREADING_LAYER` to `workqueue`. BMD calls it at import, in place of amendment 6's one
+     line. U'n'Eye calls it as it starts, after refusing where numba already chose OpenMP and
+     before torch loads.
+   - **The variable reaches the programs the process starts.** None of them uses numba today.
+   - **Tests,** each in a fresh process with the environment asking for OpenMP, on both
+     interpreters: `test_bmd_keeps_numba_off_openmp_when_its_environment_changes` and
+     `test_a_numba_kernel_compiled_after_uneye_stays_off_openmp`. Both failed first: on OpenMP and
+     at signal 11 on 3.13, for want of a threading layer on 3.11.
