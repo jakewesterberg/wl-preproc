@@ -35,10 +35,10 @@ status:
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free: the requester's
     choices of 2026-10-07 and 2026-10-08 are merged; ask what comes next. Open
-    and small: M4, and the main sequence's four deferred minors
-    (docs/handoffs/2026-10-07-main-sequence.md section 6). Fine-tuning U'n'Eye
-    waits for hand-labelled lab data.
-    Done: the U'n'Eye minors branch's three deferred minors (7dcf37f): numba
+    and small: M4. Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    Done: the main sequence's four deferred minors (b22af97): a condition held
+    to its own block's span, and the four untested paths tested. Before it,
+    the U'n'Eye minors branch's three deferred minors (7dcf37f): numba
     kept off OpenMP for the whole process, and doctor tests that open no
     database. Before it, the saccade main sequence and vigor (ff8aeb9): each
     detection trace's fit, block and condition gains, and the report's vigor
@@ -93,6 +93,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `7dcf37f` until the main-sequence-minors merge `b22af97` on
+  # 2026-10-08 (CI green on `7dcf37f`, run 37764553083); true when written.
   # Was `ff8aeb9` until the U'n'Eye-deferred-minors merge `7dcf37f` on
   # 2026-10-08 (CI green on `ff8aeb9`, run 37747737452); true when written.
   # Was `22dbb70` until the main-sequence merge `ff8aeb9` on 2026-10-08 (CI
@@ -134,7 +136,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "7dcf37f"
+  describes: "b22af97"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
