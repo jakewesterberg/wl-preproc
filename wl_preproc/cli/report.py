@@ -1022,7 +1022,6 @@ def _agreement_line(row: dict, detector_names: dict[int, str]) -> str:
     )
 
 
-
 def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
     """`### Saccade vigor per session per eye (24 h)`'s lines (main-sequence
     design spec `2026-10-07-main-sequence-design.md` section 5): for each
@@ -1087,6 +1086,7 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
             lines.append(f"- `{subject}` @ {session_datetime:%Y-%m-%d %H:%M} — {trace} (validity paramset "
                          f"{validity_idx}, fit paramset {fit_idx}): {figures}")
     return lines
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:

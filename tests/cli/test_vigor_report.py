@@ -38,18 +38,21 @@ def vigor_schema(dj_conn, prefix):
     timebase.activate(prefix=prefix)
     return SimpleNamespace(
         detection=detect.register_default_paramsets()["engbert_kliegl"],
+        detections=detect.register_default_paramsets(),
         validity=paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS)),
         fit=main_sequence.register_default_paramsets()["default"],
     )
 
 
-def _detect(schema, session, trace, *, status="computed", saccades=(), master=True):
-    """One Engbert-Kliegl detection of `trace`, its saccade runs
-    (`(amplitude, peak)` pairs, 40 ms each at 500 Hz) and, with `master`, its
-    `SaccadeMainSequence` row: computed on `CURVE` over 1-12 deg."""
+def _detect(schema, session, trace, *, detector="engbert_kliegl", status="computed", saccades=(), master=True,
+            own_fit_refused=False):
+    """One detection of `trace` (Engbert-Kliegl's unless `detector` says),
+    its saccade runs (`(amplitude, peak)` pairs, 40 ms each at 500 Hz) and,
+    with `master`, its `SaccadeMainSequence` row: computed on `CURVE` over
+    1-12 deg, or with `own_fit_refused` refused for too few saccades."""
     from wl_preproc.schema import detect, main_sequence
 
-    row = _detection_row(session.subject, session.session_datetime, trace, schema.validity, schema.detection,
+    row = _detection_row(session.subject, session.session_datetime, trace, schema.validity, schema.detections[detector],
                          status=status, n_samples=100 * (len(saccades) + 1), reason="planted refusal"
                          if status == "refused" else "")
     detect.EyeDetection.insert1(row, allow_direct_insert=True)
@@ -58,7 +61,12 @@ def _detect(schema, session, trace, *, status="computed", saccades=(), master=Tr
         {**key, "run_index": index, "run_start": 100 * index, "run_stop": 100 * index + 20, "label": "saccade",
          "amplitude_deg": amplitude, "peak_velocity_deg_s": peak}
         for index, (amplitude, peak) in enumerate(saccades))
-    if master and status == "computed":
+    if master and status == "computed" and own_fit_refused:
+        main_sequence.SaccadeMainSequence.insert1(
+            {**key, "fit_paramset_type": "main_sequence", "fit_paramset_idx": schema.fit, "fit_status": "refused",
+             "fs_hz": 500.0, "n_saccades": len(saccades),
+             "reason": f"{len(saccades)} saccades; a session fit needs at least 100"}, allow_direct_insert=True)
+    elif master and status == "computed":
         main_sequence.SaccadeMainSequence.insert1(
             {**key, "fit_paramset_type": "main_sequence", "fit_paramset_idx": schema.fit, "fit_status": "computed",
              "fs_hz": 500.0, "n_saccades": len(saccades), "amplitude_min_deg": 1.0, "amplitude_max_deg": 12.0,
@@ -71,16 +79,17 @@ def _detect(schema, session, trace, *, status="computed", saccades=(), master=Tr
     return key
 
 
-def _animal_with_history(schema, n_earlier: int):
+def _animal_with_history(schema, n_earlier: int, detectors=("engbert_kliegl",)):
     """An animal with `n_earlier` sessions ingested long ago, each fitted on
-    `CURVE` for both eyes, and a session ingested now. Returns the animal and
-    that session, landed but not yet detected."""
+    `CURVE` for both eyes by each of `detectors`, and a session ingested now.
+    Returns that session, landed but not yet detected."""
     animal = new_animal()
     for _ in range(n_earlier):
         earlier = animal.session()
         _land_session(earlier.subject, earlier.session_datetime, ingested_at=_LONG_AGO)
         for trace in ("left", "right"):
-            _detect(schema, earlier, trace)
+            for detector in detectors:
+                _detect(schema, earlier, trace, detector=detector)
     session = animal.session()
     _land_session(session.subject, session.session_datetime)
     return session
@@ -139,3 +148,24 @@ def test_the_both_eyes_trace_is_left_out(vigor_schema, tmp_path, prefix):
     _detect(vigor_schema, session, "conjunction", saccades=_saccades(40, 0.9))
     subsection = _subsection(_section(build_report(tmp_path, prefix=prefix), "Detection"), _HEADING)
     assert f"`{session.subject}` @" not in subsection
+
+
+def test_a_line_carries_every_detectors_figure_in_paramset_order(vigor_schema, tmp_path, prefix):
+    """The main-sequence review's minor: until now no test had two
+    detectors on one line."""
+    session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl", "otero_millan"))
+    _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9))
+    _detect(vigor_schema, session, "left", detector="otero_millan", saccades=_saccades(40, 1.1))
+    figures = {"engbert_kliegl": "90% (3 earlier)", "otero_millan": "110% (3 earlier)"}
+    in_order = sorted(figures, key=vigor_schema.detections.get)
+    assert _line(tmp_path, prefix, session, "left").endswith(
+        ": " + ", ".join(f"`{name}` {figures[name]}" for name in in_order))
+
+
+def test_vigor_is_shown_where_the_sessions_own_fit_was_refused(vigor_schema, tmp_path, prefix):
+    """Vigor needs only the earlier sessions' fits (spec section 5): 40
+    saccades are too few for this session's own fit, and enough for its
+    vigor. The main-sequence review's minor."""
+    session = _animal_with_history(vigor_schema, 3)
+    _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9), own_fit_refused=True)
+    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` 90% (3 earlier)")
