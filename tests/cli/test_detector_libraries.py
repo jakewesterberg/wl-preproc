@@ -44,14 +44,20 @@ def test_the_daemon_runs_its_pass_when_nothing_is_missing(monkeypatch, capsys):
 def offline(monkeypatch):
     """Doctor's two database steps, stood in for: these tests are about the
     detector-libraries check, and must open no connection (the U'n'Eye-minors
-    review's deferred minor). Each test asserts the stand-ins' lines, so a
-    real connection, or its failure, cannot pass for them."""
+    review's deferred minor). Returns the steps the stand-ins answered, in
+    order. Each test asserts both answered: a healthy real connection prints
+    the same lines, so only the record tells a test that reached the
+    database, after another test in the session opened one, from one that
+    did not."""
     import datajoint
 
     from wl_preproc import daemon
 
-    monkeypatch.setattr(datajoint, "conn", lambda reset=False: types.SimpleNamespace(is_connected=True))
-    monkeypatch.setattr(daemon, "count_stale_jobs", lambda: 0)
+    answered: list[str] = []
+    monkeypatch.setattr(datajoint, "conn",
+                        lambda reset=False: answered.append("database") or types.SimpleNamespace(is_connected=True))
+    monkeypatch.setattr(daemon, "count_stale_jobs", lambda: answered.append("stale jobs") or 0)
+    return answered
 
 
 def _offline_lines(out: str) -> bool:
@@ -67,6 +73,7 @@ def test_doctor_fails_the_detector_libraries_check_while_one_is_missing(monkeypa
     out = capsys.readouterr().out
     assert f"[FAIL] detector libraries: uneye: {_WHY}" in out
     assert _offline_lines(out)
+    assert offline == ["database", "stale jobs"]
 
 
 def test_doctor_passes_the_detector_libraries_check_when_all_are_present(monkeypatch, capsys, offline):
@@ -78,6 +85,7 @@ def test_doctor_passes_the_detector_libraries_check_when_all_are_present(monkeyp
     out = capsys.readouterr().out
     assert "[ok] detector libraries" in out
     assert _offline_lines(out)
+    assert offline == ["database", "stale jobs"]
 
 
 def test_doctor_reports_a_check_that_cannot_run_rather_than_raising(monkeypatch, capsys, offline):
@@ -93,3 +101,4 @@ def test_doctor_reports_a_check_that_cannot_run_rather_than_raising(monkeypatch,
     out = capsys.readouterr().out
     assert "[FAIL] detector libraries: the registry would not load" in out
     assert _offline_lines(out)
+    assert offline == ["database", "stale jobs"]
