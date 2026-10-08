@@ -19,8 +19,10 @@ import numpy as np
 
 from wl_preproc.eye.detect.main_sequence import (
     DEFAULT_MAIN_SEQUENCE_PARAMS,
+    Gain,
     MainSequenceParams,
     fit_session,
+    gain,
     selected,
 )
 from wl_preproc.schema import DEFAULT_PREFIX, detect, paramset, pipeline
@@ -118,10 +120,12 @@ class SaccadeMainSequence(dj.Computed):
         return detect.EyeDetection.proj() * fits
 
     def make(self, key: dict) -> None:
-        """One trace's fit, or its refusal. A trace whose detection was
-        refused gets a refused row quoting it."""
+        """One trace's fit, or its refusal, and with a fit each block's and
+        condition's gain. A trace whose detection was refused gets a refused
+        row quoting it."""
         from wl_preproc.eye.ohdpi import read_ohdpi
         from wl_preproc.schema import core, ingest
+        from wl_preproc.schema import eye as eye_schema
 
         params = MainSequenceParams(**(paramset.ParamSet & {
             "paramset_type": key["fit_paramset_type"], "paramset_idx": key["fit_paramset_idx"],
@@ -136,7 +140,8 @@ class SaccadeMainSequence(dj.Computed):
         session_key = {name: key[name] for name in pipeline.Session.primary_key}
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-        fs_hz = read_ohdpi(session_dir / "ohdpi" / segment["file_path"]).fs_hz
+        recording = read_ohdpi(session_dir / "ohdpi" / segment["file_path"])
+        fs_hz = recording.fs_hz
         runs = selected_runs((detect.EyeDetection.Run & detection_key & 'label in ("saccade", "microsaccade")')
                              .to_dicts(order_by="run_index"), fs_hz, params)
         fit = fit_session([run["amplitude_deg"] for run in runs], [run["peak_velocity_deg_s"] for run in runs],
@@ -151,6 +156,72 @@ class SaccadeMainSequence(dj.Computed):
             "v_max_se_deg_s": fit.v_max_se_deg_s, "saturation_se_deg": fit.saturation_se_deg,
             "r_squared": fit.r_squared, "reason": fit.reason,
         })
+        if curve is None:
+            return
+
+        # Each saccade is placed by where it starts, in session time.
+        times = eye_schema.row_session_times(segment, recording.frame_numbers - recording.frame_numbers[0])
+        start_s = times[[run["run_start"] for run in runs]]
+        amplitude = np.array([run["amplitude_deg"] for run in runs], dtype=float)
+        peak = np.array([run["peak_velocity_deg_s"] for run in runs], dtype=float)
+        blocks, conditions = _groups(session_key, session_dir, start_s)
+        self.Block.insert(
+            _gain_row({**key, "block_id": block_id}, gain(amplitude[inside], peak[inside], curve, params))
+            for block_id, inside in blocks)
+        self.Condition.insert(
+            _gain_row({**key, "block_id": block_id, "condition": condition},
+                      gain(amplitude[inside], peak[inside], curve, params))
+            for (block_id, condition), inside in conditions)
+
+
+def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
+    """Which of the saccades starting at `start_s` each block holds, and each
+    condition within a block (spec section 4.3): `[(block_id, mask)]` and
+    `[((block_id, condition), mask)]`.
+
+    A block holds what starts in `[block_start_time, block_stop_time)`; a
+    condition, what starts in a trial of that block (`BlockTrial`) run under
+    it. A trial's condition is resolved as the NWB export resolves it: the rig
+    record's name, else the stream's `CONDITION` number as text
+    (`nwb/conditions.py`). A trial with neither, or with a name longer than
+    the column, has none. Every condition a block's trials ran under gets a
+    group, so one whose trials hold no saccade is refused rather than absent."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.events.runs import stored_doubles
+    from wl_preproc.nwb.conditions import join, stream_codes, trial_columns
+
+    blocks = [
+        (row["block_id"], (start_s >= row["block_start_time"]) & (start_s < row["block_stop_time"]))
+        for row in sorted(stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time"),
+                          key=lambda row: row["block_id"])
+    ]
+    block_of = {row["trial_id"]: row["block_id"] for row in (pipeline.trial.BlockTrial & session_key).to_dicts()}
+    trials = [
+        {"trial_id": row["trial_id"], "start_s": row["trial_start_time"], "stop_s": row["trial_stop_time"]}
+        for row in sorted(stored_doubles(pipeline.trial.Trial & session_key, "trial_start_time", "trial_stop_time"),
+                          key=lambda row: row["trial_start_time"])
+    ]
+    events = [
+        {"time_s": row["event_start_time"], "event_type": "CONDITION", "condition": row["attribute_value"]}
+        for row in stored_doubles(pipeline.event.Event.Attribute & session_key
+                                  & {"event_type": "CONDITION", "attribute_name": "condition"}, "event_start_time")
+    ]
+    matched, _notes = join(trials, read_rig_trials(session_dir, session_key["subject"]))
+    names, _settings = trial_columns(trials, matched, stream_codes(trials, events))
+    conditions: dict = {}
+    for trial, name in zip(trials, names, strict=True):
+        if not name or len(name) > _VARCHAR_LEN or trial["trial_id"] not in block_of:
+            continue
+        group = (block_of[trial["trial_id"]], name)
+        inside = (start_s >= trial["start_s"]) & (start_s < trial["stop_s"])
+        conditions[group] = conditions.get(group, np.zeros(len(start_s), dtype=bool)) | inside
+    return blocks, sorted(conditions.items())
+
+
+def _gain_row(key: dict, result: Gain) -> dict:
+    return {**key, "gain_status": "refused" if result.gain is None else "computed",
+            "n_saccades": result.n_saccades, "amplitude_min_deg": result.amplitude_min_deg,
+            "amplitude_max_deg": result.amplitude_max_deg, "gain": result.gain, "reason": result.reason}
 
 
 def selected_runs(runs: list[dict], fs_hz: float, params: MainSequenceParams) -> list[dict]:

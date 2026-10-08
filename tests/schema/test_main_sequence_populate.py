@@ -23,6 +23,7 @@ saccades still count toward the block.
 
 from __future__ import annotations
 
+import datetime
 import math
 
 import numpy as np
@@ -303,6 +304,165 @@ def test_too_few_saccades_are_refused_with_their_count(refused_session):
         assert row["fit_status"] == "refused"
         assert row["fs_hz"] is not None
         assert row["reason"] == f"{len(runs)} saccades; a session fit needs at least 100"
+
+
+def _computed_masters(session_key) -> list[dict]:
+    from wl_preproc.schema import main_sequence
+
+    return (main_sequence.SaccadeMainSequence & session_key & _default_fit() & 'fit_status = "computed"').to_dicts()
+
+
+def _master_key(row: dict) -> dict:
+    from wl_preproc.schema import main_sequence
+
+    return {name: row[name] for name in main_sequence.SaccadeMainSequence.primary_key}
+
+
+def _selected_with_starts(session_key, master: dict):
+    """The saccades a master's fit took, their session start times, sizes and
+    peak speeds."""
+    from wl_preproc.eye.ohdpi import read_ohdpi
+    from wl_preproc.schema import core, ingest, main_sequence
+    from wl_preproc.schema import eye as eye_schema
+
+    segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
+    session_dir = (ingest.Ingestion & session_key).fetch1("session_dir")
+    recording = read_ohdpi(f"{session_dir}/ohdpi/{segment['file_path']}")
+    times = eye_schema.row_session_times(segment, recording.frame_numbers - recording.frame_numbers[0])
+    runs = main_sequence.selected_runs(_stored_runs(master), master["fs_hz"], DEFAULT_MAIN_SEQUENCE_PARAMS)
+    return (times[[run["run_start"] for run in runs]], np.array([run["amplitude_deg"] for run in runs]),
+            np.array([run["peak_velocity_deg_s"] for run in runs]))
+
+
+def _planted_groups(start_s: np.ndarray):
+    """Each block's and each block's conditions' saccades, placed from where
+    the recipe put its blocks and trials (back to back from session time 0,
+    `synth/timeline.py::build_timeline`) and named from the generator's rig
+    record -- not read back from the database. The faulted trial has no
+    condition."""
+    bounds = [0, _CAL_TRIALS, _CAL_TRIALS + _BLOCK_TRIALS, _CAL_TRIALS + 2 * _BLOCK_TRIALS]
+    blocks, conditions = {}, {}
+    for block_id in (1, 2, 3):
+        first, last = bounds[block_id - 1], bounds[block_id]
+        blocks[block_id] = (start_s >= first * TRIAL_DURATION_S) & (start_s < last * TRIAL_DURATION_S)
+        for index in range(first, last):
+            if index + 1 == _FAULTED_TRIAL:
+                continue
+            inside = (start_s >= index * TRIAL_DURATION_S) & (start_s < (index + 1) * TRIAL_DURATION_S)
+            group = (block_id, _condition(_TRIAL_NUMBERS[index]))
+            conditions[group] = conditions.get(group, np.zeros(len(start_s), dtype=bool)) | inside
+    return blocks, conditions
+
+
+def test_every_block_gets_a_row_and_one_without_saccades_is_refused(planted_session):
+    """Block 1 holds the calibration trials and no planted saccade."""
+    from wl_preproc.schema import main_sequence
+
+    session_key, _saccades = planted_session
+    masters = _computed_masters(session_key)
+    assert len(masters) >= 2
+    for master in masters:
+        rows = {row["block_id"]: row for row in (main_sequence.SaccadeMainSequence.Block & _master_key(master)).to_dicts()}
+        assert sorted(rows) == [1, 2, 3]
+        assert {name: rows[1][name] for name in ("gain_status", "n_saccades", "amplitude_min_deg", "gain", "reason")} == {
+            "gain_status": "refused", "n_saccades": 0, "amplitude_min_deg": None, "gain": None,
+            "reason": "0 saccades; a gain needs at least 30"}
+
+
+def test_each_gain_is_taken_over_the_saccades_its_block_or_condition_holds(planted_session):
+    from wl_preproc.eye.detect.main_sequence import gain
+    from wl_preproc.schema import main_sequence
+
+    session_key, _saccades = planted_session
+    for master in _computed_masters(session_key):
+        start_s, amplitude, peak = _selected_with_starts(session_key, master)
+        curve = Curve(master["v_max_deg_s"], master["saturation_deg"])
+        blocks, conditions = _planted_groups(start_s)
+        stored_blocks = {row["block_id"]: row
+                         for row in (main_sequence.SaccadeMainSequence.Block & _master_key(master)).to_dicts()}
+        stored_conditions = {(row["block_id"], row["condition"]): row
+                             for row in (main_sequence.SaccadeMainSequence.Condition & _master_key(master)).to_dicts()}
+        assert set(stored_conditions) == set(conditions)
+        for stored, planted in ((stored_blocks, blocks), (stored_conditions, conditions)):
+            for group, inside in planted.items():
+                expected = gain(amplitude[inside], peak[inside], curve, DEFAULT_MAIN_SEQUENCE_PARAMS)
+                row = stored[group]
+                assert (row["n_saccades"], row["reason"]) == (expected.n_saccades, expected.reason), group
+                assert row["gain"] == pytest.approx(expected.gain), group
+
+
+def test_a_faster_condition_shows_in_its_gain(planted_session):
+    """Block 2's `contrast-50` saccades were planted 10% faster than its
+    `contrast-10` ones: measured, 1.095 times. Block 3's four conditions hold
+    about 20 saccades each, too few for a gain."""
+    from wl_preproc.schema import main_sequence
+
+    session_key, _saccades = planted_session
+    names = _detector_names()
+    for master in _computed_masters(session_key):
+        if names[master["paramset_idx"]] != "engbert_kliegl" or master["trace"] == "conjunction":
+            continue
+        rows = (main_sequence.SaccadeMainSequence.Condition & _master_key(master)).to_dicts()
+        second = {row["condition"]: row["gain"] for row in rows if row["block_id"] == 2}
+        assert sorted(second) == ["contrast-10", "contrast-50"]
+        assert second["contrast-50"] / second["contrast-10"] == pytest.approx(FASTER, abs=0.03)
+        third = [row for row in rows if row["block_id"] == 3]
+        assert len(third) == 4
+        assert all(row["gain_status"] == "refused" and row["n_saccades"] < 30 for row in third)
+
+
+def test_a_refused_session_fit_has_no_block_or_condition_rows(refused_session):
+    from wl_preproc.schema import main_sequence
+
+    assert len(main_sequence.SaccadeMainSequence & refused_session & 'fit_status = "refused"') == 21
+    assert len(main_sequence.SaccadeMainSequence.Block & refused_session) == 0
+    assert len(main_sequence.SaccadeMainSequence.Condition & refused_session) == 0
+
+
+def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(daemon_module, tmp_path):
+    """`_groups` on planted rows, an hour into a session (Review Focus 2, 3
+    and 5). `block_start_time` and `trial_start_time` are MySQL `FLOAT`s,
+    which read back to six significant digits: 3700.0012 as 3700.00, which
+    would put a saccade at 3700.0011 in block 2. Trial 1 is named by the rig
+    record; trial 2 by the stream's `CONDITION` number alone; trial 3's name
+    is longer than the column, so it has no condition."""
+    import json
+
+    from wl_preproc.schema import main_sequence, pipeline
+
+    session = new_animal().session()
+    key = session.key
+    pipeline.lab.Lab.insert1({"lab": "wl", "lab_name": "Westerberg", "address": "y", "time_zone": "UTC"},
+                             skip_duplicates=True)
+    pipeline.subject.Subject.insert1({"subject": session.subject, "sex": "M", "subject_description": "",
+                                      "subject_birth_date": datetime.date(2020, 1, 1)})
+    pipeline.Session.insert1(key)
+    pipeline.event.BehaviorRecording.insert1(key)
+    pipeline.trial.Block.insert([{**key, "block_id": 1, "block_start_time": 3600.0, "block_stop_time": 3700.0012},
+                                 {**key, "block_id": 2, "block_start_time": 3700.0012, "block_stop_time": 3800.0}],
+                                allow_direct_insert=True)
+    pipeline.trial.Trial.insert([{**key, "trial_id": 1, "trial_start_time": 3600.0, "trial_stop_time": 3650.0},
+                                 {**key, "trial_id": 2, "trial_start_time": 3650.0, "trial_stop_time": 3700.0012},
+                                 {**key, "trial_id": 3, "trial_start_time": 3700.0012, "trial_stop_time": 3800.0}],
+                                allow_direct_insert=True)
+    pipeline.trial.BlockTrial.insert([{**key, "block_id": 1, "trial_id": 1}, {**key, "block_id": 1, "trial_id": 2},
+                                      {**key, "block_id": 2, "trial_id": 3}], allow_direct_insert=True)
+    pipeline.event.EventType.insert1({"event_type": "CONDITION", "event_type_description": ""}, skip_duplicates=True)
+    event = {**key, "event_type": "CONDITION", "event_start_time": 3660.0}
+    pipeline.event.Event.insert1(event, allow_direct_insert=True)
+    pipeline.event.Event.Attribute.insert1({**event, "attribute_name": "condition", "attribute_value": "7"})
+    (tmp_path / "xcon").mkdir()
+    (tmp_path / "xcon" / "trials.jsonl").write_text("\n".join(json.dumps(
+        {"index": number - 1, "trial_number": number, "subject": session.subject, "outcome": "correct",
+         "block": "block", "condition": condition, "params": {}})
+        for number, condition in ((1, "rig-name"), (3, "x" * 256))) + "\n", encoding="utf-8")
+
+    start_s = np.array([3610.0, 3655.0, 3700.0011, 3700.0013, 3750.0])
+    blocks, conditions = main_sequence._groups(key, tmp_path, start_s)
+    assert [(block_id, inside.tolist()) for block_id, inside in blocks] == [
+        (1, [True, True, True, False, False]), (2, [False, False, False, True, True])]
+    assert [(group, inside.tolist()) for group, inside in conditions] == [
+        ((1, "7"), [False, True, True, False, False]), ((1, "rig-name"), [True, False, False, False, False])]
 
 
 _MAIN_SEQUENCE_PROBE = """
