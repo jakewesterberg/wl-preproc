@@ -451,16 +451,15 @@ def test_a_refused_session_fit_has_no_block_or_condition_rows(refused_session):
     assert len(main_sequence.SaccadeMainSequence.Condition & refused_session) == 0
 
 
-def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(daemon_module, tmp_path):
-    """`_groups` on planted rows, an hour into a session (Review Focus 2, 3
-    and 5). `block_start_time` and `trial_start_time` are MySQL `FLOAT`s,
-    which read back to six significant digits: 3700.0012 as 3700.00, which
-    would put a saccade at 3700.0011 in block 2. Trial 1 is named by the rig
-    record; trial 2 by the stream's `CONDITION` number alone; trial 3's name
-    is longer than the column, so it has no condition."""
+def _planted_events(tmp_path, *, blocks, trials, block_trials, rig, codes=()) -> dict:
+    """A bare session holding only what `_groups` reads: `blocks` as
+    `(block_id, start_s, stop_s)`, `trials` as `(trial_id, start_s, stop_s)`,
+    `block_trials` as `(block_id, trial_id)`, the rig record's names as
+    `(trial_number, condition)`, and stream `CONDITION` numbers as
+    `(time_s, code)`. Returns the session's key."""
     import json
 
-    from wl_preproc.schema import main_sequence, pipeline
+    from wl_preproc.schema import pipeline
 
     session = new_animal().session()
     key = session.key
@@ -470,24 +469,38 @@ def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(d
                                       "subject_birth_date": datetime.date(2020, 1, 1)})
     pipeline.Session.insert1(key)
     pipeline.event.BehaviorRecording.insert1(key)
-    pipeline.trial.Block.insert([{**key, "block_id": 1, "block_start_time": 3600.0, "block_stop_time": 3700.0012},
-                                 {**key, "block_id": 2, "block_start_time": 3700.0012, "block_stop_time": 3800.0}],
-                                allow_direct_insert=True)
-    pipeline.trial.Trial.insert([{**key, "trial_id": 1, "trial_start_time": 3600.0, "trial_stop_time": 3650.0},
-                                 {**key, "trial_id": 2, "trial_start_time": 3650.0, "trial_stop_time": 3700.0012},
-                                 {**key, "trial_id": 3, "trial_start_time": 3700.0012, "trial_stop_time": 3800.0}],
-                                allow_direct_insert=True)
-    pipeline.trial.BlockTrial.insert([{**key, "block_id": 1, "trial_id": 1}, {**key, "block_id": 1, "trial_id": 2},
-                                      {**key, "block_id": 2, "trial_id": 3}], allow_direct_insert=True)
+    pipeline.trial.Block.insert([{**key, "block_id": block_id, "block_start_time": start, "block_stop_time": stop}
+                                 for block_id, start, stop in blocks], allow_direct_insert=True)
+    pipeline.trial.Trial.insert([{**key, "trial_id": trial_id, "trial_start_time": start, "trial_stop_time": stop}
+                                 for trial_id, start, stop in trials], allow_direct_insert=True)
+    pipeline.trial.BlockTrial.insert([{**key, "block_id": block_id, "trial_id": trial_id}
+                                      for block_id, trial_id in block_trials], allow_direct_insert=True)
     pipeline.event.EventType.insert1({"event_type": "CONDITION", "event_type_description": ""}, skip_duplicates=True)
-    event = {**key, "event_type": "CONDITION", "event_start_time": 3660.0}
-    pipeline.event.Event.insert1(event, allow_direct_insert=True)
-    pipeline.event.Event.Attribute.insert1({**event, "attribute_name": "condition", "attribute_value": "7"})
+    for time_s, code in codes:
+        event = {**key, "event_type": "CONDITION", "event_start_time": time_s}
+        pipeline.event.Event.insert1(event, allow_direct_insert=True)
+        pipeline.event.Event.Attribute.insert1({**event, "attribute_name": "condition", "attribute_value": code})
     (tmp_path / "xcon").mkdir()
-    (tmp_path / "xcon" / "trials.jsonl").write_text("\n".join(json.dumps(
+    (tmp_path / "xcon" / "trials.jsonl").write_text("".join(json.dumps(
         {"index": number - 1, "trial_number": number, "subject": session.subject, "outcome": "correct",
-         "block": "block", "condition": condition, "params": {}})
-        for number, condition in ((1, "rig-name"), (3, "x" * 256))) + "\n", encoding="utf-8")
+         "block": "block", "condition": condition, "params": {}}) + "\n" for number, condition in rig),
+        encoding="utf-8")
+    return key
+
+
+def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(daemon_module, tmp_path):
+    """`_groups` on planted rows, an hour into a session (Review Focus 2, 3
+    and 5). `block_start_time` and `trial_start_time` are MySQL `FLOAT`s,
+    which read back to six significant digits: 3700.0012 as 3700.00, which
+    would put a saccade at 3700.0011 in block 2. Trial 1 is named by the rig
+    record; trial 2 by the stream's `CONDITION` number alone; trial 3's name
+    is longer than the column, so it has no condition."""
+    from wl_preproc.schema import main_sequence
+
+    key = _planted_events(
+        tmp_path, blocks=((1, 3600.0, 3700.0012), (2, 3700.0012, 3800.0)),
+        trials=((1, 3600.0, 3650.0), (2, 3650.0, 3700.0012), (3, 3700.0012, 3800.0)),
+        block_trials=((1, 1), (1, 2), (2, 3)), rig=((1, "rig-name"), (3, "x" * 256)), codes=((3660.0, "7"),))
 
     start_s = np.array([3610.0, 3655.0, 3700.0011, 3700.0013, 3750.0])
     blocks, conditions = main_sequence._groups(key, tmp_path, start_s)
@@ -495,6 +508,31 @@ def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(d
         (1, [True, True, True, False, False]), (2, [False, False, False, True, True])]
     assert [(group, inside.tolist()) for group, inside in conditions] == [
         ((1, "7"), [False, True, True, False, False]), ((1, "rig-name"), [True, False, False, False, False])]
+
+
+def test_a_condition_holds_only_saccades_inside_its_block(daemon_module, tmp_path):
+    """Three paths a real session takes (the main-sequence review's minors;
+    amendment 5):
+    - a saccade between two trials of a block (3650) counts toward the block
+      only, not toward the trial before it;
+    - trial 2 runs past its block's end, as a trial does whose `TRIAL_END`
+      comes after its `BLOCK_END` (`schema/events.py::_trial_stop_time`): a
+      saccade in that tail (3705) is block 2's, with no condition;
+    - trial 3 has no `BlockTrial` row, so its saccades (3750) have no
+      condition, and nor does one between it and trial 2 (3715)."""
+    from wl_preproc.schema import main_sequence
+
+    key = _planted_events(
+        tmp_path, blocks=((1, 3600.0, 3700.0), (2, 3700.0, 3800.0)),
+        trials=((1, 3600.0, 3640.0), (2, 3660.0, 3710.0), (3, 3720.0, 3800.0)),
+        block_trials=((1, 1), (1, 2)), rig=((1, "a"), (2, "b"), (3, "other")))
+
+    start_s = np.array([3620.0, 3650.0, 3680.0, 3705.0, 3715.0, 3750.0])
+    blocks, conditions = main_sequence._groups(key, tmp_path, start_s)
+    assert [(block_id, inside.tolist()) for block_id, inside in blocks] == [
+        (1, [True, True, True, False, False, False]), (2, [False, False, False, True, True, True])]
+    assert [(group, inside.tolist()) for group, inside in conditions] == [
+        ((1, "a"), [True, False, False, False, False, False]), ((1, "b"), [False, False, True, False, False, False])]
 
 
 _MAIN_SEQUENCE_PROBE = """

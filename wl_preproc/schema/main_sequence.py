@@ -191,8 +191,12 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
 
     A block holds what starts in `[block_start_time, block_stop_time)`; a
     condition, what starts in a trial of that block (`BlockTrial`) run under
-    it. A trial's condition is resolved as the NWB export resolves it: the rig
-    record's name, else the stream's `CONDITION` number as text
+    it, and inside the block itself (spec amendment 5). A trial whose
+    `TRIAL_END` comes after its `BLOCK_END` (`schema/events.py::
+    _trial_stop_time`) therefore counts the saccades in its tail toward the
+    block they fall in, if any, with no condition. A trial's condition is
+    resolved as the NWB export resolves it: the rig record's name, else the
+    stream's `CONDITION` number as text
     (`nwb/conditions.py`). A trial with neither, or with a name longer than
     the column, has none. Every condition a block's trials ran under gets a
     group, so one whose trials hold no saccade is refused rather than absent."""
@@ -218,12 +222,13 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
     ]
     matched, _notes = join(trials, read_rig_trials(session_dir, session_key["subject"]))
     names, _settings = trial_columns(trials, matched, stream_codes(trials, events))
+    in_block = dict(blocks)
     conditions: dict = {}
     for trial, name in zip(trials, names, strict=True):
         if not name or len(name) > _VARCHAR_LEN or trial["trial_id"] not in block_of:
             continue
         group = (block_of[trial["trial_id"]], name)
-        inside = (start_s >= trial["start_s"]) & (start_s < trial["stop_s"])
+        inside = (start_s >= trial["start_s"]) & (start_s < trial["stop_s"]) & in_block[group[0]]
         conditions[group] = conditions.get(group, np.zeros(len(start_s), dtype=bool)) | inside
     return blocks, sorted(conditions.items())
 
