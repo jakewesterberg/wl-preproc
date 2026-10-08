@@ -2,7 +2,7 @@
 
 **Branch:** `spec/main-sequence`, forked from `main` at `a699dd6`.
 - **Design:** `docs/superpowers/specs/2026-10-07-main-sequence-design.md`, an addendum to the
-  saccade-detection spec's §6.5 and §9, with amendments 1–3.
+  saccade-detection spec's §6.5 and §9, with amendments 1–4.
 - **Plan:** `docs/superpowers/plans/2026-10-07-main-sequence.md`.
 - **The requester's choices,** on 2026-10-07:
   - this work next, from what was open;
@@ -51,33 +51,65 @@
 
 - `tests/eye/detect/test_main_sequence.py` (18): the defaults, the selection rule, the fit's
   recovery and each refusal, gains and vigor.
-- `tests/schema/test_main_sequence_populate.py` (12), on a synthetic session of 161 saccades on a
-  planted main sequence, with 60 frames dropped and a trial faulted:
+- `tests/schema/test_main_sequence_populate.py` (13), on a synthetic session of 161 saccades on a
+  planted main sequence, with 60 frames dropped, a trial faulted, and two condition names that
+  differ only in case:
   - a row for every trace, each stored fit equal to the fit of its own selected runs, the planted
     curve recovered, and the fit paramset in the key;
   - a refused detection's row, and too few saccades refused with their count;
   - every block's and condition's gain, against where the recipe put them, and the faster
     condition;
   - placement an hour into a session, by record name and by stream number;
+  - `Contrast-10` and `contrast-10` in one block as two conditions (amendment 4);
   - a real `wlpp daemon` pass writing rows with nothing registered beforehand.
 - `tests/cli/test_vigor_report.py` (6): a figure, too little history, too few saccades, a refused
   detection, a missing row, and the both-eyes trace left out.
 
 ## 4. The full suite
 
-Run once, on both interpreters, with every task applied and every reference variable set except
-`WLPP_OHDPI_REFERENCE`:
-- **3.11:** 2270 passed, 26 skipped, 1 deselected, 1 xfailed.
-- **3.13:** 2270 passed, 27 skipped, 1 xfailed.
+Run on both interpreters, with every reference variable set except `WLPP_OHDPI_REFERENCE`.
+- **With every task applied:** 2270 passed on each; 3.11 26 skipped, 1 deselected, 1 xfailed;
+  3.13 27 skipped, 1 xfailed.
+- **After the review's fix** (§6):
+  - **3.11:** 2271 passed, 26 skipped, 1 deselected, 1 xfailed.
+  - **3.13:** 2271 passed, 27 skipped, 1 xfailed.
 
-That is 36 more passed on each than `main`'s 2234 at `22dbb70`: this branch's new tests.
+That is 37 more passed on each than `main`'s 2234 at `22dbb70`: this branch's new tests.
 
 ## 5. What is next
 
-- **The whole-branch review, then the merge question.** After the merge: CI on both
-  interpreters, and the pointer commit (the checkpoint's header and `wl.yaml`'s `describes`).
+- **The merge question.** After the merge: CI on both interpreters, and the pointer commit (the
+  checkpoint's header and `wl.yaml`'s `describes`).
 - **Not in this round** (spec §8): the fits in the NWB file, the stream's `CONDITION` number end
   to end (wl-xcon's XC-197), other fit forms, and a rolling history.
 - **The numbers mean degrees only once sessions are calibrated.** The reference recording's
   degrees are a guessed scale. The defaults rest on its sizes and should be checked against the
   lab's first calibrated sessions.
+
+## 6. The whole-branch review (2026-10-08)
+
+One fresh reviewer on the whole branch: "with fixes". No Critical findings, one Important, four
+Minor.
+- **Fixed: condition names that differ only in case or accent** (amendment 4). `.Condition` was
+  keyed by the name, and MySQL's default collation ignores case and accents. Two rig names such as
+  `contrast-50` and `Contrast-50` in one block made the insert fail, which rolled back the
+  session's whole fit and errored its key for good: every detector, every trace. It is now keyed
+  by the condition's place in its block, the name a column beside it.
+  `test_condition_names_differing_only_in_case_are_two_conditions` failed first, on the duplicate
+  key, then passed.
+- **The five Review Focus inputs** were each checked and hold.
+- **Deferred minors:**
+  - A condition's saccades are not always a subset of its block's: a trial whose `TRIAL_END` comes
+    after its `BLOCK_END` counts its late saccades toward its condition and not its block (§4.3
+    read literally).
+  - The saccade spec's §6.5.2 pointer names "a non-converging fit" but not amendment 1's
+    relative-error check.
+  - `cli/report.py` has three blank lines before `_vigor_lines` and one after it.
+  - Untested paths: a saccade between trials, a trial with no `BlockTrial`, a report line with
+    several detectors, and vigor for a session whose own fit was refused.
+- **Set aside by the reviewer, and ruled to stand,** among sixteen:
+  - An errored key reads "not computed yet" in the report, as the daemon's every stage does.
+  - A fit paramset registered later computes nothing for a reclaimed session until it is
+    rehydrated, since `make()` reads the raw recording and rig record.
+  - Other test modules plant computed `EyeDetection` rows with no recording, so this stage may log
+    an error on them once per test run; the suite is green in its order on both interpreters.
