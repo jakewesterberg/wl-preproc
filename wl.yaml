@@ -33,16 +33,16 @@ status:
     rig: record a few minutes with the sync box live, since the barcode and
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
-    units come before everything below. Hardware-free: the requester's choice
-    of 2026-10-07, the saccade main sequence and vigor, is merged (ff8aeb9);
-    ask what comes next. Open and small: M4, the U'n'Eye minors branch's three
-    deferred minors (docs/handoffs/2026-10-06-uneye.md section 7), and the main
-    sequence's four (docs/handoffs/2026-10-07-main-sequence.md section 6). The U'n'Eye review's four
-    minors are fixed (22dbb70). Fine-tuning U'n'Eye waits for hand-labelled
-    lab data.
-    Done: the saccade main sequence and vigor (ff8aeb9): each detection
-    trace's fit, block and condition gains, and the report's vigor line.
-    Before it, U'n'Eye, the seventh detector (5b41770), on the CPU, with the
+    units come before everything below. Hardware-free: the requester's
+    choices of 2026-10-07 and 2026-10-08 are merged; ask what comes next. Open
+    and small: M4, and the main sequence's four deferred minors
+    (docs/handoffs/2026-10-07-main-sequence.md section 6). Fine-tuning U'n'Eye
+    waits for hand-labelled lab data.
+    Done: the U'n'Eye minors branch's three deferred minors (7dcf37f): numba
+    kept off OpenMP for the whole process, and doctor tests that open no
+    database. Before it, the saccade main sequence and vigor (ff8aeb9): each
+    detection trace's fit, block and condition gains, and the report's vigor
+    line. Before that, U'n'Eye, the seventh detector (5b41770), on the CPU, with the
     500 Hz network and a 20 ms merge gap. Before that: piece 4's seven
     deferred minors (a32394d; M4 is left open by the
     requester's choice); the session listing's minors M6 and M9 with the NWB
@@ -93,6 +93,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `ff8aeb9` until the U'n'Eye-deferred-minors merge `7dcf37f` on
+  # 2026-10-08 (CI green on `ff8aeb9`, run 37747737452); true when written.
   # Was `22dbb70` until the main-sequence merge `ff8aeb9` on 2026-10-08 (CI
   # green on `22dbb70`, run 37609431704); true when written.
   # Was `5b41770` until the U'n'Eye-minors merge `22dbb70` on 2026-10-07 (CI
@@ -132,7 +134,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "ff8aeb9"
+  describes: "7dcf37f"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
