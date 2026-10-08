@@ -84,12 +84,18 @@ class SaccadeMainSequence(dj.Computed):
     class Condition(dj.Part):
         definition = """
         # One condition's gain within one block, as `.Block`'s.
-        # Key: the master's, block_id, and condition.
+        # Key: the master's, block_id, and condition_index.
         -> master
         -> pipeline.trial.Block
+        # The condition's place among its block's, by name, from 1. Not the
+        # name itself: MySQL's default collation compares strings ignoring
+        # case and accents, so `contrast-50` and `Contrast-50` would be one
+        # key and their insert would roll back the whole fit (spec
+        # amendment 4).
+        condition_index : int unsigned
+        ---
         # The rig record's name, else the stream's CONDITION number as text.
         condition : varchar(255)
-        ---
         gain_status            : enum('computed','refused')
         n_saccades             : int unsigned
         amplitude_min_deg=null : double
@@ -168,10 +174,14 @@ class SaccadeMainSequence(dj.Computed):
         self.Block.insert(
             _gain_row({**key, "block_id": block_id}, gain(amplitude[inside], peak[inside], curve, params))
             for block_id, inside in blocks)
-        self.Condition.insert(
-            _gain_row({**key, "block_id": block_id, "condition": condition},
-                      gain(amplitude[inside], peak[inside], curve, params))
-            for (block_id, condition), inside in conditions)
+        places: dict[int, int] = {}
+        condition_rows = []
+        for (block_id, condition), inside in conditions:
+            places[block_id] = places.get(block_id, 0) + 1
+            condition_rows.append(_gain_row(
+                {**key, "block_id": block_id, "condition_index": places[block_id], "condition": condition},
+                gain(amplitude[inside], peak[inside], curve, params)))
+        self.Condition.insert(condition_rows)
 
 
 def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):

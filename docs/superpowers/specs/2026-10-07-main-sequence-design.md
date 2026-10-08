@@ -158,7 +158,8 @@ computed.
 
 One row for every condition that ran in a block, when the session's own fit was computed.
 
-- **Key:** the master's, `block_id`, and `condition : varchar(255)`.
+- **Key:** the master's, `block_id`, and `condition : varchar(255)`. *Superseded by amendment
+  4: keyed by `condition_index`, with the name a column beside it.*
 - **Columns:** the same as `.Block`'s.
 - **A refused session fit has no `.Block` or `.Condition` rows.** The master's reason says why,
   and there is no curve to take a gain against.
@@ -369,3 +370,13 @@ Each carries a dated pointer in the parent:
    generator's scale. Nyström–Holmqvist's adaptive threshold settles near 200 °/s on the planted
    session's slow saccades and keeps only those over 7°, so its fits there are refused for too
    few saccades. That is the detector's behaviour, not this table's.
+
+## Amendment, 2026-10-08, made in the whole-branch review
+
+4. **`.Condition` is keyed by the condition's place in its block, not by its name** (§3.3). MySQL's
+   default collation, `utf8mb4_0900_ai_ci`, compares strings ignoring case and accents. So two rig
+   names such as `contrast-50` and `Contrast-50` in one block were one key: the insert raised a
+   duplicate-key error, which rolled back the session's whole fit and left its key in error for
+   good. The key is now `condition_index`, the condition's place among its block's conditions
+   sorted by name, from 1. `condition` is a column beside it; a restriction on it by name still
+   compares under the collation.

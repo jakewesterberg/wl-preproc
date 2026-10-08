@@ -14,16 +14,20 @@ generator's rig record (`synth/peripherals.py::rig_condition`): block 2
 alternates `contrast-10` and `contrast-50`, about 40 saccades each; block 3
 cycles all four, about 20 each.
 
-**Two things a real session can do, planted.** Sixty frames (120 ms) are
+**Three things a real session can do, planted.** Sixty frames (120 ms) are
 dropped from the recording in a hold in block 2, so a saccade's session time
-must come from its frame number, not its row. And block 3's sixth trial
-faults: no outcome and no line in the rig record, so no condition, though its
-saccades still count toward the block.
+must come from its frame number, not its row. Block 3's sixth trial faults:
+no outcome and no line in the rig record, so no condition, though its
+saccades still count toward the block. And block 1's `contrast-100` trial is
+renamed `Contrast-10` in the rig record, beside its `contrast-10` trial: a
+name differing only in case, which MySQL's default collation compares equal
+(spec amendment 4).
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import math
 
 import numpy as np
@@ -44,6 +48,9 @@ _TRIAL_NUMBERS = (1, 2, 3, 4, 8, 10, 12, 14, 16, 18, 20, 22, *range(23, 31))
 #: Block 3's sixth trial, counted from 1 across the session.
 _FAULTED_TRIAL = 18
 _DROPPED_FRAMES = 60
+#: Renamed in the rig record: block 1's `contrast-100` trial, by number.
+_RENAMED_TRIAL = 3
+_RENAMED_CONDITION = "Contrast-10"
 # The most the fitted curve may stray from the planted one over 2-8 deg. The
 # detectors clip each raised cosine's slow tails, so amplitudes come out a
 # little short, and the session's own calibration is 4% under `CAL_SCALE`.
@@ -55,6 +62,11 @@ def _condition(trial_number: int) -> str:
     from wl_preproc.synth.peripherals import rig_condition
 
     return rig_condition(trial_number)[0]
+
+
+def _rig_name(trial_number: int) -> str:
+    """The condition the planted session's rig record names a trial."""
+    return _RENAMED_CONDITION if trial_number == _RENAMED_TRIAL else _condition(trial_number)
 
 
 def _planted_saccades(start_s: float, end_s: float, seed: int) -> list[tuple[float, float, float, float]]:
@@ -130,6 +142,12 @@ def _build_planted_session(tmp_path_factory, session, seed: int):
     root = tmp_path_factory.mktemp(f"mainseq{seed}")
     truth = generate_session(root, recipe)
     session_dir = root / recipe.session_id
+    record = session_dir / "xcon" / "trials.jsonl"
+    lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for line in lines:
+        if line["trial_number"] == _RENAMED_TRIAL:
+            line["condition"] = _RENAMED_CONDITION
+    record.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in lines), encoding="utf-8")
     session_key = _land(root, recipe, session.session_datetime, acquisition_systems=("syncbox", "ohdpi"))
     timebase.SystemTimebase.populate()
     core.Segment.populate()
@@ -349,7 +367,7 @@ def _planted_groups(start_s: np.ndarray):
             if index + 1 == _FAULTED_TRIAL:
                 continue
             inside = (start_s >= index * TRIAL_DURATION_S) & (start_s < (index + 1) * TRIAL_DURATION_S)
-            group = (block_id, _condition(_TRIAL_NUMBERS[index]))
+            group = (block_id, _rig_name(_TRIAL_NUMBERS[index]))
             conditions[group] = conditions.get(group, np.zeros(len(start_s), dtype=bool)) | inside
     return blocks, conditions
 
@@ -409,6 +427,20 @@ def test_a_faster_condition_shows_in_its_gain(planted_session):
         third = [row for row in rows if row["block_id"] == 3]
         assert len(third) == 4
         assert all(row["gain_status"] == "refused" and row["n_saccades"] < 30 for row in third)
+
+
+def test_condition_names_differing_only_in_case_are_two_conditions(planted_session):
+    """`Contrast-10` and `contrast-10` in block 1: two rows, not a duplicate
+    key that rolls back the whole fit (the review's finding; amendment 4)."""
+    from wl_preproc.schema import main_sequence
+
+    session_key, _saccades = planted_session
+    masters = _computed_masters(session_key)
+    assert len(masters) >= 2
+    for master in masters:
+        rows = (main_sequence.SaccadeMainSequence.Condition & _master_key(master) & {"block_id": 1}).to_dicts()
+        assert {"Contrast-10", "contrast-10"} <= {row["condition"] for row in rows}
+        assert sorted(row["condition_index"] for row in rows) == list(range(1, len(rows) + 1))
 
 
 def test_a_refused_session_fit_has_no_block_or_condition_rows(refused_session):
