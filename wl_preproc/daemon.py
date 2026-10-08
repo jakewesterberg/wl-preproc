@@ -45,6 +45,7 @@ from wl_preproc.schema import (
     events,
     eye,
     ingest,
+    main_sequence,
     nwb,
     paramset,
     # Imported, but deliberately NOT one of `_PROJECT_SCHEMA_MODULES` below --
@@ -202,6 +203,10 @@ def _computed_tables() -> list:
         # populated is never revisited, so the lag would be permanent per
         # session rather than self-correcting within a pass.
         consensus.DetectorAgreement,
+        # BELOW `detect.EyeDetection` for `DetectorAgreement`'s reason: its
+        # `key_source` is that table's rows, so above it a session's first
+        # pass would name no key and its fits would wait a whole pass.
+        main_sequence.SaccadeMainSequence,
         # Last: it counts segments and rejections, so it must run after
         # whatever produces them or it records a session as cleaner than it is.
         timebase.TimingProvenance,
@@ -321,6 +326,7 @@ _PROJECT_SCHEMA_MODULES: tuple[tuple[str, object], ...] = (
     ("events", events),
     ("eye", eye),
     ("ingest", ingest),
+    ("main_sequence", main_sequence),
     ("nwb", nwb),
     ("paramset", paramset),
     ("request", request),
@@ -368,14 +374,15 @@ def activate_all(prefix: str = DEFAULT_PREFIX) -> None:
 # shape `_PROJECT_SCHEMA_MODULES` above uses, and for the same reason: a
 # `pkgutil`/`getattr` sweep inside `wl_preproc/` would be the dynamic import
 # the outbound guardrail bans, and a written list is what makes this
-# auditable by reading. One entry today.
+# auditable by reading. Two entries: `detect`'s detectors and validity mask,
+# and `main_sequence`'s fit.
 #
 # `test_every_schema_module_that_declares_default_paramsets_is_registered`
 # is the completeness claim: it DISCOVERS which modules declare such a
 # function and fails if one is missing here. `detect`'s own omission -- from
 # production entirely, not merely from a list -- is finding H1, and this
 # tuple exists so the second such module cannot repeat it silently.
-_PARAMSET_MODULES: tuple[tuple[str, object], ...] = (("detect", detect),)
+_PARAMSET_MODULES: tuple[tuple[str, object], ...] = (("detect", detect), ("main_sequence", main_sequence))
 
 
 def register_default_paramsets() -> dict[str, dict[str, int]]:
