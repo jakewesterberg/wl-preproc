@@ -513,23 +513,26 @@ def test_placement_reads_times_as_doubles_and_names_by_record_then_stream_code(d
 def test_a_condition_holds_only_saccades_inside_its_block(daemon_module, tmp_path):
     """Three paths a real session takes (the main-sequence review's minors;
     amendment 5):
-    - trial 1 runs past its block's end, as a trial does whose `TRIAL_END`
+    - a saccade between two trials of a block (3650) counts toward the block
+      only, not toward the trial before it;
+    - trial 2 runs past its block's end, as a trial does whose `TRIAL_END`
       comes after its `BLOCK_END` (`schema/events.py::_trial_stop_time`): a
-      saccade in that tail is block 2's, and has no condition;
-    - a saccade between two trials counts toward its block only;
-    - trial 2 has no `BlockTrial` row, so its saccades have no condition."""
+      saccade in that tail (3705) is block 2's, with no condition;
+    - trial 3 has no `BlockTrial` row, so its saccades (3750) have no
+      condition, and nor does one between it and trial 2 (3715)."""
     from wl_preproc.schema import main_sequence
 
     key = _planted_events(
-        tmp_path, blocks=((1, 3600.0, 3700.0), (2, 3700.0, 3800.0)), trials=((1, 3600.0, 3710.0), (2, 3720.0, 3800.0)),
-        block_trials=((1, 1),), rig=((1, "rig-name"), (2, "other")))
+        tmp_path, blocks=((1, 3600.0, 3700.0), (2, 3700.0, 3800.0)),
+        trials=((1, 3600.0, 3640.0), (2, 3660.0, 3710.0), (3, 3720.0, 3800.0)),
+        block_trials=((1, 1), (1, 2)), rig=((1, "a"), (2, "b"), (3, "other")))
 
-    start_s = np.array([3650.0, 3705.0, 3715.0, 3750.0])
+    start_s = np.array([3620.0, 3650.0, 3680.0, 3705.0, 3715.0, 3750.0])
     blocks, conditions = main_sequence._groups(key, tmp_path, start_s)
     assert [(block_id, inside.tolist()) for block_id, inside in blocks] == [
-        (1, [True, False, False, False]), (2, [False, True, True, True])]
+        (1, [True, True, True, False, False, False]), (2, [False, False, False, True, True, True])]
     assert [(group, inside.tolist()) for group, inside in conditions] == [
-        ((1, "rig-name"), [True, False, False, False])]
+        ((1, "a"), [True, False, False, False, False, False]), ((1, "b"), [False, False, True, False, False, False])]
 
 
 _MAIN_SEQUENCE_PROBE = """

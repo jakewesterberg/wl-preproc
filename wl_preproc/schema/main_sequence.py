@@ -194,8 +194,9 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
     it, and inside the block itself (spec amendment 5). A trial whose
     `TRIAL_END` comes after its `BLOCK_END` (`schema/events.py::
     _trial_stop_time`) therefore counts the saccades in its tail toward the
-    block they fall in, with no condition. A trial's condition is resolved as the NWB export resolves it: the rig
-    record's name, else the stream's `CONDITION` number as text
+    block they fall in, if any, with no condition. A trial's condition is
+    resolved as the NWB export resolves it: the rig record's name, else the
+    stream's `CONDITION` number as text
     (`nwb/conditions.py`). A trial with neither, or with a name longer than
     the column, has none. Every condition a block's trials ran under gets a
     group, so one whose trials hold no saccade is refused rather than absent."""

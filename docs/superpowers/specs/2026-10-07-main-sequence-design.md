@@ -330,7 +330,8 @@ Each carries a dated pointer in the parent:
 - **§6.5.2:**
   - blocks and conditions hold a gain against the session's curve, not fits of their own (§2
     item 4);
-  - the session fit's guard adds the middle-80% rule and a non-converging fit (§4.2);
+  - the session fit's guard adds the middle-80% rule and a non-converging fit (§4.2); *amendment
+    1 adds the relative-error check, which the parent's pointer names*;
   - standard errors are stored;
   - selection is by size, and the floor replaces the microsaccade switch (§4.1);
   - the fit paramset is in the key (§3.1).
@@ -388,5 +389,10 @@ Each carries a dated pointer in the parent:
    counted the saccades in its tail toward its condition in its block, though they fall outside
    that block, and toward the next block's gain as well. Each condition's saccades are now those
    of its trials that also start inside its block: a saccade in such a tail counts toward the
-   block it falls in, with no condition. The whole-branch review's minor 1; the requester approved
-   the fix on 2026-10-08.
+   block it falls in, if any, with no condition. The whole-branch review's minor 1; the requester
+   approved the fix on 2026-10-08.
+   - **Repeated block numbers change too.** After a crash restart before wl-xcon's XC-026,
+     `BlockTrial` links the restarted trials to the first block of that number
+     (`2026-10-01-runs-and-trials-design.md` amendment 8). Their saccades counted toward that
+     block's conditions, outside its span; now they count toward none, and a condition that ran
+     only after the restart is refused for having no saccades.

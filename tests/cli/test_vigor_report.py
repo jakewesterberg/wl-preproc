@@ -47,9 +47,13 @@ def vigor_schema(dj_conn, prefix):
 def _detect(schema, session, trace, *, detector="engbert_kliegl", status="computed", saccades=(), master=True,
             own_fit_refused=False):
     """One detection of `trace` (Engbert-Kliegl's unless `detector` says),
-    its saccade runs (`(amplitude, peak)` pairs, 40 ms each at 500 Hz) and,
-    with `master`, its `SaccadeMainSequence` row: computed on `CURVE` over
-    1-12 deg, or with `own_fit_refused` refused for too few saccades."""
+    its runs and, with `master`, its `SaccadeMainSequence` row: computed on
+    `CURVE` over 1-12 deg, or with `own_fit_refused` refused for too few
+    saccades. Each of `saccades`, an `(amplitude, peak)` pair, is a 20-sample
+    (40 ms at 500 Hz) run every 100 samples, with `fixation` between, so the
+    runs tile the trace as a real detection's do: two detectors of one
+    session are a pair `DetectorAgreement` will score in a later daemon
+    pass, and an untiled trace makes that pass fail."""
     from wl_preproc.schema import detect, main_sequence
 
     row = _detection_row(session.subject, session.session_datetime, trace, schema.validity, schema.detections[detector],
@@ -57,10 +61,15 @@ def _detect(schema, session, trace, *, detector="engbert_kliegl", status="comput
                          if status == "refused" else "")
     detect.EyeDetection.insert1(row, allow_direct_insert=True)
     key = {name: row[name] for name in detect.EyeDetection.primary_key}
-    detect.EyeDetection.Run.insert(
-        {**key, "run_index": index, "run_start": 100 * index, "run_stop": 100 * index + 20, "label": "saccade",
-         "amplitude_deg": amplitude, "peak_velocity_deg_s": peak}
-        for index, (amplitude, peak) in enumerate(saccades))
+    runs = []
+    for index, (amplitude, peak) in enumerate(saccades):
+        runs.append({"run_start": 100 * index, "run_stop": 100 * index + 20, "label": "saccade",
+                     "amplitude_deg": amplitude, "peak_velocity_deg_s": peak})
+        runs.append({"run_start": 100 * index + 20, "run_stop": 100 * index + 100, "label": "fixation",
+                     "amplitude_deg": None, "peak_velocity_deg_s": None})
+    runs.append({"run_start": 100 * len(saccades), "run_stop": 100 * len(saccades) + 100, "label": "fixation",
+                 "amplitude_deg": None, "peak_velocity_deg_s": None})
+    detect.EyeDetection.Run.insert({**key, "run_index": index, **run} for index, run in enumerate(runs))
     if master and status == "computed" and own_fit_refused:
         main_sequence.SaccadeMainSequence.insert1(
             {**key, "fit_paramset_type": "main_sequence", "fit_paramset_idx": schema.fit, "fit_status": "refused",
@@ -152,12 +161,15 @@ def test_the_both_eyes_trace_is_left_out(vigor_schema, tmp_path, prefix):
 
 def test_a_line_carries_every_detectors_figure_in_paramset_order(vigor_schema, tmp_path, prefix):
     """The main-sequence review's minor: until now no test had two
-    detectors on one line."""
-    session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl", "otero_millan"))
+    detectors on one line. BMD is registered after Engbert-Kliegl and sorts
+    before it by name, so the order shown is the paramsets' and not the
+    names'."""
+    session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl", "bmd"))
     _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9))
-    _detect(vigor_schema, session, "left", detector="otero_millan", saccades=_saccades(40, 1.1))
-    figures = {"engbert_kliegl": "90% (3 earlier)", "otero_millan": "110% (3 earlier)"}
+    _detect(vigor_schema, session, "left", detector="bmd", saccades=_saccades(40, 1.1))
+    figures = {"engbert_kliegl": "90% (3 earlier)", "bmd": "110% (3 earlier)"}
     in_order = sorted(figures, key=vigor_schema.detections.get)
+    assert in_order != sorted(figures)
     assert _line(tmp_path, prefix, session, "left").endswith(
         ": " + ", ".join(f"`{name}` {figures[name]}" for name in in_order))
 
