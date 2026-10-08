@@ -170,6 +170,8 @@ One row for every condition that ran in a block, when the session's own fit was 
 One `make()` writes all three traces' rows: the gaze file is read once per session, detector and
 fit paramset, not once per trace.
 
+*Superseded by amendment 2: one key, and one `make()`, per trace.*
+
 No events requirement is needed in `key_source`. An `EyeDetection` row needs an `EyeValidity`
 row, which needs `EyeCalibration` to have run, and `EyeCalibration.key_source` requires
 `pipeline.event.BehaviorRecording`. So a session's blocks and trials are always assembled before
@@ -210,6 +212,8 @@ data. Its standard errors come from the fit's covariance.
 
 Count first, then range, the order the parent's §6.5.2 set to mirror `eye/calibration.py`'s guard.
 
+*Item 3 is superseded by amendment 1, which refuses a fit whose parameters are not known.*
+
 ### 4.3 Blocks and conditions
 
 - **A saccade belongs to a block** if it starts (its `run_start` in session time) inside that
@@ -243,6 +247,8 @@ Its dataclass, `MainSequenceParams`, carries the defaults:
 | `min_group_saccades` | 30 | §1.4: a gain within 9–15% in the worst tenth |
 
 A changed default is a new paramset and new rows, never a rewrite of old ones.
+
+*Amendment 1 adds a field, `max_relative_se`, 0.5.*
 
 ## 5. Vigor in the report
 
@@ -295,7 +301,8 @@ every wl.works poll (the parent's §9).
 **Database** (`tests/schema/test_main_sequence_populate.py`), on a synthetic session whose gaze
 makes raised-cosine saccades of planted sizes and durations in two blocks, its conditions named by
 the generator's rig record (`synth/peripherals.py::write_rig_trials`):
-- the session fit recovers the planted curve within a tolerance the plan measures;
+- the session fit recovers the planted curve within a tolerance the plan measures (amendment 3
+  records it);
 - every trace gets a row, and a refused detection trace a refused row quoting its reason;
 - every block gets a `.Block` row, and a block with too few saccades a refused one;
 - `.Condition` rows are keyed by the rig record's names;
@@ -334,3 +341,31 @@ Each carries a dated pointer in the parent:
   saccade's size, shown per eye for every detector.
 - **§10:** the planted main sequence and the degenerate-fit fixture are §7's tests; the
   condition-grain gap is closed as §6.5.3's amendment says.
+
+## Amendments, 2026-10-07, made while proving the plan
+
+1. **The session fit's third check refuses a fit whose parameters are not known** (§4.2 item 3,
+   §4.4; plan Task 1). As §4.2 had it, the check was a fit that does not converge or whose
+   covariance is not finite. On input that passes the first two checks it never fires: SciPy
+   converges, with a finite covariance, even for peak speed in proportion to size with no
+   saturation in range, where V_max comes to 9,352 ± 8,466 °/s. The check is now:
+   - peak speeds that do not vary, since r² would be minus infinity, which no column can hold;
+   - a fit that does not converge;
+   - V_max's or C's standard error at least `max_relative_se` of its value, a new paramset field,
+     0.5 by default.
+
+   Measured on the reference recording, whole sessions come to 3–5%, and nine in ten random
+   100-saccade samples of them under 28%: one in 2,800 reached 50%. The case with no saturation
+   comes to 90%.
+2. **One key per trace** (§3.4; plan Task 2). DataJoint 2.3 keys a table's job queue on every
+   primary-key attribute inherited through a foreign key, and `trace` comes into this table through
+   `-> detect.EyeDetection`. With `trace` missing from `key_source`, as §3.4 had it, the daemon's
+   pass wrote the left trace alone. Each trace's `make()` now reads the recording's sync line:
+   three reads per detection rather than one.
+3. **The planted session's tolerance** (§7; plan Task 2). Each eye's fit, for every detector that
+   computes one, must lie within 12% of the fit to the planted saccades themselves over 2–8°.
+   Measured: 1.4–9.2%, the most NSLR's. The detectors clip each raised cosine's slow tails, so
+   amplitudes come out a little short, and the session's own calibration is 4% under the
+   generator's scale. Nyström–Holmqvist's adaptive threshold settles near 200 °/s on the planted
+   session's slow saccades and keeps only those over 7°, so its fits there are refused for too
+   few saccades. That is the detector's behaviour, not this table's.
