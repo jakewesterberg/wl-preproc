@@ -1056,6 +1056,15 @@ seven disagreeing about individual events.
 
 ### 6.5.2 Three grains, and a degenerate-fit guard that is not new
 
+> **Amended 2026-10-07 by `2026-10-07-main-sequence-design.md`** (its §9). Measured on the
+> reference recording, a two-parameter fit over a block's or a condition's 20–100 saccades is
+> 12–55% wrong at the median, so **only the session is fitted**. Blocks and conditions store a
+> gain against the session's own curve (the requester's decision). The session fit's guard adds
+> a middle-80% size range and a non-converging fit, and stores standard errors. Saccades are
+> selected by size, from 1°, which replaces the microsaccade switch below, and lasting at most
+> 150 ms. The fit paramset is in the key. The per-detector measurement asked for below is that
+> document's §1. Read it before this section.
+
 Fits at three grains — **session, block, and trial condition** — as a master
 and two parts, mirroring `EyeCalibration`/`BlockResidual`:
 
@@ -1139,6 +1148,13 @@ condition-grain fit has nothing to test against until the generator emits
 conditions — the same shape as the gap that `SessionRecipe.eye_fixations`
 closed for calibration, and it is fixed the same way: correct the fixture.
 
+> **Amended 2026-10-07 by `2026-10-07-main-sequence-design.md`** (its §4.3 and §8). A trial's
+> condition is resolved as the NWB export resolves it: the rig record's name first
+> (`xcon/trials.jsonl`), which the generator already writes
+> (`synth/peripherals.py::write_rig_trials`), then the stream's `CONDITION` number. So the
+> condition grain is testable by name. The stream's number is not testable end to end until
+> wl-xcon sends it (its XC-197), and the generator does not send it either.
+
 ---
 
 ## 7. Schema
@@ -1153,6 +1169,12 @@ closed for calibration, and it is fixed the same way: correct the fixture.
 | `SaccadeMainSequence` | `(…, trace, validity_paramset_idx, paramset_idx)` | `v_max`, saturation constant, `n_saccades`, amplitude span, `r_squared`, `fit_status`, `reason` |
 | `SaccadeMainSequence.Block` | `+ block_id` | the same, per block |
 | `SaccadeMainSequence.Condition` | `+ block_id, condition` | the same, per condition |
+
+> **Amended 2026-10-07 by `2026-10-07-main-sequence-design.md`** (its §3).
+> `SaccadeMainSequence`'s key also carries the fit paramset (`fit_paramset_type`,
+> `fit_paramset_idx`). It stores standard errors and the recording rate durations were counted
+> at. `.Block` and `.Condition` hold a gain, its saccade count and size range, and a status and
+> reason, not a fit.
 
 Every one is a `dj.Computed` and every one joins `daemon._computed_tables()` —
 the sweep that exists because `TrialCoverage` was once missing from it and
@@ -1233,6 +1255,13 @@ whose vigor drops against its own subject's history is fatigued, disengaged, or
 mis-tracked, and the point of putting it beside the agreement rows is that
 those three look different from each other there.
 
+> **Amended 2026-10-07 by `2026-10-07-main-sequence-design.md`** (its §5; the requester's
+> decisions). Vigor is worked out per saccade: its peak speed over the median of the earlier
+> sessions' curves at its size, using only curves whose fitted range covers that size. A
+> session's figure is the median ratio. One line per session per eye shows every detector's
+> figure, needing at least 3 earlier sessions and 30 saccades. The both-eyes trace is left out
+> of the report.
+
 Computed in `build_report`, never `gather_readings` — that runs on every
 wl.works poll under the lock that also serialises job accepts, and the
 responder reads none of these.
@@ -1281,6 +1310,10 @@ that test the guard is the kind of code that looks alive and never fires.
 **Condition-grain fits cannot be tested until the generator emits conditions**
 (§6.5.3). That fixture gap is part of this work, not a prerequisite someone
 else supplies.
+
+> **Amended 2026-10-07 by `2026-10-07-main-sequence-design.md`** (its §7). The planted main
+> sequence and the 6–9° refusal are that document's tests. The condition grain is tested
+> through the rig record's names, which the generator already writes (§6.5.3's amendment).
 
 ---
 

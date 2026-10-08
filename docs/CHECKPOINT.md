@@ -168,12 +168,18 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
-> **Hardware-free:** the list the requester chose on 2026-10-05 is done. Ask
-> what comes next. Open and small: M4 (left open by his choice), and the
-> U'n'Eye minors branch's own three deferred minors
-> (`handoffs/2026-10-06-uneye.md` §7). The U'n'Eye review's four minors are
-> fixed (`22dbb70`). Fine-tuning U'n'Eye to the DPI tracker waits for
-> hand-labelled lab data.
+> **Hardware-free:** the saccade main sequence and vigor (the saccade spec's
+> §6.5), the requester's choice of 2026-10-07: built on `spec/main-sequence`,
+> not merged (`handoffs/2026-10-07-main-sequence.md`). Each detection trace's
+> session fit, each block's and condition's gain against it, and the report's
+> vigor line, per eye and detector. Next: the whole-branch review, then the
+> merge question. Open and small: M4 (left open by the requester's choice),
+> and the U'n'Eye minors branch's own three deferred minors
+> (`handoffs/2026-10-06-uneye.md` §7). Fine-tuning U'n'Eye to the DPI tracker
+> waits for hand-labelled lab data.
+>
+> *Until 2026-10-08 this said the requester's list of 2026-10-05 was done, and
+> to ask what comes next; true when written.*
 >
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
