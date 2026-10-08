@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.numba_threads import keep_off_openmp
 
 #: The copied networks, each with two classes: fixation (0) and saccade (1).
 NETWORKS = ("weights_1+2+3", "weights_dataset1", "weights_dataset2", "weights_dataset3", "weights_synthetic")
@@ -93,8 +94,11 @@ def _network(params: UneyeParams, fs_hz: float):
     convolution waits for ever, silently (design spec
     `2026-10-06-uneye-design.md` amendment 6). `bmd.py` keeps BMD's kernels
     off OpenMP; this turns the hang into an error where numba code ran on
-    OpenMP before U'n'Eye, such as code run before BMD was imported. It
-    cannot see numba choosing OpenMP after torch has loaded."""
+    OpenMP before U'n'Eye, such as code run before BMD was imported.
+
+    **Otherwise it keeps numba off OpenMP before torch loads** (amendment 8),
+    so a numba kernel launched later in the process cannot choose OpenMP,
+    which crashed the process once torch had loaded."""
     import numba
 
     try:
@@ -105,8 +109,9 @@ def _network(params: UneyeParams, fs_hz: float):
         raise RuntimeError(
             "numba runs its parallel kernels on OpenMP in this process, and U'n'Eye's torch would load a "
             "second OpenMP runtime and hang (design spec 2026-10-06-uneye-design.md, amendment 6). In a fresh "
-            "process, set numba.config.THREADING_LAYER = 'workqueue' before any parallel kernel runs, as bmd.py "
-            "does.")
+            "process, call wl_preproc.eye.detect.numba_threads.keep_off_openmp() before any parallel kernel "
+            "runs, as bmd.py does.")
+    keep_off_openmp()
     from wl_preproc.eye.vendor.uneye.classifier import DNN
 
     network = DNN(weights_name=str(_TRAINING / params.weights), sampfreq=fs_hz,

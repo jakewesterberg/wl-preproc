@@ -105,6 +105,38 @@ print(numba.threading_layer(), len(runs) == len(onsets))
     assert result.stdout.split() == ["workqueue", "True"]
 
 
+def test_bmd_keeps_numba_off_openmp_when_its_environment_changes():
+    """numba re-reads its environment when a `NUMBA_*` variable has changed
+    and it next compiles. With only its config set, BMD's setting was then
+    undone: the next parallel kernel ran on OpenMP where OpenMP loads, and
+    failed for want of it where it does not (the U'n'Eye-minors review's
+    deferred minor; U'n'Eye design spec amendment 8). In a fresh
+    interpreter, as above."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = """
+import os, numba, numpy as np
+import wl_preproc.eye.detect.bmd
+os.environ["NUMBA_WARNINGS"] = "0"
+
+@numba.njit(parallel=True)
+def roots(x):
+    out = np.empty_like(x)
+    for i in numba.prange(x.size):
+        out[i] = np.sqrt(x[i])
+    return out
+
+roots(np.arange(1e3))
+print(numba.config.THREADING_LAYER, numba.threading_layer())
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120,
+                            cwd=Path(__file__).resolve().parents[3], env={**os.environ, "NUMBA_THREADING_LAYER": "omp"})
+    assert result.stdout.split() == ["workqueue", "workqueue"], result.stderr[-2000:]
+
+
 def test_every_registered_vocabulary_is_a_subset_of_the_label_enum():
     """A detector declaring a label the schema cannot store is a silent insert
     failure on whichever session first reaches it."""
