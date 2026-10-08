@@ -113,3 +113,38 @@ Minor.
     rehydrated, since `make()` reads the raw recording and rig record.
   - Other test modules plant computed `EyeDetection` rows with no recording, so this stage may log
     an error on them once per test run; the suite is green in its order on both interpreters.
+
+## 7. The deferred minors, fixed
+
+**Branch:** `fix/main-sequence-minors`. The requester chose this work on 2026-10-08 and approved
+its design the same day.
+
+- **A condition holds only the saccades inside its own block** (spec amendment 5). A trial whose
+  `TRIAL_END` comes after its `BLOCK_END` no longer counts the saccades in its tail toward its
+  condition; they count toward the block they fall in, if any. Repeated block numbers, after a
+  crash restart before wl-xcon's XC-026, change too: amendment 5 says how.
+- **The saccade spec's §6.5.2 pointer** names amendment 1's checks: a fit that does not converge,
+  or a V_max or C with a standard error of `max_relative_se` (0.5 by default) of its value or
+  more. The main-sequence spec's own §9 says so too.
+- **`cli/report.py`'s blank lines** around `_vigor_lines` follow PEP 8.
+- **The four untested paths are tested:** a saccade between two trials of a block that has
+  conditions; a trial running past its block's end; a trial with no `BlockTrial` row (all in
+  `test_a_condition_holds_only_saccades_inside_its_block`); a report line with two detectors in
+  paramset order; and vigor shown where the session's own fit was refused.
+
+**The branch's review** (Opus, fresh): "with fixes", one Important finding, fixed. The
+between-trials saccade sat in a block with no conditions, so the test could not catch it leaking
+into the trial before; it now sits between two named trials. Its three minors were fixed at the
+requester's choice: BMD paired with Engbert-Kliegl so the order test tells paramset order from
+name order; both specs' wording of amendment 1; and amendment 5's two further cases.
+
+**Found by the full suite, not by the review:** the two-detector report test planted a pair of
+detections whose runs did not tile their traces. `DetectorAgreement` scored that pair in a later
+module's daemon pass and raised `TilingError`, erroring two `test_consensus_populate.py` tests.
+The planted runs now tile their traces, with `fixation` between saccades, as a real detection's
+do.
+
+**Full suite on the branch's final code,** with every reference variable set except
+`WLPP_OHDPI_REFERENCE`:
+- **3.11:** 2276 passed, 26 skipped, 1 deselected, 1 xfailed, no errors.
+- **3.13:** 2276 passed, 27 skipped, 1 xfailed, no errors.
