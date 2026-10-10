@@ -870,11 +870,12 @@ def _build_mixed_eye_session(
     make()`'s own refused-row branches write, via that module's own
     `_coefficient_columns(None)`); deletes the now-stale `EyeValidity`/
     `EyeDetection` rows for this session so their keys read as pending
-    again (bare `.delete()` -- safe here: safemode is off for this whole
-    suite, per `tests/schema/test_eye_populate.py`'s own `no_ohdpi_
-    acquisition_system_session` fixture, and neither table has any
-    dependent of its own beside its own `Run` part, so the cascade reaches
-    no further than intended); and calls `run_once()` a SECOND time.
+    again (no prompt: safemode is off for this whole suite, per
+    `tests/schema/test_eye_populate.py`'s own `no_ohdpi_acquisition_system_
+    session` fixture; `part_integrity="cascade"`, since the seven-way scores
+    blended from these detections hang from them through
+    `DetectionQuality.Detection` and go with them, as the pairwise and
+    main-sequence rows do); and calls `run_once()` a SECOND time.
     `EyeCalibration`/`EyeQuality`'s keys are already populated by then and
     stay untouched -- ordinary DataJoint `.populate()` behaviour, not
     special-cased here -- while `EyeValidity`/`EyeDetection` recompute
@@ -916,8 +917,8 @@ def _build_mixed_eye_session(
             "replaced with a refused row"
         ),
     })
-    (detect.EyeValidity & session_key).delete()
-    (detect.EyeDetection & session_key).delete()
+    (detect.EyeValidity & session_key).delete(part_integrity="cascade")
+    (detect.EyeDetection & session_key).delete(part_integrity="cascade")
 
     report = daemon_module.run_once(prefix=prefix)
     onsets = _rows_for_times(session_key, segment, onset_times)

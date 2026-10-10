@@ -514,6 +514,21 @@ class DetectionQuality(dj.Computed):
     detectors          : varchar(255)
     """
 
+    class Detection(dj.Part):
+        definition = """
+        # The detections a score blends, one row each (seven-way design spec
+        # amendment 6). Deleting one, to detect the session again, takes its
+        # scores with it -- `part_integrity="cascade"`; a plain delete refuses
+        # -- and the next populate blends the new labels. Without it the
+        # session kept a score of labels that no longer existed, never
+        # blended again, since DataJoint never revisits a populated key.
+        # The detection's `trace` is taken as `detection_trace`, always equal
+        # to `trace`: this table's `trace` is its own attribute, and
+        # DataJoint 2.3 refuses to join two of one name and another lineage.
+        -> master
+        -> detect.EyeDetection.proj(detection_trace='trace')
+        """
+
     @property
     def key_source(self):
         """A session and validity paramset with at least one trace computed
@@ -544,7 +559,7 @@ class DetectionQuality(dj.Computed):
 
         registered = _live_detectors()
         detections = (detect.EyeDetection & key & {"paramset_type": "eye_detection"}).to_dicts()
-        rows = []
+        rows, blended = [], []
         for trace in ("left", "right", "conjunction"):
             members = sorted((row for row in detections if row["trace"] == trace and row["paramset_idx"] in registered),
                              key=lambda row: row["paramset_idx"])
@@ -568,11 +583,14 @@ class DetectionQuality(dj.Computed):
             for pso_as in PSO_AS_VALUES:
                 for metric, compute in BLENDED_METRICS.items():
                     result = blended_agreement(labels, vocabularies, copies, pso_as, compute)
-                    rows.append({**key, "trace": trace, "metric": metric,
-                                 "vocabulary": vocabulary_text(result.vocabulary), "pso_as": pso_as,
-                                 "value": result.value, "n_samples_compared": result.n_samples_compared,
+                    score = {**key, "trace": trace, "metric": metric,
+                             "vocabulary": vocabulary_text(result.vocabulary), "pso_as": pso_as}
+                    rows.append({**score, "value": result.value, "n_samples_compared": result.n_samples_compared,
                                  "detectors": detectors})
+                    blended += [{**score, "detection_trace": trace, "paramset_type": "eye_detection",
+                                 "paramset_idx": row["paramset_idx"]} for row in members]
         self.insert(rows)
+        self.Detection.insert(blended)
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:

@@ -169,7 +169,9 @@ def half_refused_session(daemon_module, prefix, tmp_path_factory):
 
     refused = _detector("otero_millan")
     detection_key = {**right_key, **refused}
-    (detect.EyeDetection & detection_key).delete()
+    # `cascade`: the seven-way scores blended from it go too (their
+    # `DetectionQuality.Detection` rows); a plain delete refuses.
+    (detect.EyeDetection & detection_key).delete(part_integrity="cascade")
     detect.EyeDetection.insert1(
         {
             **detection_key,

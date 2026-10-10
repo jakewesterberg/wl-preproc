@@ -202,6 +202,37 @@ def test_a_paramset_for_a_detector_the_code_no_longer_has_is_not_waited_for(plan
         (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": gone}).delete()
 
 
+def test_a_blended_detection_deleted_takes_its_scores_with_it(planted):
+    """Re-detecting a session means deleting a detection and computing it
+    again. The scores blended from it must go with it, or the session keeps
+    a score of labels that no longer exist and is never blended again, since
+    DataJoint never revisits a populated key (the final review's I1). A
+    plain delete refuses, naming the remedy; `part_integrity="cascade"`
+    takes the scores too, and the next populate blends the new labels."""
+    import datajoint as dj
+
+    from wl_preproc.schema import consensus, detect
+
+    key, validity_idx = planted
+    registered = sorted(_registered())
+    trace = [F] * 20 + [S] * 5 + [F] * 20
+    for idx in registered:
+        _plant(key, validity_idx, "left", idx, trace)
+    consensus.DetectionQuality.populate(key)
+    assert [row["value"] for row in (consensus.DetectionQuality & key).to_dicts()] == [pytest.approx(1.0)] * 2
+
+    redetected = detect.EyeDetection & key & {"paramset_type": "eye_detection", "paramset_idx": registered[0]}
+    with pytest.raises(dj.DataJointError, match="part_integrity"):
+        redetected.delete()
+    redetected.delete(part_integrity="cascade")
+    assert len(consensus.DetectionQuality & key) == 0
+
+    _plant(key, validity_idx, "left", registered[0], [S] * 45)
+    consensus.DetectionQuality.populate(key)
+    rows = (consensus.DetectionQuality & key).to_dicts()
+    assert len(rows) == 2 and all(row["value"] < 1.0 for row in rows)
+
+
 _QUALITY_PROBE = """
 import json
 import os
