@@ -475,16 +475,28 @@ class DetectorAgreement(dj.Computed):
 
 
 def _live_detectors() -> dict[int, str]:
-    """Each `eye_detection` paramset whose detector the code still has, by
-    index, with that detector's name. A paramset for a detector since removed
-    from the registry can only ever error, so waiting for it would stop
-    `DetectionQuality` for every later session (seven-way design spec
-    amendment 4)."""
+    """The `eye_detection` paramsets `DetectionQuality` blends: each detector
+    the code has, by the index of its registered default paramset
+    (`detect.register_default_paramsets`'), with the detector's name. One
+    rater per detector (seven-way design spec amendments 4 and 5), as the
+    NWB file reads the defaults. Neither waited for nor blended: a paramset
+    for a detector since removed from the registry, which can only ever
+    error, and a detector's older paramset, left registered when its
+    defaults changed, which would count it twice and may only ever error
+    too.
+
+    Empty while any detector's default is unregistered, so no partial set
+    is blended. Looked up by content, never registered here: `make()` runs
+    in a transaction, where `paramset.register` must never be called."""
     from wl_preproc.eye.detect.registry import DETECTORS
 
-    return {row["paramset_idx"]: row["params"]["detector"]
-            for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
-            if row["params"].get("detector") in DETECTORS}
+    by_hash = {row["param_hash"]: row["paramset_idx"]
+               for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()}
+    digests = {name: paramset.content_hash(detect._eye_detection_params(detector))
+               for name, detector in DETECTORS.items()}
+    if not all(digest in by_hash for digest in digests.values()):
+        return {}
+    return {by_hash[digest]: name for name, digest in digests.items()}
 
 
 @schema
@@ -532,8 +544,8 @@ class DetectionQuality(dj.Computed):
     @property
     def key_source(self):
         """A session and validity paramset with at least one trace computed
-        by every registered `eye_detection` paramset whose detector the code
-        has (`_live_detectors`). `make()` blends each such trace.
+        by every detector the code has, each by its default paramset
+        (`_live_detectors`). `make()` blends each such trace.
 
         **Never a partial set** (spec section 3): a row written while one
         detector's job was pending or had errored would never be recomputed
@@ -575,8 +587,8 @@ class DetectionQuality(dj.Computed):
                     [Run(run["run_start"], run["run_stop"], Label(run["label"])) for run in runs], row["n_samples"])
                 detector = get_detector(registered[row["paramset_idx"]])
                 vocabularies[index] = detector.vocabulary
-                # The source's lowest-index paramset, where several run the
-                # same detector (registry.Detector.copies_saccades_from).
+                # The source detector's blended paramset
+                # (registry.Detector.copies_saccades_from).
                 sources = sorted(idx for idx, name in registered.items() if name == detector.copies_saccades_from)
                 copies[index] = str(sources[0]) if sources else None
             detectors = ",".join(str(row["paramset_idx"]) for row in members)

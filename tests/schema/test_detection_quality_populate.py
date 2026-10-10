@@ -39,14 +39,13 @@ def stepped(daemon_module, prefix, tmp_path_factory):
 
 
 def _registered() -> dict[int, str]:
-    """Each `eye_detection` paramset whose detector the code has. Another
-    module leaves one registered for a detector it has since removed."""
-    from wl_preproc.eye.detect.registry import DETECTORS
-    from wl_preproc.schema import paramset
+    """Each detector's default `eye_detection` paramset, by index, with its
+    name: the paramsets blended, one per detector (spec amendment 5). Other
+    modules leave other paramsets registered, one for a detector since
+    removed among them."""
+    from wl_preproc.schema import detect
 
-    return {row["paramset_idx"]: row["params"]["detector"]
-            for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
-            if row["params"]["detector"] in DETECTORS}
+    return {idx: name for name, idx in detect.register_default_paramsets().items()}
 
 
 def _stored_labels(detection: dict):
@@ -81,6 +80,7 @@ def test_each_value_is_the_blend_of_the_stored_labels(stepped):
     for row in (consensus.DetectionQuality & stepped).to_dicts():
         detections = (detect.EyeDetection & stepped & {"trace": row["trace"], "paramset_type": "eye_detection",
                                                        "validity_paramset_idx": row["validity_paramset_idx"]}).to_dicts()
+        detections = [d for d in detections if d["paramset_idx"] in registered]
         labels = {str(d["paramset_idx"]): _stored_labels(d) for d in detections}
         vocabularies = {str(d["paramset_idx"]): get_detector(registered[d["paramset_idx"]]).vocabulary for d in detections}
         copies = {str(d["paramset_idx"]): str(engbert_kliegl) if registered[d["paramset_idx"]] == "bmd" else None
@@ -200,6 +200,57 @@ def test_a_paramset_for_a_detector_the_code_no_longer_has_is_not_waited_for(plan
         assert {row["detectors"] for row in rows} == {",".join(str(idx) for idx in registered)}
     finally:
         (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": gone}).delete()
+
+
+def test_a_second_paramset_for_one_detector_is_neither_waited_for_nor_blended(planted):
+    """A detector's defaults changed leave its older paramset registered, and
+    `EyeDetection` runs both. One detector is one rater (spec amendment 5):
+    its default paramset is blended, the other is not, and the other is not
+    waited for either, since an older paramset may only ever error. Left:
+    the second paramset's detection disagrees with every other; right: it
+    has none (the final review's I2)."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema import consensus, detect, paramset
+
+    key, validity_idx = planted
+    registered = sorted(_registered())
+    defaults = detect._eye_detection_params(get_detector("engbert_kliegl"))
+    older = paramset.register("eye_detection", {**defaults, "lambda_": defaults["lambda_"] + 1.0})
+    try:
+        trace = [F] * 20 + [S] * 5 + [F] * 20
+        for idx in registered:
+            _plant(key, validity_idx, "left", idx, trace)
+            _plant(key, validity_idx, "right", idx, trace)
+        _plant(key, validity_idx, "left", older, [S] * 45)
+        consensus.DetectionQuality.populate(key)
+        rows = (consensus.DetectionQuality & key).to_dicts()
+        assert sorted((row["trace"], row["pso_as"]) for row in rows) == [
+            ("left", "fixation"), ("left", "saccade"), ("right", "fixation"), ("right", "saccade")]
+        assert {row["detectors"] for row in rows} == {",".join(str(idx) for idx in registered)}
+        assert all(row["value"] == pytest.approx(1.0) for row in rows)
+    finally:
+        (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": older}).delete(
+            part_integrity="cascade")
+
+
+def test_nothing_is_blended_while_a_detectors_default_paramset_is_unregistered(planted, monkeypatch):
+    """A detector the code has but whose default paramset is not registered
+    yet has run on nothing, so blending the others would be a partial set
+    (spec section 3). The daemon registers the defaults before it populates,
+    so this lasts no longer than one pass."""
+    import dataclasses
+
+    from wl_preproc.eye.detect import registry
+    from wl_preproc.schema import consensus
+
+    key, validity_idx = planted
+    trace = [F] * 20 + [S] * 5 + [F] * 20
+    for idx in sorted(_registered()):
+        _plant(key, validity_idx, "left", idx, trace)
+    monkeypatch.setitem(registry.DETECTORS, "unregistered_quality",
+                        dataclasses.replace(registry.DETECTORS["engbert_kliegl"], name="unregistered_quality"))
+    consensus.DetectionQuality.populate(key)
+    assert len(consensus.DetectionQuality & key) == 0
 
 
 def test_a_blended_detection_deleted_takes_its_scores_with_it(planted):
