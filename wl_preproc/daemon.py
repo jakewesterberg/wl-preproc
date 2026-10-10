@@ -204,6 +204,10 @@ def _computed_tables() -> list:
         # session rather than self-correcting within a pass.
         consensus.DetectorAgreement,
         # BELOW `detect.EyeDetection` for `DetectorAgreement`'s reason: its
+        # `key_source` is that table's computed rows, so above it a session's
+        # first pass would name no key and its rows would wait a whole pass.
+        consensus.DetectionQuality,
+        # BELOW `detect.EyeDetection` for `DetectorAgreement`'s reason: its
         # `key_source` is that table's rows, so above it a session's first
         # pass would name no key and its fits would wait a whole pass.
         main_sequence.SaccadeMainSequence,
