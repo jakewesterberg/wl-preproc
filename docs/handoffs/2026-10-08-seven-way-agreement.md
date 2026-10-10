@@ -2,7 +2,7 @@
 
 **Branch:** `spec/seven-way-agreement`, forked from `main` at `95c8b54`.
 - **Design:** `docs/superpowers/specs/2026-10-08-seven-way-agreement-design.md`, an addendum to the
-  saccade-detection spec's §6 and §7, with amendments 1–4.
+  saccade-detection spec's §6 and §7, with amendments 1–9 (7–9 from the deferred minors, §7).
 - **Plan:** `docs/superpowers/plans/2026-10-08-seven-way-agreement.md`.
 - **The requester's choices,** on 2026-10-08:
   - this work next, from what was open;
@@ -44,9 +44,10 @@
 
 ## 3. Tests
 
-- `tests/eye/detect/test_blended_agreement.py` (10): α against Krippendorff's own worked example
+- `tests/eye/detect/test_blended_agreement.py` (11): α against Krippendorff's own worked example
   (0.743), perfect and chance agreement, a unit one detector rated, the undefined case; the folded
-  vocabulary of the seven in any order; coarsening, the mask and abstention.
+  vocabulary of the seven in any order, and a lone one folded (amendment 8, §7); coarsening, the
+  mask and abstention.
 - `tests/schema/test_detection_quality_populate.py` (10): on the stepped session, a row for every
   trace, metric and convention, each value the blend of the stored labels; on planted rows, a
   trace blended only when every registered detector computed it, a session with no complete
@@ -55,10 +56,10 @@
   neither waited for nor blended and nothing blended while a default is unregistered
   (amendment 5), and a blended detection deleted taking its scores with it (amendment 6); a real
   `wlpp daemon` pass writing rows with nothing registered beforehand.
-- `tests/cli/test_quality_report.py` (7): a line against history, too little history, an
-  undefined score, a refused detection, a missing row, the both-eyes trace left out, and a
-  history of earlier sessions scored alike (trace, validity paramset, metric, vocabulary and
-  detectors).
+- `tests/cli/test_quality_report.py` (8): a line against history, too little history, an
+  undefined score, a score over no samples (amendment 7, §7), a refused detection, a missing row,
+  the both-eyes trace left out, and a history of earlier sessions scored alike (trace, validity
+  paramset, metric, vocabulary and detectors).
 - `tests/eye/detect/test_seven_way_validation.py` (1, gated on `WLPP_OHDPI_REFERENCE`): noise the
   mask keeps lowers the score.
 - `tests/cli/test_detect_report.py`: the events-count test reads its own subsection, since the
@@ -148,4 +149,5 @@ two tests. **A fresh reviewer (Opus)** read the branch on 2026-10-10: ready to m
 or Important; the fold proven and checked to leave every result for two or more vocabularies
 unchanged (42,242 cases). Three minors, for the requester: §3's `value` has no pointer to
 amendment 7; this handoff's test counts in §3 and its header's "amendments 1–4" are stale; the
-noise test's new docstring line is not reflowed.
+noise test's new docstring line is not reflowed. The requester chose to fix all three before
+the merge, and they are.

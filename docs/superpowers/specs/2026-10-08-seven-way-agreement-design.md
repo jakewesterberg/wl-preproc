@@ -95,6 +95,7 @@ been run against it.*
   - `detectors : varchar(255)`: the `eye_detection` paramset indices blended, ascending,
     comma-separated, so a row says which detectors it rests on.
   - *Amendment 6 adds a part table, one row per detection a score blends.*
+  - *Amendment 7 names a second case of a NULL `value`: no sample compared.*
 - **Which keys it runs on.** A (session, trace, validity paramset) whose `EyeDetection` rows are
   computed for every registered `eye_detection` paramset. Two rules follow:
   *(Amendment 4: every registered paramset whose detector the code still has. Amendment 5: each

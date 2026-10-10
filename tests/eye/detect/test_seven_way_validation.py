@@ -4,11 +4,12 @@ the validity mask does not catch lowers the score.
 
 Gated on `WLPP_OHDPI_REFERENCE`, so skipped in CI; the recording is never
 committed. Skipped too where a detector cannot run, U'n'Eye without its
-install say (`registry.unavailable_detectors`). Imports nothing from `wl_preproc.schema`: the gaze is repaired and
-each detector run as `schema/detect.py::EyeDetection.make()` does, restated
-here. Each detector gets `Detector.defaults`, which is what its registered
-paramset holds: the shared `microsaccade_max_deg` equals every detector's own
-default today (`schema/detect.py::_eye_detection_params`)."""
+install say (`registry.unavailable_detectors`). Imports nothing from
+`wl_preproc.schema`: the gaze is repaired and each detector run as
+`schema/detect.py::EyeDetection.make()` does, restated here. Each detector
+gets `Detector.defaults`, which is what its registered paramset holds: the
+shared `microsaccade_max_deg` equals every detector's own default today
+(`schema/detect.py::_eye_detection_params`)."""
 
 from __future__ import annotations
 
