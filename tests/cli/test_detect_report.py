@@ -366,7 +366,9 @@ def test_the_detection_section_reports_counts_per_session(detect_schema, tmp_pat
 
     section = _section(build_report(root, prefix=prefix), "Detection")
 
-    line = _line_for(section, subject)
+    # The Events subsection's line: the seven-way and vigor subsections name
+    # the session too, the second only once a main-sequence paramset exists.
+    line = _line_for(_subsection(section, "Events per session per trace (24 h)"), subject)
     # Not a bare substring check on each label alone: `n_saccades=5` and
     # `n_microsaccades=2` are deliberately DIFFERENT numbers, so a mutation
     # that swapped which count feeds which label in the f-string would still

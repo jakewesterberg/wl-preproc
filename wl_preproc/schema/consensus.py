@@ -52,16 +52,18 @@ import datajoint as dj
 import numpy as np
 
 from wl_preproc.eye.detect.consensus import (
+    BLENDED_METRICS,
     CONSENSUS_METRICS,
     DEFAULT_EVENT_F1_TOLERANCE_SAMPLES,
     PSO_AS_FIXATION,
     PSO_AS_SACCADE,
+    blended_agreement,
     coarsen,
     comparison_mask,
     shared_vocabulary,
 )
 from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs
-from wl_preproc.schema import DEFAULT_PREFIX, detect, paramset
+from wl_preproc.schema import DEFAULT_PREFIX, detect, paramset, pipeline
 
 schema = dj.Schema()
 
@@ -472,8 +474,142 @@ class DetectorAgreement(dj.Computed):
         self.insert(rows)
 
 
+def _live_detectors() -> dict[int, str]:
+    """The `eye_detection` paramsets `DetectionQuality` blends: each detector
+    the code has, by the index of its registered default paramset
+    (`detect.register_default_paramsets`'), with the detector's name. One
+    rater per detector (seven-way design spec amendments 4 and 5), as the
+    NWB file reads the defaults. Neither waited for nor blended: a paramset
+    for a detector since removed from the registry, which can only ever
+    error, and a detector's older paramset, left registered when its
+    defaults changed, which would count it twice and may only ever error
+    too.
+
+    Empty while any detector's default is unregistered, so no partial set
+    is blended. Looked up by content, never registered here: `make()` runs
+    in a transaction, where `paramset.register` must never be called."""
+    from wl_preproc.eye.detect.registry import DETECTORS
+
+    by_hash = {row["param_hash"]: row["paramset_idx"]
+               for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()}
+    digests = {name: paramset.content_hash(detect._eye_detection_params(detector))
+               for name, detector in DETECTORS.items()}
+    if not all(digest in by_hash for digest in digests.values()):
+        return {}
+    return {by_hash[digest]: name for name, digest in digests.items()}
+
+
+@schema
+class DetectionQuality(dj.Computed):
+    definition = f"""
+    # Every registered detector's agreement on one trace, in one score, beside
+    # the pairwise rows and never instead of them (design spec
+    # `2026-10-08-seven-way-agreement-design.md` section 3).
+    # Key: (subject, session_datetime, trace, validity_paramset_type,
+    # validity_paramset_idx, metric, vocabulary, pso_as).
+    -> pipeline.Session
+    trace : enum('left','right','conjunction')
+    -> paramset.ParamSet.proj(validity_paramset_type='paramset_type', validity_paramset_idx='paramset_idx')
+    # `varchar` in the key, as `DetectorAgreement`'s are: a second blended
+    # metric, or a detector that changes the shared vocabulary, adds rows and
+    # needs no migration after January.
+    metric     : varchar(32)
+    vocabulary : varchar(128)
+    pso_as     : enum({_PSO_AS_ENUM})
+    ---
+    # NULL where the metric is undefined: every compared sample one label, so
+    # no disagreement is expected.
+    value=null         : double
+    # Samples at least two detectors rated.
+    n_samples_compared : int unsigned
+    # The `eye_detection` paramset indices blended, ascending, comma-separated.
+    detectors          : varchar(255)
+    """
+
+    class Detection(dj.Part):
+        definition = """
+        # The detections a score blends, one row each (seven-way design spec
+        # amendment 6). Deleting one, to detect the session again, takes its
+        # scores with it -- `part_integrity="cascade"`; a plain delete refuses
+        # -- and the next populate blends the new labels. Without it the
+        # session kept a score of labels that no longer existed, never
+        # blended again, since DataJoint never revisits a populated key.
+        # The detection's `trace` is taken as `detection_trace`, always equal
+        # to `trace`: this table's `trace` is its own attribute, and
+        # DataJoint 2.3 refuses to join two of one name and another lineage.
+        # Key: (subject, session_datetime, trace, validity_paramset_type,
+        # validity_paramset_idx, metric, vocabulary, pso_as, detection_trace,
+        # paramset_type, paramset_idx).
+        -> master
+        -> detect.EyeDetection.proj(detection_trace='trace')
+        """
+
+    @property
+    def key_source(self):
+        """A session and validity paramset with at least one trace computed
+        by every detector the code has, each by its default paramset
+        (`_live_detectors`). `make()` blends each such trace.
+
+        **Never a partial set** (spec section 3): a row written while one
+        detector's job was pending or had errored would never be recomputed
+        when it caught up, since DataJoint never revisits a populated key. A
+        trace whose detection was refused has no computed rows and gets no
+        row, as `DetectorAgreement`'s rule is.
+
+        Collapsed over `trace` with `dj.U`, as `EyeDetection.key_source`
+        collapses over `eye`: `trace` is this table's own attribute, not one
+        it inherits, so DataJoint keys its job queue without it and one
+        `make()` writes every complete trace."""
+        live = _live_detectors()
+        computed = (detect.EyeDetection & 'status = "computed"' & {"paramset_type": "eye_detection"}
+                    & [{"paramset_idx": idx} for idx in live])
+        complete = dj.U("subject", "session_datetime", "trace", "validity_paramset_type",
+                        "validity_paramset_idx").aggr(computed, n_detectors="count(*)") & f"n_detectors = {len(live)}"
+        return dj.U("subject", "session_datetime", "validity_paramset_type", "validity_paramset_idx") & complete
+
+    def make(self, key: dict) -> None:
+        """Each complete trace's score under each blended metric and both
+        `pso` conventions."""
+        from wl_preproc.eye.detect.registry import get_detector
+
+        registered = _live_detectors()
+        detections = (detect.EyeDetection & key & {"paramset_type": "eye_detection"}).to_dicts()
+        rows, blended = [], []
+        for trace in ("left", "right", "conjunction"):
+            members = sorted((row for row in detections if row["trace"] == trace and row["paramset_idx"] in registered),
+                             key=lambda row: row["paramset_idx"])
+            if (sorted(row["paramset_idx"] for row in members) != sorted(registered)
+                    or any(row["status"] != "computed" for row in members)):
+                continue
+            labels, vocabularies, copies = {}, {}, {}
+            for row in members:
+                detection_key = {name: row[name] for name in detect.EyeDetection.primary_key}
+                runs = (detect.EyeDetection.Run & detection_key).to_dicts(order_by="run_index")
+                index = str(row["paramset_idx"])
+                labels[index] = labels_from_runs(
+                    [Run(run["run_start"], run["run_stop"], Label(run["label"])) for run in runs], row["n_samples"])
+                detector = get_detector(registered[row["paramset_idx"]])
+                vocabularies[index] = detector.vocabulary
+                # The source detector's blended paramset
+                # (registry.Detector.copies_saccades_from).
+                sources = sorted(idx for idx, name in registered.items() if name == detector.copies_saccades_from)
+                copies[index] = str(sources[0]) if sources else None
+            detectors = ",".join(str(row["paramset_idx"]) for row in members)
+            for pso_as in PSO_AS_VALUES:
+                for metric, compute in BLENDED_METRICS.items():
+                    result = blended_agreement(labels, vocabularies, copies, pso_as, compute)
+                    score = {**key, "trace": trace, "metric": metric,
+                             "vocabulary": vocabulary_text(result.vocabulary), "pso_as": pso_as}
+                    rows.append({**score, "value": result.value, "n_samples_compared": result.n_samples_compared,
+                                 "detectors": detectors})
+                    blended += [{**score, "detection_trace": trace, "paramset_type": "eye_detection",
+                                 "paramset_idx": row["paramset_idx"]} for row in members]
+        self.insert(rows)
+        self.Detection.insert(blended)
+
+
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
-    """Bind this table to `{prefix}consensus`. Idempotent."""
+    """Bind these tables to `{prefix}consensus`. Idempotent."""
     detect.activate(prefix=prefix)
     if not schema.is_activated():
         schema.activate(f"{prefix}consensus", create_tables=True)

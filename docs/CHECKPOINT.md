@@ -1,5 +1,24 @@
 # Where this build actually is
 
+**In flight, 2026-10-10: seven-way detector agreement, not merged.** The spec
+(`specs/2026-10-08-seven-way-agreement-design.md`, `a9a47a0`) and its plan
+(`plans/2026-10-08-seven-way-agreement.md`, `fad9346`) are on
+`spec/seven-way-agreement`. Every task's code was proven on `proof/seven-way`
+(worktree `~/.cache/wl-preproc-scratch/2026-10-08-seven-way/proof`, final
+commit `4d8ffa6`): 32 mutations caught, the full suite 2300 passed on each
+interpreter, and the plan's diffs replay `a9a47a0` to that tree exactly. The
+requester approved the plan and chose to run it in one session ("Native") on
+2026-10-10, after updating this machine; it was run that day, every task's
+measurements matching the plan's (`handoffs/2026-10-08-seven-way-agreement.md`).
+The whole-branch review (Opus) said "with fixes": its two Important findings
+are fixed (spec amendments 5 and 6, handoff §5), its five minors deferred for
+the requester. **Next:** the merge question. The noise test reads the
+reference recording's copy at
+`~/.cache/wl-preproc-references/OpenIris-2024Jul31-114628.txt`.
+
+*Until 2026-10-10, later, this said next was to run `open -a OrbStack` and
+execute the plan, and then the whole-branch review; true when written.*
+
 **Last updated 2026-10-08**, describing `main` at `b22af97`, the merge of
 `fix/main-sequence-minors`: the main sequence's four deferred minors (handoff
 `handoffs/2026-10-07-main-sequence.md` §7, spec amendment 5). CI read off
@@ -199,12 +218,22 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
-> **Hardware-free:** the requester's choices of 2026-10-07 and 2026-10-08 are
-> merged: the saccade main sequence and vigor (`ff8aeb9`), the U'n'Eye minors
-> branch's three deferred minors (`7dcf37f`), and the main sequence's four
-> (`b22af97`). Ask what comes next. Open and small: M4 (left open by the
-> requester's choice). Fine-tuning U'n'Eye to the DPI tracker waits for
-> hand-labelled lab data.
+> **Hardware-free:** seven-way detector agreement (the saccade spec's §6 and
+> §7), the requester's choice of 2026-10-08: built on
+> `spec/seven-way-agreement`, not merged
+> (`handoffs/2026-10-08-seven-way-agreement.md`). Each detection trace's
+> Krippendorff's α across every registered detector, per glissade convention,
+> and the report's line for each eye against the animal's own history.
+> Reviewed, its two Important findings fixed; next: the merge question, and
+> its five deferred minors (handoff §5). Open and small: M4 (left
+> open by the requester's choice). Fine-tuning U'n'Eye to the DPI tracker
+> waits for hand-labelled lab data.
+>
+> *Until 2026-10-10 this said the requester's choices of 2026-10-07 and
+> 2026-10-08 were merged: the saccade main sequence and vigor (`ff8aeb9`), the
+> U'n'Eye minors branch's three deferred minors (`7dcf37f`), and the main
+> sequence's four (`b22af97`); and to ask what comes next. True when
+> written.*
 >
 > *Until 2026-10-08 this also listed the main sequence's four deferred minors
 > as open; true when written.*

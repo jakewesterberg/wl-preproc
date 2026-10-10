@@ -33,9 +33,13 @@ status:
     rig: record a few minutes with the sync box live, since the barcode and
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
-    units come before everything below. Hardware-free: the requester's
-    choices of 2026-10-07 and 2026-10-08 are merged; ask what comes next. Open
-    and small: M4. Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    units come before everything below. Hardware-free: seven-way detector
+    agreement, the requester's choice of 2026-10-08, built on
+    spec/seven-way-agreement and not merged
+    (docs/handoffs/2026-10-08-seven-way-agreement.md); reviewed, its two
+    Important findings fixed; the merge question, and its five deferred
+    minors. Open and small: M4. Fine-tuning U'n'Eye waits for hand-labelled
+    lab data.
     Done: the main sequence's four deferred minors (b22af97): a condition held
     to its own block's span, and the four untested paths tested. Before it,
     the U'n'Eye minors branch's three deferred minors (7dcf37f): numba
