@@ -20,6 +20,7 @@ one graph does both jobs.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -273,4 +274,90 @@ CONSENSUS_METRICS: dict[str, Metric] = {
         name="cohen_kappa",
         compute=lambda a, b, mask, _tol: cohen_kappa(a, b, mask),
     ),
+}
+
+
+# -- Seven-way agreement ------------------------------------------------------
+#
+# Design spec `2026-10-08-seven-way-agreement-design.md`: one score across
+# every registered detector, kept beside the pairwise suite and never instead
+# of it, since the pairs are what diagnose.
+
+
+def blended_vocabulary(vocabularies, pso_as: str) -> frozenset[Label]:
+    """The vocabulary every one of `vocabularies` can be scored in:
+    `shared_vocabulary` folded across them. `{saccade, fixation}` for the
+    seven registered detectors, under either convention."""
+    folded, *rest = list(vocabularies)
+    for vocabulary in rest:
+        folded = shared_vocabulary(folded, vocabulary, pso_as)
+    return folded
+
+
+def krippendorff_alpha(ratings: np.ndarray) -> float:
+    """Krippendorff's alpha for nominal ratings, `(raters, units)`, each a
+    category code from 0, or -1 for a rating not given.
+
+    `1 - D_o / D_e`, from the coincidences of the units at least two raters
+    rated; a unit rated once pairs with nothing and is left out. `nan` where
+    no disagreement is expected, every pairable rating one value: 0/0, never
+    1 (as `cohen_kappa` returns)."""
+    ratings = np.asarray(ratings)
+    present = ratings >= 0
+    rated = present.sum(axis=0)
+    pairable = rated >= 2
+    ratings, rated = ratings[:, pairable], rated[pairable]
+    categories = np.unique(ratings[ratings >= 0])
+    if len(categories) < 2:
+        return float("nan")
+    counts = np.stack([(ratings == category).sum(axis=0) for category in categories])
+    observed = float(np.sum((rated**2 - (counts**2).sum(axis=0)) / (rated - 1)))
+    per_category = counts.sum(axis=1)
+    n = float(per_category.sum())
+    return 1.0 - (n - 1.0) * observed / float(n**2 - (per_category**2).sum())
+
+
+@dataclass(frozen=True, slots=True)
+class Blended:
+    """One blended score: `value` None where the metric is undefined."""
+
+    value: float | None
+    n_samples_compared: int
+    vocabulary: frozenset[Label]
+
+
+def blended_agreement(labels, vocabularies, copies, pso_as: str, compute) -> Blended:
+    """Every detector's labels, by name, scored together with `compute`.
+
+    - **In the vocabulary all can express** (`blended_vocabulary`), each
+      trace's labels coarsened into it; a label that cannot be, `blink` and
+      `invalid` included, is no rating.
+    - **A detector copying another's saccades abstains on them:** where
+      `copies[name]` names its source, its rating is left out on every sample
+      the source called `saccade`, as `DetectorAgreement` leaves those samples
+      out of that pair (`registry.Detector.copies_saccades_from`).
+    - **`n_samples_compared`** counts the samples at least two detectors
+      rated."""
+    names = list(labels)
+    vocabulary = blended_vocabulary([vocabularies[name] for name in names], pso_as)
+    code = {label: index for index, label in enumerate(sorted(vocabulary, key=list(Label).index))}
+    ratings = np.full((len(names), len(labels[names[0]])), -1, dtype=np.int64)
+    for row, name in enumerate(names):
+        trace = labels[name]
+        for value in set(trace.tolist()):
+            coarsened = coarsen(Label(value), vocabulary, pso_as)
+            if coarsened is not None:
+                ratings[row, trace == value] = code[coarsened]
+        source = copies.get(name)
+        if source is not None and source in labels:
+            ratings[row, labels[source] == Label.SACCADE] = -1
+    n_compared = int(((ratings >= 0).sum(axis=0) >= 2).sum())
+    value = compute(ratings)
+    return Blended(None if math.isnan(value) else float(value), n_compared, vocabulary)
+
+
+#: The blended metrics, by name: `DetectionQuality.metric`. A registry, as
+#: `CONSENSUS_METRICS` is, so a second one is rows, not a migration.
+BLENDED_METRICS: dict[str, Callable[[np.ndarray], float]] = {
+    "krippendorff_alpha": krippendorff_alpha,
 }
