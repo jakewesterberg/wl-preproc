@@ -518,7 +518,7 @@ class DetectionQuality(dj.Computed):
     pso_as     : enum({_PSO_AS_ENUM})
     ---
     # NULL where the metric is undefined: every compared sample one label, so
-    # no disagreement is expected.
+    # no disagreement is expected, or no sample compared at all.
     value=null         : double
     # Samples at least two detectors rated.
     n_samples_compared : int unsigned

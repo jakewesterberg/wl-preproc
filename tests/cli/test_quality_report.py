@@ -66,16 +66,17 @@ def _detect(schema, session, trace, *, status="computed"):
 
 
 def _quality(schema, session, trace, as_saccade, as_fixation, *, metric="krippendorff_alpha", vocabulary=_VOCABULARY,
-             detectors=None, validity=None):
+             detectors=None, validity=None, compared=100):
     """`DetectionQuality`'s two rows for `trace`, one per glissade
-    convention; a value of None is an undefined score."""
+    convention, each over `compared` samples; a value of None is an
+    undefined score."""
     from wl_preproc.schema import consensus
 
     consensus.DetectionQuality.insert(
         ({**session.key, "trace": trace, "validity_paramset_type": "eye_validity",
           "validity_paramset_idx": schema.validity if validity is None else validity, "metric": metric,
           "vocabulary": vocabulary,
-          "pso_as": pso_as, "value": value, "n_samples_compared": 100,
+          "pso_as": pso_as, "value": value, "n_samples_compared": compared,
           "detectors": detectors or schema.detectors}
          for pso_as, value in (("saccade", as_saccade), ("fixation", as_fixation))),
         allow_direct_insert=True)
@@ -127,6 +128,17 @@ def test_an_undefined_score_says_so(quality_schema, tmp_path, prefix):
     _quality(quality_schema, session, "left", None, 0.62)
     assert _line(tmp_path, prefix, session, "left").endswith(
         "glissades as saccade undefined (usual 0.68, 3 earlier); as fixation 0.62 (usual 0.66, 3 earlier)")
+
+
+def test_a_score_over_no_samples_says_so_rather_than_undefined(quality_schema, tmp_path, prefix):
+    """No sample rated by two detectors -- every one masked, say -- is not a
+    trace whose detectors all said one thing, though both store NULL."""
+    _animal, session = _animal_with_history(quality_schema, _HISTORY)
+    _detect(quality_schema, session, "left")
+    _quality(quality_schema, session, "left", None, None, compared=0)
+    assert _line(tmp_path, prefix, session, "left").endswith(
+        "glissades as saccade 0 samples compared (usual 0.68, 3 earlier); "
+        "as fixation 0 samples compared (usual 0.66, 3 earlier)")
 
 
 def test_a_refused_detection_says_so(quality_schema, tmp_path, prefix):
