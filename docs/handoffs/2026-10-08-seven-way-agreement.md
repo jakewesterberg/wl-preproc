@@ -141,3 +141,11 @@ The requester chose them next on 2026-10-10, the hardware unchanged. Built on
 5. **The noise test skips where a detector cannot run** (`690a93c`, amendment 9). With U'n'Eye's
    code made unimportable it failed four and a half minutes in; it now skips in under a second,
    naming the install. With U'n'Eye present it runs and passes as before.
+
+**The full suite** at `605a389`, as §4 ran it: 2305 passed, 27 skipped, 1 deselected, 1 xfailed
+on 3.11; 2305 passed, 28 skipped, 1 xfailed on 3.13. Two more passed than §4's, this section's
+two tests. **A fresh reviewer (Opus)** read the branch on 2026-10-10: ready to merge, no Critical
+or Important; the fold proven and checked to leave every result for two or more vocabularies
+unchanged (42,242 cases). Three minors, for the requester: §3's `value` has no pointer to
+amendment 7; this handoff's test counts in §3 and its header's "amendments 1–4" are stale; the
+noise test's new docstring line is not reflowed.

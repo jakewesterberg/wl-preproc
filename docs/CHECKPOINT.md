@@ -219,10 +219,15 @@ requester chose to merge the same day; true when written.*
 >   every hardware-free item once the machine exists.
 >
 > **Hardware-free:** the requester's choice of 2026-10-08, seven-way detector
-> agreement, is merged (`3a45a09`). Ask what comes next. Open and small: its
-> five deferred minors (`handoffs/2026-10-08-seven-way-agreement.md` §5), and
-> M4 (left open by the requester's choice). Fine-tuning U'n'Eye to the DPI
-> tracker waits for hand-labelled lab data.
+> agreement, is merged (`3a45a09`). Its five deferred minors, the requester's
+> choice of 2026-10-10, are built on `fix/seven-way-minors`, not merged
+> (`handoffs/2026-10-08-seven-way-agreement.md` §7, spec amendments 7–9):
+> reviewed, ready to merge; next, the merge question. Open and small: M4 (left
+> open by the requester's choice). Fine-tuning U'n'Eye to the DPI tracker
+> waits for hand-labelled lab data.
+>
+> *Until 2026-10-10, night, this said to ask what comes next, the five
+> deferred minors open; true when written.*
 >
 > *Until 2026-10-10, later, this named seven-way detector agreement as built
 > on `spec/seven-way-agreement`, reviewed and not merged, with the merge
