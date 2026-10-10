@@ -1088,6 +1088,69 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
     return lines
 
 
+# The fewest earlier sessions a seven-way median is shown over (seven-way
+# agreement design spec `2026-10-08-seven-way-agreement-design.md` section 5).
+_QUALITY_MIN_HISTORY = 3
+
+
+def _quality_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
+    """`### Seven-way agreement per session per eye (24 h)`'s lines (design
+    spec `2026-10-08-seven-way-agreement-design.md` section 5): for each
+    session in `ingested_keys`, each eye and each validity paramset, the
+    session's `DetectionQuality` score under each glissade convention beside
+    the median of the same animal's earlier sessions.
+
+    **Computed here, never stored**, for `_vigor_lines`' reason. The history
+    is the earlier sessions with the same trace, validity paramset, metric,
+    vocabulary and `detectors`, and a defined score: another set of detectors
+    is another score (the spec's amendment 2). A line per metric, and the
+    line does not name it: `BLENDED_METRICS` holds one, and a second would
+    need its name on the line. In place of the figures: "detection refused"
+    where a detector's detection of the trace was, "not computed yet" where
+    no row exists. The both-eyes trace is left out, as vigor's is."""
+    import statistics
+
+    from wl_preproc.schema import consensus
+    from wl_preproc.schema import detect as detect_schema
+
+    consensus.activate(prefix=prefix)
+    table = consensus.DetectionQuality
+
+    def figure(row: dict) -> str:
+        value = "undefined" if row["value"] is None else f"{row['value']:.2f}"
+        like = {name: row[name] for name in ("subject", "trace", "validity_paramset_type", "validity_paramset_idx",
+                                               "metric", "vocabulary", "pso_as", "detectors")}
+        before = f"session_datetime < '{row['session_datetime']:%Y-%m-%d %H:%M:%S}'"
+        earlier = [past["value"] for past in (table & like & before).to_dicts() if past["value"] is not None]
+        if len(earlier) < _QUALITY_MIN_HISTORY:
+            return f"{value} (no history yet, {len(earlier)} earlier)"
+        return f"{value} (usual {statistics.median(earlier):.2f}, {len(earlier)} earlier)"
+
+    lines = []
+    for subject, session_datetime in sorted(ingested_keys):
+        session_key = {"subject": subject, "session_datetime": session_datetime}
+        detections = (detect_schema.EyeDetection & session_key & {"paramset_type": "eye_detection"}
+                      & 'trace in ("left", "right")').to_dicts()
+        groups: dict = {}
+        for detection in detections:
+            groups.setdefault((detection["trace"], detection["validity_paramset_idx"]), []).append(detection)
+        for (trace, validity_idx), members in sorted(groups.items()):
+            by_metric: dict = {}
+            for row in (table & session_key & {"trace": trace, "validity_paramset_idx": validity_idx}).to_dicts():
+                by_metric.setdefault(row["metric"], {})[row["pso_as"]] = row
+            if by_metric:
+                texts = ["glissades " + "; ".join(f"as {pso_as} {figure(conventions[pso_as])}"
+                                                  for pso_as in consensus.PSO_AS_VALUES if pso_as in conventions)
+                         for _metric, conventions in sorted(by_metric.items())]
+            elif any(member["status"] == "refused" for member in members):
+                texts = ["detection refused"]
+            else:
+                texts = ["not computed yet"]
+            lines += [f"- `{subject}` @ {session_datetime:%Y-%m-%d %H:%M} — {trace} (validity paramset "
+                      f"{validity_idx}): {text}" for text in texts]
+    return lines
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Readings:
     """Everything both renderings need, computed once.
@@ -1795,6 +1858,14 @@ def build_report(
         # render identically to a report that stopped computing agreement.
         "- none"
     ]
+
+    # Seven-way agreement design spec section 5: each eye's score against the
+    # same animal's earlier sessions, both glissade conventions on one line,
+    # beside the pairwise rows above and never instead of them. Windowed to
+    # the 24 h `ingested_keys` the per-session lists above use.
+    quality_lines = _quality_lines(ingested_keys, prefix=prefix)
+    lines += ["", f"### Seven-way agreement per session per eye (24 h) — {len(quality_lines)}", ""]
+    lines += quality_lines or ["- none"]
 
     # Main-sequence design spec section 5: each eye's vigor against the same
     # animal's earlier sessions, every detector on one line. Windowed to the
