@@ -94,9 +94,11 @@ been run against it.*
   - `n_samples_compared : int unsigned`: samples at least two detectors rated;
   - `detectors : varchar(255)`: the `eye_detection` paramset indices blended, ascending,
     comma-separated, so a row says which detectors it rests on.
+  - *Amendment 6 adds a part table, one row per detection a score blends.*
 - **Which keys it runs on.** A (session, trace, validity paramset) whose `EyeDetection` rows are
   computed for every registered `eye_detection` paramset. Two rules follow:
-  *(Amendment 4: every registered paramset whose detector the code still has.)*
+  *(Amendment 4: every registered paramset whose detector the code still has. Amendment 5: each
+  such detector's default paramset, one per detector.)*
   - **It never blends a partial set.** A row written while one detector's job was still pending
     or had errored would never be recomputed when that detector caught up, since DataJoint never
     revisits a populated key.
@@ -199,3 +201,26 @@ Each carries a dated pointer in the parent:
    counting it would stop the table for every later session, with the report saying "not computed
    yet" for good. The full suite found it: another module leaves such a paramset registered. The
    NWB stage met the same paramset in the full suite, and no longer waits on it either.
+
+## Amendments, 2026-10-10, made by the whole-branch review
+
+5. **One rater per detector: its default paramset** (§3; the review's I2). The requester's
+   decision 1 is "all registered detectors"; §3 said "every registered `eye_detection` paramset",
+   which says the same only while each detector has one. `paramset.register` is
+   content-addressed and `EyeDetection` runs every registered paramset, so a detector whose
+   defaults change keeps its older paramset registered and is detected by both. Blended, it would
+   vote twice. Waited for, an older paramset that can only ever error, after its params class
+   gains a field without a default say, would stop the table as amendment 4's case did. So the
+   paramsets blended and waited for are each detector's registered default: the ones the NWB file
+   reads (`nwb/gather.py::_paramsets`, since `bc4fc98` on 2026-09-29). None is blended while any
+   detector's default is unregistered. Amendment 4's rule is the case of a detector with no
+   default at all. `detectors` names the defaults blended, so sessions scored after a change of
+   defaults have a history of their own.
+6. **A score hangs from the detections it blends** (§3; the review's I1). A part table,
+   `DetectionQuality.Detection`, holds one row per blended detection. Deleting one, to detect the
+   session again, takes its scores with it, and the next populate blends the new labels; before,
+   a re-detected session kept its old score and was never blended again, since DataJoint never
+   revisits a populated key. A plain delete of a blended detection, or of anything it hangs from
+   short of the session, now refuses and names the remedy, `part_integrity="cascade"`. The
+   detection's `trace` is stored as `detection_trace`, always equal to `trace`: DataJoint 2.3
+   joins no two attributes of one name and different lineages.

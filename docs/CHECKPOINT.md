@@ -10,12 +10,14 @@ interpreter, and the plan's diffs replay `a9a47a0` to that tree exactly. The
 requester approved the plan and chose to run it in one session ("Native") on
 2026-10-10, after updating this machine; it was run that day, every task's
 measurements matching the plan's (`handoffs/2026-10-08-seven-way-agreement.md`).
-**Next:** the whole-branch review and the merge question. The noise test
-reads the reference recording's copy at
+The whole-branch review (Opus) said "with fixes": its two Important findings
+are fixed (spec amendments 5 and 6, handoff §5), its five minors deferred for
+the requester. **Next:** the merge question. The noise test reads the
+reference recording's copy at
 `~/.cache/wl-preproc-references/OpenIris-2024Jul31-114628.txt`.
 
 *Until 2026-10-10, later, this said next was to run `open -a OrbStack` and
-execute the plan; true when written.*
+execute the plan, and then the whole-branch review; true when written.*
 
 **Last updated 2026-10-08**, describing `main` at `b22af97`, the merge of
 `fix/main-sequence-minors`: the main sequence's four deferred minors (handoff
@@ -221,8 +223,9 @@ requester chose to merge the same day; true when written.*
 > `spec/seven-way-agreement`, not merged
 > (`handoffs/2026-10-08-seven-way-agreement.md`). Each detection trace's
 > Krippendorff's α across every registered detector, per glissade convention,
-> and the report's line for each eye against the animal's own history. Next:
-> the whole-branch review, then the merge question. Open and small: M4 (left
+> and the report's line for each eye against the animal's own history.
+> Reviewed, its two Important findings fixed; next: the merge question, and
+> its five deferred minors (handoff §5). Open and small: M4 (left
 > open by the requester's choice). Fine-tuning U'n'Eye to the DPI tracker
 > waits for hand-labelled lab data.
 >
