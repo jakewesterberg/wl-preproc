@@ -96,6 +96,7 @@ been run against it.*
     comma-separated, so a row says which detectors it rests on.
 - **Which keys it runs on.** A (session, trace, validity paramset) whose `EyeDetection` rows are
   computed for every registered `eye_detection` paramset. Two rules follow:
+  *(Amendment 4: every registered paramset whose detector the code still has.)*
   - **It never blends a partial set.** A row written while one detector's job was still pending
     or had errored would never be recomputed when that detector caught up, since DataJoint never
     revisits a populated key.
@@ -104,6 +105,9 @@ been run against it.*
   - **A paramset registered later,** an eighth detector say, keeps older sessions without a row
     for the new set until they are detected by it too. Their existing rows stay, each naming its
     own `detectors`.
+
+    *Corrected by amendment 1: an older session gets no row for the new set, even once detected
+    by it.*
 
 ## 4. Computing it
 
@@ -136,6 +140,8 @@ session per eye (24 h)"**. Computed in `build_report`, never `gather_readings`.
   sessions; "undefined" for a NULL value; "detection refused" where the trace's detection was;
   "not computed yet" where no row exists.
 - **The both-eyes trace is stored and left out of the report,** as vigor's is.
+
+*Amendment 2 adds `detectors` to what the history matches; amendment 3 places "no history yet".*
 
 ## 6. Wiring
 
@@ -172,3 +178,24 @@ Each carries a dated pointer in the parent:
 - **§6, N-way:** the blended score is §2's Krippendorff's α, per trace and convention.
 - **§7:** `DetectionQuality`'s key and columns are §3's.
 - **§9:** the report's seven-way line is §5's.
+
+## Amendments, 2026-10-08, made while proving the plan
+
+1. **A session is blended once** (§3; plan Task 2). DataJoint keys a table's job queue on the
+   primary-key attributes it inherits, and `trace` is this table's own, so `key_source` collapses
+   it: one key, and one `make()`, per session and validity paramset, writing every trace that is
+   complete. No trace is stranded by that, since `EyeDetection.make()` writes all three traces of
+   one detector at once. But a session once blended is never revisited, so a paramset registered
+   later, an eighth detector say, leaves older sessions with their rows, each naming its own
+   `detectors`, and gives them no row for the new set even once they are detected by it. Blending
+   one anew means deleting its rows. §3 had said they would get one.
+2. **The history also matches `detectors`** (§5; plan Task 3). Another set of detectors is another
+   score: leaving one of the seven out moved the reference recording's α by as much as 0.035
+   (§1.2).
+3. **"No history yet" stands beside the session's own score** (§5; plan Task 3), which is shown
+   either way: *glissades as saccade 0.63 (no history yet, 2 earlier)*.
+4. **Only paramsets whose detector the code still has are waited for** (§3; plan Task 2). A
+   paramset registered for a detector since removed from the registry can only ever error, so
+   counting it would stop the table for every later session, with the report saying "not computed
+   yet" for good. The full suite found it: another module leaves such a paramset registered. The
+   NWB stage met the same paramset in the full suite, and no longer waits on it either.
