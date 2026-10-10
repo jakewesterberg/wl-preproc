@@ -113,11 +113,31 @@ Important, five Minor. Both Important findings are fixed, each by a test that fa
 
 ## 6. What is next
 
-- **The merge question.** After the merge: CI on both interpreters, and the pointer commit (the
-  checkpoint's header and `wl.yaml`'s `describes`).
+- **Merged** as `3a45a09` on 2026-10-10, on the requester's word, and pushed: CI green, 2294
+  passed and 37 skipped on each interpreter (`gh run view 38052463665`), the one more skipped
+  being the noise test; pointer commit `5e05285`, its CI green too.
+  *Until 2026-10-10, later, this said the merge question was next; true when written.*
 - **Not in this round** (spec §8): the score in the NWB file, an event-level seven-way score, and
   any fixed threshold.
 - **A detector registered later** gives older sessions no new row (amendment 1); their rows stay,
   naming the detectors they blend.
 - **The numbers mean degrees only once sessions are calibrated.** The reference recording's
   degrees are a guessed scale.
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-10, the hardware unchanged. Built on
+`fix/seven-way-minors`, from `5e05285`; spec amendments 7–9, and amendment 4 corrected.
+1. **A single live detector** (`c2f2cd1`): `blended_vocabulary` folds the first vocabulary with
+   itself, so a lone one gains `fixation` and the blend is undefined, comparing nothing, rather
+   than a `KeyError` (amendment 8). `test_a_single_detector_is_scored_in_its_own_vocabulary_folded`
+   failed first.
+2. **"undefined" covered two cases** (`4d6be6e`): a score over no samples now says "0 samples
+   compared" (amendment 7); `DetectionQuality`'s `value` comment names both.
+   `test_a_score_over_no_samples_says_so_rather_than_undefined` failed first.
+3. **Amendment 4's NWB sentence** now says `bc4fc98` changed the NWB stage, on 2026-09-29.
+4. **The module docstring** of `schema/consensus.py` describes `DetectionQuality` beside the
+   pairwise rows (`50665bf`).
+5. **The noise test skips where a detector cannot run** (`690a93c`, amendment 9). With U'n'Eye's
+   code made unimportable it failed four and a half minutes in; it now skips in under a second,
+   naming the install. With U'n'Eye present it runs and passes as before.

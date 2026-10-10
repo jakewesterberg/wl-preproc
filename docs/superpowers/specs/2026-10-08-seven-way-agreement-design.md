@@ -127,6 +127,8 @@ In `wl_preproc/eye/detect/consensus.py`, beside the pairwise metrics:
 - **Krippendorff's α, nominal,** with missing ratings: from the coincidence matrix over samples
   rated by at least two detectors, `α = 1 - D_o / D_e`. NULL where `D_e` is zero.
 
+*Amendment 8 folds a lone vocabulary as two are.*
+
 ## 5. The report
 
 A new subsection of `## Detection` in `cli/report.py::build_report`: **"Seven-way agreement per
@@ -143,7 +145,8 @@ session per eye (24 h)"**. Computed in `build_report`, never `gather_readings`.
   "not computed yet" where no row exists.
 - **The both-eyes trace is stored and left out of the report,** as vigor's is.
 
-*Amendment 2 adds `detectors` to what the history matches; amendment 3 places "no history yet".*
+*Amendment 2 adds `detectors` to what the history matches; amendment 3 places "no history yet";
+amendment 7 says "0 samples compared" where no sample was rated twice.*
 
 ## 6. Wiring
 
@@ -167,6 +170,8 @@ metric is a registry entry. `consensus` is already in `_PROJECT_SCHEMA_MODULES`.
 - **The noise check (§1.3) as a test,** gated on `WLPP_OHDPI_REFERENCE` and so skipped in CI:
   on the reference recording's first 10 minutes, α under 0.05° of added noise must fall clearly
   below α with none.
+
+*Amendment 9 skips it, too, where a detector cannot run.*
 
 ## 8. Not in scope
 
@@ -200,7 +205,10 @@ Each carries a dated pointer in the parent:
    paramset registered for a detector since removed from the registry can only ever error, so
    counting it would stop the table for every later session, with the report saying "not computed
    yet" for good. The full suite found it: another module leaves such a paramset registered. The
-   NWB stage met the same paramset in the full suite, and no longer waits on it either.
+   NWB stage had met the same paramset there on 2026-09-29, and has waited only on the paramsets
+   the file reads since (`bc4fc98`); this work did not change it.
+   *Until 2026-10-10 the last sentence said the NWB stage "no longer waits on it either", as if
+   this work had changed it (the review's minor 3); true when written.*
 
 ## Amendments, 2026-10-10, made by the whole-branch review
 
@@ -224,3 +232,18 @@ Each carries a dated pointer in the parent:
    short of the session, now refuses and names the remedy, `part_integrity="cascade"`. The
    detection's `trace` is stored as `detection_trace`, always equal to `trace`: DataJoint 2.3
    joins no two attributes of one name and different lineages.
+
+## Amendments, 2026-10-10, made by the review's deferred minors
+
+7. **A score over no samples says so** (§5; minor 2). `value` is NULL in two cases: every
+   compared sample carrying one label, and no sample rated by two detectors at all, every one
+   masked say. They are not the same finding, so the report says "undefined" for the first and
+   "0 samples compared" for the second, beside the history as before.
+8. **A lone vocabulary is folded as two are** (§4; minor 1). `blended_vocabulary` folds the first
+   vocabulary with itself, so it gains `fixation`, which every detector can say, as a pair's
+   would. Unfolded, a single live detector's `fixation` samples had no code and the blend raised;
+   now it is undefined and compares nothing, since one rater pairs with no one. The seven's
+   vocabulary is unchanged, `{saccade, fixation}`.
+9. **The noise test is skipped where a detector cannot run** (§7; minor 5), U'n'Eye without its
+   install say, as `wlpp daemon` and `wlpp doctor` find it (`registry.unavailable_detectors`).
+   It had failed there, four and a half minutes in.
