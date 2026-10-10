@@ -1,5 +1,18 @@
 # Where this build actually is
 
+**In flight, 2026-10-10: seven-way detector agreement, not merged.** The spec
+(`specs/2026-10-08-seven-way-agreement-design.md`, `a9a47a0`) and its plan
+(`plans/2026-10-08-seven-way-agreement.md`, `fad9346`) are on
+`spec/seven-way-agreement`. Every task's code was proven on `proof/seven-way`
+(worktree `~/.cache/wl-preproc-scratch/2026-10-08-seven-way/proof`, final
+commit `4d8ffa6`): 32 mutations caught, the full suite 2300 passed on each
+interpreter, and the plan's diffs replay `a9a47a0` to that tree exactly. The
+requester approved the plan and chose to run it in one session ("Native") on
+2026-10-10, after updating this machine. **Next:** run `open -a OrbStack`,
+then execute the plan on `spec/seven-way-agreement`; then the whole-branch
+review and the merge question. The noise test reads the reference recording's
+copy at `~/.cache/wl-preproc-references/OpenIris-2024Jul31-114628.txt`.
+
 **Last updated 2026-10-08**, describing `main` at `b22af97`, the merge of
 `fix/main-sequence-minors`: the main sequence's four deferred minors (handoff
 `handoffs/2026-10-07-main-sequence.md` §7, spec amendment 5). CI read off
