@@ -24,7 +24,7 @@ status:
     calibration and seven saccade detectors (U'n'Eye, the seventh, merged
     5b41770, 2026-10-07), with their saccades' main sequence and vigor
     (ff8aeb9, 2026-10-08) and their seven-way agreement (3a45a09,
-    2026-10-10). Spike sorting (Phase 2b, and the
+    2026-10-10; its minors c899a9d). Spike sorting (Phase 2b, and the
     NWB's units) waits on the compute machine. docs/CHECKPOINT.md and
     docs/handoffs/ hold the full record. *Until 2026-10-05 this field was a
     running log of every merge since Phase 1c; it is in git at 817c204:wl.yaml;
@@ -34,19 +34,19 @@ status:
     rig: record a few minutes with the sync box live, since the barcode and
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
-    units come before everything below. Hardware-free: the requester's choice
-    of 2026-10-08, seven-way detector agreement, is merged; its five deferred
-    minors, his choice of 2026-10-10, are built on fix/seven-way-minors and
-    not merged (docs/handoffs/2026-10-08-seven-way-agreement.md section 7);
-    reviewed, ready; the merge question. Open and small: M4. Fine-tuning
-    U'n'Eye waits for hand-labelled lab data.
-    Done: seven-way detector agreement (3a45a09): each detection trace's
-    Krippendorff's alpha across every detector's default paramset, per
-    glissade convention, and the report's line for each eye against the
-    animal's own history. Before it, the main sequence's four deferred minors
-    (b22af97): a condition held to its own block's span, and the four untested
-    paths tested. Before them, the U'n'Eye minors branch's three deferred
-    minors (7dcf37f): numba
+    units come before everything below. Hardware-free: the requester's
+    choices of 2026-10-08 and 2026-10-10 are merged; ask what comes next.
+    Open and small: M4. Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    Done: seven-way agreement's five deferred minors (c899a9d): a lone
+    detector's blend undefined rather than an error, "0 samples compared" in
+    the report, the noise test skipped where a detector cannot run, and two
+    documents corrected. Before it, seven-way detector agreement (3a45a09):
+    each detection trace's Krippendorff's alpha across every detector's
+    default paramset, per glissade convention, and the report's line for each
+    eye against the animal's own history. Before that, the main sequence's
+    four deferred minors (b22af97): a condition held to its own block's span,
+    and the four untested paths tested. Before them, the U'n'Eye minors
+    branch's three deferred minors (7dcf37f): numba
     kept off OpenMP for the whole process, and doctor tests that open no
     database. Before it, the saccade main sequence and vigor (ff8aeb9): each
     detection trace's fit, block and condition gains, and the report's vigor
@@ -101,6 +101,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `3a45a09` until the seven-way-minors merge `c899a9d` on 2026-10-10 (CI
+  # green on `3a45a09`, run 38052463665); true when written.
   # Was `b22af97` until the seven-way merge `3a45a09` on 2026-10-10 (CI green
   # on `b22af97`, run 37787193207); true when written.
   # Was `7dcf37f` until the main-sequence-minors merge `b22af97` on
@@ -146,7 +148,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "3a45a09"
+  describes: "c899a9d"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
