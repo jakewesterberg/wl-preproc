@@ -1105,9 +1105,12 @@ def _quality_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str
     vocabulary and `detectors`, and a defined score: another set of detectors
     is another score (the spec's amendment 2). A line per metric, and the
     line does not name it: `BLENDED_METRICS` holds one, and a second would
-    need its name on the line. In place of the figures: "detection refused"
-    where a detector's detection of the trace was, "not computed yet" where
-    no row exists. The both-eyes trace is left out, as vigor's is."""
+    need its name on the line. Both NULL, in place of the session's figure:
+    "undefined" where every compared sample carried one label, and "0
+    samples compared" where no sample was rated twice. In place of the
+    figures: "detection refused" where a detector's detection of the trace
+    was, "not computed yet" where no row exists. The both-eyes trace is left
+    out, as vigor's is."""
     import statistics
 
     from wl_preproc.schema import consensus
@@ -1117,7 +1120,10 @@ def _quality_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str
     table = consensus.DetectionQuality
 
     def figure(row: dict) -> str:
-        value = "undefined" if row["value"] is None else f"{row['value']:.2f}"
+        if row["n_samples_compared"] == 0:
+            value = "0 samples compared"
+        else:
+            value = "undefined" if row["value"] is None else f"{row['value']:.2f}"
         like = {name: row[name] for name in ("subject", "trace", "validity_paramset_type", "validity_paramset_idx",
                                                "metric", "vocabulary", "pso_as", "detectors")}
         before = f"session_datetime < '{row['session_datetime']:%Y-%m-%d %H:%M:%S}'"

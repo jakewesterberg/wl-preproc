@@ -287,8 +287,12 @@ CONSENSUS_METRICS: dict[str, Metric] = {
 def blended_vocabulary(vocabularies, pso_as: str) -> frozenset[Label]:
     """The vocabulary every one of `vocabularies` can be scored in:
     `shared_vocabulary` folded across them. `{saccade, fixation}` for the
-    seven registered detectors, under either convention."""
-    folded, *rest = list(vocabularies)
+    seven registered detectors, under either convention. The first is folded
+    with itself, so a lone vocabulary gains `fixation` as a pair's would; a
+    detector's own `fixation` samples otherwise have no code in
+    `blended_agreement`."""
+    first, *rest = list(vocabularies)
+    folded = shared_vocabulary(first, first, pso_as)
     for vocabulary in rest:
         folded = shared_vocabulary(folded, vocabulary, pso_as)
     return folded

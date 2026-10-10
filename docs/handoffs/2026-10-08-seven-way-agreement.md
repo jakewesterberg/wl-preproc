@@ -2,7 +2,7 @@
 
 **Branch:** `spec/seven-way-agreement`, forked from `main` at `95c8b54`.
 - **Design:** `docs/superpowers/specs/2026-10-08-seven-way-agreement-design.md`, an addendum to the
-  saccade-detection spec's §6 and §7, with amendments 1–4.
+  saccade-detection spec's §6 and §7, with amendments 1–9 (7–9 from the deferred minors, §7).
 - **Plan:** `docs/superpowers/plans/2026-10-08-seven-way-agreement.md`.
 - **The requester's choices,** on 2026-10-08:
   - this work next, from what was open;
@@ -44,9 +44,10 @@
 
 ## 3. Tests
 
-- `tests/eye/detect/test_blended_agreement.py` (10): α against Krippendorff's own worked example
+- `tests/eye/detect/test_blended_agreement.py` (11): α against Krippendorff's own worked example
   (0.743), perfect and chance agreement, a unit one detector rated, the undefined case; the folded
-  vocabulary of the seven in any order; coarsening, the mask and abstention.
+  vocabulary of the seven in any order, and a lone one folded (amendment 8, §7); coarsening, the
+  mask and abstention.
 - `tests/schema/test_detection_quality_populate.py` (10): on the stepped session, a row for every
   trace, metric and convention, each value the blend of the stored labels; on planted rows, a
   trace blended only when every registered detector computed it, a session with no complete
@@ -55,10 +56,10 @@
   neither waited for nor blended and nothing blended while a default is unregistered
   (amendment 5), and a blended detection deleted taking its scores with it (amendment 6); a real
   `wlpp daemon` pass writing rows with nothing registered beforehand.
-- `tests/cli/test_quality_report.py` (7): a line against history, too little history, an
-  undefined score, a refused detection, a missing row, the both-eyes trace left out, and a
-  history of earlier sessions scored alike (trace, validity paramset, metric, vocabulary and
-  detectors).
+- `tests/cli/test_quality_report.py` (8): a line against history, too little history, an
+  undefined score, a score over no samples (amendment 7, §7), a refused detection, a missing row,
+  the both-eyes trace left out, and a history of earlier sessions scored alike (trace, validity
+  paramset, metric, vocabulary and detectors).
 - `tests/eye/detect/test_seven_way_validation.py` (1, gated on `WLPP_OHDPI_REFERENCE`): noise the
   mask keeps lowers the score.
 - `tests/cli/test_detect_report.py`: the events-count test reads its own subsection, since the
@@ -113,11 +114,40 @@ Important, five Minor. Both Important findings are fixed, each by a test that fa
 
 ## 6. What is next
 
-- **The merge question.** After the merge: CI on both interpreters, and the pointer commit (the
-  checkpoint's header and `wl.yaml`'s `describes`).
+- **Merged** as `3a45a09` on 2026-10-10, on the requester's word, and pushed: CI green, 2294
+  passed and 37 skipped on each interpreter (`gh run view 38052463665`), the one more skipped
+  being the noise test; pointer commit `5e05285`, its CI green too.
+  *Until 2026-10-10, later, this said the merge question was next; true when written.*
 - **Not in this round** (spec §8): the score in the NWB file, an event-level seven-way score, and
   any fixed threshold.
 - **A detector registered later** gives older sessions no new row (amendment 1); their rows stay,
   naming the detectors they blend.
 - **The numbers mean degrees only once sessions are calibrated.** The reference recording's
   degrees are a guessed scale.
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-10, the hardware unchanged. Built on
+`fix/seven-way-minors`, from `5e05285`; spec amendments 7–9, and amendment 4 corrected.
+1. **A single live detector** (`c2f2cd1`): `blended_vocabulary` folds the first vocabulary with
+   itself, so a lone one gains `fixation` and the blend is undefined, comparing nothing, rather
+   than a `KeyError` (amendment 8). `test_a_single_detector_is_scored_in_its_own_vocabulary_folded`
+   failed first.
+2. **"undefined" covered two cases** (`4d6be6e`): a score over no samples now says "0 samples
+   compared" (amendment 7); `DetectionQuality`'s `value` comment names both.
+   `test_a_score_over_no_samples_says_so_rather_than_undefined` failed first.
+3. **Amendment 4's NWB sentence** now says `bc4fc98` changed the NWB stage, on 2026-09-29.
+4. **The module docstring** of `schema/consensus.py` describes `DetectionQuality` beside the
+   pairwise rows (`50665bf`).
+5. **The noise test skips where a detector cannot run** (`690a93c`, amendment 9). With U'n'Eye's
+   code made unimportable it failed four and a half minutes in; it now skips in under a second,
+   naming the install. With U'n'Eye present it runs and passes as before.
+
+**The full suite** at `605a389`, as §4 ran it: 2305 passed, 27 skipped, 1 deselected, 1 xfailed
+on 3.11; 2305 passed, 28 skipped, 1 xfailed on 3.13. Two more passed than §4's, this section's
+two tests. **A fresh reviewer (Opus)** read the branch on 2026-10-10: ready to merge, no Critical
+or Important; the fold proven and checked to leave every result for two or more vocabularies
+unchanged (42,242 cases). Three minors, for the requester: §3's `value` has no pointer to
+amendment 7; this handoff's test counts in §3 and its header's "amendments 1–4" are stale; the
+noise test's new docstring line is not reflowed. The requester chose to fix all three before
+the merge, and they are.

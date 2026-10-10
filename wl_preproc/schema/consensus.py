@@ -1,20 +1,22 @@
 # wl_preproc/schema/consensus.py
-"""Pairwise detector agreement, keyed by the vocabulary it was scored in.
+"""Detector agreement, pairwise and seven-way, keyed by the vocabulary it
+was scored in.
 
-Design spec `docs/superpowers/specs/2026-08-31-saccade-detection-design.md`
-sections 6 and 6.1. One row per `(session, trace, mask, detector pair, metric,
+`DetectorAgreement`, the pairwise rows: design spec
+`docs/superpowers/specs/2026-08-31-saccade-detection-design.md` sections 6
+and 6.1. One row per `(session, trace, mask, detector pair, metric,
 vocabulary, pso assignment)`, which is the whole of section 6.1's argument
 made structural: a score computed in a coarse vocabulary is not comparable to
 one computed in a fine one, so the vocabulary is IN THE KEY and any report
 aggregating across pairs has to group by it or say something false.
 
 **Two detectors are the minimum this table needs to exist at all**, and stage
-2A is the first time this repository has had them. Engbert-Kliegl and
+2A was the first time this repository had them. Engbert-Kliegl and
 Otero-Millan declare the SAME vocabulary (`{saccade, microsaccade}`,
-`eye/detect/registry.py::DETECTORS`), so this first pair exercises neither
+`eye/detect/registry.py::DETECTORS`), so that first pair exercised neither
 coarsening nor exclusion -- section 6.1's own "a pair whose vocabularies are
-equal needs neither mechanism". The coarsening step below is therefore a
-no-op today. It is written anyway, and it is not speculative: five of section
+equal needs neither mechanism" -- and the coarsening step below was a no-op
+then. It was written anyway, and it was not speculative: five of section
 3.1's seven detectors declare something else, and a comparison that skipped
 coarsening would silently score the most capable of them as the least
 reliable, which is the defect section 6.1 opens by naming.
@@ -28,20 +30,33 @@ rather than in `make()` is what makes it converge: a `make()` that inserted
 nothing would leave its key outstanding and be retried on every
 `daemon.run_once` pass forever.
 
+`DetectionQuality`, the seven-way score: design spec
+`docs/superpowers/specs/2026-10-08-seven-way-agreement-design.md`. Every
+detector's agreement on one trace in one number, Krippendorff's alpha,
+beside the pairwise rows and never instead of them: each detector's default
+paramset is one rater (amendment 5), scored in the vocabulary all of them can
+express (`eye/detect/consensus.py::blended_agreement`). A trace is blended
+only once every detector computed it, so a refused detection names no row
+here either, and `DetectionQuality.Detection` names the detections a score
+blends, so deleting one takes the score with it (amendment 6).
+
 **This module declares no paramset of its own, deliberately.**
 `event_f1`'s tolerance is the one tunable number here, and section 6.1 rules
 it "the metric's own parameter, not a detection paramset's". It is
 `eye/detect/consensus.py::DEFAULT_EVENT_F1_TOLERANCE_SAMPLES`, a module
-constant, and that is the honest shape for it: this table's key has no
+constant, and that is the honest shape for it: neither table's key has a
 consensus-paramset column (section 7), so a paramset here would be a stored
 number that could change with nothing in the key to say which value produced
 a row -- strictly worse than a constant, which at least changes in a commit.
-What this table DOES depend on is `detect.register_default_paramsets`
-registering a second detector, since one detector is zero pairs; that call
-reaches production through `daemon._PARAMSET_MODULES`, and
+What both DO depend on is `detect.register_default_paramsets`: a second
+detector registered, since one detector is zero pairs, and every detector's
+default, since `DetectionQuality` blends nothing while one is missing. That
+call reaches production through `daemon._PARAMSET_MODULES`, and
 `tests/schema/test_consensus_populate.py::
 test_a_real_wlpp_daemon_pass_writes_agreement_rows_registering_nothing_itself`
-is what fails if it stops.
+and `tests/schema/test_detection_quality_populate.py::
+test_a_real_wlpp_daemon_pass_writes_quality_rows_registering_nothing_itself`
+are what fail if it stops.
 """
 
 from __future__ import annotations
@@ -518,7 +533,7 @@ class DetectionQuality(dj.Computed):
     pso_as     : enum({_PSO_AS_ENUM})
     ---
     # NULL where the metric is undefined: every compared sample one label, so
-    # no disagreement is expected.
+    # no disagreement is expected, or no sample compared at all.
     value=null         : double
     # Samples at least two detectors rated.
     n_samples_compared : int unsigned

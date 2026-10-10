@@ -35,10 +35,11 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free: the requester's choice
-    of 2026-10-08, seven-way detector agreement, is merged; ask what comes
-    next. Open and small: its five deferred minors
-    (docs/handoffs/2026-10-08-seven-way-agreement.md section 5), and M4.
-    Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    of 2026-10-08, seven-way detector agreement, is merged; its five deferred
+    minors, his choice of 2026-10-10, are built on fix/seven-way-minors and
+    not merged (docs/handoffs/2026-10-08-seven-way-agreement.md section 7);
+    reviewed, ready; the merge question. Open and small: M4. Fine-tuning
+    U'n'Eye waits for hand-labelled lab data.
     Done: seven-way detector agreement (3a45a09): each detection trace's
     Krippendorff's alpha across every detector's default paramset, per
     glissade convention, and the report's line for each eye against the

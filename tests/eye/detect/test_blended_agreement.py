@@ -116,6 +116,18 @@ def test_an_undefined_blend_is_none():
     assert (result.value, result.n_samples_compared) == (None, 3)
 
 
+def test_a_single_detector_is_scored_in_its_own_vocabulary_folded():
+    """One vocabulary is folded as two are: `fixation`, which every
+    detector can say, joins it. Unfolded, `a`'s `fixation` samples had no
+    code. One rater pairs with no one, so the blend is undefined and compares
+    nothing."""
+    labels, vocabularies, _copies = _traces()
+    for pso_as in (PSO_AS_SACCADE, PSO_AS_FIXATION):
+        assert blended_vocabulary([vocabularies["a"]], pso_as) == frozenset({S, M, F})
+        result = blended_agreement({"a": labels["a"]}, vocabularies, {"a": None}, pso_as, krippendorff_alpha)
+        assert (result.value, result.n_samples_compared, result.vocabulary) == (None, 0, frozenset({S, M, F}))
+
+
 def test_the_registry_names_krippendorffs_alpha():
     assert list(BLENDED_METRICS) == ["krippendorff_alpha"]
     assert BLENDED_METRICS["krippendorff_alpha"] is krippendorff_alpha
