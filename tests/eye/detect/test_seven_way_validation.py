@@ -3,7 +3,8 @@
 the validity mask does not catch lowers the score.
 
 Gated on `WLPP_OHDPI_REFERENCE`, so skipped in CI; the recording is never
-committed. Imports nothing from `wl_preproc.schema`: the gaze is repaired and
+committed. Skipped too where a detector cannot run, U'n'Eye without its
+install say (`registry.unavailable_detectors`). Imports nothing from `wl_preproc.schema`: the gaze is repaired and
 each detector run as `schema/detect.py::EyeDetection.make()` does, restated
 here. Each detector gets `Detector.defaults`, which is what its registered
 paramset holds: the shared `microsaccade_max_deg` equals every detector's own
@@ -40,6 +41,12 @@ def left_eye():
     sample = os.environ.get("WLPP_OHDPI_REFERENCE")
     if not sample:
         pytest.skip("WLPP_OHDPI_REFERENCE is not set -- see test_nystrom_holmqvist_validation.py")
+    from wl_preproc.eye.detect.registry import unavailable_detectors
+
+    # The score is every detector's, so one that cannot run here, U'n'Eye
+    # without its install say, skips the test rather than fail it minutes in.
+    if unavailable := unavailable_detectors():
+        pytest.skip(f"a detector cannot run here: {unavailable}")
     from wl_preproc.eye.detect.glitch import repair_glitches
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
     from wl_preproc.eye.gaze import gaze_trace, purkinje_vector
