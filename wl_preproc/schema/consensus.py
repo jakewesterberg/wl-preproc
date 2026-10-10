@@ -537,6 +537,9 @@ class DetectionQuality(dj.Computed):
         # The detection's `trace` is taken as `detection_trace`, always equal
         # to `trace`: this table's `trace` is its own attribute, and
         # DataJoint 2.3 refuses to join two of one name and another lineage.
+        # Key: (subject, session_datetime, trace, validity_paramset_type,
+        # validity_paramset_idx, metric, vocabulary, pso_as, detection_trace,
+        # paramset_type, paramset_idx).
         -> master
         -> detect.EyeDetection.proj(detection_trace='trace')
         """
