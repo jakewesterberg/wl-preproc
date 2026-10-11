@@ -361,7 +361,9 @@ fallback's design); not C.
   `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero. Fixed the same day
   on this repository's branch `fix/eye-loss` (`docs/superpowers/specs/2026-10-11-eye-loss-design.md`):
   `EyeQuality` and the validity mask read a lost eye from the 0s OpenIrisDPI writes. *Until then this
-  said the defect was open here; true when written.*
+  said the defect was open here; true when written.* Two asks back, for P10 (blinks from the image,
+  with their flanks; raw eye video from the first sessions), are in this repository's
+  `docs/pending-wl-xcon-amendments.md`.
 
 **10. XC-096: per-trial gaze staleness into `EyeQuality` (an offer, standing).** Blocks: nothing; waits on
 wl-xcon's XC-007. Your answer is wanted only as "yes, in `EyeQuality`" or "no, leave it in the behavioral
