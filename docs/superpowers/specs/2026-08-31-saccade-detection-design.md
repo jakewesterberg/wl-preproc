@@ -48,7 +48,7 @@ fact are created.
 
 | Order | Label | Where it comes from |
 |---|---|---|
-| 1 | `blink` | the pupil not found, or `DataQuality < 100` — what the tracker wrote (`ohdpi.TrackerLoss`) |
+| 1 | `blink` | the pupil not found — what the tracker wrote (`ohdpi.TrackerLoss`) |
 | 2 | `invalid` | any other validity-mask criterion (§2) |
 | 3 | `saccade` *or* `microsaccade` | a detected event, split by amplitude at the threshold |
 | 4 | `pso` | post-saccadic oscillation, in the window following a saccade (§2.5) |
@@ -75,8 +75,7 @@ validity failure, so generic-first would mean no sample is ever labelled
 `blink` and the label would be dead code that looks alive.
 
 **`blink` reads the rule `EyeQuality` reads,** `ohdpi.TrackerLoss`: a sample
-whose pupil was not found, or whose `{eye}DataQuality` is below 100. One rule,
-never two: a second blink definition free to drift from the one the daily report
+whose pupil was not found. One rule, never two: a second blink definition free to drift from the one the daily report
 already publishes is precisely the defect this repository names most often.
 *Until 2026-10-11 both read `DataQuality` below 100 alone, which OpenIrisDPI
 writes as 100 through every blink (`2026-10-11-eye-loss-design.md`); true when
@@ -95,8 +94,9 @@ inherits the event's class. The threshold is a paramset parameter, default
 OpenIrisDPI's tutorial notebook lists five criteria: eye open, gaze within a
 plausible region, plausible speed, no frame discontinuity, and then invalid
 regions expanded with short surviving epochs dropped. *Eye open is read since
-2026-10-11 by `ohdpi.TrackerLoss`: a blink, or P1 or P4 written as 0, which is
-`invalid` (`2026-10-11-eye-loss-design.md` §3).*
+2026-10-11 by `ohdpi.TrackerLoss`: a blink, or a lost reflection -- P1 or P4
+written as 0, or `DataQuality` below 100 -- which is `invalid`
+(`2026-10-11-eye-loss-design.md` §3 and amendment 8).*
 
 **None of them involves a detector.** They depend on the raw recording and the
 calibration alone. That is why the mask is its own Computed table

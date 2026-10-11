@@ -265,10 +265,17 @@ requester chose to merge the same day; true when written.*
 > recording, so both read zero. **The fix, the requester's choice, is built on
 > `fix/eye-loss`, not merged** (`handoffs/2026-10-11-eye-loss.md`): one rule
 > reads a lost eye from the 0s OpenIrisDPI writes, for the validity mask and
-> `EyeQuality`. Next: the review. Still to build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open
-> and small: the correction marker's three deferred minors
+> `EyeQuality`. Reviewed: one Important and three Minors re-graded Important,
+> fixed (`4f28441`) with the requester's decision that `DataQuality` below 100
+> is a lost reflection, not a blink. **Next: the merge question.** Still to
+> build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open and small:
+> the eye-loss fix's five deferred minors (`handoffs/2026-10-11-eye-loss.md`
+> §6) and the correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, at night, this said the eye-loss fix's review came next;
+> true when written.*
 >
 > *Until 2026-10-11, in the evening, this said the fix came next; true when written.*
 >

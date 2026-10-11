@@ -339,9 +339,12 @@ fallback's design); not C.
   switching rule and the second map.* P4 reaches about 10° of gaze and the lab's stimuli about 15° (S5
   §1), so without it this repository's gaze beyond P4's reach rests on `CR1 - CR4` where that is not
   reliable. One input to XC-006's switching rule: `DataQuality` cannot be it, since it stays 100 through
-  every blink (item 9). What OpenIrisDPI writes for a feature it did not find is 0: the pupil and P1 go to
-  0 through each blink, and P4 almost never does (`docs/superpowers/specs/2026-10-11-eye-loss-design.md`
-  §1).
+  every blink (item 9). What OpenIrisDPI writes for a feature it did not find is 0. Through each blink the
+  pupil and P1 go to 0 and P4 does not; outside blinks, P4 has a coordinate at 0 on 1.13% of the left eye's
+  frames and 0.22% of the right's, measured here, with the pupil high in the image (the eye looking up)
+  and P1 at 0 on most of them: the tracker lost P4 there, which is XC-006's question
+  (`docs/superpowers/specs/2026-10-11-eye-loss-design.md` §1 and amendment 9). *Until 2026-10-11, later,
+  this said P4 "almost never" goes to 0, true within blinks only; true when written.*
 
 **9. XC-095: correct the `DataQuality` description.** Blocks: nothing.
 - *Asked:* your eye spec's section 1.1 (and `eye/gaze.py:23`) describe `DataQuality` as 0/50/100,

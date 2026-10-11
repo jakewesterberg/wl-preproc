@@ -284,3 +284,25 @@ what the sections above left open; §0 stands.
    yet built (wl-xcon's P9; open ask 7 here), could help detect blinks. It would see the eyelid
    independently of the tracker, beside the zeros this rule reads, and could cover the partial
    blinks the rule leaves to the mask's dilation (`handoffs/2026-10-11-eye-loss.md` §3).
+
+---
+
+## Amendments, 2026-10-11, from the final review
+
+8. **`DataQuality` below 100 is a lost reflection, not a blink** (the requester's decision, on the
+   final review's Minor 4; §2 said "kept" as a blink). `DataQuality` is 50*P1_valid + 50*P4_valid,
+   so below 100 says P1 or P4 was lost and nothing about the pupil: a 50 is an open eye with one
+   reflection gone. It joins `feature_lost`, which the mask withholds as `invalid`, and a blink is
+   the pupil not found alone. It never happens on this rig, where `DataQuality` is always 100, so no
+   figure on the reference recording moves. The fixtures that faked a blink by lowering
+   `DataQuality` (`tests/schema/test_eye_populate.py::lossy_quality_session`,
+   `tests/schema/test_consensus_populate.py::_inject_blink`) write one as OpenIrisDPI does, the
+   pupil at 0; one that withholds an eye through `DataQuality`
+   (`tests/schema/test_detect_populate.py::_withhold_one_eye_then_both`) still withholds it, as
+   `invalid`, and its test accepts either label.
+9. **§1's P4 figures, corrected** (the final review's Minor 8). "3 frames lost in the left eye"
+   counted P4 with both coordinates at 0. By the rule's own test, either coordinate at 0, P4 is at
+   0 on 1 of the left eye's 5,008 blink frames and none of the right's 3,965. Outside blinks it is
+   at 0 on 13,275 left-eye frames (1.13%) and 2,626 right (0.22%), with the pupil high in the image
+   (median Y 87 px against 222 px otherwise; right 90 against 255): the eye looking up, P1 at 0 too
+   on 12,947 of the left eye's. These are counted in §1's 44,804 and 41,391.

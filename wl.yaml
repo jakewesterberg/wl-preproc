@@ -43,8 +43,11 @@ status:
     where it runs). Ask 9 found EyeQuality's tracking loss and blink rate
     reading zero on real OpenIrisDPI data (DataQuality is always 100); the
     fix, the requester's choice, is built on fix/eye-loss and not merged
-    (docs/handoffs/2026-10-11-eye-loss.md); next, the review. Still to build: asks 1, 2's flag, 3, 5,
-    6, 7 and 8. Open and small: the correction marker's
+    (docs/handoffs/2026-10-11-eye-loss.md); reviewed, and its fixes made
+    (4f28441) with the requester's decision that DataQuality below 100 is a
+    lost reflection; next, the merge question. Still to build: asks 1, 2's
+    flag, 3, 5, 6, 7 and 8. Open and small: the eye-loss fix's five deferred
+    minors and the correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
     section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: M4, the correction marker (caf1d63): a correction marks its file
