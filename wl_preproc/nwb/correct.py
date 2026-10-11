@@ -175,9 +175,22 @@ def _subject_paths(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     return inside, [row for row in rows if row["dataset_path"] not in SUBJECT_DATASETS]
 
 
+def _mark(key: dict) -> None:
+    """The file's marker, committed before its swap (design spec
+    `2026-10-11-correction-marker-design.md` section 3, rule 1): a swap whose
+    records then fail leaves it, and `stale_files` finds the file by it. One
+    already there is kept, with its time. When it cannot be written this
+    raises, and nothing is swapped."""
+    from wl_preproc.nwb.publish import _now
+    from wl_preproc.schema import nwb as nwb_schema
+
+    if not len(nwb_schema.NwbCorrecting & key):
+        nwb_schema.NwbCorrecting.insert1({**key, "started_at": _now()})
+
+
 def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     """Correct one stale file where it is (spec section 3): copy, patch,
-    check, swap, record, and rewrite the description beside it. `shares`
+    check, mark, swap, record, and rewrite the description beside it. `shares`
     maps a tier to its `publish.Share`. Returns the note, or None when the
     file already held the details and only its records were brought up to
     them. Raises `CorrectionRefused`, `ChangedWhileCorrecting` or
@@ -230,6 +243,7 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
                                          "to it); tried again next pass")
         if note is not None:
             _keep_access(live, partial)
+            _mark(key)
             os.replace(partial, live)
     finally:
         partial.unlink(missing_ok=True)
@@ -273,7 +287,8 @@ def write_subject_records(key: dict, description: dict, fresh: list[dict], chang
     """`subject_records`' result into the records, in one transaction: the
     description, the four datasets' `NwbFile.Dataset` rows, the scratch
     copy's size when given, and -- for a correction -- its `corrected`
-    change, with `change` as its placement (or `{}` for none)."""
+    change, with `change` as its placement (or `{}` for none). The file's
+    marker, if any, is deleted with them."""
     import datajoint as dj
 
     from wl_preproc.nwb.publish import insert_change
@@ -284,6 +299,10 @@ def write_subject_records(key: dict, description: dict, fresh: list[dict], chang
                                     **({} if n_bytes is None else {"n_bytes": n_bytes})})
         (nwb_schema.NwbFile.Dataset & key & [{"dataset_path": path} for path in SUBJECT_DATASETS]).delete_quick()
         nwb_schema.NwbFile.Dataset.insert({**key, **item} for item in fresh)
+        # The records now describe the file, so its marker goes in the same
+        # transaction, and stays if it fails (design spec
+        # `2026-10-11-correction-marker-design.md` section 3, rule 2).
+        (nwb_schema.NwbCorrecting & key).delete_quick()
         if change is not None:
             insert_change(key, "corrected", change or None)
 
@@ -295,10 +314,18 @@ def _record(key: dict, row: dict, live: Path, placement: dict | None) -> None:
     the size, and a `corrected` change -- with the placement again, same
     share and path, for a published file. Written in that order, a failed
     description file leaves the records stale, so the next pass writes it
-    (the final review's I3)."""
+    (the final review's I3). A description already recorded as the file's
+    is not recorded again: only the file's marker is deleted."""
     from wl_preproc.nwb.publish import write_description
+    from wl_preproc.schema import nwb as nwb_schema
 
     description, fresh = subject_records(key, row["description"], live)
+    if description == row["description"]:
+        # Marked and never swapped: the records already describe the file,
+        # and wl.works is shown no change for nothing (design spec
+        # `2026-10-11-correction-marker-design.md` section 3, rule 3).
+        (nwb_schema.NwbCorrecting & key).delete_quick()
+        return
     n_bytes = live.stat().st_size
     if placement is not None:
         write_description(live, description)
