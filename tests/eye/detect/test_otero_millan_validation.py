@@ -591,6 +591,13 @@ def test_the_main_sequence_statistic_is_measured_and_not_asserted(reference, cap
     scale on this recording; where a figure comes from a configuration this
     test does not itself reproduce, that is said.
 
+    *Taken with the mask before 2026-10-11, which offered the detectors frames
+    the tracker had lost (design spec `2026-10-11-eye-loss-design.md`,
+    amendment 6). On the mask since, this test prints Engbert-Kliegl 0.8067 /
+    0.7826 against otero_millan's 0.8577 / 0.8046, the duration-matched null
+    0.8674 / 0.8554, and 4,525 left-eye events, from 4,700: points 1 and 2
+    stand. The figures below were not re-measured; true when written.*
+
     1. **Engbert-Kliegl, the always-on baseline nobody is validating, scores
        LOWER on the identical trace** -- 0.7536 / 0.7415 against
        otero_millan's 0.8213 / 0.7750, same mask, same `measure` call. A bound

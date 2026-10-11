@@ -150,9 +150,10 @@ def validity_labels(
     rejected fraction. See `ValidityMask` for what the seven fractions are,
     and for what they deliberately do not sum to."""
     n = gaze_deg.shape[0]
-    # Eye open, read by the rule: a blink (the pupil not found, or a declared
-    # failure), and P1 or P4 at 0 with the pupil found, where `CR1 - CR4` is
-    # not a position (design spec `2026-10-11-eye-loss-design.md` section 3).
+    # Eye open, read by the rule: a blink (the pupil not found), and a lost
+    # reflection (P1 or P4 at 0, or `DataQuality` below 100), where `CR1 -
+    # CR4` is not a position (design spec `2026-10-11-eye-loss-design.md`
+    # section 3 and amendment 8).
     blink = loss.blink
     feature_lost = loss.feature_lost
 

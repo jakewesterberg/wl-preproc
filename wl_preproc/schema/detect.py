@@ -149,8 +149,9 @@ class EyeValidity(dj.Computed):
     # OpenIrisDPI's own five (design spec section 2): eye open, gaze within a
     # plausible region, plausible speed, no frame discontinuity, and short
     # surviving epochs dropped. Eye open is two columns since 2026-10-11:
-    # `blink` and `feature_lost` (P1 or P4 at 0), both by `ohdpi.
-    # TrackerLoss`'s rule (design spec `2026-10-11-eye-loss-design.md`).
+    # `blink` (the pupil not found) and `feature_lost` (P1 or P4 at 0, or
+    # `DataQuality` below 100), both by `ohdpi.TrackerLoss`'s rule (design
+    # spec `2026-10-11-eye-loss-design.md`).
     # `non_finite` is a data-integrity guard added 2026-09-27: a gaze,
     # velocity or loss column that is not a finite number.
     #

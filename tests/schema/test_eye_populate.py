@@ -1400,13 +1400,16 @@ def test_carried_forward_writes_the_candidates_real_datetime(carried_forward_ses
 @pytest.fixture(scope="module")
 def lossy_quality_session(daemon_module, prefix, tmp_path_factory):
     """A real, alignable ohDPI recording (so `EyeQuality.key_source` admits
-    it) with REAL, per-eye-DISTINCT tracking loss injected directly into the
-    generated file's own `LeftDataQuality`/`RightDataQuality` columns --
-    `synth/ohdpi.py::write_ohdpi` always writes `DataQuality=100`, so no
-    fixture anywhere else in this file (or this plan's own synthetic
-    generator) ever gives `EyeQuality.make()`'s inline re-derivation of
-    `gaze.tracking_loss_fraction` (and its own per-eye COLUMN SELECTION) a
-    real loss to compute from, or a real run to count.
+    it) with REAL, per-eye-DISTINCT blinks injected directly into the
+    generated file, as OpenIrisDPI writes one: the eye's own `PupilWidth` and
+    `PupilHeight` at 0 -- `synth/ohdpi.py::write_ohdpi` always writes a
+    constant pupil, so no fixture anywhere else in this file (or this plan's
+    own synthetic generator) ever gives `EyeQuality.make()`'s inline
+    re-derivation of `gaze.tracking_loss_fraction` (and its own per-eye
+    COLUMN SELECTION) a real loss to compute from, or a real run to count.
+    *Until 2026-10-11 this drove `DataQuality` below 100, a blink then and a
+    lost reflection since (design spec `2026-10-11-eye-loss-design.md`,
+    amendment 8); true when written.*
 
     Left: three separated single-frame drops -> 3 runs. Right: a 3-frame
     run and a 2-frame run at DIFFERENT rows -> 2 runs, 5 lost frames.
@@ -1426,21 +1429,19 @@ def lossy_quality_session(daemon_module, prefix, tmp_path_factory):
     ohdpi_dir = session_dir / "ohdpi"
     (ohdpi_txt,) = ohdpi_dir.glob("*.txt")
 
-    left_idx = HEADER.index("LeftDataQuality")
-    right_idx = HEADER.index("RightDataQuality")
+    left_idx = [HEADER.index(f"Left{name}") for name in ("PupilWidth", "PupilHeight")]
+    right_idx = [HEADER.index(f"Right{name}") for name in ("PupilWidth", "PupilHeight")]
     lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
     header_line, data_lines = lines[0], lines[1:]
 
     left_loss_rows = (500, 1500, 2500)
     right_loss_rows = (700, 701, 702, 3000, 3001)
-    for row_index in left_loss_rows:
-        fields = data_lines[row_index].split(" ")
-        fields[left_idx] = "0.0000"
-        data_lines[row_index] = " ".join(fields)
-    for row_index in right_loss_rows:
-        fields = data_lines[row_index].split(" ")
-        fields[right_idx] = "50.0000"
-        data_lines[row_index] = " ".join(fields)
+    for rows, columns in ((left_loss_rows, left_idx), (right_loss_rows, right_idx)):
+        for row_index in rows:
+            fields = data_lines[row_index].split(" ")
+            for column in columns:
+                fields[column] = "0.0000"
+            data_lines[row_index] = " ".join(fields)
     ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
 
     session_key = _land(

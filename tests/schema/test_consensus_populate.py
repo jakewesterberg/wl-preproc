@@ -57,16 +57,17 @@ _BLINK_N_FRAMES = 60
 
 
 def _inject_blink(session_dir) -> None:
-    """Drive both eyes' `DataQuality` to zero for `_BLINK_N_FRAMES` frames,
-    directly in the generated ohDPI `.txt`.
+    """Write a blink in both eyes for `_BLINK_N_FRAMES` frames, as OpenIrisDPI
+    writes one -- the pupil's width and height at 0 -- directly in the
+    generated ohDPI `.txt`.
 
     `test_detect_populate.py::_inject_single_eye_ramps`' own technique --
     split each affected line by column, replace one field, rewrite -- against
-    a different pair of columns. Nothing in `SessionRecipe` can express a
-    blink: `write_ohdpi` writes `_fmt(100.0)` into both `DataQuality` columns
-    unconditionally, and `validity_labels`' blink criterion includes
-    `DataQuality` below 100 (`ohdpi.TrackerLoss`; until 2026-10-11 it was
-    that alone).
+    different columns. Nothing in `SessionRecipe` can express a blink:
+    `write_ohdpi` writes a constant pupil, and `validity_labels`' blink is
+    the pupil not found (`ohdpi.TrackerLoss`, design spec
+    `2026-10-11-eye-loss-design.md`). *Until 2026-10-11 this drove both eyes'
+    `DataQuality` to 0, the blink criterion then; true when written.*
 
     BOTH eyes, at the same frames. A single-eye blink would mask that eye's
     trace and the conjunction (which is built on the left eye's own mask) but
@@ -83,7 +84,8 @@ def _inject_blink(session_dir) -> None:
     header_line, data_lines = lines[0], lines[1:]
 
     row_start = _first_row_at(_BLINK_ONSET_S)
-    columns = [HEADER.index(name) for name in ("LeftDataQuality", "RightDataQuality")]
+    columns = [HEADER.index(f"{eye}{name}") for eye in ("Left", "Right")
+               for name in ("PupilWidth", "PupilHeight")]
     for offset in range(_BLINK_N_FRAMES):
         fields = data_lines[row_start + offset].split(" ")
         for column in columns:
@@ -396,6 +398,13 @@ def test_n_samples_compared_counts_what_neither_side_called_blink_or_invalid(
 
     session_key, _report = agreement_session
     excluded = {Label.BLINK, Label.INVALID}
+
+    # The planted frames are stored as a blink, as `_inject_blink` writes one:
+    # the pupil not found (design spec `2026-10-11-eye-loss-design.md`).
+    start = _first_row_at(_BLINK_ONSET_S)
+    for trace in ("left", "right"):
+        for name, labels in _label_arrays(session_key, trace).items():
+            assert set(labels[start:start + _BLINK_N_FRAMES]) == {Label.BLINK}, (trace, name)
 
     for trace in ("left", "right", "conjunction"):
         arrays = _label_arrays(session_key, trace)

@@ -3784,7 +3784,8 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # cases `test_the_conjunction_inherits_the_detectors_own_minimum_
     # duration` covers: no stored conjunction event may be shorter than the
     # detector's own floor, and the raw intersection genuinely contains such
-    # spans (402 of 4,952 when this was measured), so this is not vacuous.
+    # spans (402 of 4,952 when this was measured; 279 of 4,495 on the mask
+    # since 2026-10-11), so this is not vacuous.
     assert all(
         stop - start >= DEFAULT_EK_PARAMS.min_duration_samples
         for start, stop in _bounds(conjunction_spans)

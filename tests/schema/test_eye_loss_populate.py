@@ -165,20 +165,53 @@ def test_a_database_without_the_column_masks_nothing_and_names_the_statement(los
     assert "restart" in str(raised.value)
 
 
-def test_a_daemon_pass_reports_the_statement_and_parks_no_key(lost_session, daemon_module, prefix, monkeypatch):
-    """Refused before any job is reserved: a key whose `make()` raised would be
-    parked as an error and never retried (`daemon.reap_stale_jobs`), so the
-    statement alone would not bring the stage back."""
+def test_a_table_read_without_the_column_is_refused(lost_session, monkeypatch):
+    """`_lacks_feature_lost()` itself, not a stand-in for it: the heading
+    DataJoint caches on the class for the process, replaced by one without
+    the column -- what a daemon reads that started on a database declared
+    before 2026-10-11, or before the statement ran -- and the stage refuses
+    (the final review's Minor 1)."""
+    from types import SimpleNamespace
+
     from wl_preproc.schema import detect
 
+    names = [name for name in detect.EyeValidity.heading.names if name != "frac_feature_lost"]
+    monkeypatch.setattr(detect.EyeValidity, "_heading", SimpleNamespace(names=names))
+
+    assert detect._lacks_feature_lost()
+    with pytest.raises(RuntimeError, match="has no column frac_feature_lost"):
+        detect.EyeValidity.populate()
+
+
+def test_a_daemon_pass_reports_the_statement_and_parks_no_key(daemon_module, prefix, monkeypatch, tmp_path_factory):
+    """Refused before any job is reserved: a key whose `make()` raised would be
+    parked as an error and never retried (`daemon.reap_stale_jobs`), so the
+    statement alone would not bring the stage back. A fresh session's key is
+    pending when the refused pass runs (the final review's Minor 2: with
+    `lost_session` alone, already masked, nothing was), the pass still runs
+    the other stages, and the next pass, the column read, masks it."""
+    from wl_preproc.schema import detect, eye as eye_schema
+
+    session = new_animal().session()
+    session_key, _segment, _onsets = _build_stepped_session(
+        tmp_path_factory, dirname="eyelossrefused", session_id=session.session_id, subject=session.subject,
+        session_datetime=session.session_datetime, seed=1112)
     errored = len(detect.EyeValidity.jobs & {"status": "error"})
-    monkeypatch.setattr(detect, "_lacks_feature_lost", lambda: True)
 
-    report = daemon_module.run_once(prefix=prefix)
+    with monkeypatch.context() as patch:
+        patch.setattr(detect, "_lacks_feature_lost", lambda: True)
+        report = daemon_module.run_once(prefix=prefix)
 
+    assert len(detect.EyeValidity.jobs & {"status": "error"}) == errored
+    assert len(detect.EyeValidity.key_source & session_key) > 0
+    assert len(detect.EyeValidity & session_key) == 0
+    assert len(eye_schema.EyeQuality & session_key) == 2
     assert any(error.startswith("EyeValidity: ") and detect._feature_lost_statement() in error
                for error in report["errors"])
-    assert len(detect.EyeValidity.jobs & {"status": "error"}) == errored
+
+    daemon_module.run_once(prefix=prefix)
+
+    assert len(detect.EyeValidity & session_key) == 2
 
 
 def test_the_statement_restores_the_column_as_datajoint_declares_it(lost_session):

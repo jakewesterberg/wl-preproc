@@ -218,8 +218,10 @@ def read_ohdpi(path: Path) -> OhdpiRecording:
 # camera's view. A real position is fractional; the lowest 0.1% of P1's
 # normal Y values sit at 69 px.
 #
-# `DataQuality` is 50*P1_valid + 50*P4_valid, so below 100 is still the
-# tracker declaring a failure, on any version or tracker that sets it.
+# `DataQuality` is 50*P1_valid + 50*P4_valid, so below 100 is the tracker
+# declaring P1 or P4 lost, on any version or tracker that sets it: a lost
+# reflection, not a blink, since it says nothing about the pupil (the
+# requester's decision, 2026-10-11, design spec amendment 8).
 FULL_TRACKING_QUALITY = 100.0
 
 _LOSS_COLUMNS = ("DataQuality", "PupilWidth", "PupilHeight", "CR1X", "CR1Y", "CR4X", "CR4Y")
@@ -229,11 +231,11 @@ _LOSS_COLUMNS = ("DataQuality", "PupilWidth", "PupilHeight", "CR1X", "CR1Y", "CR
 class TrackerLoss:
     """Per frame, where the tracker lost one eye (design spec section 2).
 
-    - `blink`: the pupil not found (its width or height 0), or `DataQuality`
-      below 100.
-    - `feature_lost`: P1 or P4 with a coordinate at exactly 0. Inside a blink
-      P1 is lost too, so the two overlap there; P1 alone at 0 is the eye
-      looking up, out of the camera's view of P1.
+    - `blink`: the pupil not found (its width or height 0).
+    - `feature_lost`: P1 or P4 with a coordinate at exactly 0, or
+      `DataQuality` below 100, the tracker declaring one of them lost. Inside
+      a blink P1 is lost too, so the two overlap there; P1 alone at 0 is the
+      eye looking up, out of the camera's view of P1.
     - `unreadable`: a column read for this rule is not a finite number. A
       NaN compares false against both tests above, so such a frame is in
       neither: it declares nothing, and the validity mask withholds it as
@@ -259,8 +261,8 @@ def tracker_loss(columns: Mapping[str, np.ndarray], eye: str) -> TrackerLoss:
         np.asarray(columns[f"{eye}{name}"], dtype=float) for name in _LOSS_COLUMNS
     )
     return TrackerLoss(
-        blink=(width == 0) | (height == 0) | (quality < FULL_TRACKING_QUALITY),
-        feature_lost=(p1x == 0) | (p1y == 0) | (p4x == 0) | (p4y == 0),
+        blink=(width == 0) | (height == 0),
+        feature_lost=(p1x == 0) | (p1y == 0) | (p4x == 0) | (p4y == 0) | (quality < FULL_TRACKING_QUALITY),
         unreadable=~np.isfinite(np.column_stack([quality, width, height, p1x, p1y, p4x, p4y])).all(axis=1),
     )
 

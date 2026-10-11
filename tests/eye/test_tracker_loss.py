@@ -48,13 +48,19 @@ def test_a_pupil_not_found_is_a_blink():
     assert _rows(loss.lost) == [2, 4]
 
 
-def test_data_quality_below_one_hundred_is_still_a_blink():
-    """Kept for any tracker or version that does declare a failure."""
+def test_data_quality_below_one_hundred_is_a_lost_reflection_not_a_blink():
+    """`DataQuality` is 50*P1_valid + 50*P4_valid: below 100 says P1 or P4
+    was lost and nothing about the pupil, so a 50 is an open eye with one
+    reflection gone (the requester's decision, 2026-10-11, spec amendment 8).
+    Kept for any tracker or version that does set it."""
     columns = _columns(5)
     columns["LeftDataQuality"][1] = 50.0
     columns["LeftDataQuality"][3] = 0.0
 
-    assert _rows(tracker_loss(columns, "Left").blink) == [1, 3]
+    loss = tracker_loss(columns, "Left")
+
+    assert _rows(loss.feature_lost) == [1, 3]
+    assert not loss.blink.any()
 
 
 def test_p1_or_p4_at_zero_is_a_lost_feature_not_a_blink():

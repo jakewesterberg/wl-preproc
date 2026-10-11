@@ -2092,23 +2092,28 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
     """The 225/337 saccades one eye found and the other did not
     (`docs/handoffs/2026-09-19-what-the-agreement-rule-costs-saccades.md`),
     sorted by what the other eye was doing over the same samples
-    (`_why_unmatched`). Measured 2026-09-28, through the registry's
+    (`_why_unmatched`). Measured 2026-10-11, through the registry's
     `detect` as the pipeline stores it, so after the usable-data guard
     (`registry.py::_within_usable`), at the conjunction's floor of 5
     samples (`NH_CONJUNCTION_FLOOR_SAMPLES`), on glitch-repaired gaze
-    (`eye/detect/glitch.py`):
+    (`eye/detect/glitch.py`), with the mask reading where the tracker lost
+    the eye (design spec `2026-10-11-eye-loss-design.md`):
 
     | | left -> right | right -> left |
     |---|---|---|
-    | unmatched, of the eye's saccades | 497 of 4,793 | 468 of 4,756 |
-    | the other eye's data was withheld | 311 | 188 |
-    | the other eye's saccade was just outside it | 25 | 28 |
-    | the other eye moved too, undetected | 92 | 179 |
-    | the other eye did not move | 69 | 73 |
+    | unmatched, of the eye's saccades | 403 of 4,729 | 324 of 4,646 |
+    | the other eye's data was withheld | 260 | 136 |
+    | the other eye's saccade was just outside it | 24 | 26 |
+    | the other eye moved too, undetected | 64 | 106 |
+    | the other eye did not move | 55 | 56 |
 
     Only the middle two rows are real saccades the binocular rule loses:
-    about 2.4% and 4.4% of each eye's saccades. The largest row is missing
+    about 1.9% and 2.8% of each eye's saccades. The largest row is missing
     data, not disagreement, and it is asserted to stay the largest.
+
+    *Measured 2026-09-28, with the mask reading `DataQuality` alone: 497 of
+    4,793 and 468 of 4,756 unmatched (311/25/92/69 and 188/28/179/73), about
+    2.4% and 4.4%; true when written.*
 
     *Measured the same day before the glitch repair: 691 of 4,641 and 437
     of 4,384 unmatched (552/13/61/65 and 189/22/164/62), about 1.6% and
@@ -2149,10 +2154,15 @@ def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
     `2026-09-28-both-eyes-fallback-design.md` section 6), on this detector's
     two eyes. Recorded, and one thing asserted: after the usable-data guard
     no run covers a withheld sample, so the which-eye trace is `neither`
-    exactly where both eyes' masks withhold. Measured 2026-09-28, after the
-    final review's fix, on glitch-repaired gaze: 340 left and 211 right
-    saccades kept whole, and the trace is `both` on 95.17%, `left` 1.87%,
-    `right` 1.38% and `neither` 1.58%.
+    exactly where both eyes' masks withhold. Measured 2026-10-11, on
+    glitch-repaired gaze, with the mask reading where the tracker lost the
+    eye (design spec `2026-10-11-eye-loss-design.md`): 306 left and 184
+    right saccades kept whole, and the trace is `both` on 93.58%, `left`
+    1.24%, `right` 1.15% and `neither` 4.04%.
+
+    *Measured 2026-09-28, after the final review's fix, with the mask reading
+    `DataQuality` alone: 340 and 211, with `both` on 95.17%, `left` 1.87%,
+    `right` 1.38% and `neither` 1.58%; true when written.*
 
     *Before the glitch repair (the same day): 587 and 205, with `both` on
     93.76%, `left` 2.42%, `right` 1.62% and `neither` 2.20%; true when
