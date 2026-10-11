@@ -103,7 +103,8 @@ class NwbCorrecting(dj.Manual):
    `os.replace`, the marker is inserted in a transaction of its own, which commits before the
    swap. A marker already there is kept, with its time. If the insert fails, nothing is swapped:
    the copy is deleted, the file is left as it was, and the failure is reported and retried next
-   pass.
+   pass. *Amendment 4 moves it earlier: after the copy is flushed, before the live file's stamp is
+   checked.*
 2. **The records clear it.** `write_subject_records` deletes the file's marker inside the
    transaction that writes the description, the four checksums and the `corrected` change. The
    marker goes if and only if the records are written. The same function writes an adoption's
@@ -235,3 +236,15 @@ These settle what the sections above left open; §0 stands.
    `skip_duplicates`, so any other error inserting it still stops the swap (§3 rule 1).
 3. **`stale_files` reads every marker in one query per pass** and matches them to files by
    `publish.activation_tuple`.
+
+---
+
+## Amendment, 2026-10-11, from the final review
+
+4. **The marker is written after the copy is flushed and before the live file's stamp is
+   checked,** not after every check (§3 rule 1). Written after the check, its two database round
+   trips lay between the check and the swap, and a lab's write landing then was lost under the
+   swap: the gap amendment 8 of `2026-10-05-subject-corrections-design.md` closed for the flush
+   (its M2). A write seen at the check drops the copy, and the marker stays for a swap that never
+   happened (§5). The final review graded it Minor, as the spec's own timing; re-graded Important
+   by its effect, the loss of a person's annotation.

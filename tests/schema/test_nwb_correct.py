@@ -1269,3 +1269,41 @@ def test_a_file_put_back_does_not_stop_a_move_due_that_pass(published, shares, d
         daemon_module.run_once(prefix=prefix, **passes)
         daemon_module.run_once(prefix=prefix, **passes)
     assert current_placement(key)["tier"] == "slow"
+
+
+# -- The final review.
+
+def test_a_write_while_the_marker_is_written_stops_the_swap(published, shares, monkeypatch):
+    """Minor 1, re-graded: the marker is written before the live file's stamp
+    is checked, so a lab's write landing while it is written is seen and the
+    copy dropped, rather than lost under the swap, as M2 has it for the
+    flush. The marker stays, for a swap that never happened (section 5)."""
+    from wl_preproc.nwb import correct as correct_module
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    size = live.stat().st_size
+    real = correct_module._mark
+
+    def written_meanwhile(marked):
+        real(marked)
+        with open(live, "ab") as handle:
+            handle.write(b"\0")
+
+    monkeypatch.setattr(correct_module, "_mark", written_meanwhile)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with pytest.raises(correct_module.ChangedWhileCorrecting):
+            correct_module.correct(key, shares, _DAY)
+        assert live.stat().st_size == size + 1 and _marked(key)
+    finally:
+        monkeypatch.undo()
+        if live.stat().st_size == size + 1:  # the byte appended above, removed
+            with open(live, "r+b") as handle:
+                handle.truncate(size)
+        _set_birth(_BIRTH)
+        correct_module.correct(key, shares, _DAY)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+    assert correct_module.file_subject(live)["date_of_birth"] == _BIRTH

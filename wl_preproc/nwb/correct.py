@@ -236,6 +236,10 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
         if note is not None:
             with open(partial, "rb+") as handle:
                 os.fsync(handle.fileno())
+            # Marked before the stamp is checked, so a write landing while
+            # the marker is written is seen too (design spec
+            # `2026-10-11-correction-marker-design.md`, amendment 4).
+            _mark(key)
         # Checked after the copy is flushed, so a write landing during the
         # flush is seen rather than lost under the swap (the final review's M2).
         if _stamp(live) != before:
@@ -243,7 +247,6 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
                                          "to it); tried again next pass")
         if note is not None:
             _keep_access(live, partial)
-            _mark(key)
             os.replace(partial, live)
     finally:
         partial.unlink(missing_ok=True)
