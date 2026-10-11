@@ -42,19 +42,19 @@ def recording():
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
     from wl_preproc.eye.gaze import purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
     rec = read_ohdpi(sample)
     raw = {"left": purkinje_vector(sample, "Left"), "right": purkinje_vector(sample, "Right")}
-    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    loss = {"left": read_tracker_loss(sample, "Left"), "right": read_tracker_loss(sample, "Right")}
     pooled_x = np.concatenate([np.abs(raw["left"][:, 0]), np.abs(raw["right"][:, 0])])
     pooled_y = np.concatenate([np.abs(raw["left"][:, 1]), np.abs(raw["right"][:, 1])])
     scale = _SCALE_P99_AT_DEG / max(float(np.percentile(pooled_x, 99)), float(np.percentile(pooled_y, 99)))
     eyes = {}
-    for eye, column in (("left", "LeftDataQuality"), ("right", "RightDataQuality")):
+    for eye in ("left", "right"):
         gaze = apply_map(_scaled_affine_map(scale), raw[eye])
         v = velocity(gaze, rec.fs_hz)
-        mask = validity_labels(gaze, v, quality[column], rec.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+        mask = validity_labels(gaze, v, loss[eye], rec.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
         eyes[eye] = (gaze, v, mask)
     return rec, eyes
 

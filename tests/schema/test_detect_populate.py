@@ -1300,7 +1300,7 @@ def test_the_runs_tile_the_whole_trace(stepped_session):
 
 
 _VALIDITY_FRACTION_COLUMNS = (
-    "frac_blink", "frac_out_of_region", "frac_too_fast",
+    "frac_blink", "frac_feature_lost", "frac_out_of_region", "frac_too_fast",
     "frac_frame_gap", "frac_short_epoch", "frac_non_finite",
 )
 
@@ -2150,16 +2150,18 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     than relied on silently."""
     from wl_preproc.eye.detect.labels import Label
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
+    from wl_preproc.eye.ohdpi import TrackerLoss
 
     n = 50
     rng = np.random.default_rng(0)
     gaze = rng.normal(0, 1, (n, 2))
     velocity_deg_s = rng.normal(0, 1, (n, 2))
-    quality = np.full(n, 100.0)
-    quality[10:15] = 0.0  # a blink
+    loss = TrackerLoss(blink=np.zeros(n, dtype=bool), feature_lost=np.zeros(n, dtype=bool),
+                       unreadable=np.zeros(n, dtype=bool))
+    loss.blink[10:15] = True  # a blink
     gaze[30:35, 0] = 100.0  # outside the region -> invalid
 
-    labels = validity_labels(gaze, velocity_deg_s, quality, (), DEFAULT_VALIDITY_PARAMS).labels
+    labels = validity_labels(gaze, velocity_deg_s, loss, (), DEFAULT_VALIDITY_PARAMS).labels
 
     present = {label for label in labels if label is not None}
     assert Label.FIXATION not in present
@@ -3423,7 +3425,7 @@ def _scaled_affine_map(scale: float):
     return CalibrationMap(model=CalibrationModel.AFFINE, x=(0.0, scale, 0.0), y=(0.0, 0.0, scale))
 
 
-def _mask_and_velocity(raw_xy, quality, fs_hz, frame_gaps, scale):
+def _mask_and_velocity(raw_xy, loss, fs_hz, frame_gaps, scale):
     """One eye's gaze at `scale`, its velocity, and its validity mask -- the
     three real functions `EyeValidity.make()` itself calls (`apply_map`,
     `velocity`, `validity_labels`), run here without a database.
@@ -3439,7 +3441,7 @@ def _mask_and_velocity(raw_xy, quality, fs_hz, frame_gaps, scale):
 
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
-    mask = validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS)
+    mask = validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS)
     return gaze, v, mask.labels
 
 
@@ -3515,15 +3517,17 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     present, and never committed regardless.
 
     **Timing, measured directly, so nobody mistakes this for a hang.** The
-    file is 633 MB, 1,177,799 rows. Reading it takes four column-selective
+    file is 633 MB, 1,177,799 rows. Reading it takes five column-selective
     passes -- `read_ohdpi` once (frame numbers, seconds, the sync word),
-    `purkinje_vector` once per eye, `read_columns` once for both eyes'
-    `DataQuality` -- and this test times and prints that total. Measured on
-    this machine: ~8 s for all four passes combined. Everything downstream
+    `purkinje_vector` once per eye, `read_tracker_loss` once per eye (its
+    seven columns) -- and this test times and prints that total. Measured on
+    this machine: ~8 s for the four passes it took until 2026-10-11, when
+    one `DataQuality` read became two reads of the loss columns.
+    Everything downstream
     (masking, detecting, encoding, at every scale this test uses) runs in
     well under a second per pass, because it is pure in-memory numpy once the
     columns are in hand -- which is also why the sweep below re-reads
-    nothing: `raw["left"]`/`raw["right"]`/`quality` are read ONCE and every
+    nothing: `raw["left"]`/`raw["right"]`/`loss` are read ONCE and every
     scale after that is `apply_map` on the same arrays.
 
     **Why a scale can be chosen at all without a validated calibration for
@@ -3585,13 +3589,13 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
     from wl_preproc.schema.detect import _conjunction_label, _conjunction_runs, _overlapping
 
     t0 = time.monotonic()
     recording = read_ohdpi(sample)
     raw = {"left": purkinje_vector(sample, "Left"), "right": purkinje_vector(sample, "Right")}
-    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    loss = {"left": read_tracker_loss(sample, "Left"), "right": read_tracker_loss(sample, "Right")}
     read_s = time.monotonic() - t0
 
     # The scale heuristic (this test's own honesty requirement: STATE it,
@@ -3606,10 +3610,10 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     scale_ref = 15.0 / max(p99_x, p99_y)
 
     left_gaze, left_v, left_mask = _mask_and_velocity(
-        raw["left"], quality["LeftDataQuality"], recording.fs_hz, recording.frame_gaps, scale_ref
+        raw["left"], loss["left"], recording.fs_hz, recording.frame_gaps, scale_ref
     )
     right_gaze, right_v, right_mask = _mask_and_velocity(
-        raw["right"], quality["RightDataQuality"], recording.fs_hz, recording.frame_gaps, scale_ref
+        raw["right"], loss["right"], recording.fs_hz, recording.frame_gaps, scale_ref
     )
     left_spans = _detect(left_gaze, left_v, left_mask, recording.fs_hz)
     right_spans = _detect(right_gaze, right_v, right_mask, recording.fs_hz)
@@ -3695,7 +3699,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
             f"{recording.n_frames / recording.fs_hz / 60:.1f} min, "
             f"{len(recording.frame_gaps)} frame gap(s)"
         )
-        print(f"  file read: {read_s:.1f}s over 4 column-selective passes")
+        print(f"  file read: {read_s:.1f}s over 5 column-selective passes")
         print(
             f"  scale heuristic: {scale_ref:.6g} deg/px ({1 / scale_ref:.2f} px/deg) -- "
             f"pooled p99 |raw| is ({p99_x:.1f}, {p99_y:.1f}) px, placed at 15 deg"
@@ -3753,7 +3757,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
         for mult in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0):
             scale = scale_ref * mult
             gaze, v, mask = _mask_and_velocity(
-                raw["left"], quality["LeftDataQuality"], recording.fs_hz, recording.frame_gaps, scale
+                raw["left"], loss["left"], recording.fs_hz, recording.frame_gaps, scale
             )
             spans = _detect(gaze, v, mask, recording.fs_hz)
             runs, _, _ = _encode(mask, spans)
@@ -3780,7 +3784,8 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # cases `test_the_conjunction_inherits_the_detectors_own_minimum_
     # duration` covers: no stored conjunction event may be shorter than the
     # detector's own floor, and the raw intersection genuinely contains such
-    # spans (402 of 4,952 when this was measured), so this is not vacuous.
+    # spans (402 of 4,952 when this was measured; 279 of 4,495 on the mask
+    # since 2026-10-11), so this is not vacuous.
     assert all(
         stop - start >= DEFAULT_EK_PARAMS.min_duration_samples
         for start, stop in _bounds(conjunction_spans)

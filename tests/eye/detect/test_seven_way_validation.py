@@ -36,8 +36,8 @@ def _scaled_affine_map(scale: float):
 @pytest.fixture(scope="module")
 def left_eye():
     """The first ten minutes of the left eye's glitch-repaired gaze, as
-    `schema/detect.py::_repaired_gaze` builds it, its quality flags and the
-    rate. The recording is uncalibrated, so its 99th percentile is put at 15
+    `schema/detect.py::_repaired_gaze` builds it, where the tracker lost it
+    (`ohdpi.TrackerLoss`) and the rate. The recording is uncalibrated, so its 99th percentile is put at 15
     degrees, as the other validation tests do."""
     sample = os.environ.get("WLPP_OHDPI_REFERENCE")
     if not sample:
@@ -51,7 +51,7 @@ def left_eye():
     from wl_preproc.eye.detect.glitch import repair_glitches
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
     from wl_preproc.eye.gaze import gaze_trace, purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import TrackerLoss, read_ohdpi, read_tracker_loss
 
     rec = read_ohdpi(sample)
     # The mask below is given no frame gaps: they are rows of the whole
@@ -64,11 +64,12 @@ def left_eye():
     gaze, _repaired = repair_glitches(gaze_trace(sample, "Left", _scaled_affine_map(scale)), rec.fs_hz,
                                       DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms)
     n = int(MINUTES * 60 * rec.fs_hz)
-    quality = read_columns(sample, ["LeftDataQuality"])["LeftDataQuality"]
-    return gaze[:n], quality[:n], rec.fs_hz
+    loss = read_tracker_loss(sample, "Left")
+    return gaze[:n], TrackerLoss(blink=loss.blink[:n], feature_lost=loss.feature_lost[:n],
+                                 unreadable=loss.unreadable[:n]), rec.fs_hz
 
 
-def _seven_way(gaze, quality, fs_hz) -> tuple[float, float]:
+def _seven_way(gaze, loss, fs_hz) -> tuple[float, float]:
     """Krippendorff's alpha over every registered detector, glissades as
     saccade, BMD abstaining on the saccades it copies; and the share of
     samples the mask offered."""
@@ -77,7 +78,7 @@ def _seven_way(gaze, quality, fs_hz) -> tuple[float, float]:
     from wl_preproc.eye.detect.velocity import velocity
 
     v = velocity(gaze, fs_hz)
-    offered = np.asarray(validity_labels(gaze, v, quality, (), DEFAULT_VALIDITY_PARAMS).labels, dtype=object)
+    offered = np.asarray(validity_labels(gaze, v, loss, (), DEFAULT_VALIDITY_PARAMS).labels, dtype=object)
     labels = {}
     for name, detector in DETECTORS.items():
         trace = offered.copy()
@@ -94,9 +95,9 @@ def test_noise_the_mask_keeps_lowers_the_seven_way_score(left_eye):
     """Spec section 1.3 measured 0.684 with no noise and 0.594 under 0.05
     degrees, the mask keeping 0.991 of samples at both. A drop of more than
     0.05 is asked for, with the mask's share unmoved."""
-    gaze, quality, fs_hz = left_eye
-    clean, clean_share = _seven_way(gaze, quality, fs_hz)
+    gaze, loss, fs_hz = left_eye
+    clean, clean_share = _seven_way(gaze, loss, fs_hz)
     noisy_gaze = gaze + np.random.default_rng(0).normal(0.0, NOISE_SD_DEG, gaze.shape)
-    noisy, noisy_share = _seven_way(noisy_gaze, quality, fs_hz)
+    noisy, noisy_share = _seven_way(noisy_gaze, loss, fs_hz)
     assert noisy_share == pytest.approx(clean_share, abs=0.001)
     assert noisy < clean - 0.05, (clean, noisy)

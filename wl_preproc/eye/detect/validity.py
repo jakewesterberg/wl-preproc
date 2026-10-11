@@ -1,6 +1,12 @@
 """The validity mask -- OpenIrisDPI's own five criteria, plus one guard.
 
-The guard is `non_finite`: a sample whose gaze, velocity or quality flag is
+Its first criterion, eye open, is two: `blink` and `feature_lost`, both read
+by `ohdpi.TrackerLoss`'s rule from what the tracker wrote (design spec
+`2026-10-11-eye-loss-design.md` section 3). *Until 2026-10-11 it was `blink`
+alone, read as `DataQuality` below 100, which OpenIrisDPI writes as 100 on
+every frame, blinks included; true when written.*
+
+The guard is `non_finite`: a sample whose gaze, velocity or loss columns are
 not a finite number. It is not one of OpenIrisDPI's criteria but a
 data-integrity check, added 2026-09-27 -- a NaN compares false against every
 threshold the five apply, so until then a sample with no gaze at all was
@@ -28,16 +34,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.velocity import _HALF_WINDOW
-from wl_preproc.eye.ohdpi import FrameGap
-
-# `EyeQuality`'s own `_FULL_TRACKING_QUALITY`, restated rather than imported --
-# it is private there, and the value belongs to the frozen recording format
-# rather than being a choice free to drift between the two places it is read.
-#
-# NECESSARY, NOT SUFFICIENT: OpenIrisDPI "does not determine when the image
-# processing algorithm has failed", so a frame at 100 is one the tracker did
-# not declare a failure on, which is not the same as one it tracked correctly.
-_FULL_TRACKING_QUALITY = 100.0
+from wl_preproc.eye.ohdpi import FrameGap, TrackerLoss
 
 # **The one ranking this subsystem actually applies**, most specific first.
 # Design spec section 1 gives all eight labels a precedence order, but only
@@ -106,15 +103,16 @@ class ValidityMask:
     about the data was missing, and a mask that rejects most of a session
     said only that something did.
 
-    `fractions` is keyed by CRITERION name (`blink`, `out_of_region`,
-    `too_fast`, `frame_gap`, `short_epoch`, `non_finite`), never by
-    `EyeValidity` column name: this module states criteria, the schema states
-    columns. Those keys are exactly the column suffixes, which is what lets
-    `EyeValidity.make()` spread them all in ONE line instead of writing each
-    out. (Five until 2026-09-27, when `non_finite` joined.) Columns
-    fed by hand from one place is precisely the shape a copy-paste error
-    survives in -- every column still looks populated, so nothing downstream
-    reads wrong, and no test that only checks for a number notices.
+    `fractions` is keyed by CRITERION name (`blink`, `feature_lost`,
+    `out_of_region`, `too_fast`, `frame_gap`, `short_epoch`, `non_finite`),
+    never by `EyeValidity` column name: this module states criteria, the
+    schema states columns. Those keys are exactly the column suffixes, which
+    is what lets `EyeValidity.make()` spread them all in ONE line instead of
+    writing each out. (Five until 2026-09-27, when `non_finite` joined, and
+    six until 2026-10-11, when `feature_lost` did.) Columns fed by hand from
+    one place is precisely the shape a copy-paste error survives in -- every
+    column still looks populated, so nothing downstream reads wrong, and no
+    test that only checks for a number notices.
 
     **Every fraction is a RAW per-criterion count over all `n` samples,
     never an apportioned share of the rejection**, because "which criterion
@@ -127,12 +125,13 @@ class ValidityMask:
       therefore exceed 1.0, and can exceed the fraction of samples the mask
       actually rejects.
     - They are counted at two DIFFERENT stages, deliberately. `blink`,
-      `out_of_region`, `too_fast`, `frame_gap` and `non_finite` are counted
-      BEFORE `_dilate` grows every rejected region: the halo dilation adds
-      belongs to no one criterion, and attributing it to whichever criterion
-      it happens to surround would be an invention. `short_epoch` can only
-      be counted after, because dilation is what creates most of the short
-      epochs it drops. So they can sum BELOW the rejected fraction too.
+      `feature_lost`, `out_of_region`, `too_fast`, `frame_gap` and
+      `non_finite` are counted BEFORE `_dilate` grows every rejected
+      region: the halo dilation adds belongs to no one criterion, and
+      attributing it to whichever criterion it happens to surround would be
+      an invention. `short_epoch` can only be counted after, because
+      dilation is what creates most of the short epochs it drops. So they
+      can sum BELOW the rejected fraction too.
     """
 
     labels: np.ndarray
@@ -142,16 +141,21 @@ class ValidityMask:
 def validity_labels(
     gaze_deg: np.ndarray,
     velocity_deg_s: np.ndarray,
-    data_quality: np.ndarray,
+    loss: TrackerLoss,
     frame_gaps: Sequence[FrameGap],
     params: ValidityParams,
 ) -> ValidityMask:
     """One entry per sample: a `Label` where the sample is unusable, `None`
     where a detector may label it -- and beside it each criterion's own
-    rejected fraction. See `ValidityMask` for what the five fractions are,
+    rejected fraction. See `ValidityMask` for what the seven fractions are,
     and for what they deliberately do not sum to."""
     n = gaze_deg.shape[0]
-    blink = data_quality < _FULL_TRACKING_QUALITY
+    # Eye open, read by the rule: a blink (the pupil not found), and a lost
+    # reflection (P1 or P4 at 0, or `DataQuality` below 100), where `CR1 -
+    # CR4` is not a position (design spec `2026-10-11-eye-loss-design.md`
+    # section 3 and amendment 8).
+    blink = loss.blink
+    feature_lost = loss.feature_lost
 
     outside = (np.abs(gaze_deg[:, 0]) > params.region_half_width_deg) | (
         np.abs(gaze_deg[:, 1]) > params.region_half_height_deg
@@ -215,23 +219,23 @@ def validity_labels(
 
     # **The guard, and the one criterion not from OpenIrisDPI's notebook.**
     # Every comparison above is false for a NaN: `abs(NaN) > half-width`,
-    # `hypot(NaN, 0) > ceiling` and `NaN < 100` all say "fine", so a sample
-    # with no gaze, no speed or no quality flag was offered to every detector
-    # as usable. Velocity is tested here too, not left to `_dilate` below:
-    # one NaN gaze sample spoils every velocity estimate within
-    # `_HALF_WINDOW` of it, and a paramset may set `dilate_samples` below
-    # that. `inf` gaze was already out of region and still is; the raw
-    # counts overlap by design (see `ValidityMask`).
+    # `hypot(NaN, 0) > ceiling`, and the rule's `== 0` and `< 100` all say
+    # "fine", so a sample with no gaze, no speed or no loss columns was
+    # offered to every detector as usable. Velocity is tested here too, not
+    # left to `_dilate` below: one NaN gaze sample spoils every velocity
+    # estimate within `_HALF_WINDOW` of it, and a paramset may set
+    # `dilate_samples` below that. `inf` gaze was already out of region and
+    # still is; the raw counts overlap by design (see `ValidityMask`).
     #
-    # A missing quality flag is `invalid`, not `blink`: `blink` means the
-    # tracker DECLARED a failure, and a missing flag declares nothing.
+    # An unreadable loss column is `invalid`, not `blink`: `blink` means the
+    # tracker DECLARED a failure, and a missing value declares nothing.
     non_finite = (
         ~np.isfinite(gaze_deg).all(axis=1)
         | ~np.isfinite(velocity_deg_s).all(axis=1)
-        | ~np.isfinite(data_quality)
+        | loss.unreadable
     )
 
-    unusable = blink | outside | too_fast | across_gap | non_finite
+    unusable = blink | feature_lost | outside | too_fast | across_gap | non_finite
     unusable = _dilate(unusable, params.dilate_samples)
     # Bound to a name rather than folded straight into `unusable`, because
     # `_short_valid_epochs`' own docstring says it is returned as its own
@@ -268,6 +272,7 @@ def validity_labels(
         # -- a fraction OF A CRITERION, not of a rendered verdict.
         fractions={
             "blink": _fraction(blink),
+            "feature_lost": _fraction(feature_lost),
             "out_of_region": _fraction(outside),
             "too_fast": _fraction(too_fast),
             "frame_gap": _fraction(across_gap),

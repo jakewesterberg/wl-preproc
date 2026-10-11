@@ -88,35 +88,38 @@ def test_gaze_actually_applies_the_map_not_just_the_feature():
 def test_tracking_loss_is_zero_on_this_clean_fixture():
     """Pins what the committed 200-row fixture actually contains (checked
     directly: every row of both `LeftDataQuality` and `RightDataQuality` is
-    100) rather than the vacuous `0.0 <= x <= 1.0`, which a broken function
+    100, and no pupil, P1 or P4 value is 0) rather than the vacuous `0.0 <= x <= 1.0`, which a broken function
     returning any constant in range would also satisfy."""
     assert tracking_loss_fraction(FIXTURE, "Left") == 0.0
     assert tracking_loss_fraction(FIXTURE, "Right") == 0.0
 
 
-def test_tracking_loss_counts_frames_below_100_per_eye(tmp_path):
-    """`DataQuality` is 50*P1_valid + 50*P4_valid (design spec section 1.1), so
-    loss is stated by the recording rather than inferred from missing values
-    or a heuristic threshold on the signal itself -- necessary but not
-    sufficient, since the tracker reports that detection succeeded and not
-    that it was correct (`gaze.py`'s own `_FULL_TRACKING_QUALITY` comment).
-    What this function measures is therefore a LOWER bound on unusable frames.
+def test_tracking_loss_counts_every_frame_the_tracker_lost_per_eye(tmp_path):
+    """The share of frames lost or unreadable by `ohdpi.TrackerLoss`'s rule
+    (design spec `2026-10-11-eye-loss-design.md` section 4): a pupil not
+    found, `DataQuality` below 100, P1 or P4 at 0, or a value that is not a
+    number. `DataQuality` alone said 0 on every real recording, since
+    OpenIrisDPI writes 100 through every blink. Still a LOWER bound: the
+    plugin can report a confident, wrong position, which no 0 marks.
 
-    Built rather than read from the real fixture, which never dips below 100
-    and so cannot exercise this at all (see the clean-fixture test above).
-    Left and Right are given DIFFERENT loss patterns -- 2/5 vs 4/5 -- so a
-    mix-up between the two eyes' columns, not just a wrong threshold, is
-    caught.
+    Built rather than read from the real fixture, which loses nothing (see
+    the clean-fixture test above). Left and Right are given DIFFERENT loss
+    patterns -- 2/5 vs 4/5 -- so a mix-up between the two eyes' columns, not
+    just a wrong rule, is caught.
     """
+    names = ("DataQuality", "PupilWidth", "PupilHeight", "CR1X", "CR1Y", "CR4X", "CR4Y")
+    tracked = ("100", "526.5", "112.3", "346.3", "289.8", "396.9", "196.8")
+    rows = [{f"{eye}{name}": value for eye in ("Left", "Right") for name, value in zip(names, tracked)}
+            for _ in range(5)]
+    rows[1]["LeftDataQuality"] = "50"
+    rows[3]["LeftPupilWidth"] = "0"
+    rows[0]["RightCR1Y"] = "0"
+    rows[1]["RightCR4X"] = "0"
+    rows[2]["RightPupilHeight"] = "NaN"
+    rows[4]["RightDataQuality"] = "0"
+    header = list(rows[0])
     path = tmp_path / "partial_loss.txt"
-    path.write_text(
-        "LeftDataQuality RightDataQuality\n"
-        "100 100\n"
-        "100 50\n"
-        "50 50\n"
-        "0 50\n"
-        "100 0\n"
-    )
+    path.write_text(" ".join(header) + "\n" + "".join(" ".join(row[name] for name in header) + "\n" for row in rows))
 
     assert tracking_loss_fraction(path, "Left") == pytest.approx(2 / 5)
     assert tracking_loss_fraction(path, "Right") == pytest.approx(4 / 5)

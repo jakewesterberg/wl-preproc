@@ -1,9 +1,50 @@
 # Amendments to wl-xcon
 
-**Two are outstanding, opened 2026-09-29 and 2026-10-01.** wl-xcon (formerly wl-expcontroller) is the rig's
-experiment controller. What it asked of this repository is recorded in
+**Three are outstanding, opened 2026-09-29, 2026-10-01 and 2026-10-11.** wl-xcon (formerly wl-expcontroller) is
+the rig's experiment controller. What it asked of this repository is recorded in
 [`HANDOVER-wl-expcontroller.md`](../HANDOVER-wl-expcontroller.md) and in its own
 `docs/pending-wl-preproc-amendments.md`; this file is the other direction.
+
+*Until 2026-10-11 this said two were outstanding; true when written.*
+
+---
+
+# OPEN — blinks in the DPI tracker, and raw eye video from the first sessions
+
+**Opened 2026-10-11** with the eye-loss fix
+([`specs/2026-10-11-eye-loss-design.md`](superpowers/specs/2026-10-11-eye-loss-design.md)), the
+requester's decision the same day. Both concern wl-xcon's P10, the clean-room DPI tracker the
+requester chose on 2026-09-27 over driving or forking OpenIrisDPI (its
+`docs/research/2026-09-27-p10-dpi-spike.md`; OpenIris is AGPL-3.0 and OpenIrisDPI GPL-3.0, wl-xcon
+Apache-2.0).
+
+**What this repository can see, and what it cannot.** From OpenIrisDPI's file it reads where the
+tracker lost the eye: a feature it did not find is written as 0, and `DataQuality` is 100 on every
+frame. The pupil is lost only in a blink's closed phase, a median 36 ms. wl-xcon's own spike found
+the flanks corrupted (its §7b.3): P4 steps above 2 px on 61–64% of frames in the 50 ms before the
+pupil is lost and 83–90% in the 50 ms after, against 0.009% in fixation; and partial closures
+return a confident, wrong P4 while the pupil is still found (its §7.5). The partial phases are
+visible only in the image, which this repository never sees.
+
+**The asks:**
+1. **P10 detects a blink from the image, not only from a lost pupil, and covers its flanks:** the
+   eyelid or lashes in the frame mark it, and every frame it spoils reaches `taskd` as "no
+   sample" (the requester's answer 4 of 2026-09-27).
+2. **Raw eye video is recorded alongside OpenIrisDPI from the first sessions.** OpenIris saves
+   each eye's video, every frame, with `RecordVideo` on and `DecimateVideoRatio` at 1; OpenIrisDPI's
+   tutorial recording had it off and carries none. P10's validation needs it (the requester's
+   answer 1), and it lets a blink be measured from the eyelid offline. Storage at 500 Hz in both
+   eyes is the cost to plan. **Tell us** whether the lab's OpenIrisDPI PC records it and where the
+   files land in the session folder: this repository archives every file of a session, and reads
+   none of the video yet.
+
+**Offered meanwhile, not asked:** until P10 exists, the same rule this repository reads offline can
+run online on the samples wl-xcon receives (its S5 reads the pupil, P1 and P4 per eye): the pupil
+not found, P1 or P4 at 0, or `DataQuality` below 100 is "no sample", with the flanks padded.
+
+**What this repository does meanwhile:** reads the zeros (`eye/ohdpi.py::TrackerLoss`) for the
+validity mask and `EyeQuality`, and pads each blink's flanks next (the requester's choice of
+2026-10-11).
 
 ---
 
