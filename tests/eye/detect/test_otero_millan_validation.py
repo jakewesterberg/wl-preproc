@@ -212,7 +212,7 @@ def _scaled_affine_map(scale: float):
     return CalibrationMap(model=CalibrationModel.AFFINE, x=(0.0, scale, 0.0), y=(0.0, 0.0, scale))
 
 
-def _gaze_velocity_mask(raw_xy, quality, fs_hz, frame_gaps, scale):
+def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
     """One eye's gaze at `scale`, its velocity, and its validity mask -- the
     three real functions `EyeValidity.make()` itself calls, run without a
     database. Returns the mask's `labels` array, which is what a detector
@@ -223,7 +223,7 @@ def _gaze_velocity_mask(raw_xy, quality, fs_hz, frame_gaps, scale):
 
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
 
 
 def _measured(runs, gaze, v, fs_hz):
@@ -414,8 +414,8 @@ class _Trace:
 def reference():
     """The recording, read once, with both eyes detected by both methods.
 
-    Module-scoped because the read is four column-selective passes over 633 MB
-    (~8 s) and three tests need the same answer. A per-test fixture would
+    Module-scoped because the read is five column-selective passes over 633 MB
+    (~12 s) and three tests need the same answer. A per-test fixture would
     triple that for nothing; a per-test *recomputation* would additionally
     risk three tests reporting three different numbers, which is the failure
     mode this whole file exists to guard against one level up.
@@ -425,7 +425,7 @@ def reference():
         pytest.skip(_skip_reason())
 
     from wl_preproc.eye.gaze import purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
     started = time.monotonic()
     recording = read_ohdpi(sample)
@@ -433,7 +433,7 @@ def reference():
         "left": purkinje_vector(sample, "Left"),
         "right": purkinje_vector(sample, "Right"),
     }
-    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    loss = {"left": read_tracker_loss(sample, "Left"), "right": read_tracker_loss(sample, "Right")}
     read_s = time.monotonic() - started
 
     # The scale heuristic, stated rather than merely used (this file's own
@@ -444,9 +444,9 @@ def reference():
     p99_y = float(np.percentile(pooled_y, 99))
     scale = _SCALE_P99_AT_DEG / max(p99_x, p99_y)
 
-    def build(eye_name, column):
+    def build(eye_name):
         gaze, v, mask = _gaze_velocity_mask(
-            raw[eye_name], quality[column], recording.fs_hz, recording.frame_gaps, scale
+            raw[eye_name], loss[eye_name], recording.fs_hz, recording.frame_gaps, scale
         )
         return _Trace(eye_name, gaze, v, mask, recording.fs_hz)
 
@@ -454,11 +454,11 @@ def reference():
         "sample": sample,
         "recording": recording,
         "raw": raw,
-        "quality": quality,
+        "loss": loss,
         "read_s": read_s,
         "scale": scale,
         "p99": (p99_x, p99_y),
-        "traces": [build("left", "LeftDataQuality"), build("right", "RightDataQuality")],
+        "traces": [build("left"), build("right")],
     }
 
 
@@ -507,7 +507,7 @@ def test_the_microsaccade_rate_is_the_rate_the_paper_reports(reference, capsys):
             f"  {recording.n_frames} frames, {recording.fs_hz:.2f} Hz, "
             f"{recording.n_frames / recording.fs_hz / 60:.1f} min, "
             f"{len(recording.frame_gaps)} frame gap(s); read in "
-            f"{reference['read_s']:.1f}s over 4 column-selective passes"
+            f"{reference['read_s']:.1f}s over 5 column-selective passes"
         )
         print(
             f"  scale heuristic: {reference['scale']:.6g} deg/px "
@@ -549,7 +549,7 @@ def test_the_microsaccade_rate_is_the_rate_the_paper_reports(reference, capsys):
         scale = reference["scale"] * multiplier
         gaze, v, mask = _gaze_velocity_mask(
             reference["raw"]["left"],
-            reference["quality"]["LeftDataQuality"],
+            reference["loss"]["left"],
             recording.fs_hz,
             recording.frame_gaps,
             scale,

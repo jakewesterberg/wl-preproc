@@ -64,8 +64,9 @@ def _inject_blink(session_dir) -> None:
     split each affected line by column, replace one field, rewrite -- against
     a different pair of columns. Nothing in `SessionRecipe` can express a
     blink: `write_ohdpi` writes `_fmt(100.0)` into both `DataQuality` columns
-    unconditionally, and `validity_labels`' blink criterion is
-    `data_quality < 100.0`.
+    unconditionally, and `validity_labels`' blink criterion includes
+    `DataQuality` below 100 (`ohdpi.TrackerLoss`; until 2026-10-11 it was
+    that alone).
 
     BOTH eyes, at the same frames. A single-eye blink would mask that eye's
     trace and the conjunction (which is built on the left eye's own mask) but

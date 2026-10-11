@@ -1483,7 +1483,7 @@ def _scaled_affine_map(scale: float):
     return CalibrationMap(model=CalibrationModel.AFFINE, x=(0.0, scale, 0.0), y=(0.0, 0.0, scale))
 
 
-def _gaze_velocity_mask(raw_xy, quality, fs_hz, frame_gaps, scale):
+def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
     """One eye's gaze at `scale`, its velocity, and its validity mask.
     Restated from `test_otero_millan_validation.py`, not imported -- and,
     since 2026-09-28, with tracker glitches repaired as the pipeline repairs
@@ -1499,7 +1499,7 @@ def _gaze_velocity_mask(raw_xy, quality, fs_hz, frame_gaps, scale):
         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
     )
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, quality, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
 
 
 class _Trace:
@@ -1558,7 +1558,7 @@ def reference():
         pytest.skip(_skip_reason())
 
     from wl_preproc.eye.gaze import purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
     started = time.monotonic()
     recording = read_ohdpi(sample)
@@ -1566,7 +1566,7 @@ def reference():
         "left": purkinje_vector(sample, "Left"),
         "right": purkinje_vector(sample, "Right"),
     }
-    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    loss = {"left": read_tracker_loss(sample, "Left"), "right": read_tracker_loss(sample, "Right")}
     read_s = time.monotonic() - started
 
     pooled_x = np.concatenate([np.abs(raw["left"][:, 0]), np.abs(raw["right"][:, 0])])
@@ -1575,9 +1575,9 @@ def reference():
     p99_y = float(np.percentile(pooled_y, 99))
     scale = _SCALE_P99_AT_DEG / max(p99_x, p99_y)
 
-    def build(eye_name: str, column: str) -> _Trace:
+    def build(eye_name: str) -> _Trace:
         gaze, v, mask = _gaze_velocity_mask(
-            raw[eye_name], quality[column], recording.fs_hz, recording.frame_gaps, scale
+            raw[eye_name], loss[eye_name], recording.fs_hz, recording.frame_gaps, scale
         )
         # Through the registry's `detect`, as the pipeline stores it: since
         # 2026-09-28 that holds every run to the samples the mask offered
@@ -1596,7 +1596,7 @@ def reference():
         "read_s": read_s,
         "scale": scale,
         "p99": (p99_x, p99_y),
-        "traces": [build("left", "LeftDataQuality"), build("right", "RightDataQuality")],
+        "traces": [build("left"), build("right")],
     }
 
 

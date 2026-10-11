@@ -105,11 +105,11 @@ def reference():
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
     from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
-    from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
     recording = read_ohdpi(sample)
     raw = {"left": purkinje_vector(sample, "Left"), "right": purkinje_vector(sample, "Right")}
-    quality = read_columns(sample, ["LeftDataQuality", "RightDataQuality"])
+    loss = {"left": read_tracker_loss(sample, "Left"), "right": read_tracker_loss(sample, "Right")}
     pooled_x = np.concatenate([np.abs(raw["left"][:, 0]), np.abs(raw["right"][:, 0])])
     pooled_y = np.concatenate([np.abs(raw["left"][:, 1]), np.abs(raw["right"][:, 1])])
     scale = _SCALE_P99_AT_DEG / max(float(np.percentile(pooled_x, 99)), float(np.percentile(pooled_y, 99)))
@@ -117,10 +117,10 @@ def reference():
     limit = min(REMODNAV_COMPARISON_SAMPLES, recording.n_frames)
 
     eyes = {}
-    for eye, column in (("left", "LeftDataQuality"), ("right", "RightDataQuality")):
+    for eye in ("left", "right"):
         gaze = apply_map(_scaled_affine_map(scale), raw[eye])
         v = velocity(gaze, fs)
-        mask = validity_labels(gaze, v, quality[column], recording.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+        mask = validity_labels(gaze, v, loss[eye], recording.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
         started = time.monotonic()
         full_runs = detect_remodnav(gaze, v, mask, fs, DEFAULT_REMODNAV_PARAMS)
         full_s = time.monotonic() - started

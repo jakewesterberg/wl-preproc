@@ -145,12 +145,14 @@ class EyeValidity(dj.Computed):
     status : enum('computed','refused')
     n_samples=null : int unsigned
     # Per-criterion bookkeeping, so a mask that rejects most of a session says
-    # WHICH criterion did it rather than only that something did. The first
-    # five match OpenIrisDPI's own five (design spec section 2): eye open,
-    # gaze within a plausible region, plausible speed, no frame
-    # discontinuity, and short surviving epochs dropped. The sixth,
-    # `non_finite`, is a data-integrity guard added 2026-09-27: a gaze,
-    # velocity or quality value that is not a finite number.
+    # WHICH criterion did it rather than only that something did. They match
+    # OpenIrisDPI's own five (design spec section 2): eye open, gaze within a
+    # plausible region, plausible speed, no frame discontinuity, and short
+    # surviving epochs dropped. Eye open is two columns since 2026-10-11:
+    # `blink` and `feature_lost` (P1 or P4 at 0), both by `ohdpi.
+    # TrackerLoss`'s rule (design spec `2026-10-11-eye-loss-design.md`).
+    # `non_finite` is a data-integrity guard added 2026-09-27: a gaze,
+    # velocity or loss column that is not a finite number.
     #
     # RAW per-criterion counts over all `n_samples`, never apportioned
     # shares: one sample can be rejected by two criteria at once, so these
@@ -160,6 +162,7 @@ class EyeValidity(dj.Computed):
     # ValidityMask` states both in full. `NULL` on a refused row, which has
     # no mask at all, and only there.
     frac_blink=null         : double
+    frac_feature_lost=null  : double
     frac_out_of_region=null : double
     frac_too_fast=null      : double
     frac_frame_gap=null     : double
@@ -246,11 +249,28 @@ class EyeValidity(dj.Computed):
             validity_paramset_idx="paramset_idx"
         )
 
+    def populate(self, *args, **kwargs):
+        """`AutoPopulate.populate`, refused before any job is reserved while
+        this process reads the table without `frac_feature_lost`: a database
+        declared before 2026-10-11 (design spec `2026-10-11-eye-loss-
+        design.md` section 3). Refused here rather than in `make()`, because
+        a key whose `make()` raised is parked as an error and never retried
+        (`daemon.reap_stale_jobs`), so the statement alone would not bring the
+        stage back; the daemon reports this stage's error and runs the
+        others."""
+        if _lacks_feature_lost():
+            raise RuntimeError(
+                f"{self.full_table_name} has no column frac_feature_lost, as read by this process: a "
+                "database declared before 2026-10-11. Nothing is masked until it is altered and the "
+                f"daemon restarted: {_feature_lost_statement()}"
+            )
+        return super().populate(*args, **kwargs)
+
     def make(self, key: dict) -> None:
         """Both eyes' mask for one session and one paramset."""
         from wl_preproc.eye.detect.validity import ValidityParams, validity_labels
         from wl_preproc.eye.detect.velocity import velocity
-        from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+        from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
         from wl_preproc.schema import eye as eye_schema, ingest
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -287,9 +307,8 @@ class EyeValidity(dj.Computed):
                 continue
 
             gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
-            quality = read_columns(path, [f"{file_eye}DataQuality"])[f"{file_eye}DataQuality"]
             mask = validity_labels(
-                gaze, velocity(gaze, recording.fs_hz), quality,
+                gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
                 recording.frame_gaps, params,
             )
             labels = mask.labels
@@ -341,6 +360,22 @@ class EyeValidity(dj.Computed):
                  "run_stop": run.stop, "label": run.label.value}
                 for index, run in enumerate(runs)
             )
+
+
+def _lacks_feature_lost() -> bool:
+    """`EyeValidity`, as this process's DataJoint reads it, has no
+    `frac_feature_lost`. DataJoint 2.3.3 reads a table's columns once per
+    process: a column dropped or added by `ALTER TABLE` is not seen until a
+    restart (measured 2026-10-11), so this is what an insert would meet."""
+    return "frac_feature_lost" not in EyeValidity.heading.names
+
+
+def _feature_lost_statement() -> str:
+    """The statement that adds `frac_feature_lost` to an `EyeValidity`
+    declared before it, as DataJoint declares the column: `double`, nullable,
+    no comment, after `frac_blink`."""
+    return (f"ALTER TABLE {EyeValidity.full_table_name} ADD COLUMN frac_feature_lost double "
+            "DEFAULT NULL COMMENT '' AFTER frac_blink")
 
 
 @schema
