@@ -77,8 +77,10 @@ From `OpenIrisDPI/OpenIrisDPIPipeline.cs::ConvertDPIOutputToEyeData`, confirmed
 in the recording:
 
 - **P1 → `CR1`**, **P4 → `CR4`**. `CR2`, `CR3` and `CR5` are identically zero.
-- `DataQuality = 50·P1_valid + 50·P4_valid`, so **0, 50 or 100** — tracking loss
-  is stated by the file, not inferred.
+- `DataQuality = 50·P1_valid + 50·P4_valid`, so **0, 50 or 100**. It says
+  detection succeeded, never that it was correct: **necessary, not sufficient**
+  (§12, corrected 2026-10-11). On the OpenIris recording this repository tests
+  against it is 100 on every frame of both eyes, blinks included.
 - `Torsion` and both eyelid columns are zero: the DPI pipeline does not compute
   them.
 - Pupil is an **ellipse**: centre, width, height, angle.
@@ -465,8 +467,9 @@ DataJoint silently stores a numpy array as its truncated string repr; a
 residual. Where §3.6's drift becomes visible.
 
 `EyeQuality` — `dj.Computed`, per session per eye: tracking-loss percentage and
-blink rate. Tracking loss comes straight from `DataQuality`'s 0/50/100, so it is
-stated rather than inferred.
+blink rate, both counted from `DataQuality` below 100. *Until 2026-10-11 this
+said tracking loss was therefore stated rather than inferred; §12 corrects it:
+on a recording whose `DataQuality` is always 100, both read zero.*
 
 **Both new computed tables must be registered in `daemon._computed_tables()`.**
 `test_every_computed_table_is_a_daemon_stage` discovers computed tables and
@@ -631,3 +634,12 @@ originals left visible, per this repository's correction convention:
 > (verify code 21). That is a server-side misconfiguration, not an attack; the
 > leaf certificate was checked as legitimate before its content was relied on.
 > A reader who cannot fetch that page should expect the same failure.
+
+> **Corrected 2026-10-11, asked by wl-xcon** (`HANDOVER-wl-expcontroller.md`, open ask 9, its
+> XC-095). §1.1 said `DataQuality`'s 0/50/100 states tracking loss. It states only that the plugin
+> detected P1 and P4, not that it detected them correctly. wl-xcon's real-data follow-up found
+> OpenIrisDPI reporting P4 through every blink with `DataQuality` = 100 on every row (its
+> `docs/CHECKPOINT.md`, P10). Measured here on `OpenIris-2024Jul31-114628.txt`: 100 on all
+> 1,177,799 frames of each eye. `eye/gaze.py`'s comment already said "necessary, not sufficient";
+> the spec now says the same. **Not yet corrected:** `EyeQuality` counts tracking loss and blinks
+> from `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero.

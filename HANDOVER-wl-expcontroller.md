@@ -237,6 +237,23 @@ read them.
 - *Not asked:* publishing or reading the agent's file; any new escape or code; any timing claim (the rig's
   event-log instants are wall-clock bookkeeping, the sync box stays the timing ground truth, spec §3.11).
 
+- *wl-preproc's answer, 2026-10-11, on the file left unread: confirmed, with three things to know.*
+  - **Ingest never reads `xcon/`.** It is deliberately not one of `SYSTEMS` (`contracts/paths.py`), so it
+    has no DONE marker; discovery iterates `SYSTEMS` only, and transfer verification (`ingest/verify.py`)
+    re-hashes only the files a system's DONE marker declares. A SQLite file there cannot fail ingest.
+  - **Give it, and the rebuild's dated snapshot if that goes in `xcon/`, any extension but `.yaml` or
+    `.bhv2`.** Two readers open `xcon/` files by name (`events/rigtrials.py`: `trials.jsonl`;
+    `events/rigruns.py`: `runs.jsonl` and `config.json`), but `schema/eye.py::_find_xcon_log` takes the
+    first `*.bhv2` or `*.yaml` there, sorted by name, as the online calibration map. A YAML file sorting
+    before the map would be read in its place, and the session's map lost.
+  - **A rebuild after archiving is not in the archive.** Archival stores every file in the session folder
+    as it is at that moment (`archive/store.py`). Freeing the scratch copy afterwards refuses, naming the
+    changed files, until a person re-archives with `wlpp archive` (`archive/scratch.py`), so nothing is
+    lost; but a format change that rebuilds every past session means a re-archive for each one still on
+    scratch. A session whose scratch copy is already freed has no folder there until it is rehydrated.
+- *Reading the records into the published dataset* is open here: it needs its own design, not yet
+  scheduled (2026-10-11).
+
 **2. XC-197: number the conditions, and carry an "overridden" flag in the trial table.** Blocks: the flag
 blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and conditions) and on this answer.
 - *Asked:* (a) say how `CONDITION` (`0x8003`) numbers should be assigned, so wl-xcon can emit them and
@@ -248,6 +265,16 @@ blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and cond
 - *Why:* otherwise an analysis grouping by condition mixes trials the experimenter changed mid-run.
 - *From:* [engine spec §14.7 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
 - *Not asked:* any change to `CONDITION`'s payload shape.
+
+- *wl-preproc's answer, 2026-10-11, the requester's decision: (a) the task assigns the numbers.* Each task
+  declares its conditions with fixed numbers from 1, unchanged while the task's version is; 0 means no
+  condition. Under ADR-0007 what a code means is the task side's (wl-xtasks). This repository needs only
+  that one number names one condition within a session, sent in `CONDITION` inside every trial and recorded
+  in `trials.jsonl` beside the condition's name: its own open ask of 2026-09-29
+  (`docs/pending-wl-xcon-amendments.md`, ask 2). Tell us that field's name when it settles.
+- *(b) The "overridden" flag: accepted.* The published trials table will carry it once `trials.jsonl`
+  does, so that grouping by condition can leave those trials out; tell us the field's name and shape. Not
+  yet built here.
 
 **3. Reading monocular and session-start calibrations.** Blocks: engine build T.
 - *Asked:* that you can read a monocular grid's eye, the session-start block (marked with the calibration
@@ -309,9 +336,20 @@ fallback's design); not C.
 - *From:* [CHECKPOINT, 2026-09-27 afternoon](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/CHECKPOINT.md).
 - *Not asked:* a new validity rule.
 
+- *wl-preproc's answer, 2026-10-11: corrected.* The eye spec's §1.1 and §6 now say `DataQuality` is
+  necessary, not sufficient (its §12, corrected 2026-10-11). Measured here on the OpenIris recording this
+  repository tests against (`OpenIris-2024Jul31-114628.txt`): 100 on all 1,177,799 frames of each eye.
+  One consequence the ask did not name: `EyeQuality` counts both tracking loss and blinks from
+  `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero. That is open here.
+
 **10. XC-096: per-trial gaze staleness into `EyeQuality` (an offer, standing).** Blocks: nothing; waits on
 wl-xcon's XC-007. Your answer is wanted only as "yes, in `EyeQuality`" or "no, leave it in the behavioral
 table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#10-open-items).
+
+- *wl-preproc's answer, 2026-10-11: no, not in `EyeQuality`; keep it in your behavioural table.* The eye
+  spec (§10 item 5, 2026-08-31) accepted the offer in principle but not as an `EyeQuality` column:
+  `EyeQuality` holds one row per session per eye, and staleness is per trial. Whether the published
+  trials table carries it is decided with item 1's records.
 
 **11. XC-098: who writes `session_manifest.yaml`?** Blocks: nothing urgent; wl-xcon supplies its two
 fields (`started_at_source`, `stimulus_calibration_id`) by whichever route you choose. Still a question,

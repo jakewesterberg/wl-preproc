@@ -109,3 +109,8 @@ not joined at all** (`events/rigtrials.py`): a per-run `index` is not the sessio
 even where it is unique. Once this repository reads XC-155's field, such records join again.
 *True when written. Since 2026-10-01 a line carrying `trial_number` is joined by it; only a
 run-named line without one is left out.*
+
+**Numbering settled, 2026-10-11** (the requester's decision; `HANDOVER-wl-expcontroller.md`, open ask
+2, wl-xcon's XC-197): the task assigns each condition's number, from 1, unchanged while the task's
+version is, and 0 means none. Ask 2 stays open until wl-xcon emits `CONDITION` and names the field in
+`trials.jsonl` that carries the number. Its "overridden" flag was accepted the same day.

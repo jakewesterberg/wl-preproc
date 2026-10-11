@@ -245,12 +245,22 @@ requester chose to merge the same day; true when written.*
 >
 > **Hardware-free:** the requester's choices of 2026-10-08, 2026-10-10 and
 > 2026-10-11 are merged: seven-way detector agreement (`3a45a09`), its five
-> deferred minors (`c899a9d`), and M4, the correction marker (`caf1d63`). Ask
-> what comes next. wl-xcon's eleven open asks of 2026-10-11
-> (`HANDOVER-wl-expcontroller.md`, recorded by `7183347`) have no answer here
-> yet. Open and small: the correction marker's three deferred minors
+> deferred minors (`c899a9d`), and M4, the correction marker (`caf1d63`).
+> wl-xcon's eleven open asks of 2026-10-11 (`HANDOVER-wl-expcontroller.md`,
+> recorded by `7183347`) were sorted the same day. Answered there: ask 1's
+> file left unread, ask 2's numbering (the task assigns them, the requester's
+> decision) and its "overridden" flag, 9 and 10. Ask 9 found a defect here:
+> `EyeQuality` counts tracking loss and blinks from `DataQuality` below 100,
+> which is 100 on every frame of the OpenIris recording, so both read zero.
+> **Next: that fix, the requester's choice.** Asks 7, 8 and 11 and the
+> online-detector offer go to the requester first. The rest need building
+> (1's records, 2's flag, 3, 5, 6) or are unread (4). Open and small: the
+> correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, afternoon, this said to ask what comes next, wl-xcon's
+> asks unanswered here; true when written.*
 >
 > *Until 2026-10-11, at the merge, this named M4 as built on
 > `fix/correction-marker`, reviewed and not merged, with the merge question
