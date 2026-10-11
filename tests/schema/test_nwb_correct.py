@@ -968,3 +968,62 @@ def test_the_stages_that_visit_every_published_file_read_its_placements_once(pub
     for name, stage in stages.items():
         selects(over(keys, stage))
         assert selects(over(keys[:1], stage)) == selects(over(keys, stage)), name
+
+
+# -- The marker of a correction not yet recorded (design spec
+# `2026-10-11-correction-marker-design.md`, M4).
+
+def _marked(key) -> bool:
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    return len(nwb_schema.NwbCorrecting & key_of(key)) > 0
+
+
+def test_the_marker_is_keyed_by_the_file(dj_conn, prefix):
+    """Section 2: at most one marker per file."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.activate(prefix=prefix)
+    assert nwb_schema.NwbCorrecting.primary_key == nwb_schema.NwbFile.primary_key
+
+
+def test_a_marked_file_is_stale_though_its_records_match_its_details(published):
+    """Section 4: stale by its marker, as by value, and listed once when it
+    is both."""
+    from wl_preproc.nwb.correct import stale_files
+    from wl_preproc.nwb.publish import _now, activation_tuple, key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    assert not _is_stale(key)
+    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    try:
+        assert _is_stale(key)
+        _set_birth(datetime.date(2016, 3, 1))
+        assert [activation_tuple(stale) for stale in stale_files()].count(activation_tuple(key)) == 1
+    finally:
+        _set_birth(_BIRTH)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+
+
+def test_a_marked_file_on_an_unreachable_share_keeps_its_marker(published, shares, tmp_path_factory):
+    """Held back with the rest of its share's files and reported once, as a
+    stale file is (amendment 13), and still marked for the pass that reaches
+    the share."""
+    from wl_preproc.nwb.correct import run_corrections
+    from wl_preproc.nwb.publish import Share, _now, current_placement, key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    tier = current_placement(key)["tier"]
+    gone = Share(tier=tier, mount=tmp_path_factory.mktemp("nwbfix-gone-marked") / "gone", host="wl-nas",
+                 name=shares[tier].name)
+    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    try:
+        _corrected, errors = run_corrections(*((gone, shares["fast"]) if tier == "slow" else (shares["slow"], gone)))
+        reached = [error for error in errors if "not reachable" in error]
+        assert len(reached) == 1 and reached[0].endswith("; 1 file(s) on it not corrected"), errors
+        assert _marked(key)
+    finally:
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()

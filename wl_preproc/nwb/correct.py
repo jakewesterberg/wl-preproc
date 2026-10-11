@@ -50,17 +50,22 @@ def stale_files() -> list[dict]:
     details other than the subject's current ones (spec section 2): by value,
     as `build.resolved_invalid` finds `invalid` files, since subject details
     carry no timestamp. Published or not, canonical or derivative, current or
-    superseded."""
+    superseded. With them, once each, every file with a marker
+    (`NwbCorrecting`): one swapped whose records were not written, which may
+    hold other details than its records though they match the subject's
+    (design spec `2026-10-11-correction-marker-design.md` section 4)."""
     from wl_preproc.nwb.gather import described_subject
+    from wl_preproc.nwb.publish import activation_tuple
     from wl_preproc.schema import nwb as nwb_schema
 
+    marked = {activation_tuple(key) for key in nwb_schema.NwbCorrecting.keys()}
     stale, subjects = [], {}
     for row in (nwb_schema.NwbFile & {"status": "written"}).proj("description").to_dicts():
         if row["subject"] not in subjects:
             subjects[row["subject"]] = described_subject(row["subject"])
         now = subjects[row["subject"]]
         built_with = (row["description"] or {}).get("subject") or {}
-        if {field: built_with.get(field) for field in now} != now:
+        if activation_tuple(row) in marked or {field: built_with.get(field) for field in now} != now:
             stale.append({k: row[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")})
     return stale
 

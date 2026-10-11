@@ -111,6 +111,21 @@ class NwbPlacement(dj.Manual):
 
 
 @schema
+class NwbCorrecting(dj.Manual):
+    definition = """
+    # A file a correction is swapping, or has swapped, whose records are
+    # not yet written: inserted before the swap and deleted in the
+    # transaction that writes them, so while it is here the file may hold
+    # other subject details than its records say (design spec
+    # `2026-10-11-correction-marker-design.md`).
+    # Key: (subject, session_datetime, montage_id, activation_id).
+    -> NwbFile
+    ---
+    started_at : datetime(6)
+    """
+
+
+@schema
 class ActiveSet(dj.Manual):
     definition = """
     # Each PUT /nwb/active, as received: the whole set of activations
