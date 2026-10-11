@@ -200,3 +200,132 @@ repository would otherwise say so, and the failure would look like unusually goo
 `wl-expcontroller/docs/superpowers/specs/` — S2 for the event vocabulary and ADR-0007's split,
 S5 for eye tracking and calibration, S3 for sync and the session-directory position, S10 for the
 lab-host protocol. Amendments in longer form at `docs/pending-wl-preproc-amendments.md`.
+
+---
+
+# 2026-10-11: open asks from wl-xcon
+
+wl-xcon is what this file calls wl-expcontroller (renamed 2026-09-28). The PI decided on 2026-10-11 to
+send every open ask from wl-xcon to its sibling repositories now, and wl-xcon's engine build C (the task
+object, trials that vary) is being planned. This section lists what is still open, what is closed, and
+what is deliberately not asked. Answer in this file under each item, or in this repository's
+`docs/CHECKPOINT.md`, as before. "Blocks" says which wl-xcon build waits on the answer. **Nothing here
+changes the frozen codec**, and wl-xcon sends nothing new on the wire until you say it is on `main`.
+
+Links are to wl-xcon on GitHub, on `main`. wl-xcon's own copy of the longer text is `docs/pending-wl-preproc-amendments.md`.
+
+## Open
+
+**1. XC-321: read XC-288's training records, and accept the agent's file unread.** Blocks: wl-xcon build C
+(+I) writes the files; it waits on nothing here, but the records are not in the published dataset until you
+read them.
+- *Asked:* read into the published dataset the session folder's **change log** (`parameter_changes.jsonl`,
+  grown: one row per setting moved, a preset being many rows under one `change` id), **`reasons.jsonl`**
+  (new: one row per reason, pointing at a `change` id or a pause's `id`), the **timed event log** (new: every
+  state entered and left, every code strobed, with instants), and **`controls.jsonl`** (writers and fields
+  unchanged; new rows gain an `id`). Join keys: the `change` id, `sequence` and `trial_number`. Only rows
+  that strobe `PARAM_CHANGED` carry `sequence`; until wl-xcon's XC-008 strobes your `PARAM_CHANGE` escape
+  (`contracts/events.py:157`) the join to the recording is the n-th `sequence` row to the n-th code.
+  Also: **accept a SQLite file, one per session, in the session folder, without reading it**; the rig's
+  tooling rebuilds it after the session closes and whenever its version changes. Ingest must not fail on its
+  presence. (I found no code here that lists unknown files in `xcon/`; `ingest/verify.py` works from the
+  manifest's declared files. Please confirm rather than take that as checked.)
+- *Why:* the training records are how a later reader sees what the animal experienced and why it changed.
+  They are in every session; nothing reads them today (no match for these file names in `wl_preproc/`).
+- *From:* [XC-288 spec §6 and §7](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-10-xc288-training-records-design.md#7-which-build-carries-what)
+  and [the pending file's section](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/pending-wl-preproc-amendments.md).
+- *Not asked:* publishing or reading the agent's file; any new escape or code; any timing claim (the rig's
+  event-log instants are wall-clock bookkeeping, the sync box stays the timing ground truth, spec §3.11).
+
+**2. XC-197: number the conditions, and carry an "overridden" flag in the trial table.** Blocks: the flag
+blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and conditions) and on this answer.
+- *Asked:* (a) say how `CONDITION` (`0x8003`) numbers should be assigned, so wl-xcon can emit them and
+  record the number in `trials.jsonl` beside the condition's name (today every trial runs under one
+  condition named "session"); you already decode the escape (`schema/events.py:500`). (b) A live edit to a
+  value a condition sets wins and the trial still counts toward its condition; the parameter-change code
+  goes out, and the trial table should carry an **"overridden"** flag so grouping by condition cannot
+  silently include overridden trials.
+- *Why:* otherwise an analysis grouping by condition mixes trials the experimenter changed mid-run.
+- *From:* [engine spec §14.7 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
+- *Not asked:* any change to `CONDITION`'s payload shape.
+
+**3. Reading monocular and session-start calibrations.** Blocks: engine build T.
+- *Asked:* that you can read a monocular grid's eye, the session-start block (marked with the calibration
+  task type), interlude recalibrations as `CALIBRATION_START`/`END` epochs, and the target positions they
+  use.
+- *Why:* the stereoscope's monocular grids and the session-start calibration are recorded as events, and
+  the map's provenance depends on reading them. Today `eye/xcon.py::read_xcon_map` (line 242) reads one map.
+- *From:* engine spec §12.4 and §21 (same link as item 2).
+- *Not asked:* a change to `CalibrationModel` or the `CR1 - CR4` signal.
+
+**4. The continuous mode's record shape and anchor codes.** Blocks: engine build K (not C).
+- *Asked:* agree the record shape for a trial that lasts minutes (the once-a-second check strobes and the
+  screen log's frame record) and the anchor code. Note the code allocation itself is wl-xtasks' under
+  ADR-0007; what is asked of you is that your assembly tolerates the shape.
+- *From:* engine spec §13.6, §8.4 and §21.
+- *Not asked:* a new escape.
+
+**5. The session kind and the warnings in the record.** Blocks: nothing; this is what wl-xcon's engine
+build B writes, sent so you can read it.
+- *Asked:* read `config.json`'s `session_kind`; its `calibration` (`id`, `standard`, `measured_on`, and
+  `cones`, or `null` when the rig's record would not load); each run's start row's `calibration` (the id);
+  and **`warnings.jsonl`**, one row per warning a session accepted (`code`, `detail`, `accepted_in`,
+  `session_kind`, `by`, `at`, `at_local`, `how`, `run`). No match for `session_kind` or `warnings.jsonl`
+  in `wl_preproc/` today.
+- *Why:* a session run with an accepted warning or in a non-experimental kind should be marked so in the
+  published dataset.
+- *From:* [engine spec §19 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
+- *Not asked:* acting on the warnings; only carrying them.
+
+**6. Onset alignment through the screen log and the flip count.** Blocks: engine build F.
+- *Asked:* align stimulus onsets using the screen log's frame record and the flip count.
+- *Why:* wl-xcon records the frame each change was strobed on; the actual onset is measured by the sync
+  box (the speaker tap, V7), and the two must join.
+- *From:* engine spec §8 and §21.
+- *Not asked:* any timing number; none is claimed without a measurement.
+
+**7. XC-093: amend the `bcam` sidecar contract for primary-triggered cameras.** Blocks: wl-xcon P9 (camera
+system); not C.
+- *Asked:* a trigger source that says the primary camera triggered the group, and the per-frame
+  `digital_line` and `frame_rate_hz` fields made required. Today `contracts/sidecar.py` has both as
+  optional (about lines 40 to 70) and `REQUIRED_TRIGGER_SOURCE = "syncbox"` predates wl-sync's 2026-08-16
+  change to free-running cameras.
+- *From:* [P9 spec §7](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-09-27-P9-camera-system-design.md#7-outside-this-repository-asks-not-assumptions).
+- *Not asked:* the camera library or encoder choice (a wl-xcon ADR).
+
+**8. XC-094: a `pupil - CR1` fallback beside the fixed `CR1 - CR4` signal.** Blocks: wl-xcon XC-006 (the
+fallback's design); not C.
+- *Asked:* nothing to build yet. Told so you know: where P4 cannot be vouched for, wl-xcon's gaze would
+  come from `pupil - CR1` with its own map and a per-sample method flag. Say whether you want that
+  carried (a second `raw_definition`, which `eye/xcon.py:73` now refuses by design) or kept out.
+- *From:* [S5 §1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#1-most-of-the-calibration-is-already-decided-and-not-by-us).
+- *Not asked:* any change to `purkinje_vector`.
+
+**9. XC-095: correct the `DataQuality` description.** Blocks: nothing.
+- *Asked:* your eye spec's section 1.1 (and `eye/gaze.py:23`) describe `DataQuality` as 0/50/100,
+  `50*P1_valid + 50*P4_valid`. wl-xcon's P10 real-data follow-up found OpenIrisDPI reporting P4 through every
+  blink, a median 320 to 340 px off, with `DataQuality` = 100 on every row. The comment at `gaze.py:23-33`
+  already says "necessary, not sufficient"; the spec's table should say the same.
+- *From:* [CHECKPOINT, 2026-09-27 afternoon](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/CHECKPOINT.md).
+- *Not asked:* a new validity rule.
+
+**10. XC-096: per-trial gaze staleness into `EyeQuality` (an offer, standing).** Blocks: nothing; waits on
+wl-xcon's XC-007. Your answer is wanted only as "yes, in `EyeQuality`" or "no, leave it in the behavioral
+table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#10-open-items).
+
+**11. XC-098: who writes `session_manifest.yaml`?** Blocks: nothing urgent; wl-xcon supplies its two
+fields (`started_at_source`, `stimulus_calibration_id`) by whichever route you choose. Still a question,
+unanswered here (the section above); the contract is yours. From
+[S10 §6 item 1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S10-data-and-lab-integration-design.md#6-open-items).
+
+## Closed since last time (nothing more to do)
+
+- **`PARAM_CHANGE` escape (XC-008's wire half):** `contracts/events.py:157`, commit `5ea827b`, 2026-08-31.
+- **Ownership split and the codec's registry entry:** answered 2026-09-01 in `docs/CHECKPOINT.md` ("we
+  agree"); commit `7e100ab`; `wl.yaml:522` declares `event-code-protocol`.
+- **DVA comment's premise:** commit `ae1ece1`, 2026-08-31.
+- **Reader for a controller that is not MonkeyLogic:** `eye/xcon.py::read_xcon_map` (line 242).
+- **Runs, blocks and resume (XC-026):** `RUN_START` `0x8006` (`events.py:162`) and the `RUN_END` marker;
+  accepted 2026-10-01 per `docs/pending-wl-xcon-amendments.md`; `TRIAL_NUMBER` and `CONDITION` decode.
+- **Offer 2 (the online detector as an eighth registry entry):** no reply found; it stays an offer, not a
+  task. Say "no" here and wl-xcon drops it.
