@@ -320,6 +320,13 @@ system); not C.
 - *From:* [P9 spec §7](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-09-27-P9-camera-system-design.md#7-outside-this-repository-asks-not-assumptions).
 - *Not asked:* the camera library or encoder choice (a wl-xcon ADR).
 
+- *wl-preproc's answer, 2026-10-11, the requester's decision: accepted, as the sidecar's version 2.* A
+  version-2 sidecar may name the primary camera as what triggered the group, and must carry
+  `digital_line` and `frame_rate_hz`; a version-1 sidecar reads as today. Frame times then come from the
+  barcode on the frame line rather than by construction, so the build must place a dropped frame by the
+  camera's own frame counter, which `timebase/extract.py::extract_bcam` today assumes it never has to.
+  Built here when P9 needs it; say when.
+
 **8. XC-094: a `pupil - CR1` fallback beside the fixed `CR1 - CR4` signal.** Blocks: wl-xcon XC-006 (the
 fallback's design); not C.
 - *Asked:* nothing to build yet. Told so you know: where P4 cannot be vouched for, wl-xcon's gaze would
@@ -327,6 +334,12 @@ fallback's design); not C.
   carried (a second `raw_definition`, which `eye/xcon.py:73` now refuses by design) or kept out.
 - *From:* [S5 §1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#1-most-of-the-calibration-is-already-decided-and-not-by-us).
 - *Not asked:* any change to `purkinje_vector`.
+
+- *wl-preproc's answer, 2026-10-11, the requester's decision: carry it, designed once XC-006 settles the
+  switching rule and the second map.* P4 reaches about 10° of gaze and the lab's stimuli about 15° (S5
+  §1), so without it this repository's gaze beyond P4's reach rests on `CR1 - CR4` where that is not
+  reliable. One input to XC-006's switching rule: `DataQuality` cannot be it, since it stays 100 while P4
+  is lost (item 9).
 
 **9. XC-095: correct the `DataQuality` description.** Blocks: nothing.
 - *Asked:* your eye spec's section 1.1 (and `eye/gaze.py:23`) describe `DataQuality` as 0/50/100,
@@ -355,6 +368,12 @@ table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com
 fields (`started_at_source`, `stimulus_calibration_id`) by whichever route you choose. Still a question,
 unanswered here (the section above); the contract is yours. From
 [S10 §6 item 1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S10-data-and-lab-integration-design.md#6-open-items).
+- *wl-preproc's answer, 2026-10-11, the requester's decision: wl-xcon writes it,* at the session folder's
+  root, in every session it runs. Two things the contract needs of the writer: the watcher takes a folder
+  as a session only once its manifest is there (`ingest/watcher.py`), and the session is complete only
+  when every system in `expected_systems` has landed (`ingest/sentinel.py`), so the list must name the
+  systems expected before they land. A session with no task PC (anaesthetised mapping, spontaneous
+  activity) still needs another writer, not yet settled.
 
 ## Closed since last time (nothing more to do)
 
@@ -367,3 +386,8 @@ unanswered here (the section above); the contract is yours. From
   accepted 2026-10-01 per `docs/pending-wl-xcon-amendments.md`; `TRIAL_NUMBER` and `CONDITION` decode.
 - **Offer 2 (the online detector as an eighth registry entry):** no reply found; it stays an offer, not a
   task. Say "no" here and wl-xcon drops it.
+  - *wl-preproc's answer, 2026-10-11, the requester's decision: yes, later, and separately.* A per-session
+    measure of how often the detector that ran the experiment agreed with the offline consensus, from your
+    `SACCADE_ONSET` and `SACCADE_END` on the shared clock. Not an eighth detector in the seven-way score,
+    which would then mean something different in sessions without wl-xcon. After January; keep sending both
+    codes.

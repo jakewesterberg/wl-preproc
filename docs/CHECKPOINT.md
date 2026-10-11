@@ -247,17 +247,29 @@ requester chose to merge the same day; true when written.*
 > 2026-10-11 are merged: seven-way detector agreement (`3a45a09`), its five
 > deferred minors (`c899a9d`), and M4, the correction marker (`caf1d63`).
 > wl-xcon's eleven open asks of 2026-10-11 (`HANDOVER-wl-expcontroller.md`,
-> recorded by `7183347`) were sorted the same day. Answered there: ask 1's
-> file left unread, ask 2's numbering (the task assigns them, the requester's
-> decision) and its "overridden" flag, 9 and 10. Ask 9 found a defect here:
-> `EyeQuality` counts tracking loss and blinks from `DataQuality` below 100,
-> which is 100 on every frame of the OpenIris recording, so both read zero.
-> **Next: that fix, the requester's choice.** Asks 7, 8 and 11 and the
-> online-detector offer go to the requester first. The rest need building
-> (1's records, 2's flag, 3, 5, 6) or are unread (4). Open and small: the
-> correction marker's three deferred minors
+> recorded by `7183347`) were sorted the same day and answered there, the
+> requester deciding 2, 7, 8, 11 and the online-detector offer:
+> - **1:** the unread SQLite file cannot fail ingest; its records' reading
+>   needs a design;
+> - **2:** the task assigns condition numbers; the "overridden" flag accepted;
+> - **7:** the camera sidecar's version 2, for free-running cameras;
+> - **8:** the `pupil − CR1` fallback carried, designed after wl-xcon's XC-006;
+> - **9:** the eye spec corrected; **10:** staleness not in `EyeQuality`;
+> - **11:** wl-xcon writes `session_manifest.yaml` where it runs; a session
+>   with no task PC still needs a writer;
+> - **the offer:** a separate online-versus-offline saccade measure, after
+>   January.
+>
+> Ask 9 found a defect here: `EyeQuality` counts tracking loss and blinks
+> from `DataQuality` below 100, which is 100 on every frame of the OpenIris
+> recording, so both read zero. **Next: that fix, the requester's choice.**
+> Still to build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open
+> and small: the correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, later, this said asks 7, 8 and 11 and the online-detector
+> offer went to the requester first; true when written.*
 >
 > *Until 2026-10-11, afternoon, this said to ask what comes next, wl-xcon's
 > asks unanswered here; true when written.*

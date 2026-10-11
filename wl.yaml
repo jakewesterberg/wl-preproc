@@ -38,11 +38,12 @@ status:
     units come before everything below. Hardware-free: the requester's choices
     of 2026-10-08, 2026-10-10 and 2026-10-11 are merged. wl-xcon's eleven
     open asks of 2026-10-11 (HANDOVER-wl-expcontroller.md, 7183347) were
-    sorted that day; 1 (in part), 2's numbering and flag, 9 and 10 are
-    answered there. Ask 9 found EyeQuality's tracking loss and blink rate
+    sorted and answered there that day, the requester deciding 2, 7, 8, 11
+    and the online-detector offer (wl-xcon writes session_manifest.yaml
+    where it runs). Ask 9 found EyeQuality's tracking loss and blink rate
     reading zero on real OpenIrisDPI data (DataQuality is always 100); next,
-    that fix, the requester's choice. Asks 7, 8, 11 and the online-detector
-    offer go to the requester. Open and small: the correction marker's
+    that fix, the requester's choice. Still to build: asks 1, 2's flag, 3, 5,
+    6, 7 and 8. Open and small: the correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
     section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: M4, the correction marker (caf1d63): a correction marks its file
