@@ -18,12 +18,13 @@ from pathlib import Path
 import numpy as np
 
 from wl_preproc.eye.calibration import CalibrationMap, apply_map
-from wl_preproc.eye.ohdpi import read_columns
+from wl_preproc.eye.ohdpi import read_columns, read_tracker_loss
 
-# DataQuality is exactly 50*P1_valid + 50*P4_valid (design spec section 1.1),
-# so a frame below 100 is one the tracker itself declared a failure on --
-# stated by the recording rather than inferred from missing values or a
-# threshold on the signal.
+# Where the tracker lost the eye is `ohdpi.TrackerLoss`'s rule (design spec
+# `2026-10-11-eye-loss-design.md`): a pupil not found, `DataQuality` below
+# 100, or P1 or P4 at 0. *Until 2026-10-11 this read `DataQuality` alone,
+# which OpenIrisDPI writes as 100 on every frame, blinks included; true when
+# written.*
 #
 # **Necessary, not sufficient.** An earlier version of this comment stopped at
 # "stated, not inferred", which overclaims: OpenIrisDPI's own tutorial
@@ -32,14 +33,13 @@ from wl_preproc.eye.ohdpi import read_columns
 # only analyse epochs when the corneal reflection and P4 are tracked
 # correctly." `DataQuality` reports that detection SUCCEEDED, not that it was
 # CORRECT: P4 can be mis-detected from an aberrant glint or an occluding iris
-# and still report a confident position at 100.
+# and still report a confident position at 100, and no 0 marks that either.
 #
 # The validity mask that closes the gap -- eye open, gaze in region, plausible
 # speed, no frame discontinuity, invalid regions expanded and short epochs
 # dropped -- belongs with saccade detection, which is what consumes it and
 # which must run per valid epoch, since a velocity computed across a gap is a
 # spurious saccade. It is deliberately not built here.
-_FULL_TRACKING_QUALITY = 100
 
 
 def _purkinje_columns(eye: str) -> list[str]:
@@ -68,7 +68,7 @@ def gaze_trace(path: Path, eye: str, map_: CalibrationMap) -> np.ndarray:
 
 
 def tracking_loss_fraction(path: Path, eye: str) -> float:
-    """Fraction of frames whose `{eye}DataQuality` is below 100."""
-    cols = read_columns(path, [f"{eye}DataQuality"])
-    quality = cols[f"{eye}DataQuality"]
-    return float(np.mean(quality < _FULL_TRACKING_QUALITY))
+    """Fraction of frames the tracker lost or that cannot be read, by
+    `ohdpi.TrackerLoss`'s rule."""
+    loss = read_tracker_loss(path, eye)
+    return float(np.mean(loss.lost | loss.unreadable))
