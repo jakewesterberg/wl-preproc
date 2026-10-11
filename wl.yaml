@@ -25,7 +25,8 @@ status:
     calibration and seven saccade detectors (U'n'Eye, the seventh, merged
     5b41770, 2026-10-07), with their saccades' main sequence and vigor
     (ff8aeb9, 2026-10-08) and their seven-way agreement (3a45a09,
-    2026-10-10; its minors c899a9d). Spike sorting (Phase 2b, and the
+    2026-10-10; its minors c899a9d), and a lost eye read from the zeros
+    OpenIrisDPI writes (1dda41b, 2026-10-11). Spike sorting (Phase 2b, and the
     NWB's units) waits on the compute machine. docs/CHECKPOINT.md and
     docs/handoffs/ hold the full record. *Until 2026-10-05 this field was a
     running log of every merge since Phase 1c; it is in git at 817c204:wl.yaml;
@@ -42,15 +43,19 @@ status:
     and the online-detector offer (wl-xcon writes session_manifest.yaml
     where it runs). Ask 9 found EyeQuality's tracking loss and blink rate
     reading zero on real OpenIrisDPI data (DataQuality is always 100); the
-    fix, the requester's choice, is built on fix/eye-loss and not merged
-    (docs/handoffs/2026-10-11-eye-loss.md); reviewed, and its fixes made
-    (4f28441) with the requester's decision that DataQuality below 100 is a
-    lost reflection; next, the merge question. Still to build: asks 1, 2's
+    fix, the requester's choice, is merged (1dda41b;
+    docs/handoffs/2026-10-11-eye-loss.md). Next, blink padding, the
+    requester's choice, on fix/blink-padding: each blink's flanks padded in the
+    mask, 50 ms before and 80 ms after; its plan is being written. Still to
+    build: asks 1, 2's
     flag, 3, 5, 6, 7 and 8. Open and small: the eye-loss fix's five deferred
     minors and the correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
     section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: M4, the correction marker (caf1d63): a correction marks its file
+    Done: the eye-loss fix (1dda41b): one rule reads a lost eye from the
+    zeros OpenIrisDPI writes, so EyeQuality and the mask's blinks no longer read
+    zero on real data. Before it, M4, the correction marker (caf1d63): a
+    correction marks its file
     before the swap and the records' transaction clears the mark, so a file
     whose records failed is found even if the animal's details are changed
     back. Before it, seven-way agreement's five deferred minors (c899a9d): a lone
@@ -118,6 +123,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `caf1d63` until the eye-loss merge `1dda41b` on 2026-10-11 (CI green
+  # on `caf1d63`, run 38141210544); true when written.
   # Was `c899a9d` until the correction-marker merge `caf1d63` on 2026-10-11
   # (CI green on `c899a9d`, run 38076369335); true when written.
   # Was `3a45a09` until the seven-way-minors merge `c899a9d` on 2026-10-10 (CI
@@ -167,7 +174,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "caf1d63"
+  describes: "1dda41b"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

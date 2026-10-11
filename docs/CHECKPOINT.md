@@ -1,23 +1,28 @@
 # Where this build actually is
 
-**Last updated 2026-10-11**, describing `main` at `caf1d63`, the merge of
-`fix/correction-marker`: M4, the last deferred minor of subject corrections
-(spec `specs/2026-10-11-correction-marker-design.md`, amendments 1–4, handoff
-`handoffs/2026-10-11-correction-marker.md`). CI read off `caf1d63` is green
-on both interpreters, 2308 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 38141210544`). Just before it, `7183347`
-recorded wl-xcon's open asks of 2026-10-11 in `HANDOVER-wl-expcontroller.md`.
-- **A correction marks its file before the swap** (`nwb.NwbCorrecting`), and
-  the transaction that writes its records clears the mark, so a file whose
-  records failed after the swap stays stale, and is put back, even if the
-  animal's details are changed back. A file marked but never swapped records
-  nothing (spec §3).
-- **The marker is written before the live file's stamp is checked,** so no
-  database round trip lies between the check and the swap, where a lab's
-  write would be lost under it (amendment 4, `e8ef871`).
-- **The table is declared on activation,** with no statement to run, and
-  deleting a file's row deletes its marker.
-- **Seven-way agreement's five deferred minors were merged just before**
+**Last updated 2026-10-12**, describing `main` at `1dda41b`, the merge of
+`fix/eye-loss`: reading a lost eye from what OpenIrisDPI writes (spec
+`specs/2026-10-11-eye-loss-design.md`, amendments 1–9, handoff
+`handoffs/2026-10-11-eye-loss.md`). CI read off `1dda41b` is green on both
+interpreters, 2330 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 38174521182`).
+- **One rule reads a lost eye** (`ohdpi.TrackerLoss`): a blink is the pupil not
+  found; a lost reflection is P1 or P4 at 0, or `DataQuality` below 100
+  (amendment 8). `DataQuality` alone, always 100 on OpenIrisDPI, had made
+  `EyeQuality`'s figures and the mask's `blink` read zero.
+- **The validity mask reads it:** a lost reflection is `invalid`, counted in
+  the new `EyeValidity.frac_feature_lost`; on a database declared before that
+  column the stage refuses, naming the `ALTER TABLE` and a restart.
+- **`EyeQuality` counts by it:** tracking loss is every frame lost or
+  unreadable, and blinks less than 100 ms apart are one.
+- **Two asks of wl-xcon** for its P10 tracker: blinks from the image with their
+  flanks, and raw eye video from the first sessions
+  (`docs/pending-wl-xcon-amendments.md`).
+- **M4, the correction marker, was merged just before** (`caf1d63`, CI green;
+  spec `specs/2026-10-11-correction-marker-design.md`): a correction marks its
+  file before the swap and the records' transaction clears the mark, so a file
+  whose records failed is found even if the animal's details are changed back.
+- **Seven-way agreement's five deferred minors were merged before it**
   (`c899a9d`, CI green): a lone detector's blend undefined rather than an
   error, "0 samples compared" in the report, and the noise test skipped where
   a detector cannot run.
@@ -71,6 +76,10 @@ recorded wl-xcon's open asks of 2026-10-11 in `HANDOVER-wl-expcontroller.md`.
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `caf1d63` (the correction-marker merge, CI green, 2308
+passed on each interpreter, `38141210544`) until the eye-loss merge; true when
+written.*
 
 *This header named `c899a9d` (the seven-way-minors merge, CI green, 2296
 passed on each interpreter, `38076369335`) until the correction-marker merge;
@@ -262,17 +271,22 @@ requester chose to merge the same day; true when written.*
 >
 > Ask 9 found a defect here: `EyeQuality` counts tracking loss and blinks
 > from `DataQuality` below 100, which is 100 on every frame of the OpenIris
-> recording, so both read zero. **The fix, the requester's choice, is built on
-> `fix/eye-loss`, not merged** (`handoffs/2026-10-11-eye-loss.md`): one rule
-> reads a lost eye from the 0s OpenIrisDPI writes, for the validity mask and
-> `EyeQuality`. Reviewed: one Important and three Minors re-graded Important,
-> fixed (`4f28441`) with the requester's decision that `DataQuality` below 100
-> is a lost reflection, not a blink. **Next: the merge question.** Still to
+> recording, so both read zero. **The fix, the requester's choice, is merged**
+> (`1dda41b`; `handoffs/2026-10-11-eye-loss.md`): one rule reads a lost eye
+> from the 0s OpenIrisDPI writes, for the validity mask and `EyeQuality`, with
+> the requester's decision that `DataQuality` below 100 is a lost reflection,
+> not a blink. **Next: blink padding, the requester's choice,** on
+> `fix/blink-padding` (spec `specs/2026-10-11-blink-padding-design.md`): each
+> blink's flanks padded in the mask, 50 ms before and 80 ms after; its plan is
+> being written. Still to
 > build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open and small:
 > the eye-loss fix's five deferred minors (`handoffs/2026-10-11-eye-loss.md`
 > §6) and the correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-12 this said the eye-loss fix was built, not merged,
+> with the merge question next; true when written.*
 >
 > *Until 2026-10-11, at night, this said the eye-loss fix's review came next;
 > true when written.*
@@ -326,7 +340,10 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: M4, the correction marker (`caf1d63`): a correction marks its file
+> Done: the eye-loss fix (`1dda41b`): one rule reads a lost eye from the 0s
+> OpenIrisDPI writes, so `EyeQuality`'s tracking loss and blink rate, and the
+> mask's blinks, no longer read zero on real data. Before it, M4, the
+> correction marker (`caf1d63`): a correction marks its file
 > before the swap and the records' transaction clears the mark, so a file
 > whose records failed is found even if the animal's details are changed back.
 > Before it, seven-way agreement's five deferred minors (`c899a9d`): a lone
