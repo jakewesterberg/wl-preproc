@@ -49,7 +49,7 @@ the markers read in one query per pass.
 ## 5. What execution measured
 
 Executed on 2026-10-11, inline (the requester's choice), task by task: Task 1 `f6e4bbd`, Task 2
-`ae6bb13`. Each task's tree is identical to its proof commit on the local branch
+`ae6bb13`. Each task's code and tests are identical to its proof commit on the local branch
 `proof/correction-marker`, and every count matched the plan's:
 - **Each task's tests failed first:** Task 1, 3 failed; Task 2, 7 failed and 1 passed, the
   third-value test, which pins behaviour Task 2 keeps.
@@ -62,3 +62,37 @@ Executed on 2026-10-11, inline (the requester's choice), task by task: Task 1 `f
 
   That is 11 more than the seven-way minors' run at `605a389`, the marker's tests.
 - **`wl-check`:** `wl.yaml: no findings`.
+
+## 6. The final review
+
+A fresh Opus reviewer read the whole branch (`87a0ed6..89f3a65`), with one probe against a live
+MySQL: rule 3's equality holds for a file never corrected, not only for one the tests had
+rewritten. It found **no Critical, no Important and four Minor**, set ten behaviours aside, and
+judged the branch ready to merge.
+- **Minor 1, re-graded Important by its effect, and fixed** (`e8ef871`, spec amendment 4). The
+  marker's two database round trips lay between the live file's stamp check and the swap, so a
+  lab's write landing then was lost under the swap: the gap M2 closed for the flush, widened by
+  this branch. The marker is now written before the check.
+  `test_a_write_while_the_marker_is_written_stops_the_swap` failed first, run alone.
+- **Deferred, Minor:**
+  - no test asserts that §5's first row clears the marker; a regression would clear itself on the
+    next pass;
+  - the adoption test calls `write_subject_records` directly, not through `publish._adopt`;
+  - wording: `NwbCorrecting`'s comment and `correct`'s docstring leave out rule 3's deletion, and §5
+    above says "as CI has it" of references CI lacks, where it means `WLPP_OHDPI_REFERENCE` unset;
+    CI should show about 2308 passed (`main`'s 2296 and this branch's 12), not 2317;
+  - `docs/CHECKPOINT.md`'s and `wl.yaml`'s history lines still say M4 is left open; the merge's
+    pointer rewrites them.
+- **Set aside by the reviewer, and the rulings on them** (all stand): a reconnect dropping the NWB
+  lock mid-pass (every NWB writer, already set aside); a marked unpublished file in a freed session
+  waiting unreported, as any stale file there does; a deleted superseded row orphaning its file,
+  as any does; an adoption that changes nothing leaving a marker, which the next pass clears; the
+  count including a marker cleared with nothing recorded, as spec §5 chose; a rollback while
+  markers exist; two loose phrases in the spec (§1's "heals the file", §2's "began"), which nothing
+  reads; which database user declares the table; and the swap on the NAS's mounts, open in §3. The
+  reviewer also noted §5's "identical" trees differ by the plan document, which the proof
+  predates: it now says code and tests.
+
+**The full suite after the fix, on `e8ef871`:** 3.11, **2317 passed, 27 skipped, 1 deselected, 1
+xfailed**; 3.13, **2317 passed, 28 skipped, 1 xfailed**. That is one more than §5's run, the fix's
+test, and both exited 0.

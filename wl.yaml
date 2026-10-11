@@ -38,8 +38,9 @@ status:
     of 2026-10-08 and 2026-10-10 are merged; M4, the requester's choice of
     2026-10-11, is built on fix/correction-marker and not merged
     (docs/handoffs/2026-10-11-correction-marker.md): a correction marks its
-    file before the swap. Next: the whole-branch review, then the merge
-    question. Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    file before the swap. Reviewed: one finding, re-graded Important, fixed
+    (e8ef871). Next: the merge question. Fine-tuning U'n'Eye waits for
+    hand-labelled lab data.
     Done: seven-way agreement's five deferred minors (c899a9d): a lone
     detector's blend undefined rather than an error, "0 samples compared" in
     the report, the noise test skipped where a detector cannot run, and two

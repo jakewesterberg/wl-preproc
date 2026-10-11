@@ -239,9 +239,12 @@ requester chose to merge the same day; true when written.*
 > `fix/correction-marker`, not merged
 > (`handoffs/2026-10-11-correction-marker.md`): a correction marks its file
 > before the swap, so a file whose records failed is found even if the animal's
-> details are changed back. Next: the whole-branch review, then the merge
-> question. Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab
-> data.
+> details are changed back. Reviewed: one finding, re-graded Important, fixed
+> (`e8ef871`). Next: the merge question. Fine-tuning U'n'Eye to the DPI tracker
+> waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, later, this said the whole-branch review came next; true
+> when written.*
 >
 > *Until 2026-10-11 this said to ask what comes next, M4 open; true when written.*
 >
