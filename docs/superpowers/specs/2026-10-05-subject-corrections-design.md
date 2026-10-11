@@ -154,6 +154,9 @@ Each is reported per file, and none stops the pass or another file.
 | A crash after the swap, before the records | Next pass finds the file already holds the current details: only the records are updated, and no note is added |
 | A published file missing where its placement says | Reported, as publishing already reports it |
 
+*A correction marks its file before the swap, so a failure after it leaves the file stale until
+its records are written, whatever its details become meanwhile (amendment 15).*
+
 ---
 
 ## 6. What goes back to the other repositories
@@ -296,3 +299,13 @@ These settle what the sections above left open; §0 stands.
     - a share a file is placed on that the pass was not given is reported once, as an
       unreachable one is (M-c).
 
+---
+
+## Amendment, 2026-10-11, from minor M4
+
+15. **A correction marks its file before the swap** (`nwb.NwbCorrecting`), and the transaction
+    that writes its records clears the mark. A swap whose description file or records then fail
+    leaves the file marked, so the next pass finds it stale even if the animal's details were
+    changed back in between, and puts it back with a second note. §5's row for a crash after the
+    swap no longer depends on the details staying as they were. Design spec
+    `2026-10-11-correction-marker-design.md`.

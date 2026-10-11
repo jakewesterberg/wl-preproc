@@ -968,3 +968,342 @@ def test_the_stages_that_visit_every_published_file_read_its_placements_once(pub
     for name, stage in stages.items():
         selects(over(keys, stage))
         assert selects(over(keys[:1], stage)) == selects(over(keys, stage)), name
+
+
+# -- The marker of a correction not yet recorded (design spec
+# `2026-10-11-correction-marker-design.md`, M4).
+
+def _marked(key) -> bool:
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    return len(nwb_schema.NwbCorrecting & key_of(key)) > 0
+
+
+def test_the_marker_is_keyed_by_the_file(dj_conn, prefix):
+    """Section 2: at most one marker per file."""
+    from wl_preproc.schema import nwb as nwb_schema
+
+    nwb_schema.activate(prefix=prefix)
+    assert nwb_schema.NwbCorrecting.primary_key == nwb_schema.NwbFile.primary_key
+
+
+def test_a_marked_file_is_stale_though_its_records_match_its_details(published):
+    """Section 4: stale by its marker, as by value, and listed once when it
+    is both."""
+    from wl_preproc.nwb.correct import stale_files
+    from wl_preproc.nwb.publish import _now, activation_tuple, key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    assert not _is_stale(key)
+    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    try:
+        assert _is_stale(key)
+        _set_birth(datetime.date(2016, 3, 1))
+        assert [activation_tuple(stale) for stale in stale_files()].count(activation_tuple(key)) == 1
+    finally:
+        _set_birth(_BIRTH)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+
+
+def test_a_marked_file_on_an_unreachable_share_keeps_its_marker(published, shares, tmp_path_factory):
+    """Held back with the rest of its share's files and reported once, as a
+    stale file is (amendment 13), and still marked for the pass that reaches
+    the share."""
+    from wl_preproc.nwb.correct import run_corrections
+    from wl_preproc.nwb.publish import Share, _now, current_placement, key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    tier = current_placement(key)["tier"]
+    gone = Share(tier=tier, mount=tmp_path_factory.mktemp("nwbfix-gone-marked") / "gone", host="wl-nas",
+                 name=shares[tier].name)
+    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    try:
+        _corrected, errors = run_corrections(*((gone, shares["fast"]) if tier == "slow" else (shares["slow"], gone)))
+        reached = [error for error in errors if "not reachable" in error]
+        assert len(reached) == 1 and reached[0].endswith("; 1 file(s) on it not corrected"), errors
+        assert _marked(key)
+    finally:
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+
+
+def _failing(*args, **kwargs):
+    raise OSError("[Errno 5] Input/output error")
+
+
+def _corrected_notes(key) -> int:
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    notes = (nwb_schema.NwbFile & key_of(key)).fetch1("description")["notes"]
+    return sum(1 for note in notes if note.startswith("Corrected "))
+
+
+def _changes(key) -> int:
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    return len(nwb_schema.NwbChange & key_of(key))
+
+
+def _assert_settled(key, live, born: datetime.date) -> None:
+    """The file, its description file and its records all hold `born`, the
+    four checksums match the file, and the file is neither marked nor
+    stale."""
+    import json
+
+    from wl_preproc.nwb.correct import file_subject
+    from wl_preproc.nwb.publish import description_path, key_of, mismatches
+    from wl_preproc.schema import nwb as nwb_schema
+
+    assert file_subject(live)["date_of_birth"] == born
+    described = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
+    assert described["subject"]["date_of_birth"] == born.isoformat()
+    assert json.loads(description_path(live).read_text()) == described
+    assert mismatches(live, (nwb_schema.NwbFile.Dataset & key_of(key)).to_dicts()) == []
+    assert not _marked(key) and not _is_stale(key)
+
+
+@pytest.mark.parametrize("fails", ["write_description", "insert_change"])
+def test_a_file_whose_records_failed_after_the_swap_is_put_back_when_its_details_are(published, shares,
+                                                                                    monkeypatch, fails):
+    """M4 (section 5): the swap succeeds and its records do not -- the
+    description file's write on the share fails, or the database inside the
+    records' transaction -- and the animal's details are changed back before
+    the next pass. The marker keeps the file stale, so that pass puts it back
+    with a second note, and one more pass records nothing."""
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import file_subject, run_corrections
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    notes = _corrected_notes(key)
+    monkeypatch.setattr(publish_module, fails, _failing)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert [error for error in errors if "Input/output error" in error], errors
+        assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 1) and _marked(key)
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        changes = _changes(key)
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert not [error for error in errors if _SUBJECT in error], errors
+        _assert_settled(key, live, _BIRTH)
+        assert _corrected_notes(key) == notes + 2 and _changes(key) == changes + 1
+        run_corrections(shares["slow"], shares["fast"])
+        assert _changes(key) == changes + 1
+    finally:
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_marker_whose_swap_never_happened_is_cleared_and_nothing_recorded(published, shares, monkeypatch):
+    """Section 5: the marker is written and the rename then fails, on two
+    passes, the marker keeping its first time; the details are then changed
+    back. The file and its records already hold them, so the next pass
+    deletes the marker and records no change (section 3, rule 3)."""
+    from wl_preproc.nwb import correct as correct_module
+    from wl_preproc.nwb.correct import correct
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    stamp = live.stat().st_mtime_ns
+    described = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
+    changes = _changes(key)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(correct_module.os, "replace", _failing)
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+            first = (nwb_schema.NwbCorrecting & key_of(key)).fetch1("started_at")
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+            assert (nwb_schema.NwbCorrecting & key_of(key)).fetch1("started_at") == first
+        _set_birth(_BIRTH)
+        assert _is_stale(key)
+        assert correct(key, shares, _DAY) is None
+        assert not _marked(key) and not _is_stale(key) and _changes(key) == changes
+        assert (nwb_schema.NwbFile & key_of(key)).fetch1("description") == described
+        assert live.stat().st_mtime_ns == stamp
+    finally:
+        _set_birth(_BIRTH)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+
+
+def test_a_marker_that_cannot_be_written_stops_the_swap(published, shares, monkeypatch):
+    """Section 3, rule 1: no marker, no swap. The file keeps its details, the
+    failure is reported, and the file is still stale for the next pass."""
+    from wl_preproc.nwb.correct import file_subject, run_corrections
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    monkeypatch.setattr(nwb_schema.NwbCorrecting, "insert1", _failing)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert [error for error in errors if "Input/output error" in error], errors
+        assert file_subject(live)["date_of_birth"] == _BIRTH and _is_stale(key) and not _marked(key)
+    finally:
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_records_written_for_an_adoption_clear_a_marker(published, shares):
+    """Section 3, rule 2: `write_subject_records` writes an adoption's records
+    too (`publish._adopt`), and records brought up to the file leave no
+    marker."""
+    from wl_preproc.nwb.correct import subject_records, write_subject_records
+    from wl_preproc.nwb.publish import _now, key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    try:
+        description, fresh = subject_records(key_of(key), (nwb_schema.NwbFile & key_of(key)).fetch1("description"),
+                                             live)
+        write_subject_records(key_of(key), description, fresh)
+        assert not _marked(key)
+    finally:
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+
+
+def test_a_marked_file_whose_details_changed_again_is_corrected_to_them(published, shares, monkeypatch):
+    """A to B with the records failing, then B to C before the next pass:
+    stale by value, corrected to C with both notes, and the marker cleared."""
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import run_corrections
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    notes = _corrected_notes(key)
+    monkeypatch.setattr(publish_module, "write_description", _failing)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        run_corrections(shares["slow"], shares["fast"])
+        monkeypatch.undo()
+        _set_birth(datetime.date(2016, 2, 29))
+        _corrected, errors = run_corrections(shares["slow"], shares["fast"])
+        assert not [error for error in errors if _SUBJECT in error], errors
+        _assert_settled(key, live, datetime.date(2016, 2, 29))
+        assert _corrected_notes(key) == notes + 2
+    finally:
+        monkeypatch.undo()
+        _set_birth(_BIRTH)
+        run_corrections(shares["slow"], shares["fast"])
+
+
+def test_a_marked_row_deleted_to_rebuild_takes_its_marker_and_the_file_is_put_right(published, shares,
+                                                                                   daemon_module, prefix,
+                                                                                   monkeypatch):
+    """Section 2: M4's file, its row then deleted to rebuild. The marker goes
+    with the row; the rebuild adopts the file and takes its subject records
+    from it (amendment 7), and the pass after corrects it back."""
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import correct
+    from wl_preproc.schema import nwb as nwb_schema
+    from wl_preproc.schema.request import current_canonical
+
+    session_key, _key, _runs, root = published
+    passes = {"nwb_root": root, "nwb_slow": shares["slow"], "nwb_fast": shares["fast"]}
+    montage = {"subject": session_key["subject"], "session_datetime": session_key["session_datetime"], "montage_id": 0}
+    key = {k: current_canonical(montage)[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
+    live = _live(key, shares)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(publish_module, "write_description", _failing)
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+        assert _marked(key)
+        _set_birth(_BIRTH)
+        (nwb_schema.NwbFile & key).delete(prompt=False)
+        assert not _marked(key)
+        for _pass in range(2):
+            report = daemon_module.run_once(prefix=prefix, **passes)
+            assert not [error for error in report["errors"] if _SUBJECT in error], report["errors"]
+        _assert_settled(key, live, _BIRTH)
+    finally:
+        _set_birth(_BIRTH)
+        daemon_module.run_once(prefix=prefix, **passes)
+
+
+def test_a_file_put_back_does_not_stop_a_move_due_that_pass(published, shares, daemon_module, prefix,
+                                                            monkeypatch):
+    """M4 as the requester would meet it: a move compares every recorded
+    checksum, and refused M4's file on every pass. Corrections run first
+    (amendment 11), so the file is put back and recorded, and the move goes
+    ahead."""
+    from tests.schema.test_nwb_build import _set_active
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import correct
+    from wl_preproc.nwb.publish import current_placement
+
+    _session_key, key, _runs, root = published
+    passes = {"nwb_root": root, "nwb_slow": shares["slow"], "nwb_fast": shares["fast"]}
+    assert current_placement(key)["tier"] == "slow"
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(publish_module, "write_description", _failing)
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+        _set_birth(_BIRTH)
+        _set_active(key)
+        report = daemon_module.run_once(prefix=prefix, **passes)
+        assert not [error for error in report["errors"] if _SUBJECT in error], report["errors"]
+        assert current_placement(key)["tier"] == "fast"
+        _assert_settled(key, _live(key, shares), _BIRTH)
+    finally:
+        _set_active()
+        _set_birth(_BIRTH)
+        daemon_module.run_once(prefix=prefix, **passes)
+        daemon_module.run_once(prefix=prefix, **passes)
+    assert current_placement(key)["tier"] == "slow"
+
+
+# -- The final review.
+
+def test_a_write_while_the_marker_is_written_stops_the_swap(published, shares, monkeypatch):
+    """Minor 1, re-graded: the marker is written before the live file's stamp
+    is checked, so a lab's write landing while it is written is seen and the
+    copy dropped, rather than lost under the swap, as M2 has it for the
+    flush. The marker stays, for a swap that never happened (section 5)."""
+    from wl_preproc.nwb import correct as correct_module
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    live = _live(key, shares)
+    size = live.stat().st_size
+    real = correct_module._mark
+
+    def written_meanwhile(marked):
+        real(marked)
+        with open(live, "ab") as handle:
+            handle.write(b"\0")
+
+    monkeypatch.setattr(correct_module, "_mark", written_meanwhile)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with pytest.raises(correct_module.ChangedWhileCorrecting):
+            correct_module.correct(key, shares, _DAY)
+        assert live.stat().st_size == size + 1 and _marked(key)
+    finally:
+        monkeypatch.undo()
+        if live.stat().st_size == size + 1:  # the byte appended above, removed
+            with open(live, "r+b") as handle:
+                handle.truncate(size)
+        _set_birth(_BIRTH)
+        correct_module.correct(key, shares, _DAY)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+    assert correct_module.file_subject(live)["date_of_birth"] == _BIRTH

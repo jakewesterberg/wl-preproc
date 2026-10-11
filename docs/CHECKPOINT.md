@@ -219,8 +219,8 @@ requester chose to merge the same day; true when written.*
 > archival with rehydration, and ingest with the timebase. "What is built",
 > below, and `handoffs/` have each piece.
 >
-> **Hardware: ask whether it has changed.** It had not on 2026-10-05: the
-> requester chose hardware-free work that day.
+> **Hardware: ask whether it has changed.** It had not on 2026-10-11, when the
+> requester chose M4.
 > - **The rig.** The barcode and timebase alignment path has never met real
 >   data, and cannot with the recording the lab has, which carries no wl-sync
 >   barcodes (below). A few minutes of recording with the sync box live would
@@ -231,11 +231,22 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until 2026-10-11 this said it had not on 2026-10-05; true when written.*
+>
 > **Hardware-free:** the requester's choices of 2026-10-08 and 2026-10-10 are
-> merged: seven-way detector agreement (`3a45a09`) and its five deferred
-> minors (`c899a9d`). Ask what comes next. Open and small: M4 (left open by
-> the requester's choice). Fine-tuning U'n'Eye to the DPI tracker waits for
-> hand-labelled lab data.
+> merged: seven-way detector agreement (`3a45a09`) and its five deferred minors
+> (`c899a9d`). M4, the requester's choice of 2026-10-11, is built on
+> `fix/correction-marker`, not merged
+> (`handoffs/2026-10-11-correction-marker.md`): a correction marks its file
+> before the swap, so a file whose records failed is found even if the animal's
+> details are changed back. Reviewed: one finding, re-graded Important, fixed
+> (`e8ef871`). Next: the merge question. Fine-tuning U'n'Eye to the DPI tracker
+> waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, later, this said the whole-branch review came next; true
+> when written.*
+>
+> *Until 2026-10-11 this said to ask what comes next, M4 open; true when written.*
 >
 > *Until 2026-10-10, at night, this named the five minors as built on
 > `fix/seven-way-minors`, reviewed and not merged, with the merge question

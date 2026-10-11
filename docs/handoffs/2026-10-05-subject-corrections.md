@@ -144,16 +144,20 @@ with a test that failed first, run alone, and M10 a comment (spec amendments 11�
 - **M10:** `NwbPlacement`'s comment names corrections.
 
 **Two are left as they are, for the requester to overrule:**
-- **M4, a file corrected while its records are not.** A swap succeeds and its records do not —
-  the description file's write on the NAS fails (it comes before the commit, amendment 8), or the
-  database fails between the swap and the commit — and the animal's details then revert before
-  the next pass brings the records up (a pass an unreachable share can also hold back). The file
-  then holds the newer details, its records and description the older, and nothing finds it
-  stale. **It is silent for a file at rest:** only a move or an adoption compares the subject's
-  checksums, and then refuses with `ChangedData`, naming them. Its most likely cause, a database
-  without `corrected`, is now refused before any swap (amendment 9). A real fix needs a pending
-  marker recorded before the swap, a schema change. *Until the minors' review this said it was
-  never silent; true when written of a file being moved, not of one at rest.*
+- **M4, a file corrected while its records are not.** A swap succeeds and its records do not — the
+  description file's write on the NAS fails (it comes before the commit, amendment 8), or the
+  database fails between the swap and the commit — and the animal's details then revert before the
+  next pass brings the records up (a pass an unreachable share can also hold back). The file then
+  holds the newer details, its records and description the older, and nothing finds it stale. **It
+  is silent for a file at rest:** only a move compares the subject's checksums, and refuses with
+  `ChangedData`, naming them, and a first publish from scratch fails its verification. Its most
+  likely cause, a database without `corrected`, is now refused before any swap (amendment 9). A real
+  fix needs a pending marker recorded before the swap, a schema change. *Until the minors' review
+  this said it was never silent; true when written of a file being moved, not of one at rest.*
+  *Until 2026-10-11 this also said an adoption compares them and refuses. It never did: amendment 7,
+  made before this was written, has adoption take the four from the file.* **Fixed on
+  `fix/correction-marker` (2026-10-11)** by a marker recorded before the swap
+  (`handoffs/2026-10-11-correction-marker.md`, spec amendment 15).
 - **M9's other half, `stale_files` reading every written file's description each pass,** about
   75 KB each on the fixture. Avoiding it needs the subject's details kept beside the description,
   a schema change, or a per-subject record of the details last seen. It is worth doing if a pass
