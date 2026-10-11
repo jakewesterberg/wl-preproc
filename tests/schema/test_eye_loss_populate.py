@@ -204,3 +204,22 @@ def test_the_statement_restores_the_column_as_datajoint_declares_it(lost_session
             dj.conn().query(f"ALTER TABLE {table} ADD COLUMN frac_feature_lost double DEFAULT NULL AFTER frac_blink")
 
     assert columns() == declared
+
+
+def test_eye_quality_counts_the_loss_and_merges_a_blink_that_reopens_briefly(lost_session):
+    """Tracking loss is every lost or unreadable frame; blinks less than 100
+    ms apart are one, 150 ms apart two (spec section 4). Left: three blinks
+    planted, two counted, and P1 off camera as loss but no blink. Right: one
+    blink, and five unreadable frames as loss but no blink."""
+    from wl_preproc.schema import eye as eye_schema
+
+    session_key, segment, _report = lost_session
+    duration_s = segment["end_s"] - segment["start_s"]
+    p1_off = _first_row_at(_P1_OFF_S[1]) - _first_row_at(_P1_OFF_S[0])
+    rows = {row["eye"]: row for row in (eye_schema.EyeQuality & session_key).to_dicts()}
+
+    assert rows["left"]["tracking_loss_fraction"] == pytest.approx((3 * _BLINK_ROWS + p1_off) / segment["n_samples"])
+    assert rows["right"]["tracking_loss_fraction"] == pytest.approx(
+        (_BLINK_ROWS + _UNREADABLE_ROWS) / segment["n_samples"])
+    assert rows["left"]["blink_rate_hz"] == pytest.approx(2 / duration_s)
+    assert rows["right"]["blink_rate_hz"] == pytest.approx(1 / duration_s)

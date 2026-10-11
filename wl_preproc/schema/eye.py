@@ -25,8 +25,8 @@ payloads and the `FIXATION_ACQUIRED`/`FIXATION_END` window they bound (design
 spec section 4.3), samples the raw ohDPI Purkinje signal over that same
 window via `core.Segment`'s own session-time alignment, and runs the result
 through `wl_preproc.eye.calibration.resolve_calibration`. `EyeQuality.make()`
-reads tracking loss and blink rate straight off the raw file's own
-`DataQuality` column.
+reads tracking loss and blink rate straight off the raw file, by
+`ohdpi.TrackerLoss`'s rule (design spec `2026-10-11-eye-loss-design.md`).
 """
 
 from __future__ import annotations
@@ -59,25 +59,17 @@ from wl_preproc.eye.calibration import (
     validate_map,
 )
 from wl_preproc.eye.gaze import purkinje_vector
-from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 from wl_preproc.contracts.paths import XCON_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
 schema = dj.Schema()
 
-# DataQuality is exactly 50*P1_valid + 50*P4_valid (design spec section 1.1),
-# matching `eye/gaze.py`'s own `_FULL_TRACKING_QUALITY`: anything short of
-# this means at least one Purkinje image failed on that frame. Restated here
-# rather than imported -- it is a private name in that module, and the value
-# is the frozen recording format's, not a choice free to drift between the
-# two places it is read.
-#
-# It is NECESSARY, not sufficient -- see `eye/gaze.py`'s own copy of this
-# constant for the full correction and the notebook quotation behind it. In
-# short: a frame at 100 is one the tracker did not declare a failure on, which
-# is not the same as one it tracked correctly, and the validity mask that
-# closes the gap belongs with saccade detection.
-_FULL_TRACKING_QUALITY = 100
+# Blinks less than this apart are one: a lid that reopens for less has not
+# finished blinking (design spec `2026-10-11-eye-loss-design.md` section 4).
+# On the reference recording 8 of the 262 gaps between the left eye's
+# lost-pupil runs are shorter, and none of the rest is under 150 ms.
+BLINK_MERGE_S = 0.1
 
 # `EyeCalibration.reason` is `varchar(255)` (that class's own `definition`,
 # below). Named against the column's own declared width, the same pattern
@@ -1063,21 +1055,24 @@ def _best_carry_forward_candidate(
     return best["session_datetime"], borrowed
 
 
-def _count_true_runs(mask: np.ndarray) -> int:
-    """How many CONTIGUOUS `True` runs `mask` contains -- a rising-edge
-    count, not a sum: `[T, T, F, T]` is two runs, not three frames.
+def _count_blinks(blink: np.ndarray, merge_samples: int) -> int:
+    """How many blinks `blink` holds: its CONTIGUOUS `True` runs, a run that
+    starts fewer than `merge_samples` after the previous one ends counted
+    with it. A rising-edge count, not a sum: `[T, T, F, T]` is two runs, not
+    three frames, and one blink once `merge_samples` exceeds 1.
 
-    Runs are counted per FILE, not stitched across a multi-segment session's
-    boundary: two files from a restart mid-blink would count as two runs
+    Counted per FILE, not stitched across a multi-segment session's
+    boundary: two files from a restart mid-blink would count as two blinks
     rather than one continuation. Accepted rather than resolved -- a session
     whose ohDPI recording restarts mid-blink is rare, and stitching across
     two different files' own clocks is not otherwise needed anywhere in
     this module.
     """
-    if mask.size == 0:
+    edges = np.diff(np.concatenate(([False], blink, [False])).astype(np.int8))
+    starts, stops = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    if starts.size == 0:
         return 0
-    padded = np.concatenate(([False], mask, [False]))
-    return int(np.sum(np.diff(padded.astype(np.int8)) == 1))
+    return int(1 + np.sum(starts[1:] - stops[:-1] >= merge_samples))
 
 
 @schema
@@ -1093,11 +1088,13 @@ class EyeQuality(dj.Computed):
     -> pipeline.Session
     eye : enum('left','right')
     ---
-    # From the file's own DataQuality column (0/50/100), so tracking loss is
-    # STATED by the recording rather than inferred from missing values -- but
-    # necessary, not sufficient: it reports that detection succeeded, never
-    # that it was correct (`_FULL_TRACKING_QUALITY`, above). These two numbers
-    # are a lower bound on how much of a session is unusable.
+    # By `ohdpi.TrackerLoss`'s rule: a frame is lost where the pupil, P1 or P4
+    # was not found (OpenIrisDPI writes 0) or `DataQuality` is below 100, and
+    # a blink is a run of frames whose pupil was not found (design spec
+    # `2026-10-11-eye-loss-design.md`). A lower bound on how much of a
+    # session is unusable: the tracker can report a confident, wrong position,
+    # which no 0 marks. *Until 2026-10-11 both read `DataQuality` alone, which
+    # OpenIrisDPI writes as 100 through every blink; true when written.*
     tracking_loss_fraction : double
     blink_rate_hz          : double
     """
@@ -1126,8 +1123,8 @@ class EyeQuality(dj.Computed):
         No "assembled events" restriction, unlike `EyeCalibration`: Task 9's
         own docstring already named this difference ("tracking loss and
         blink rate need only an ohDPI recording, not assembled events"), and
-        tracking loss reads straight off `DataQuality`, needing no decoded
-        target at all.
+        tracking loss reads straight off the file, needing no decoded target
+        at all.
 
         This is also why THIS table, unlike `EyeCalibration`, keeps
         `core.Segment`'s own self-healing property intact: a session whose
@@ -1145,23 +1142,25 @@ class EyeQuality(dj.Computed):
         return pipeline.Session & ingest.Ingestion & (core.Segment & '`system` = "ohdpi"')
 
     def make(self, key: dict) -> None:
-        """Tracking loss and blink rate, per eye, straight off
-        `DataQuality`'s 0/50/100 -- stated by the recording, never inferred,
-        and a LOWER BOUND on unusable frames rather than the whole of it: the
-        tracker reports that detection succeeded, not that it was correct
-        (`_FULL_TRACKING_QUALITY`'s own comment, and the notebook quotation
-        there). A frame where P4 was mis-detected from an aberrant glint reads
-        100 here and is counted as tracked.
+        """Tracking loss and blink rate, per eye, straight off the file by
+        `ohdpi.TrackerLoss`'s rule (design spec `2026-10-11-eye-loss-
+        design.md` section 4), the rule the validity mask reads too.
 
-        A "blink" is read here as one CONTIGUOUS run of tracking loss
-        (`DataQuality < 100`; design spec section 1.1: "DataQuality =
-        50*P1_valid + 50*P4_valid"). A real dual-Purkinje tracker loses both
-        images together for the duration of an actual blink, and neither the
-        design spec nor any task before this one names a more specific
-        signal to use instead -- section 1.1 also names `UpperEyelid`/
-        `LowerEyelid` as always zero ("the DPI pipeline does not compute
-        them"), so there is no eyelid signal here to prefer even in
-        principle, not merely one this pipeline happens not to read yet.
+        - **Tracking loss:** the share of frames lost or unreadable. A LOWER
+          BOUND on unusable frames: a frame where P4 was mis-detected from an
+          aberrant glint carries a confident position, no 0, and is counted
+          as tracked.
+        - **Blink rate:** blinks per second of recording, a blink being a run
+          of frames whose pupil was not found, with runs less than
+          `BLINK_MERGE_S` apart counted as one (`_count_blinks`). The pupil
+          is the signal because the eyelid columns are always 0 ("the DPI
+          pipeline does not compute them", eye spec section 1.1) and
+          `DataQuality` stays 100 through a blink; on the reference recording
+          the pupil's height falls in the 10 ms before each lost run and
+          recovers over about 40 ms after it.
+
+        *Until 2026-10-11 both read `DataQuality` below 100, and so read zero
+        on every real recording; true when written.*
         """
         from wl_preproc.schema import ingest
 
@@ -1177,21 +1176,19 @@ class EyeQuality(dj.Computed):
             total_duration_s = 0.0
             for segment in segments:
                 path = session_dir / "ohdpi" / segment["file_path"]
-                # Read once and derive both metrics from the same array,
+                # Read once and derive both metrics from the same arrays,
                 # rather than calling `gaze.tracking_loss_fraction` and then
-                # re-reading the identical column separately: `eye/gaze.py`'s
-                # own module docstring measures this read alone at ~2.5 s on
-                # a real recording, dominating everything else that module
-                # does with it -- reading the same column twice would double
-                # exactly that cost for nothing.
-                quality = read_columns(path, [f"{file_eye}DataQuality"])[
-                    f"{file_eye}DataQuality"
-                ]
-                lost = quality < _FULL_TRACKING_QUALITY
-                lost_frames += int(lost.sum())
-                total_frames += lost.size
-                blink_runs += _count_true_runs(lost)
-                total_duration_s += segment["end_s"] - segment["start_s"]
+                # re-reading the identical columns separately: `eye/gaze.py`'s
+                # own module docstring measures a read alone at ~2.5 s on a
+                # real recording, dominating everything else done with it.
+                loss = read_tracker_loss(path, file_eye)
+                duration_s = segment["end_s"] - segment["start_s"]
+                # The segment's own rate, from what it stores: no second read.
+                merge_samples = round(BLINK_MERGE_S * segment["n_samples"] / duration_s) if duration_s > 0 else 0
+                lost_frames += int((loss.lost | loss.unreadable).sum())
+                total_frames += loss.blink.size
+                blink_runs += _count_blinks(loss.blink, merge_samples)
+                total_duration_s += duration_s
 
             rows.append(
                 {

@@ -901,26 +901,28 @@ def test_carry_forward_candidate_prefers_nearest_same_day_and_a_preceding_tie(
     )
 
 
-def test_count_true_runs_counts_contiguous_runs_not_frames():
-    """`EyeQuality.make()`'s blink-rate computation needs this to count
-    RUNS, not lost frames -- and no fixture anywhere in this file exercises
-    it, since `synth/ohdpi.py::write_ohdpi` always writes `DataQuality=100`
-    (checked directly: `_fmt(100.0)` is hardcoded there, no fault ever
-    varies it). A pure numpy helper, so this needs no session, no database,
-    and no file -- there is no reason its own correctness should wait on
-    those."""
+def test_count_blinks_counts_runs_and_merges_a_brief_reopening():
+    """`EyeQuality.make()`'s blink rate counts RUNS, not lost frames, and a
+    run starting fewer than `merge_samples` after the previous one ends is
+    the same blink (design spec `2026-10-11-eye-loss-design.md` section 4).
+    A pure numpy helper, so this needs no session, no database, and no
+    file."""
     import numpy as np
 
-    from wl_preproc.schema.eye import _count_true_runs
+    from wl_preproc.schema.eye import _count_blinks
 
-    assert _count_true_runs(np.array([], dtype=bool)) == 0
-    assert _count_true_runs(np.array([False, False, False])) == 0
-    assert _count_true_runs(np.array([True, True, True])) == 1
+    assert _count_blinks(np.array([], dtype=bool), 1) == 0
+    assert _count_blinks(np.array([False, False, False]), 1) == 0
+    assert _count_blinks(np.array([True, True, True]), 1) == 1
     # [T, T, F, T]: two runs, not the three frames a bare `.sum()` would give.
-    assert _count_true_runs(np.array([True, True, False, True])) == 2
-    assert _count_true_runs(np.array([True, False, True, False, True])) == 3
+    assert _count_blinks(np.array([True, True, False, True]), 1) == 2
+    assert _count_blinks(np.array([True, False, True, False, True]), 1) == 3
     # A run touching either edge of the array still counts as exactly one.
-    assert _count_true_runs(np.array([True, False, False, True, True])) == 2
+    assert _count_blinks(np.array([True, False, False, True, True]), 1) == 2
+    # Merged: a gap shorter than `merge_samples` is a lid that reopened briefly.
+    assert _count_blinks(np.array([True, False, False, True]), 3) == 1
+    assert _count_blinks(np.array([True, False, False, True]), 2) == 2
+    assert _count_blinks(np.array([True, False, True, False, False, False, True]), 2) == 2
 
 
 # --- Round-trip precision, BlockResidual, carried-forward end to end, and
