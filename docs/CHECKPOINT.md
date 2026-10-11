@@ -1,21 +1,27 @@
 # Where this build actually is
 
-**Last updated 2026-10-10**, describing `main` at `c899a9d`, the merge of
-`fix/seven-way-minors`: seven-way agreement's five deferred minors (handoff
-`handoffs/2026-10-08-seven-way-agreement.md` §7, spec amendments 7–9). CI
-read off `c899a9d` is green on both interpreters, 2296 passed on each with 37
-skipped, and the manifest check is green (`gh run view 38076369335`).
-- **A single live detector no longer raises:** a lone vocabulary is folded as
-  two are, so its blend is undefined, comparing nothing (amendment 8). The
-  seven's vocabulary is unchanged.
-- **The report says "0 samples compared"** where no sample was rated twice,
-  and "undefined" only where every compared sample carried one label
-  (amendment 7).
-- **The gated noise test skips where a detector cannot run,** U'n'Eye without
-  its install say, rather than fail minutes in (amendment 9); amendment 4 now
-  credits `bc4fc98` with the NWB stage's change, and `schema/consensus.py`'s
-  docstring describes the seven-way score.
-- **Seven-way detector agreement was merged just before** (`3a45a09`, CI
+**Last updated 2026-10-11**, describing `main` at `caf1d63`, the merge of
+`fix/correction-marker`: M4, the last deferred minor of subject corrections
+(spec `specs/2026-10-11-correction-marker-design.md`, amendments 1–4, handoff
+`handoffs/2026-10-11-correction-marker.md`). CI read off `caf1d63` is green
+on both interpreters, 2308 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 38141210544`). Just before it, `7183347`
+recorded wl-xcon's open asks of 2026-10-11 in `HANDOVER-wl-expcontroller.md`.
+- **A correction marks its file before the swap** (`nwb.NwbCorrecting`), and
+  the transaction that writes its records clears the mark, so a file whose
+  records failed after the swap stays stale, and is put back, even if the
+  animal's details are changed back. A file marked but never swapped records
+  nothing (spec §3).
+- **The marker is written before the live file's stamp is checked,** so no
+  database round trip lies between the check and the swap, where a lab's
+  write would be lost under it (amendment 4, `e8ef871`).
+- **The table is declared on activation,** with no statement to run, and
+  deleting a file's row deletes its marker.
+- **Seven-way agreement's five deferred minors were merged just before**
+  (`c899a9d`, CI green): a lone detector's blend undefined rather than an
+  error, "0 samples compared" in the report, and the noise test skipped where
+  a detector cannot run.
+- **Seven-way detector agreement was merged before them** (`3a45a09`, CI
   green; spec `specs/2026-10-08-seven-way-agreement-design.md`):
   - **each detection trace gets a seven-way score:** Krippendorff's α across
     every detector the code has, each by its default paramset (amendment 5),
@@ -65,6 +71,10 @@ skipped, and the manifest check is green (`gh run view 38076369335`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `c899a9d` (the seven-way-minors merge, CI green, 2296
+passed on each interpreter, `38076369335`) until the correction-marker merge;
+true when written.*
 
 *This header named `3a45a09` (the seven-way merge, CI green, 2294 passed on
 each interpreter, `38052463665`) until the seven-way-minors merge; true when
@@ -233,15 +243,18 @@ requester chose to merge the same day; true when written.*
 >
 > *Until 2026-10-11 this said it had not on 2026-10-05; true when written.*
 >
-> **Hardware-free:** the requester's choices of 2026-10-08 and 2026-10-10 are
-> merged: seven-way detector agreement (`3a45a09`) and its five deferred minors
-> (`c899a9d`). M4, the requester's choice of 2026-10-11, is built on
-> `fix/correction-marker`, not merged
-> (`handoffs/2026-10-11-correction-marker.md`): a correction marks its file
-> before the swap, so a file whose records failed is found even if the animal's
-> details are changed back. Reviewed: one finding, re-graded Important, fixed
-> (`e8ef871`). Next: the merge question. Fine-tuning U'n'Eye to the DPI tracker
-> waits for hand-labelled lab data.
+> **Hardware-free:** the requester's choices of 2026-10-08, 2026-10-10 and
+> 2026-10-11 are merged: seven-way detector agreement (`3a45a09`), its five
+> deferred minors (`c899a9d`), and M4, the correction marker (`caf1d63`). Ask
+> what comes next. wl-xcon's eleven open asks of 2026-10-11
+> (`HANDOVER-wl-expcontroller.md`, recorded by `7183347`) have no answer here
+> yet. Open and small: the correction marker's three deferred minors
+> (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
+> DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, at the merge, this named M4 as built on
+> `fix/correction-marker`, reviewed and not merged, with the merge question
+> next; true when written.*
 >
 > *Until 2026-10-11, later, this said the whole-branch review came next; true
 > when written.*
@@ -280,7 +293,10 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: seven-way agreement's five deferred minors (`c899a9d`): a lone
+> Done: M4, the correction marker (`caf1d63`): a correction marks its file
+> before the swap and the records' transaction clears the mark, so a file
+> whose records failed is found even if the animal's details are changed back.
+> Before it, seven-way agreement's five deferred minors (`c899a9d`): a lone
 > detector's blend undefined rather than an error, "0 samples compared" in the
 > report, the noise test skipped where a detector cannot run, and two
 > documents corrected. Before it, seven-way detector agreement (`3a45a09`):
@@ -295,9 +311,9 @@ requester chose to merge the same day; true when written.*
 > detection trace's fit, each block's and condition's gain, and the report's
 > vigor line. Before that, U'n'Eye, the seventh detector (`5b41770`): its authors' code and
 > five networks, on the CPU, with the 500 Hz network and a 20 ms merge gap.
-> Before that: piece 4's seven deferred minors (`a32394d`; M4 is left open by the
-> requester's choice); the session listing's minors M6 and M9 with the NWB
-> stages' per-file placement lookups (`7cfc852`,
+> Before that: piece 4's seven deferred minors (`a32394d`; M4, left open then by
+> the requester's choice, was fixed in `caf1d63`); the session listing's
+> minors M6 and M9 with the NWB stages' per-file placement lookups (`7cfc852`,
 > `handoffs/2026-10-01-session-listing.md` §8); and fresh identities for
 > database-backed tests, merged from `feat/test-identities`
 > (`handoffs/2026-10-06-test-identities.md`): a new test takes its animal,

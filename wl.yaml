@@ -17,7 +17,8 @@ status:
     publishing to the NAS shares and the canonical lifecycle (pieces 1, 2a and
     2b); probes and areas in the file; runs and trials from wl-xcon's codes; the
     landed-session listing, GET /sessions; requests that name runs, with the NWB
-    description at version 3; and subject corrections in files already built.
+    description at version 3; and subject corrections in files already built,
+    with a marker that finds a file whose records failed (caf1d63, 2026-10-11).
     With them, everything wl.works asked of this repository for January's
     canonical NWBs is built. Earlier phases are complete: ingest and the
     timebase (1c), archival with rehydration, and the eye subsystem with
@@ -35,13 +36,15 @@ status:
     timebase alignment path has never met real data and cannot with the
     recording the lab has. With the compute machine: Phase 2b and the NWB's
     units come before everything below. Hardware-free: the requester's choices
-    of 2026-10-08 and 2026-10-10 are merged; M4, the requester's choice of
-    2026-10-11, is built on fix/correction-marker and not merged
-    (docs/handoffs/2026-10-11-correction-marker.md): a correction marks its
-    file before the swap. Reviewed: one finding, re-graded Important, fixed
-    (e8ef871). Next: the merge question. Fine-tuning U'n'Eye waits for
-    hand-labelled lab data.
-    Done: seven-way agreement's five deferred minors (c899a9d): a lone
+    of 2026-10-08, 2026-10-10 and 2026-10-11 are merged; ask what comes next.
+    wl-xcon's eleven open asks of 2026-10-11 (HANDOVER-wl-expcontroller.md,
+    7183347) have no answer here yet. Open and small: the correction marker's
+    three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
+    section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    Done: M4, the correction marker (caf1d63): a correction marks its file
+    before the swap and the records' transaction clears the mark, so a file
+    whose records failed is found even if the animal's details are changed
+    back. Before it, seven-way agreement's five deferred minors (c899a9d): a lone
     detector's blend undefined rather than an error, "0 samples compared" in
     the report, the noise test skipped where a detector cannot run, and two
     documents corrected. Before it, seven-way detector agreement (3a45a09):
@@ -56,9 +59,10 @@ status:
     detection trace's fit, block and condition gains, and the report's vigor
     line. Before that, U'n'Eye, the seventh detector (5b41770), on the CPU, with the
     500 Hz network and a 20 ms merge gap. Before that: piece 4's seven
-    deferred minors (a32394d; M4 is left open by the
-    requester's choice); the session listing's minors M6 and M9 with the NWB
-    stages' per-file placement lookups (7cfc852); and fresh identities for
+    deferred minors (a32394d; M4, left open then by the
+    requester's choice, was fixed in caf1d63); the session listing's minors
+    M6 and M9 with the NWB stages' per-file placement lookups (7cfc852); and
+    fresh identities for
     database-backed tests (tests/identities.py), merged from
     feat/test-identities.
     Other repositories': wl.works vendors job_request.json and
@@ -105,6 +109,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `c899a9d` until the correction-marker merge `caf1d63` on 2026-10-11
+  # (CI green on `c899a9d`, run 38076369335); true when written.
   # Was `3a45a09` until the seven-way-minors merge `c899a9d` on 2026-10-10 (CI
   # green on `3a45a09`, run 38052463665); true when written.
   # Was `b22af97` until the seven-way merge `3a45a09` on 2026-10-10 (CI green
@@ -152,7 +158,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "c899a9d"
+  describes: "caf1d63"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
