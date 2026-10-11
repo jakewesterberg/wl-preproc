@@ -80,7 +80,9 @@ in the recording:
 - `DataQuality = 50·P1_valid + 50·P4_valid`, so **0, 50 or 100**. It says
   detection succeeded, never that it was correct: **necessary, not sufficient**
   (§12, corrected 2026-10-11). On the OpenIris recording this repository tests
-  against it is 100 on every frame of both eyes, blinks included.
+  against it is 100 on every frame of both eyes, blinks included. A feature the
+  plugin did not find is written as 0 instead (`2026-10-11-eye-loss-design.md`
+  §1).
 - `Torsion` and both eyelid columns are zero: the DPI pipeline does not compute
   them.
 - Pupil is an **ellipse**: centre, width, height, angle.
@@ -467,9 +469,13 @@ DataJoint silently stores a numpy array as its truncated string repr; a
 residual. Where §3.6's drift becomes visible.
 
 `EyeQuality` — `dj.Computed`, per session per eye: tracking-loss percentage and
-blink rate, both counted from `DataQuality` below 100. *Until 2026-10-11 this
-said tracking loss was therefore stated rather than inferred; §12 corrects it:
-on a recording whose `DataQuality` is always 100, both read zero.*
+blink rate, by `ohdpi.TrackerLoss`'s rule (`2026-10-11-eye-loss-design.md` §4): a
+frame is lost where the pupil, P1 or P4 is written as 0 or `DataQuality` is below
+100, and a blink is a run of frames whose pupil was not found, runs less than
+100 ms apart counted as one. Both are lower bounds. *Until 2026-10-11 both were
+counted from `DataQuality` below 100, and this said tracking loss was therefore
+stated rather than inferred; on a recording whose `DataQuality` is always 100,
+both read zero (§12). True when written.*
 
 **Both new computed tables must be registered in `daemon._computed_tables()`.**
 `test_every_computed_table_is_a_daemon_stage` discovers computed tables and
@@ -641,5 +647,7 @@ originals left visible, per this repository's correction convention:
 > OpenIrisDPI reporting P4 through every blink with `DataQuality` = 100 on every row (its
 > `docs/CHECKPOINT.md`, P10). Measured here on `OpenIris-2024Jul31-114628.txt`: 100 on all
 > 1,177,799 frames of each eye. `eye/gaze.py`'s comment already said "necessary, not sufficient";
-> the spec now says the same. **Not yet corrected:** `EyeQuality` counts tracking loss and blinks
-> from `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero.
+> the spec now says the same. **Corrected the same day** by `2026-10-11-eye-loss-design.md`:
+> `EyeQuality` and the validity mask read a lost eye from the 0s OpenIrisDPI writes. *Until then
+> this said `EyeQuality` was not yet corrected and read zero on such a recording; true when
+> written.*

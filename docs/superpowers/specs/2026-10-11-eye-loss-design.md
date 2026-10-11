@@ -226,3 +226,61 @@ Each test written first and seen to fail:
   five) point here.
 - **`HANDOVER-wl-expcontroller.md`:** ask 9's answer says fixed, with the zeros for XC-006.
 - **`docs/CHECKPOINT.md` and `wl.yaml`,** at the merge, as every piece's are.
+---
+
+## Amendments, 2026-10-11, made while proving the plan
+
+The plan (`plans/2026-10-11-eye-loss.md`) was proven in code before it was written. These settle
+what the sections above left open; §0 stands.
+
+1. **§7's items, answered:**
+   - **1:** the table is `<prefix>detect`.`__eye_validity`. DataJoint declares each `frac_` column
+     as `double`, nullable, with no comment, so the statement is
+     `ALTER TABLE <table> ADD COLUMN frac_feature_lost double DEFAULT NULL COMMENT '' AFTER frac_blink`;
+     a test drops the column from the test database and restores it by the statement, and the
+     columns match what declaring the table wrote.
+   - **2:** DataJoint 2.3.3 reads a table's columns once per process. A column dropped or added by
+     `ALTER TABLE` is not seen, by the class or a new instance, until the process restarts
+     (measured). So the stage checks the columns the process read, which are what an insert meets,
+     and its message names the statement and a restart (amendment 2).
+   - **3:** the changed comment lines of `EyeQuality`'s and `EyeValidity`'s definitions change
+     nothing in an existing database; activation raised nothing across the suite.
+   - **4:** the guardrail tests pass.
+   - **5:** the gated validation tests, before and after, are in amendment 6.
+   - **6:** the other readers were the six gated tests, three calls in
+     `tests/schema/test_detect_populate.py` (one of them gated) and a docstring in
+     `tests/schema/test_consensus_populate.py`; nothing else passes `DataQuality` to the mask or
+     counts loss from it.
+2. **The stage refuses in `EyeValidity.populate()`, not in `make()`** (§3's "masks nothing"). A key
+   whose `make()` raised is parked as an error and never retried (`daemon.reap_stale_jobs`), so the
+   statement alone would not bring the stage back. Refused before any job is reserved, the daemon
+   reports `EyeValidity: …` and runs every other stage.
+3. **The column goes after `frac_blink`,** beside it as §3 says; §3's sample statement put it after
+   `frac_non_finite`.
+4. **The planted losses are written into the generated file before landing,** as every loss
+   fixture in this suite is (`_withhold_one_eye_then_both`, `lossy_quality_session`), not by the
+   generator on request as §6 said: the generator has no notion of loss, and nothing else needs one.
+   The fixture also writes five frames of one eye's pupil width as `NaN`, so the unreadable path is
+   tested end to end: stored as `invalid`, counted as loss, not as a blink.
+5. **`EyeQuality`'s 100 ms is turned into samples from each segment's own stored rate**
+   (`n_samples` over its span), with no second read of the file; `_count_true_runs` becomes
+   `_count_blinks(blink, merge_samples)`.
+6. **The seven tests gated on the reference recording** pass before and after, 69 of 69, and none
+   of their assertions changed. What they print moved as removing lost frames from the detectors
+   should move it; the larger shifts, left eye unless named:
+   - **the mask** keeps 1,115,287 of 1,177,799 samples, from 1,134,769 (right 1,112,551, from
+     1,130,669);
+   - **at a quarter of the calibration scale** it withholds 3.67% of samples, from 0.04%: the old
+     mask caught a lost frame only where its gaze happened to leave the screen region;
+   - **Engbert–Kliegl** finds 5,295 events over the recording, from 5,972, and Otero-Millán 4,525,
+     from 4,700; their agreement (F1) is 0.843, from 0.801 (right 0.821, from 0.783);
+   - **events of exactly 0.0°** fall to 1, from 17 (right 0, from 2), and the main sequence's r
+     rises to 0.858, from 0.821 (Engbert–Kliegl 0.807, from 0.754);
+   - **saccades one eye detects alone** fall to 403, from 497 (right 324, from 468), and the
+     both-eyes trace has neither eye usable over 4.04% of samples, from 1.58%;
+   - **the seven-way noise test** still finds the score lowered by noise with the mask's share
+     unmoved; it prints no figure.
+7. **Not in this piece, noted by the requester on 2026-10-11:** the behaviour-camera system, not
+   yet built (wl-xcon's P9; open ask 7 here), could help detect blinks. It would see the eyelid
+   independently of the tracker, beside the zeros this rule reads, and could cover the partial
+   blinks the rule leaves to the mask's dilation (`handoffs/2026-10-11-eye-loss.md` §3).

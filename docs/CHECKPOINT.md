@@ -262,11 +262,15 @@ requester chose to merge the same day; true when written.*
 >
 > Ask 9 found a defect here: `EyeQuality` counts tracking loss and blinks
 > from `DataQuality` below 100, which is 100 on every frame of the OpenIris
-> recording, so both read zero. **Next: that fix, the requester's choice.**
-> Still to build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open
+> recording, so both read zero. **The fix, the requester's choice, is built on
+> `fix/eye-loss`, not merged** (`handoffs/2026-10-11-eye-loss.md`): one rule
+> reads a lost eye from the 0s OpenIrisDPI writes, for the validity mask and
+> `EyeQuality`. Next: the review. Still to build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open
 > and small: the correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-11, in the evening, this said the fix came next; true when written.*
 >
 > *Until 2026-10-11, later, this said asks 7, 8 and 11 and the online-detector
 > offer went to the requester first; true when written.*

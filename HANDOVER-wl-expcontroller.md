@@ -338,8 +338,10 @@ fallback's design); not C.
 - *wl-preproc's answer, 2026-10-11, the requester's decision: carry it, designed once XC-006 settles the
   switching rule and the second map.* P4 reaches about 10° of gaze and the lab's stimuli about 15° (S5
   §1), so without it this repository's gaze beyond P4's reach rests on `CR1 - CR4` where that is not
-  reliable. One input to XC-006's switching rule: `DataQuality` cannot be it, since it stays 100 while P4
-  is lost (item 9).
+  reliable. One input to XC-006's switching rule: `DataQuality` cannot be it, since it stays 100 through
+  every blink (item 9). What OpenIrisDPI writes for a feature it did not find is 0: the pupil and P1 go to
+  0 through each blink, and P4 almost never does (`docs/superpowers/specs/2026-10-11-eye-loss-design.md`
+  §1).
 
 **9. XC-095: correct the `DataQuality` description.** Blocks: nothing.
 - *Asked:* your eye spec's section 1.1 (and `eye/gaze.py:23`) describe `DataQuality` as 0/50/100,
@@ -353,7 +355,10 @@ fallback's design); not C.
   necessary, not sufficient (its §12, corrected 2026-10-11). Measured here on the OpenIris recording this
   repository tests against (`OpenIris-2024Jul31-114628.txt`): 100 on all 1,177,799 frames of each eye.
   One consequence the ask did not name: `EyeQuality` counts both tracking loss and blinks from
-  `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero. That is open here.
+  `DataQuality` below 100 (`schema/eye.py`), so on such a recording both read zero. Fixed the same day
+  on this repository's branch `fix/eye-loss` (`docs/superpowers/specs/2026-10-11-eye-loss-design.md`):
+  `EyeQuality` and the validity mask read a lost eye from the 0s OpenIrisDPI writes. *Until then this
+  said the defect was open here; true when written.*
 
 **10. XC-096: per-trial gaze staleness into `EyeQuality` (an offer, standing).** Blocks: nothing; waits on
 wl-xcon's XC-007. Your answer is wanted only as "yes, in `EyeQuality`" or "no, leave it in the behavioral
