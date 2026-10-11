@@ -212,3 +212,26 @@ each test written first and seen to fail:
   before the bullet was written, has adoption take the four datasets from the file (§1). A note
   says so, rather than "*true when written*".
 - **`docs/CHECKPOINT.md` and `wl.yaml`,** at the merge, as every piece's are.
+
+---
+
+## Amendments, 2026-10-11, made while proving the plan
+
+The plan (`plans/2026-10-11-correction-marker.md`) was proven in code before it was written.
+These settle what the sections above left open; §0 stands.
+
+1. **§7's items, answered:**
+   - **1:** `nwb.activate` declares the table in a database that already has the `nwb` schema. A
+     probe dropped it from the test database and activated the schema again, and it was back.
+   - **2:** deleting an `NwbFile` row through `.delete(prompt=False)` deletes its marker, under
+     DataJoint 2.3.3's part integrity.
+   - **3:** a failure inside `write_subject_records`' transaction rolls the marker's deletion back
+     with the description and the checksums.
+   - **4:** the description `subject_records` builds equals the stored one exactly when nothing
+     changed, after the blob's round trip, so §3 rule 3 records nothing for a file never swapped.
+   - **5:** a second `insert1` of a marker raises `DuplicateError` (amendment 2).
+   - **6:** the guardrail tests accept the table.
+2. **The marker is inserted only when none is there,** checked under the NWB lock, not with
+   `skip_duplicates`, so any other error inserting it still stops the swap (§3 rule 1).
+3. **`stale_files` reads every marker in one query per pass** and matches them to files by
+   `publish.activation_tuple`.
