@@ -120,7 +120,7 @@ def reference():
     for eye in ("left", "right"):
         gaze = apply_map(_scaled_affine_map(scale), raw[eye])
         v = velocity(gaze, fs)
-        mask = validity_labels(gaze, v, loss[eye], recording.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+        mask = validity_labels(gaze, v, loss[eye], recording.frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs).labels
         started = time.monotonic()
         full_runs = detect_remodnav(gaze, v, mask, fs, DEFAULT_REMODNAV_PARAMS)
         full_s = time.monotonic() - started

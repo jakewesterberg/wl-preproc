@@ -2161,7 +2161,7 @@ def test_the_validity_mask_never_emits_a_real_fixation_label():
     loss.blink[10:15] = True  # a blink
     gaze[30:35, 0] = 100.0  # outside the region -> invalid
 
-    labels = validity_labels(gaze, velocity_deg_s, loss, (), DEFAULT_VALIDITY_PARAMS).labels
+    labels = validity_labels(gaze, velocity_deg_s, loss, (), DEFAULT_VALIDITY_PARAMS, fs_hz=500.0).labels
 
     present = {label for label in labels if label is not None}
     assert Label.FIXATION not in present
@@ -3441,7 +3441,7 @@ def _mask_and_velocity(raw_xy, loss, fs_hz, frame_gaps, scale):
 
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
-    mask = validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS)
+    mask = validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz)
     return gaze, v, mask.labels
 
 

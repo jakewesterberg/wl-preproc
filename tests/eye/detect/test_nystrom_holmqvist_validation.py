@@ -1499,7 +1499,7 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
     )
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
 
 
 class _Trace:

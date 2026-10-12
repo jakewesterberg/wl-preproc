@@ -54,7 +54,7 @@ def recording():
     for eye in ("left", "right"):
         gaze = apply_map(_scaled_affine_map(scale), raw[eye])
         v = velocity(gaze, rec.fs_hz)
-        mask = validity_labels(gaze, v, loss[eye], rec.frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+        mask = validity_labels(gaze, v, loss[eye], rec.frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=rec.fs_hz).labels
         eyes[eye] = (gaze, v, mask)
     return rec, eyes
 

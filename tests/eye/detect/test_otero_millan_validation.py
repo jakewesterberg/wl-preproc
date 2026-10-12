@@ -223,7 +223,7 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
 
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
 
 
 def _measured(runs, gaze, v, fs_hz):

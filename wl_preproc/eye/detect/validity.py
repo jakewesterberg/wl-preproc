@@ -69,6 +69,13 @@ class ValidityParams:
     # this, before the mask or any detector reads it. A default, unlike the
     # fields above, so a paramset written before it existed still loads.
     max_glitch_ms: float = 10.0
+    # A blink's flanks, withheld as `invalid` from its edges: the gaze vector
+    # is disturbed before the pupil is lost and after it returns (design spec
+    # `2026-10-11-blink-padding-design.md`). 0 by default, so a paramset
+    # stored before them loads unchanged and its content hash still names
+    # what it does; `DEFAULT_VALIDITY_PARAMS` sets the measured values.
+    blink_pad_before_ms: float = 0.0
+    blink_pad_after_ms: float = 0.0
 
 
 # **These are placeholders with no measured basis on this rig** (design spec
@@ -85,6 +92,12 @@ DEFAULT_VALIDITY_PARAMS = ValidityParams(
     # REMoDNaV accept, below which an out-and-back cannot be two eye
     # movements (the requester's decision of 2026-09-28).
     max_glitch_ms=10.0,
+    # Measured on the reference recording: the gaze vector's frame-to-frame
+    # steps fall to 1.7x baseline 50 ms before the pupil is lost, and to 2.9x
+    # 80 ms after it returns, where the real movement after a blink begins
+    # (design spec `2026-10-11-blink-padding-design.md` section 1).
+    blink_pad_before_ms=50.0,
+    blink_pad_after_ms=80.0,
 )
 
 
@@ -127,9 +140,9 @@ class ValidityMask:
     - They are counted at two DIFFERENT stages, deliberately. `blink`,
       `feature_lost`, `out_of_region`, `too_fast`, `frame_gap` and
       `non_finite` are counted BEFORE `_dilate` grows every rejected
-      region: the halo dilation adds belongs to no one criterion, and
-      attributing it to whichever criterion it happens to surround would be
-      an invention. `short_epoch` can only be counted after, because
+      region: the halo dilation adds belongs to no one criterion, nor do
+      the blink pads (`_blink_pads`), and attributing either to whichever
+      criterion it happens to surround would be an invention. `short_epoch` can only be counted after, because
       dilation is what creates most of the short epochs it drops. So they
       can sum BELOW the rejected fraction too.
     """
@@ -144,11 +157,15 @@ def validity_labels(
     loss: TrackerLoss,
     frame_gaps: Sequence[FrameGap],
     params: ValidityParams,
+    *,
+    fs_hz: float,
 ) -> ValidityMask:
     """One entry per sample: a `Label` where the sample is unusable, `None`
     where a detector may label it -- and beside it each criterion's own
     rejected fraction. See `ValidityMask` for what the seven fractions are,
-    and for what they deliberately do not sum to."""
+    and for what they deliberately do not sum to. `fs_hz` is the
+    recording's rate, which turns the blink pads' milliseconds into
+    samples."""
     n = gaze_deg.shape[0]
     # Eye open, read by the rule: a blink (the pupil not found), and a lost
     # reflection (P1 or P4 at 0, or `DataQuality` below 100), where `CR1 -
@@ -237,6 +254,15 @@ def validity_labels(
 
     unusable = blink | feature_lost | outside | too_fast | across_gap | non_finite
     unusable = _dilate(unusable, params.dilate_samples)
+    # Each blink's flanks, measured from its edges, after the margin so that
+    # the margin sits inside a pad rather than adding to it, and before
+    # `short_epoch`, so a fragment stranded between two pads is dropped as
+    # any short epoch is (design spec `2026-10-11-blink-padding-design.md`).
+    unusable = unusable | _blink_pads(
+        blink,
+        round(params.blink_pad_before_ms * fs_hz / 1000.0),
+        round(params.blink_pad_after_ms * fs_hz / 1000.0),
+    )
     # Bound to a name rather than folded straight into `unusable`, because
     # `_short_valid_epochs`' own docstring says it is returned as its own
     # mask "so the caller can see that these samples were dropped for being
@@ -293,6 +319,20 @@ def _fraction(mask: np.ndarray) -> float:
     daily report would render as `nan%` -- is not.
     """
     return float(mask.mean()) if mask.size else 0.0
+
+
+def _blink_pads(blink: np.ndarray, before: int, after: int) -> np.ndarray:
+    """`before` samples ahead of each run of `blink` and `after` samples
+    behind it, the run itself excluded: it keeps its own label. Pads that
+    meet make one stretch."""
+    out = np.zeros(blink.shape[0], dtype=bool)
+    if (before <= 0 and after <= 0) or not blink.any():
+        return out
+    edges = np.diff(np.concatenate(([0], blink.astype(np.int8), [0])))
+    for start, stop in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
+        out[max(start - before, 0):start] = True
+        out[stop:min(stop + after, blink.shape[0])] = True
+    return out
 
 
 def _dilate(mask: np.ndarray, samples: int) -> np.ndarray:
