@@ -44,9 +44,10 @@ status:
     where it runs). Ask 9 found EyeQuality's tracking loss and blink rate
     reading zero on real OpenIrisDPI data (DataQuality is always 100); the
     fix, the requester's choice, is merged (1dda41b;
-    docs/handoffs/2026-10-11-eye-loss.md). Next, blink padding, the
-    requester's choice, on fix/blink-padding: each blink's flanks padded in the
-    mask, 50 ms before and 80 ms after; its plan is being written. Still to
+    docs/handoffs/2026-10-11-eye-loss.md). Blink padding, the requester's
+    choice, is built on fix/blink-padding and not merged
+    (docs/handoffs/2026-10-11-blink-padding.md): each blink's flanks padded
+    in the mask, 50 ms before and 80 ms after; next, the review. Still to
     build: asks 1, 2's
     flag, 3, 5, 6, 7 and 8. Open and small: the eye-loss fix's five deferred
     minors and the correction marker's

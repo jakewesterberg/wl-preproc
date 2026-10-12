@@ -275,15 +275,18 @@ requester chose to merge the same day; true when written.*
 > (`1dda41b`; `handoffs/2026-10-11-eye-loss.md`): one rule reads a lost eye
 > from the 0s OpenIrisDPI writes, for the validity mask and `EyeQuality`, with
 > the requester's decision that `DataQuality` below 100 is a lost reflection,
-> not a blink. **Next: blink padding, the requester's choice,** on
-> `fix/blink-padding` (spec `specs/2026-10-11-blink-padding-design.md`): each
-> blink's flanks padded in the mask, 50 ms before and 80 ms after; its plan is
-> being written. Still to
+> not a blink. **Blink padding, the requester's choice, is built on
+> `fix/blink-padding`, not merged** (`handoffs/2026-10-11-blink-padding.md`):
+> each blink's flanks padded in the mask, 50 ms before and 80 ms after. Next:
+> the review. Still to
 > build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open and small:
 > the eye-loss fix's five deferred minors (`handoffs/2026-10-11-eye-loss.md`
 > §6) and the correction marker's three deferred minors
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-12, later, this said the blink padding's plan was being
+> written; true when written.*
 >
 > *Until 2026-10-12 this said the eye-loss fix was built, not merged,
 > with the merge question next; true when written.*

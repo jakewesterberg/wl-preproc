@@ -149,3 +149,44 @@ Each written first and seen to fail:
 - **The eye-loss handoff's** §3 open item on partial blinks says padded, with the adaptive pad still
   to try.
 - **`docs/CHECKPOINT.md` and `wl.yaml`,** at the merge, as every piece's are.
+---
+
+## Amendments, 2026-10-12, made while proving the plan
+
+The plan (`plans/2026-10-11-blink-padding.md`) was proven in code before it was written. These
+settle what the sections above left open; §0 stands.
+
+1. **§5's items, answered:**
+   - **1:** every reader of a validity paramset builds `ValidityParams(**params)`
+     (`schema/detect.py::EyeValidity.make` and `EyeDetection.make`, `nwb/gather.py`), so an old
+     paramset loads with both pads at 0.
+   - **2:** every caller of `validity_labels` has the rate: `EyeValidity.make`, the six gated
+     validation tests and `tests/schema/test_detect_populate.py`'s two, one of which builds random
+     arrays and states 500 Hz.
+   - **3:** the NWB export registers the current default and uses its index, so it follows the
+     change; the seven-way scores, the main sequence and the report are keyed by validity
+     paramset and are computed for each one registered (§3); the tests that register a validity
+     paramset register `DEFAULT_VALIDITY_PARAMS`.
+   - **4:** amendment 2.
+   - **5:** the guardrail tests pass.
+2. **What the pads newly withhold, every criterion counted:** the mask keeps 1,108,196 of the
+   left eye's 1,177,799 frames, from 1,115,287 (0.60% fewer), and 1,107,323 of the right's, from
+   1,112,551 (0.44% fewer). §1's 0.95% and 0.80% counted only the tracker's losses and the
+   margin; the region and speed criteria already caught some of the flank frames.
+3. **The seven tests gated on the reference recording** pass before and after, 69 of 69, and none
+   of their assertions changed. The larger shifts, left eye unless named:
+   - **Engbert–Kliegl** finds 5,047 events, from 5,295 (right 4,826, from 5,029), and Otero-Millán
+     4,469, from 4,525; their agreement (F1) is 0.863, from 0.843 (right 0.836, from 0.821);
+   - **saccades one eye detects alone** are 395 of 4,689, from 403 of 4,729 (right 325 of 4,620,
+     from 324 of 4,646), and the both-eyes trace has neither eye usable over 4.70% of samples,
+     from 4.04%;
+   - **the main sequence's r** is 0.8515 for Otero-Millán, from 0.8577, and 0.8052 for
+     Engbert–Kliegl, from 0.8067; the duration-matched null 0.8583, from 0.8674. Both orderings
+     its test records stand;
+   - **the conjunction** has 4,340 raw intersections, from 4,495, 261 of them below its floor,
+     from 279.
+4. **The rulings:** `fs_hz` is keyword-only, so no caller passes the rate by position by
+   accident; and the database test sits in the plan's first task with the unit tests, since the
+   code that passes the rate is that task's, and in a later task it would pass before it could
+   fail. A blink at the recording's very edge, which §4 did not name, is tested too: its pad
+   stops at the first and last frames.
