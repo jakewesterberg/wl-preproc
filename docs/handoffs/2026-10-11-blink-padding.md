@@ -67,3 +67,35 @@ Executed on 2026-10-12, task by task: Task 1 `c6c0e80`. Every count matched the 
 
   That is 10 more than the eye-loss fix's 2339: this piece's new tests. CI, without the references, should show about 2340 (`main`'s 2330 and these 10).
 - **`wl-check`:** `wl.yaml: no findings`.
+
+## 6. The final review
+
+A fresh Opus reviewer read the whole branch (`9773bda..577b014`), re-ran the seven tests gated on
+the reference recording, 69 passed, and reproduced every figure in spec §1 and amendments 2 and 3.
+It judged the order, the label, the units, the clipping at the recording's edges and the old
+paramset's loading correct, and found that no other wl-* repository calls `validity_labels`. It
+found **no Critical, no Important and five Minor**, and judged the branch ready to merge. Re-graded
+by their effect, all five stay Minor; there was no fix pass.
+
+**Deferred, Minor:**
+- spec §4's "or a frame gap keeps the 10 ms margin" has no test; only a lost reflection is
+  planted;
+- the rounding (`round`, 25 and 40 samples at 498.55 Hz, against 24 and 39 truncated) and a pad on
+  one side only are untested;
+- descriptions not yet updated for the pads: `cli/report.py`'s `invalid` line, `validity.py`'s
+  module docstring, `test_consensus_populate.py`'s comment on the margin, and
+  `docs/pending-wl-xcon-amendments.md`, which says the pads come next and gives no figures (fixed
+  with the merge's records);
+- the pads were measured on the reference recording, OpenIrisDPI's tutorial, not on this rig's
+  animals; re-measuring them on the rig's first recordings is not yet listed as open;
+- spec §1 does not say that frames already lost were left out of the step measurement, and §3's
+  "about 1%" is 0.60% and 0.44% once every criterion is counted (amendment 2).
+
+**Set aside by the reviewer, and the rulings on them** (all stand): the report's running total
+mixes validity paramsets on a database holding both defaults, as it did before; the Andersson
+benchmarks' masks are unpadded, a different tracker; a partial blink, P1 lost with the pupil found,
+gets no pad (§3); the rise from about 80 ms after a blink is kept as real movement (§3); `round`
+rounds halves to even, with no effect at these pads and rates; negative or NaN pads are not
+validated, as no `ValidityParams` field is; a development database computes everything for both
+defaults (§2); an isolated one-frame pupil dropout costs 130 ms, 4 and 6 of them on the reference
+recording; and the Otero-Millán test masks unrepaired gaze, which predates this branch.
