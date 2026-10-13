@@ -683,14 +683,17 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
 
     **`EyeValidity.Run` rows, not `EyeValidity`'s own master rows -- and
     that stays true now that every master fraction is populated.** The
-    `frac_*` columns (five, six since `non_finite` joined on 2026-09-27) are
+    criterion columns, every `frac_*` but `frac_glitch_repaired` (five, six
+    since `non_finite` joined on 2026-09-27, seven since `feature_lost` did
+    on 2026-10-11), are
     RAW PER-CRITERION counts (`eye/detect/validity.py::ValidityMask`): they
     overlap, and all but `short_epoch` are taken before dilation grows each
     rejected region, so they sum to the fraction
     of samples the mask rejected from neither direction. What
     `_unusable_fractions` below reports is a different quantity entirely --
     the fraction of samples carrying each STORED LABEL, where `invalid` is
-    every criterion, plus the dilation halo, plus the dropped short epochs,
+    every criterion, plus the dilation halo, plus each blink's pads, plus
+    the dropped short epochs,
     collapsed into one verdict. No arithmetic on those columns produces
     it. The stored runs are the exact per-sample verdicts `EyeValidity.
     make()` wrote, and they remain its only honest source.

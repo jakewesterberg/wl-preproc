@@ -420,7 +420,7 @@ def test_the_fractions_are_raw_per_criterion_counts_and_may_sum_above_one():
     """`ValidityMask`'s stated contract, asserted rather than only written
     down: a sample rejected by two criteria is counted by both.
 
-    A reader who sums the five columns of one `EyeValidity` row and gets
+    A reader who sums the seven criterion columns of one `EyeValidity` row and gets
     1.3 is seeing the intended thing. An implementation that instead
     apportioned each sample to one "winning" criterion would pass every
     isolation test above and fail here.
@@ -501,6 +501,36 @@ def test_the_pad_is_turned_into_samples_at_the_rate_given():
     assert labels[44] is Label.INVALID and labels[45] is None
 
 
+def test_a_pad_is_rounded_to_the_nearest_sample():
+    """At the reference recording's 498.55 Hz, 50 ms is 24.93 samples and 80
+    ms 39.88: 25 and 40, where truncating would give 24 and 39. And 51 ms is
+    25.43 and 81 ms 40.38: 25 and 40 again, where rounding up would give 26
+    and 41."""
+    gaze, vel, loss, gaps = _clean(100)
+    loss.blink[40:42] = True
+
+    up = validity_labels(gaze, vel, loss, gaps, _padded(50.0, 80.0), fs_hz=498.55).labels
+    down = validity_labels(gaze, vel, loss, gaps, _padded(51.0, 81.0), fs_hz=498.55).labels
+
+    for labels in (up, down):
+        assert labels[14] is None and labels[15] is Label.INVALID
+        assert labels[81] is Label.INVALID and labels[82] is None
+
+
+def test_a_pad_on_one_side_alone_is_applied():
+    """A pad of 0 on one side leaves the other in place."""
+    gaze, vel, loss, gaps = _clean(40)
+    loss.blink[15:20] = True
+
+    before = validity_labels(gaze, vel, loss, gaps, _padded(10.0, 0.0), fs_hz=FS_HZ).labels
+    after = validity_labels(gaze, vel, loss, gaps, _padded(0.0, 20.0), fs_hz=FS_HZ).labels
+
+    assert [before[i] for i in range(10, 15)] == [Label.INVALID] * 5
+    assert before[9] is None and before[20] is None
+    assert [after[i] for i in range(20, 30)] == [Label.INVALID] * 10
+    assert after[14] is None and after[30] is None
+
+
 def test_two_blinks_whose_pads_meet_are_one_withheld_stretch():
     gaze, vel, loss, gaps = _clean(60)
     loss.blink[10:12] = True    # padded to 5..21
@@ -531,6 +561,20 @@ def test_only_blinks_are_padded():
 
     assert labels[13] is Label.INVALID and labels[21] is Label.INVALID
     assert labels[12] is None and labels[22] is None
+
+
+def test_a_frame_gap_keeps_the_margin_and_is_not_padded():
+    """As a lost reflection does (spec section 4): the gap after row 19
+    corrupts samples 18-21, and the margin grows that to 16-23."""
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    gaze, vel, loss, _ = _clean(40)
+
+    labels = validity_labels(gaze, vel, loss, (FrameGap(row=19, n_missing=3),), _padded(10.0, 20.0, dilate=2),
+                             fs_hz=FS_HZ).labels
+
+    assert labels[16] is Label.INVALID and labels[23] is Label.INVALID
+    assert labels[15] is None and labels[24] is None
 
 
 def test_a_paramset_stored_before_the_pads_loads_without_them():

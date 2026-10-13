@@ -235,28 +235,39 @@ def test_a_daemon_pass_reports_the_statement_and_parks_no_key(daemon_module, pre
 
 
 def test_the_statement_restores_the_column_as_datajoint_declares_it(lost_session):
-    """Dropped and restored by the named statement on the test database:
-    type, nullability, default, comment and place match what declaring the
-    table wrote. This process's DataJoint keeps the columns it read, so the
-    rest of the suite is unaffected either way."""
+    """Dropped and restored by the named statement on a copy of the table
+    (`CREATE TABLE ... LIKE`): type, nullability, default, comment and place
+    match what declaring the table wrote. The copy is what loses the column,
+    so no row of the table itself loses its value."""
     import datajoint as dj
 
     from wl_preproc.schema import detect
 
     table = detect.EyeValidity.full_table_name
+    copy = table[:-1] + '_restore_check`'
+    statement = detect._feature_lost_statement()
+    assert statement.count(table) == 1
 
-    def columns():
-        return [row[:2] + row[3:6] + row[8:9] for row in dj.conn().query(f"SHOW FULL COLUMNS FROM {table}").fetchall()]
+    def columns(name):
+        return [row[:2] + row[3:6] + row[8:9] for row in dj.conn().query(f"SHOW FULL COLUMNS FROM {name}").fetchall()]
 
-    declared = columns()
-    dj.conn().query(f"ALTER TABLE {table} DROP COLUMN frac_feature_lost")
+    def stored():
+        return sorted(dj.conn().query(f"SELECT frac_feature_lost FROM {table} "
+                                      "WHERE frac_feature_lost IS NOT NULL").fetchall())
+
+    before = stored()
+    # The fixture's session gives the check something to lose.
+    assert before
+    dj.conn().query(f"CREATE TABLE {copy} LIKE {table}")
     try:
-        dj.conn().query(detect._feature_lost_statement())
+        dj.conn().query(f"ALTER TABLE {copy} DROP COLUMN frac_feature_lost")
+        dj.conn().query(statement.replace(table, copy))
+        restored = columns(copy)
     finally:
-        if len(columns()) < len(declared):
-            dj.conn().query(f"ALTER TABLE {table} ADD COLUMN frac_feature_lost double DEFAULT NULL AFTER frac_blink")
+        dj.conn().query(f"DROP TABLE IF EXISTS {copy}")
 
-    assert columns() == declared
+    assert restored == columns(table)
+    assert stored() == before
 
 
 def test_eye_quality_counts_the_loss_and_merges_a_blink_that_reopens_briefly(lost_session):

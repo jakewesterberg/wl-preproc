@@ -42,8 +42,8 @@ from tests.schema.test_detect_populate import (
 
 # Trial 4 is the detection trial; its three planted transitions start at
 # +1.0 s, +1.9 s and +2.9 s (`test_detect_populate.py::_ONSET_OFFSETS_S`).
-# +0.2 s is before all three, with `_BLINK_N_FRAMES` plus the mask's own
-# 5-sample dilation halo finishing well clear of the first. Trials 0-3 are
+# +0.2 s is before all three, with `_BLINK_N_FRAMES` plus the mask's 80 ms
+# pad after each blink finishing well clear of the first. Trials 0-3 are
 # left alone: their `[start + 0.2, start + 0.8)` windows are what the affine
 # calibration is fitted against, and a blink there would refuse the session
 # rather than mask part of it.

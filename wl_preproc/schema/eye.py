@@ -1090,7 +1090,8 @@ class EyeQuality(dj.Computed):
     ---
     # By `ohdpi.TrackerLoss`'s rule: a frame is lost where the pupil, P1 or P4
     # was not found (OpenIrisDPI writes 0) or `DataQuality` is below 100, and
-    # a blink is a run of frames whose pupil was not found (design spec
+    # counted as lost too where a column the rule reads is not a finite
+    # number; a blink is a run of frames whose pupil was not found (design spec
     # `2026-10-11-eye-loss-design.md`). A lower bound on how much of a
     # session is unusable: the tracker can report a confident, wrong position,
     # which no 0 marks. *Until 2026-10-11 both read `DataQuality` alone, which

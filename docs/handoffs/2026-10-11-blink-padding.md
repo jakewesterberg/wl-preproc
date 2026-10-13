@@ -25,8 +25,9 @@ before the plan was written.
   keyword `fs_hz`; every caller passes it.
 - **The pads are `invalid` and count toward no criterion:** `frac_blink` and the other fractions
   are unchanged, and there is no new column.
-- **On the reference recording** the mask keeps 0.60% fewer of the left eye's frames and 0.44%
-  fewer of the right's; Engbert–Kliegl finds 248 fewer events in the left eye, and its agreement
+- **On the reference recording** the mask keeps 0.69% fewer of the left eye's frames and 0.53%
+  fewer of the right's, 0.60% and 0.44% on gaze not glitch-repaired, as the gated tests mask it
+  (spec amendment 5); Engbert–Kliegl finds 248 fewer events in the left eye, and its agreement
   with Otero-Millán rises from 0.843 to 0.863 (spec amendments 2 and 3).
 
 ## 2. What the other repositories must do
@@ -47,6 +48,9 @@ repair added `max_glitch_ms`. No real database exists yet.
   steps rise again, peaking near 200 ms. That is read as the eyes moving again, real movement the
   detectors should see; nothing in the data file alone can prove it.
 - **Only blinks are padded:** a lost reflection, P1 off camera, keeps the 10 ms margin.
+- **The pads were measured on OpenIrisDPI's tutorial recording,** not on this rig's animals.
+  Re-measure them on the rig's first recordings, as spec §1 did, frames already lost left out
+  (amendment 5). *Listed 2026-10-13, from the final review.*
 
 ## 4. The rulings
 
@@ -99,3 +103,52 @@ rounds halves to even, with no effect at these pads and rates; negative or NaN p
 validated, as no `ValidityParams` field is; a development database computes everything for both
 defaults (§2); an isolated one-frame pupil dropout costs 130 ms, 4 and 6 of them on the reference
 recording; and the Otero-Millán test masks unrepaired gaze, which predates this branch.
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-13, the hardware unchanged, with the eye-loss fix's five
+(`handoffs/2026-10-11-eye-loss.md` §7). Built on `fix/eye-minors`, from `4a432c0`; spec amendment
+5.
+1. **A frame gap keeps the margin and is not padded** (`1456ea3`), as spec §4 says and no test
+   held: `test_a_frame_gap_keeps_the_margin_and_is_not_padded`.
+2. **The rounding and a pad on one side alone** (`1456ea3`):
+   `test_a_pad_is_rounded_to_the_nearest_sample`, 25 and 40 samples at 498.55 Hz where truncating
+   gives 24 and 39, and `test_a_pad_on_one_side_alone_is_applied`. Each of the three mutations
+   the reviewer named passed every test before and fails one now.
+3. **Descriptions** (`75b5878`): the mask's module docstring names the pads, the report's
+   `invalid` share includes them, the consensus test's comment names the 80 ms pad, and the long
+   line is wrapped. `docs/pending-wl-xcon-amendments.md` gave the figures with the merge's
+   pointer (`4a432c0`).
+4. **Re-measuring the pads on the rig's first recordings** is listed open (§3).
+5. **What spec §1 measured** (amendment 5): frames already lost left out, which counted in would
+   double the share 50 ms before in the left eye and raise it by half in the right; §3's 0.69%
+   and 0.53%, on the repaired gaze the stored mask reads; and wl-xcon's 0.008% and 0.009%.
+   *Until the review's fixes this gave §3 as 0.60% and 0.44%, the gated tests' figures on gaze
+   not repaired, and said "double" of both eyes.*
+
+**The full suite** at `7000d3c`, with the BMD, NSLR and Andersson references set: 2352 passed, 27
+skipped, 1 deselected, 1 xfailed on 3.11; 2352 passed, 28 skipped, 1 xfailed on 3.13. Three more
+than the merge's 2349, this section's tests. **A fresh reviewer (Opus)** read the branch with the
+eye-loss fix's five on 2026-10-13: ready to merge, no Critical or Important. It re-ran the mask's
+and the statement's mutations at the base and the head, and reproduced every figure but one. Four
+minors and two nits, which the requester chose to fix before the merge (`d95163a`):
+- §3's report share was given as 0.60% and 0.44%, the gated tests' figures on gaze not repaired;
+  the stored mask, on glitch-repaired gaze, keeps 0.69% and 0.53% fewer (amendment 5);
+- the rounding test caught truncation but not rounding up, and now rounds down too: 51 and 81 ms,
+  25.43 and 40.38 samples, are 25 and 40, and a round-up mutation on either pad fails it;
+- criterion counts the branch had missed; `test_detect_report.py`'s row left
+  `frac_glitch_repaired` empty; `frac_glitch_repaired`'s comment said "a criterion" where the mask
+  withholds, 84% of the left eye's repaired samples and 75% of the right's with the margin and
+  the pads; and "double" held of the left eye only.
+
+After the fixes the tests they touch pass, 72 of them, and `wl-check` finds nothing.
+
+**Set aside by the reviewer, and the rulings on them** (all stand): §1's other figures differ by
+0.3–0.7 points under the reviewer's frame convention, and amendment 5 quotes none of them;
+`round` halves to even, ruled before; the scale left as the requester approved; the saccade spec's
+"repaired samples stay usable", which in context means "not a criterion"; "five criteria … its
+sixth" in the report, the mask's own "five plus one guard"; a `-inf` `DataQuality`, both
+unreadable and a lost reflection, outside these minors; "hundreds of pixels", where the median
+step into a lost frame is 152 px left and 187 px right, loose rather than false; the wl-xcon
+note's corrected figure without a dated note, the note not yet sent; and a copy table stranded by
+a reply lost after `CREATE`, negligible in a fresh container.

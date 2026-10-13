@@ -22,7 +22,8 @@ Apache-2.0).
 tracker lost the eye: a feature it did not find is written as 0, and `DataQuality` is 100 on every
 frame. The pupil is lost only in a blink's closed phase, a median 36 ms. wl-xcon's own spike found
 the flanks corrupted (its §7b.3): P4 steps above 2 px on 61–64% of frames in the 50 ms before the
-pupil is lost and 83–90% in the 50 ms after, against 0.009% in fixation; and partial closures
+pupil is lost and 83–90% in the 50 ms after, against 0.008% (left) and 0.009% (right) in
+fixation; and partial closures
 return a confident, wrong P4 while the pupil is still found (its §7.5). The partial phases are
 visible only in the image, which this repository never sees.
 
