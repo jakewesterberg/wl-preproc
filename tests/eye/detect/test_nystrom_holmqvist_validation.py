@@ -1499,7 +1499,7 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
     )
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
 
 
 class _Trace:
@@ -2097,19 +2097,24 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
     (`registry.py::_within_usable`), at the conjunction's floor of 5
     samples (`NH_CONJUNCTION_FLOOR_SAMPLES`), on glitch-repaired gaze
     (`eye/detect/glitch.py`), with the mask reading where the tracker lost
-    the eye (design spec `2026-10-11-eye-loss-design.md`):
+    the eye and padding each blink's flanks (design specs
+    `2026-10-11-eye-loss-design.md` and `2026-10-11-blink-padding-design.md`):
 
     | | left -> right | right -> left |
     |---|---|---|
-    | unmatched, of the eye's saccades | 403 of 4,729 | 324 of 4,646 |
-    | the other eye's data was withheld | 260 | 136 |
-    | the other eye's saccade was just outside it | 24 | 26 |
-    | the other eye moved too, undetected | 64 | 106 |
-    | the other eye did not move | 55 | 56 |
+    | unmatched, of the eye's saccades | 395 of 4,689 | 325 of 4,620 |
+    | the other eye's data was withheld | 250 | 139 |
+    | the other eye's saccade was just outside it | 25 | 23 |
+    | the other eye moved too, undetected | 68 | 103 |
+    | the other eye did not move | 52 | 60 |
 
     Only the middle two rows are real saccades the binocular rule loses:
-    about 1.9% and 2.8% of each eye's saccades. The largest row is missing
+    about 2.0% and 2.7% of each eye's saccades. The largest row is missing
     data, not disagreement, and it is asserted to stay the largest.
+
+    *Measured the same day before the blink pads: 403 of 4,729 and 324 of
+    4,646 unmatched (260/24/64/55 and 136/26/106/56), about 1.9% and 2.8%;
+    true when written.*
 
     *Measured 2026-09-28, with the mask reading `DataQuality` alone: 497 of
     4,793 and 468 of 4,756 unmatched (311/25/92/69 and 188/28/179/73), about
@@ -2156,9 +2161,14 @@ def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
     no run covers a withheld sample, so the which-eye trace is `neither`
     exactly where both eyes' masks withhold. Measured 2026-10-11, on
     glitch-repaired gaze, with the mask reading where the tracker lost the
-    eye (design spec `2026-10-11-eye-loss-design.md`): 306 left and 184
-    right saccades kept whole, and the trace is `both` on 93.58%, `left`
-    1.24%, `right` 1.15% and `neither` 4.04%.
+    eye and padding each blink's flanks (design specs
+    `2026-10-11-eye-loss-design.md` and `2026-10-11-blink-padding-design.md`):
+    281 left and 177 right saccades kept whole, and the trace is `both` on
+    93.05%, `left` 1.09%, `right` 1.15% and `neither` 4.70%.
+
+    *Measured the same day before the blink pads: 306 and 184, with `both`
+    on 93.58%, `left` 1.24%, `right` 1.15% and `neither` 4.04%; true when
+    written.*
 
     *Measured 2026-09-28, after the final review's fix, with the mask reading
     `DataQuality` alone: 340 and 211, with `both` on 95.17%, `left` 1.87%,

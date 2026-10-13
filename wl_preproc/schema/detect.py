@@ -310,7 +310,7 @@ class EyeValidity(dj.Computed):
             gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
             mask = validity_labels(
                 gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
-                recording.frame_gaps, params,
+                recording.frame_gaps, params, fs_hz=recording.fs_hz,
             )
             labels = mask.labels
             # `validity_labels` returns `None` for a usable sample; encoded

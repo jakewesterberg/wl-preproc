@@ -223,7 +223,7 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
 
     gaze = apply_map(_scaled_affine_map(scale), raw_xy)
     v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS).labels
+    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
 
 
 def _measured(runs, gaze, v, fs_hz):
@@ -593,10 +593,13 @@ def test_the_main_sequence_statistic_is_measured_and_not_asserted(reference, cap
 
     *Taken with the mask before 2026-10-11, which offered the detectors frames
     the tracker had lost (design spec `2026-10-11-eye-loss-design.md`,
-    amendment 6). On the mask since, this test prints Engbert-Kliegl 0.8067 /
-    0.7826 against otero_millan's 0.8577 / 0.8046, the duration-matched null
-    0.8674 / 0.8554, and 4,525 left-eye events, from 4,700: points 1 and 2
-    stand. The figures below were not re-measured; true when written.*
+    amendment 6). On the mask since, which also pads each blink's flanks
+    (design spec `2026-10-11-blink-padding-design.md`), this test prints
+    Engbert-Kliegl 0.8052 / 0.7850 against otero_millan's 0.8515 / 0.8070,
+    the duration-matched null 0.8583 / 0.8439, and 4,469 left-eye events,
+    from 4,700: points 1 and 2 stand. (Before the pads, the same day:
+    0.8067 / 0.7826, 0.8577 / 0.8046, 0.8674 / 0.8554 and 4,525.) The
+    figures below were not re-measured; true when written.*
 
     1. **Engbert-Kliegl, the always-on baseline nobody is validating, scores
        LOWER on the identical trace** -- 0.7536 / 0.7415 against

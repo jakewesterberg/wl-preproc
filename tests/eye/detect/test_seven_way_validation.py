@@ -78,7 +78,7 @@ def _seven_way(gaze, loss, fs_hz) -> tuple[float, float]:
     from wl_preproc.eye.detect.velocity import velocity
 
     v = velocity(gaze, fs_hz)
-    offered = np.asarray(validity_labels(gaze, v, loss, (), DEFAULT_VALIDITY_PARAMS).labels, dtype=object)
+    offered = np.asarray(validity_labels(gaze, v, loss, (), DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels, dtype=object)
     labels = {}
     for name, detector in DETECTORS.items():
         trace = offered.copy()

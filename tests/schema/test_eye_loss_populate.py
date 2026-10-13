@@ -138,6 +138,26 @@ def test_the_mask_counts_the_lost_features_and_the_blinks(lost_session):
         assert row["frac_non_finite"] == pytest.approx(unreadable / row["n_samples"]), eye
 
 
+def test_a_stored_blink_is_padded_either_side_as_invalid(lost_session):
+    """The right eye's blink, alone in that eye: 50 ms before it and 80 ms
+    after, from its edges, stored as `invalid`, and the frames beyond them
+    usable (design spec `2026-10-11-blink-padding-design.md`)."""
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
+    from wl_preproc.synth.ohdpi import OHDPI_FPS
+
+    session_key, _segment, _report = lost_session
+    before = round(DEFAULT_VALIDITY_PARAMS.blink_pad_before_ms * OHDPI_FPS / 1000)
+    after = round(DEFAULT_VALIDITY_PARAMS.blink_pad_after_ms * OHDPI_FPS / 1000)
+    start = _first_row_at(_FIRST_BLINK_S)
+    stop = start + _BLINK_ROWS
+    labels = _stored_mask(session_key, "right")
+
+    assert set(labels[start - before:start]) == {"invalid"}
+    assert set(labels[start:stop]) == {"blink"}
+    assert set(labels[stop:stop + after]) == {"invalid"}
+    assert labels[start - before - 1] == "fixation" and labels[stop + after] == "fixation"
+
+
 def test_the_two_stages_raised_nothing_for_this_session(lost_session):
     """`EyeValidity` and `EyeQuality`, for this session's subject. Filtered
     both ways: the suite's other modules leave their own sessions in the

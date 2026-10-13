@@ -96,7 +96,9 @@ plausible region, plausible speed, no frame discontinuity, and then invalid
 regions expanded with short surviving epochs dropped. *Eye open is read since
 2026-10-11 by `ohdpi.TrackerLoss`: a blink, or a lost reflection -- P1 or P4
 written as 0, or `DataQuality` below 100 -- which is `invalid`
-(`2026-10-11-eye-loss-design.md` §3 and amendment 8).*
+(`2026-10-11-eye-loss-design.md` §3 and amendment 8). Each blink's flanks are
+padded as `invalid` too, 50 ms before the pupil is lost and 80 ms after it
+returns (`2026-10-11-blink-padding-design.md`).*
 
 **None of them involves a detector.** They depend on the raw recording and the
 calibration alone. That is why the mask is its own Computed table
