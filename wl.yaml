@@ -53,7 +53,8 @@ status:
     flag, 3, 5, 6, 7 and 8. The eye minors, the requester's choice of
     2026-10-13, are built on fix/eye-minors and not merged: blink padding's
     five deferred minors and the eye-loss fix's five (section 7 of each
-    handoff); next, the review. Open and small: the
+    handoff); reviewed, its minors fixed (d95163a); next, the merge
+    question. Open and small: the
     correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
     section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.

@@ -125,3 +125,30 @@ The requester chose them next on 2026-10-13, the hardware unchanged, with the ey
    and 0.53%, on the repaired gaze the stored mask reads; and wl-xcon's 0.008% and 0.009%.
    *Until the review's fixes this gave §3 as 0.60% and 0.44%, the gated tests' figures on gaze
    not repaired, and said "double" of both eyes.*
+
+**The full suite** at `7000d3c`, with the BMD, NSLR and Andersson references set: 2352 passed, 27
+skipped, 1 deselected, 1 xfailed on 3.11; 2352 passed, 28 skipped, 1 xfailed on 3.13. Three more
+than the merge's 2349, this section's tests. **A fresh reviewer (Opus)** read the branch with the
+eye-loss fix's five on 2026-10-13: ready to merge, no Critical or Important. It re-ran the mask's
+and the statement's mutations at the base and the head, and reproduced every figure but one. Four
+minors and two nits, which the requester chose to fix before the merge (`d95163a`):
+- §3's report share was given as 0.60% and 0.44%, the gated tests' figures on gaze not repaired;
+  the stored mask, on glitch-repaired gaze, keeps 0.69% and 0.53% fewer (amendment 5);
+- the rounding test caught truncation but not rounding up, and now rounds down too: 51 and 81 ms,
+  25.43 and 40.38 samples, are 25 and 40, and a round-up mutation on either pad fails it;
+- criterion counts the branch had missed; `test_detect_report.py`'s row left
+  `frac_glitch_repaired` empty; `frac_glitch_repaired`'s comment said "a criterion" where the mask
+  withholds, 84% of the left eye's repaired samples and 75% of the right's with the margin and
+  the pads; and "double" held of the left eye only.
+
+After the fixes the tests they touch pass, 72 of them, and `wl-check` finds nothing.
+
+**Set aside by the reviewer, and the rulings on them** (all stand): §1's other figures differ by
+0.3–0.7 points under the reviewer's frame convention, and amendment 5 quotes none of them;
+`round` halves to even, ruled before; the scale left as the requester approved; the saccade spec's
+"repaired samples stay usable", which in context means "not a criterion"; "five criteria … its
+sixth" in the report, the mask's own "five plus one guard"; a `-inf` `DataQuality`, both
+unreadable and a lost reflection, outside these minors; "hundreds of pixels", where the median
+step into a lost frame is 152 px left and 187 px right, loose rather than false; the wl-xcon
+note's corrected figure without a dated note, the note not yet sent; and a copy table stranded by
+a reply lost after `CREATE`, negligible in a fresh container.

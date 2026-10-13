@@ -291,9 +291,13 @@ requester chose to merge the same day; true when written.*
 > build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. **The eye
 > minors, the requester's choice of 2026-10-13, are built on `fix/eye-minors`,
 > not merged:** blink padding's five deferred minors and the eye-loss fix's
-> five (§7 of each handoff). Next: the review. Open and small: the correction
+> five (§7 of each handoff). Reviewed, its four minors and two nits fixed
+> (`d95163a`). Next: the merge question. Open and small: the correction
 > marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-13, at night, this said the eye minors' review came next;
+> true when written.*
 >
 > *Until 2026-10-13, later still, this listed the eye minors as open; true when
 > written.*
