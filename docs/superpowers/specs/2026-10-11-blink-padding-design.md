@@ -190,3 +190,17 @@ settle what the sections above left open; §0 stands.
    code that passes the rate is that task's, and in a later task it would pass before it could
    fail. A blink at the recording's very edge, which §4 did not name, is tested too: its pad
    stops at the first and last frames.
+
+## Amendment 5, 2026-10-13, from the final review
+
+5. **What §1 measured, stated in full:**
+   - **A step is counted only where neither of its two frames is lost**
+     (`ohdpi.TrackerLoss`: a blink, a lost reflection or an unreadable frame), at the flanks
+     and in the baseline alike; §1 did not say so. Counted in, the share 50 ms before the pupil
+     is lost is 23.5% (left) and 21.9% (right) rather than 11.6% and 14.3%: a frame written with
+     P1 or P4 at 0 steps by hundreds of pixels from its neighbours. Re-measuring the pads on the
+     rig's recordings should leave them out the same way.
+   - **§3's "about 1%"** is 0.60% (left) and 0.44% (right) once every criterion is counted
+     (amendment 2).
+   - **wl-xcon's figure in fixation** (§1's last bullet) is 0.008% in the left eye and 0.009% in
+     the right (its spike's §7b.3 table), not 0.009% in both.

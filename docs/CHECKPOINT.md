@@ -245,8 +245,8 @@ requester chose to merge the same day; true when written.*
 > archival with rehydration, and ingest with the timebase. "What is built",
 > below, and `handoffs/` have each piece.
 >
-> **Hardware: ask whether it has changed.** It had not on 2026-10-11, when the
-> requester chose M4.
+> **Hardware: ask whether it has changed.** It had not on 2026-10-13, when the
+> requester chose the eye minors.
 > - **The rig.** The barcode and timebase alignment path has never met real
 >   data, and cannot with the recording the lab has, which carries no wl-sync
 >   barcodes (below). A few minutes of recording with the sync box live would
@@ -256,6 +256,8 @@ requester chose to merge the same day; true when written.*
 >   export's units (the sorter will read each probe's runs from
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
+>
+> *Until 2026-10-13 this said it had not on 2026-10-11; true when written.*
 >
 > *Until 2026-10-11 this said it had not on 2026-10-05; true when written.*
 >
@@ -286,12 +288,15 @@ requester chose to merge the same day; true when written.*
 > (`55142c6`; `handoffs/2026-10-11-blink-padding.md`): each blink's flanks
 > padded in the mask, 50 ms before and 80 ms after, measured on the reference
 > recording; the adaptive pad waits for data to validate it against. Still to
-> build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open and small:
-> the blink padding's five deferred minors
-> (`handoffs/2026-10-11-blink-padding.md` §6), the eye-loss fix's five
-> (`handoffs/2026-10-11-eye-loss.md` §6) and the correction marker's three
-> (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
-> DPI tracker waits for hand-labelled lab data.
+> build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. **The eye
+> minors, the requester's choice of 2026-10-13, are built on `fix/eye-minors`,
+> not merged:** blink padding's five deferred minors and the eye-loss fix's
+> five (§7 of each handoff). Next: the review. Open and small: the correction
+> marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
+> U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-13, later still, this listed the eye minors as open; true when
+> written.*
 >
 > *Until 2026-10-13, later, this said blink padding was built, not merged,
 > with the merge question next; true when written.*

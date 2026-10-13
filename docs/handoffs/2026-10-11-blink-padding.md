@@ -47,6 +47,9 @@ repair added `max_glitch_ms`. No real database exists yet.
   steps rise again, peaking near 200 ms. That is read as the eyes moving again, real movement the
   detectors should see; nothing in the data file alone can prove it.
 - **Only blinks are padded:** a lost reflection, P1 off camera, keeps the 10 ms margin.
+- **The pads were measured on OpenIrisDPI's tutorial recording,** not on this rig's animals.
+  Re-measure them on the rig's first recordings, as spec §1 did, frames already lost left out
+  (amendment 5). *Listed 2026-10-13, from the final review.*
 
 ## 4. The rulings
 
@@ -99,3 +102,22 @@ rounds halves to even, with no effect at these pads and rates; negative or NaN p
 validated, as no `ValidityParams` field is; a development database computes everything for both
 defaults (§2); an isolated one-frame pupil dropout costs 130 ms, 4 and 6 of them on the reference
 recording; and the Otero-Millán test masks unrepaired gaze, which predates this branch.
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-13, the hardware unchanged, with the eye-loss fix's five
+(`handoffs/2026-10-11-eye-loss.md` §7). Built on `fix/eye-minors`, from `4a432c0`; spec amendment
+5.
+1. **A frame gap keeps the margin and is not padded** (`1456ea3`), as spec §4 says and no test
+   held: `test_a_frame_gap_keeps_the_margin_and_is_not_padded`.
+2. **The rounding and a pad on one side alone** (`1456ea3`):
+   `test_a_pad_is_rounded_to_the_nearest_sample`, 25 and 40 samples at 498.55 Hz where truncating
+   gives 24 and 39, and `test_a_pad_on_one_side_alone_is_applied`. Each of the three mutations
+   the reviewer named passed every test before and fails one now.
+3. **Descriptions** (`75b5878`): the mask's module docstring names the pads, the report's
+   `invalid` share includes them, the consensus test's comment names the 80 ms pad, and the long
+   line is wrapped. `docs/pending-wl-xcon-amendments.md` gave the figures with the merge's
+   pointer (`4a432c0`).
+4. **Re-measuring the pads on the rig's first recordings** is listed open (§3).
+5. **What spec §1 measured** (amendment 5): frames already lost left out, which counted in would
+   double the share 50 ms before; §3's 0.60% and 0.44%; and wl-xcon's 0.008% and 0.009%.
