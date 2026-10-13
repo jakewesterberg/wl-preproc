@@ -27,7 +27,8 @@ status:
     (ff8aeb9, 2026-10-08) and their seven-way agreement (3a45a09,
     2026-10-10; its minors c899a9d), and a lost eye read from the zeros
     OpenIrisDPI writes (1dda41b, 2026-10-11), each blink's flanks padded in
-    the validity mask (55142c6, 2026-10-13). Spike sorting (Phase 2b, and the
+    the validity mask (55142c6, 2026-10-13; its deferred minors and the
+    eye-loss fix's, 0e4df0f). Spike sorting (Phase 2b, and the
     NWB's units) waits on the compute machine. docs/CHECKPOINT.md and
     docs/handoffs/ hold the full record. *Until 2026-10-05 this field was a
     running log of every merge since Phase 1c; it is in git at 817c204:wl.yaml;
@@ -51,14 +52,15 @@ status:
     adaptive pad waits for data to validate it against. Still to
     build: asks 1, 2's
     flag, 3, 5, 6, 7 and 8. The eye minors, the requester's choice of
-    2026-10-13, are built on fix/eye-minors and not merged: blink padding's
-    five deferred minors and the eye-loss fix's five (section 7 of each
-    handoff); reviewed, its minors fixed (d95163a); next, the merge
-    question. Open and small: the
+    2026-10-13, are merged (0e4df0f): blink padding's five deferred minors
+    and the eye-loss fix's five (section 7 of each handoff). Open and small:
+    the
     correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md
     section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: blink padding (55142c6): each blink's flanks, 50 ms before and 80
+    Done: the eye minors (0e4df0f): three tests for the blink pads, the
+    ALTER TABLE checked on a copy, and descriptions made true. Before them,
+    blink padding (55142c6): each blink's flanks, 50 ms before and 80
     ms after, withheld from the detectors. Before it, the eye-loss fix
     (1dda41b): one rule reads a lost eye from the
     zeros OpenIrisDPI writes, so EyeQuality and the mask's blinks no longer read
@@ -131,6 +133,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `55142c6` until the eye-minors merge `0e4df0f` on 2026-10-13 (CI
+  # green on `55142c6`, run 38453320426); true when written.
   # Was `1dda41b` until the blink-padding merge `55142c6` on 2026-10-13 (CI
   # green on `1dda41b`, run 38174521182); true when written.
   # Was `caf1d63` until the eye-loss merge `1dda41b` on 2026-10-11 (CI green
@@ -184,7 +188,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "55142c6"
+  describes: "0e4df0f"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
