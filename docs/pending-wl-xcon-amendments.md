@@ -40,11 +40,18 @@ visible only in the image, which this repository never sees.
 
 **Offered meanwhile, not asked:** until P10 exists, the same rule this repository reads offline can
 run online on the samples wl-xcon receives (its S5 reads the pupil, P1 and P4 per eye): the pupil
-not found, P1 or P4 at 0, or `DataQuality` below 100 is "no sample", with the flanks padded.
+not found, P1 or P4 at 0, or `DataQuality` below 100 is "no sample", and so are each blink's
+flanks, 50 ms before the pupil is lost and 80 ms after it returns, as this repository pads them.
 
 **What this repository does meanwhile:** reads the zeros (`eye/ohdpi.py::TrackerLoss`) for the
-validity mask and `EyeQuality`, and pads each blink's flanks next (the requester's choice of
-2026-10-11).
+validity mask and `EyeQuality`, and pads each blink's flanks in the mask: 50 ms before the pupil
+is lost and 80 ms after it returns, the padded frames withheld from the detectors (`55142c6`, the
+requester's choice of 2026-10-11;
+[`specs/2026-10-11-blink-padding-design.md`](superpowers/specs/2026-10-11-blink-padding-design.md)
+§1 has the measurement). The pads were measured on OpenIrisDPI's tutorial recording, not yet on
+this rig's.
+
+*Until 2026-10-13 this said the flanks would be padded next; true when written.*
 
 ---
 

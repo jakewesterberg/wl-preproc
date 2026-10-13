@@ -1,28 +1,31 @@
 # Where this build actually is
 
-**Last updated 2026-10-12**, describing `main` at `1dda41b`, the merge of
-`fix/eye-loss`: reading a lost eye from what OpenIrisDPI writes (spec
-`specs/2026-10-11-eye-loss-design.md`, amendments 1–9, handoff
-`handoffs/2026-10-11-eye-loss.md`). CI read off `1dda41b` is green on both
-interpreters, 2330 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 38174521182`).
-- **One rule reads a lost eye** (`ohdpi.TrackerLoss`): a blink is the pupil not
-  found; a lost reflection is P1 or P4 at 0, or `DataQuality` below 100
-  (amendment 8). `DataQuality` alone, always 100 on OpenIrisDPI, had made
-  `EyeQuality`'s figures and the mask's `blink` read zero.
-- **The validity mask reads it:** a lost reflection is `invalid`, counted in
-  the new `EyeValidity.frac_feature_lost`; on a database declared before that
-  column the stage refuses, naming the `ALTER TABLE` and a restart.
-- **`EyeQuality` counts by it:** tracking loss is every frame lost or
-  unreadable, and blinks less than 100 ms apart are one.
-- **Two asks of wl-xcon** for its P10 tracker: blinks from the image with their
-  flanks, and raw eye video from the first sessions
-  (`docs/pending-wl-xcon-amendments.md`).
-- **M4, the correction marker, was merged just before** (`caf1d63`, CI green;
+**Last updated 2026-10-13**, describing `main` at `55142c6`, the merge of
+`fix/blink-padding`: padding a blink's flanks in the validity mask (spec
+`specs/2026-10-11-blink-padding-design.md`, amendments 1–4, handoff
+`handoffs/2026-10-11-blink-padding.md`). CI read off `55142c6` is green on both
+interpreters, 2340 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 38453320426`).
+- **Each blink's flanks are withheld:** from 50 ms before the pupil is lost to
+  80 ms after it returns, measured from its edges, the padded frames
+  `invalid`. On the reference recording the mask keeps 0.60% fewer of the left
+  eye's frames and 0.44% fewer of the right's (amendment 2).
+- **Two `ValidityParams` fields in milliseconds,** 0 for a paramset stored
+  before them, which masks as it did; `validity_labels` takes the recording's
+  rate. No schema change: the new default paramset is registered beside the
+  old.
+- **The adaptive pad,** extended while the pupil or the gaze stays abnormal,
+  is to try once there is data to validate it against (the requester's
+  reminder, spec §0).
+- **The eye-loss fix was merged just before** (`1dda41b`, CI green; spec
+  `specs/2026-10-11-eye-loss-design.md`): one rule reads a lost eye from the
+  zeros OpenIrisDPI writes, for the validity mask and `EyeQuality`; and two
+  asks of wl-xcon for its P10 tracker (`docs/pending-wl-xcon-amendments.md`).
+- **M4, the correction marker, was merged before it** (`caf1d63`, CI green;
   spec `specs/2026-10-11-correction-marker-design.md`): a correction marks its
   file before the swap and the records' transaction clears the mark, so a file
   whose records failed is found even if the animal's details are changed back.
-- **Seven-way agreement's five deferred minors were merged before it**
+- **Seven-way agreement's five deferred minors were merged before that**
   (`c899a9d`, CI green): a lone detector's blend undefined rather than an
   error, "0 samples compared" in the report, and the noise test skipped where
   a detector cannot run.
@@ -76,6 +79,10 @@ check is green (`gh run view 38174521182`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `1dda41b` (the eye-loss merge, CI green, 2330 passed on
+each interpreter, `38174521182`) until the blink-padding merge; true when
+written.*
 
 *This header named `caf1d63` (the correction-marker merge, CI green, 2308
 passed on each interpreter, `38141210544`) until the eye-loss merge; true when
@@ -275,16 +282,19 @@ requester chose to merge the same day; true when written.*
 > (`1dda41b`; `handoffs/2026-10-11-eye-loss.md`): one rule reads a lost eye
 > from the 0s OpenIrisDPI writes, for the validity mask and `EyeQuality`, with
 > the requester's decision that `DataQuality` below 100 is a lost reflection,
-> not a blink. **Blink padding, the requester's choice, is built on
-> `fix/blink-padding`, not merged** (`handoffs/2026-10-11-blink-padding.md`):
-> each blink's flanks padded in the mask, 50 ms before and 80 ms after. The
-> review found no Critical or Important and five Minor, deferred (§6). Next:
-> the merge question. Still to
+> not a blink. **Blink padding, the requester's choice, is merged**
+> (`55142c6`; `handoffs/2026-10-11-blink-padding.md`): each blink's flanks
+> padded in the mask, 50 ms before and 80 ms after, measured on the reference
+> recording; the adaptive pad waits for data to validate it against. Still to
 > build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is unread. Open and small:
-> the eye-loss fix's five deferred minors (`handoffs/2026-10-11-eye-loss.md`
-> §6) and the correction marker's three deferred minors
+> the blink padding's five deferred minors
+> (`handoffs/2026-10-11-blink-padding.md` §6), the eye-loss fix's five
+> (`handoffs/2026-10-11-eye-loss.md` §6) and the correction marker's three
 > (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning U'n'Eye to the
 > DPI tracker waits for hand-labelled lab data.
+>
+> *Until 2026-10-13, later, this said blink padding was built, not merged,
+> with the merge question next; true when written.*
 >
 > *Until 2026-10-13 this said the blink padding's review came next; true when
 > written.*
@@ -347,7 +357,9 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: the eye-loss fix (`1dda41b`): one rule reads a lost eye from the 0s
+> Done: blink padding (`55142c6`): each blink's flanks, 50 ms before the
+> pupil is lost and 80 ms after it returns, withheld from the detectors.
+> Before it, the eye-loss fix (`1dda41b`): one rule reads a lost eye from the 0s
 > OpenIrisDPI writes, so `EyeQuality`'s tracking loss and blink rate, and the
 > mask's blinks, no longer read zero on real data. Before it, M4, the
 > correction marker (`caf1d63`): a correction marks its file
