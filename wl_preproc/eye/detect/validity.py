@@ -115,8 +115,8 @@ class ValidityMask:
     per-criterion rejected fractions".
 
     **A record rather than a bare array, because the return shape was the
-    only obstacle there ever was.** All five criteria are already named
-    locals inside `validity_labels`; four of them were simply never
+    only obstacle there ever was.** All five criteria it had then were
+    already named locals inside `validity_labels`; four of them were never
     returned, so `schema/detect.py::EyeValidity.make()` wrote `NULL` into
     four columns section 7 asks it to fill, under a comment calling them
     "not separately recoverable". They were always recoverable. Nothing
@@ -302,7 +302,7 @@ def validity_labels(
         # `blink` is the raw criterion, not `out == Label.BLINK`. The two
         # are the same set by construction (BLINK is assigned last, so every
         # raw-blink sample carries it), and naming the criterion is what
-        # makes this line say the same kind of thing the four beside it say
+        # makes this line say the same kind of thing the six beside it say
         # -- a fraction OF A CRITERION, not of a rendered verdict.
         fractions={
             "blink": _fraction(blink),

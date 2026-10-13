@@ -242,6 +242,7 @@ def _validity_row(subject, dt, eye_value, validity_idx, *, n_samples, frac_blink
         "frac_frame_gap": 0.0,
         "frac_short_epoch": 0.0,
         "frac_non_finite": 0.0,
+        "frac_glitch_repaired": 0.0,
         "reason": "",
     }
 

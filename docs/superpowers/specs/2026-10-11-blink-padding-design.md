@@ -200,7 +200,10 @@ settle what the sections above left open; §0 stands.
      is lost is 23.5% (left) and 21.9% (right) rather than 11.6% and 14.3%: a frame written with
      P1 or P4 at 0 steps by hundreds of pixels from its neighbours. Re-measuring the pads on the
      rig's recordings should leave them out the same way.
-   - **§3's "about 1%"** is 0.60% (left) and 0.44% (right) once every criterion is counted
-     (amendment 2).
+   - **§3's "about 1%"** is 0.69% (left) and 0.53% (right) once every criterion is counted:
+     the mask `EyeValidity` stores, which the report reads, keeps 1,111,382 of the left eye's
+     1,177,799 frames, from 1,119,527, and 1,114,087 of the right's, from 1,120,297. It masks
+     glitch-repaired gaze (`schema/detect.py::_repaired_gaze`). Amendment 2's 0.60% and 0.44%
+     are the tests gated on the reference recording, which mask gaze not repaired.
    - **wl-xcon's figure in fixation** (§1's last bullet) is 0.008% in the left eye and 0.009% in
      the right (its spike's §7b.3 table), not 0.009% in both.

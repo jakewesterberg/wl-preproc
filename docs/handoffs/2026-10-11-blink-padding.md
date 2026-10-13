@@ -25,8 +25,9 @@ before the plan was written.
   keyword `fs_hz`; every caller passes it.
 - **The pads are `invalid` and count toward no criterion:** `frac_blink` and the other fractions
   are unchanged, and there is no new column.
-- **On the reference recording** the mask keeps 0.60% fewer of the left eye's frames and 0.44%
-  fewer of the right's; Engbert–Kliegl finds 248 fewer events in the left eye, and its agreement
+- **On the reference recording** the mask keeps 0.69% fewer of the left eye's frames and 0.53%
+  fewer of the right's, 0.60% and 0.44% on gaze not glitch-repaired, as the gated tests mask it
+  (spec amendment 5); Engbert–Kliegl finds 248 fewer events in the left eye, and its agreement
   with Otero-Millán rises from 0.843 to 0.863 (spec amendments 2 and 3).
 
 ## 2. What the other repositories must do
@@ -120,4 +121,7 @@ The requester chose them next on 2026-10-13, the hardware unchanged, with the ey
    pointer (`4a432c0`).
 4. **Re-measuring the pads on the rig's first recordings** is listed open (§3).
 5. **What spec §1 measured** (amendment 5): frames already lost left out, which counted in would
-   double the share 50 ms before; §3's 0.60% and 0.44%; and wl-xcon's 0.008% and 0.009%.
+   double the share 50 ms before in the left eye and raise it by half in the right; §3's 0.69%
+   and 0.53%, on the repaired gaze the stored mask reads; and wl-xcon's 0.008% and 0.009%.
+   *Until the review's fixes this gave §3 as 0.60% and 0.44%, the gated tests' figures on gaze
+   not repaired, and said "double" of both eyes.*

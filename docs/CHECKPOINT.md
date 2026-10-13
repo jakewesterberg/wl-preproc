@@ -8,8 +8,8 @@ interpreters, 2340 passed on each with 37 skipped, and the manifest
 check is green (`gh run view 38453320426`).
 - **Each blink's flanks are withheld:** from 50 ms before the pupil is lost to
   80 ms after it returns, measured from its edges, the padded frames
-  `invalid`. On the reference recording the mask keeps 0.60% fewer of the left
-  eye's frames and 0.44% fewer of the right's (amendment 2).
+  `invalid`. On the reference recording the mask keeps 0.69% fewer of the left
+  eye's frames and 0.53% fewer of the right's (amendment 5).
 - **Two `ValidityParams` fields in milliseconds,** 0 for a paramset stored
   before them, which masks as it did; `validity_labels` takes the recording's
   rate. No schema change: the new default paramset is registered beside the

@@ -420,7 +420,7 @@ def test_the_fractions_are_raw_per_criterion_counts_and_may_sum_above_one():
     """`ValidityMask`'s stated contract, asserted rather than only written
     down: a sample rejected by two criteria is counted by both.
 
-    A reader who sums the five columns of one `EyeValidity` row and gets
+    A reader who sums the seven criterion columns of one `EyeValidity` row and gets
     1.3 is seeing the intended thing. An implementation that instead
     apportioned each sample to one "winning" criterion would pass every
     isolation test above and fail here.
@@ -503,14 +503,18 @@ def test_the_pad_is_turned_into_samples_at_the_rate_given():
 
 def test_a_pad_is_rounded_to_the_nearest_sample():
     """At the reference recording's 498.55 Hz, 50 ms is 24.93 samples and 80
-    ms 39.88: 25 and 40, where truncating would give 24 and 39."""
+    ms 39.88: 25 and 40, where truncating would give 24 and 39. And 51 ms is
+    25.43 and 81 ms 40.38: 25 and 40 again, where rounding up would give 26
+    and 41."""
     gaze, vel, loss, gaps = _clean(100)
     loss.blink[40:42] = True
 
-    labels = validity_labels(gaze, vel, loss, gaps, _padded(50.0, 80.0), fs_hz=498.55).labels
+    up = validity_labels(gaze, vel, loss, gaps, _padded(50.0, 80.0), fs_hz=498.55).labels
+    down = validity_labels(gaze, vel, loss, gaps, _padded(51.0, 81.0), fs_hz=498.55).labels
 
-    assert labels[14] is None and labels[15] is Label.INVALID
-    assert labels[81] is Label.INVALID and labels[82] is None
+    for labels in (up, down):
+        assert labels[14] is None and labels[15] is Label.INVALID
+        assert labels[81] is Label.INVALID and labels[82] is None
 
 
 def test_a_pad_on_one_side_alone_is_applied():

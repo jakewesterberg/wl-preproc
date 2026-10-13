@@ -172,9 +172,10 @@ class EyeValidity(dj.Computed):
     # Not a criterion: the share of samples whose gaze was a tracker
     # glitch, repaired before the mask was built (`eye/detect/glitch.py`, the
     # requester's decision of 2026-09-28). A repaired sample is usable unless
-    # a criterion rejects it, and a frame the tracker lost is rejected:
+    # the mask withholds it, and it withholds every frame the tracker lost:
     # since 2026-10-11 that is over half the left eye's on the reference
-    # recording (6,684 of 10,969) and 45% of the right's.
+    # recording (6,684 of 10,969) and 45% of the right's, and with the
+    # margin and the blink pads 84% and 75%.
     frac_glitch_repaired=null : double
     reason='' : varchar(255)
     """
@@ -338,13 +339,14 @@ class EyeValidity(dj.Computed):
                 # a comment claiming `validity_labels` folded them into one
                 # combined mask before returning and so made them "not
                 # separately recoverable" -- true of the RETURN SHAPE, never
-                # of the data: all five were already named locals in that
-                # function. It now returns a `ValidityMask` carrying them.
+                # of the data: all five there were then were already named
+                # locals in that function. It now returns a `ValidityMask`
+                # carrying them.
                 #
-                # ONE spread, not five hand-written lines. `ValidityMask.
+                # ONE spread, not seven hand-written lines. `ValidityMask.
                 # fractions` is keyed by criterion name and this table's
                 # columns are `frac_` + that name, so the pairing happens
-                # once, in the function that owns the criteria. Five columns
+                # once, in the function that owns the criteria. Seven columns
                 # written out by hand from a single source is the shape a
                 # copy-paste error survives in: every column still looks
                 # populated. A key naming no column raises on insert here
