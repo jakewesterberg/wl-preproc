@@ -6,6 +6,13 @@ by `ohdpi.TrackerLoss`'s rule from what the tracker wrote (design spec
 alone, read as `DataQuality` below 100, which OpenIrisDPI writes as 100 on
 every frame, blinks included; true when written.*
 
+Each blink is padded either side, `invalid`, from its edges: by
+`blink_pad_before_ms` before the pupil is lost and `blink_pad_after_ms` after
+it returns, 50 and 80 ms in the default paramset, where the gaze vector is
+already or still disturbed (design spec `2026-10-11-blink-padding-design.md`).
+The pads, like the margin around every rejected frame, belong to no one
+criterion; only blinks are padded.
+
 The guard is `non_finite`: a sample whose gaze, velocity or loss columns are
 not a finite number. It is not one of OpenIrisDPI's criteria but a
 data-integrity check, added 2026-09-27 -- a NaN compares false against every
@@ -142,8 +149,9 @@ class ValidityMask:
       `non_finite` are counted BEFORE `_dilate` grows every rejected
       region: the halo dilation adds belongs to no one criterion, nor do
       the blink pads (`_blink_pads`), and attributing either to whichever
-      criterion it happens to surround would be an invention. `short_epoch` can only be counted after, because
-      dilation is what creates most of the short epochs it drops. So they
+      criterion it happens to surround would be an invention. `short_epoch`
+      can only be counted after, because dilation is what creates most of
+      the short epochs it drops. So they
       can sum BELOW the rejected fraction too.
     """
 

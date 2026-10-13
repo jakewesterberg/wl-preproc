@@ -237,9 +237,10 @@ class TrackerLoss:
       a blink P1 is lost too, so the two overlap there; P1 alone at 0 is the
       eye looking up, out of the camera's view of P1.
     - `unreadable`: a column read for this rule is not a finite number. A
-      NaN compares false against both tests above, so such a frame is in
-      neither: it declares nothing, and the validity mask withholds it as
-      `invalid`, never as a blink.
+      NaN compares false against both tests above, so a NaN alone puts a
+      frame in neither: it declares nothing, and the validity mask withholds
+      it as `invalid`. A frame with a NaN in one column and a 0 in another is
+      unreadable and whichever the 0 declares.
 
     One rule for every consumer: the validity mask and `EyeQuality` both read
     it, so the mask's blinks and the report's blink rate cannot drift apart.

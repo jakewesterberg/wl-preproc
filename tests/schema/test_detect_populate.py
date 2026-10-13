@@ -3603,7 +3603,9 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # of |raw Purkinje difference|, over both eyes, is placed at 15 degrees --
     # inside both `region_half_width_deg=20.0` and the tighter
     # `region_half_height_deg=15.0`, with margin, so "the bulk of the trace"
-    # sits inside the plausible region rather than at its very edge.
+    # sits inside the plausible region rather than at its very edge. The
+    # frames the tracker lost are counted in it: `test_otero_millan_
+    # validation.py::_SCALE_P99_AT_DEG` says by how much, and why it stays.
     pooled_abs_x = np.concatenate([np.abs(raw["left"][:, 0]), np.abs(raw["right"][:, 0])])
     pooled_abs_y = np.concatenate([np.abs(raw["left"][:, 1]), np.abs(raw["right"][:, 1])])
     p99_x, p99_y = float(np.percentile(pooled_abs_x, 99)), float(np.percentile(pooled_abs_y, 99))

@@ -184,6 +184,13 @@ EK_OM_OVERLAP_MAX_F1 = 1.0
 #: coincidence between this constant and `region_half_height_deg` is a
 #: coincidence.
 #:
+#: **The pooled p99 counts the frames the tracker lost** (`ohdpi.TrackerLoss`),
+#: where P1 or P4 is written as 0 and the difference is the other's position.
+#: Without them it is (158.8, 163.1) px, `y` the larger, and the scale would be
+#: 218.6/163.1 = 1.34 times this one. Left as it is (2026-10-13): the scale is
+#: chosen, not measured, either is as plausible, and changing it would move
+#: every figure the tests on this recording print.
+#:
 #: Restated from `tests/schema/test_detect_populate.py`, which documents the
 #: same choice at length; see this module's docstring for why it is restated
 #: rather than imported.
