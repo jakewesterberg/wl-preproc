@@ -227,3 +227,13 @@ written. These settle what the sections above left open; §0 stands.
    value too long is cut: either would otherwise fail the session's whole event stage on every pass.
 5. **The description's new fields default** to null and empty, so a description built before them
    still reads as version 3.
+
+## Amendments, 2026-10-14, from the final review
+
+6. **§9 left out `docs/ops/lab-host-protocol.md`,** the wire contract wl.works builds against and keeps
+   a copy of, which every earlier change to the listing or the description updated. It now names the
+   listing's and the description's new fields, and a test holds it to the listing's models
+   (`tests/responder/test_protocol_document.py`).
+7. **A description recorded before §5's fields compares as the model reads it now.** Re-read, it gains
+   them defaulted, so compared raw it differed from itself, and a correction marker whose swap never
+   happened showed wl.works a change for nothing (`nwb/correct.py::as_described_now`).

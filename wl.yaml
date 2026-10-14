@@ -57,7 +57,8 @@ status:
     5, the requester's choice of 2026-10-14, is built on feat/session-kind
     and not merged (docs/handoffs/2026-10-14-session-kind.md): each
     session's kind, display calibration and accepted warnings, carried into
-    the database, the listing and the NWB file; next, the review. Open and
+    the database, the listing and the NWB file; reviewed, its fixes made
+    (b4fc467); next, the merge question. Open and
     small: the
     correction marker's
     three deferred minors (docs/handoffs/2026-10-11-correction-marker.md

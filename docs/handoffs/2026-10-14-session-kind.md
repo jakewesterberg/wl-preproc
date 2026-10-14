@@ -66,3 +66,45 @@ both checkouts collect the same 392, and the replay, run again, gives 391.
   - 3.11: **2393 passed, 27 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2393 passed, 28 skipped, 1 xfailed**.
 - **`wl-check`:** `wl.yaml: no findings`.
+
+## 6. The final review
+
+A fresh Opus reviewer read the whole branch (`ae1d439..3277011`), checked the spec's claims about
+wl-xcon against its code at `b2c2850` and read wl-works' `main` where wl.works is concerned. It found
+**no Critical, two Important and seven Minor**, and judged the branch ready to merge with fixes. Carry
+only and the privacy rule hold, and so do the five Review Focus items.
+
+**Fixed, in one pass** (`b4fc467`):
+- **`docs/ops/lab-host-protocol.md` was stale:** the wire contract wl.works keeps a copy of named none of
+  the new fields, and still called a `rig_record_problem` the run record's. Updated, and
+  `tests/responder/test_protocol_document.py` now holds it to the listing's models and the
+  description's new fields (spec amendment 6).
+- **wl.works' amendment left out four things:** that its session record, as its plan of 2026-10-14
+  builds it, allows `training` and `recording` and refuses `piloting`; that the description's schema is
+  strict and was vendored; that a null kind means three things; and that problems stored before
+  2026-10-14 name no file.
+- **Two Minors, re-graded Important by their effect:**
+  - a description recorded before this change compared unequal to itself re-read, so a correction
+    marker whose swap never happened would show wl.works a `corrected` change for nothing:
+    `test_a_description_recorded_before_it_carried_the_sessions_kind_is_still_the_files_own` failed
+    first (spec amendment 7);
+  - the synthetic colour record had none of the real one's floats, lists or degree sign, so a database
+    library returning arrays from a blob, which would fail every such file's build, went untested: the
+    record now takes wl-xcon's shape, and the build test compares it whole.
+
+**Deferred, Minor:**
+- another animal's `config.json` writes an all-null `core.SessionRecord` row, so its file gets a blank
+  `rig_record` module, where three comments say only its own animal's has one;
+- a non-finite `at` would fail the session's event stage on every pass (wl-xcon never writes one), and a
+  run index nulled for its range then reads as "at the open" in the file;
+- a run with an end row and no start row is joined by `run` + 1, where §2 says "through its start
+  row": consistent with `core.RunRecord`'s mapping, to be said one way;
+- three comment nits in `rigruns.py` and `core.py`;
+- the listing fetches the `calibration_cones` blob for every session on every pass and never uses it.
+
+**Set aside by the reviewer, and the rulings on them** (all stand): the deploy order, wl.works taking the
+amendment first, now stated in it; no backfill for sessions read before (§6); invalid UTF-8 in
+`warnings.jsonl`, as in `runs.jsonl`; 4-byte characters, MySQL 8.0 being utf8mb4; more than 65535
+warnings; nwbinspector's view of a JSON string and a one-row table; a re-read keeping stale rows, as
+`core.RunRecord` does (§8); inputs wl-xcon's types cannot produce; two subject-mismatch problems, one per
+reader; and a box-typed name going to wl.works (§0, decision 3).
