@@ -20,7 +20,12 @@ def listed(dj_conn, prefix, tmp_path_factory):
     daemon.activate_all(prefix=prefix)
     sessions = {
         "runs": _session(tmp_path_factory, subject="sllist1", session_id="2025-07-21_01", runs=True,
-                         unclosed_blocks=[1], spikeglx_restart={**RESTART, "probe_bank": 1}),
+                         unclosed_blocks=[1], spikeglx_restart={**RESTART, "probe_bank": 1},
+                         rig_record={"session_kind": "recording", "warnings": [
+                             {"code": "default-calibration"},
+                             {"code": "luminance-step", "run": 1, "how": "start",
+                              "by": {"kind": "member", "name": "J. W.", "account": "acct-1",
+                                     "issuer": "https://wl.works", "token_id": "tok-1"}}]}),
         "plain": _session(tmp_path_factory, subject="sllist2", session_id="2025-07-22_01"),
     }
     daemon.run_once(prefix=prefix)
@@ -50,6 +55,27 @@ def test_an_entry_reads_what_the_daemon_measured(listed):
         part["imro_table"] for part in census]
     assert [segment["probes"][0]["electrodes"][0] for segment in entry["segments"]] == [0, 384]
     assert [(flag["code"], flag["run_number"]) for flag in entry["flags"]] == [("bank_change_in_run", 2)]
+
+
+def test_an_entry_carries_what_wl_xcons_record_says_the_session_was(listed):
+    """Through one daemon pass: the kind, the calibration the session and each
+    run ran against, and each accepted warning, its run as the measured run's
+    number and its acceptor without the token (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 4)."""
+    from wl_preproc.listing.entry import session_entry
+
+    recipe, key = listed["runs"]
+    entry = session_entry(key)
+    calibration = recipe.rig_record.calibration_id
+    assert (entry["session_kind"], entry["calibration"]) == (
+        "recording", {"id": calibration, "standard": False, "measured_on": "2027-03-01"})
+    assert [run["calibration"] for run in entry["runs"]] == [calibration, calibration]
+    assert [(warning["code"], warning["run_number"], warning["by"]) for warning in entry["accepted_warnings"]] == [
+        ("default-calibration", None, {"kind": "box", "name": "synth", "account": None}),
+        ("luminance-step", 2, {"kind": "member", "name": "J. W.", "account": "acct-1"})]
+    assert "tok-1" not in str(entry)
+    plain = session_entry(listed["plain"][1])
+    assert (plain["session_kind"], plain["calibration"], plain["accepted_warnings"]) == (None, None, [])
 
 
 def test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares(listed):

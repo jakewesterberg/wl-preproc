@@ -700,7 +700,7 @@ def test_problems_reading_the_rigs_run_record_are_kept(events_activated, dj_conn
     _recipe, absent = _populate_generated(tmp_path / "absent", "slrig5", datetime.datetime(2027, 7, 25, 9, 0),
                                           mutate=no_record, runs=True)
     problems = lambda key: [row["problem"] for row in (core.RunRecordProblem & key).to_dicts(order_by="problem_number")]
-    assert problems(bad) == ["line 5: not JSON"]
+    assert problems(bad) == ["runs.jsonl line 5: not JSON"]
     assert problems(absent) == ["the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]
 
 

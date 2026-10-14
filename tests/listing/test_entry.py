@@ -34,6 +34,7 @@ def _facts(**changes):
         census=[_probe(100, "a" * 32)],
         electrodes={("a" * 32, "NP1000"): [0, 1, 2]},
         strobed_runs=[1, 2], strobed_blocks=[1, 2], censused=frozenset({100}), rig_problems=[],
+        rig_session=None, run_calibrations={}, warnings=[],
     )
     return dataclasses.replace(facts, **changes)
 
@@ -196,11 +197,84 @@ def test_a_segment_whose_census_was_not_read_has_no_probes_yet():
     assert build_entry(_facts(census=[], electrodes={}))["segments"][0]["probes"] == []
 
 
-def test_a_problem_reading_the_rigs_run_record_is_flagged():
-    """Kept by the event stage, so a run with no task says why (final review M2)."""
+def test_a_problem_reading_the_rigs_record_is_flagged():
+    """Kept by the event stage, so a run with no task says why (final review
+    M2); each names the file it is about, now that the record is more than
+    the runs (design spec `2026-10-14-session-kind-and-warnings-design.md`
+    section 3)."""
     from wl_preproc.listing.entry import build_entry
 
-    entry = build_entry(_facts(rig_problems=["line 2: not JSON", "line 3: not a start or end row naming its run"]))
+    entry = build_entry(_facts(rig_problems=["runs.jsonl line 2: not JSON",
+                                             "config.json: session kind 'rehearsal' is not one of training, "
+                                             "piloting, recording"]))
     assert [(flag["code"], flag["message"]) for flag in entry["flags"]] == [
-        ("rig_record_problem", "the rig's run record: line 2: not JSON"),
-        ("rig_record_problem", "the rig's run record: line 3: not a start or end row naming its run")]
+        ("rig_record_problem", "the rig's record: runs.jsonl line 2: not JSON"),
+        ("rig_record_problem", "the rig's record: config.json: session kind 'rehearsal' is not one of training, "
+                               "piloting, recording")]
+
+
+# -- What wl-xcon's record says the session was (design spec
+# `2026-10-14-session-kind-and-warnings-design.md` section 4).
+
+_SESSION_RECORD = {"session_kind": "training", "calibration_id": "rig-a-2026-10-01", "calibration_standard": 0,
+                   "calibration_measured_on": "2026-10-01", "calibration_cones": {"dkl": "unit"}}
+
+
+def _accepted(number, code, run_number=None, **by):
+    return {"warning_number": number, "code": code, "detail": f"the {code} sentence", "accepted_in": "training,piloting",
+            "session_kind": "training", "how": "open" if run_number is None else "start", "run_index": None,
+            "run_number": run_number, "at": 1760000000.5, "at_local": "2026-10-09T09:00:00+02:00",
+            "by_kind": None, "by_name": None, "by_account": None, "by_issuer": None, "by_token_id": None, **by}
+
+
+def test_a_session_lists_its_kind_its_calibration_and_its_accepted_warnings():
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_session=_SESSION_RECORD, warnings=[
+        _accepted(1, "default-calibration", by_kind="box", by_name="jw"),
+        _accepted(2, "luminance-step", run_number=2, by_kind="member", by_name="J. W.", by_account="acct-1",
+                  by_issuer="https://wl.works", by_token_id="tok-1")]))
+    assert entry["session_kind"] == "training"
+    assert entry["calibration"] == {"id": "rig-a-2026-10-01", "standard": False, "measured_on": "2026-10-01"}
+    assert entry["accepted_warnings"] == [
+        {"code": "default-calibration", "detail": "the default-calibration sentence",
+         "accepted_in": ["training", "piloting"], "how": "open", "run_number": None,
+         "at_local": "2026-10-09T09:00:00+02:00", "by": {"kind": "box", "name": "jw", "account": None}},
+        {"code": "luminance-step", "detail": "the luminance-step sentence", "accepted_in": ["training", "piloting"],
+         "how": "start", "run_number": 2, "at_local": "2026-10-09T09:00:00+02:00",
+         "by": {"kind": "member", "name": "J. W.", "account": "acct-1"}}]
+
+
+def test_a_warnings_acceptor_is_listed_without_the_issuer_or_the_token():
+    """wl.works gets its own member's name and account; the token's id, and
+    who vouched for it, stay in this repository's database (section 0,
+    decision 3)."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_session=_SESSION_RECORD, warnings=[
+        _accepted(1, "head-free", by_kind="member", by_name="J. W.", by_account="acct-1",
+                  by_issuer="https://wl.works", by_token_id="tok-1")]))
+    assert "tok-1" not in str(entry) and "https://wl.works" not in str(entry)
+
+
+def test_a_run_lists_its_calibration():
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(run_calibrations={1: "rig-a-2026-10-01"}))
+    assert [run["calibration"] for run in entry["runs"]] == ["rig-a-2026-10-01", None]
+
+
+def test_a_session_wl_xcon_did_not_run_lists_no_kind_no_calibration_and_no_warnings():
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts())
+    assert (entry["session_kind"], entry["calibration"], entry["accepted_warnings"]) == (None, None, [])
+
+
+def test_a_kind_not_recorded_lists_none_beside_a_calibration_not_recorded():
+    """A `config.json` written before wl-xcon's engine build B: its row holds
+    neither, and the entry lists neither."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_session={**{name: None for name in _SESSION_RECORD}}))
+    assert (entry["session_kind"], entry["calibration"]) == (None, None)

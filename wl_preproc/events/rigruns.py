@@ -13,7 +13,9 @@ build B a start row also names the display calibration the run ran against
 (design spec `2026-10-14-session-kind-and-warnings-design.md` section 1).
 
 **Read, never repaired.** A row that is not a JSON object naming its event and
-run is reported by line and left out. wl-xcon writes a run's end row on every
+run is reported by file and line and left out: the file named, since the rig's
+record is more than its runs (design spec
+`2026-10-14-session-kind-and-warnings-design.md` section 3). wl-xcon writes a run's end row on every
 way out, a fault included (`stop_kind` "fault"); only a killed process leaves
 none, and that run's stop reason is absent, not guessed.
 
@@ -83,10 +85,10 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            problems.append(f"line {number_of_line}: not JSON")
+            problems.append(f"{RECORD_NAME} line {number_of_line}: not JSON")
             continue
         if not isinstance(row, dict) or row.get("event") not in ("start", "end") or not _integer(row.get("run")):
-            problems.append(f"line {number_of_line}: not a start or end row naming its run")
+            problems.append(f"{RECORD_NAME} line {number_of_line}: not a start or end row naming its run")
             continue
         # A start row and its end row share `run`; only the start row is
         # sure to carry `run_in_session`, so the number is taken from it. A
@@ -94,7 +96,7 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         # kept, as everywhere a number repeats here.
         run = fields.setdefault(row["run"], {"number": row["run"] + 1})
         if row["event"] in run.setdefault("seen", set()):
-            problems.append(f"line {number_of_line}: run {row['run']} has a second {row['event']} row; "
+            problems.append(f"{RECORD_NAME} line {number_of_line}: run {row['run']} has a second {row['event']} row; "
                             "the first is kept")
             continue
         run["seen"].add(row["event"])

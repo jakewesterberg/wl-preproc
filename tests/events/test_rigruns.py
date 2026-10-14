@@ -62,7 +62,8 @@ def test_a_row_it_cannot_read_is_reported_by_line_and_left_out(tmp_path):
     rows = [_start(0, "rf_map"), "{not json", json.dumps({"event": "start"}), json.dumps({"event": "pause", "run": 0})]
     record = read_rig_runs(_record(tmp_path, rows), "pico")
     assert [run.number for run in record.runs] == [1]
-    assert [problem.split(":")[0] for problem in record.problems] == ["line 2", "line 3", "line 4"]
+    assert [problem.split(":")[0] for problem in record.problems] == ["runs.jsonl line 2", "runs.jsonl line 3",
+                                                                   "runs.jsonl line 4"]
 
 
 def test_a_record_of_another_animal_is_not_read(tmp_path):
@@ -89,8 +90,8 @@ def test_a_run_named_twice_keeps_its_first_rows_and_says_so(tmp_path):
             _start(0, "fixation"), _end(0, "stopped by jw", "operator")]
     record = read_rig_runs(_record(tmp_path, rows), "pico")
     assert record.runs == (RigRun(1, "rf_map", "every block is finished", "completed"),)
-    assert record.problems == ("line 3: run 0 has a second start row; the first is kept",
-                               "line 4: run 0 has a second end row; the first is kept")
+    assert record.problems == ("runs.jsonl line 3: run 0 has a second start row; the first is kept",
+                               "runs.jsonl line 4: run 0 has a second end row; the first is kept")
 
 
 def test_a_runs_calibration_is_its_start_rows(tmp_path):

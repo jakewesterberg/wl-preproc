@@ -47,7 +47,12 @@ class SessionFacts:
     strobed_runs: list[int]  # every RUN_START's run number, one per occurrence
     strobed_blocks: list[int]  # every BLOCK_START's block number, one per occurrence
     censused: frozenset[int]  # the segments the probe census has read
-    rig_problems: list[str]  # what reading the rig's run record could not use (core.RunRecordProblem)
+    rig_problems: list[str]  # what reading the rig's record could not use (core.RunRecordProblem)
+    # What wl-xcon's record says the session was (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 4).
+    rig_session: dict | None  # its core.SessionRecord row; None when wl-xcon did not run it
+    run_calibrations: dict[int, str]  # run_number -> core.RunCalibration's calibration_id
+    warnings: list[dict]  # its core.AcceptedWarning rows, by warning_number
 
 
 def _repeats(numbers: list[int]) -> list[tuple[int, int]]:
@@ -73,7 +78,7 @@ def build_entry(facts: SessionFacts) -> dict:
                            f"block number {number} appears {count} times in the recording; only the first is "
                            "listed", block_number=number))
     for problem in facts.rig_problems:
-        flags.append(_flag("rig_record_problem", f"the rig's run record: {problem}"))
+        flags.append(_flag("rig_record_problem", f"the rig's record: {problem}"))
 
     probes_of = collections.defaultdict(list)
     for part in sorted(facts.census, key=lambda part: (part["segment_barcode"], part["stream"])):
@@ -114,6 +119,7 @@ def build_entry(facts: SessionFacts) -> dict:
             "run_number": run["run_number"], "task_code": run["task_type"], "task": record.get("task"),
             "start_s": start, "end_s": stop, "closed": bool(run["closed"]),
             "stopped_because": record.get("stopped_because"), "stop_kind": record.get("stop_kind"),
+            "calibration": facts.run_calibrations.get(run["run_number"]),
             "segments": [segment["segment_barcode"] for segment in spanned], "blocks": listed_blocks,
         })
         if not listed_blocks:
@@ -154,8 +160,36 @@ def build_entry(facts: SessionFacts) -> dict:
         "runs": runs, "segments": segments,
         "probes": sorted({part["probe_serial"] for part in facts.census if part["probe_serial"]}),
         "flags": flags,
+        **_rig_session(facts),
     }
     return SessionEntry.model_validate(entry).model_dump(mode="json")
+
+
+_CALIBRATION_COLUMNS = ("calibration_id", "calibration_standard", "calibration_measured_on")
+
+
+def _rig_session(facts: SessionFacts) -> dict:
+    """The session's kind, calibration and accepted warnings, as wl-xcon's
+    record gives them. Who accepted a warning is listed by name and wl.works
+    account, never by the token's id or its issuer (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 0, decision 3)."""
+    row = facts.rig_session or {}
+    recorded = any(row.get(column) is not None for column in _CALIBRATION_COLUMNS)
+    return {
+        "session_kind": row.get("session_kind"),
+        "calibration": None if not recorded else {
+            "id": row["calibration_id"],
+            "standard": None if row["calibration_standard"] is None else bool(row["calibration_standard"]),
+            "measured_on": row["calibration_measured_on"],
+        },
+        "accepted_warnings": [{
+            "code": warning["code"], "detail": warning["detail"],
+            "accepted_in": [kind for kind in (warning["accepted_in"] or "").split(",") if kind],
+            "how": warning["how"], "run_number": warning["run_number"], "at_local": warning["at_local"],
+            "by": None if warning["by_kind"] is None and warning["by_name"] is None else {
+                "kind": warning["by_kind"], "name": warning["by_name"], "account": warning["by_account"]},
+        } for warning in sorted(facts.warnings, key=lambda warning: warning["warning_number"])],
+    }
 
 
 def _session(row: dict) -> tuple[str, datetime.datetime]:
@@ -216,6 +250,9 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
     strobed_runs, strobed_blocks = strobed("RUN_START", "run_number"), strobed("BLOCK_START", "block_id")
     censused = _by_session((ephys.ProbeCensus & keys).proj().to_dicts())
     rig_problems = _by_session((core.RunRecordProblem & keys).to_dicts(order_by="problem_number"))
+    rig_sessions = {_session(row): row for row in (core.SessionRecord & keys).to_dicts()}
+    run_calibrations = _by_session((core.RunCalibration & keys).to_dicts())
+    warnings = _by_session((core.AcceptedWarning & keys).to_dicts(order_by="warning_number"))
     facts = {}
     for ingestion in (ingest.Ingestion & keys).proj("session_dir").to_dicts():
         session = _session(ingestion)
@@ -241,6 +278,9 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
             strobed_blocks=strobed_blocks.get(session, []),
             censused=frozenset(int(row["segment_barcode"]) for row in censused.get(session, [])),
             rig_problems=[row["problem"] for row in rig_problems.get(session, [])],
+            rig_session=rig_sessions.get(session),
+            run_calibrations={row["run_number"]: row["calibration_id"] for row in run_calibrations.get(session, [])},
+            warnings=warnings.get(session, []),
         )
     return facts
 
