@@ -702,3 +702,162 @@ def test_problems_reading_the_rigs_run_record_are_kept(events_activated, dj_conn
     problems = lambda key: [row["problem"] for row in (core.RunRecordProblem & key).to_dicts(order_by="problem_number")]
     assert problems(bad) == ["line 5: not JSON"]
     assert problems(absent) == ["the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]
+
+
+# -- What the event stage keeps of the session from wl-xcon's record: its kind,
+# its calibrations and its accepted warnings (design spec
+# `2026-10-14-session-kind-and-warnings-design.md` sections 2 and 3).
+
+_MEMBER = {"kind": "member", "name": "J. W.", "account": "acct-1", "issuer": "https://wl.works", "token_id": "tok-1"}
+
+
+def _rig_record(**update):
+    from wl_preproc.synth.recipe import RigRecordSpec, RigWarningSpec
+
+    return RigRecordSpec(**{"session_kind": "training", "warnings": (
+        RigWarningSpec(code="default-calibration"),
+        RigWarningSpec(code="luminance-step", run=1, how="start", by=_MEMBER)), **update}).model_dump()
+
+
+def test_populate_session_keeps_the_rigs_kind_calibration_and_accepted_warnings(events_activated, dj_conn,
+                                                                                 tmp_path):
+    """The session's kind and calibration, each measured run's calibration,
+    and each accepted warning as wl-xcon wrote it, its run joined to the
+    measured run's number: wl-xcon's run 1, from 0, is run number 2."""
+    from wl_preproc.schema import core
+
+    recipe, key = _populate_generated(tmp_path, "slkind1", datetime.datetime(2027, 7, 26, 9, 0), runs=True,
+                                      rig_record=_rig_record())
+    calibration = recipe.rig_record.calibration_id
+    record = (core.SessionRecord & key).fetch1()
+    assert (record["session_kind"], record["calibration_id"], record["calibration_standard"],
+            record["calibration_measured_on"]) == ("training", calibration, 0, "2027-03-01")
+    from wl_preproc.synth.peripherals import RIG_CONES
+
+    assert record["calibration_cones"] == RIG_CONES  # a nested record, its nulls included, read back unchanged
+    assert [(row["run_number"], row["calibration_id"]) for row in
+            (core.RunCalibration & key).to_dicts(order_by="run_number")] == [(1, calibration), (2, calibration)]
+    warnings = (core.AcceptedWarning & key).to_dicts(order_by="warning_number")
+    assert [(row["warning_number"], row["code"], row["how"], row["run_index"], row["run_number"])
+            for row in warnings] == [(1, "default-calibration", "open", None, None),
+                                     (2, "luminance-step", "start", 1, 2)]
+    assert (warnings[1]["by_kind"], warnings[1]["by_name"], warnings[1]["by_account"], warnings[1]["by_issuer"],
+            warnings[1]["by_token_id"]) == ("member", "J. W.", "acct-1", "https://wl.works", "tok-1")
+    assert warnings[0]["accepted_in"] == "training"
+    assert len(core.RunRecordProblem & key) == 0
+
+
+def test_a_warning_for_a_run_the_recording_did_not_measure_has_no_run_number(events_activated, dj_conn, tmp_path):
+    """wl-xcon's run 2, from 0, has a start row, so a number, 3; the
+    recording measured runs 1 and 2 only, so the warning names no measured
+    run."""
+    import json
+
+    from wl_preproc.schema import core
+    from wl_preproc.synth.recipe import RigWarningSpec
+
+    def a_third_run(session_dir):
+        path = session_dir / "xcon" / "runs.jsonl"
+        path.write_text(path.read_text() + json.dumps({"event": "start", "run": 2, "at": 99.0, "task": "rf_map"})
+                        + "\n")
+
+    _recipe, key = _populate_generated(tmp_path, "slkind2", datetime.datetime(2027, 7, 27, 9, 0), mutate=a_third_run,
+                                       runs=True, rig_record=_rig_record(warnings=(
+                                           RigWarningSpec(code="head-free", run=2, how="start"),)))
+    row = (core.AcceptedWarning & key).fetch1()
+    assert (row["run_index"], row["run_number"]) == (2, None)
+
+
+def test_problems_reading_the_rigs_session_record_are_kept_with_the_runs(events_activated, dj_conn, tmp_path):
+    """Kept beside the run record's, in the reader's order, so they reach
+    the listing as its `rig_record_problem` flags."""
+    import json
+
+    from wl_preproc.schema import core
+
+    def unknown_kind(session_dir):
+        path = session_dir / "xcon" / "config.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "session_kind": "rehearsal"}))
+        warnings = session_dir / "xcon" / "warnings.jsonl"
+        warnings.write_text(warnings.read_text() + "{not json\n")
+
+    _recipe, key = _populate_generated(tmp_path, "slkind3", datetime.datetime(2027, 7, 28, 9, 0),
+                                       mutate=unknown_kind, runs=True, rig_record=_rig_record())
+    assert (core.SessionRecord & key).fetch1("session_kind") is None
+    assert [row["problem"] for row in (core.RunRecordProblem & key).to_dicts(order_by="problem_number")] == [
+        "config.json: session kind 'rehearsal' is not one of training, piloting, recording",
+        "warnings.jsonl line 3: not JSON"]
+
+
+def test_a_session_read_again_keeps_one_record_of_its_kind_and_warnings(events_activated, dj_conn, tmp_path):
+    """The event stage reads a session again when asked; it adds nothing
+    twice (design spec section 8, item 2)."""
+    from wl_preproc.schema import core
+
+    recipe, key = _populate_generated(tmp_path, "slkind4", datetime.datetime(2027, 7, 29, 9, 0), runs=True,
+                                      rig_record=_rig_record())
+    events.populate_session(key, tmp_path / recipe.session_id)
+    assert (len(core.SessionRecord & key), len(core.RunCalibration & key), len(core.AcceptedWarning & key)) == (
+        1, 2, 2)
+
+
+def test_a_session_without_a_rig_record_keeps_no_kind(events_activated, dj_conn, tmp_path):
+    """A recording wl-xcon did not run has no `config.json`: no row, and no
+    problem for it."""
+    from wl_preproc.schema import core
+
+    _recipe, key = _populate_generated(tmp_path, "slkind5", datetime.datetime(2027, 7, 30, 9, 0))
+    assert (len(core.SessionRecord & key), len(core.AcceptedWarning & key), len(core.RunRecordProblem & key)) == (
+        0, 0, 0)
+
+
+def test_a_warning_for_a_run_with_no_start_row_has_no_run_number(events_activated, dj_conn, tmp_path):
+    """Review Focus 1: wl-xcon's run 7 has no row in `runs.jsonl`, so no number
+    to join it by."""
+    from wl_preproc.schema import core
+    from wl_preproc.synth.recipe import RigWarningSpec
+
+    _recipe, key = _populate_generated(tmp_path, "slkind6", datetime.datetime(2027, 7, 31, 9, 0), runs=True,
+                                       rig_record=_rig_record(warnings=(RigWarningSpec(code="head-free", run=7,
+                                                                                       how="start"),)))
+    row = (core.AcceptedWarning & key).fetch1()
+    assert (row["run_index"], row["run_number"]) == (7, None)
+
+
+def test_a_record_without_its_runs_keeps_the_kind_and_unjoined_warnings(events_activated, dj_conn, tmp_path):
+    """Review Focus 3: `config.json` and `warnings.jsonl` without `runs.jsonl`:
+    the kind and the warnings are kept, and no warning names a run, since
+    nothing joins wl-xcon's runs to the measured ones; the missing run record
+    is the one problem, as before."""
+    from wl_preproc.schema import core
+
+    def no_runs(session_dir):
+        (session_dir / "xcon" / "runs.jsonl").unlink()
+
+    _recipe, key = _populate_generated(tmp_path, "slkind7", datetime.datetime(2027, 8, 1, 9, 0), mutate=no_runs,
+                                       runs=True, rig_record=_rig_record())
+    assert (core.SessionRecord & key).fetch1("session_kind") == "training"
+    assert [row["run_number"] for row in (core.AcceptedWarning & key).to_dicts(order_by="warning_number")] == [
+        None, None]
+    assert (len(core.RunCalibration & key), len(core.RunRecord & key)) == (0, 0)
+    assert [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()] == [
+        "the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]
+
+
+def test_a_warnings_sentence_in_any_script_is_kept_as_written(events_activated, dj_conn, tmp_path):
+    """Review Focus 4: a sentence beyond ASCII is stored as written."""
+    import json
+
+    from wl_preproc.schema import core
+
+    sentence = "Gamma Δ ≠ 2.2 — ¿calibración? 校准"
+
+    def reword(session_dir):
+        path = session_dir / "xcon" / "warnings.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["detail"] = sentence
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    _recipe, key = _populate_generated(tmp_path, "slkind8", datetime.datetime(2027, 8, 2, 9, 0), mutate=reword,
+                                       runs=True, rig_record=_rig_record())
+    assert (core.AcceptedWarning & key & {"warning_number": 1}).fetch1("detail") == sentence

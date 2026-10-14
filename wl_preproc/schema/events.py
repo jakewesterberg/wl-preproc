@@ -54,6 +54,7 @@ from wl_preproc.contracts.events import (
 from wl_preproc.events.assemble import AssembledBlock, AssembledTrial, assemble
 from wl_preproc.events.extract import extract_syncbox_words
 from wl_preproc.events.rigruns import read_rig_runs
+from wl_preproc.events.rigsession import read_rig_session
 from wl_preproc.events.rigtrials import read_rig_trials
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.timebase import segments
@@ -357,6 +358,13 @@ def _clip(value: str | None, width: int) -> str | None:
     return None if value is None else value[:width]
 
 
+def _run_index(value: int | None) -> int | None:
+    """wl-xcon's 0-based run, or `None` where it will not fit its column: a
+    value that does not would fail the session's whole event stage on every
+    pass, as a value too long would."""
+    return value if value is not None and 0 <= value <= 65535 else None
+
+
 def _block_type_rows(session_key: dict, block_trial_rows: list[dict], record) -> list[dict]:
     """Each block's type: the `block` its trials' rig-record lines name, when
     they name one (design spec
@@ -635,12 +643,56 @@ def populate_session(key: dict, session_dir: Path) -> None:
     ]
     if record_rows:
         core.RunRecord.insert(record_rows, skip_duplicates=True)
+
+    # -- core.RunCalibration, core.SessionRecord and core.AcceptedWarning:
+    # what wl-xcon's record says the session was, its kind, its calibrations
+    # and the warnings it accepted (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` sections 2 and 3).
+    # Carried, never acted on.
+    calibration_rows = [
+        {**session_key, "run_number": run.number, "calibration_id": _clip(run.calibration, 255)}
+        for run in (rig_runs.runs if rig_runs is not None else ())
+        if run.number in measured and run.calibration is not None
+    ]
+    if calibration_rows:
+        core.RunCalibration.insert(calibration_rows, skip_duplicates=True)
+    rig_session = read_rig_session(session_dir, session_key["subject"])
+    if rig_session is not None:
+        calibration = rig_session.calibration
+        core.SessionRecord.insert1({
+            **session_key, "session_kind": rig_session.kind,
+            "calibration_id": None if calibration is None else _clip(calibration.id, 255),
+            "calibration_standard": None if calibration is None or calibration.standard is None
+            else int(calibration.standard),
+            "calibration_measured_on": None if calibration is None else _clip(calibration.measured_on, 32),
+            "calibration_cones": None if calibration is None else calibration.cones,
+        }, skip_duplicates=True)
+        numbers = rig_runs.run_numbers if rig_runs is not None else {}
+        warning_rows = []
+        for number, warning in enumerate(rig_session.warnings, start=1):
+            run_number = numbers.get(warning.run_index) if warning.run_index is not None else None
+            warning_rows.append({
+                **session_key, "warning_number": number, "code": _clip(warning.code, 64),
+                "detail": _clip(warning.detail, 1024), "accepted_in": _clip(",".join(warning.accepted_in), 64),
+                "session_kind": _clip(warning.session_kind, 16), "how": _clip(warning.how, 64),
+                "run_index": _run_index(warning.run_index),
+                "run_number": run_number if run_number in measured else None,
+                "at": warning.at, "at_local": _clip(warning.at_local, 64),
+                "by_kind": _clip(warning.by_kind, 16), "by_name": _clip(warning.by_name, 255),
+                "by_account": _clip(warning.by_account, 255), "by_issuer": _clip(warning.by_issuer, 255),
+                "by_token_id": _clip(warning.by_token_id, 255),
+            })
+        if warning_rows:
+            core.AcceptedWarning.insert(warning_rows, skip_duplicates=True)
+
     if rig_runs is not None:
         problems = list(rig_runs.problems)
     elif run_rows:
         problems = ["the session has no xcon/runs.jsonl, so its runs have no task or stop reason"]
     else:
         problems = []
+    if rig_session is not None:
+        problems += rig_session.problems
     if len(problems) > _RIG_PROBLEMS_KEPT:
         problems = [*problems[:_RIG_PROBLEMS_KEPT - 1], f"and {len(problems) - _RIG_PROBLEMS_KEPT + 1} more"]
     if problems:

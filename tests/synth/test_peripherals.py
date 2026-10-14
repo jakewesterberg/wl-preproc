@@ -181,3 +181,50 @@ def test_a_session_without_runs_has_no_run_record(tmp_path):
 
     generate_session(tmp_path, CI_RECIPE)
     assert not list(tmp_path.rglob("runs.jsonl")) and not list(tmp_path.rglob("config.json"))
+
+
+def test_the_rig_record_carries_the_kind_the_calibration_and_the_accepted_warnings(tmp_path):
+    """wl-xcon's engine build B, as its code writes it (read at `b2c2850`):
+    `config.json`'s `session_kind` and `calibration`, each run's start row's
+    `calibration`, and one `warnings.jsonl` row per accepted warning (design
+    spec `2026-10-14-session-kind-and-warnings-design.md` section 1)."""
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.events.rigsession import read_rig_session
+    from wl_preproc.synth.peripherals import write_rig_runs
+    from wl_preproc.synth.recipe import RigRecordSpec, RigWarningSpec, SessionRecipe
+
+    rig = RigRecordSpec(session_kind="piloting", warnings=(RigWarningSpec(code="default-calibration"),
+                                                           RigWarningSpec(code="luminance-step", run=1, how="start")))
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "rig_record": rig.model_dump()})
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    session = read_rig_session(tmp_path, recipe.subject)
+    assert (session.kind, session.calibration.id, session.calibration.standard) == (
+        "piloting", rig.calibration_id, False)
+    assert [(warning.code, warning.run_index, warning.how, warning.by_name) for warning in session.warnings] == [
+        ("default-calibration", None, "open", "synth"), ("luminance-step", 1, "start", "synth")]
+    assert session.problems == ()
+    assert [run.calibration for run in read_rig_runs(tmp_path, recipe.subject).runs] == [rig.calibration_id] * 2
+
+
+def test_a_recipe_without_a_rig_record_writes_config_as_before(tmp_path):
+    """Off by default, so every existing profile's files are byte-identical."""
+    from wl_preproc.synth.peripherals import write_rig_runs
+    from wl_preproc.synth.recipe import SessionRecipe
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True})
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    assert json.loads((tmp_path / "xcon" / "config.json").read_text()) == {
+        "session_id": recipe.session_id, "subject": recipe.subject}
+    assert "calibration" not in (tmp_path / "xcon" / "runs.jsonl").read_text()
+    assert not (tmp_path / "xcon" / "warnings.jsonl").exists()
+
+
+def test_a_rig_record_needs_runs():
+    """The record is written with the runs' (`write_rig_runs`), so a recipe
+    asking for one without runs would silently write nothing."""
+    from wl_preproc.synth.recipe import RigRecordSpec, SessionRecipe
+
+    with pytest.raises(ValueError, match="rig_record needs runs"):
+        SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "rig_record": RigRecordSpec().model_dump()})

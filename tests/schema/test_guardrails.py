@@ -695,6 +695,11 @@ _EXPECTED_EXERCISED_BLOB_ATTRIBUTES = frozenset(
         # it: a new array attribute that does not join this set is exactly the
         # silent hole this set exists to close.
         "wl_preproc.schema.ephys.QualityMetrics.Channel.spectral_profile",
+        # How a session's display calibration made its cone colours light, as
+        # wl-xcon's `config.json` gives it (design spec
+        # `2026-10-14-session-kind-and-warnings-design.md` section 3), added
+        # 2026-10-14 with the table that declares it.
+        "wl_preproc.schema.core.SessionRecord.calibration_cones",
     }
 )
 

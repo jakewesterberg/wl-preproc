@@ -77,15 +77,81 @@ class RunRecord(dj.Manual):
 @schema
 class RunRecordProblem(dj.Manual):
     definition = """
-    # What reading wl-xcon's run record could not use, kept by the event stage
-    # for the session listing (final review M2 of the listing): a line it
-    # could not read, a record of another animal, or no record at all for a
-    # session with measured runs. At most 20, the last saying how many more.
+    # What reading wl-xcon's record could not use, kept by the event stage for
+    # the session listing (final review M2 of the listing): a line of its run
+    # record or of its accepted warnings it could not read, a session kind it
+    # does not know, a record of another animal, or no run record at all for
+    # a session with measured runs. At most 20, the last saying how many more.
     # Key: (subject, session_datetime, problem_number).
     -> pipeline.Session
     problem_number : smallint unsigned  # from 1, in the reader's order
     ---
     problem : varchar(1024)
+    """
+
+
+@schema
+class SessionRecord(dj.Manual):
+    definition = """
+    # What wl-xcon's record says the session was, from `xcon/config.json`: the
+    # kind it was run as and the display calibration it opened with, read by
+    # `schema/events.py::populate_session` (design spec
+    # 2026-10-14-session-kind-and-warnings-design.md section 3). Carried, never
+    # acted on. Null where not recorded: a config.json written before wl-xcon's
+    # engine build B has neither, and a calibration that would not load is
+    # null. Only a session with a config.json of its own animal has one.
+    # Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    session_kind = null            : varchar(16)   # training, piloting or recording
+    calibration_id = null          : varchar(255)
+    calibration_standard = null    : tinyint       # 1 for the sRGB standard, which nobody measured
+    calibration_measured_on = null : varchar(32)   # YYYY-MM-DD; empty for the standard
+    calibration_cones = null       : <blob>        # how its cone colours became light, as given
+    """
+
+
+@schema
+class RunCalibration(dj.Manual):
+    definition = """
+    # The display calibration a measured run ran against, from its start row
+    # in `xcon/runs.jsonl` (design spec
+    # 2026-10-14-session-kind-and-warnings-design.md section 3). It can differ
+    # from the session's: a resume after the rig's calibration changed is not
+    # refused. Only a run whose start row names one has a row.
+    # Key: (subject, session_datetime, run_number).
+    -> Run
+    ---
+    calibration_id : varchar(255)
+    """
+
+
+@schema
+class AcceptedWarning(dj.Manual):
+    definition = """
+    # One warning the session accepted, from `xcon/warnings.jsonl`, as wl-xcon
+    # wrote it (design spec 2026-10-14-session-kind-and-warnings-design.md
+    # section 3). `at` is the rig's wall clock, its bookkeeping, not a time on
+    # the recording's clock. Who accepted it is kept here and listed for
+    # wl.works without the issuer or the token id; the NWB file names no one.
+    # Key: (subject, session_datetime, warning_number).
+    -> pipeline.Session
+    warning_number : smallint unsigned  # from 1, in the file's order
+    ---
+    code                : varchar(64)
+    detail = null       : varchar(1024)  # the warning's sentence
+    accepted_in = ''    : varchar(64)    # the kinds it is acceptable in, comma-joined
+    session_kind = null : varchar(16)
+    how = null          : varchar(64)    # open, start or --accept-warnings
+    run_index = null    : smallint unsigned  # wl-xcon's run, from 0; null at the open
+    run_number = null   : smallint       # the measured run's; null at the open or when not measured
+    at = null           : double         # the rig's wall clock, seconds
+    at_local = null     : varchar(64)
+    by_kind = null      : varchar(16)    # box or member; null for nobody
+    by_name = null      : varchar(255)
+    by_account = null   : varchar(255)
+    by_issuer = null    : varchar(255)
+    by_token_id = null  : varchar(255)
     """
 
 

@@ -163,6 +163,33 @@ class RestartSpec(BaseModel):
     probe_bank: int | None = Field(default=None, ge=0)
 
 
+class RigWarningSpec(BaseModel):
+    """One warning the synthetic session accepted, as wl-xcon's
+    `record.py::SessionRecord.warning` writes it: `run` is wl-xcon's 0-based
+    run, `None` for one accepted at the session's open; `by` its actor map,
+    or `None` for nobody."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    run: int | None = None
+    how: str = "open"
+    by: dict | None = Field(default_factory=lambda: {"kind": "box", "name": "synth"})
+
+
+class RigRecordSpec(BaseModel):
+    """What wl-xcon's engine build B adds to a session's record (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 1): the kind,
+    the display calibration the session and each run ran against (`None`:
+    the rig's record would not load), and the warnings accepted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_kind: str = "training"
+    calibration_id: str | None = "rig-synth-2027-03-01"
+    warnings: tuple[RigWarningSpec, ...] = ()
+
+
 class SessionRecipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -214,6 +241,11 @@ class SessionRecipe(BaseModel):
     # (marker 4) after the block's end. Off by default, so every existing
     # profile is byte-identical.
     runs: bool = False
+    # What wl-xcon's engine build B adds to the run record: the session's kind,
+    # its display calibration and the warnings it accepted. Written with the
+    # runs', so it needs them. Off by default, so every existing profile is
+    # byte-identical.
+    rig_record: RigRecordSpec | None = None
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and
@@ -323,6 +355,8 @@ class SessionRecipe(BaseModel):
             )
         if "syncbox" not in self.systems:
             raise ValueError("syncbox is present at every session")
+        if self.rig_record is not None and not self.runs:
+            raise ValueError("rig_record needs runs: it is written with the run record")
         covered = sum(m.end_s - m.start_s for m in self.montages)
         if abs(covered - self.duration_s) > 1e-6:
             raise ValueError(
