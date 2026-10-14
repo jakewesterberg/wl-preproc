@@ -196,3 +196,34 @@ Each written first and seen to fail:
   "Yes, it will record", its folder not yet named (wl-xcon's `docs/pending-wl-preproc-amendments.md`,
   section "ANSWERED 2026-10-11", read at `b2c2850`).
 - **`docs/CHECKPOINT.md` and `wl.yaml`,** at the merge, as every piece's are.
+
+---
+
+## Amendments, 2026-10-14, made while proving the plan
+
+The plan (`plans/2026-10-14-session-kind-and-warnings.md`) was proven in code before it was
+written. These settle what the sections above left open; §0 stands.
+
+1. **A file holds the warnings of the session's open and of its own runs.** §5 did not say which of
+   a session's warnings a file of some of its runs holds. One accepted for a run the file does not
+   hold is about that run, and stays out (`nwb/gather.py::_rig_record`).
+2. **Every problem names its file.** The run record's problems begin `runs.jsonl line N:`, as the
+   new ones begin `config.json:` and `warnings.jsonl line N:`, and the listing's `rig_record_problem`
+   message begins "the rig's record:", not "the rig's run record:". wl.works sees the wording change;
+   its amendment says so.
+3. **§8 answered:**
+   - **1:** the generator writes `xcon/` in `synth/peripherals.py::write_rig_runs`, for a recipe with
+     runs only. A recipe field, `rig_record` (off by default, refused without runs), adds the kind,
+     the calibration and the warnings, so every existing profile's files are byte-identical.
+   - **2:** the stage's inserts take `skip_duplicates`, as `core.RunRecord`'s do: a session read
+     again adds nothing (tested).
+   - **3:** `listing/entry.py::build_entry` builds the entry, and its digest is of the whole entry,
+     so the new fields enter it; `gather_all` reads each new table once for every session.
+   - **4:** `nwb/describe.py::describe`. CI's "Exported schemas are current" step pins
+     `docs/schemas`; both `session_listing.json` and `nwb_description.json` are regenerated.
+   - **5:** `<blob>` reads a nested record with nulls back unchanged (tested), and
+     `tests/schema/test_guardrails.py` pins the new blob attribute, as it pins every one.
+4. **A warning's run that will not fit its column** (below 0, or above 65535) is stored null, as a
+   value too long is cut: either would otherwise fail the session's whole event stage on every pass.
+5. **The description's new fields default** to null and empty, so a description built before them
+   still reads as version 3.

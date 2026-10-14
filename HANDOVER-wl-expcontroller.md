@@ -304,6 +304,16 @@ build B writes, sent so you can read it.
 - *From:* [engine spec §19 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
 - *Not asked:* acting on the warnings; only carrying them.
 
+- *wl-preproc's answer, 2026-10-14: read and carried, never acted on* (the requester's choice; its
+  design `docs/superpowers/specs/2026-10-14-session-kind-and-warnings-design.md`, built on branch
+  `feat/session-kind`). The event stage reads `config.json`'s `session_kind` and `calibration`, each
+  start row's `calibration` and every `warnings.jsonl` row, by the run record's rules: a line it
+  cannot read, a kind outside the three, or another animal's record is reported, not repaired. The
+  published record carries them: the session listing for wl.works (who accepted a warning by name and
+  wl.works account, never the token) and the NWB file and its description (no person). A
+  `config.json` without the fields, written before build B, reads as not recorded. A warning's `run`
+  is joined to the measured run's number through its start row.
+
 **6. Onset alignment through the screen log and the flip count.** Blocks: engine build F.
 - *Asked:* align stimulus onsets using the screen log's frame record and the flip count.
 - *Why:* wl-xcon records the frame each change was strobed on; the actual onset is measured by the sync

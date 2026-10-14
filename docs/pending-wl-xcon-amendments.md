@@ -38,6 +38,9 @@ visible only in the image, which this repository never sees.
    eyes is the cost to plan. **Tell us** whether the lab's OpenIrisDPI PC records it and where the
    files land in the session folder: this repository archives every file of a session, and reads
    none of the video yet.
+   - *wl-xcon's answer, read 2026-10-14 in its `docs/pending-wl-preproc-amendments.md` (section
+     "ANSWERED 2026-10-11") on its `main` at `b2c2850`:* the PI, 2026-10-12, "Yes, it will record".
+     The folder is not yet named.
 
 **Offered meanwhile, not asked:** until P10 exists, the same rule this repository reads offline can
 run online on the samples wl-xcon receives (its S5 reads the pupil, P1 and P4 per eye): the pupil
