@@ -49,7 +49,11 @@ def built(recorded, tmp_path_factory):
 
 
 def test_the_file_holds_the_kind_the_calibrations_and_the_warnings(recorded, built):
+    import json
+
     from pynwb import NWBHDF5IO
+
+    from wl_preproc.synth.peripherals import RIG_CONES
 
     recipe, _canonical_key, _derivative_key = recorded
     canonical, _derivative = built
@@ -61,6 +65,10 @@ def test_the_file_holds_the_kind_the_calibrations_and_the_warnings(recorded, bui
         module = nwb.processing["rig_record"]
         (session,) = module["session"].to_dataframe().to_dict("records")
         assert (session["session_kind"], session["calibration_id"]) == ("training", calibration)
+        # The colour model, in the shape wl-xcon writes it (floats, lists, a
+        # degree sign), through the database's blob and into JSON unchanged
+        # (the session kind's final review's I4).
+        assert json.loads(session["calibration_cones"]) == RIG_CONES
         warnings = module["accepted_warnings"].to_dataframe()
         assert warnings[["code", "how", "run_number"]].values.tolist() == [
             ["default-calibration", "open", -1], ["luminance-step", "start", 2]]

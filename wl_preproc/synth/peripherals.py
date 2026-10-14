@@ -231,12 +231,21 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
     (xcon_dir / "config.json").write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
 
 
-# How a calibration's cone colours became light, in the keys wl-xcon's
-# `photometry.py::cone_record` writes (read at `b2c2850`); its values here are
-# placeholders, carried verbatim and read by nothing. `via` and `luminance` are
-# null, as wl-xcon writes them where no cone colour converts, so the nulls a
-# nested record holds are carried too.
-RIG_CONES = {"observer": {"name": "CIE2006_10"}, "via": None, "luminance": None, "dkl": "unit"}
+# How a calibration's cone colours became light, in the shape wl-xcon's
+# `photometry.py::cone_record` writes it (read at `b2c2850`): its observer as
+# `cones.py::Observer.record` gives the CIE 2006 10-degree one, with floats,
+# lists and a degree sign, so the real shape is what crosses the database's
+# blob and the NWB file's JSON (the session kind's final review's I4). Its
+# `luminosity_weights` are placeholders: carried verbatim and read by nothing.
+# `via` and `luminance` are null, as wl-xcon writes them where no cone colour
+# converts, so the nulls a nested record holds are carried too.
+RIG_CONES = {
+    "observer": {"name": "CIE 2006 10°", "data": "10.25039/CIE.DS.nxsqeri8", "field_deg": 10.0,
+                 "peak_optical_density": [0.38, 0.38, 0.30], "macular_density_460nm": 0.095,
+                 "lens_density_400nm": 1.7649, "luminosity": "V_F,10", "luminosity_weights": [0.69, 0.35],
+                 "interpolation": "linear between the table's 5 nm points; zero outside 390-830 nm"},
+    "via": None, "luminance": None, "dkl": "unit",
+}
 
 
 def write_rig_warnings(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
