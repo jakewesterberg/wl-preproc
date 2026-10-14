@@ -91,3 +91,25 @@ def test_a_run_named_twice_keeps_its_first_rows_and_says_so(tmp_path):
     assert record.runs == (RigRun(1, "rf_map", "every block is finished", "completed"),)
     assert record.problems == ("line 3: run 0 has a second start row; the first is kept",
                                "line 4: run 0 has a second end row; the first is kept")
+
+
+def test_a_runs_calibration_is_its_start_rows(tmp_path):
+    """wl-xcon's engine build B: each start row names the display calibration
+    the run ran against (design spec `2026-10-14-session-kind-and-warnings-design.md`
+    section 1); a row written before it names none."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "rf_map", calibration="rig-a-2026-10-01"), _end(0, "every block is finished", "completed"),
+            _start(1, "rf_map")]
+    runs = read_rig_runs(_record(tmp_path, rows), "pico").runs
+    assert [run.calibration for run in runs] == ["rig-a-2026-10-01", None]
+
+
+def test_each_of_wl_xcons_runs_maps_to_its_number(tmp_path):
+    """A warning names its run as wl-xcon counts it, from 0; the run's number
+    is the start row's `run_in_session`, or that `run` plus one before it."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "rf_map", run_in_session=7), _end(0, "every block is finished", "completed"),
+            _start(1, "rf_map")]
+    assert read_rig_runs(_record(tmp_path, rows), "pico").run_numbers == {0: 7, 1: 2}

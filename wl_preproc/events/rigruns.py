@@ -8,7 +8,9 @@ per event, `{"event": "start" | "end", "run": <0-based run in session>, ...}`:
 the start row carries the `task`, the end row `stopped_because` and
 `stop_kind`. Since wl-xcon's session-levels change a start row also carries
 `run_in_session`, the number `RUN_START` strobes; before it, that number is
-`run` + 1. A start row and its end row share `run`.
+`run` + 1. A start row and its end row share `run`. Since wl-xcon's engine
+build B a start row also names the display calibration the run ran against
+(design spec `2026-10-14-session-kind-and-warnings-design.md` section 1).
 
 **Read, never repaired.** A row that is not a JSON object naming its event and
 run is reported by line and left out. wl-xcon writes a run's end row on every
@@ -39,12 +41,16 @@ class RigRun:
     task: str | None
     stopped_because: str | None
     stop_kind: str | None
+    calibration: str | None = None  # the start row's display calibration id
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RigRuns:
     runs: tuple[RigRun, ...]
     problems: tuple[str, ...]
+    # wl-xcon's 0-based `run` -> the run's number, which joins an accepted
+    # warning, named by the former, to the measured run.
+    run_numbers: dict[int, int] = dataclasses.field(default_factory=dict)
 
 
 def _integer(value: object) -> bool:
@@ -94,12 +100,15 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         run["seen"].add(row["event"])
         if row["event"] == "start":
             run["task"] = _text(row.get("task"))
+            run["calibration"] = _text(row.get("calibration"))
             if _integer(row.get("run_in_session")):
                 run["number"] = row["run_in_session"]
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))
     runs = tuple(sorted((RigRun(number=run["number"], task=run.get("task"),
-                                stopped_because=run.get("stopped_because"), stop_kind=run.get("stop_kind"))
+                                stopped_because=run.get("stopped_because"), stop_kind=run.get("stop_kind"),
+                                calibration=run.get("calibration"))
                          for run in fields.values()), key=lambda run: run.number))
-    return RigRuns(runs=runs, problems=tuple(problems))
+    return RigRuns(runs=runs, problems=tuple(problems),
+                   run_numbers={index: run["number"] for index, run in sorted(fields.items())})
