@@ -14,6 +14,7 @@ from wl_preproc.nwb.eye_events import add_agreement, add_detections, add_sources
 from wl_preproc.nwb.gather import Refused, gather, readiness
 from wl_preproc.nwb.intervals import add_blocks, add_conditions, add_runs, add_task_events, add_trials
 from wl_preproc.nwb.probes import add_probes
+from wl_preproc.nwb.rig_record import add_rig_record
 from wl_preproc.nwb.session import new_file
 from wl_preproc.nwb.timebase import add_timebase
 from wl_preproc.nwb.validate import inspect_file, n_critical
@@ -71,6 +72,8 @@ def build(activation_key: dict, nwb_root: Path) -> BuildResult:
     add_task_events(nwb, data.events)
     add_timebase(nwb, **data.timebase)
     add_probes(nwb, data.probes)
+    if data.rig_record is not None:
+        add_rig_record(nwb, data.rig_record)
     if data.eye is not None:
         add_eye_series(nwb, data.eye["times"], data.eye["gaze"], data.eye["pupil"])
         add_eye_tables(nwb, data.eye["calibration"], data.eye["validity"], data.eye["repairs"])

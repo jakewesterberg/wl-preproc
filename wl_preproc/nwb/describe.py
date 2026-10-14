@@ -48,6 +48,23 @@ def _age_days(date_of_birth: datetime.date | None, session_datetime: datetime.da
     return None if date_of_birth is None else (session_datetime.date() - date_of_birth).days
 
 
+def _rig_record(record: dict | None) -> dict:
+    """What wl-xcon's record says the session was, for selecting a dataset by
+    kind: the calibration without its colour model, and each warning by its
+    code and run (design spec `2026-10-14-session-kind-and-warnings-design.md`
+    section 5)."""
+    if record is None:
+        return {"session_kind": None, "calibration": None, "accepted_warnings": []}
+    calibration = record["calibration"]
+    return {
+        "session_kind": record["session_kind"],
+        "calibration": None if calibration is None else {
+            name: calibration[name] for name in ("id", "standard", "measured_on")},
+        "accepted_warnings": [{"code": warning["code"], "run_number": warning["run_number"]}
+                              for warning in record["warnings"]],
+    }
+
+
 def describe(data, *, status: str, n_critical: int, checksums: list[dict], built_at: datetime.datetime) -> dict:
     """The description of one built file. `data` is `gather.Gathered`."""
     session, subject, eye = data.session, data.session["subject"], data.eye
@@ -112,6 +129,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
                 "closed": block["closed"],
                 "trials": block["n_trials"],
             } for block in data.blocks if block["run_number"] == run["run_number"]],
+            "calibration": run.get("calibration"),
         } for run in data.runs],
         "quality": {
             "timing_tier": session["timing_tier"],
@@ -120,5 +138,6 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
         },
         "notes": [*data.condition_notes, *data.trial_notes, *data.probe_notes],
         "checksums": {"algorithm": "sha256", "datasets": checksums},
+        **_rig_record(data.rig_record),
     }
     return NwbDescription.model_validate(description).model_dump(mode="json")

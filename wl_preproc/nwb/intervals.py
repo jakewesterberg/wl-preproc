@@ -47,6 +47,8 @@ def add_runs(nwb: NWBFile, runs: list[dict], systems: list[str]) -> None:
             column("task", "The rig's name for the run's task ('' if its record names none).",
                    [r["task"] or "" for r in rows]),
             column("closed", "Whether a RUN_END arrived.", [bool(r["closed"]) for r in rows]),
+            column("calibration", "The display calibration the run ran against, from its start row in the rig's "
+                                  "record ('' if it names none).", [r.get("calibration") or "" for r in rows]),
             *_coverage_columns(rows, systems),
         ],
     ))
