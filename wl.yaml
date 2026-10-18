@@ -67,12 +67,12 @@ status:
     review's five findings fixed. wl-xcon's ask 1 is designed with a
     clock for a session without the sync box
     (docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md,
-    five parts); part 1 waits on wl-xcon's event_code; part 2, the clock
-    as a recorded choice, is built on feat/clock-choice and not merged
-    (docs/handoffs/2026-10-18-clock-choice.md); reviewed, its Important
-    finding fixed (e0aa0bc); next, the merge question.
+    five parts); part 2, the clock as a recorded choice, is merged
+    (789e825; docs/handoffs/2026-10-18-clock-choice.md); part 1 can be
+    planned, wl-xcon's event_code being on its main (67d7028).
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: the correction marker's minors and its review's five findings
+    Done: part 2 of the training-records design (789e825). Before it, the
+    correction marker's minors and its review's five findings
     (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before
     them, wl-xcon's
     ask 5 (9e13ba5): each session's kind, display
@@ -152,6 +152,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `ad9ccb6` until part 2's merge `789e825` on 2026-10-18 (CI green
+  # on `ad9ccb6`, run 39123167628); true when written.
   # Was `ad52b79` until the correction marker's minors' merge `ad9ccb6` on
   # 2026-10-18 (CI green on `ad52b79`, run 39109197433); true when written.
   # Was `9e13ba5` until its minors' merge `ad52b79` on 2026-10-18 (CI green
@@ -213,7 +215,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "ad9ccb6"
+  describes: "789e825"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

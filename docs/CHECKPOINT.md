@@ -1,18 +1,24 @@
 # Where this build actually is
 
-**Last updated 2026-10-18**, describing `main` at `ad9ccb6`, the merge of
-`fix/correction-marker-minors`: the correction marker's three deferred minors
-and its review's five findings (§7 of `handoffs/2026-10-11-correction-marker.md`;
-subject-corrections spec amendment 16). CI read off `ad9ccb6` is green on both
-interpreters, 2395 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 39123167628`).
-- **The marker's minors:** the records-only catch-up is checked to clear the
+**Last updated 2026-10-18**, describing `main` at `789e825`, the merge of
+`feat/clock-choice`: part 2 of `specs/2026-10-18-training-records-and-backup-clock-design.md`,
+the session's clock as a recorded choice (amendments 3-8;
+`handoffs/2026-10-18-clock-choice.md`). CI read off `789e825` is green on both
+interpreters, 2410 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 39152694853`).
+- **The session's clock, recorded:** `timebase.SessionClock` records which clock
+  keeps each session's time, chosen once, by the daemon before its events stage;
+  every stage reads the session's time through `timebase/clock.py`. The sync box
+  is still the only clock, and every session's results are unchanged. The design's
+  spec, its asks of wl-xcon and wl-xcon's answer came with it.
+- **The correction marker's minors** were merged just before (`ad9ccb6`): the
+  records-only catch-up is checked to clear the
   marker in its own pass, and the adoption test goes through `publish._adopt`.
   The review found an older defect there: an adopted file whose scratch copy
   had been corrected kept a correction note it never received, and lost the
   next one's. A description's correction notes are now the file's own lines,
   after its build notes.
-- **Ask 5's five deferred minors** were merged just before (`ad52b79`): another
+- **Ask 5's five deferred minors** before them (`ad52b79`): another
   animal's `config.json` keeps its problem and no session row; a warning joins
   a run only through its start row; a time that is not finite reads as none,
   and a warning's run that cannot be stored is flagged by its line; the listing
@@ -96,6 +102,10 @@ check is green (`gh run view 39123167628`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `ad9ccb6` (the correction marker's minors' merge, CI green,
+2395 passed on each interpreter, `39123167628`) until part 2's merge; true when
+written.*
 
 *This header named `ad52b79` (the ask-5 minors' merge, CI green, 2395 passed on
 each interpreter, `39109197433`) until the correction marker's minors' merge;
@@ -356,12 +366,14 @@ requester chose to merge the same day; true when written.*
 > fixed. **wl-xcon's ask 1, the requester's choice of 2026-10-18, is designed**
 > with a clock for a session without the sync box
 > (`specs/2026-10-18-training-records-and-backup-clock-design.md`), in five parts:
-> part 1, the training records, waits on wl-xcon's `event_code` (its branch
-> `xc321-event-code`); **part 2, the clock as a recorded choice, is built on
-> `feat/clock-choice`, not merged** (`handoffs/2026-10-18-clock-choice.md`),
-> reviewed and its one Important finding fixed (`e0aa0bc`). Next: the merge
-> question. Fine-tuning
+> **part 2, the clock as a recorded choice, is merged** (`789e825`,
+> `handoffs/2026-10-18-clock-choice.md`), its review's one Important finding fixed
+> and five Minor deferred (§6). Part 1, the training records, can be planned:
+> wl-xcon's `event_code` is on its `main` (`67d7028`, read at `e5b9835`). Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 2's merge, this said it was built, not merged, and that part 1
+> waited on wl-xcon's `event_code`; true when written.*
 >
 > *Until part 2's review was answered, this said the review came next; true when
 > written.*
@@ -442,7 +454,9 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: the correction marker's three deferred minors and its review's five
+> Done: part 2 of the training-records design, the session's clock as a recorded
+> choice (`789e825`). Before it, the correction marker's three deferred minors and
+> its review's five
 > findings (`ad9ccb6`). Before them, ask 5's five deferred minors (`ad52b79`).
 > Before them, wl-xcon's ask 5
 > (`9e13ba5`): each session's kind, display calibration
