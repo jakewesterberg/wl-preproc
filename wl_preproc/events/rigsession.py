@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from pathlib import Path
 
 from wl_preproc.contracts.paths import XCON_DIRNAME
@@ -73,6 +74,9 @@ class RigSession:
     calibration: RigCalibration | None
     warnings: tuple[RigWarning, ...]
     problems: tuple[str, ...]
+    # False for a record whose `config.json` names another animal: nothing of
+    # it is kept but its problem.
+    of_this_session: bool = True
 
 
 def _text(value: object) -> str | None:
@@ -84,7 +88,11 @@ def _integer(value: object) -> int | None:
 
 
 def _number(value: object) -> float | None:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    """A finite number, or None: MySQL refuses an infinite or NaN double, and
+    one would fail the session's whole event stage on every pass."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def _calibration(value: object, problems: list[str]) -> RigCalibration | None:
@@ -129,7 +137,7 @@ def read_rig_session(session_dir: Path, subject: str) -> RigSession | None:
         config = {}
     recorded = config.get("subject")
     if recorded is not None and recorded != subject:
-        return RigSession(kind=None, calibration=None, warnings=(), problems=(
+        return RigSession(kind=None, calibration=None, warnings=(), of_this_session=False, problems=(
             f"{CONFIG_NAME} names subject {recorded!r}, not {subject!r}, so its kind, calibration and warnings "
             "are not this session's",))
     kind = config.get("session_kind")

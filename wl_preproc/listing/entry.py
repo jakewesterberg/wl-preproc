@@ -250,7 +250,9 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
     strobed_runs, strobed_blocks = strobed("RUN_START", "run_number"), strobed("BLOCK_START", "block_id")
     censused = _by_session((ephys.ProbeCensus & keys).proj().to_dicts())
     rig_problems = _by_session((core.RunRecordProblem & keys).to_dicts(order_by="problem_number"))
-    rig_sessions = {_session(row): row for row in (core.SessionRecord & keys).to_dicts()}
+    # Its colour model (`calibration_cones`, a blob) is not listed, so not read.
+    rig_sessions = {_session(row): row for row in (core.SessionRecord & keys).proj(
+        "session_kind", *_CALIBRATION_COLUMNS).to_dicts()}
     run_calibrations = _by_session((core.RunCalibration & keys).to_dicts())
     warnings = _by_session((core.AcceptedWarning & keys).to_dicts(order_by="warning_number"))
     facts = {}

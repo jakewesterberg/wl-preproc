@@ -657,7 +657,8 @@ def populate_session(key: dict, session_dir: Path) -> None:
     if calibration_rows:
         core.RunCalibration.insert(calibration_rows, skip_duplicates=True)
     rig_session = read_rig_session(session_dir, session_key["subject"])
-    if rig_session is not None:
+    unfitting = []
+    if rig_session is not None and rig_session.of_this_session:
         calibration = rig_session.calibration
         core.SessionRecord.insert1({
             **session_key, "session_kind": rig_session.kind,
@@ -671,6 +672,9 @@ def populate_session(key: dict, session_dir: Path) -> None:
         warning_rows = []
         for number, warning in enumerate(rig_session.warnings, start=1):
             run_number = numbers.get(warning.run_index) if warning.run_index is not None else None
+            if warning.run_index is not None and _run_index(warning.run_index) is None:
+                unfitting.append(f"warnings.jsonl: warning {number}'s run {warning.run_index} will not fit its "
+                                 "column, so it names no run")
             warning_rows.append({
                 **session_key, "warning_number": number, "code": _clip(warning.code, 64),
                 "detail": _clip(warning.detail, 1024), "accepted_in": _clip(",".join(warning.accepted_in), 64),
@@ -693,6 +697,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
         problems = []
     if rig_session is not None:
         problems += rig_session.problems
+    problems += unfitting
     if len(problems) > _RIG_PROBLEMS_KEPT:
         problems = [*problems[:_RIG_PROBLEMS_KEPT - 1], f"and {len(problems) - _RIG_PROBLEMS_KEPT + 1} more"]
     if problems:
