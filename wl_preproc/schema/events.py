@@ -673,8 +673,8 @@ def populate_session(key: dict, session_dir: Path) -> None:
         for number, warning in enumerate(rig_session.warnings, start=1):
             run_number = numbers.get(warning.run_index) if warning.run_index is not None else None
             if warning.run_index is not None and _run_index(warning.run_index) is None:
-                unfitting.append(f"warnings.jsonl: warning {number}'s run {warning.run_index} will not fit its "
-                                 "column, so it names no run")
+                unfitting.append(f"warnings.jsonl line {warning.line}: run {warning.run_index} cannot be stored "
+                                 "(0 to 65535), so the warning names no run")
             warning_rows.append({
                 **session_key, "warning_number": number, "code": _clip(warning.code, 64),
                 "detail": _clip(warning.detail, 1024), "accepted_in": _clip(",".join(warning.accepted_in), 64),

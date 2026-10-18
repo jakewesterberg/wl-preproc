@@ -247,7 +247,7 @@ written. These settle what the sections above left open; §0 stands.
      lost keeps its stop reason by `run` + 1, as `core.RunRecord` maps it, but that guess joins no
      warning: wl-xcon's numbers part from it once a session resumes.
    - **A non-finite `at` is read as none,** and **a warning's run that will not fit its column** is
-     stored with none and flagged (`rig_record_problem`), so it is not taken silently for one accepted
-     at the session's open. Either would otherwise fail the session's event stage on every pass, as
+     stored with none and flagged (`rig_record_problem`). The flag is the only sign of it: the listing
+     lists the warning with no run number, and the file holds it as accepted at the session's open. Either would otherwise fail the session's event stage on every pass, as
      amendment 4 says of a run.
    - **The listing does not read the colour model** it does not list.

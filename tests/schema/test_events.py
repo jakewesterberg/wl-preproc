@@ -878,6 +878,11 @@ def test_a_record_of_another_animal_keeps_no_kind_and_no_warnings(events_activat
     _recipe, key = _populate_generated(tmp_path, "slkind9", datetime.datetime(2027, 8, 3, 9, 0),
                                        mutate=another_animal, runs=True, rig_record=_rig_record())
     assert (len(core.SessionRecord & key), len(core.AcceptedWarning & key)) == (0, 0)
+    # So its NWB file has no `rig_record` module: the builder writes one only
+    # for what this returns (the minors' review, Minor 4).
+    from wl_preproc.nwb.gather import _rig_record as gathered
+
+    assert gathered(key, {1, 2}) is None
     assert "config.json names subject 'zorro', not 'slkind9', so its kind, calibration and warnings are not this " \
            "session's" in [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()]
 
@@ -894,4 +899,4 @@ def test_a_warnings_run_that_will_not_fit_is_a_problem_and_names_no_run(events_a
     row = (core.AcceptedWarning & key).fetch1()
     assert (row["run_index"], row["run_number"]) == (None, None)
     assert [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()] == [
-        "warnings.jsonl: warning 1's run 70000 will not fit its column, so it names no run"]
+        "warnings.jsonl line 1: run 70000 cannot be stored (0 to 65535), so the warning names no run"]

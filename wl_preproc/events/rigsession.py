@@ -66,6 +66,7 @@ class RigWarning:
     by_account: str | None
     by_issuer: str | None
     by_token_id: str | None
+    line: int | None = None  # its line in `warnings.jsonl`, from 1, for a problem to name
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -107,7 +108,7 @@ def _calibration(value: object, problems: list[str]) -> RigCalibration | None:
                           measured_on=_text(value.get("measured_on")), cones=cones if isinstance(cones, dict) else None)
 
 
-def _warning(row: dict) -> RigWarning:
+def _warning(row: dict, line: int) -> RigWarning:
     accepted_in = row.get("accepted_in")
     by = row.get("by") if isinstance(row.get("by"), dict) else {}
     return RigWarning(
@@ -116,7 +117,7 @@ def _warning(row: dict) -> RigWarning:
         session_kind=_text(row.get("session_kind")), how=_text(row.get("how")),
         run_index=_integer(row.get("run")), at=_number(row.get("at")), at_local=_text(row.get("at_local")),
         by_kind=_text(by.get("kind")), by_name=_text(by.get("name")), by_account=_text(by.get("account")),
-        by_issuer=_text(by.get("issuer")), by_token_id=_text(by.get("token_id")),
+        by_issuer=_text(by.get("issuer")), by_token_id=_text(by.get("token_id")), line=line,
     )
 
 
@@ -159,5 +160,5 @@ def read_rig_session(session_dir: Path, subject: str) -> RigSession | None:
         if not isinstance(row, dict) or not isinstance(row.get("code"), str) or not row["code"]:
             problems.append(f"{WARNINGS_NAME} line {number_of_line}: not a warning naming its code")
             continue
-        warnings.append(_warning(row))
+        warnings.append(_warning(row, number_of_line))
     return RigSession(kind=kind, calibration=calibration, warnings=tuple(warnings), problems=tuple(problems))
