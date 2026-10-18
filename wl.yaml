@@ -69,7 +69,8 @@ status:
     (docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md,
     five parts); part 1 waits on wl-xcon's event_code; part 2, the clock
     as a recorded choice, is built on feat/clock-choice and not merged
-    (docs/handoffs/2026-10-18-clock-choice.md); next, the review.
+    (docs/handoffs/2026-10-18-clock-choice.md); reviewed, its Important
+    finding fixed (e0aa0bc); next, the merge question.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: the correction marker's minors and its review's five findings
     (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before

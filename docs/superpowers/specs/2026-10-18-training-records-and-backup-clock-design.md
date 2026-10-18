@@ -486,3 +486,16 @@ its mutation checks; the full suite runs once per branch on both interpreters.
    blob probe leaves a session with no sync box log in the shared test database, and run before
    `tests/schema/test_daemon.py` it fails three of that module's clean-pass tests, on the base commit
    as on part 2 (checked at `54d585b`). The suite runs the daemon's tests first.
+
+## Amendment, 2026-10-18, from part 2's final review
+
+8. **The daemon records every session's clock first, each in its own short transaction, and a stage
+   whose snapshot predates another pass's record reads it with a locking read.** Two daemon passes can
+   overlap: nothing stops a second cron pass (`daemon.py`). Chosen only on first ask (amendment 3), a
+   stage whose transaction opened, `WITH CONSISTENT SNAPSHOT` as every DataJoint transaction does,
+   before the other pass committed the clock found no row, its own insert changed nothing, and its
+   re-read still saw the snapshot, so it raised; and a pass whose events stage had recorded the row but
+   not yet committed held its lock for the length of a decode, which another pass's stage waited on for
+   the lock timeout. `daemon._first_tables` now records each session's clock before the events stage,
+   and `clock_for` reads with `FOR SHARE` when its re-read is empty. A stage asked outside a daemon pass
+   still records the clock itself, as amendment 3 says.

@@ -358,9 +358,13 @@ requester chose to merge the same day; true when written.*
 > (`specs/2026-10-18-training-records-and-backup-clock-design.md`), in five parts:
 > part 1, the training records, waits on wl-xcon's `event_code` (its branch
 > `xc321-event-code`); **part 2, the clock as a recorded choice, is built on
-> `feat/clock-choice`, not merged** (`handoffs/2026-10-18-clock-choice.md`). Next:
-> the review. Fine-tuning
+> `feat/clock-choice`, not merged** (`handoffs/2026-10-18-clock-choice.md`),
+> reviewed and its one Important finding fixed (`e0aa0bc`). Next: the merge
+> question. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 2's review was answered, this said the review came next; true when
+> written.*
 >
 > *Until part 2 of the training-records design was built, this named ask 1 as
 > next by the January sort, undesigned; true when written.*

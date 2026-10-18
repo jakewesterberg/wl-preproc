@@ -54,3 +54,35 @@ Executed on 2026-10-18: Task 1 `265de8b`, Task 2 `be1c50c`.
   Andersson data set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as in CI:
   - 3.11: **2418 passed, 27 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2418 passed, 28 skipped, 1 xfailed**.
+
+## 6. The final review
+
+A fresh Opus reviewer read the branch (`08cad2b..5b225b9`) and found **one Important and five Minor**,
+judging it ready to merge with the Important fixed.
+- **Important, fixed** (`e0aa0bc`, spec amendment 8): two overlapping daemon passes made one stage
+  crash on a session's clock. A stage whose snapshot predated the other pass's committed row read
+  none, its insert changed nothing, and its re-read raised `IndexError`; and an uncommitted record held
+  its lock while another pass waited out the lock timeout. The daemon now records each session's clock
+  first, in its own short transaction, and `clock_for` reads with `FOR SHARE` when its re-read is
+  empty. `test_a_clock_another_pass_records_during_this_stages_snapshot_is_read` (a second connection
+  commits the row inside the stage's snapshot) and
+  `test_a_daemon_pass_chooses_the_clock_before_its_events_stage` each failed first, and each fix's
+  removal fails its test.
+- **Deferred, Minor:**
+  - nothing depends on `SessionClock`, so deleting the row re-chooses the clock and recomputes nothing;
+    and a session processed before part 2 is given its clock only when a stage next asks, which under
+    part 3's rule could differ from the sync box its results are timed by. Decide before part 3: record
+    `syncbox` for every session with a `BehaviorRecording`, or have the timed tables reference the clock;
+  - the sync box's identity row in `SystemTimebase.make` still assumes the sync box is the clock; the
+    spec's §4.3 lists it, and it is part 3's;
+  - the guard test checks three names only: it misses `extract_syncbox_words` and `extract_syncbox`
+    with `decode_edges`, and aliased imports, and would flag a docstring; amendment 6 and §1 above claim
+    more than it checks;
+  - `tests/schema/test_eye_populate.py`'s no-sync-box fixture's docstring still names
+    `decode_syncbox_in_session_time` raising `FileNotFoundError`;
+  - nits: `SOURCES` in `timebase/clock.py` is unused.
+- **Set aside by the reviewer, and the rulings on them** (all stand): `TimingProvenance` does not catch
+  `NoClock`, reachable only with no recorded row and the log removed after the sync box was fitted, and
+  an error there says why where the old path gave a silent tier; a first ask by the NWB build or a CLI
+  command on a session processed before part 2 fails exactly where the old read failed, now named
+  `NoClock`; the other reads of the sync box's folder read it as a device or a file, not as the clock.
