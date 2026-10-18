@@ -80,6 +80,38 @@ _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
 
 
 @schema
+class SessionClock(dj.Imported):
+    definition = """
+    # Which clock keeps the session's time, chosen once, by the first stage
+    # that asks: the events stage, in the daemon's order (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` section 4.1).
+    # Every stage reads it through `timebase/clock.py::clock_for`.
+    # Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    source : enum('syncbox','nidq','lab')
+    reason : varchar(255)  # one sentence: why this clock
+    """
+
+    @property
+    def key_source(self):
+        """Every landed session. Imported locally, as `SystemTimebase`'s is."""
+        from wl_preproc.schema import ingest
+
+        return pipeline.Session & ingest.Ingestion
+
+    def make(self, key: dict) -> None:
+        """Imported, not Computed: the choice reads the session folder. It is
+        made by `clock_for` when a stage first asks; `populate()` makes the
+        same row."""
+        from wl_preproc.schema import ingest
+        from wl_preproc.timebase.clock import choose
+
+        choice = choose(Path((ingest.Ingestion & key).fetch1("session_dir")))
+        self.insert1({**key, "source": choice.source, "reason": choice.reason})
+
+
+@schema
 class SystemTimebase(dj.Computed):
     definition = f"""
     # The once-per-(system, session) clock fit. Rate is pooled across every
