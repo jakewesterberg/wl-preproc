@@ -104,3 +104,25 @@ def test_a_sync_box_log_with_no_barcode_is_the_clock_and_cannot_time_the_session
     assert choose(session_dir).source == "syncbox"
     with pytest.raises(ValueError, match="the sync box log decoded no barcodes"):
         Clock(source="syncbox", session_dir=session_dir).codes()
+
+
+def test_every_stage_reads_the_sessions_time_through_the_clock():
+    """Section 4.3: nothing outside `timebase/clock.py` reaches the sync box's
+    barcode reference or its codes directly, so a second clock is one module's
+    change (`timebase/segments.py` defines the reference)."""
+    import re
+    from pathlib import Path
+
+    import wl_preproc
+
+    package = Path(wl_preproc.__file__).parent
+    direct = re.compile(r"\b(session_reference|syncbox_codes|decode_syncbox_in_session_time)\(")
+    allowed = {package / "timebase" / "clock.py", package / "timebase" / "segments.py"}
+    reaching = sorted(
+        f"{path.relative_to(package)}:{number}"
+        for path in package.rglob("*.py")
+        if path not in allowed
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if direct.search(line) and not line.lstrip().startswith("#")
+    )
+    assert reaching == []

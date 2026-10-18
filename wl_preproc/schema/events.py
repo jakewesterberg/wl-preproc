@@ -52,13 +52,11 @@ from wl_preproc.contracts.events import (
     decode_stream,
 )
 from wl_preproc.events.assemble import AssembledBlock, AssembledTrial, assemble
-from wl_preproc.events.extract import extract_syncbox_words
 from wl_preproc.events.rigruns import read_rig_runs
 from wl_preproc.events.rigsession import read_rig_session
 from wl_preproc.events.rigtrials import read_rig_trials
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
-from wl_preproc.timebase import segments
-from wl_preproc.timebase.fit import RateFit, fit_offset
+from wl_preproc.timebase.clock import clock_for
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
@@ -111,70 +109,6 @@ def _u32(words: tuple[int, ...]) -> int:
     between the two places it is used.
     """
     return (words[0] << 16) | words[1]
-
-
-def decode_syncbox_in_session_time(session_dir: Path) -> list[tuple[float, int]]:
-    """Every code word the sync box recorded, native time converted to session
-    time via `timebase/fit.py` -- the same fit primitives `core.Segment` and
-    `timebase.SystemTimebase` use, so this does not invent a second
-    conversion.
-
-    **Public, not module-private** (1c-5 Task 9): this docstring said all
-    along that the NI's own code words are "used only for `event_code_agreement`
-    ... which is `events/agreement.py` and `TimingProvenance`'s job ... not
-    this module's" -- and `TimingProvenance.make()` needs the Pi's SAME
-    canonical decode to compare the NI's record against. Restating this
-    function there, the way `events.py`'s own `_u32` restates `assemble.py`'s,
-    would duplicate the non-trivial half (barcode reference, identity rate,
-    offset fit) that restating a two-word integer pack does not risk --
-    `timebase/coverage.py`'s own rule against a second implementation applies
-    here for the same reason.
-
-    Sync box only, deliberately. The NI's own code words are a SECOND,
-    independent record used only for `event_code_agreement` (tier A) and the
-    tier B/C witness counts, which is `TimingProvenance`'s job, not this
-    module's: the canonical trial list is built from exactly one full-code
-    record.
-
-    Identity rate, not `fit_rate`: session time IS the sync box's own
-    timeline (spec section 4.5), the same special case `SystemTimebase.make()`
-    applies to this same system for the same reason -- a fit of it against
-    itself is exactly zero drift with zero residual, the truth rather than a
-    placeholder.
-    """
-    reference = segments.session_reference(session_dir)
-    scans = segments.scan_system("syncbox", session_dir / "syncbox")
-    if not scans:
-        raise FileNotFoundError(
-            f"{session_dir}: no syncbox recording, so this session has no "
-            "session time and no code stream to decode from -- every session "
-            "has one (SessionRecipe requires it of the synthetic fixtures, and "
-            "spec section 4.3 makes it essential sync infrastructure)"
-        )
-
-    converted: list[tuple[float, int]] = []
-    for scan in scans:
-        rate = RateFit(
-            fitted_rate_hz=scan.stream.fs_hz,
-            drift_ppm=0.0,
-            n_matched=len(scan.barcodes),
-            residual_us_rms=0.0,
-            residual_us_max=0.0,
-        )
-        offset = fit_offset(scan.barcodes, reference, rate)
-        word_stream = extract_syncbox_words(scan.path)
-        converted.extend(
-            (native_pos / word_stream.fs_hz / rate.scale + offset.offset_s, code)
-            for native_pos, code in word_stream.words
-        )
-
-    # `decode_stream` reads an escape payload by POSITION, not by comparing
-    # timestamps -- see its own docstring -- so a session recorded across more
-    # than one sync box log file needs re-sorting to restore emission order
-    # before decoding. A single file (the common case, and every current
-    # fixture) is already sorted; this is then a no-op.
-    converted.sort(key=lambda pair: pair[0])
-    return converted
 
 
 def _containing_block(
@@ -413,7 +347,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
     """
     session_key = {k: key[k] for k in pipeline.Session.primary_key}
 
-    converted = decode_syncbox_in_session_time(session_dir)
+    converted = clock_for(session_key, session_dir).codes()
     decoded = decode_stream(converted)
     assembly = assemble(decoded)
 

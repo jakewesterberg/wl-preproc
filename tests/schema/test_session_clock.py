@@ -97,3 +97,14 @@ def test_populate_makes_the_same_choice(landed):
     key, _session_dir = landed()
     timebase.SessionClock.populate(key, suppress_errors=False)
     assert (timebase.SessionClock & key).fetch1("source") == "syncbox"
+
+
+def test_a_daemon_pass_chooses_the_clock_in_its_events_stage(daemon_module, prefix, landed):
+    """One pass chooses the clock and, reading through it, builds the
+    session's trial list."""
+    from wl_preproc.schema import pipeline, timebase
+
+    key, _session_dir = landed()
+    report = daemon_module.run_once(prefix=prefix)
+    assert (timebase.SessionClock & key).fetch1("source") == "syncbox"
+    assert len(pipeline.event.BehaviorRecording & key), report["errors"]
