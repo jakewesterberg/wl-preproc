@@ -86,3 +86,7 @@ judging it ready to merge with the Important fixed.
   an error there says why where the old path gave a silent tier; a first ask by the NWB build or a CLI
   command on a session processed before part 2 fails exactly where the old read failed, now named
   `NoClock`; the other reads of the sync box's folder read it as a device or a file, not as the clock.
+
+**The full suite after the fix,** at `15e8a37`: 3.11, **2419 passed, 27 skipped, 1 deselected, 1 xfailed**;
+3.13, **2419 passed, 28 skipped, 1 xfailed**, both exiting 0. One more than §5's: the daemon-pass test
+replaced, the snapshot test added.
