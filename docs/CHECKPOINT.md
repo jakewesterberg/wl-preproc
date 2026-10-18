@@ -1,19 +1,24 @@
 # Where this build actually is
 
-**Last updated 2026-10-14**, describing `main` at `0e4df0f`, the merge of
-`fix/eye-minors`: blink padding's five deferred minors and the eye-loss fix's
-five (§7 of `handoffs/2026-10-11-blink-padding.md` and of
-`handoffs/2026-10-11-eye-loss.md`; blink-padding spec amendment 5). CI read off
-`0e4df0f` is green on both interpreters, 2343 passed on each with 37
-skipped, and the manifest check is green (`gh run view 38468704997`).
-- **Three tests pin what the blink pads do** and no test held: a frame gap
-  keeps the margin unpadded, a pad rounds to the nearest sample both ways, and
-  a pad on one side alone applies.
-- **The `ALTER TABLE` statement is checked on a copy** of `EyeValidity`, so no
-  stored row loses its `frac_feature_lost`.
-- **Descriptions made true,** and the gated tests' scale documented rather
-  than changed: lost frames set it, 218.6 px against 163.1 without them.
-- **Blink padding was merged just before** (`55142c6`, CI green; spec
+**Last updated 2026-10-18**, describing `main` at `9e13ba5`, the merge of
+`feat/session-kind`: wl-xcon's ask 5 (spec
+`specs/2026-10-14-session-kind-and-warnings-design.md`, amendments 1–7, handoff
+`handoffs/2026-10-14-session-kind.md`). CI read off `9e13ba5` is green on both
+interpreters, 2388 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 39092580654`).
+- **Each session's kind** (training, piloting or recording), the display
+  calibration it and each run ran against, and the warnings it accepted, read
+  from wl-xcon's record into `core.SessionRecord`, `core.RunCalibration` and
+  `core.AcceptedWarning`. Carried, never acted on.
+- **The listing and the NWB file carry them:** who accepted a warning by name
+  and wl.works account in the listing, never the token, and no one in the
+  file. wl.works' amendment and `docs/ops/lab-host-protocol.md` say what
+  changed; its session record allows `training` and `recording` only, so a
+  piloting session needs its decision (told to its session 2026-10-18).
+- **The eye minors were merged just before** (`0e4df0f`, CI green): three tests
+  for the blink pads, the `ALTER TABLE` checked on a copy, descriptions made
+  true, the gated tests' scale documented.
+- **Blink padding was merged before them** (`55142c6`, CI green; spec
   `specs/2026-10-11-blink-padding-design.md`): each blink's flanks withheld,
   50 ms before the pupil is lost and 80 ms after it returns; on the reference
   recording the stored mask keeps 0.69% fewer of the left eye's frames and
@@ -80,6 +85,9 @@ skipped, and the manifest check is green (`gh run view 38468704997`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `0e4df0f` (the eye-minors merge, CI green, 2343 passed on
+each interpreter, `38468704997`) until the ask-5 merge; true when written.*
 
 *This header named `55142c6` (the blink-padding merge, CI green, 2340 passed
 on each interpreter, `38453320426`) until the eye-minors merge; true when
@@ -262,6 +270,9 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until 2026-10-18 this said ask 5 was built, not merged, with the merge question
+> next; true when written.*
+>
 > *Until 2026-10-14, later, this said ask 5's review came next; true when written.*
 >
 > *Until 2026-10-14 this said it had not on 2026-10-13; true when written.*
@@ -299,16 +310,15 @@ requester chose to merge the same day; true when written.*
 > recording; the adaptive pad waits for data to validate it against. **The
 > eye minors, the requester's choice of 2026-10-13, are merged** (`0e4df0f`):
 > blink padding's five deferred minors and the eye-loss fix's five (§7 of each
-> handoff). **wl-xcon's ask 5, the requester's choice of 2026-10-14, is built on
-> `feat/session-kind`, not merged** (`handoffs/2026-10-14-session-kind.md`): each
-> session's kind, display calibration and accepted warnings, carried into the
-> database, the listing and the NWB file. Reviewed: its two Important findings and
-> two Minors re-graded Important fixed (`b4fc467`), five minors deferred. Next:
-> the merge question. Still to build: 1's
+> handoff). **wl-xcon's ask 5, the requester's choice of 2026-10-14, is merged**
+> (`9e13ba5`; `handoffs/2026-10-14-session-kind.md`): each session's kind,
+> display calibration and accepted warnings, carried into the database, the
+> listing and the NWB file; five minors deferred (§6). Still to build: 1's
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
 > record designed by wl-xcon's build K. Open and small: the correction
-> marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
+> marker's three (`handoffs/2026-10-11-correction-marker.md` §6) and ask 5's
+> five (`handoffs/2026-10-14-session-kind.md` §6). Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until 2026-10-14 this said the eye minors were built, not
@@ -384,7 +394,9 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: the eye minors (`0e4df0f`): blink padding's five deferred minors and
+> Done: wl-xcon's ask 5 (`9e13ba5`): each session's kind, display calibration
+> and accepted warnings, carried into the database, the listing and the NWB
+> file. Before it, the eye minors (`0e4df0f`): blink padding's five deferred minors and
 > the eye-loss fix's five, among them three tests for the pads and the
 > `ALTER TABLE` checked on a copy. Before them, blink padding (`55142c6`):
 > each blink's flanks, 50 ms before the

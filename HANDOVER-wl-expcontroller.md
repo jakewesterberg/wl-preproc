@@ -305,8 +305,8 @@ build B writes, sent so you can read it.
 - *Not asked:* acting on the warnings; only carrying them.
 
 - *wl-preproc's answer, 2026-10-14: read and carried, never acted on* (the requester's choice; its
-  design `docs/superpowers/specs/2026-10-14-session-kind-and-warnings-design.md`, built on branch
-  `feat/session-kind`). The event stage reads `config.json`'s `session_kind` and `calibration`, each
+  design `docs/superpowers/specs/2026-10-14-session-kind-and-warnings-design.md`, merged as
+  `9e13ba5` on 2026-10-18). The event stage reads `config.json`'s `session_kind` and `calibration`, each
   start row's `calibration` and every `warnings.jsonl` row, by the run record's rules: a line it
   cannot read, a kind outside the three, or another animal's record is reported, not repaired. The
   published record carries them: the session listing for wl.works (who accepted a warning by name and
