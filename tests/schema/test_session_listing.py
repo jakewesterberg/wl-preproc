@@ -25,7 +25,11 @@ def listed(dj_conn, prefix, tmp_path_factory):
                              {"code": "default-calibration"},
                              {"code": "luminance-step", "run": 1, "how": "start",
                               "by": {"kind": "member", "name": "J. W.", "account": "acct-1",
-                                     "issuer": "https://wl.works", "token_id": "tok-1"}}]}),
+                                     "issuer": "https://wl.works", "token_id": "tok-1"}}],
+                             "changes": [{"trial": 1}],
+                             "controls": [{"trial": 2}, {"trial": 2, "kind": "resume", "event_code": 4132},
+                                          {"trial": 3, "kind": "note", "event_code": None},
+                                          {"trial": 4, "kind": "reward", "event_code": 4134}]}),
         "plain": _session(tmp_path_factory, subject="sllist2", session_id="2025-07-22_01"),
     }
     daemon.run_once(prefix=prefix)
@@ -76,6 +80,22 @@ def test_an_entry_carries_what_wl_xcons_record_says_the_session_was(listed):
     assert "tok-1" not in str(entry)
     plain = session_entry(listed["plain"][1])
     assert (plain["session_kind"], plain["calibration"], plain["accepted_warnings"]) == (None, None, [])
+
+
+def test_an_entry_counts_the_training_records_and_names_its_clock(listed):
+    """Through one daemon pass (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.4): a
+    change, a pause and a manual reward, counted from the database; the
+    resume and the note are in neither count. A session wl-xcon did not run
+    has none to count, and the sync box kept time in both."""
+    from wl_preproc.listing.entry import session_entry
+
+    _recipe, key = listed["runs"]
+    entry = session_entry(key)
+    assert entry["training_records"] == {"parameter_changes": 1, "pauses": 1, "manual_rewards": 1}
+    assert entry["clock"] == "syncbox"
+    plain = session_entry(listed["plain"][1])
+    assert (plain["training_records"], plain["clock"]) == (None, "syncbox")
 
 
 def test_the_listing_does_not_read_the_colour_model_it_does_not_list(listed, monkeypatch):

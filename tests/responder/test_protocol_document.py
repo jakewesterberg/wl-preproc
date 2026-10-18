@@ -19,11 +19,13 @@ def _section(heading: str) -> str:
 
 
 def test_every_field_a_listed_session_carries_is_named_in_the_protocol():
-    from wl_preproc.contracts.protocol import ListedActor, ListedCalibration, ListedRun, ListedWarning, SessionEntry
+    from wl_preproc.contracts.protocol import (ListedActor, ListedCalibration, ListedRun, ListedTrainingRecords,
+                                               ListedWarning, SessionEntry)
 
     section = _section("`GET /sessions`")
     missing = sorted(f"{model.__name__}.{name}"
-                     for model in (SessionEntry, ListedRun, ListedWarning, ListedCalibration, ListedActor)
+                     for model in (SessionEntry, ListedRun, ListedWarning, ListedCalibration, ListedActor,
+                                   ListedTrainingRecords)
                      for name in model.model_fields if f"`{name}`" not in section)
     assert missing == []
 

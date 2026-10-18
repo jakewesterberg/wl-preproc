@@ -610,14 +610,22 @@ Authorization: Bearer <token>
     box), never the token or its issuer. A session wl-xcon did not run, one whose record predates
     its engine build B, and one read before this host carried them (2026-10-14) list null, null and
     `[]` alike;
+  - `training_records`, how many of wl-xcon's training records the session has (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` §3.4): its `parameter_changes`, and of
+    its console controls its `pauses` and `manual_rewards`; the rows are in the database and the
+    NWB file, never listed. Null for a session wl-xcon did not run; a session read before this host
+    carried them (2026-10-18) lists zeros;
+  - `clock`, which clock kept the session's time: `syncbox` (the only one built yet), `nidq` or
+    `lab`, or null until the daemon has chosen it;
   - `flags`, each a `code`, a `message`, and the `run_number` or `block_number` it is about:
     `waiting_for_run_markers` (no measured run yet), `repeated_run_number` and
     `repeated_block_number` (a crash restart before wl-xcon's XC-026; only the first is
     listed), `run_without_block`, `bank_change_in_run`, `block_type_unknown`, `task_unknown`,
     `block_outside_runs` (a block in no measured run: its run's `RUN_START` was lost), and
     `rig_record_problem` (what wl-xcon's record could not supply, each naming its file, line by
-    line: `runs.jsonl`, `config.json` or `warnings.jsonl`; or the run record's absence; a problem
-    stored before 2026-10-14 names no file).
+    line: `runs.jsonl`, `config.json`, `warnings.jsonl`, `parameter_changes.jsonl` or
+    `controls.jsonl`, the last two also when a count of codes disagrees or rows cannot be timed; or
+    the run record's absence; a problem stored before 2026-10-14 names no file).
     **None of them blocks anything here.**
 
 ---

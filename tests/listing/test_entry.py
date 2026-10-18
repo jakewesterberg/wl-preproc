@@ -34,7 +34,7 @@ def _facts(**changes):
         census=[_probe(100, "a" * 32)],
         electrodes={("a" * 32, "NP1000"): [0, 1, 2]},
         strobed_runs=[1, 2], strobed_blocks=[1, 2], censused=frozenset({100}), rig_problems=[],
-        rig_session=None, run_calibrations={}, warnings=[],
+        rig_session=None, run_calibrations={}, warnings=[], parameter_changes=0, control_kinds={}, clock="syncbox",
     )
     return dataclasses.replace(facts, **changes)
 
@@ -278,3 +278,27 @@ def test_a_kind_not_recorded_lists_none_beside_a_calibration_not_recorded():
 
     entry = build_entry(_facts(rig_session={**{name: None for name in _SESSION_RECORD}}))
     assert (entry["session_kind"], entry["calibration"]) == (None, None)
+
+
+def test_a_session_lists_how_many_training_records_it_has_and_its_clock():
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 3.4: the parameter changes, pauses and manual rewards, counted;
+    the rows are not listed. A session wl-xcon did not run lists none."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_session={"session_kind": "training"}, parameter_changes=3,
+                               control_kinds={"pause": 2, "resume": 3, "reward": 1, "note": 4}))
+    assert entry["training_records"] == {"parameter_changes": 3, "pauses": 2, "manual_rewards": 1}
+    assert entry["clock"] == "syncbox"
+    plain = build_entry(_facts(clock=None))
+    assert (plain["training_records"], plain["clock"]) == (None, None)
+
+
+def test_a_session_read_before_its_training_records_were_kept_lists_zeros():
+    """The plan's Review Focus 5: a session wl-xcon ran whose event stage ran
+    before part 1 has its record and no training rows, so it lists zeros,
+    never null, as the protocol says."""
+    from wl_preproc.listing.entry import build_entry
+
+    entry = build_entry(_facts(rig_session={"session_kind": "training"}))
+    assert entry["training_records"] == {"parameter_changes": 0, "pauses": 0, "manual_rewards": 0}

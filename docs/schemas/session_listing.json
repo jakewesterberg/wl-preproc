@@ -452,6 +452,31 @@
       "title": "ListedSegment",
       "type": "object"
     },
+    "ListedTrainingRecords": {
+      "additionalProperties": false,
+      "description": "How many of wl-xcon's training records the session has: its live\nparameter changes, and of its console controls the pauses and the manual\nrewards. The rows are in the database and the NWB file, not here (design\nspec `2026-10-18-training-records-and-backup-clock-design.md` section 3.4).",
+      "properties": {
+        "manual_rewards": {
+          "title": "Manual Rewards",
+          "type": "integer"
+        },
+        "parameter_changes": {
+          "title": "Parameter Changes",
+          "type": "integer"
+        },
+        "pauses": {
+          "title": "Pauses",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parameter_changes",
+        "pauses",
+        "manual_rewards"
+      ],
+      "title": "ListedTrainingRecords",
+      "type": "object"
+    },
     "ListedWarning": {
       "additionalProperties": false,
       "description": "One warning the session accepted, from wl-xcon's `warnings.jsonl`:\nits code and sentence, the session kinds it is acceptable in, how it was\naccepted (`open`, `start` or `--accept-warnings`), the measured run it\nwas accepted for (null at the open, or when the run was not measured),\nand the rig's local time, its bookkeeping rather than a time on the\nrecording's clock.",
@@ -579,6 +604,22 @@
             }
           ]
         },
+        "clock": {
+          "anyOf": [
+            {
+              "enum": [
+                "syncbox",
+                "nidq",
+                "lab"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Clock"
+        },
         "flags": {
           "items": {
             "$ref": "#/$defs/ListedFlag"
@@ -659,6 +700,16 @@
             }
           ],
           "title": "Tier"
+        },
+        "training_records": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListedTrainingRecords"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -673,7 +724,9 @@
         "flags",
         "session_kind",
         "calibration",
-        "accepted_warnings"
+        "accepted_warnings",
+        "training_records",
+        "clock"
       ],
       "title": "SessionEntry",
       "type": "object"

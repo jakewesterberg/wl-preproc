@@ -53,6 +53,12 @@ class SessionFacts:
     rig_session: dict | None  # its core.SessionRecord row; None when wl-xcon did not run it
     run_calibrations: dict[int, str]  # run_number -> core.RunCalibration's calibration_id
     warnings: list[dict]  # its core.AcceptedWarning rows, by warning_number
+    # How many of wl-xcon's training records it has, and the clock that kept
+    # its time (design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    # section 3.4).
+    parameter_changes: int  # its core.ParameterChange rows
+    control_kinds: dict[str, int]  # control kind -> its core.RigControl rows
+    clock: str | None  # timebase.SessionClock's source; None until chosen
 
 
 def _repeats(numbers: list[int]) -> list[tuple[int, int]]:
@@ -160,6 +166,7 @@ def build_entry(facts: SessionFacts) -> dict:
         "runs": runs, "segments": segments,
         "probes": sorted({part["probe_serial"] for part in facts.census if part["probe_serial"]}),
         "flags": flags,
+        "clock": facts.clock,
         **_rig_session(facts),
     }
     return SessionEntry.model_validate(entry).model_dump(mode="json")
@@ -172,7 +179,10 @@ def _rig_session(facts: SessionFacts) -> dict:
     """The session's kind, calibration and accepted warnings, as wl-xcon's
     record gives them. Who accepted a warning is listed by name and wl.works
     account, never by the token's id or its issuer (design spec
-    `2026-10-14-session-kind-and-warnings-design.md` section 0, decision 3)."""
+    `2026-10-14-session-kind-and-warnings-design.md` section 0, decision 3).
+    And how many training records it has, never the rows (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 0,
+    decision 7)."""
     row = facts.rig_session or {}
     recorded = any(row.get(column) is not None for column in _CALIBRATION_COLUMNS)
     return {
@@ -189,6 +199,9 @@ def _rig_session(facts: SessionFacts) -> dict:
             "by": None if warning["by_kind"] is None and warning["by_name"] is None else {
                 "kind": warning["by_kind"], "name": warning["by_name"], "account": warning["by_account"]},
         } for warning in sorted(facts.warnings, key=lambda warning: warning["warning_number"])],
+        "training_records": None if facts.rig_session is None else {
+            "parameter_changes": facts.parameter_changes, "pauses": facts.control_kinds.get("pause", 0),
+            "manual_rewards": facts.control_kinds.get("reward", 0)},
     }
 
 
@@ -209,6 +222,8 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
     all of them: every daemon pass builds every listed session's entry, and
     reading each table once per session grew with the lab (the listing's
     M9)."""
+    import datajoint as dj
+
     from wl_preproc.schema import core, ephys, ingest, pipeline, timebase
 
     keys = [{name: key[name] for name in ("subject", "session_datetime")} for key in keys]
@@ -255,6 +270,13 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
         "session_kind", *_CALIBRATION_COLUMNS).to_dicts()}
     run_calibrations = _by_session((core.RunCalibration & keys).to_dicts())
     warnings = _by_session((core.AcceptedWarning & keys).to_dicts(order_by="warning_number"))
+    # Counted by the database, since the rows are not listed.
+    changes = {_session(row): int(row["n"]) for row in (pipeline.Session & keys).aggr(
+        core.ParameterChange, n="count(*)", exclude_nonmatching=True).to_dicts()}
+    control_kinds = collections.defaultdict(dict)
+    for row in dj.U("subject", "session_datetime", "kind").aggr(core.RigControl & keys, n="count(*)").to_dicts():
+        control_kinds[_session(row)][row["kind"]] = int(row["n"])
+    clocks = {_session(row): row["source"] for row in (timebase.SessionClock & keys).proj("source").to_dicts()}
     facts = {}
     for ingestion in (ingest.Ingestion & keys).proj("session_dir").to_dicts():
         session = _session(ingestion)
@@ -283,6 +305,9 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
             rig_session=rig_sessions.get(session),
             run_calibrations={row["run_number"]: row["calibration_id"] for row in run_calibrations.get(session, [])},
             warnings=warnings.get(session, []),
+            parameter_changes=changes.get(session, 0),
+            control_kinds=dict(control_kinds.get(session, {})),
+            clock=clocks.get(session),
         )
     return facts
 
