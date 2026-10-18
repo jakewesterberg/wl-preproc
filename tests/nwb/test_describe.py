@@ -165,9 +165,22 @@ def test_the_description_says_what_wl_xcons_record_says_the_session_was():
     assert out["schema_version"] == 3
 
 
+def test_the_description_counts_the_training_records_the_file_holds():
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 3.2: the counts, never who acted."""
+    from tests.nwb.test_writers import RIG_RECORD
+    from wl_preproc.nwb.describe import describe
+
+    record = {**RIG_RECORD, "parameter_changes": [{"by_kind": "member"}] * 2, "controls": [{"by_kind": "box"}] * 3}
+    out = describe(_gathered(rig_record=record), status="written", n_critical=0, checksums=[CHECKSUM],
+                   built_at=BUILT_AT)
+    assert out["training_records"] == {"parameter_changes": 2, "controls": 3}
+
+
 def test_a_file_of_a_session_wl_xcon_did_not_run_describes_no_kind():
     from wl_preproc.nwb.describe import describe
 
     out = describe(_gathered(), status="written", n_critical=0, checksums=[CHECKSUM], built_at=BUILT_AT)
-    assert (out["session_kind"], out["calibration"], out["accepted_warnings"]) == (None, None, [])
+    assert (out["session_kind"], out["calibration"], out["accepted_warnings"], out["training_records"]) == (
+        None, None, [], None)
     assert [run["calibration"] for run in out["runs"]] == [None]

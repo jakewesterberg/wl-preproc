@@ -520,9 +520,13 @@ Authorization: Bearer <token>
     `2026-10-14-session-kind-and-warnings-design.md` §5): what wl-xcon's record says the session
     was, `session_kind`, `calibration` (`id`, `standard`, `measured_on`) and
     `accepted_warnings` (each `code` and `run_number`, null at the open), and each run's
-    `calibration`; null and empty for a session wl-xcon did not run. The exported schema refuses
-    fields it does not know, so a copy validated against must take these. Read
-    `schema_version`, and ignore fields you do not know.
+    `calibration`; null and empty for a session wl-xcon did not run. **Within version 3, since
+    2026-10-18** (design spec `2026-10-18-training-records-and-backup-clock-design.md` §3.2):
+    `training_records`, how many of wl-xcon's training records the file holds, its
+    `parameter_changes` and its `controls` (the rows themselves are in the file's `rig_record`
+    module, which names no one who acted); null for a session wl-xcon did not run, and in a file
+    built before. The exported schema refuses fields it does not know, so a copy validated against
+    must take these. Read `schema_version`, and ignore fields you do not know.
 
 A file changes when it is built, published, moved between shares, or **its subject's details are
 corrected** (design spec `2026-10-05-subject-corrections-design.md`): a request that carries an

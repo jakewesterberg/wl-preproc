@@ -9,7 +9,9 @@ the measured blocks inside it, and gave each probe its `sorted_runs` (design
 spec `2026-10-01-session-listing-and-run-requests-design.md` section 4); within
 it, 2026-10-14 added what wl-xcon's record says the session was, its kind, its
 display calibration and each run's, and the warnings it accepted (design spec
-`2026-10-14-session-kind-and-warnings-design.md` section 5).
+`2026-10-14-session-kind-and-warnings-design.md` section 5), and 2026-10-18 how
+many of wl-xcon's training records the file holds (design spec
+`2026-10-18-training-records-and-backup-clock-design.md` section 3.2).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -179,6 +181,17 @@ class AcceptedWarning(_Frozen):
     run_number: int | None
 
 
+class TrainingRecords(_Frozen):
+    """How many of wl-xcon's training records the file holds: the live
+    changes the rig applied and the console controls it was sent. Who acted
+    is not published (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 0,
+    decision 6)."""
+
+    parameter_changes: int
+    controls: int
+
+
 class Quality(_Frozen):
     timing_tier: str
     reference_source: Literal["barcode", "manifest"]
@@ -260,3 +273,7 @@ class NwbDescription(_Frozen):
     session_kind: Literal["training", "piloting", "recording"] | None = None
     calibration: RigCalibration | None = None
     accepted_warnings: list[AcceptedWarning] = []
+    # How many training records the file holds (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` section 3.2),
+    # added within version 3: null for a session wl-xcon did not run.
+    training_records: TrainingRecords | None = None

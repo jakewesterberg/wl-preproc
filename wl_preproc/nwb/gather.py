@@ -83,13 +83,19 @@ def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
 
 def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
     """What wl-xcon's record says the session was (`core.SessionRecord`,
-    `core.AcceptedWarning`), or None when wl-xcon did not run it. The
-    warnings are those accepted at the session's open and those for the
-    file's own runs: one accepted for a run the file does not hold is about
-    that run (design spec `2026-10-14-session-kind-and-warnings-design.md`,
-    amendment 1). Who accepted a warning is not read: the file names no one
-    (section 0, decision 3)."""
+    `core.AcceptedWarning`), and its training records (`core.ParameterChange`,
+    `core.RigControl`), or None when wl-xcon did not run it. The warnings are
+    those accepted at the session's open and those for the file's own runs:
+    one accepted for a run the file does not hold is about that run (design
+    spec `2026-10-14-session-kind-and-warnings-design.md`, amendment 1). The
+    training records are chosen by the same rule (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 10).
+    Who acted is read by kind only: the file names no one (decision 3 of the
+    first; decision 6 of the second)."""
     from wl_preproc.schema import core
+
+    def the_files(row: dict) -> bool:
+        return row["run_index"] is None or row["run_number"] in run_numbers
 
     rows = (core.SessionRecord & session_key).to_dicts()
     if not rows:
@@ -107,7 +113,15 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
                       "accepted_in": [kind for kind in (warning["accepted_in"] or "").split(",") if kind],
                       "how": warning["how"], "run_number": warning["run_number"], "at_local": warning["at_local"]}
                      for warning in (core.AcceptedWarning & session_key).to_dicts(order_by="warning_number")
-                     if warning["run_index"] is None or warning["run_number"] in run_numbers],
+                     if the_files(warning)],
+        "parameter_changes": [
+            {name: change[name] for name in ("session_time", "run_number", "name", "was", "now", "sequence",
+                                             "by_kind")}
+            for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line") if the_files(change)],
+        "controls": [
+            {name: control[name] for name in ("session_time", "time_source", "at", "kind", "trial_index", "detail",
+                                              "by_kind")}
+            for control in (core.RigControl & session_key).to_dicts(order_by="control_line") if the_files(control)],
     }
 
 

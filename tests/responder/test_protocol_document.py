@@ -29,11 +29,11 @@ def test_every_field_a_listed_session_carries_is_named_in_the_protocol():
 
 
 def test_the_descriptions_record_of_the_session_is_named_in_the_protocol():
-    from wl_preproc.contracts.nwb_description import AcceptedWarning, RigCalibration
+    from wl_preproc.contracts.nwb_description import AcceptedWarning, RigCalibration, TrainingRecords
 
     section = _section("`GET /nwb`")
-    names = ["session_kind", "calibration", "accepted_warnings",
-             *AcceptedWarning.model_fields, *RigCalibration.model_fields]
+    names = ["session_kind", "calibration", "accepted_warnings", "training_records",
+             *AcceptedWarning.model_fields, *RigCalibration.model_fields, *TrainingRecords.model_fields]
     assert [name for name in names if f"`{name}`" not in section] == []
 
 

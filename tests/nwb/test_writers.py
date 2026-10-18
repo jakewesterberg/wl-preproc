@@ -323,6 +323,8 @@ RIG_RECORD = {
         {"code": "luminance-step", "detail": "the luminance-step sentence", "accepted_in": ["training"],
          "how": "start", "run_number": 2, "at_local": "2026-10-09T09:05:00+02:00"},
     ],
+    "parameter_changes": [],
+    "controls": [],
 }
 
 
@@ -356,13 +358,44 @@ def test_the_rig_record_holds_the_session_and_the_warnings_it_accepted(tmp_path)
         assert warnings["detail"].tolist() == ["the default-calibration sentence", "the luminance-step sentence"]
 
 
+def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(tmp_path):
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 3.2: each change and control at its session time (NaN where
+    untimed), its values and detail as JSON text, and the kind of actor."""
+    import math
+
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    record = {**RIG_RECORD, "parameter_changes": [
+        {"session_time": 2.5, "run_number": 1, "name": "reward_ml", "was": "0.2", "now": "0.25", "sequence": 1,
+         "by_kind": "member"},
+        {"session_time": None, "run_number": None, "name": "seed", "was": None, "now": "[8, 9]", "sequence": None,
+         "by_kind": None}],
+        "controls": [
+        {"session_time": 4.0, "time_source": "code", "at": 1773478804.0, "kind": "pause", "trial_index": 1,
+         "detail": "{}", "by_kind": "box"},
+        {"session_time": None, "time_source": None, "at": None, "kind": "note", "trial_index": None,
+         "detail": '{"note": "lid droop"}', "by_kind": None}]}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
+    with io:
+        module = nwb.processing["rig_record"]
+        changes = module["parameter_changes"].to_dataframe()
+        assert changes[["run_number", "setting", "was", "now", "sequence", "by_kind"]].values.tolist() == [
+            [1, "reward_ml", "0.2", "0.25", 1, "member"], [-1, "seed", "", "[8, 9]", -1, ""]]
+        assert changes["session_time"].iloc[0] == 2.5 and math.isnan(changes["session_time"].iloc[1])
+        controls = module["controls"].to_dataframe()
+        assert controls[["time_source", "kind", "trial_index", "detail", "by_kind"]].values.tolist() == [
+            ["code", "pause", 1, "{}", "box"], ["", "note", -1, '{"note": "lid droop"}', ""]]
+        assert controls["rig_at"].iloc[0] == 1773478804.0 and math.isnan(controls["rig_at"].iloc[1])
+
+
 def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_table(tmp_path):
     """A `config.json` written before wl-xcon's engine build B: the session
     row says nothing was recorded, and a session that accepted no warning
     has no warnings table."""
     from wl_preproc.nwb.rig_record import add_rig_record
 
-    record = {"session_kind": None, "calibration": None, "warnings": []}
+    record = {"session_kind": None, "calibration": None, "warnings": [], "parameter_changes": [], "controls": []}
     _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
     with io:
         module = nwb.processing["rig_record"]
@@ -370,3 +403,4 @@ def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_t
         assert (session["session_kind"], session["calibration_id"], session["calibration_standard"],
                 session["calibration_cones"]) == ("", "", -1, "")
         assert "accepted_warnings" not in module.data_interfaces
+        assert "parameter_changes" not in module.data_interfaces and "controls" not in module.data_interfaces

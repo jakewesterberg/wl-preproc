@@ -52,9 +52,10 @@ def _rig_record(record: dict | None) -> dict:
     """What wl-xcon's record says the session was, for selecting a dataset by
     kind: the calibration without its colour model, and each warning by its
     code and run (design spec `2026-10-14-session-kind-and-warnings-design.md`
-    section 5)."""
+    section 5); and how many training records the file holds (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.2)."""
     if record is None:
-        return {"session_kind": None, "calibration": None, "accepted_warnings": []}
+        return {"session_kind": None, "calibration": None, "accepted_warnings": [], "training_records": None}
     calibration = record["calibration"]
     return {
         "session_kind": record["session_kind"],
@@ -62,6 +63,8 @@ def _rig_record(record: dict | None) -> dict:
             name: calibration[name] for name in ("id", "standard", "measured_on")},
         "accepted_warnings": [{"code": warning["code"], "run_number": warning["run_number"]}
                               for warning in record["warnings"]],
+        "training_records": {"parameter_changes": len(record["parameter_changes"]),
+                             "controls": len(record["controls"])},
     }
 
 
