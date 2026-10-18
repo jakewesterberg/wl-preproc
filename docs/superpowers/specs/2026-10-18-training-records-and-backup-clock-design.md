@@ -439,8 +439,8 @@ its mutation checks; the full suite runs once per branch on both interpreters.
 
 ## Amendment, 2026-10-18, wl-xcon's answer
 
-2. **Each row will say the code it strobed** (wl-xcon, 2026-10-18, building on its branch
-   `xc321-event-code`, not yet merged). Every `parameter_changes.jsonl` and `controls.jsonl` row
+2. **Each row says the code it strobed** (wl-xcon, 2026-10-18; merged on its `main` as `67d7028`,
+   read at `e5b9835`). Every `parameter_changes.jsonl` and `controls.jsonl` row
    gains `event_code`, an integer or null: the number that row's act strobed, from the allocation the
    session's process loaded, or null when it strobed nothing. **A row written before the field has no
    key, which is read as unknown, never as null.** A change carries `PARAM_CHANGED`'s number;
@@ -448,8 +448,28 @@ its mutation checks; the full suite runs once per branch on both interpreters.
    without its code is refused and writes no row); an `end` `HEAD_RELEASED`'s when ending released
    the head; `note`, `schedule`, `cancel`, `scheduled_stop` and `stop` are always null. It is on the
    row rather than the run's start row because a resumed session can come back on another
-   allocation that no file names until its next run. wl-xcon also now refuses a run whose allocation
-   lacks `PARAM_CHANGED` before it applies any value.
+   allocation that no file names until its next run. A run whose allocation lacks `PARAM_CHANGED`
+   faults at the first change it applies, before applying any value (the first correction below).
+
+   *Until wl-xcon's corrections, this said the field was being built on wl-xcon's branch
+   `xc321-event-code`, and that such a run is refused before it applies any value, as wl-xcon first
+   said.*
+   - **wl-xcon's three corrections** (2026-10-18, once merged; each read in its `main` at `7398d3e`,
+     whose code is `e5b9835`'s):
+     1. **A run whose allocation lacks `PARAM_CHANGED` is not refused before it starts.** It starts,
+        its start row written and its codes strobed, and faults at the first trial boundary that applies
+        a staged change, before applying any value or writing any change row
+        (`taskd.py::_apply_staged`, which looks the code up first). A run with nothing staged never
+        faults on it.
+     2. **`HEAD_RELEASED` is strobed with no row in a head-fixed `wlx run` session**, at its run's end
+        and while it waits for the animal's return (`taskd.py`, the run's end and its fault handler,
+        both `not self.service`). The `end` row exists only in a `wlx taskd` service session
+        (`end_runs`), whose release it records. So a `wlx run` session's `HEAD_RELEASED` codes join no
+        row, and none needs to.
+     3. **Some fault paths strobe a code and write no row.** A manual reward's code goes out before the
+        pump runs and its row after it, so a pump fault leaves the code alone (`taskd.py`'s reward);
+        wl-xcon also names a mark stamped in a trial that then faults. Each reads here as a count that
+        disagrees: that number's rows stay untimed, and the problem names both counts.
    - **§3.3's joins read it:** the n-th row carrying a number takes the time of the n-th occurrence
      of that number in the session's codes; a count that disagrees leaves that number's rows untimed,
      naming both counts; a row without the key is untimed. A task's own mark can strobe a framework

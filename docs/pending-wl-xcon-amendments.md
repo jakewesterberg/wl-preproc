@@ -48,9 +48,13 @@ here before it is written.
 
 **Nothing on the wire changes.**
 
-**Answered 2026-10-18, building:** each row gains `event_code`, an integer or null, a missing key
-read as unknown (wl-xcon's branch `xc321-event-code`, not yet merged; the spec's amendment 2). The
-three later asks are its XC-356, XC-383 and XC-288 §3.1 and §3.2.
+**Answered 2026-10-18, and merged:** each row gains `event_code`, an integer or null, a missing key
+read as unknown (wl-xcon's `main` at `67d7028`; the spec's amendment 2, which also records wl-xcon's
+three corrections to its first answer). The three later asks are its XC-356, XC-383 and XC-288 §3.1
+and §3.2.
+
+*Until the merge, this said wl-xcon was building it on its branch `xc321-event-code`; true when
+written.*
 
 ---
 
