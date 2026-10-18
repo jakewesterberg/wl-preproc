@@ -519,3 +519,52 @@ its mutation checks; the full suite runs once per branch on both interpreters.
    the lock timeout. `daemon._first_tables` now records each session's clock before the events stage,
    and `clock_for` reads with `FOR SHARE` when its re-read is empty. A stage asked outside a daemon pass
    still records the clock itself, as amendment 3 says.
+
+## Amendments, 2026-10-18, made while proving part 1's plan
+
+9. **§10's item 7, measured: the values and the line are stored as JSON text** (`mediumtext`), not in
+   MySQL's `json` type. On the test MySQL through DataJoint 2.3.3, a `json` column gave
+   `123456789.12345679` back as `123456789.1234568`, a double's seventeenth digit rounded, and refused
+   NaN ("Invalid JSON text"), which wl-xcon's `json.dumps` writes for a value that is not a number, and
+   which would fail the session's event stage on every pass. A `mediumtext` column gave back every
+   probed value and line exactly. `row` is the line as written; `was`, `now` and `detail` are each
+   value's JSON text, keys sorted.
+10. **The NWB file holds the training records of its own runs, and those outside any run** (§3.2 did
+    not say which): a row of a run the file does not hold is about that run, as ask 5's warnings are
+    chosen (its amendment 1). wl-xcon numbers a row by the run in progress or, between runs, the last
+    one; a row before the first run has none.
+11. **§10's item 10, measured: no fit may miss a code by more than 50 ms**
+    (`events/rigtiming.py::RIG_CLOCK_LIMIT_S`). The synthetic rig record states its jitter, each instant
+    up to 5 ms either side of its code, its clock 20 ppm fast (`synth/peripherals.py`). Over 2000
+    synthetic sessions of 15 s to two hours, 4 to 200 instants each, the largest miss was 6.8 ms (the
+    99th percentile 6.1 ms). A step in the rig's clock of 2 s, as a resumed process anchors it again,
+    was refused in each of 1000 sessions; one of 0.5 s in 998, of 0.1 s in 819, and of 50 ms in 3. A
+    step at a session's last instants tilts the line instead, within the step. wl-xcon has not
+    measured its rig's own jitter (amendment 2), so the limit is set against the stated one.
+12. **The rig's clock fit is kept in `core.RigClock`,** beside the records it times and written with
+    them by the events stage: `rig_at_zero` (the rig's clock at session t = 0), `drift_ppm`, the
+    instants matched and the residuals. §3.3 said "with the session's other device maps"; those are
+    each an acquisition system's (`timebase.SystemTimebase`), and the rig is not one of `SYSTEMS`. A
+    control is timed through the fit only when its row says it strobed nothing (`event_code: null`) and
+    carries an instant; a row whose code's count disagrees, or that does not say, stays untimed, as
+    amendment 2 says.
+13. **§10's item 1, verified:** each row's `event_code` (amendment 2) says which code it strobed, and
+    this pipeline decodes every number from 4096 up as a simple event (`contracts/events.py`'s ranges),
+    so the framework codes are among the session's codes; a payload's words, read by position, are
+    not counted (`events/rigtiming.py::code_times`). The listing's pauses are `controls.jsonl`'s
+    `pause` rows and its manual rewards its `reward` rows (wl-xcon's `taskd.py`, read at `7398d3e`).
+14. **§10's item 6, verified: both contracts widen within themselves.** The NWB description gains
+    `training_records` (`parameter_changes`, `controls`) within version 3, as ask 5's fields were
+    added; the listing gains `training_records` (`parameter_changes`, `pauses`, `manual_rewards`) and
+    `clock`, listed from part 1 since `timebase.SessionClock` exists. Both exported schemas refuse
+    fields they do not know, so wl.works' copies must take these first
+    (`docs/pending-wl-works-amendments.md`, the section opened 2026-10-18). Every listed session is
+    listed once more when this ships.
+15. **The events stage's activation binds `timebase`** (found while proving). Since part 2 the stage
+    reads the session's codes through its clock, which records `timebase.SessionClock` on first ask,
+    and `events.activate` bound `pipeline` and `core` only. The daemon binds every schema, so nothing
+    in production failed; but `tests/schema/test_events.py` run alone failed 20 of its 30 tests at
+    `5b7744b` ("assert self._connection is not None"), as did each of part 1's own tests run alone.
+16. **The synthetic run record's instants are the rig's clock** (`synth/peripherals.py::rig_clock`):
+    each run row's `at` was its session time, which wl-xcon never writes and nothing read. A profile
+    without runs is unchanged; one with runs differs in those instants only.

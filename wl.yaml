@@ -68,8 +68,9 @@ status:
     clock for a session without the sync box
     (docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md,
     five parts); part 2, the clock as a recorded choice, is merged
-    (789e825; docs/handoffs/2026-10-18-clock-choice.md); part 1 can be
-    planned, wl-xcon's event_code being on its main (67d7028).
+    (789e825; docs/handoffs/2026-10-18-clock-choice.md); part 1, the
+    training records, is built on feat/training-records and not merged
+    (docs/handoffs/2026-10-18-training-records.md); next, the review.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: part 2 of the training-records design (789e825). Before it, the
     correction marker's minors and its review's five findings
