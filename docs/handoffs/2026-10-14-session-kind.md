@@ -108,3 +108,22 @@ amendment first, now stated in it; no backfill for sessions read before (§6); i
 warnings; nwbinspector's view of a JSON string and a one-row table; a re-read keeping stale rows, as
 `core.RunRecord` does (§8); inputs wl-xcon's types cannot produce; two subject-mismatch problems, one per
 reader; and a box-typed name going to wl.works (§0, decision 3).
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-18. Built on
+`fix/session-kind-minors`, from `fff716b`; spec amendment 8; the fixes in `1a55c9e`.
+1. **Another animal's `config.json`** keeps its problem and no session row, so its file gets no
+   `rig_record` module (`test_a_record_of_another_animal_keeps_no_kind_and_no_warnings`).
+2. **A non-finite `at`** is read as none (`test_a_time_that_is_not_finite_is_none`), and **a warning's
+   run that will not fit its column** is flagged
+   (`test_a_warnings_run_that_will_not_fit_is_a_problem_and_names_no_run`).
+3. **A run without its start row** joins no warning (`test_a_run_without_its_start_row_maps_to_no_number`):
+   the code made to say what §2 said, rather than §2 the code.
+4. **The listing leaves `calibration_cones` out of its query**
+   (`test_the_listing_does_not_read_the_colour_model_it_does_not_list`).
+5. **Three comments** in `rigruns.py` and `core.py` made true.
+
+Each test failed first, and a mutation of each fix fails it. **The full suite** at the fixes' commit (as
+`712ddf9`, before its rebase onto the merge's pointer, which changed documents only), as Task 5 ran it: 2403 passed, 27 skipped, 1 deselected, 1 xfailed on 3.11; 2403 passed, 28 skipped,
+1 xfailed on 3.13. Six more than the merge's 2397, this section's tests.

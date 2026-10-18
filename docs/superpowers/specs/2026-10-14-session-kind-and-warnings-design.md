@@ -237,3 +237,17 @@ written. These settle what the sections above left open; §0 stands.
 7. **A description recorded before §5's fields compares as the model reads it now.** Re-read, it gains
    them defaulted, so compared raw it differed from itself, and a correction marker whose swap never
    happened showed wl.works a change for nothing (`nwb/correct.py::as_described_now`).
+
+## Amendment 8, 2026-10-18, the final review's deferred minors
+
+8. **What the minors settled** (the requester's choice, 2026-10-18):
+   - **A record of another animal keeps nothing but its problem:** no `core.SessionRecord` row, so its
+     file has no `rig_record` module, as §3 says.
+   - **A warning joins a run only through the run's start row,** as §2 says. A run whose start line was
+     lost keeps its stop reason by `run` + 1, as `core.RunRecord` maps it, but that guess joins no
+     warning: wl-xcon's numbers part from it once a session resumes.
+   - **A non-finite `at` is read as none,** and **a warning's run that will not fit its column** is
+     stored with none and flagged (`rig_record_problem`), so it is not taken silently for one accepted
+     at the session's open. Either would otherwise fail the session's event stage on every pass, as
+     amendment 4 says of a run.
+   - **The listing does not read the colour model** it does not list.
