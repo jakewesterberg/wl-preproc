@@ -228,3 +228,89 @@ def test_a_rig_record_needs_runs():
 
     with pytest.raises(ValueError, match="rig_record needs runs"):
         SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "rig_record": RigRecordSpec().model_dump()})
+
+
+# -- The rig's training records (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md` section 3).
+
+def _training(changes=(), controls=()):
+    from wl_preproc.synth.recipe import RigRecordSpec, SessionRecipe
+
+    rig = RigRecordSpec(changes=changes, controls=controls)
+    return SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "rig_record": rig.model_dump()})
+
+
+def test_each_act_strobes_its_code_mid_trial_and_one_that_strobed_nothing_strobes_none():
+    from wl_preproc.synth.recipe import RigChangeSpec, RigControlSpec
+
+    recipe = _training(changes=(RigChangeSpec(trial=2),),
+                       controls=(RigControlSpec(trial=2), RigControlSpec(trial=3, kind="note", event_code=None)))
+    truth = build_timeline(recipe)
+    (change,), (pause, note) = truth.change_times, truth.control_times
+    assert (change, 4130) in truth.code_words and (pause, 4131) in truth.code_words
+    second, third = truth.trials[1], truth.trials[2]
+    assert second.start_s < change < pause < second.end_s
+    assert note == (third.start_s + third.end_s) / 2
+    assert len(truth.code_words) == len(build_timeline(_training()).code_words) + 2
+
+
+def test_the_training_records_are_written_in_wl_xcons_keys():
+    """`record.py`'s `parameter_change` and `control` (wl-xcon's `7398d3e`),
+    read back with nothing to report."""
+    import tempfile
+    from pathlib import Path
+
+    from wl_preproc.events.rigrecords import read_rig_records
+    from wl_preproc.synth.peripherals import write_rig_runs
+    from wl_preproc.synth.recipe import RigChangeSpec, RigControlSpec
+
+    recipe = _training(changes=(RigChangeSpec(trial=1), RigChangeSpec(trial=4, name="seed", was=1, now=[2, 3])),
+                       controls=(RigControlSpec(trial=4, kind="reward", event_code=4134, detail={"ml": 0.1}),))
+    with tempfile.TemporaryDirectory() as directory:
+        xcon = Path(directory) / "xcon"
+        xcon.mkdir()
+        write_rig_runs(xcon, recipe, build_timeline(recipe))
+        changes = [json.loads(line) for line in (xcon / "parameter_changes.jsonl").read_text().splitlines()]
+        (control,) = [json.loads(line) for line in (xcon / "controls.jsonl").read_text().splitlines()]
+        records = read_rig_records(Path(directory))
+    assert [set(row) for row in changes] == [{"sequence", "name", "was", "now", "by", "run", "event_code"}] * 2
+    assert [(row["sequence"], row["run"], row["now"]) for row in changes] == [(1, 0, 0.25), (2, 1, [2, 3])]
+    assert set(control) == {"kind", "by", "at", "at_local", "trial_index", "event_code", "run", "ml"}
+    assert (control["trial_index"], control["run"], control["event_code"]) == (3, 1, 4134)
+    assert (len(records.changes), len(records.controls), records.problems) == (2, 1, ())
+
+
+def test_the_rigs_instants_are_its_clock_within_the_stated_jitter(tmp_path):
+    """Its run rows and its controls, stamped on the rig's anchored wall
+    clock, each within `RIG_STAMP_JITTER_S` of its code."""
+    from wl_preproc.synth.peripherals import (RIG_CLOCK_LEAD_S, RIG_DRIFT_PPM, RIG_STAMP_JITTER_S,
+                                              write_rig_runs)
+    from wl_preproc.synth.recipe import SYNTH_EPOCH, RigControlSpec
+
+    recipe = _training(controls=(RigControlSpec(trial=2), RigControlSpec(trial=3, kind="resume", event_code=4132)))
+    truth = build_timeline(recipe)
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, truth)
+    runs = [json.loads(line) for line in (tmp_path / "xcon" / "runs.jsonl").read_text().splitlines()]
+    controls = [json.loads(line) for line in (tmp_path / "xcon" / "controls.jsonl").read_text().splitlines()]
+    planted = [time for block in truth.blocks for time in (block.start_s, block.end_s)] + list(truth.control_times)
+    for row, time in zip(runs + controls, planted, strict=True):
+        ideal = SYNTH_EPOCH.timestamp() + RIG_CLOCK_LEAD_S + time * (1 + RIG_DRIFT_PPM / 1e6)
+        assert abs(row["at"] - ideal) <= RIG_STAMP_JITTER_S
+
+
+def test_a_rig_record_without_acts_writes_no_training_records(tmp_path):
+    from wl_preproc.synth.peripherals import write_rig_runs
+
+    recipe = _training()
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    assert not (tmp_path / "xcon" / "parameter_changes.jsonl").exists()
+    assert not (tmp_path / "xcon" / "controls.jsonl").exists()
+
+
+def test_an_act_past_the_sessions_trials_is_refused():
+    from wl_preproc.synth.recipe import RigControlSpec
+
+    with pytest.raises(ValueError, match=r"rig_record acts in trials \[5\], past the session's 4"):
+        _training(controls=(RigControlSpec(trial=5),))
