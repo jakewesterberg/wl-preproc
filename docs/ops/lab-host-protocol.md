@@ -516,8 +516,13 @@ Authorization: Bearer <token>
     design, `2026-09-30-nwb-probes-design.md` §3.2) gave `probes` its shape: each probe's
     `serial`, `probe_type`, `insertion_number`, `trajectory_id`, `n_electrodes`, `target`
     and `assignment`, and `area_from`, which says whether the file's area label came from
-    the assignment, the aim, or neither. Read `schema_version`, and ignore fields you do
-    not know.
+    the assignment, the aim, or neither. **Within version 3, since 2026-10-14** (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` §5): what wl-xcon's record says the session
+    was, `session_kind`, `calibration` (`id`, `standard`, `measured_on`) and
+    `accepted_warnings` (each `code` and `run_number`, null at the open), and each run's
+    `calibration`; null and empty for a session wl-xcon did not run. The exported schema refuses
+    fields it does not know, so a copy validated against must take these. Read
+    `schema_version`, and ignore fields you do not know.
 
 A file changes when it is built, published, moved between shares, or **its subject's details are
 corrected** (design spec `2026-10-05-subject-corrections-design.md`): a request that carries an
@@ -576,7 +581,8 @@ Authorization: Bearer <token>
   - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
     (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and
     `end_s` on the recording's clock, `closed`, wl-xcon's `stopped_because` and `stop_kind`,
-    `segments` (the barcodes of the SpikeGLX segments it spans), and `blocks`;
+    `calibration` (the display calibration the run ran against, from its start row in wl-xcon's
+    record, or null), `segments` (the barcodes of the SpikeGLX segments it spans), and `blocks`;
   - each block: `block_number` (in the session), `block_in_run`, `block_type`, `start_s`,
     `end_s`, `closed` (null when never recorded, for a session read before 2026-10-01),
     `n_trials`;
@@ -587,13 +593,26 @@ Authorization: Bearer <token>
     recorded none. **Runs and segments do not align**: a bank change needs a SpikeGLX restart,
     which is a new segment, and a run need not stop for it;
   - `probes`, every serial the recording names;
+  - what wl-xcon's record says the session was (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` §4), carried and never acted on here:
+    `session_kind` (`training`, `piloting` or `recording`), `calibration` (`id`, `standard`: true for
+    the sRGB standard nobody measured, and `measured_on`, empty for the standard), and
+    `accepted_warnings`, each with its `code`, its sentence as `detail`, the kinds it is acceptable
+    in as `accepted_in`, `how` it was accepted (`open`, `start` or `--accept-warnings`), the
+    `run_number` it was accepted for (null at the open, or for a run the recording did not
+    measure), `at_local` (the rig's local time, not the recording's clock) and `by`: `kind` (`box`
+    for a name typed at the rig, `member` for a wl.works member), `name` and `account` (null for a
+    box), never the token or its issuer. A session wl-xcon did not run, one whose record predates
+    its engine build B, and one read before this host carried them (2026-10-14) list null, null and
+    `[]` alike;
   - `flags`, each a `code`, a `message`, and the `run_number` or `block_number` it is about:
     `waiting_for_run_markers` (no measured run yet), `repeated_run_number` and
     `repeated_block_number` (a crash restart before wl-xcon's XC-026; only the first is
     listed), `run_without_block`, `bank_change_in_run`, `block_type_unknown`, `task_unknown`,
     `block_outside_runs` (a block in no measured run: its run's `RUN_START` was lost), and
-    `rig_record_problem` (what wl-xcon's run record could not supply, line by line, or its
-    absence).
+    `rig_record_problem` (what wl-xcon's record could not supply, each naming its file, line by
+    line: `runs.jsonl`, `config.json` or `warnings.jsonl`; or the run record's absence; a problem
+    stored before 2026-10-14 names no file).
     **None of them blocks anything here.**
 
 ---

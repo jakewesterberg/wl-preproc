@@ -33,12 +33,13 @@ CHECKSUM = {"dataset_path": "/intervals/trials/start_time", "dtype": "float64", 
             "sha256": "0" * 64, "paired_with": ""}
 
 
-def _gathered(eye=None, notes=(), probes=(), probe_notes=(), trial_notes=()):
+def _gathered(eye=None, notes=(), probes=(), probe_notes=(), trial_notes=(), runs=(RUN,), rig_record=None):
     from wl_preproc.nwb.gather import Gathered
 
-    return Gathered(session=SESSION, systems=["ohdpi"], runs=[RUN], blocks=[BLOCK], trials=[{"trial_id": 1}],
+    return Gathered(session=SESSION, systems=["ohdpi"], runs=list(runs), blocks=[BLOCK], trials=[{"trial_id": 1}],
                     events=[{}, {}], timebase={}, eye=eye, conditions=[CONDITION], condition_notes=list(notes),
-                    probes=list(probes), probe_notes=list(probe_notes), trial_notes=list(trial_notes))
+                    probes=list(probes), probe_notes=list(probe_notes), trial_notes=list(trial_notes),
+                    rig_record=rig_record)
 
 
 def test_the_description_of_a_file_without_eye_data():
@@ -144,3 +145,29 @@ def test_a_run_takes_the_rigs_name_for_its_task_and_a_probe_its_sorted_runs():
     out = describe(data, status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
     assert out["runs"][0]["task"] == {"code": "2", "name": "fixation_detection"}
     assert out["probes"][0]["sorted_runs"] == [1]
+
+
+def test_the_description_says_what_wl_xcons_record_says_the_session_was():
+    """So a dataset can be selected by kind (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 5): the kind,
+    the calibration without its colour model, each accepted warning's code
+    and run, and each run's calibration. No person."""
+    from tests.nwb.test_writers import RIG_RECORD
+    from wl_preproc.nwb.describe import describe
+
+    out = describe(_gathered(runs=[{**RUN, "calibration": "rig-a-2026-10-01"}], rig_record=RIG_RECORD),
+                   status="written", n_critical=0, checksums=[CHECKSUM], built_at=BUILT_AT)
+    assert out["session_kind"] == "training"
+    assert out["calibration"] == {"id": "rig-a-2026-10-01", "standard": False, "measured_on": "2026-10-01"}
+    assert out["accepted_warnings"] == [{"code": "default-calibration", "run_number": None},
+                                        {"code": "luminance-step", "run_number": 2}]
+    assert [run["calibration"] for run in out["runs"]] == ["rig-a-2026-10-01"]
+    assert out["schema_version"] == 3
+
+
+def test_a_file_of_a_session_wl_xcon_did_not_run_describes_no_kind():
+    from wl_preproc.nwb.describe import describe
+
+    out = describe(_gathered(), status="written", n_critical=0, checksums=[CHECKSUM], built_at=BUILT_AT)
+    assert (out["session_kind"], out["calibration"], out["accepted_warnings"]) == (None, None, [])
+    assert [run["calibration"] for run in out["runs"]] == [None]

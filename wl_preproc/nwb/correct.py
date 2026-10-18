@@ -254,6 +254,18 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     return note
 
 
+def as_described_now(description: dict) -> dict:
+    """A recorded description as the description's model reads it now: one
+    recorded before a field was added within its version has it defaulted, so
+    it compares equal to itself re-read (`subject_records` re-reads every one).
+    Compared raw, a field added since would be a change for nothing (the
+    session kind's final review's I3; design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 5)."""
+    from wl_preproc.contracts.nwb_description import NwbDescription
+
+    return NwbDescription.model_validate(description).model_dump(mode="json")
+
+
 def subject_records(key: dict, description: dict, path: Path) -> tuple[dict, list[dict]]:
     """A description and the four subject datasets' checksums brought up to
     the file at `path`: its subject as the file holds it (with `age_days`),
@@ -323,7 +335,7 @@ def _record(key: dict, row: dict, live: Path, placement: dict | None) -> None:
     from wl_preproc.schema import nwb as nwb_schema
 
     description, fresh = subject_records(key, row["description"], live)
-    if description == row["description"]:
+    if description == as_described_now(row["description"]):
         # Marked and never swapped: the records already describe the file,
         # and wl.works is shown no change for nothing (design spec
         # `2026-10-11-correction-marker-design.md` section 3, rule 3).

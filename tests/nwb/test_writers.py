@@ -307,3 +307,66 @@ def test_runs_that_hold_no_block_add_no_block_table(tmp_path):
     _path, io, nwb = _write(tmp_path, build)
     with io:
         assert "blocks" not in nwb.intervals and "runs" in nwb.intervals
+
+
+# -- What wl-xcon's record says the session was (design spec
+# `2026-10-14-session-kind-and-warnings-design.md` section 5).
+
+RIG_RECORD = {
+    "session_kind": "training",
+    "calibration": {"id": "rig-a-2026-10-01", "standard": False, "measured_on": "2026-10-01",
+                    "cones": {"observer": {"name": "CIE2006_10"}, "via": None, "luminance": None, "dkl": "unit"}},
+    "warnings": [
+        {"code": "default-calibration", "detail": "the default-calibration sentence",
+         "accepted_in": ["training", "piloting"], "how": "open", "run_number": None,
+         "at_local": "2026-10-09T09:00:00+02:00"},
+        {"code": "luminance-step", "detail": "the luminance-step sentence", "accepted_in": ["training"],
+         "how": "start", "run_number": 2, "at_local": "2026-10-09T09:05:00+02:00"},
+    ],
+}
+
+
+def test_each_run_carries_the_calibration_it_ran_against(tmp_path):
+    from wl_preproc.nwb.intervals import add_runs
+
+    runs = [{**RUNS[0], "calibration": "rig-a-2026-10-01"}, RUNS[1]]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_runs(nwb, runs, ["ohdpi"]))
+    with io:
+        assert nwb.intervals["runs"].to_dataframe()["calibration"].tolist() == ["rig-a-2026-10-01", ""]
+
+
+def test_the_rig_record_holds_the_session_and_the_warnings_it_accepted(tmp_path):
+    import json
+
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, RIG_RECORD))
+    with io:
+        module = nwb.processing["rig_record"]
+        (session,) = module["session"].to_dataframe().to_dict("records")
+        assert {name: session[name] for name in ("session_kind", "calibration_id", "calibration_standard",
+                                                 "calibration_measured_on")} == {
+            "session_kind": "training", "calibration_id": "rig-a-2026-10-01", "calibration_standard": 0,
+            "calibration_measured_on": "2026-10-01"}
+        assert json.loads(session["calibration_cones"]) == RIG_RECORD["calibration"]["cones"]
+        warnings = module["accepted_warnings"].to_dataframe()
+        assert warnings[["code", "accepted_in", "how", "run_number", "accepted_at_local"]].values.tolist() == [
+            ["default-calibration", "training,piloting", "open", -1, "2026-10-09T09:00:00+02:00"],
+            ["luminance-step", "training", "start", 2, "2026-10-09T09:05:00+02:00"]]
+        assert warnings["detail"].tolist() == ["the default-calibration sentence", "the luminance-step sentence"]
+
+
+def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_table(tmp_path):
+    """A `config.json` written before wl-xcon's engine build B: the session
+    row says nothing was recorded, and a session that accepted no warning
+    has no warnings table."""
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    record = {"session_kind": None, "calibration": None, "warnings": []}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
+    with io:
+        module = nwb.processing["rig_record"]
+        (session,) = module["session"].to_dataframe().to_dict("records")
+        assert (session["session_kind"], session["calibration_id"], session["calibration_standard"],
+                session["calibration_cones"]) == ("", "", -1, "")
+        assert "accepted_warnings" not in module.data_interfaces

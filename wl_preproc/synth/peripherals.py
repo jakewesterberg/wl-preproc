@@ -7,6 +7,7 @@ a format nothing else speaks.
 
 from __future__ import annotations
 
+import datetime
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -206,10 +207,12 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
     whose block is unclosed faulted, and its end row says so in `taskd.py`'s
     words for a fault; the others are its words for a run that finished its
     blocks."""
+    rig = recipe.rig_record
     rows = []
     for run_index, block in enumerate(truth.blocks):
         spec = recipe.blocks[run_index]
-        rows.append({"event": "start", "run": run_index, "at": block.start_s, "task": spec.task_type.name.lower()})
+        rows.append({"event": "start", "run": run_index, "at": block.start_s, "task": spec.task_type.name.lower(),
+                     **({} if rig is None else {"calibration": rig.calibration_id})})
         if run_index + 1 in recipe.unclosed_blocks:
             rows.append({"event": "end", "run": run_index, "at": block.end_s,
                          "stopped_because": "fault, session aborted: RuntimeError: a synthetic fault",
@@ -219,5 +222,44 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
                          "stopped_because": "every block is finished", "stop_kind": "completed"})
     (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
                                          encoding="utf-8")
-    (xcon_dir / "config.json").write_text(json.dumps({"session_id": recipe.session_id, "subject": recipe.subject},
-                                                     sort_keys=True), encoding="utf-8")
+    config = {"session_id": recipe.session_id, "subject": recipe.subject}
+    if rig is not None:
+        config["session_kind"] = rig.session_kind
+        config["calibration"] = None if rig.calibration_id is None else {
+            "id": rig.calibration_id, "standard": False, "measured_on": "2027-03-01", "cones": RIG_CONES}
+        write_rig_warnings(xcon_dir, recipe, truth)
+    (xcon_dir / "config.json").write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+
+
+# How a calibration's cone colours became light, in the shape wl-xcon's
+# `photometry.py::cone_record` writes it (read at `b2c2850`): its observer as
+# `cones.py::Observer.record` gives the CIE 2006 10-degree one, with floats,
+# lists and a degree sign, so the real shape is what crosses the database's
+# blob and the NWB file's JSON (the session kind's final review's I4). Its
+# `luminosity_weights` are placeholders: carried verbatim and read by nothing.
+# `via` and `luminance` are null, as wl-xcon writes them where no cone colour
+# converts, so the nulls a nested record holds are carried too.
+RIG_CONES = {
+    "observer": {"name": "CIE 2006 10°", "data": "10.25039/CIE.DS.nxsqeri8", "field_deg": 10.0,
+                 "peak_optical_density": [0.38, 0.38, 0.30], "macular_density_460nm": 0.095,
+                 "lens_density_400nm": 1.7649, "luminosity": "V_F,10", "luminosity_weights": [0.69, 0.35],
+                 "interpolation": "linear between the table's 5 nm points; zero outside 390-830 nm"},
+    "via": None, "luminance": None, "dkl": "unit",
+}
+
+
+def write_rig_warnings(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
+    """Stands in for wl-xcon's `xcon/warnings.jsonl`: one row per accepted
+    warning, in the keys `wl_xcon/record.py::SessionRecord.warning` writes
+    (read at `b2c2850`). One accepted at the open is at the session's start; one
+    accepted at a run's start, at that run's."""
+    rig = recipe.rig_record
+    rows = []
+    for warning in rig.warnings:
+        at = 0.0 if warning.run is None or warning.run >= len(truth.blocks) else truth.blocks[warning.run].start_s
+        rows.append({"code": warning.code, "detail": f"the synthetic {warning.code} warning",
+                     "accepted_in": [rig.session_kind], "session_kind": rig.session_kind, "by": warning.by,
+                     "at": at, "at_local": (SYNTH_EPOCH + datetime.timedelta(seconds=at)).isoformat(),
+                     "how": warning.how, "run": warning.run})
+    (xcon_dir / "warnings.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                                             encoding="utf-8")

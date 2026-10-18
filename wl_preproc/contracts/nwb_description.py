@@ -6,7 +6,10 @@ section 2).
 **Versioned and open.** `schema_version` is 3: version 3 replaced `blocks`
 with `runs`, each with `works_run_id` for wl.works' `animal_session_run` and
 the measured blocks inside it, and gave each probe its `sorted_runs` (design
-spec `2026-10-01-session-listing-and-run-requests-design.md` section 4).
+spec `2026-10-01-session-listing-and-run-requests-design.md` section 4); within
+it, 2026-10-14 added what wl-xcon's record says the session was, its kind, its
+display calibration and each run's, and the warnings it accepted (design spec
+`2026-10-14-session-kind-and-warnings-design.md` section 5).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -150,6 +153,30 @@ class Run(_Frozen):
     coverage: dict[str, Coverage]
     conditions: list[Condition]
     blocks: list[RunBlock]
+    # The display calibration the run ran against, from its start row in
+    # wl-xcon's record; null where it names none (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 5).
+    calibration: str | None = None
+
+
+class RigCalibration(_Frozen):
+    """The display calibration the session opened with, as wl-xcon's
+    `config.json` names it; its colour model is in the file's `rig_record`
+    module, not here."""
+
+    id: str | None
+    standard: bool | None
+    measured_on: str | None
+
+
+class AcceptedWarning(_Frozen):
+    """A warning the session accepted, by its code, and the run it was
+    accepted for (null: at the session's open). Who accepted it is not
+    published (design spec `2026-10-14-session-kind-and-warnings-design.md`
+    section 0, decision 3)."""
+
+    code: str
+    run_number: int | None
 
 
 class Quality(_Frozen):
@@ -227,3 +254,9 @@ class NwbDescription(_Frozen):
     # probe.
     notes: list[str]
     checksums: Checksums
+    # What wl-xcon's record says the session was (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 5), added within
+    # version 3: null, null and empty for a session wl-xcon did not run.
+    session_kind: Literal["training", "piloting", "recording"] | None = None
+    calibration: RigCalibration | None = None
+    accepted_warnings: list[AcceptedWarning] = []

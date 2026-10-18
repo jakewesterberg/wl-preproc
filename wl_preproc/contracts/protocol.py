@@ -476,8 +476,55 @@ class ListedRun(BaseModel):
     closed: bool
     stopped_because: str | None
     stop_kind: str | None
+    # The display calibration the run ran against, from its start row; null
+    # where the rig's record names none (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 4).
+    calibration: str | None
     segments: list[int]
     blocks: list[ListedBlock]
+
+
+class ListedCalibration(BaseModel):
+    """The display calibration the session opened with, as wl-xcon's
+    `config.json` names it: its id, whether it is the sRGB standard nobody
+    measured, and the day it was measured (empty for the standard)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str | None
+    standard: bool | None
+    measured_on: str | None
+
+
+class ListedActor(BaseModel):
+    """Who accepted a warning: a name typed at the rig (`box`, no account) or
+    a wl.works member, by name and wl.works account. Never the token's id or
+    its issuer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str | None
+    name: str | None
+    account: str | None
+
+
+class ListedWarning(BaseModel):
+    """One warning the session accepted, from wl-xcon's `warnings.jsonl`:
+    its code and sentence, the session kinds it is acceptable in, how it was
+    accepted (`open`, `start` or `--accept-warnings`), the measured run it
+    was accepted for (null at the open, or when the run was not measured),
+    and the rig's local time, its bookkeeping rather than a time on the
+    recording's clock."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    detail: str | None
+    accepted_in: list[str]
+    how: str | None
+    run_number: int | None
+    at_local: str | None
+    by: ListedActor | None
 
 
 class RejectedFile(BaseModel):
@@ -504,6 +551,13 @@ class SessionEntry(BaseModel):
     segments: list[ListedSegment]
     probes: list[str]
     flags: list[ListedFlag]
+    # What wl-xcon's record says the session was (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 4): carried,
+    # never acted on here. Null, null and empty for a session wl-xcon did not
+    # run, or whose record predates its engine build B.
+    session_kind: Literal["training", "piloting", "recording"] | None
+    calibration: ListedCalibration | None
+    accepted_warnings: list[ListedWarning]
 
 
 class SessionListing(BaseModel):

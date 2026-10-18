@@ -1137,6 +1137,42 @@ def test_a_marker_whose_swap_never_happened_is_cleared_and_nothing_recorded(publ
         (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
 
 
+def test_a_description_recorded_before_it_carried_the_sessions_kind_is_still_the_files_own(published, shares,
+                                                                                             monkeypatch):
+    """A description recorded before the description carried what wl-xcon's
+    record says the session was (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 5) reads back with
+    those fields defaulted. It is still the file's own, so a marker whose swap
+    never happened records no change for it (section 3, rule 3 of the
+    correction marker's design; the session kind's final review's I3)."""
+    from wl_preproc.nwb import correct as correct_module
+    from wl_preproc.nwb.correct import correct
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    _session_key, key, _runs, _root = published
+    described = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
+    older = {name: value for name, value in described.items()
+             if name not in ("session_kind", "calibration", "accepted_warnings")}
+    older["runs"] = [{name: value for name, value in run.items() if name != "calibration"}
+                     for run in described["runs"]]
+    nwb_schema.NwbFile.update1({**key_of(key), "description": older})
+    changes = _changes(key)
+    _set_birth(datetime.date(2016, 3, 1))
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(correct_module.os, "replace", _failing)
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+        _set_birth(_BIRTH)
+        assert correct(key, shares, _DAY) is None
+        assert not _marked(key) and _changes(key) == changes
+    finally:
+        _set_birth(_BIRTH)
+        (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+        nwb_schema.NwbFile.update1({**key_of(key), "description": described})
+
+
 def test_a_marker_that_cannot_be_written_stops_the_swap(published, shares, monkeypatch):
     """Section 3, rule 1: no marker, no swap. The file keeps its details, the
     failure is reported, and the file is still stale for the next pass."""

@@ -61,6 +61,11 @@ class Gathered:
     # canonical, the trials and blocks that start in its montage's window but
     # in no measured run (`_outside_runs_notes`).
     trial_notes: list[str] = dataclasses.field(default_factory=list)
+    # What wl-xcon's record says the session was, for the file's `rig_record`
+    # module and its description (design spec
+    # `2026-10-14-session-kind-and-warnings-design.md` section 5); None for a
+    # session wl-xcon did not run. See `_rig_record`.
+    rig_record: dict | None = None
 
 
 def _aware_utc(value: datetime.datetime) -> datetime.datetime:
@@ -76,11 +81,43 @@ def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
     numbers = {int(number) for number in (request.ActivationRun & activation_key).to_arrays("run_number")}
     works = {row["run_number"]: row["works_run_id"] for row in (core.RunAssertion & session_key).to_dicts()}
     tasks = {row["run_number"]: row["task"] for row in (core.RunRecord & session_key).to_dicts()}
+    calibrations = {row["run_number"]: row["calibration_id"] for row in (core.RunCalibration & session_key).to_dicts()}
     rows = [{"run_number": row["run_number"], "start_s": float(row["run_start_time"]),
              "end_s": float(row["run_stop_time"]), "task_type": row["task_type"], "task": tasks.get(row["run_number"]),
-             "works_run_id": works.get(row["run_number"]), "closed": bool(row["closed"])}
+             "works_run_id": works.get(row["run_number"]), "closed": bool(row["closed"]),
+             "calibration": calibrations.get(row["run_number"])}
             for row in (core.Run & session_key).to_dicts() if row["run_number"] in numbers]
     return sorted(rows, key=lambda row: row["start_s"])
+
+
+def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
+    """What wl-xcon's record says the session was (`core.SessionRecord`,
+    `core.AcceptedWarning`), or None when wl-xcon did not run it. The
+    warnings are those accepted at the session's open and those for the
+    file's own runs: one accepted for a run the file does not hold is about
+    that run (design spec `2026-10-14-session-kind-and-warnings-design.md`,
+    amendment 1). Who accepted a warning is not read: the file names no one
+    (section 0, decision 3)."""
+    from wl_preproc.schema import core
+
+    rows = (core.SessionRecord & session_key).to_dicts()
+    if not rows:
+        return None
+    (row,) = rows
+    recorded = any(row[column] is not None for column in ("calibration_id", "calibration_standard",
+                                                          "calibration_measured_on"))
+    return {
+        "session_kind": row["session_kind"],
+        "calibration": None if not recorded else {
+            "id": row["calibration_id"],
+            "standard": None if row["calibration_standard"] is None else bool(row["calibration_standard"]),
+            "measured_on": row["calibration_measured_on"], "cones": row["calibration_cones"]},
+        "warnings": [{"code": warning["code"], "detail": warning["detail"],
+                      "accepted_in": [kind for kind in (warning["accepted_in"] or "").split(",") if kind],
+                      "how": warning["how"], "run_number": warning["run_number"], "at_local": warning["at_local"]}
+                     for warning in (core.AcceptedWarning & session_key).to_dicts(order_by="warning_number")
+                     if warning["run_index"] is None or warning["run_number"] in run_numbers],
+    }
 
 
 def identifier_for(activation_key: dict, session_id: str) -> str:
@@ -727,4 +764,5 @@ def gather(activation_key: dict) -> Gathered:
         probes=probes,
         probe_notes=probe_notes,
         trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
+        rig_record=_rig_record(session_key, {row["run_number"] for row in run_rows}),
     )

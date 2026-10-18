@@ -261,14 +261,14 @@ def _adopt(key: dict, target: Path, share: Share, checksums: list[dict], descrip
     taken from the file, so a correction brings it up to the current details
     if they differ (design spec `2026-10-05-subject-corrections-design.md`,
     the final review's I1)."""
-    from wl_preproc.nwb.correct import SUBJECT_DATASETS, subject_records, write_subject_records
+    from wl_preproc.nwb.correct import SUBJECT_DATASETS, as_described_now, subject_records, write_subject_records
 
     bad = mismatches(target, [row for row in checksums if row["dataset_path"] not in SUBJECT_DATASETS])
     if bad:
         raise PublishConflict(f"{target} already exists with other written-once data ({len(bad)} dataset(s), "
                               f"first {bad[0]}) and no placement of this activation records it; not overwritten")
     adopted, fresh = subject_records(key, description, target)
-    if adopted != description:
+    if adopted != as_described_now(description):
         write_subject_records(key, adopted, fresh)
     write_description(target, adopted)
     return {"tier": share.tier, "host": share.host, "share": share.name,

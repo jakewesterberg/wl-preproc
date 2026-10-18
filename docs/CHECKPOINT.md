@@ -250,8 +250,8 @@ requester chose to merge the same day; true when written.*
 > archival with rehydration, and ingest with the timebase. "What is built",
 > below, and `handoffs/` have each piece.
 >
-> **Hardware: ask whether it has changed.** It had not on 2026-10-13, when the
-> requester chose the eye minors.
+> **Hardware: ask whether it has changed.** It had not on 2026-10-14, when the
+> requester chose wl-xcon's ask 5.
 > - **The rig.** The barcode and timebase alignment path has never met real
 >   data, and cannot with the recording the lab has, which carries no wl-sync
 >   barcodes (below). A few minutes of recording with the sync box live would
@@ -261,6 +261,10 @@ requester chose to merge the same day; true when written.*
 >   export's units (the sorter will read each probe's runs from
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
+>
+> *Until 2026-10-14, later, this said ask 5's review came next; true when written.*
+>
+> *Until 2026-10-14 this said it had not on 2026-10-13; true when written.*
 >
 > *Until 2026-10-13 this said it had not on 2026-10-11; true when written.*
 >
@@ -295,8 +299,15 @@ requester chose to merge the same day; true when written.*
 > recording; the adaptive pad waits for data to validate it against. **The
 > eye minors, the requester's choice of 2026-10-13, are merged** (`0e4df0f`):
 > blink padding's five deferred minors and the eye-loss fix's five (§7 of each
-> handoff). Still to build: 1's records, 2's flag, 3, 5, 6, 7 and 8; 4 is
-> unread. Open and small: the correction
+> handoff). **wl-xcon's ask 5, the requester's choice of 2026-10-14, is built on
+> `feat/session-kind`, not merged** (`handoffs/2026-10-14-session-kind.md`): each
+> session's kind, display calibration and accepted warnings, carried into the
+> database, the listing and the NWB file. Reviewed: its two Important findings and
+> two Minors re-graded Important fixed (`b4fc467`), five minors deferred. Next:
+> the merge question. Still to build: 1's
+> records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
+> 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
+> record designed by wl-xcon's build K. Open and small: the correction
 > marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >

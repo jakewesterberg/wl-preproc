@@ -8,10 +8,14 @@ per event, `{"event": "start" | "end", "run": <0-based run in session>, ...}`:
 the start row carries the `task`, the end row `stopped_because` and
 `stop_kind`. Since wl-xcon's session-levels change a start row also carries
 `run_in_session`, the number `RUN_START` strobes; before it, that number is
-`run` + 1. A start row and its end row share `run`.
+`run` + 1. A start row and its end row share `run`. Since wl-xcon's engine
+build B a start row also names the display calibration the run ran against
+(design spec `2026-10-14-session-kind-and-warnings-design.md` section 1).
 
 **Read, never repaired.** A row that is not a JSON object naming its event and
-run is reported by line and left out. wl-xcon writes a run's end row on every
+run is reported by file and line and left out: the file named, since the rig's
+record is more than its runs (design spec
+`2026-10-14-session-kind-and-warnings-design.md` section 3). wl-xcon writes a run's end row on every
 way out, a fault included (`stop_kind` "fault"); only a killed process leaves
 none, and that run's stop reason is absent, not guessed.
 
@@ -39,12 +43,16 @@ class RigRun:
     task: str | None
     stopped_because: str | None
     stop_kind: str | None
+    calibration: str | None = None  # the start row's display calibration id
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RigRuns:
     runs: tuple[RigRun, ...]
     problems: tuple[str, ...]
+    # wl-xcon's 0-based `run` -> the run's number, which joins an accepted
+    # warning, named by the former, to the measured run.
+    run_numbers: dict[int, int] = dataclasses.field(default_factory=dict)
 
 
 def _integer(value: object) -> bool:
@@ -77,10 +85,10 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            problems.append(f"line {number_of_line}: not JSON")
+            problems.append(f"{RECORD_NAME} line {number_of_line}: not JSON")
             continue
         if not isinstance(row, dict) or row.get("event") not in ("start", "end") or not _integer(row.get("run")):
-            problems.append(f"line {number_of_line}: not a start or end row naming its run")
+            problems.append(f"{RECORD_NAME} line {number_of_line}: not a start or end row naming its run")
             continue
         # A start row and its end row share `run`; only the start row is
         # sure to carry `run_in_session`, so the number is taken from it. A
@@ -88,18 +96,21 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         # kept, as everywhere a number repeats here.
         run = fields.setdefault(row["run"], {"number": row["run"] + 1})
         if row["event"] in run.setdefault("seen", set()):
-            problems.append(f"line {number_of_line}: run {row['run']} has a second {row['event']} row; "
+            problems.append(f"{RECORD_NAME} line {number_of_line}: run {row['run']} has a second {row['event']} row; "
                             "the first is kept")
             continue
         run["seen"].add(row["event"])
         if row["event"] == "start":
             run["task"] = _text(row.get("task"))
+            run["calibration"] = _text(row.get("calibration"))
             if _integer(row.get("run_in_session")):
                 run["number"] = row["run_in_session"]
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))
     runs = tuple(sorted((RigRun(number=run["number"], task=run.get("task"),
-                                stopped_because=run.get("stopped_because"), stop_kind=run.get("stop_kind"))
+                                stopped_because=run.get("stopped_because"), stop_kind=run.get("stop_kind"),
+                                calibration=run.get("calibration"))
                          for run in fields.values()), key=lambda run: run.number))
-    return RigRuns(runs=runs, problems=tuple(problems))
+    return RigRuns(runs=runs, problems=tuple(problems),
+                   run_numbers={index: run["number"] for index, run in sorted(fields.items())})

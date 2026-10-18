@@ -1,5 +1,51 @@
 {
   "$defs": {
+    "ListedActor": {
+      "additionalProperties": false,
+      "description": "Who accepted a warning: a name typed at the rig (`box`, no account) or\na wl.works member, by name and wl.works account. Never the token's id or\nits issuer.",
+      "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Kind"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "account"
+      ],
+      "title": "ListedActor",
+      "type": "object"
+    },
     "ListedBlock": {
       "additionalProperties": false,
       "description": "A measured block: consecutive trials under one block type, inside a\nrun. `block_number` is its number in the session, as `BLOCK_START`\nstrobes it; `block_in_run` its order in its run, from 1. `closed` is\nnull when it was never recorded: a session event-staged before\n2026-10-01 kept no block closure.",
@@ -57,6 +103,52 @@
         "n_trials"
       ],
       "title": "ListedBlock",
+      "type": "object"
+    },
+    "ListedCalibration": {
+      "additionalProperties": false,
+      "description": "The display calibration the session opened with, as wl-xcon's\n`config.json` names it: its id, whether it is the sRGB standard nobody\nmeasured, and the day it was measured (empty for the standard).",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "measured_on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Measured On"
+        },
+        "standard": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Standard"
+        }
+      },
+      "required": [
+        "id",
+        "standard",
+        "measured_on"
+      ],
+      "title": "ListedCalibration",
       "type": "object"
     },
     "ListedFlag": {
@@ -232,6 +324,17 @@
           "title": "Blocks",
           "type": "array"
         },
+        "calibration": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Calibration"
+        },
         "closed": {
           "title": "Closed",
           "type": "boolean"
@@ -302,6 +405,7 @@
         "closed",
         "stopped_because",
         "stop_kind",
+        "calibration",
         "segments",
         "blocks"
       ],
@@ -348,6 +452,88 @@
       "title": "ListedSegment",
       "type": "object"
     },
+    "ListedWarning": {
+      "additionalProperties": false,
+      "description": "One warning the session accepted, from wl-xcon's `warnings.jsonl`:\nits code and sentence, the session kinds it is acceptable in, how it was\naccepted (`open`, `start` or `--accept-warnings`), the measured run it\nwas accepted for (null at the open, or when the run was not measured),\nand the rig's local time, its bookkeeping rather than a time on the\nrecording's clock.",
+      "properties": {
+        "accepted_in": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Accepted In",
+          "type": "array"
+        },
+        "at_local": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "At Local"
+        },
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListedActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Detail"
+        },
+        "how": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "How"
+        },
+        "run_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Run Number"
+        }
+      },
+      "required": [
+        "code",
+        "detail",
+        "accepted_in",
+        "how",
+        "run_number",
+        "at_local",
+        "by"
+      ],
+      "title": "ListedWarning",
+      "type": "object"
+    },
     "RejectedFile": {
       "additionalProperties": false,
       "properties": {
@@ -376,6 +562,23 @@
       "additionalProperties": false,
       "description": "One landed session, as it stands now. A naive `session_datetime` is\nUTC, as every one this host issues is. `tier` is the timing tier, null\nuntil it is computed; D is quarantined, not published automatically.",
       "properties": {
+        "accepted_warnings": {
+          "items": {
+            "$ref": "#/$defs/ListedWarning"
+          },
+          "title": "Accepted Warnings",
+          "type": "array"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListedCalibration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "flags": {
           "items": {
             "$ref": "#/$defs/ListedFlag"
@@ -416,6 +619,22 @@
           "title": "Session Datetime",
           "type": "string"
         },
+        "session_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "training",
+                "piloting",
+                "recording"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Kind"
+        },
         "session_name": {
           "title": "Session Name",
           "type": "string"
@@ -451,7 +670,10 @@
         "runs",
         "segments",
         "probes",
-        "flags"
+        "flags",
+        "session_kind",
+        "calibration",
+        "accepted_warnings"
       ],
       "title": "SessionEntry",
       "type": "object"

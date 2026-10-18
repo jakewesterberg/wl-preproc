@@ -1,9 +1,51 @@
 # Amendments to wl-works
 
-**Eight are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05.** The earlier two
+**Nine are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — what wl-xcon's record says the session was, in the listing and the NWB description
+
+**Opened 2026-10-14** with
+[`specs/2026-10-14-session-kind-and-warnings-design.md`](superpowers/specs/2026-10-14-session-kind-and-warnings-design.md)
+(§4, §5; the requester's decisions in §0), answering wl-xcon's ask 5 of 2026-10-11 (its XC-325).
+wl-xcon's engine build B writes every session's kind (training, piloting or recording), the display
+calibration it and each run ran against, and each warning it accepted. **Carried, never acted on
+here:** whether a training or piloting session gets a canonical NWB is wl.works' to decide.
+
+- **`GET /sessions`:** each session gains `session_kind`, `calibration` (`id`, `standard`,
+  `measured_on`) and `accepted_warnings` (each `code`, `detail`, `accepted_in`, `how`, `run_number`,
+  `at_local` and `by`); each run gains `calibration`. `docs/schemas/session_listing.json` refuses
+  fields it does not know, so wl.works' copy must take these before it validates an entry from a
+  host running this change.
+- **Who accepted a warning** is listed by name and wl.works account (`by.kind` is `box` for a name
+  typed at the rig, `member` for a wl.works member), never by the token's id or its issuer. The NWB
+  file names no one.
+- **Every listed session is listed once more** when this ships: each entry changes, so its digest
+  does.
+- **A `rig_record_problem` flag's message now begins "the rig's record:",** and each problem names
+  the file it is about (`runs.jsonl`, `config.json` or `warnings.jsonl`).
+- **The NWB description** gains `session_kind`, `calibration`, `accepted_warnings` (each `code` and
+  `run_number`) and each run's `calibration`, within `schema_version` 3. Its exported schema refuses
+  fields it does not know, as the listing's does, so the copy of `docs/schemas/nwb_description.json`
+  you were asked to vendor (above, "measured runs") must take them before it validates a description
+  from a host running this change. Selecting a dataset by kind can use them.
+- **The kinds differ from yours.** wl-xcon writes three: `training`, `piloting` and `recording`
+  (its `wl_xcon/findings.py::SESSION_KINDS`, read at `b2c2850`). Your session record, as your plan
+  `docs/superpowers/plans/2026-10-14-16b-1-the-visit.md` builds it (read on your `main` at
+  `3cad5e43`), allows two: `CHECK (kind in ('training', 'recording'))` and
+  `SESSION_KINDS = ["training", "recording"]`; `piloting` appears in none of your documents. A
+  record taken from the listing would refuse a piloting session. How to map, or whether to add the
+  third, is yours and the requester's to decide; this host lists what the rig wrote.
+- **A null kind means one of three things:** a session wl-xcon did not run, one whose record predates
+  its engine build B, and one this host read before carrying the kind (2026-10-14) all list
+  `session_kind`, `calibration` and `accepted_warnings` as null, null and `[]`. Nothing distinguishes
+  them in the listing.
+- **Problems stored before 2026-10-14 name no file:** a `rig_record_problem` flag read before then says
+  "line 5: not JSON", where one read since says "runs.jsonl line 5: not JSON".
 
 ---
 

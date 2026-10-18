@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "AcceptedWarning": {
+      "additionalProperties": false,
+      "description": "A warning the session accepted, by its code, and the run it was\naccepted for (null: at the session's open). Who accepted it is not\npublished (design spec `2026-10-14-session-kind-and-warnings-design.md`\nsection 0, decision 3).",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "run_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Run Number"
+        }
+      },
+      "required": [
+        "code",
+        "run_number"
+      ],
+      "title": "AcceptedWarning",
+      "type": "object"
+    },
     "Behaviour": {
       "additionalProperties": false,
       "properties": {
@@ -641,6 +668,52 @@
       "title": "Quality",
       "type": "object"
     },
+    "RigCalibration": {
+      "additionalProperties": false,
+      "description": "The display calibration the session opened with, as wl-xcon's\n`config.json` names it; its colour model is in the file's `rig_record`\nmodule, not here.",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "measured_on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Measured On"
+        },
+        "standard": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Standard"
+        }
+      },
+      "required": [
+        "id",
+        "standard",
+        "measured_on"
+      ],
+      "title": "RigCalibration",
+      "type": "object"
+    },
     "Run": {
       "additionalProperties": false,
       "description": "One run the file holds, measured from the recording. `works_run_id`\njoins it to wl.works' `animal_session_run`.",
@@ -651,6 +724,18 @@
           },
           "title": "Blocks",
           "type": "array"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration"
         },
         "closed": {
           "title": "Closed",
@@ -862,6 +947,25 @@
   },
   "additionalProperties": false,
   "properties": {
+    "accepted_warnings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AcceptedWarning"
+      },
+      "title": "Accepted Warnings",
+      "type": "array"
+    },
+    "calibration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RigCalibration"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "checksums": {
       "$ref": "#/$defs/Checksums"
     },
@@ -907,6 +1011,23 @@
       "default": 3,
       "title": "Schema Version",
       "type": "integer"
+    },
+    "session_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "training",
+            "piloting",
+            "recording"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Kind"
     },
     "subject": {
       "$ref": "#/$defs/SubjectInfo"
