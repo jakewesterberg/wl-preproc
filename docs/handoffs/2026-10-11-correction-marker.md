@@ -99,3 +99,27 @@ judged the branch ready to merge.
 **The full suite after the fix, on `e8ef871`:** 3.11, **2317 passed, 27 skipped, 1 deselected, 1
 xfailed**; 3.13, **2317 passed, 28 skipped, 1 xfailed**. That is one more than §5's run, the fix's
 test, and both exited 0.
+
+## 7. The final review's deferred minors
+
+The requester chose them on 2026-10-18, the rig and compute machine unchanged: a bounded change,
+designed in conversation, built on `fix/correction-marker-minors` from `6be2565`. Nothing the code
+does changes, so neither spec gains an amendment.
+1. **§5's first row clears the marker in the pass that brings the records up.**
+   `test_a_description_file_that_could_not_be_written_is_written_next_pass` now checks that the
+   file is marked after the failing pass and, after the next, unmarked and not stale, with one
+   `corrected` change added. Before, a regression leaving the marker there would have gone unseen,
+   the pass after clearing it by §3's rule 3. With the marker's deletion taken out of
+   `write_subject_records`, that test alone fails, on the new check.
+2. **The adoption test goes through `publish._adopt`.** `test_records_written_for_an_adoption_clear_a_marker`
+   called `write_subject_records` itself. Now the code makes every step: a failed publish leaves the
+   file on its share, its scratch copy is corrected, and a later correction marks it and fails to
+   rename. The publishing pass adopts the shared file, its records taken from it and the marker
+   gone, and the next correction brings it up to the current details. It fails with the marker
+   deleted only for a correction's records, and with `_adopt` never writing the records, which the
+   direct call could not see.
+3. **Wording.** `NwbCorrecting`'s comment and `correct`'s docstring name rule 3's deletion; the
+   comment's first line, which MySQL keeps as the table's comment, is unchanged. §5 now says the
+   references were set here, which CI lacks, and gives CI's count on `caf1d63`, 2308 passed.
+
+§6's fourth item, the history lines, was done by the merge's pointer.

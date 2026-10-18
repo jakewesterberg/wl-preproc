@@ -61,9 +61,10 @@ status:
     calibration and accepted warnings, carried into the database, the
     listing and the NWB file; its five deferred minors, the requester's
     choice of 2026-10-18, are merged (ad52b79; section 7 of its handoff).
-    Open and small: the
-    correction marker's three deferred minors
-    (docs/handoffs/2026-10-11-correction-marker.md section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    The correction marker's three deferred minors, the requester's
+    choice of 2026-10-18, are built on fix/correction-marker-minors and
+    not merged (docs/handoffs/2026-10-11-correction-marker.md section 7);
+    next, the review. Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: ask 5's five deferred minors (ad52b79). Before them, wl-xcon's
     ask 5 (9e13ba5): each session's kind, display
     calibration and accepted warnings, carried. Before it, the eye minors
