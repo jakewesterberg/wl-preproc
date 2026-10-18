@@ -270,6 +270,9 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until 2026-10-18, later, this listed ask 5's five minors as open; true when
+> written.*
+>
 > *Until 2026-10-18 this said ask 5 was built, not merged, with the merge question
 > next; true when written.*
 >
@@ -313,12 +316,14 @@ requester chose to merge the same day; true when written.*
 > handoff). **wl-xcon's ask 5, the requester's choice of 2026-10-14, is merged**
 > (`9e13ba5`; `handoffs/2026-10-14-session-kind.md`): each session's kind,
 > display calibration and accepted warnings, carried into the database, the
-> listing and the NWB file; five minors deferred (§6). Still to build: 1's
+> listing and the NWB file. **Its five deferred minors, the requester's choice of
+> 2026-10-18, are built on `fix/session-kind-minors`, not merged** (§7 of the
+> handoff), reviewed and its four minors fixed (`d56a59f`). Next: the merge
+> question. Still to build: 1's
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
 > record designed by wl-xcon's build K. Open and small: the correction
-> marker's three (`handoffs/2026-10-11-correction-marker.md` §6) and ask 5's
-> five (`handoffs/2026-10-14-session-kind.md` §6). Fine-tuning
+> marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until 2026-10-14 this said the eye minors were built, not

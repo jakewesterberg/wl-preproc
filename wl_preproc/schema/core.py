@@ -79,9 +79,11 @@ class RunRecordProblem(dj.Manual):
     definition = """
     # What reading wl-xcon's record could not use, kept by the event stage for
     # the session listing (final review M2 of the listing): a line of its run
-    # record or of its accepted warnings it could not read, a session kind it
-    # does not know, a record of another animal, or no run record at all for
-    # a session with measured runs. At most 20, the last saying how many more.
+    # record or of its accepted warnings it could not read, a config.json that
+    # is not a JSON object or whose calibration is neither an object nor
+    # null, a session kind it does not know, a warning's run that will not fit
+    # its column, a record of another animal, or no run record at all for a
+    # session with measured runs. At most 20, the last saying how many more.
     # Key: (subject, session_datetime, problem_number).
     -> pipeline.Session
     problem_number : smallint unsigned  # from 1, in the reader's order
@@ -143,7 +145,7 @@ class AcceptedWarning(dj.Manual):
     accepted_in = ''    : varchar(64)    # the kinds it is acceptable in, comma-joined
     session_kind = null : varchar(16)
     how = null          : varchar(64)    # open, start or --accept-warnings
-    run_index = null    : smallint unsigned  # wl-xcon's run, from 0; null at the open
+    run_index = null    : smallint unsigned  # wl-xcon's run, from 0; null at the open, or when it will not fit
     run_number = null   : smallint       # the measured run's; null at the open or when not measured
     at = null           : double         # the rig's wall clock, seconds
     at_local = null     : varchar(64)

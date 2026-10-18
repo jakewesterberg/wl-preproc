@@ -87,12 +87,12 @@ def test_every_accepted_warning_is_read_as_written(tmp_path):
         RigWarning(code="default-calibration", detail="the default-calibration sentence",
                    accepted_in=("training", "piloting"), session_kind="training", how="open", run_index=None,
                    at=1760000000.5, at_local="2026-10-09T09:00:00+02:00 Europe/Berlin",
-                   by_kind="box", by_name="jw", by_account=None, by_issuer=None, by_token_id=None),
+                   by_kind="box", by_name="jw", by_account=None, by_issuer=None, by_token_id=None, line=1),
         RigWarning(code="luminance-step", detail="the luminance-step sentence",
                    accepted_in=("training", "piloting"), session_kind="training", how="start", run_index=1,
                    at=1760000000.5, at_local="2026-10-09T09:00:00+02:00 Europe/Berlin",
                    by_kind="member", by_name="J. W.", by_account="acct-1", by_issuer="https://wl.works",
-                   by_token_id="tok-1"),
+                   by_token_id="tok-1", line=2),
     )
     assert session.problems == ()
 
@@ -124,6 +124,9 @@ def test_a_record_of_another_animal_is_not_read(tmp_path):
     session = read_rig_session(_record(tmp_path, {"subject": "zorro", "session_kind": "recording"},
                                        [_warning("default-calibration")]), "pico")
     assert (session.kind, session.calibration, session.warnings) == (None, None, ())
+    # Not this session's, so nothing of it is kept but the problem (the
+    # session kind's deferred minor 1).
+    assert session.of_this_session is False
     assert session.problems == ("config.json names subject 'zorro', not 'pico', so its kind, calibration and "
                                 "warnings are not this session's",)
 
@@ -166,3 +169,30 @@ def test_a_warning_whose_kinds_are_not_a_list_is_acceptable_in_none(tmp_path):
     (warning,) = read_rig_session(_record(tmp_path, {"subject": "pico"}, [
         _warning("head-free", accepted_in="training")]), "pico").warnings
     assert warning.accepted_in == ()
+
+
+def test_a_record_of_this_animal_is_this_sessions(tmp_path):
+    from wl_preproc.events.rigsession import read_rig_session
+
+    assert read_rig_session(_record(tmp_path, {"subject": "pico"}), "pico").of_this_session is True
+
+
+def test_a_time_that_is_not_finite_is_none(tmp_path):
+    """A non-finite `at` would fail the session's whole event stage on every
+    pass (MySQL refuses it), so it is read as none, as a value too long is
+    cut (the session kind's deferred minor 2)."""
+    from wl_preproc.events.rigsession import read_rig_session
+
+    warnings = read_rig_session(_record(tmp_path, {"subject": "pico"}, [
+        _warning("head-free", at=float("inf")), _warning("head-free", at=float("nan"))]), "pico").warnings
+    assert [warning.at for warning in warnings] == [None, None]
+
+
+def test_each_warning_keeps_its_line_in_the_file(tmp_path):
+    """So a problem about one can name its line, as every other problem
+    with the file does (the minors' review, Minor 1)."""
+    from wl_preproc.events.rigsession import read_rig_session
+
+    warnings = read_rig_session(_record(tmp_path, {"subject": "pico"}, [
+        _warning("default-calibration"), "{not json", _warning("head-free")]), "pico").warnings
+    assert [(warning.code, warning.line) for warning in warnings] == [("default-calibration", 1), ("head-free", 3)]

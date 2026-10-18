@@ -15,7 +15,7 @@ build B a start row also names the display calibration the run ran against
 **Read, never repaired.** A row that is not a JSON object naming its event and
 run is reported by file and line and left out: the file named, since the rig's
 record is more than its runs (design spec
-`2026-10-14-session-kind-and-warnings-design.md` section 3). wl-xcon writes a run's end row on every
+`2026-10-14-session-kind-and-warnings-design.md`, amendment 2). wl-xcon writes a run's end row on every
 way out, a fault included (`stop_kind` "fault"); only a killed process leaves
 none, and that run's stop reason is absent, not guessed.
 
@@ -51,7 +51,10 @@ class RigRuns:
     runs: tuple[RigRun, ...]
     problems: tuple[str, ...]
     # wl-xcon's 0-based `run` -> the run's number, which joins an accepted
-    # warning, named by the former, to the measured run.
+    # warning, named by the former, to the measured run: for runs with a start
+    # row only. A run whose start line was lost keeps its stop reason by `run`
+    # + 1, a guess no warning is joined by, since wl-xcon's numbers part from
+    # it once a session resumes.
     run_numbers: dict[int, int] = dataclasses.field(default_factory=dict)
 
 
@@ -113,4 +116,5 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
                                 calibration=run.get("calibration"))
                          for run in fields.values()), key=lambda run: run.number))
     return RigRuns(runs=runs, problems=tuple(problems),
-                   run_numbers={index: run["number"] for index, run in sorted(fields.items())})
+                   run_numbers={index: run["number"] for index, run in sorted(fields.items())
+                                if "start" in run["seen"]})

@@ -861,3 +861,42 @@ def test_a_warnings_sentence_in_any_script_is_kept_as_written(events_activated, 
     _recipe, key = _populate_generated(tmp_path, "slkind8", datetime.datetime(2027, 8, 2, 9, 0), mutate=reword,
                                        runs=True, rig_record=_rig_record())
     assert (core.AcceptedWarning & key & {"warning_number": 1}).fetch1("detail") == sentence
+
+
+def test_a_record_of_another_animal_keeps_no_kind_and_no_warnings(events_activated, dj_conn, tmp_path):
+    """Only a session whose `config.json` names its own animal has a
+    `core.SessionRecord` row; another's keeps the problem and nothing else
+    (the session kind's deferred minor 1)."""
+    import json
+
+    from wl_preproc.schema import core
+
+    def another_animal(session_dir):
+        path = session_dir / "xcon" / "config.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "subject": "zorro"}))
+
+    _recipe, key = _populate_generated(tmp_path, "slkind9", datetime.datetime(2027, 8, 3, 9, 0),
+                                       mutate=another_animal, runs=True, rig_record=_rig_record())
+    assert (len(core.SessionRecord & key), len(core.AcceptedWarning & key)) == (0, 0)
+    # So its NWB file has no `rig_record` module: the builder writes one only
+    # for what this returns (the minors' review, Minor 4).
+    from wl_preproc.nwb.gather import _rig_record as gathered
+
+    assert gathered(key, {1, 2}) is None
+    assert "config.json names subject 'zorro', not 'slkind9', so its kind, calibration and warnings are not this " \
+           "session's" in [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()]
+
+
+def test_a_warnings_run_that_will_not_fit_is_a_problem_and_names_no_run(events_activated, dj_conn, tmp_path):
+    """Stored with no run, and flagged, so it is not taken silently for one
+    accepted at the session's open (the session kind's deferred minor 2)."""
+    from wl_preproc.schema import core
+    from wl_preproc.synth.recipe import RigWarningSpec
+
+    _recipe, key = _populate_generated(tmp_path, "slkind10", datetime.datetime(2027, 8, 4, 9, 0), runs=True,
+                                       rig_record=_rig_record(warnings=(RigWarningSpec(code="head-free", run=70000,
+                                                                                       how="start"),)))
+    row = (core.AcceptedWarning & key).fetch1()
+    assert (row["run_index"], row["run_number"]) == (None, None)
+    assert [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()] == [
+        "warnings.jsonl line 1: run 70000 cannot be stored (0 to 65535), so the warning names no run"]

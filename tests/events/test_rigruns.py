@@ -114,3 +114,18 @@ def test_each_of_wl_xcons_runs_maps_to_its_number(tmp_path):
     rows = [_start(0, "rf_map", run_in_session=7), _end(0, "every block is finished", "completed"),
             _start(1, "rf_map")]
     assert read_rig_runs(_record(tmp_path, rows), "pico").run_numbers == {0: 7, 1: 2}
+
+
+def test_a_run_without_its_start_row_maps_to_no_number(tmp_path):
+    """A warning joins a run only through its start row (design spec
+    `2026-10-14-session-kind-and-warnings-design.md` section 2): a run whose
+    start line was lost keeps its stop reason by `run` + 1, but that guess is
+    not a number to join a warning by, since wl-xcon's numbers part from it
+    once a session resumes (the session kind's deferred minor 3)."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "rf_map"), _end(0, "every block is finished", "completed"),
+            _end(1, "stopped by jw", "operator")]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    assert [run.number for run in record.runs] == [1, 2]
+    assert record.run_numbers == {0: 1}

@@ -78,6 +78,29 @@ def test_an_entry_carries_what_wl_xcons_record_says_the_session_was(listed):
     assert (plain["session_kind"], plain["calibration"], plain["accepted_warnings"]) == (None, None, [])
 
 
+def test_the_listing_does_not_read_the_colour_model_it_does_not_list(listed, monkeypatch):
+    """`calibration_cones` is a blob the listing never shows; reading it for
+    every listed session on every pass is work for nothing (the session
+    kind's deferred minor 4)."""
+    import datajoint as dj
+
+    from wl_preproc.listing.entry import gather_all
+
+    keys = [key for _recipe, key in listed.values()]
+    connection, sent = dj.conn(), []
+    real = connection.query
+
+    def capturing(query, *args, **kwargs):
+        sent.append(query)
+        return real(query, *args, **kwargs)
+
+    monkeypatch.setattr(connection, "query", capturing)
+    gather_all(keys)
+    monkeypatch.undo()
+    assert any("session_kind" in query for query in sent)
+    assert not any("calibration_cones" in query for query in sent)
+
+
 def test_one_sessions_entry_is_found_by_its_key_in_any_form_mysql_compares(listed):
     """Its time as text too, as the per-session reading took it (the M9
     review's M1); a session that has not landed is named."""

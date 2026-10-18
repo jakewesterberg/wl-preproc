@@ -108,3 +108,37 @@ amendment first, now stated in it; no backfill for sessions read before (§6); i
 warnings; nwbinspector's view of a JSON string and a one-row table; a re-read keeping stale rows, as
 `core.RunRecord` does (§8); inputs wl-xcon's types cannot produce; two subject-mismatch problems, one per
 reader; and a box-typed name going to wl.works (§0, decision 3).
+
+## 7. The review's deferred minors
+
+The requester chose them next on 2026-10-18. Built on
+`fix/session-kind-minors`, from `fff716b`; spec amendment 8; the fixes in `1a55c9e`.
+1. **Another animal's `config.json`** keeps its problem and no session row, so its file gets no
+   `rig_record` module (`test_a_record_of_another_animal_keeps_no_kind_and_no_warnings`).
+2. **A non-finite `at`** is read as none (`test_a_time_that_is_not_finite_is_none`), and **a warning's
+   run that will not fit its column** is flagged
+   (`test_a_warnings_run_that_will_not_fit_is_a_problem_and_names_no_run`).
+3. **A run without its start row** joins no warning (`test_a_run_without_its_start_row_maps_to_no_number`):
+   the code made to say what §2 said, rather than §2 the code.
+4. **The listing leaves `calibration_cones` out of its query**
+   (`test_the_listing_does_not_read_the_colour_model_it_does_not_list`).
+5. **Three comments** in `rigruns.py` and `core.py` made true.
+
+Each test failed first, and a mutation of each fix fails it.
+
+**A fresh reviewer** read the branch on 2026-10-18 (`fff716b..b49c030`). Two Opus reviews were stopped by
+the model's safeguards before they could report, and the requester chose a Sonnet reviewer, which found
+no Critical or Important, judged the branch ready to merge, and found four Minors, which the requester
+chose to fix before the merge (`d56a59f`):
+- the problem for a warning's run that cannot be stored named the warning by its count among those
+  read, where every other problem names its line in the file, and in database words: each warning now
+  keeps its line, and the problem reads "warnings.jsonl line N: run R cannot be stored (0 to 65535), so
+  the warning names no run";
+- amendment 8 now says the flag is that warning's only sign;
+- the protocol document now gives every case a warning's `run_number` is null, and which of them is
+  flagged;
+- a test now shows another animal's record gives its file no `rig_record` module.
+
+The reviewer set aside whether item 3's join is the right design, the requester's call, and the full
+suite, run here. **The full suite** at `d56a59f`: 2404 passed, 27 skipped, 1 deselected, 1 xfailed on 3.11; 2404 passed, 28 skipped, 1 xfailed on 3.13. 7 more than
+the merge's 2397, this section's tests.

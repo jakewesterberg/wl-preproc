@@ -599,8 +599,9 @@ Authorization: Bearer <token>
     the sRGB standard nobody measured, and `measured_on`, empty for the standard), and
     `accepted_warnings`, each with its `code`, its sentence as `detail`, the kinds it is acceptable
     in as `accepted_in`, `how` it was accepted (`open`, `start` or `--accept-warnings`), the
-    `run_number` it was accepted for (null at the open, or for a run the recording did not
-    measure), `at_local` (the rig's local time, not the recording's clock) and `by`: `kind` (`box`
+    `run_number` it was accepted for (null at the open, for a run the recording did not
+    measure, for one with no start row in wl-xcon's record, or for one whose number could not
+    be stored, only the last flagged as a `rig_record_problem`), `at_local` (the rig's local time, not the recording's clock) and `by`: `kind` (`box`
     for a name typed at the rig, `member` for a wl.works member), `name` and `account` (null for a
     box), never the token or its issuer. A session wl-xcon did not run, one whose record predates
     its engine build B, and one read before this host carried them (2026-10-14) list null, null and

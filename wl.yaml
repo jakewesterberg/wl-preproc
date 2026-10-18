@@ -59,9 +59,12 @@ status:
     5, the requester's choice of 2026-10-14, is merged (9e13ba5;
     docs/handoffs/2026-10-14-session-kind.md): each session's kind, display
     calibration and accepted warnings, carried into the database, the
-    listing and the NWB file. Open and small: the correction marker's three
-    deferred minors (docs/handoffs/2026-10-11-correction-marker.md section
-    6) and ask 5's five (its handoff's section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
+    listing and the NWB file; its five deferred minors, the requester's
+    choice of 2026-10-18, are built on fix/session-kind-minors and not
+    merged (section 7 of its handoff); reviewed, its minors fixed (d56a59f);
+    next, the merge question. Open and small: the
+    correction marker's three deferred minors
+    (docs/handoffs/2026-10-11-correction-marker.md section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: wl-xcon's ask 5 (9e13ba5): each session's kind, display
     calibration and accepted warnings, carried. Before it, the eye minors
     (0e4df0f): three tests for the blink pads, the
