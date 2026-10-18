@@ -99,12 +99,51 @@ def test_populate_makes_the_same_choice(landed):
     assert (timebase.SessionClock & key).fetch1("source") == "syncbox"
 
 
-def test_a_daemon_pass_chooses_the_clock_in_its_events_stage(daemon_module, prefix, landed):
-    """One pass chooses the clock and, reading through it, builds the
-    session's trial list."""
-    from wl_preproc.schema import pipeline, timebase
+def test_a_daemon_pass_chooses_the_clock_before_its_events_stage(daemon_module, prefix, landed, monkeypatch):
+    """The daemon records each session's clock in its own short transaction
+    before the events stage, so no stage holds the new row's lock for the
+    length of a decode another pass may wait on (the final review's I1); the
+    events stage then reads the clock it recorded."""
+    from wl_preproc.schema import events, pipeline, timebase
 
     key, _session_dir = landed()
+    seen = {}
+    real = events.populate_session
+
+    def spy(session_key, session_dir):
+        if session_key == key:
+            seen["recorded"] = len(timebase.SessionClock & key)
+        return real(session_key, session_dir)
+
+    monkeypatch.setattr(events, "populate_session", spy)
     report = daemon_module.run_once(prefix=prefix)
+    assert seen == {"recorded": 1}, report["errors"]
     assert (timebase.SessionClock & key).fetch1("source") == "syncbox"
     assert len(pipeline.event.BehaviorRecording & key), report["errors"]
+
+
+def test_a_clock_another_pass_records_during_this_stages_snapshot_is_read(landed):
+    """The final review's I1: two daemon passes overlap. A stage's transaction
+    opens, WITH CONSISTENT SNAPSHOT as every DataJoint transaction does, before
+    the other pass records the session's clock; inside it the stage finds no
+    row, its own insert changes nothing, and a plain re-read still sees the
+    snapshot. It is given the clock recorded, and does not raise."""
+    import pymysql
+
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import clock_for
+
+    key, _session_dir = landed()
+    other = pymysql.connect(host=dj.config["database.host"], port=dj.config["database.port"],
+                            user=dj.config["database.user"], password=dj.config["database.password"],
+                            autocommit=True)
+    try:
+        with dj.conn().transaction:
+            assert not len(timebase.SessionClock & key)
+            with other.cursor() as cursor:
+                cursor.execute(f"INSERT INTO {timebase.SessionClock.full_table_name} "
+                               "(subject, session_datetime, source, reason) VALUES (%s, %s, 'syncbox', %s)",
+                               (key["subject"], key["session_datetime"], "the sync box recorded this session"))
+            assert clock_for(key).source == "syncbox"
+    finally:
+        other.close()

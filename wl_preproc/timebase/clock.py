@@ -163,9 +163,11 @@ class Clock:
 def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
     """The session's clock, as `timebase.SessionClock` recorded it. A
     session not yet given one is given it now, by `choose`, and that choice
-    is recorded and never made again (section 4.1): the first stage to ask
-    is the events stage, in the daemon's order. Raises `NoClock`, recording
-    nothing, when no clock built so far can time the session."""
+    is recorded and never made again (section 4.1, amendment 3). The daemon
+    records every session's clock first, each in its own short transaction
+    (`daemon._first_tables`), so a stage asking inside its own transaction
+    finds it already there. Raises `NoClock`, recording nothing, when no
+    clock built so far can time the session."""
     from wl_preproc.schema import ingest, timebase
 
     session = {field: session_key[field] for field in ("subject", "session_datetime")}
@@ -177,4 +179,15 @@ def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
         timebase.SessionClock.insert1({**session, "source": choice.source, "reason": choice.reason},
                                       allow_direct_insert=True, skip_duplicates=True)
         rows = (timebase.SessionClock & session).to_dicts()
+    if not rows:
+        # Another pass recorded it after this transaction's snapshot was taken
+        # (DataJoint starts every transaction WITH CONSISTENT SNAPSHOT): the
+        # insert above changed nothing and a plain read still cannot see the
+        # row, so read the latest committed one (the final review's I1).
+        import datajoint as dj
+
+        rows = [{"source": source} for (source,) in dj.conn().query(
+            f"SELECT source FROM {timebase.SessionClock.full_table_name} "
+            "WHERE subject = %s AND session_datetime = %s FOR SHARE",
+            args=(session["subject"], session["session_datetime"])).fetchall()]
     return Clock(source=rows[0]["source"], session_dir=session_dir)

@@ -83,9 +83,10 @@ _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
 class SessionClock(dj.Imported):
     definition = """
     # Which clock keeps the session's time, chosen once, by the first stage
-    # that asks: the events stage, in the daemon's order (design spec
-    # `2026-10-18-training-records-and-backup-clock-design.md` section 4.1).
-    # Every stage reads it through `timebase/clock.py::clock_for`.
+    # that asks: the daemon, before its events stage, in a short transaction
+    # of its own (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md`, amendments 3
+    # and 8). Every stage reads it through `timebase/clock.py::clock_for`.
     # Key: (subject, session_datetime).
     -> pipeline.Session
     ---
