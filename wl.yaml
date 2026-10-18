@@ -62,11 +62,13 @@ status:
     listing and the NWB file; its five deferred minors, the requester's
     choice of 2026-10-18, are merged (ad52b79; section 7 of its handoff).
     The correction marker's three deferred minors, the requester's
-    choice of 2026-10-18, are built on fix/correction-marker-minors and
-    not merged (docs/handoffs/2026-10-11-correction-marker.md section 7);
-    reviewed, its five findings fixed (bafc2ba); next, the merge question.
+    choice of 2026-10-18, are merged (ad9ccb6;
+    docs/handoffs/2026-10-11-correction-marker.md section 7), its
+    review's five findings fixed.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: ask 5's five deferred minors (ad52b79). Before them, wl-xcon's
+    Done: the correction marker's minors and its review's five findings
+    (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before
+    them, wl-xcon's
     ask 5 (9e13ba5): each session's kind, display
     calibration and accepted warnings, carried. Before it, the eye minors
     (0e4df0f): three tests for the blink pads, the
@@ -144,6 +146,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `ad52b79` until the correction marker's minors' merge `ad9ccb6` on
+  # 2026-10-18 (CI green on `ad52b79`, run 39109197433); true when written.
   # Was `9e13ba5` until its minors' merge `ad52b79` on 2026-10-18 (CI green
   # on `9e13ba5`, run 39092580654); true when written.
   # Was `0e4df0f` until the ask-5 merge `9e13ba5` on 2026-10-18 (CI green
@@ -203,7 +207,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "ad52b79"
+  describes: "ad9ccb6"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

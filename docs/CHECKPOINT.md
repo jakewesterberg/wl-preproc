@@ -1,15 +1,22 @@
 # Where this build actually is
 
-**Last updated 2026-10-18**, describing `main` at `ad52b79`, the merge of
-`fix/session-kind-minors`: ask 5's five deferred minors (spec amendment 8,
-§7 of `handoffs/2026-10-14-session-kind.md`). CI read off `ad52b79` is green on
-both interpreters, 2395 passed on each with 37 skipped, and the
-manifest check is green (`gh run view 39109197433`).
-- **The minors:** another animal's `config.json` keeps its problem and no
-  session row; a warning joins a run only through its start row; a time that
-  is not finite reads as none, and a warning's run that cannot be stored is
-  flagged by its line; the listing reads no colour model. Ask 5 itself, below,
-  was merged just before (`9e13ba5`).
+**Last updated 2026-10-18**, describing `main` at `ad9ccb6`, the merge of
+`fix/correction-marker-minors`: the correction marker's three deferred minors
+and its review's five findings (§7 of `handoffs/2026-10-11-correction-marker.md`;
+subject-corrections spec amendment 16). CI read off `ad9ccb6` is green on both
+interpreters, 2395 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 39123167628`).
+- **The marker's minors:** the records-only catch-up is checked to clear the
+  marker in its own pass, and the adoption test goes through `publish._adopt`.
+  The review found an older defect there: an adopted file whose scratch copy
+  had been corrected kept a correction note it never received, and lost the
+  next one's. A description's correction notes are now the file's own lines,
+  after its build notes.
+- **Ask 5's five deferred minors** were merged just before (`ad52b79`): another
+  animal's `config.json` keeps its problem and no session row; a warning joins
+  a run only through its start row; a time that is not finite reads as none,
+  and a warning's run that cannot be stored is flagged by its line; the listing
+  reads no colour model. Ask 5 itself, below, before them (`9e13ba5`).
 - **Each session's kind** (training, piloting or recording), the display
   calibration it and each run ran against, and the warnings it accepted, read
   from wl-xcon's record into `core.SessionRecord`, `core.RunCalibration` and
@@ -89,6 +96,10 @@ manifest check is green (`gh run view 39109197433`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `ad52b79` (the ask-5 minors' merge, CI green, 2395 passed on
+each interpreter, `39109197433`) until the correction marker's minors' merge;
+true when written.*
 
 *This header named `9e13ba5` (the ask-5 merge, CI green, 2388 passed on each
 interpreter, `39092580654`) until its minors' merge; true when written.*
@@ -277,6 +288,9 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until the correction marker's minors' merge (`ad9ccb6`) this said they were
+> built, not merged, with the merge question next; true when written.*
+>
 > *Until 2026-10-18 the hardware line said it had not changed on 2026-10-14, when
 > the requester chose wl-xcon's ask 5; true when written.*
 >
@@ -337,10 +351,9 @@ requester chose to merge the same day; true when written.*
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
 > record designed by wl-xcon's build K. **The correction marker's three
-> deferred minors, the requester's choice of 2026-10-18, are built on
-> `fix/correction-marker-minors`, not merged** (§7 of
-> `handoffs/2026-10-11-correction-marker.md`), reviewed and its five findings
-> fixed (`bafc2ba`). Next: the merge question. Fine-tuning
+> deferred minors, the requester's choice of 2026-10-18, are merged** (`ad9ccb6`,
+> §7 of `handoffs/2026-10-11-correction-marker.md`), its review's five findings
+> fixed. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until 2026-10-14 this said the eye minors were built, not
@@ -416,7 +429,9 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: ask 5's five deferred minors (`ad52b79`). Before them, wl-xcon's ask 5
+> Done: the correction marker's three deferred minors and its review's five
+> findings (`ad9ccb6`). Before them, ask 5's five deferred minors (`ad52b79`).
+> Before them, wl-xcon's ask 5
 > (`9e13ba5`): each session's kind, display calibration
 > and accepted warnings, carried into the database, the listing and the NWB
 > file. Before it, the eye minors (`0e4df0f`): blink padding's five deferred minors and
