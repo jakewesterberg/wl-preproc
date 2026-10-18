@@ -154,3 +154,5 @@ chose to fix all five before the merge (`bafc2ba`, with these records):
 
 **The full suite** at `0e6d11c`, before the review: 2404 passed, 27 skipped, 1 deselected, 1
 xfailed on 3.11; 2404 passed, 28 skipped, 1 xfailed on 3.13.
+**And at `822b04f`, after the fixes:** the same, 2404 passed on each interpreter, both exiting 0;
+the review's fixes changed tests and added none.
