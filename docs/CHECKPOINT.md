@@ -277,6 +277,9 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until 2026-10-18 the hardware line said it had not changed on 2026-10-14, when
+> the requester chose wl-xcon's ask 5; true when written.*
+>
 > *Until 2026-10-18, latest, this listed the correction marker's three minors as
 > open; true when written.*
 >
@@ -336,7 +339,8 @@ requester chose to merge the same day; true when written.*
 > record designed by wl-xcon's build K. **The correction marker's three
 > deferred minors, the requester's choice of 2026-10-18, are built on
 > `fix/correction-marker-minors`, not merged** (§7 of
-> `handoffs/2026-10-11-correction-marker.md`). Next: the review. Fine-tuning
+> `handoffs/2026-10-11-correction-marker.md`), reviewed and its five findings
+> fixed (`bafc2ba`). Next: the merge question. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until 2026-10-14 this said the eye minors were built, not

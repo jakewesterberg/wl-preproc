@@ -234,6 +234,7 @@ These settle what the sections above left open; §0 stands.
 3. **The description's notes follow the file's by count:** the correction lines the file carries
    past those the description already has. The same correction made twice is noted twice, and a
    pass after a crash that followed the swap records the note the crashed pass wrote, once.
+   *Replaced by amendment 16, 2026-10-18.*
 4. **The daemon reports `nwb_corrected`,** `None` with neither the builder's root nor a share
    configured, and `0` when another wlpp process holds the NWB lock. Its failures are prefixed
    `NwbCorrection`. A file not yet published in a freed session waits, as publishing does.
@@ -309,3 +310,14 @@ These settle what the sections above left open; §0 stands.
     changed back in between, and puts it back with a second note. §5's row for a crash after the
     swap no longer depends on the details staying as they were. Design spec
     `2026-10-11-correction-marker-design.md`.
+
+## Amendment, 2026-10-18, from the correction marker's minors' review
+
+16. **The description's correction notes are the file's own correction lines,** every one, in the
+    file's order, after the notes the build wrote. This replaces amendment 3's count, which took the
+    lines past the number the records held: right only when the records' notes were the first of
+    the file's lines. After an adoption whose records were brought up to another copy they were
+    not. A publish fails past its rename, the stage corrects the scratch copy and records its note,
+    and the publishing pass adopts the shared file, which never received it: the count kept that
+    note and lost the next correction's. The same correction made twice is still noted twice, as two
+    lines in the file. Handoff `2026-10-11-correction-marker.md` §7.

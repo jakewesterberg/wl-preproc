@@ -239,8 +239,8 @@ def test_a_file_already_holding_the_details_gets_only_its_records(published, sha
     the file again. Here the same correction is made twice on one day -- A to
     B, back, then A to B once more by the pass that crashed -- so the crashed
     pass's note has the very text of one already recorded: it is recorded
-    again, because the description follows the file's correction lines by
-    count, not by text (spec amendment 3)."""
+    again, because the description's correction notes are the file's lines,
+    every one, not matched by text (spec amendments 3 and 16)."""
     import h5py
 
     from wl_preproc.nwb.correct import correct, patch_subject

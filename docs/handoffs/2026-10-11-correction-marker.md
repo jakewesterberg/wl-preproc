@@ -55,15 +55,16 @@ Executed on 2026-10-11, inline (the requester's choice), task by task: Task 1 `f
   third-value test, which pins behaviour Task 2 keeps.
 - **Then passed, with their neighbours:** 3 and 52; 8 and 131.
 - **All seven mutation checks the plan names failed their tests:** T1a and T2a–f.
-- **The full suite, once, on both interpreters,** with the BMD, NSLR and Andersson references
-  set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as it is in CI:
+- **The full suite, once, on both interpreters,** with the BMD and NSLR references set, as CI
+  has them, the Andersson data set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as in CI:
   - 3.11: **2316 passed, 27 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2316 passed, 28 skipped, 1 xfailed**.
 
-  That is 11 more than the seven-way minors' run at `605a389`, the marker's tests. CI, without
-  those references, ran fewer: on the merge `caf1d63`, **2308 passed and 37 skipped** on each
-  interpreter (`gh run view 38141210544`).
-  *Until 2026-10-18 this said "as CI has it" of all four settings; the final review's minor.*
+  That is 11 more than the seven-way minors' run at `605a389`, the marker's tests. CI, which
+  lacks the Andersson data, ran fewer: on the merge `caf1d63`, **2308 passed and 37 skipped** on
+  each interpreter (`gh run view 38141210544`).
+  *Until 2026-10-18 this said "as CI has it" of all four settings, wrong only of the Andersson
+  data: CI fetches the NSLR and BMD references (`.github/workflows/ci.yml`).*
 - **`wl-check`:** `wl.yaml: no findings`.
 
 ## 6. The final review
@@ -103,14 +104,17 @@ test, and both exited 0.
 ## 7. The final review's deferred minors
 
 The requester chose them on 2026-10-18, the rig and compute machine unchanged: a bounded change,
-designed in conversation, built on `fix/correction-marker-minors` from `6be2565`. Nothing the code
-does changes, so neither spec gains an amendment.
+designed in conversation, built on `fix/correction-marker-minors` from `6be2565`. As designed,
+nothing the code does changed; the review's finding 2, below, changed one rule, and the
+subject-corrections spec gains amendment 16.
 1. **§5's first row clears the marker in the pass that brings the records up.**
    `test_a_description_file_that_could_not_be_written_is_written_next_pass` now checks that the
    file is marked after the failing pass and, after the next, unmarked and not stale, with one
    `corrected` change added. Before, a regression leaving the marker there would have gone unseen,
    the pass after clearing it by §3's rule 3. With the marker's deletion taken out of
-   `write_subject_records`, that test alone fails, on the new check.
+   `write_subject_records`, this test, run alone, fails on the new check; the put-back test's
+   `write_description` case fails too, since both passes write their records through `_record`.
+   No mutation fails the new check alone: what it adds is the check in that pass itself.
 2. **The adoption test goes through `publish._adopt`.** `test_records_written_for_an_adoption_clear_a_marker`
    called `write_subject_records` itself. Now the code makes every step: a failed publish leaves the
    file on its share, its scratch copy is corrected, and a later correction marks it and fails to
@@ -119,7 +123,34 @@ does changes, so neither spec gains an amendment.
    deleted only for a correction's records, and with `_adopt` never writing the records, which the
    direct call could not see.
 3. **Wording.** `NwbCorrecting`'s comment and `correct`'s docstring name rule 3's deletion; the
-   comment's first line, which MySQL keeps as the table's comment, is unchanged. §5 now says the
-   references were set here, which CI lacks, and gives CI's count on `caf1d63`, 2308 passed.
+   comment's first line, which MySQL keeps as the table's comment, is unchanged. §5 now gives CI's
+   count on `caf1d63`, 2308 passed, and says which references CI has: the NSLR and BMD
+   references, not the Andersson data. §6's premise, that CI lacks all three, was wrong of NSLR
+   and BMD, and this item first copied it.
 
 §6's fourth item, the history lines, was done by the merge's pointer.
+
+**A fresh Opus reviewer** read the branch on 2026-10-18 (`6be2565..0e6d11c`) and found two
+Important and three Minor, judging it not ready to merge until the first was fixed. The requester
+chose to fix all five before the merge (`bafc2ba`, with these records):
+- **Important, the references (finding 1):** item 3's first wording said CI lacks the NSLR and
+  BMD references, which it fetches. Corrected above.
+- **Important, an older defect the rewritten adoption test drove through (finding 2):**
+  `subject_records` matched the file's correction lines to the records' notes by count. After a
+  publish failed past its rename and the stage corrected the scratch copy, adopting the shared
+  file kept the scratch copy's note, which the shared file never received, and the next
+  correction's note was lost. Reproduced here, the records said `2016-03-02 → 2016-03-01` where the
+  file said `2016-03-02 → 2016-03-05`, and wl.works and the description beside the file would
+  have shown the records'. The description's correction notes are now the file's own lines, every
+  one, after the build's notes (amendment 16). The adoption test checks them after the adoption and
+  after the next correction; it failed first, and matching by count again fails it.
+- **Minor, cleanup:** a failure in either adoption test before the file was published again left
+  the fixture unpublished, and the next test errored in `_live`. Both now publish it again if need
+  be and bring every file of the animal back (`_put_back`). With a failure injected before the
+  adoption, the next test errored under the old cleanup and passes under the new.
+- **Minor:** item 1's mutation sentence said "alone" of a mutation the put-back test catches
+  too. Reworded above.
+- **Minor:** the checkpoint's hardware date moved without its history note. Added.
+
+**The full suite** at `0e6d11c`, before the review: 2404 passed, 27 skipped, 1 deselected, 1
+xfailed on 3.11; 2404 passed, 28 skipped, 1 xfailed on 3.13.
