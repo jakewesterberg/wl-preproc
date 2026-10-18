@@ -1,11 +1,52 @@
 # Amendments to wl-xcon
 
-**Three are outstanding, opened 2026-09-29, 2026-10-01 and 2026-10-11.** wl-xcon (formerly wl-expcontroller) is
+**Four are outstanding, opened 2026-09-29, 2026-10-01, 2026-10-11 and 2026-10-18.** wl-xcon (formerly wl-expcontroller) is
 the rig's experiment controller. What it asked of this repository is recorded in
 [`HANDOVER-wl-expcontroller.md`](../HANDOVER-wl-expcontroller.md) and in its own
 `docs/pending-wl-preproc-amendments.md`; this file is the other direction.
 
 *Until 2026-10-11 this said two were outstanding; true when written.*
+*Until 2026-10-18 this said three were outstanding; true when written.*
+
+---
+
+# OPEN — say which code each training record strobed, and three asks for later
+
+**Opened 2026-10-18** with the design for wl-xcon's ask 1, its XC-321
+([`specs/2026-10-18-training-records-and-backup-clock-design.md`](superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md)),
+the requester's choice the same day to ask this first and plan the records once it is answered.
+
+**What this repository found, reading wl-xcon's `main` at `a607414`.** The training records are to be
+placed on the recording's clock by their codes: the n-th `parameter_changes.jsonl` row with a
+`sequence` to the n-th `PARAM_CHANGED` code (its `record.py`, `parameter_change`; XC-288 §3.4), and
+`controls.jsonl`'s pauses, resumes, marks and manual rewards to their own codes "by order and
+instant" (its `record.py`, the `CONTROLS` comment). **The session folder does not say which number
+any of those codes had.** Each is the run's allocation's (`Allocation.code_for`); `runs.jsonl`'s start
+row names the allocation by its path (`allocation`, `versions.allocation`), and `config.json` carries
+no codes. This repository will not copy the reference allocation's numbers (its `tasks/allocation.py`,
+4130 to 4134): under ADR-0007 their meaning is wl-xtasks', and a task whose allocation numbers them
+otherwise would be joined wrongly. Nor can rows be counted by name alone: a pause, resume or mark
+strobes nothing when its run's allocation has no code for it (its `taskd.py`, `_pause`, `_resume`,
+`_stamp`), so the n-th pause row is not always the n-th `PAUSE` code.
+
+**The ask:** each `parameter_changes.jsonl` and `controls.jsonl` row records the number it strobed,
+or null when it strobed nothing. A mark's row already says whether it strobed (`strobed`); this says
+which. A number on the row covers the rows outside a run too (a manual reward between runs), whatever
+allocation they used. If wl-xcon would rather write each run's framework codes once, in its start
+row, this repository reads that instead; the field's name and shape are wl-xcon's to choose, sent
+here before it is written.
+
+**And three for later parts of the same design,** none blocking the first:
+1. **The manifest** (its §5): list `syncbox` in `expected_systems` only when the sync box is running
+   at the open; add `expects_rig_record: true`, and write `xcon/DONE` when the session's record is
+   closed. The requester ruled on 2026-10-18 that the sync box should run at every session, and that
+   a session without it must still be taken in.
+2. **Before builds C3, C4 and C7** (its split of build C): the file name and row shape of the grown
+   change log, `reasons.jsonl` and the timed event log.
+3. **The trial start and end instants, and each code's instant** (XC-288 §3.1 and §3.2): what this
+   repository times a training session by when neither the sync box nor the NI recorded it.
+
+**Nothing on the wire changes.**
 
 ---
 

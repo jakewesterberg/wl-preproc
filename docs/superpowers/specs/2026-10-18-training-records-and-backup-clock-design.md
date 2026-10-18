@@ -417,3 +417,22 @@ its mutation checks; the full suite runs once per branch on both interpreters.
 - **`docs/ops/lab-host-protocol.md`:** the listing's new fields (its test holds the document to the
   models).
 - **`docs/CHECKPOINT.md` and `wl.yaml`,** at each part's merge.
+
+---
+
+## Amendment, 2026-10-18, made while planning part 1
+
+1. **§10's item 1, answered: the session folder does not record the codes' numbers,** and part 1 is
+   not planned until it does. Read in wl-xcon's `main` at `a607414`: each framework code is the run's
+   allocation's (`Allocation.code_for`); `runs.jsonl`'s start row names the allocation by its path and
+   `config.json` carries no codes; and a pause, resume or mark strobes nothing when its run's
+   allocation has no code for it (`taskd.py`'s `_pause`, `_resume`, `_stamp`). The kinds
+   `controls.jsonl` writes are `pause`, `resume`, `mark`, `note`, `schedule`, `cancel`,
+   `scheduled_stop`, `stop`, `end` and `reward`; only a `reward` always strobes (`MANUAL_REWARD`, or
+   it is refused), and each row also carries its `run`. In this repository, a code outside `Marker`
+   is stored as an event named `CODE_<n>` (`schema/events.py`), and the `PARAM_CHANGE` escape's
+   sequence number is not kept. Copying the reference allocation's numbers was offered and declined
+   (ADR-0007; wrong for any task numbering them otherwise), as was timing controls by the rig's clock
+   alone for now: the requester chose to ask wl-xcon first (`docs/pending-wl-xcon-amendments.md`,
+   the section opened 2026-10-18), and to plan part 1 with §3.3's joins once the record says which
+   code each row strobed.

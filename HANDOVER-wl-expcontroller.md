@@ -253,6 +253,16 @@ read them.
     scratch. A session whose scratch copy is already freed has no folder there until it is rehydrated.
 - *Reading the records into the published dataset* is open here: it needs its own design, not yet
   scheduled (2026-10-11).
+- *wl-preproc's answer, 2026-10-18: designed, and one thing asked back.* The requester chose it on
+  2026-10-18, as one design with a clock for a session without the sync box (the requester: the sync
+  box "should always run, but there should be a backup protocol so that information in a session
+  without a sync box is okay"): `docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md`.
+  Its first part reads `parameter_changes.jsonl` and `controls.jsonl` as they are written today, every
+  line kept as written, and places each row on the recording's clock by the code it strobed. **The
+  session folder does not say which number that was**, so the first part waits on the ask in
+  `docs/pending-wl-xcon-amendments.md` (the section opened 2026-10-18): each row records the code it
+  strobed, or each run its framework codes. Three later asks are there too: the manifest without the
+  sync box, the new files' row shapes, and the instants build C writes.
 
 **2. XC-197: number the conditions, and carry an "overridden" flag in the trial table.** Blocks: the flag
 blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and conditions) and on this answer.
