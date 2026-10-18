@@ -436,3 +436,28 @@ its mutation checks; the full suite runs once per branch on both interpreters.
    alone for now: the requester chose to ask wl-xcon first (`docs/pending-wl-xcon-amendments.md`,
    the section opened 2026-10-18), and to plan part 1 with §3.3's joins once the record says which
    code each row strobed.
+
+## Amendment, 2026-10-18, wl-xcon's answer
+
+2. **Each row will say the code it strobed** (wl-xcon, 2026-10-18, building on its branch
+   `xc321-event-code`, not yet merged). Every `parameter_changes.jsonl` and `controls.jsonl` row
+   gains `event_code`, an integer or null: the number that row's act strobed, from the allocation the
+   session's process loaded, or null when it strobed nothing. **A row written before the field has no
+   key, which is read as unknown, never as null.** A change carries `PARAM_CHANGED`'s number;
+   `pause`, `resume` and `mark` their own when the allocation has one; a `reward` always (one
+   without its code is refused and writes no row); an `end` `HEAD_RELEASED`'s when ending released
+   the head; `note`, `schedule`, `cancel`, `scheduled_stop` and `stop` are always null. It is on the
+   row rather than the run's start row because a resumed session can come back on another
+   allocation that no file names until its next run. wl-xcon also now refuses a run whose allocation
+   lacks `PARAM_CHANGED` before it applies any value.
+   - **§3.3's joins read it:** the n-th row carrying a number takes the time of the n-th occurrence
+     of that number in the session's codes; a count that disagrees leaves that number's rows untimed,
+     naming both counts; a row without the key is untimed. A task's own mark can strobe a framework
+     code's number (wl-xcon's XC-382, a load-time warning there), which reads here as such a
+     disagreement.
+   - **§9's "each row strobes exactly one" reads "at most one".**
+   - **The later asks:** the manifest is wl-xcon's XC-356 (its `DONE` at a stranded session's close
+     goes to the PI's welfare review); the new files' shapes are its XC-383, each of builds C3, C4 and
+     C7 sending its file names and row shapes before it is built; the instants are XC-288 §3.1 and
+     §3.2, with no accuracy stated for them until wl-xcon has measured the rig's clock, so part 4
+     assumes none.

@@ -263,6 +263,8 @@ read them.
   `docs/pending-wl-xcon-amendments.md` (the section opened 2026-10-18): each row records the code it
   strobed, or each run its framework codes. Three later asks are there too: the manifest without the
   sync box, the new files' row shapes, and the instants build C writes.
+  *wl-xcon answered the same day:* each row gains `event_code`, being built on its branch
+  `xc321-event-code` (the spec's amendment 2).
 
 **2. XC-197: number the conditions, and carry an "overridden" flag in the trial table.** Blocks: the flag
 blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and conditions) and on this answer.

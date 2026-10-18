@@ -48,6 +48,10 @@ here before it is written.
 
 **Nothing on the wire changes.**
 
+**Answered 2026-10-18, building:** each row gains `event_code`, an integer or null, a missing key
+read as unknown (wl-xcon's branch `xc321-event-code`, not yet merged; the spec's amendment 2). The
+three later asks are its XC-356, XC-383 and XC-288 §3.1 and §3.2.
+
 ---
 
 # OPEN — blinks in the DPI tracker, and raw eye video from the first sessions
