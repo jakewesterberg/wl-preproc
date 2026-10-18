@@ -1287,3 +1287,18 @@ def test_cli_ingest_still_prints_outcomes_found_before_a_root_fault(monkeypatch,
     assert exit_code == 1
     assert "2027-03-14_01" in captured.out
     assert "ingested" in captured.out
+
+
+def test_the_rig_agents_sqlite_file_in_xcon_changes_nothing(root):
+    """wl-xcon's agent rebuilds a SQLite file in `xcon/`; ingest lands the
+    session unread and unchanged by it (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.5):
+    `xcon/` is not one of `SYSTEMS`, so nothing verifies or lists it."""
+    tmp_path, prefix, session_dir = root
+    _use_dedicated_subject(tmp_path, "sqlkey")
+    (Path(session_dir) / "xcon" / "training.sqlite").write_bytes(b"SQLite format 3\x00" + bytes(84))
+
+    result = scan_once(tmp_path, prefix=prefix)
+
+    assert result.outcomes[session_dir] is Outcome.INGESTED
+    assert (ingest.Ingestion & {"session_dir": session_dir}).fetch1("integrity") == "verified"

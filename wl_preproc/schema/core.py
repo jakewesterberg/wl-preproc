@@ -82,8 +82,9 @@ class RunRecordProblem(dj.Manual):
     # record or of its accepted warnings it could not read, a config.json that
     # is not a JSON object or whose calibration is neither an object nor
     # null, a session kind it does not know, a warning's run that will not fit
-    # its column, a record of another animal, or no run record at all for a
-    # session with measured runs. At most 20, the last saying how many more.
+    # its column, a training record it could not read or time, a record of
+    # another animal, or no run record at all for a session with measured
+    # runs. At most 20, the last saying how many more.
     # Key: (subject, session_datetime, problem_number).
     -> pipeline.Session
     problem_number : smallint unsigned  # from 1, in the reader's order
@@ -154,6 +155,90 @@ class AcceptedWarning(dj.Manual):
     by_account = null   : varchar(255)
     by_issuer = null    : varchar(255)
     by_token_id = null  : varchar(255)
+    """
+
+
+@schema
+class ParameterChange(dj.Manual):
+    definition = """
+    # One live change the rig applied, from `xcon/parameter_changes.jsonl`, as
+    # wl-xcon wrote it, read by `schema/events.py::populate_session` (design
+    # spec 2026-10-18-training-records-and-backup-clock-design.md section 3.1).
+    # Timed by the code its act strobed (section 3.3), and otherwise untimed.
+    # Its values and its line are JSON text as written: MySQL's json type
+    # rounds a double's seventeenth digit and refuses NaN (amendment 9). Who
+    # made it is kept here, never in the NWB file. Key: (subject,
+    # session_datetime, change_line).
+    -> pipeline.Session
+    change_line : int unsigned  # its line in the file, from 1
+    ---
+    sequence = null     : int unsigned       # wl-xcon's change number; null when the row has none
+    name                : varchar(255)       # the setting
+    was = null          : mediumtext         # its old value, as JSON text; null when the row has none
+    now = null          : mediumtext         # its new value, likewise
+    event_code = null   : smallint unsigned  # the code its act strobed; null for none, or when the row does not say
+    run_index = null    : smallint unsigned  # wl-xcon's run, from 0; null for none, or when it will not fit
+    run_number = null   : smallint           # the measured run's; null when the run was not measured
+    by_kind = null      : varchar(16)        # box or member
+    by_name = null      : varchar(255)
+    by_account = null   : varchar(255)
+    by_issuer = null    : varchar(255)
+    by_token_id = null  : varchar(255)
+    session_time = null : double             # (s) session time; null when untimed
+    row                 : mediumtext         # the line as written
+    """
+
+
+@schema
+class RigControl(dj.Manual):
+    definition = """
+    # One console control, from `xcon/controls.jsonl`, as wl-xcon wrote it,
+    # read by `schema/events.py::populate_session` (design spec
+    # 2026-10-18-training-records-and-backup-clock-design.md section 3.1).
+    # Timed by the code its act strobed, or, for one that strobed nothing,
+    # through the rig's clock fit (`RigClock`); otherwise untimed. Its detail
+    # and its line are JSON text as written. Key: (subject, session_datetime,
+    # control_line).
+    -> pipeline.Session
+    control_line : int unsigned  # its line in the file, from 1
+    ---
+    kind                : varchar(64)        # as written: pause, resume, reward and the others amendment 1 lists
+    at = null           : double             # the rig's anchored wall clock, POSIX seconds
+    at_local = null     : varchar(64)
+    trial_index = null  : int unsigned       # the trial it happened in or, between trials, the one about to run
+    event_code = null   : smallint unsigned  # the code its act strobed; null for none, or when the row does not say
+    run_index = null    : smallint unsigned  # wl-xcon's run, from 0; null for none, or when it will not fit
+    run_number = null   : smallint           # the measured run's; null when the run was not measured
+    detail              : mediumtext         # the row's own fields, as JSON text
+    by_kind = null      : varchar(16)        # box or member; null for nobody
+    by_name = null      : varchar(255)
+    by_account = null   : varchar(255)
+    by_issuer = null    : varchar(255)
+    by_token_id = null  : varchar(255)
+    session_time = null : double             # (s) session time; null when untimed
+    time_source = null  : enum('code', 'rig_clock')  # its own code, or the rig's clock fit
+    row                 : mediumtext         # the line as written
+    """
+
+
+@schema
+class RigClock(dj.Manual):
+    definition = """
+    # The rig's anchored wall clock fitted to session time: its run rows' and
+    # its coded controls' instants against their codes (design spec
+    # 2026-10-18-training-records-and-backup-clock-design.md section 3.3),
+    # rig_s = rig_at_zero + session_s * (1 + drift_ppm / 1e6). Written by the
+    # event stage with the records it times. None when fewer than two instants
+    # matched, or one missed its code by more than 50 ms
+    # (`events/rigtiming.py::RIG_CLOCK_LIMIT_S`). Key: (subject,
+    # session_datetime).
+    -> pipeline.Session
+    ---
+    rig_at_zero     : double        # (s) POSIX seconds on the rig's clock at session t = 0
+    drift_ppm       : double
+    n_matched       : int unsigned  # instants matched to a code
+    residual_ms_rms : double
+    residual_ms_max : double
     """
 
 
