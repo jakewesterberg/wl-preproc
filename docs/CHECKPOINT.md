@@ -318,7 +318,8 @@ requester chose to merge the same day; true when written.*
 > display calibration and accepted warnings, carried into the database, the
 > listing and the NWB file. **Its five deferred minors, the requester's choice of
 > 2026-10-18, are built on `fix/session-kind-minors`, not merged** (§7 of the
-> handoff). Next: the review. Still to build: 1's
+> handoff), reviewed and its four minors fixed (`d56a59f`). Next: the merge
+> question. Still to build: 1's
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
 > record designed by wl-xcon's build K. Open and small: the correction

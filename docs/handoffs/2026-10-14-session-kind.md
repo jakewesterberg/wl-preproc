@@ -124,6 +124,21 @@ The requester chose them next on 2026-10-18. Built on
    (`test_the_listing_does_not_read_the_colour_model_it_does_not_list`).
 5. **Three comments** in `rigruns.py` and `core.py` made true.
 
-Each test failed first, and a mutation of each fix fails it. **The full suite** at the fixes' commit (as
-`712ddf9`, before its rebase onto the merge's pointer, which changed documents only), as Task 5 ran it: 2403 passed, 27 skipped, 1 deselected, 1 xfailed on 3.11; 2403 passed, 28 skipped,
-1 xfailed on 3.13. Six more than the merge's 2397, this section's tests.
+Each test failed first, and a mutation of each fix fails it.
+
+**A fresh reviewer** read the branch on 2026-10-18 (`fff716b..b49c030`). Two Opus reviews were stopped by
+the model's safeguards before they could report, and the requester chose a Sonnet reviewer, which found
+no Critical or Important, judged the branch ready to merge, and found four Minors, which the requester
+chose to fix before the merge (`d56a59f`):
+- the problem for a warning's run that cannot be stored named the warning by its count among those
+  read, where every other problem names its line in the file, and in database words: each warning now
+  keeps its line, and the problem reads "warnings.jsonl line N: run R cannot be stored (0 to 65535), so
+  the warning names no run";
+- amendment 8 now says the flag is that warning's only sign;
+- the protocol document now gives every case a warning's `run_number` is null, and which of them is
+  flagged;
+- a test now shows another animal's record gives its file no `rig_record` module.
+
+The reviewer set aside whether item 3's join is the right design, the requester's call, and the full
+suite, run here. **The full suite** at `d56a59f`: 2404 passed, 27 skipped, 1 deselected, 1 xfailed on 3.11; 2404 passed, 28 skipped, 1 xfailed on 3.13. 7 more than
+the merge's 2397, this section's tests.
