@@ -715,7 +715,7 @@ def test_a_file_left_by_a_failed_publish_is_adopted_after_its_scratch_copy_was_c
         run_corrections(shares["slow"], shares["fast"])
         assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 1) and not _is_stale(key)
     finally:
-        _restore(key, shares)
+        _put_back(key, shares)
 
 
 # -- Piece 4's deferred minors (handoff `2026-10-05-subject-corrections.md` §6).
@@ -1047,6 +1047,38 @@ def _corrected_notes(key) -> int:
     return sum(1 for note in notes if note.startswith("Corrected "))
 
 
+def _recorded_corrections(key) -> list[str]:
+    """The correction notes the file's records hold, in their order."""
+    from wl_preproc.nwb.publish import key_of
+    from wl_preproc.schema import nwb as nwb_schema
+
+    notes = (nwb_schema.NwbFile & key_of(key)).fetch1("description")["notes"]
+    return [note for note in notes if note.startswith("Corrected ")]
+
+
+def _correction_lines(path) -> list[str]:
+    """The correction lines the file's subject description holds, in its
+    order."""
+    import h5py
+
+    with h5py.File(path, "r") as handle:
+        stated = handle["general/subject/description"][()].decode()
+    return [line for line in stated.split("\n") if line.startswith("Corrected ")]
+
+
+def _put_back(key, shares) -> None:
+    """After a test that left the file's placement unrecorded: the file
+    published again if a failure left it so, and every file of the animal
+    back to the fixture's details, since a pass corrects them all."""
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import run_corrections
+
+    if publish_module.current_placement(key) is None:
+        publish_module.run_publish(shares["slow"], shares["fast"])
+    _set_birth(_BIRTH)
+    run_corrections(shares["slow"], shares["fast"])
+
+
 def _changes(key) -> int:
     from wl_preproc.nwb.publish import key_of
     from wl_preproc.schema import nwb as nwb_schema
@@ -1207,7 +1239,11 @@ def test_records_written_for_an_adoption_clear_a_marker(published, shares, monke
     the fixture's details, and failed before recording it; its scratch copy
     was corrected, and a later correction marked it and failed to rename. The
     publishing pass adopts the shared file, its records taken from it, and
-    the next correction brings it up to the current details."""
+    the next correction brings it up to the current details. The records'
+    correction notes are the shared file's own throughout: the scratch copy's
+    note, which it never received, is dropped at the adoption, and the next
+    correction's note is recorded (the marker minors' review, finding 2;
+    subject-corrections spec amendment 16)."""
     import shutil
     from pathlib import Path
 
@@ -1240,12 +1276,13 @@ def test_records_written_for_an_adoption_clear_a_marker(published, shares, monke
         assert not _marked(key)
         described = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
         assert described["subject"]["date_of_birth"] == _BIRTH.isoformat() and _is_stale(key)
+        assert _recorded_corrections(key) == _correction_lines(live)
         run_corrections(shares["slow"], shares["fast"])
-        assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 5)
-        assert not _marked(key) and not _is_stale(key)
+        assert _recorded_corrections(key) == _correction_lines(live)
+        _assert_settled(key, live, datetime.date(2016, 3, 5))
     finally:
         (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
-        _restore(key, shares)
+        _put_back(key, shares)
 
 
 def test_a_marked_file_whose_details_changed_again_is_corrected_to_them(published, shares, monkeypatch):
