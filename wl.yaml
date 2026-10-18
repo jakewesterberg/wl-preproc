@@ -70,7 +70,8 @@ status:
     five parts); part 2, the clock as a recorded choice, is merged
     (789e825; docs/handoffs/2026-10-18-clock-choice.md); part 1, the
     training records, is built on feat/training-records and not merged
-    (docs/handoffs/2026-10-18-training-records.md); next, the review.
+    (docs/handoffs/2026-10-18-training-records.md); reviewed, its three
+    findings fixed; next, the merge question.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: part 2 of the training-records design (789e825). Before it, the
     correction marker's minors and its review's five findings

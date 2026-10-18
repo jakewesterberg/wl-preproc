@@ -58,3 +58,38 @@ Executed on 2026-10-18: Task 1 `9588b12`, Task 2 `2d03efb`, Task 3 `b5308d8`, Ta
   Andersson data set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as in CI:
   - 3.11: **2459 passed, 27 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2459 passed, 28 skipped, 1 xfailed**.
+
+## 6. The final review
+
+A fresh Opus reviewer read the branch (`a639b83..f70f840`) and found **one Important and six Minor**,
+judging it ready to merge with fixes. Two of the Minor were re-graded Important by what a person gets, and
+the three were fixed, each by a test that failed first and a mutation its test catches:
+- **A lone UTF-16 surrogate in a rig record failed the session's events stage on every pass** (`40aee42`,
+  spec amendment 17): `test_a_lone_surrogate_in_a_controls_text_is_kept_and_the_stage_completes` and, in
+  ask 5's columns, `test_a_lone_surrogate_in_a_warnings_text_is_kept_and_the_stage_completes`.
+- **The rig's clock fit divided by a rate of zero, and took a negative or absurd one** (`450ca1b`,
+  amendment 18): `test_a_rig_whose_instants_do_not_advance_or_run_backwards_has_no_fit` and
+  `test_a_rate_no_clock_runs_at_has_no_fit`. Two instants across a small forward step still fit.
+- **A control's `trial_index` is run-relative, and the NWB table named no run** (`81bde77`, amendment 19):
+  the synthetic rig's, the writer's and the built file's tests.
+- **Deferred, Minor:**
+  - a control whose row says it strobed nothing and carries no usable instant is untimed with no problem
+    named;
+  - a several-hundred-digit integer instant raises `OverflowError` in the readers (`rigsession.py` too);
+    wl-xcon writes floats;
+  - the changes and the controls are inserted in one batch each, so a flooded `controls.jsonl`
+    (`wlx run --link-allow-remote`) could pass MySQL's `max_allowed_packet`, as `Event` could already;
+  - the column `row` is a MySQL 8 reserved word: DataJoint quotes it, but hand-written SQL must too.
+- **Set aside by the reviewer, and the rulings on them** (all stand): a session event-staged before part 1
+  lists zeros (the plan's Review Focus 5); re-running the events stage keeps the old training rows, as
+  ask 5's tables do; wl.works' copies of the two schemas refuse the new fields until updated (§2); a lost
+  row and a stray code of the same number pair by count, as the spec defines a match; a record outside any
+  run goes into every montage's file, as warnings do (amendment 10).
+- **Recommended to wl-xcon, not asked yet:** end a torn last line before appending to
+  `parameter_changes.jsonl` and `controls.jsonl`, as its `warning()` already does (its XC-352's C11).
+  Today a resumed process glues its first row to a torn one, which reads here as "not JSON" and a count
+  that disagrees.
+
+**The full suite after the fixes,** at `81bde77`: 3.11, **2463 passed, 27 skipped, 1 deselected, 1 xfailed**;
+3.13, **2463 passed, 28 skipped, 1 xfailed**, both exiting 0. Four more than §5's: the two surrogate tests
+and the two rate tests.

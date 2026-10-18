@@ -568,3 +568,23 @@ its mutation checks; the full suite runs once per branch on both interpreters.
 16. **The synthetic run record's instants are the rig's clock** (`synth/peripherals.py::rig_clock`):
     each run row's `at` was its session time, which wl-xcon never writes and nothing read. A profile
     without runs is unchanged; one with runs differs in those instants only.
+
+## Amendments, 2026-10-19, from part 1's final review
+
+17. **A lone UTF-16 surrogate in a rig record is kept as its escape.** wl-xcon writes ASCII lines, so
+    half an emoji (one split at a field's length limit, or sent by a console peer) arrives as a
+    `\ud83d` escape, which `json.loads` makes a character utf8mb4 cannot store; inserting it failed the
+    session's whole events stage, on every pass. The training records' JSON text is now ASCII, exact JSON
+    still, and every rig text column the events stage writes, ask 5's included, keeps a lone surrogate as
+    its escape (`schema/events.py::_clip`).
+18. **The rig's clock fit also refuses a rate no clock runs at:** zero or less (instants that do not
+    advance divided by zero, failing the stage on every pass; two across a backward re-anchor fitted a
+    negative rate that timed a note before the session), or more than 1,000 ppm either way
+    (`events/rigtiming.py::RIG_CLOCK_DRIFT_LIMIT_PPM`; a quartz oscillator is specified to within
+    100 ppm). Two instants always fit exactly, so a step between them shows only as a rate: a step under
+    1,000 ppm of the time between them (3 s over an hour) is still taken as the rig's rate, and a
+    control that strobed nothing is then timed up to the step off.
+19. **A control's `trial_index` is wl-xcon's trial within its run, from 0** (`taskd.py` sets its index
+    to 0 at each run's start), not a trial number. The NWB file's `controls` table gains the run it
+    happened in (`run_number`), so the index can be read, and the database's comment and the synthetic
+    rig say what it counts.
