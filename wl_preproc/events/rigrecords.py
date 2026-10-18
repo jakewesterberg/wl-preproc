@@ -111,7 +111,10 @@ def _number(value: object) -> float | None:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    """The value's JSON text, keys sorted and ASCII: a lone UTF-16 surrogate
+    (half an emoji, from a `\\ud83d` escape) stays escaped, since utf8mb4
+    cannot store it (the final review's I1)."""
+    return json.dumps(value, sort_keys=True)
 
 
 def _code(row: dict) -> tuple[int | None, bool]:

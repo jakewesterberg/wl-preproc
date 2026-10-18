@@ -176,3 +176,21 @@ def test_a_session_without_training_records_fits_the_rigs_clock_from_its_runs(ev
     assert (len(core.ParameterChange & key), len(core.RigControl & key)) == (0, 0)
     assert (core.RigClock & key).fetch1("n_matched") == 4
     assert len(core.RunRecordProblem & key) == 0
+
+
+def test_a_lone_surrogate_in_a_controls_text_is_kept_and_the_stage_completes(events_activated, dj_conn,
+                                                                            tmp_path):
+    """The final review's I1: wl-xcon writes ASCII lines, so half an emoji,
+    split at a field's limit, arrives as `\\ud83d`, which `json.loads` makes a
+    lone surrogate that utf8mb4 cannot store, failing the session's whole
+    events stage on every pass. The detail's JSON text keeps it escaped, as
+    exact JSON; a text column keeps its escape."""
+    from wl_preproc.schema import core
+    from wl_preproc.synth.recipe import RigControlSpec
+
+    _recipe, key = _land(tmp_path, "trsurr1", 9, controls=(RigControlSpec(
+        trial=2, kind="note", event_code=None, detail={"note": "lid \ud83d"},
+        by={"kind": "box", "name": "J\ud83d"}),))
+    row = (core.RigControl & key).fetch1()
+    assert json.loads(row["detail"]) == {"note": "lid \ud83d"}
+    assert row["by_name"] == "J\\ud83d"

@@ -298,8 +298,11 @@ _RIG_PROBLEMS_KEPT = 20
 
 def _clip(value: str | None, width: int) -> str | None:
     """A rig-record value cut to its column: a value too long would fail the
-    session's whole event stage on every pass."""
-    return None if value is None else value[:width]
+    session's whole event stage on every pass. So would a lone UTF-16
+    surrogate, which utf8mb4 cannot store: wl-xcon writes ASCII lines, so half
+    an emoji arrives as a `\\ud83d` escape, which `json.loads` makes one. It is
+    kept as that escape (the training records' final review, I1)."""
+    return None if value is None else value.encode("utf-8", "backslashreplace").decode("utf-8")[:width]
 
 
 def _run_index(value: int | None) -> int | None:
