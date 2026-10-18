@@ -265,8 +265,8 @@ requester chose to merge the same day; true when written.*
 > archival with rehydration, and ingest with the timebase. "What is built",
 > below, and `handoffs/` have each piece.
 >
-> **Hardware: ask whether it has changed.** It had not on 2026-10-14, when the
-> requester chose wl-xcon's ask 5.
+> **Hardware: ask whether it has changed.** It had not on 2026-10-18, when the
+> requester chose the correction marker's three minors.
 > - **The rig.** The barcode and timebase alignment path has never met real
 >   data, and cannot with the recording the lab has, which carries no wl-sync
 >   barcodes (below). A few minutes of recording with the sync box live would
@@ -276,6 +276,12 @@ requester chose to merge the same day; true when written.*
 >   export's units (the sorter will read each probe's runs from
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
+>
+> *Until 2026-10-18 the hardware line said it had not changed on 2026-10-14, when
+> the requester chose wl-xcon's ask 5; true when written.*
+>
+> *Until 2026-10-18, latest, this listed the correction marker's three minors as
+> open; true when written.*
 >
 > *Until 2026-10-18, later still, this said ask 5's minors were built, not merged,
 > with the merge question next; true when written.*
@@ -330,8 +336,11 @@ requester chose to merge the same day; true when written.*
 > 2026-10-18, are merged** (`ad52b79`, §7 of the handoff). Still to build: 1's
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
-> record designed by wl-xcon's build K. Open and small: the correction
-> marker's three (`handoffs/2026-10-11-correction-marker.md` §6). Fine-tuning
+> record designed by wl-xcon's build K. **The correction marker's three
+> deferred minors, the requester's choice of 2026-10-18, are built on
+> `fix/correction-marker-minors`, not merged** (§7 of
+> `handoffs/2026-10-11-correction-marker.md`), reviewed and its five findings
+> fixed (`bafc2ba`). Next: the merge question. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until 2026-10-14 this said the eye minors were built, not

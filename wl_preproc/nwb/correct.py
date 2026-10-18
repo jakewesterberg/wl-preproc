@@ -192,9 +192,12 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     """Correct one stale file where it is (spec section 3): copy, patch,
     check, mark, swap, record, and rewrite the description beside it. `shares`
     maps a tier to its `publish.Share`. Returns the note, or None when the
-    file already held the details and only its records were brought up to
-    them. Raises `CorrectionRefused`, `ChangedWhileCorrecting` or
-    `publish.ChangedData`, leaving the live file as it was."""
+    file already held the details: only its records were brought up to them,
+    or, for a file marked and never swapped whose records already describe
+    it, only its marker was deleted (design spec
+    `2026-10-11-correction-marker-design.md` section 3, rule 3). Raises
+    `CorrectionRefused`, `ChangedWhileCorrecting` or `publish.ChangedData`,
+    leaving the live file as it was."""
     from wl_preproc.nwb.gather import _subject
     from wl_preproc.nwb.publish import ChangedData, _stamp, mismatches
     from wl_preproc.schema import nwb as nwb_schema
@@ -269,7 +272,7 @@ def as_described_now(description: dict) -> dict:
 def subject_records(key: dict, description: dict, path: Path) -> tuple[dict, list[dict]]:
     """A description and the four subject datasets' checksums brought up to
     the file at `path`: its subject as the file holds it (with `age_days`),
-    its correction lines past those the description already has, and the
+    its correction lines in place of those the description had, and the
     four checksums. Read from the file, so a pass after a crash that
     followed the swap records the note the crashed pass wrote. Shared by a
     correction's records and by publishing when it adopts a file a
@@ -286,11 +289,15 @@ def subject_records(key: dict, description: dict, path: Path) -> tuple[dict, lis
                             "age_days": _age_days(born, key["session_datetime"])}
     with h5py.File(path, "r") as handle:
         stated = handle[SUBJECT]["description"][()].decode() if "description" in handle[SUBJECT] else ""
-    # Counted rather than compared, so the same correction twice is noted
-    # twice.
+    # The file's own correction lines, every one, after the notes the build
+    # wrote: the same correction twice is noted twice, and a file adopted
+    # with records brought up to another copy -- its scratch copy, corrected
+    # after a publish failed past its rename -- is described by its own lines,
+    # not that copy's (subject-corrections spec amendment 16, which replaces
+    # amendment 3's count).
     corrections = [line for line in stated.split("\n") if line.startswith("Corrected ")]
-    recorded = sum(1 for note in described["notes"] if note.startswith("Corrected "))
-    described["notes"] = [*described["notes"], *corrections[recorded:]]
+    built = [note for note in described["notes"] if not note.startswith("Corrected ")]
+    described["notes"] = [*built, *corrections]
     fresh = dataset_checksums(path, only=SUBJECT_DATASETS)
     _old, kept = _subject_paths(described["checksums"]["datasets"])
     described["checksums"]["datasets"] = sorted([*kept, *fresh], key=lambda item: item["dataset_path"])

@@ -116,8 +116,10 @@ class NwbCorrecting(dj.Manual):
     # A file a correction is swapping, or has swapped, whose records are
     # not yet written: inserted before the swap and deleted in the
     # transaction that writes them, so while it is here the file may hold
-    # other subject details than its records say (design spec
-    # `2026-10-11-correction-marker-design.md`).
+    # other subject details than its records say. One whose swap never
+    # happened is deleted alone, and nothing recorded, when the records
+    # already describe the file (design spec
+    # `2026-10-11-correction-marker-design.md`, section 3, rule 3).
     # Key: (subject, session_datetime, montage_id, activation_id).
     -> NwbFile
     ---
