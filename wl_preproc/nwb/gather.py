@@ -9,24 +9,19 @@ so every writer is tested without either."""
 from __future__ import annotations
 
 import dataclasses
-import datetime
 from pathlib import Path
 
 import numpy as np
 
 from wl_preproc.nwb.describe import task_name
 from wl_preproc.nwb.trim import BlockSet
+# Where the wall-clock time of t = 0 comes from is the session clock's to
+# answer (`timebase/clock.py`); these stay importable here, where
+# `tests/nwb/test_clock.py` has always read them.
+from wl_preproc.timebase.clock import BARCODE_EPOCH, CLOCK_DISAGREEMENT_S, clock_for, reference_from  # noqa: F401
+from wl_preproc.timebase.clock import aware_utc as _aware_utc
 
 MASK_LABELS = ("blink", "invalid")
-# Wall clocks that disagree by more than this are not trusted to place t = 0
-# (section 4.2). Borrowed from wl-sync's CLOCK_TRUST_TOLERANCE_S.
-CLOCK_DISAGREEMENT_S = 60.0
-# A barcode's value is whole seconds since this instant, off the sync box's
-# wall clock: wl-sync's `wl_sync/clock.py::BARCODE_EPOCH`, since its commit
-# 3ce66b9 (2026-08-17). RESTATED, not imported: the wl-sync commit this
-# repository pins predates that module. `tests/nwb/test_clock.py` pins the
-# two equal wherever a newer wl-sync is installed.
-BARCODE_EPOCH = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 class Refused(Exception):
@@ -66,10 +61,6 @@ class Gathered:
     # `2026-10-14-session-kind-and-warnings-design.md` section 5); None for a
     # session wl-xcon did not run. See `_rig_record`.
     rig_record: dict | None = None
-
-
-def _aware_utc(value: datetime.datetime) -> datetime.datetime:
-    return value.replace(tzinfo=datetime.timezone.utc) if value.tzinfo is None else value
 
 
 def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
@@ -186,30 +177,6 @@ def agreement_rows(rows: list[dict], names: dict) -> list[dict]:
              "pso_as": row["pso_as"], "value": np.nan if row["value"] is None else float(row["value"]),
              "n_samples_compared": int(row["n_samples_compared"])}
             for row in rows if row["paramset_a"] in names and row["paramset_b"] in names]
-
-
-def reference_from(first_barcode_value: int, started_at: datetime.datetime) -> dict:
-    """Section 4.2: the first barcode's own value places session t = 0 on
-    the wall clock, unless it disagrees with the manifest's `started_at` by
-    more than `CLOCK_DISAGREEMENT_S`, when `started_at` is used and the
-    source says so."""
-    barcode_time = BARCODE_EPOCH + datetime.timedelta(seconds=int(first_barcode_value))
-    started_at = _aware_utc(started_at)
-    difference = (started_at - barcode_time).total_seconds()
-    trusted = abs(difference) <= CLOCK_DISAGREEMENT_S
-    return {
-        "reference_time": barcode_time if trusted else started_at,
-        "source": "barcode" if trusted else "manifest",
-        "manifest_started_at": started_at,
-        "started_at_difference_s": difference,
-    }
-
-
-def _reference_time(session_dir: Path, started_at: datetime.datetime) -> dict:
-    from wl_preproc.timebase.segments import session_reference
-
-    reference = session_reference(session_dir)
-    return reference_from(min(reference, key=reference.get), started_at)
 
 
 def _subject(subject_id: str) -> dict:
@@ -711,7 +678,7 @@ def gather(activation_key: dict) -> Gathered:
         probe["sorted_runs"] = sorted_runs.get(probe["serial"], [])
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
-    clock = _reference_time(session_dir, key["session_datetime"])
+    clock = clock_for(session_key, session_dir).wall_reference(key["session_datetime"])
     validity_idx, detection_idx = _paramsets()
     eye = _eye(session_key, session_dir, extent, validity_idx, detection_idx)
     no_eye_samples = eye is not None and eye.get("no_samples", False)

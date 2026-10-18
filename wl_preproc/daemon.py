@@ -69,6 +69,17 @@ from wl_preproc.schema import (
 _DEFAULT_STALE_THRESHOLD_S = 24 * 60 * 60  # 24h
 
 
+def _first_tables() -> list:
+    """The tables `run_once` populates before the events stage: the
+    session's clock, recorded in its own short transaction, so no stage that
+    reads it holds the new row's lock for the length of its own work while an
+    overlapping pass waits on it (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 4.1; the
+    final review's I1). `timebase/clock.py::clock_for` still records it for a
+    stage asked outside a daemon pass."""
+    return [timebase.SessionClock]
+
+
 def _computed_tables() -> list:
     """The computed tables, in dependency order.
 
@@ -1018,6 +1029,16 @@ def run_once(
 
     freed = currently_freed(prefix=prefix)
     freed_skipped = len(freed)
+
+    for table in _first_tables():
+        try:
+            result = table.populate(
+                *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
+            )
+            populated += int(result["success_count"])
+            errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
+        except Exception as exc:  # a failing stage must not stop the others
+            errors.append(f"{table.__name__}: {exc}")
 
     built, event_errors = _populate_event_stage(freed)
     populated += built

@@ -414,13 +414,13 @@ class EyeCalibration(dj.Computed):
         `CONDITION` get one (see that function's own body) -- so the
         `(role, x, y)` triple this table needs survives only in the raw
         stream. `TimingProvenance.make()` re-decodes the identical stream
-        for the identical reason; see `schema/events.py`'s own "Public, not
-        module-private" paragraph on `decode_syncbox_in_session_time`, which
-        is what makes this a second CALLER of one decode rather than a
-        second, independently drifting implementation of it.
+        for the identical reason; both read it through the session's clock
+        (`timebase/clock.py::Clock.codes`), which is what makes this a second
+        CALLER of one decode rather than a second, independently drifting
+        implementation of it.
         """
         from wl_preproc.schema import ingest
-        from wl_preproc.schema.events import decode_syncbox_in_session_time
+        from wl_preproc.timebase.clock import clock_for
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
@@ -471,7 +471,7 @@ class EyeCalibration(dj.Computed):
 
         # -- Re-decode the sync box's own code stream (see this method's own
         # docstring for why this cannot instead read `pipeline.event.Event`).
-        decoded = decode_stream(decode_syncbox_in_session_time(session_dir))
+        decoded = decode_stream(clock_for(session_key, session_dir).codes())
 
         # -- One pass over the stream: track the most recently announced
         # target per role and the most recently opened block, and close a

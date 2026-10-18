@@ -263,6 +263,7 @@ class Segment(dj.Computed):
         """
         from wl_preproc.schema import ingest, timebase
         from wl_preproc.timebase import segments
+        from wl_preproc.timebase.clock import clock_for
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -282,7 +283,7 @@ class Segment(dj.Computed):
         rate = (
             segments.rate_fit_from_row(fit) if fit["fit_status"] == "fitted" else None
         )
-        reference = segments.session_reference(session_dir)
+        reference = clock_for(session_key, session_dir).barcode_reference()
 
         accepted, rejected = [], []
         for scan in scans:

@@ -80,6 +80,39 @@ _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
 
 
 @schema
+class SessionClock(dj.Imported):
+    definition = """
+    # Which clock keeps the session's time, chosen once, by the first stage
+    # that asks: the daemon, before its events stage, in a short transaction
+    # of its own (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md`, amendments 3
+    # and 8). Every stage reads it through `timebase/clock.py::clock_for`.
+    # Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    source : enum('syncbox','nidq','lab')
+    reason : varchar(255)  # one sentence: why this clock
+    """
+
+    @property
+    def key_source(self):
+        """Every landed session. Imported locally, as `SystemTimebase`'s is."""
+        from wl_preproc.schema import ingest
+
+        return pipeline.Session & ingest.Ingestion
+
+    def make(self, key: dict) -> None:
+        """Imported, not Computed: the choice reads the session folder. It is
+        made by `clock_for` when a stage first asks; `populate()` makes the
+        same row."""
+        from wl_preproc.schema import ingest
+        from wl_preproc.timebase.clock import choose
+
+        choice = choose(Path((ingest.Ingestion & key).fetch1("session_dir")))
+        self.insert1({**key, "source": choice.source, "reason": choice.reason})
+
+
+@schema
 class SystemTimebase(dj.Computed):
     definition = f"""
     # The once-per-(system, session) clock fit. Rate is pooled across every
@@ -133,6 +166,7 @@ class SystemTimebase(dj.Computed):
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
+        from wl_preproc.timebase.clock import clock_for
         from wl_preproc.timebase.fit import fit_rate_across
 
         session_dir = Path(
@@ -186,7 +220,7 @@ class SystemTimebase(dj.Computed):
             )
             return
 
-        reference = segments.session_reference(session_dir)
+        reference = clock_for(key, session_dir).barcode_reference()
         try:
             fit = fit_rate_across([scan.barcodes for scan in scans], reference, nominal_rate_hz)
         except ValueError:
@@ -306,8 +340,8 @@ class TimingProvenance(dj.Computed):
         from wl_preproc.events.extract import extract_nidq_words, extract_rhs_witness
         from wl_preproc.events.taskfile import SyntheticTaskFileReader, UnsupportedTaskFile
         from wl_preproc.schema import core, ingest
-        from wl_preproc.schema.events import decode_syncbox_in_session_time
         from wl_preproc.timebase import segments
+        from wl_preproc.timebase.clock import clock_for
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -361,8 +395,8 @@ class TimingProvenance(dj.Computed):
         #
         # A second layer catches the reverse: `SystemTimebase.make()` marks
         # syncbox "fitted" even with zero decoded barcodes (a real log file
-        # that happens to be empty), so `decode_syncbox_in_session_time`'s own
-        # `session_reference` can still raise `ValueError`. Caught here rather
+        # that happens to be empty), so the clock's codes (`Clock.codes`,
+        # through `session_reference`) can still raise `ValueError`. Caught here rather
         # than left to propagate, for the same reason a single trial's decode
         # error does not lose the whole session in `assemble()`.
         #
@@ -398,7 +432,7 @@ class TimingProvenance(dj.Computed):
 
         if syncbox_fitted:
             try:
-                syncbox_pairs = decode_syncbox_in_session_time(session_dir)
+                syncbox_pairs = clock_for(session_key, session_dir).codes()
                 syncbox_available = True
             except (FileNotFoundError, ValueError):
                 syncbox_available = False
@@ -428,7 +462,7 @@ class TimingProvenance(dj.Computed):
                 )
                 if spikeglx_fit is not None:
                     rate = segments.rate_fit_from_row(spikeglx_fit)
-                    reference = segments.session_reference(session_dir)
+                    reference = clock_for(session_key, session_dir).barcode_reference()
                     pairs: list[tuple[float, int]] = []
                     for scan in segments.scan_system("spikeglx", session_dir / "spikeglx"):
                         try:
