@@ -266,10 +266,17 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
     `wl_xcon/record.py`'s `parameter_change` and `control` write (read at
     wl-xcon's `7398d3e`), `event_code` included (design spec
     `2026-10-18-training-records-and-backup-clock-design.md`, amendment 2). A
-    run wraps each block, so an act's run is its trial's block's, from 0. A
-    file is written only when it has a row, as wl-xcon appends its first."""
+    run wraps each block, so an act's run is its trial's block's, from 0, and
+    a control's `trial_index` its trial within that run, from 0, as wl-xcon's
+    `taskd.py` counts it (the final review's M3). A file is written only when
+    it has a row, as wl-xcon appends its first."""
     rig = recipe.rig_record
     run_of = {position: trial.block_id - 1 for position, trial in enumerate(truth.trials, start=1)}
+    first_of: dict[int, int] = {}
+    for position, trial in enumerate(truth.trials, start=1):
+        first_of.setdefault(trial.block_id, position)
+    index_in_run = {position: position - first_of[trial.block_id]
+                    for position, trial in enumerate(truth.trials, start=1)}
     changes = [{"sequence": sequence, "name": change.name, "was": change.was, "now": change.now, "by": change.by,
                 "run": run_of[change.trial], "event_code": change.event_code}
                for sequence, change in enumerate(rig.changes, start=1)]
@@ -278,7 +285,7 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
         at = stamp(time)
         controls.append({"kind": control.kind, "by": control.by, "at": at,
                          "at_local": datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat(),
-                         "trial_index": control.trial - 1, "event_code": control.event_code,
+                         "trial_index": index_in_run[control.trial], "event_code": control.event_code,
                          "run": run_of[control.trial], **control.detail})
     for name, rows in (("parameter_changes.jsonl", changes), ("controls.jsonl", controls)):
         if rows:

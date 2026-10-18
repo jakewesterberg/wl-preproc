@@ -134,8 +134,10 @@ def test_the_file_holds_the_training_records_of_its_runs_at_their_session_times(
         controls = module["controls"].to_dataframe()
         assert changes[["run_number", "setting", "now", "by_kind"]].values.tolist() == [
             [1, "reward_ml", "0.25", "box"], [2, "seed", "[2, 3]", "member"]]
-        assert controls[["kind", "time_source", "by_kind"]].values.tolist() == [
-            ["pause", "code", "box"], ["note", "rig_clock", "box"], ["reward", "code", "member"]]
+        # The run beside each control's trial, which wl-xcon counts within it
+        # (the final review's M3): run 2's first trial is its 0.
+        assert controls[["kind", "time_source", "by_kind", "run_number", "trial_index"]].values.tolist() == [
+            ["pause", "code", "box", 1, 1], ["note", "rig_clock", "box", 1, 1], ["reward", "code", "member", 2, 0]]
         assert controls["session_time"].tolist() == pytest.approx(stored.tolist())
     with NWBHDF5IO(str(derivative.path), "r") as handle:
         module = handle.read().processing["rig_record"]

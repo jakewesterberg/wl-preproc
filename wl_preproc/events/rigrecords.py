@@ -65,7 +65,9 @@ class ParameterChange:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Control:
     """One row of `controls.jsonl`. `at` is the rig's anchored wall clock,
-    POSIX seconds; `detail` is the row's own fields as JSON text."""
+    POSIX seconds; `trial_index` is wl-xcon's trial within the run, from 0,
+    not a trial number (`taskd.py` counts from 0 at each run's start);
+    `detail` is the row's own fields as JSON text."""
 
     line: int
     kind: str

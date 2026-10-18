@@ -113,7 +113,10 @@ def _add_controls(module, controls: list[dict]) -> None:
                              "on the session's clock (NaN if none).", [_time(control["at"]) for control in controls]),
             column("kind", "The control: pause, resume, mark, note, schedule, cancel, scheduled_stop, stop, end or "
                            "reward, as written.", [control["kind"] for control in controls]),
-            column("trial_index", "The trial it happened in or, between trials, the one about to run (-1 if not "
+            column("run_number", "The run it happened in (-1: none, or a run the recording did not measure).",
+                   [-1 if control["run_number"] is None else control["run_number"] for control in controls]),
+            column("trial_index", "Its trial within that run, from 0, as wl-xcon counts them: the one it happened "
+                                  "in or, between trials, the one about to run; not a trial number (-1 if not "
                                   "recorded).",
                    [-1 if control["trial_index"] is None else control["trial_index"] for control in controls]),
             column("detail", "The control's own fields, as JSON text.", [control["detail"] for control in controls]),

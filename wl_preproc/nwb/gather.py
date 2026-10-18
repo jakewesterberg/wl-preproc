@@ -119,8 +119,8 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
                                              "by_kind")}
             for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line") if the_files(change)],
         "controls": [
-            {name: control[name] for name in ("session_time", "time_source", "at", "kind", "trial_index", "detail",
-                                              "by_kind")}
+            {name: control[name] for name in ("session_time", "time_source", "at", "kind", "run_number",
+                                              "trial_index", "detail", "by_kind")}
             for control in (core.RigControl & session_key).to_dicts(order_by="control_line") if the_files(control)],
     }
 

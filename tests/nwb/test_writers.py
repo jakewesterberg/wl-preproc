@@ -372,10 +372,10 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
         {"session_time": None, "run_number": None, "name": "seed", "was": None, "now": "[8, 9]", "sequence": None,
          "by_kind": None}],
         "controls": [
-        {"session_time": 4.0, "time_source": "code", "at": 1773478804.0, "kind": "pause", "trial_index": 1,
-         "detail": "{}", "by_kind": "box"},
-        {"session_time": None, "time_source": None, "at": None, "kind": "note", "trial_index": None,
-         "detail": '{"note": "lid droop"}', "by_kind": None}]}
+        {"session_time": 4.0, "time_source": "code", "at": 1773478804.0, "kind": "pause", "run_number": 1,
+         "trial_index": 1, "detail": "{}", "by_kind": "box"},
+        {"session_time": None, "time_source": None, "at": None, "kind": "note", "run_number": None,
+         "trial_index": None, "detail": '{"note": "lid droop"}', "by_kind": None}]}
     _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
     with io:
         module = nwb.processing["rig_record"]
@@ -384,8 +384,8 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
             [1, "reward_ml", "0.2", "0.25", 1, "member"], [-1, "seed", "", "[8, 9]", -1, ""]]
         assert changes["session_time"].iloc[0] == 2.5 and math.isnan(changes["session_time"].iloc[1])
         controls = module["controls"].to_dataframe()
-        assert controls[["time_source", "kind", "trial_index", "detail", "by_kind"]].values.tolist() == [
-            ["code", "pause", 1, "{}", "box"], ["", "note", -1, '{"note": "lid droop"}', ""]]
+        assert controls[["time_source", "kind", "run_number", "trial_index", "detail", "by_kind"]].values.tolist() == [
+            ["code", "pause", 1, 1, "{}", "box"], ["", "note", -1, -1, '{"note": "lid droop"}', ""]]
         assert controls["rig_at"].iloc[0] == 1773478804.0 and math.isnan(controls["rig_at"].iloc[1])
 
 

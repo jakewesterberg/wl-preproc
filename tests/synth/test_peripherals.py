@@ -276,7 +276,9 @@ def test_the_training_records_are_written_in_wl_xcons_keys():
     assert [set(row) for row in changes] == [{"sequence", "name", "was", "now", "by", "run", "event_code"}] * 2
     assert [(row["sequence"], row["run"], row["now"]) for row in changes] == [(1, 0, 0.25), (2, 1, [2, 3])]
     assert set(control) == {"kind", "by", "at", "at_local", "trial_index", "event_code", "run", "ml"}
-    assert (control["trial_index"], control["run"], control["event_code"]) == (3, 1, 4134)
+    # wl-xcon counts a run's trials from 0 (`taskd.py` sets its index to 0 at
+    # each run's start): trial 4 is run 1's first (the final review's M3).
+    assert (control["trial_index"], control["run"], control["event_code"]) == (0, 1, 4134)
     assert (len(records.changes), len(records.controls), records.problems) == (2, 1, ())
 
 
