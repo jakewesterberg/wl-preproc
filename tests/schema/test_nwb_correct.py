@@ -548,7 +548,10 @@ def test_only_the_four_subject_datasets_are_spared_or_taken_into_the_records(pub
 def test_a_description_file_that_could_not_be_written_is_written_next_pass(published, shares, monkeypatch):
     """Final review I3: the description beside a published file is written
     before the records, so a failure leaves the file stale and the next pass
-    writes it (spec section 5: retried next pass)."""
+    writes it (spec section 5: retried next pass). It is the marker's first
+    case too (design spec `2026-10-11-correction-marker-design.md` section 5,
+    swapped with the details unchanged): the records brought up clear the
+    marker in that pass, not the pass after (the marker minors' minor 1)."""
     import json
 
     from wl_preproc.nwb import publish as publish_module
@@ -566,10 +569,13 @@ def test_a_description_file_that_could_not_be_written_is_written_next_pass(publi
     try:
         _corrected, errors = run_corrections(shares["slow"], shares["fast"])
         assert [error for error in errors if "Input/output error" in error]
+        assert _marked(key)
+        changes = _changes(key)
         monkeypatch.setattr(publish_module, "write_description", real)
         run_corrections(shares["slow"], shares["fast"])
         described = json.loads(publish_module.description_path(live).read_text())
         assert described["subject"]["date_of_birth"] == "2016-03-01"
+        assert not _marked(key) and not _is_stale(key) and _changes(key) == changes + 1
     finally:
         monkeypatch.undo()
         _set_birth(_BIRTH)
@@ -1193,24 +1199,53 @@ def test_a_marker_that_cannot_be_written_stops_the_swap(published, shares, monke
         run_corrections(shares["slow"], shares["fast"])
 
 
-def test_records_written_for_an_adoption_clear_a_marker(published, shares):
-    """Section 3, rule 2: `write_subject_records` writes an adoption's records
-    too (`publish._adopt`), and records brought up to the file leave no
-    marker."""
-    from wl_preproc.nwb.correct import subject_records, write_subject_records
-    from wl_preproc.nwb.publish import _now, key_of
+def test_records_written_for_an_adoption_clear_a_marker(published, shares, monkeypatch):
+    """Section 3, rule 2: an adoption's records are written by the function
+    that writes a correction's, and records brought up to the file leave no
+    marker -- through `publish._adopt`, as a publishing pass adopts (the
+    marker minors' minor 2). A publish left the file on its share, holding
+    the fixture's details, and failed before recording it; its scratch copy
+    was corrected, and a later correction marked it and failed to rename. The
+    publishing pass adopts the shared file, its records taken from it, and
+    the next correction brings it up to the current details."""
+    import shutil
+    from pathlib import Path
+
+    from wl_preproc.nwb import correct as correct_module
+    from wl_preproc.nwb import publish as publish_module
+    from wl_preproc.nwb.correct import correct, file_subject, run_corrections
+    from wl_preproc.nwb.publish import key_of
     from wl_preproc.schema import nwb as nwb_schema
 
     _session_key, key, _runs, _root = published
     live = _live(key, shares)
-    nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
+    scratch = Path((nwb_schema.NwbFile & key).fetch1("path"))
+    scratch.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(live, scratch)
+    (nwb_schema.NwbChange & key & "kind IN ('published', 'moved', 'corrected')").delete(prompt=False)
+    assert publish_module.current_placement(key) is None
+    _set_birth(datetime.date(2016, 3, 1))
     try:
-        description, fresh = subject_records(key_of(key), (nwb_schema.NwbFile & key_of(key)).fetch1("description"),
-                                             live)
-        write_subject_records(key_of(key), description, fresh)
+        run_corrections(shares["slow"], shares["fast"])
+        assert file_subject(scratch)["date_of_birth"] == datetime.date(2016, 3, 1) and not _marked(key)
+        _set_birth(datetime.date(2016, 3, 5))
+        with monkeypatch.context() as patched:
+            patched.setattr(correct_module.os, "replace", _failing)
+            with pytest.raises(OSError, match="Input/output error"):
+                correct(key, shares, _DAY)
+        assert _marked(key)
+        _published, errors = publish_module.run_publish(shares["slow"], shares["fast"])
+        assert not [error for error in errors if _SUBJECT in error], errors
+        assert publish_module.current_placement(key) is not None and _live(key, shares) == live
         assert not _marked(key)
+        described = (nwb_schema.NwbFile & key_of(key)).fetch1("description")
+        assert described["subject"]["date_of_birth"] == _BIRTH.isoformat() and _is_stale(key)
+        run_corrections(shares["slow"], shares["fast"])
+        assert file_subject(live)["date_of_birth"] == datetime.date(2016, 3, 5)
+        assert not _marked(key) and not _is_stale(key)
     finally:
         (nwb_schema.NwbCorrecting & key_of(key)).delete_quick()
+        _restore(key, shares)
 
 
 def test_a_marked_file_whose_details_changed_again_is_corrected_to_them(published, shares, monkeypatch):

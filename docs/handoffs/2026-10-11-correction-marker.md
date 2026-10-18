@@ -56,11 +56,14 @@ Executed on 2026-10-11, inline (the requester's choice), task by task: Task 1 `f
 - **Then passed, with their neighbours:** 3 and 52; 8 and 131.
 - **All seven mutation checks the plan names failed their tests:** T1a and T2a–f.
 - **The full suite, once, on both interpreters,** with the BMD, NSLR and Andersson references
-  set and `WLPP_OHDPI_REFERENCE` unset, as CI has it:
+  set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as it is in CI:
   - 3.11: **2316 passed, 27 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2316 passed, 28 skipped, 1 xfailed**.
 
-  That is 11 more than the seven-way minors' run at `605a389`, the marker's tests.
+  That is 11 more than the seven-way minors' run at `605a389`, the marker's tests. CI, without
+  those references, ran fewer: on the merge `caf1d63`, **2308 passed and 37 skipped** on each
+  interpreter (`gh run view 38141210544`).
+  *Until 2026-10-18 this said "as CI has it" of all four settings; the final review's minor.*
 - **`wl-check`:** `wl.yaml: no findings`.
 
 ## 6. The final review

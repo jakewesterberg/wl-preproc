@@ -192,9 +192,12 @@ def correct(key: dict, shares: dict, day: datetime.date) -> str | None:
     """Correct one stale file where it is (spec section 3): copy, patch,
     check, mark, swap, record, and rewrite the description beside it. `shares`
     maps a tier to its `publish.Share`. Returns the note, or None when the
-    file already held the details and only its records were brought up to
-    them. Raises `CorrectionRefused`, `ChangedWhileCorrecting` or
-    `publish.ChangedData`, leaving the live file as it was."""
+    file already held the details: only its records were brought up to them,
+    or, for a file marked and never swapped whose records already describe
+    it, only its marker was deleted (design spec
+    `2026-10-11-correction-marker-design.md` section 3, rule 3). Raises
+    `CorrectionRefused`, `ChangedWhileCorrecting` or `publish.ChangedData`,
+    leaving the live file as it was."""
     from wl_preproc.nwb.gather import _subject
     from wl_preproc.nwb.publish import ChangedData, _stamp, mismatches
     from wl_preproc.schema import nwb as nwb_schema
