@@ -60,12 +60,12 @@ status:
     docs/handoffs/2026-10-14-session-kind.md): each session's kind, display
     calibration and accepted warnings, carried into the database, the
     listing and the NWB file; its five deferred minors, the requester's
-    choice of 2026-10-18, are built on fix/session-kind-minors and not
-    merged (section 7 of its handoff); reviewed, its minors fixed (d56a59f);
-    next, the merge question. Open and small: the
+    choice of 2026-10-18, are merged (ad52b79; section 7 of its handoff).
+    Open and small: the
     correction marker's three deferred minors
     (docs/handoffs/2026-10-11-correction-marker.md section 6). Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: wl-xcon's ask 5 (9e13ba5): each session's kind, display
+    Done: ask 5's five deferred minors (ad52b79). Before them, wl-xcon's
+    ask 5 (9e13ba5): each session's kind, display
     calibration and accepted warnings, carried. Before it, the eye minors
     (0e4df0f): three tests for the blink pads, the
     ALTER TABLE checked on a copy, and descriptions made true. Before them,
@@ -142,6 +142,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `9e13ba5` until its minors' merge `ad52b79` on 2026-10-18 (CI green
+  # on `9e13ba5`, run 39092580654); true when written.
   # Was `0e4df0f` until the ask-5 merge `9e13ba5` on 2026-10-18 (CI green
   # on `0e4df0f`, run 38468704997); true when written.
   # Was `55142c6` until the eye-minors merge `0e4df0f` on 2026-10-13 (CI
@@ -199,7 +201,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "9e13ba5"
+  describes: "ad52b79"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

@@ -1,11 +1,15 @@
 # Where this build actually is
 
-**Last updated 2026-10-18**, describing `main` at `9e13ba5`, the merge of
-`feat/session-kind`: wl-xcon's ask 5 (spec
-`specs/2026-10-14-session-kind-and-warnings-design.md`, amendments 1–7, handoff
-`handoffs/2026-10-14-session-kind.md`). CI read off `9e13ba5` is green on both
-interpreters, 2388 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 39092580654`).
+**Last updated 2026-10-18**, describing `main` at `ad52b79`, the merge of
+`fix/session-kind-minors`: ask 5's five deferred minors (spec amendment 8,
+§7 of `handoffs/2026-10-14-session-kind.md`). CI read off `ad52b79` is green on
+both interpreters, 2395 passed on each with 37 skipped, and the
+manifest check is green (`gh run view 39109197433`).
+- **The minors:** another animal's `config.json` keeps its problem and no
+  session row; a warning joins a run only through its start row; a time that
+  is not finite reads as none, and a warning's run that cannot be stored is
+  flagged by its line; the listing reads no colour model. Ask 5 itself, below,
+  was merged just before (`9e13ba5`).
 - **Each session's kind** (training, piloting or recording), the display
   calibration it and each run ran against, and the warnings it accepted, read
   from wl-xcon's record into `core.SessionRecord`, `core.RunCalibration` and
@@ -85,6 +89,9 @@ check is green (`gh run view 39092580654`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `9e13ba5` (the ask-5 merge, CI green, 2388 passed on each
+interpreter, `39092580654`) until its minors' merge; true when written.*
 
 *This header named `0e4df0f` (the eye-minors merge, CI green, 2343 passed on
 each interpreter, `38468704997`) until the ask-5 merge; true when written.*
@@ -270,6 +277,9 @@ requester chose to merge the same day; true when written.*
 >   `request.ActivationProbeRun`). It is the bulk of what remains, and outranks
 >   every hardware-free item once the machine exists.
 >
+> *Until 2026-10-18, later still, this said ask 5's minors were built, not merged,
+> with the merge question next; true when written.*
+>
 > *Until 2026-10-18, later, this listed ask 5's five minors as open; true when
 > written.*
 >
@@ -316,10 +326,8 @@ requester chose to merge the same day; true when written.*
 > handoff). **wl-xcon's ask 5, the requester's choice of 2026-10-14, is merged**
 > (`9e13ba5`; `handoffs/2026-10-14-session-kind.md`): each session's kind,
 > display calibration and accepted warnings, carried into the database, the
-> listing and the NWB file. **Its five deferred minors, the requester's choice of
-> 2026-10-18, are built on `fix/session-kind-minors`, not merged** (§7 of the
-> handoff), reviewed and its four minors fixed (`d56a59f`). Next: the merge
-> question. Still to build: 1's
+> listing and the NWB file; **its five deferred minors, the requester's choice of
+> 2026-10-18, are merged** (`ad52b79`, §7 of the handoff). Still to build: 1's
 > records, 2's flag, 3, 6, 7 and 8, sorted by what January needs on 2026-10-14:
 > 1 next; 3, 6 and 2's flag wait on wl-xcon's builds T and F; 4 is read, its
 > record designed by wl-xcon's build K. Open and small: the correction
@@ -399,7 +407,8 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: wl-xcon's ask 5 (`9e13ba5`): each session's kind, display calibration
+> Done: ask 5's five deferred minors (`ad52b79`). Before them, wl-xcon's ask 5
+> (`9e13ba5`): each session's kind, display calibration
 > and accepted warnings, carried into the database, the listing and the NWB
 > file. Before it, the eye minors (`0e4df0f`): blink padding's five deferred minors and
 > the eye-loss fix's five, among them three tests for the pads and the
