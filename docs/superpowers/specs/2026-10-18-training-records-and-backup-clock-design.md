@@ -461,3 +461,28 @@ its mutation checks; the full suite runs once per branch on both interpreters.
      C7 sending its file names and row shapes before it is built; the instants are XC-288 §3.1 and
      §3.2, with no accuracy stated for them until wl-xcon has measured the rig's clock, so part 4
      assumes none.
+
+## Amendments, 2026-10-18, made while proving part 2's plan
+
+3. **The clock is chosen when a stage first asks for it,** in that stage's transaction, and recorded:
+   `timebase.SessionClock`, an Imported table, since the choice reads the session folder. In the
+   daemon's order the first to ask is the events stage. §4.1 said "in its own transaction": a stage
+   ahead of the events stage was built first, and every test that runs a stage directly had then to
+   choose the clock before it (285 failures and errors across 18 test files, each "no clock is
+   chosen"), for nothing a recorded choice does not already give. A choice made by a stage that then
+   fails rolls back with it and is made again, identically, on the next pass.
+4. **Part 2 checks only that the sync box recorded the session** (its log is there). Whether its
+   codes hold every run (§4.2's rule 1) arrives with part 3, the first part with another clock to
+   choose. A session the sync box did not record raises "no sync box log, so no clock is built for
+   this session yet" in its events stage, on each pass, and records nothing, as the missing log
+   raised there before.
+5. **The NWB file's sentence about t = 0** (`nwb/timebase.py`) is unchanged in part 2: while the sync
+   box is the only clock it is true of every file. Part 3 makes it the clock's.
+6. **What moved:** `reference_from`, `BARCODE_EPOCH` and `CLOCK_DISAGREEMENT_S` to
+   `timebase/clock.py`, still importable from `nwb/gather.py`; `schema/events.py`'s
+   `decode_syncbox_in_session_time` to `timebase/clock.py::syncbox_codes`, unchanged. A test finds
+   any module outside `timebase/clock.py` that reaches the sync box's reference or codes directly.
+7. **A plan's neighbour runs name their files in the suite's order.** `tests/schema/test_guardrails.py`'s
+   blob probe leaves a session with no sync box log in the shared test database, and run before
+   `tests/schema/test_daemon.py` it fails three of that module's clean-pass tests, on the base commit
+   as on part 2 (checked at `54d585b`). The suite runs the daemon's tests first.

@@ -353,8 +353,17 @@ requester chose to merge the same day; true when written.*
 > record designed by wl-xcon's build K. **The correction marker's three
 > deferred minors, the requester's choice of 2026-10-18, are merged** (`ad9ccb6`,
 > §7 of `handoffs/2026-10-11-correction-marker.md`), its review's five findings
-> fixed. Fine-tuning
+> fixed. **wl-xcon's ask 1, the requester's choice of 2026-10-18, is designed**
+> with a clock for a session without the sync box
+> (`specs/2026-10-18-training-records-and-backup-clock-design.md`), in five parts:
+> part 1, the training records, waits on wl-xcon's `event_code` (its branch
+> `xc321-event-code`); **part 2, the clock as a recorded choice, is built on
+> `feat/clock-choice`, not merged** (`handoffs/2026-10-18-clock-choice.md`). Next:
+> the review. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 2 of the training-records design was built, this named ask 1 as
+> next by the January sort, undesigned; true when written.*
 >
 > *Until 2026-10-14 this said the eye minors were built, not
 > merged, with the merge question next; true when written.*

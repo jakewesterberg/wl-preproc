@@ -64,7 +64,12 @@ status:
     The correction marker's three deferred minors, the requester's
     choice of 2026-10-18, are merged (ad9ccb6;
     docs/handoffs/2026-10-11-correction-marker.md section 7), its
-    review's five findings fixed.
+    review's five findings fixed. wl-xcon's ask 1 is designed with a
+    clock for a session without the sync box
+    (docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md,
+    five parts); part 1 waits on wl-xcon's event_code; part 2, the clock
+    as a recorded choice, is built on feat/clock-choice and not merged
+    (docs/handoffs/2026-10-18-clock-choice.md); next, the review.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: the correction marker's minors and its review's five findings
     (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before
