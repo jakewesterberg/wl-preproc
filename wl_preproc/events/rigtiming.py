@@ -16,10 +16,10 @@ measured `RUN_START`, its end row to its `RUN_END` when it closed, and each
 control timed by its code to that code -- they fit the rig's clock as a rate and
 an offset, residuals kept. A control that strobed nothing (a note, a schedule,
 a pause its allocation has no code for) is timed through the fit, and is
-otherwise untimed. Fewer than two matches, or a residual past
-`RIG_CLOCK_LIMIT_S`, and there is no fit: a resumed session's process anchors
-the rig's clock again (wl-xcon's `welfare.SessionClock`), which one line cannot
-follow.
+otherwise untimed. Fewer than two matches, a residual past `RIG_CLOCK_LIMIT_S`,
+or a rate no clock runs at (`RIG_CLOCK_DRIFT_LIMIT_PPM`), and there is no fit:
+a resumed session's process anchors the rig's clock again (wl-xcon's
+`welfare.SessionClock`), which one line cannot follow.
 
 Pure: no database and no file I/O, as `timebase/fit.py`."""
 
@@ -41,6 +41,12 @@ from wl_preproc.events.rigruns import RigRun
 # 1000 sessions, one of 0.5 s in 998 and one of 0.1 s in 819: a step at a
 # session's last instants tilts the line instead, within the step.
 RIG_CLOCK_LIMIT_S = 0.05
+# The largest rate a fit may find, either way, in parts per million. A quartz
+# oscillator is specified to within 100 ppm, and the synthetic rig runs 20 ppm
+# fast; a rate further off is a step in the rig's clock that too few instants
+# show as a rate rather than a miss: two always fit exactly (the final
+# review's M2).
+RIG_CLOCK_DRIFT_LIMIT_PPM = 1000
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -112,11 +118,17 @@ def fit_rig_clock(pairs: Sequence[tuple[float, float]]) -> RigClock | str:
     if variance <= 0.0:
         return "its instants matched codes at a single time"
     scale = sum((session - mean_session) * (rig - mean_rig) for rig, session in pairs) / variance
+    if scale <= 0.0:
+        return "its instants do not advance with the recording's"
     rig_at_zero = mean_rig - scale * mean_session
     misses = [abs((rig - rig_at_zero) / scale - session) for rig, session in pairs]
     if max(misses) > RIG_CLOCK_LIMIT_S:
         return f"its instants miss their codes by up to {max(misses):.3f} s, past the {RIG_CLOCK_LIMIT_S} s limit"
-    return RigClock(rig_at_zero=rig_at_zero, drift_ppm=(scale - 1.0) * 1e6, n_matched=n,
+    drift_ppm = (scale - 1.0) * 1e6
+    if abs(drift_ppm) > RIG_CLOCK_DRIFT_LIMIT_PPM:
+        return (f"its instants run {drift_ppm:+,.0f} ppm against the recording's, past the "
+                f"{RIG_CLOCK_DRIFT_LIMIT_PPM:,} ppm a clock may")
+    return RigClock(rig_at_zero=rig_at_zero, drift_ppm=drift_ppm, n_matched=n,
                     residual_ms_rms=(sum(miss * miss for miss in misses) / n) ** 0.5 * 1e3,
                     residual_ms_max=max(misses) * 1e3)
 

@@ -163,6 +163,27 @@ def test_a_rig_clock_re_anchored_mid_session_has_no_fit():
     assert problem.endswith(" s, past the 0.05 s limit), so they are not timed")
 
 
+def test_a_rig_whose_instants_do_not_advance_or_run_backwards_has_no_fit():
+    """The final review's M2: instants that do not advance divided by a rate
+    of zero, failing the session's events stage on every pass; two that run
+    backwards, as two killed processes across a backward re-anchor leave,
+    timed a note 100 s before the session. Neither is a clock."""
+    from wl_preproc.events.rigtiming import fit_rig_clock
+
+    assert fit_rig_clock([(ZERO, 0.0), (ZERO, 10.0), (ZERO, 20.0)]) == (
+        "its instants do not advance with the recording's")
+    assert fit_rig_clock([(ZERO + 50.0, 0.0), (ZERO, 50.0)]) == "its instants do not advance with the recording's"
+
+
+def test_a_rate_no_clock_runs_at_has_no_fit():
+    """Two instants always fit exactly, so a step in the rig's clock between
+    them shows as a rate, not a miss: 3 s over 10 s is 300,000 ppm."""
+    from wl_preproc.events.rigtiming import fit_rig_clock
+
+    assert fit_rig_clock([(_rig(0.0), 0.0), (_rig(10.0) + 3.0, 10.0)]) == (
+        "its instants run +300,020 ppm against the recording's, past the 1,000 ppm a clock may")
+
+
 def test_fewer_than_two_matched_instants_is_no_fit():
     from wl_preproc.events.rigtiming import fit_rig_clock
 
