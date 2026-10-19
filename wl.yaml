@@ -69,11 +69,12 @@ status:
     (docs/superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md,
     five parts); part 2, the clock as a recorded choice, is merged
     (789e825; docs/handoffs/2026-10-18-clock-choice.md); part 1, the
-    training records, is built on feat/training-records and not merged
-    (docs/handoffs/2026-10-18-training-records.md); reviewed, its three
-    findings fixed; next, the merge question.
+    training records, is merged (b74d4f3;
+    docs/handoffs/2026-10-18-training-records.md); part 3, the NI as the
+    clock, can be planned once part 2's deferred M2 is decided.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: part 2 of the training-records design (789e825). Before it, the
+    Done: part 1 of the training-records design (b74d4f3). Before it,
+    part 2 (789e825). Before it, the
     correction marker's minors and its review's five findings
     (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before
     them, wl-xcon's
@@ -154,6 +155,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `789e825` until part 1's merge `b74d4f3` on 2026-10-19 (CI green
+  # on `789e825`, run 39152694853); true when written.
   # Was `ad9ccb6` until part 2's merge `789e825` on 2026-10-18 (CI green
   # on `ad9ccb6`, run 39123167628); true when written.
   # Was `ad52b79` until the correction marker's minors' merge `ad9ccb6` on
@@ -217,7 +220,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "789e825"
+  describes: "b74d4f3"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
