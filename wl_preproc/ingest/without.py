@@ -37,7 +37,10 @@ def land_without(session_dir: Path, system: str, *, actor: str, reason: str, pre
     `system`, a listed system or `xcon`, for `reason`, and evaluate the
     session once. Run again, it finds its record and evaluates again."""
     at = now or datetime.datetime.now(datetime.UTC)
-    session_dir = Path(session_dir)
+    # Absolute: every later stage resolves the recorded path from the daemon's
+    # own directory, not the shell's this was typed in (part 3a's final
+    # review, I4).
+    session_dir = Path(session_dir).absolute()
     try:
         manifest = SessionManifest.from_yaml((session_dir / MANIFEST_FILENAME).read_text(encoding="utf-8"))
     except Exception as exc:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -33,10 +34,12 @@ def root(tmp_path, dj_conn, prefix):
     generate_session(tmp_path, CI_RECIPE)
     layout = SessionLayout(tmp_path, CI_RECIPE.session_id)
     yield tmp_path, prefix, layout
-    landed = (ingest.Ingestion & {"session_dir": str(layout.dir)}).proj().to_dicts()
+    landed = (ingest.Ingestion & [{"session_dir": str(layout.dir)}, {"session_dir": CI_RECIPE.session_id}]
+              ).proj().to_dicts()
     if landed:
         (pipeline.Session & landed).delete(prompt=False)
-    (ingest.LandedWithout & {"session_dir": str(layout.dir)}).delete(prompt=False)
+    (ingest.LandedWithout & [{"session_dir": str(layout.dir)}, {"session_dir": CI_RECIPE.session_id}]
+     ).delete(prompt=False)
 
 
 def _manifest(layout, subject, replace=()):
@@ -167,3 +170,19 @@ def test_the_command_lands_the_session_and_says_so(root, capsys):
     assert main(["land-without", "--session", str(layout.dir), "--system", "syncbox", "--actor", "J. W.",
                  "--reason", "r", "--prefix", prefix]) == 1
     assert "refusing: it has already landed" in capsys.readouterr().out
+
+
+def test_a_relative_session_path_is_recorded_whole(root, monkeypatch):
+    """Part 3a's final review, I4: a person at a shell in the storage root types
+    the session's folder name; every later stage resolves the recorded path
+    from the daemon's own directory, so it is recorded absolute."""
+    from wl_preproc.ingest.without import land_without
+
+    tmp_path, prefix, layout = root
+    _manifest(layout, "relpath1")
+    layout.done_marker("syncbox").unlink()
+    monkeypatch.chdir(tmp_path)
+    assert land_without(Path(CI_RECIPE.session_id), "syncbox", actor="J. W.", reason="r", prefix=prefix) is (
+        Outcome.INGESTED)
+    assert (ingest.Ingestion & {"subject": "relpath1"}).fetch1("session_dir") == str(layout.dir)
+    assert (ingest.LandedWithout & {"subject": "relpath1"}).fetch1("session_dir") == str(layout.dir)
