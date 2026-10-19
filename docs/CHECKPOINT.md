@@ -384,10 +384,15 @@ requester chose to merge the same day; true when written.*
 > fixed and four Minor deferred (§6). **Part 4, lab time, is designed in full** (the
 > requester's choice of 2026-10-19: amendments 20-26, merged `02fd6c0`), its asks of
 > wl-xcon filed there as XC-391 to XC-393 (its build C7). **Part 3a, taking a session
-> in without the sync box, is built on `feat/ni-ingest`, not merged**
-> (`handoffs/2026-10-19-ni-ingest.md`; amendments 27-34, M2 decided as amendment 28). Next:
-> the review. Part 3b, the NI as the clock, follows. Fine-tuning
+> in without the sync box, is built and reviewed on `feat/ni-ingest`, not merged**
+> (`handoffs/2026-10-19-ni-ingest.md`; amendments 27-38, M2 decided as amendment 28), its
+> review's one Critical and four Important findings fixed and six Minor deferred (§6); the
+> requester chose that `xcon/DONE` lists the rig's files (amendment 35). Next: the merge,
+> then wl-xcon told the marker's shape. Part 3b, the NI as the clock, follows. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 3a's review, this said it was built and next was the review; true when
+> written.*
 >
 > *Until part 3a was built, this said lab time was on `spec/lab-time`, its asks to be sent
 > once reviewed, and part 3 built once M2 was decided; true when written.*

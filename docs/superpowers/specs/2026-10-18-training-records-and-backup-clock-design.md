@@ -741,3 +741,33 @@ its mutation checks; the full suite runs once per branch on both interpreters.
 34. **`timebase.activate` binds `ingest`** (found while proving): `SessionClock`'s choice reads
     `ingest.LandedWithout`, and `tests/schema/test_events.py` run alone failed 21 of its 31 tests without
     it, as amendment 15 found for `timebase` itself.
+
+## Amendments, 2026-10-19, made in part 3a's final review
+
+35. **`xcon/DONE` is a DONE marker** (the requester's choice of 2026-10-19, replacing amendment 32's "the
+    marker's presence is the signal and nothing in it is read"). wl-xcon writes it as a system writes its
+    own: `system: xcon`, and each of the rig's record files with its size and blake3, leaving out the
+    XC-288 agent's SQLite file and its rebuild's dated snapshot, which the agent may rewrite after the close
+    (wl-xcon's XC-357). The rig's files are checked on arrival as a system's are, so a mismatch
+    quarantines the session, and archived against the marker, so §5's session with no acquisition system,
+    its record alone, lands `verified` and is archived. An empty `xcon/DONE` declares nothing and lands
+    `declared_only`, which the daemon does not archive; one that does not parse does not close the record.
+    The final review found that the presence-only marker stopped the archive, the reclaim proof and
+    rehydration for every session expecting the record (its C1), and left a session with the record alone
+    `verified` with nothing checked and never archivable (its I1).
+36. **What a person landed a session without stays out of the archive's checks** (the final review's
+    I2). The archive, the reclaim proof and preview, the daily report's reclaim list and rehydration read
+    each system's own marker and `xcon/DONE` (`archive/verify.py::_expected_digests`), never every file
+    named `DONE`, and none of a system the session was landed without, whose marker never finished and may
+    not parse. That system's files are stored byte for byte, never laid out as a stream, since a stalled
+    transfer can leave a `.bin` without its `.meta` or an `amplifier.dat` without its `time.dat`. This is
+    what makes amendment 33's "its partial files stay in the folder, and so in the archive" true.
+37. **A session no clock can time yet is left alone until one can** (the final review's I3). The daemon
+    runs its computed stages only for sessions whose clock is recorded (`daemon.py::_clocked`), and
+    `SessionClock` records nothing and parks no error for a session no clock can time, so it is asked
+    again on every pass. Before, such a session was given a tier-D timing record from checks that never
+    ran, and its jobs were parked in `error`, which nothing retries, so part 3b would have met sessions to
+    repair by hand. Its events stage still says why on each pass. Until it is timed it has no tier, so it
+    cannot be reclaimed and keeps its scratch.
+38. **`wlpp land-without` records the session's absolute path** (the final review's I4): every later
+    stage resolves the recorded path from the daemon's directory, not from the shell's it was typed in.

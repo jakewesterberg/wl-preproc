@@ -73,8 +73,9 @@ status:
     docs/handoffs/2026-10-18-training-records.md); part 4, lab time, is
     designed in full (amendments 20-26, merged 02fd6c0), its asks filed
     by wl-xcon as XC-391 to XC-393; part 3a, taking a session in
-    without the sync box, is built on feat/ni-ingest and not merged
-    (docs/handoffs/2026-10-19-ni-ingest.md); next, the review; part 3b,
+    without the sync box, is built and reviewed on feat/ni-ingest, its
+    review's findings fixed, and not merged
+    (docs/handoffs/2026-10-19-ni-ingest.md); next, the merge; part 3b,
     the NI as the clock, follows.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: part 1 of the training-records design (b74d4f3). Before it,

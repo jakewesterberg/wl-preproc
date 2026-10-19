@@ -89,11 +89,20 @@ here before it is written.
 
 **Nothing on the wire changes.**
 
-**2026-10-19, this repository's side of the first later ask, built (part 3a, the spec's amendment
-32):** a manifest may leave `syncbox` out of `expected_systems`; `expects_rig_record: true` holds the
-session until `xcon/DONE` exists, whose presence is the signal and whose content is never read; a
-manifest without the field behaves as before. A stalled transfer, the rig's record included, can be
-landed without by a person (`wlpp land-without`).
+**2026-10-19, this repository's side of the first later ask, built (part 3a, the spec's amendments
+32 and 35):** a manifest may leave `syncbox` out of `expected_systems`; `expects_rig_record: true` holds
+the session until `xcon/DONE` is written; a manifest without the field behaves as before. **`xcon/DONE`
+is a DONE marker, as each system's is** (the requester's choice in part 3a's final review): `system:
+xcon`, `schema_version`, `transfer_finished_at`, and `files`, each of the rig's record files with its
+path relative to `xcon/`, its size in bytes and its blake3, leaving out the XC-288 agent's SQLite file
+and its rebuild's dated snapshot, which the agent may rewrite after the close (XC-357). The files are
+checked on arrival, so a mismatch quarantines the session, and the record is archived against the
+marker. An empty marker declares nothing and the session lands unverified, which the daemon does not
+archive; one that does not parse does not close the record. A stalled transfer, the rig's record
+included, can be landed without by a person (`wlpp land-without`).
+
+*Until part 3a's final review this said, on its branch before the merge, that `xcon/DONE`'s presence
+was the signal and its content never read; true when written, and never sent to wl-xcon.*
 
 **Answered 2026-10-18, and merged:** each row gains `event_code`, an integer or null, a missing key
 read as unknown (wl-xcon's `main` at `67d7028`; the spec's amendment 2, which also records wl-xcon's
