@@ -1478,3 +1478,17 @@ rather than trusted.
 **This does not block Phase 1c-2 from being designed**, only from reaching `submit()`. The
 watcher's ingest half — sentinel, transfer verification, manifest validation, topology
 discovery, and the `Subject`/`Session`/`AcquisitionSystem` rows — depends on none of it.
+
+---
+
+## 15. Amendment, 2026-10-19: a session without the sync box
+
+§2 has the sync box "present at every session", and §4.2 "the sole recorder on training days". **It
+should be at every session, and a session without it is still taken in:** the requester's ruling of
+2026-10-18 ("should always run, but there should be a backup protocol so that information in a session
+without a sync box is okay. redundant systems is what we strive for"), designed in
+[`2026-10-18-training-records-and-backup-clock-design.md`](2026-10-18-training-records-and-backup-clock-design.md).
+A manifest need not list `syncbox` (its §5, built in part 3a); such a session is timed by the NI where it
+has one (part 3b) and otherwise by lab time, the rig's own clock (part 4). §4.2's rule that every session
+has at least one device recording full code content holds on: without the sync box, the NI records the
+codes, or the rig's own timed event log records every word it strobed (that design's amendment 22).

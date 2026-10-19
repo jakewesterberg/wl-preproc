@@ -89,6 +89,12 @@ here before it is written.
 
 **Nothing on the wire changes.**
 
+**2026-10-19, this repository's side of the first later ask, built (part 3a, the spec's amendment
+32):** a manifest may leave `syncbox` out of `expected_systems`; `expects_rig_record: true` holds the
+session until `xcon/DONE` exists, whose presence is the signal and whose content is never read; a
+manifest without the field behaves as before. A stalled transfer, the rig's record included, can be
+landed without by a person (`wlpp land-without`).
+
 **Answered 2026-10-18, and merged:** each row gains `event_code`, an integer or null, a missing key
 read as unknown (wl-xcon's `main` at `67d7028`; the spec's amendment 2, which also records wl-xcon's
 three corrections to its first answer). The three later asks are its XC-356, XC-383 and XC-288 §3.1

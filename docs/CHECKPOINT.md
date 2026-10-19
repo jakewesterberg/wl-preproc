@@ -382,10 +382,15 @@ requester chose to merge the same day; true when written.*
 > and five Minor deferred (§6); **part 1, the training records, is merged**
 > (`b74d4f3`, `handoffs/2026-10-18-training-records.md`), its review's three findings
 > fixed and four Minor deferred (§6). **Part 4, lab time, is designed in full** (the
-> requester's choice of 2026-10-19: amendments 20-26, on `spec/lab-time`, not merged), its
-> asks of wl-xcon to be sent once the requester has reviewed it; part 3, the NI, is built
-> while they arrive, once part 2's deferred M2 is decided. Fine-tuning
+> requester's choice of 2026-10-19: amendments 20-26, merged `02fd6c0`), its asks of
+> wl-xcon filed there as XC-391 to XC-393 (its build C7). **Part 3a, taking a session
+> in without the sync box, is built on `feat/ni-ingest`, not merged**
+> (`handoffs/2026-10-19-ni-ingest.md`; amendments 27-34, M2 decided as amendment 28). Next:
+> the review. Part 3b, the NI as the clock, follows. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 3a was built, this said lab time was on `spec/lab-time`, its asks to be sent
+> once reviewed, and part 3 built once M2 was decided; true when written.*
 >
 > *Until lab time was designed, this said part 3 could be planned next; true when
 > written.*

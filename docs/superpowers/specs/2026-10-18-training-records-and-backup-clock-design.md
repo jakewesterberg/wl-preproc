@@ -702,3 +702,42 @@ its mutation checks; the full suite runs once per branch on both interpreters.
     its stage refuses, saying that the events must be deleted for the session to be timed again. No
     schema changes: built as part 3's first task, since part 3 is the first part with another clock to
     choose.
+
+## Amendments, 2026-10-19, made while proving part 3a's plan
+
+29. **Part 3 is planned and merged in two.** Part 3a takes a session in without the sync box (§5, and
+    amendment 28's first rule); part 3b makes the NI its clock (§4.2's rules 1 and 2, §6.2, §7's tier N).
+    Both backup clocks need 3a: until it, no session without the sync box is ever taken in.
+30. **Amendment 28's two rules, by part.** Part 3a gives a staged session without a clock row `syncbox`,
+    read from the database and never the folder, which may have been freed (`timebase/clock.py::
+    choose_for`). Until part 3b the sync box is the only clock, so that is the clock that timed it,
+    whether its events were staged before part 2 recorded clocks or its row was deleted since. Part 3b,
+    the first part with another clock, replaces the rule with the refusal; by then the daemon has
+    recorded every staged session's clock, so the refusal meets only a row deleted after it.
+31. **§10's item 9, verified.** The watcher (`ingest/watcher.py::_evaluate_session`) lands a session
+    once every system its manifest lists has a DONE marker (`ingest/sentinel.py::session_complete`),
+    reports it INCOMPLETE until then and STALLED once quiet for `STALL_AFTER_S` (2 h), and the daily
+    report lists each stalled session with what it is missing (`missing_systems`). Nothing read `xcon/`
+    for completeness before this part.
+32. **The manifest (§5).** `syncbox` is no longer required in `expected_systems`. `expects_rig_record`
+    (a boolean, false when absent) holds the session until `xcon/DONE` is written; the marker's presence
+    is the signal and nothing in it is read, since wl-xcon's agent rebuilds files in `xcon/` after the
+    close, so no list of hashes would stay true. The report names the record `xcon` among what a stalled
+    session is missing. The exported manifest schema gains the field, and wl-xcon is told the shape (its
+    XC-356).
+33. **Landing without (§5, decision 10).** `wlpp land-without --session --system --actor --reason`
+    records who landed a stalled session without what, why and when, in `ingest.LandedWithout`, keyed by
+    the manifest's session since it is written before the session lands, and then evaluates the session
+    once, as a scan would. **It takes any listed system whose transfer has not finished, not only the
+    sync box** (a stalled transfer holds a session the same way whichever system it is), and `xcon` for a
+    manifest that expects the rig's record. It refuses what would change nothing or cannot be stored: a
+    system not listed, one whose marker landed, a session already landed, a manifest that cannot be
+    read, a subject or path too long to land. The watcher, the stall check, verification and the report
+    do not wait for it; the landed topology marks it `waived`; it gets no AcquisitionSystem row; its
+    partial files stay in the folder, and so in the archive, which takes every verified session. **A
+    session landed without its sync box is never timed by it** (decision 8): until part 3b its events
+    stage says, on each pass, who landed it without the sync box and when, and that the NI or lab time
+    keeps its time. It is not listed until it has a clock.
+34. **`timebase.activate` binds `ingest`** (found while proving): `SessionClock`'s choice reads
+    `ingest.LandedWithout`, and `tests/schema/test_events.py` run alone failed 21 of its 31 tests without
+    it, as amendment 15 found for `timebase` itself.
