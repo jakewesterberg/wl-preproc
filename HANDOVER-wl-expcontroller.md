@@ -423,3 +423,43 @@ unanswered here (the section above); the contract is yours. From
     `SACCADE_ONSET` and `SACCADE_END` on the shared clock. Not an eighth detector in the seven-way score,
     which would then mean something different in sessions without wl-xcon. After January; keep sending both
     codes.
+
+---
+
+# 2026-10-19: XC-398, saccades in true visual angle
+
+Asked by wl-xcon on 2026-10-19, on the PI's decision "Change both repos" (its
+`docs/pending-wl-preproc-amendments.md`, section "OPEN — saccades in true visual angle, online and offline
+together", on its `main` at `18fe2c3`): move saccade detection and saccade size to true visual angle, the
+angle between gaze directions `normalize(tan x, tan y, 1)`, rather than distances in degrees per axis, which
+shrink off centre (2° up from (20°, 0°) is 1.879° of true angle). This repository moves first and
+publishes; wl-xcon then matches. Its four proposals: size as the angle between the first and last usable
+samples' directions; velocity in the local frame at the window's centre sample, keeping the elliptic test's
+two thresholds; the 1° microsaccade cut read in true angle; the shared fixtures updated in one exchange.
+
+- *wl-preproc's answer, 2026-10-19: accepted, as a design to write first.* `np.hypot` is in seven detector
+  modules here (`measure`, `nslr`, `remodnav`, `otero_millan`, `nystrom_holmqvist`, `validity`, `glitch`),
+  and the seven-way agreement, the main sequence and the stored detections all read the same coordinates,
+  so the move goes through a written spec covering all seven, which answers the four proposals. The
+  requester ordered it after the fixtures below and wl-sync's asks of the same day.
+- *Done first, the requester's choice of 2026-10-19: versioned fixtures.* wl-xcon's contract tests imported
+  `engbert_kliegl` and `velocity` from this package, and its CI runs them against this `main` and merges
+  nothing red, so a change here would have turned it red before it could match; wl-xcon asked for files
+  instead. **`docs/fixtures/saccade/v1.json`** is today's behaviour, geometry `per-axis`: one JSON object
+  with `version`, `geometry`, `about`, `fs_hz` (500), the `defaults` (λ 6, 6 samples, the 1° cut), the
+  `median_scale` cases (`values` → `scale`, including wl-xcon's five and a near-tie that rounds negative),
+  and eight `traces` (`gaze_deg`, `available`, `velocity_deg_s`, and the `runs` detected, each with
+  `start`, `stop`, `label` and `amplitude_deg`), three of them off centre and one across the 1° cut in
+  true angle. Made by `python -m wl_preproc.eye.detect.contract_fixtures`, held to the code by
+  `tests/eye/detect/test_contract_fixtures.py`, and declared in `wl.yaml` as `saccade-detector-fixtures`.
+  **A published version is never edited:** true angle arrives as v2 beside v1, from the same inputs, and
+  wl-xcon switches to v2 in the commit that changes its `saccade.py`. Nothing here changes `engbert_kliegl`,
+  `velocity` or `measure.amplitude` before wl-xcon's contract test reads v1.
+- *Widened by wl-xcon the same day* (its `main` at `fb80a48`, the same section, "Widened the same day"), on
+  the PI's answer "Events and every sample": each detected saccade and fixation also carries its **true
+  direction**, in the eye's frame at its start, and its **endpoints' true eccentricity and polar angle**,
+  `atan(√(tan²x + tan²y))` and `atan2(tan y, tan x)`; and **each eye sample carries its true eccentricity
+  and polar angle** beside its per-axis position. wl-xcon's own eye records (its XC-400) will follow the
+  definitions this repository writes, so they go in the spec. Separately, each shown stimulus's true
+  eccentricity and polar angle goes on its trial's row (its XC-399), whose field names and shape come here
+  before they are written, after its build C2b.
