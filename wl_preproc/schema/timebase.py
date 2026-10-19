@@ -104,11 +104,11 @@ class SessionClock(dj.Imported):
     def make(self, key: dict) -> None:
         """Imported, not Computed: the choice reads the session folder. It is
         made by `clock_for` when a stage first asks; `populate()` makes the
-        same row."""
+        same row, by the same `choose_for` (amendment 28)."""
         from wl_preproc.schema import ingest
-        from wl_preproc.timebase.clock import choose
+        from wl_preproc.timebase.clock import choose_for
 
-        choice = choose(Path((ingest.Ingestion & key).fetch1("session_dir")))
+        choice = choose_for(key, Path((ingest.Ingestion & key).fetch1("session_dir")))
         self.insert1({**key, "source": choice.source, "reason": choice.reason})
 
 

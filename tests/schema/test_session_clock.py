@@ -147,3 +147,41 @@ def test_a_clock_another_pass_records_during_this_stages_snapshot_is_read(landed
             assert clock_for(key).source == "syncbox"
     finally:
         other.close()
+
+
+# -- A session already staged keeps the clock that timed it (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendment 28).
+
+def _staged_without_its_clock(landed):
+    """A session whose events were staged, then its clock row deleted, as a
+    session staged before part 2 has none; its sync box log is then removed,
+    as a freed scratch copy's is, so nothing can be read from its folder."""
+    from wl_preproc.schema import events, timebase
+
+    key, session_dir = landed()
+    events.populate_session(key, session_dir)
+    (timebase.SessionClock & key).delete(prompt=False)
+    shutil.rmtree(session_dir / "syncbox")
+    return key
+
+
+def test_a_staged_session_without_a_clock_keeps_the_sync_boxs(landed):
+    """The sync box is the only clock any session has been staged on, so it
+    is the one that timed these events, read from the database and never the
+    folder (amendment 28's first rule)."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import STAGED_REASON, clock_for
+
+    key = _staged_without_its_clock(landed)
+    assert clock_for(key).source == "syncbox"
+    assert (timebase.SessionClock & key).fetch1("source", "reason") == ("syncbox", STAGED_REASON)
+
+
+def test_populate_gives_a_staged_session_the_sync_boxs_clock(landed):
+    """The daemon's first stage records it, as `clock_for` would."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import STAGED_REASON
+
+    key = _staged_without_its_clock(landed)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert (timebase.SessionClock & key).fetch1("source", "reason") == ("syncbox", STAGED_REASON)
