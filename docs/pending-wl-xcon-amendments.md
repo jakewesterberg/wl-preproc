@@ -1,12 +1,44 @@
 # Amendments to wl-xcon
 
-**Four are outstanding, opened 2026-09-29, 2026-10-01, 2026-10-11 and 2026-10-18.** wl-xcon (formerly wl-expcontroller) is
+**Five are outstanding, opened 2026-09-29, 2026-10-01, 2026-10-11, 2026-10-18 and 2026-10-19.** wl-xcon (formerly wl-expcontroller) is
 the rig's experiment controller. What it asked of this repository is recorded in
 [`HANDOVER-wl-expcontroller.md`](../HANDOVER-wl-expcontroller.md) and in its own
 `docs/pending-wl-preproc-amendments.md`; this file is the other direction.
 
 *Until 2026-10-11 this said two were outstanding; true when written.*
 *Until 2026-10-18 this said three were outstanding; true when written.*
+*Until 2026-10-19 this said four were outstanding; true when written.*
+
+---
+
+# OPEN — what a session without the sync box is timed by: every word with its instant, the open, and the clock pairs
+
+**Opened 2026-10-19** with part 4 of
+[`specs/2026-10-18-training-records-and-backup-clock-design.md`](superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md)
+(amendments 20-26), lab time, designed in full by the requester's choice the same day: the sync box
+should run at every session, and lab time is the last resort, used in practice by the one or two
+training rigs with neither an NI nor Intan when their sync box fails. It makes precise the third of the
+three later asks in the section below (the instants).
+
+**The design.** In such a session the rig's own anchored clock (`taskd.Session.wall_now`, its XC-288
+§3.11) keeps the session's time, t = 0 at the session's open; its events come from your timed event
+log (XC-288 §3.2), decoded exactly as the sync box's codes are; and the eye tracker and behaviour
+cameras, once they can free-run, are brought onto your clock from their host stamps on lab time.
+
+**The asks:**
+1. **The timed event log holds every word the card sent,** escapes and payload words included, in the
+   order sent, each with its instant on the anchored clock. This repository's decoder reads a payload
+   by position (`contracts/events.py::decode_stream`), so a log of named codes alone cannot be decoded.
+   Its file name and row shape come here before it is built, as XC-383 already agrees.
+2. **The session's open instant,** on the anchored clock, written into the session's record, and each
+   resumed process's: t = 0 is the open.
+3. **Clock pairs:** at each process's open, at least once a minute, and at its close, one row with the
+   anchored instant, the computer's own clock read at the same moment, and that computer's
+   synchronisation state as its time daemon reports it (synchronised or not, and its estimated
+   offset). This joins a resumed session's processes, and places other computers' devices on your
+   clock. Its file name and row shape come here before it is built.
+
+**Nothing on the wire changes,** and nothing here is needed in a session with the sync box running.
 
 ---
 
