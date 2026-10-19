@@ -115,6 +115,9 @@ Parts 1 and 2 share nothing and may be built in either order; part 3 needs part 
 joins (§3.3) read the session's codes through part 2's interface once it exists. The order chosen:
 1, then 2 and 3, with 4 and 5 following wl-xcon and wl-time.
 
+*Revised 2026-10-19 (amendment 20): part 4, lab time, is designed in full first and its asks sent,
+since it is the one backup every rig has; part 3 is built while its inputs arrive.*
+
 ---
 
 ## 3. The training records
@@ -296,6 +299,9 @@ Unchanged.
 
 ### 6.3 Lab time as the clock (part 4)
 
+*Designed in full on 2026-10-19 by amendments 20 to 26, which replace this sketch where they differ:
+the rig's own clock keeps the session's time, and lab time brings other computers' devices onto it.*
+
 - **The rig's records:** on lab time as written, once the rig's clock follows wl-time.
 - **Intan,** in a session with no NI: matched by its strobes against the rig's code instants (the
   timed event log).
@@ -365,7 +371,8 @@ its mutation checks; the full suite runs once per branch on both interpreters.
      timed event log;
   3. which code each control kind strobes, and that each row strobes exactly one (§3.3);
   4. the trial start and end instants and each code's instant (XC-288 §3.1, §3.2), which part 4
-     needs.
+     needs; *made precise by amendment 25: every word strobed with its instant, the open instant, and
+     the clock pairs.*
 - **wl-sync and the lab:** the cameras' fallback (decision 4): when untriggered, the eye and behavior
   cameras free-run with host timestamps on lab time; or the rig's strobe goes into a camera GPIO
   input, recorded per frame, which would make each camera a strobe witness.
@@ -588,3 +595,93 @@ its mutation checks; the full suite runs once per branch on both interpreters.
     to 0 at each run's start), not a trial number. The NWB file's `controls` table gains the run it
     happened in (`run_number`), so the index can be read, and the database's comment and the synthetic
     rig say what it counts.
+
+## Amendments, 2026-10-19: part 4, lab time, designed in full
+
+20. **The requester's decisions.** Asked after part 1's merge whether the backup should be the
+    computers' PTP/NTP clock rather than the NI, "because not all systems (or future rigs) will
+    necessarily have an NI", and shown that the NI is still a shared-signal clock (it records the same
+    codes on the same wire, and SpikeGLX syncs the probes to it) and that wl-works' time-service design
+    makes PTP "Never the alignment source where a shared-signal alignment exists" (its §4), the
+    requester kept both: the sync box, then the NI where a session has one, then lab time for every
+    other session (§4.2 unchanged). What changed is the order of work: lab time is designed in full
+    now and its asks sent, since it is the one backup every rig has and its inputs take longest; part 3
+    is built while they arrive. **The brief,** in the requester's words: "Everything **should** run with
+    at least a sync box, unless it fails. There will likely be 1-2 training rigs that wont have a NI or
+    Intan (but also wont be used for recording). There may be a future rig that has a system different
+    than an NI or Intan (but will still have a sync!)". So lab time is the last resort, used in practice
+    by those training rigs when their sync box fails; it serves behaviour, to milliseconds or tens of
+    milliseconds, and never neural data. A recording rig with Intan and no NI whose sync box fails is
+    out of scope until such a rig exists; a future rig's other acquisition system is a question of what
+    counts as "the NI" (part 3), not of lab time.
+21. **The rig's own clock keeps a lab-time session's time; lab time brings other computers' devices onto
+    it** (the requester's choice of three, against lab time itself as the clock and against a second,
+    disciplined stamp on every row). wl-xcon's instants are its anchored clock (`taskd.Session.wall_now`:
+    the computer's clock read once at the session's open, then carried on a steady clock, immune to the
+    clock being stepped; its XC-288 §3.11), so the rig's records are consistent among themselves whether
+    or not any computer is disciplined. The source keeps its name, `lab`, already in `timebase.SessionClock`
+    and the listing's contract, and tier L; the spec's meaning for it is this one.
+    - **Chosen** by §4.2's rule 3: the sync box's codes do not hold every run and no NI recorded the
+      session, and the session has its own rig record (a `config.json` of its animal) with its open
+      instant. With no rig record there is nothing to time: the session is archived, and its events
+      stage says so on each pass.
+    - **t = 0 is the rig's session open,** on its anchored clock. A rig instant's session time is the
+      instant less the open, at rate 1, as the sync box's own timeline is session time when it keeps
+      time (§4.5 of the 2026-08-12 design spec).
+    - **The wall-clock time of t = 0** is the open instant itself: `reference_source` `lab_time` when the
+      clock pairs (amendment 23) show the rig's computer synchronised at the open, else `rig_clock`.
+22. **A lab-time session's events come from wl-xcon's timed event log** (its XC-288 §3.2), read through
+    the clock's `codes()` (§4.3): each word the rig strobed, at its instant less the open. The events
+    stage decodes and assembles them as it does the sync box's, so nothing downstream changes. The log
+    must hold every word the card sent, escapes and payload words included, in emission order, each with
+    its instant on the anchored clock: `decode_stream` reads a payload by position, so a log of named
+    codes alone cannot be decoded. **Until the log exists** (wl-xcon's build C7) a lab-time session is
+    taken in and archived, and its events stage says on each pass that lab time needs the rig's timed
+    event log; nothing is assembled from `trials.jsonl`. Part 1's training records are timed as on every
+    session: each change and coded control by its code, now the log's; the rig's clock fit, against the
+    log's own instants, finds about zero drift; a control that strobed nothing is timed by its instant
+    through it. A resumed session's processes, each on its own anchor, are joined through their maps
+    (amendment 23).
+23. **The clock pairs, and other computers' devices.** The rig writes a pair at each process's open, at
+    least once a minute, and at its close: its anchored instant, its computer's disciplined clock, and
+    that computer's synchronisation state as its time daemon reports it (synchronised or not, and the
+    estimated offset). From each process's pairs, a map from the rig's clock to lab time is fitted, a
+    rate and an offset with residuals kept, as part 1's rig clock fit is; a step in the computer's clock
+    mid-session shows as residuals past a limit, and that process then has no map, the problem naming
+    it, rather than a piecewise repair. **The eye tracker and the behaviour cameras,** once the camera
+    fallback lets them free-run, stamp each frame on their computer's lab time; each stamp goes from lab
+    time to the rig's clock to session time, its source `host_stamp`, its accuracy recorded as the stamp
+    jitter, both computers' reported offsets and the fit's residual. A device whose computer, or the
+    rig's, was not synchronised, or whose map failed, is left out of the file and named, as an unfitted
+    system is today; the rig's own records still land. Intan and probes are out of scope (amendment 20).
+24. **Taking the session in, its tier, the listing and the NWB file.** §5's ingest changes are unchanged
+    and are built with part 3, which needs them too; lab time's build follows. **A sync box that recorded
+    part of the session** (decision 8): lab time keeps the whole session's time, and the sync box's codes
+    over the part it covers are matched to the event log's, agreement recorded as a cross-check and a
+    disagreement sending the session to tier D. **Tier L:** lab time kept time and every check passed;
+    any failed check, such as codes in the log that do not decode, is D, whatever the clock. L publishes
+    as A to C do, labelled (decision 11). **The listing** gives `clock: "lab"` and tier L. **The NWB
+    file's** `processing/timebase` says lab time kept the time, t = 0 at the rig's open, and lists each
+    device's map with its source (`rig_clock` for the rig, `host_stamp` for a camera; §7's
+    list); `session_start_time` is
+    the open instant, `reference_source` `lab_time` or `rig_clock`. The NWB builder spec's §4.4 is
+    amended for lab-time sessions only (§6.3). wl.works is sent tier L and the two reference sources
+    when this is built.
+25. **The asks** (§9's wl-xcon item 4, made precise), sent once this amendment is approved:
+    - **wl-xcon:** (1) the timed event log, its XC-383 and build C7, holding every word the card sent,
+      escapes and payload words included, in order, each with its instant on the anchored clock, its
+      file name and row shape sent here before it is built, as agreed; (2) the session's open instant on
+      the anchored clock in the record, and each resumed process's; (3) the clock pairs of amendment 23.
+    - **wl-sync and the lab:** the camera fallback (§9), each frame with its host stamp and its
+      computer's synchronisation state.
+    - **The time service** (wl-works' row 60, waiting on its hardware, its §10): nothing beyond §9; the
+      rig and camera computers disciplined, each reporting its state.
+26. **Testing, and what can be built when.** On synthetic sessions: a training session with no sync box,
+    its event log and pairs generated on a drifting rig clock offset from lab time; a resumed session
+    that anchors again; a step in the pairs; a free-running camera's host stamps; a partial sync box,
+    agreeing and disagreeing. Each asserts the planted times are recovered, tier L, and the NWB file.
+    **Nothing is built against row shapes wl-xcon has not sent**; once it sends the event log's and the
+    pairs', the pipeline's side is built and tested on synthetic sessions that write them, before any
+    rig does, and checked on a real session once build C7 and the time service exist. The cameras' part
+    waits on the fallback's shape. Part 2's deferred question (M2, the clock of a session processed
+    before part 2) is decided before part 3 is built.
