@@ -45,6 +45,21 @@ fails in two places:
 Every one of these changes landed after the pin, between 2026-08-17 and 2026-08-22. In wl-sync,
 `git log 90b931e..main -- wl_sync/log.py` lists them.
 
+**Moving the pin is not enough on its own** *(added 2026-10-19, before this section was pushed)*.
+`timebase/_syncbox_log.py:49-63` finds the box's barcodes by decoding `Edge` records on
+`gpio_map["barcode_out"]`, which is the shape `synth/syncbox.py:36-41` writes. The real box
+never captures that line:
+
+- GPIO17 is its own output, and its edge inputs are GPIO20–27 (wl-sync `wl_sync/pins.py:40`).
+- It records each barcode it emits as a `B` record, holding the value and its tick. In
+  wl-sync's words that record is *"the emitter's own account of what it put on the wire, not a
+  measurement of it"* (`wl_sync/log.py:17-19`).
+
+So a real box log yields **no barcodes** through that function. **The ask, in full:** read the
+box's own barcodes from its `B` records, and have `synth/syncbox.py` write them the same way, so
+the fixtures stop modelling a log the box does not write. The latency from a `B` tick to the
+edge on the wire has not been measured yet. Measuring it is on the box's bench-day list.
+
 **wl-sync's own fault, recorded so it is not repeated:** `SCHEMA_VERSION` is still `1`. The
 format changed without a version bump, so nothing in a log tells an old reader why it fails. The
 new header fields all have defaults, so a current reader still reads August's logs. The change is
