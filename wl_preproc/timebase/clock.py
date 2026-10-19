@@ -74,12 +74,24 @@ def choose_for(session_key: dict, session_dir: Path) -> Choice:
     from its folder, which may have been freed (amendment 28). Until part 3b
     that is the sync box, the only clock built, whether its events were
     staged before part 2 recorded clocks or its row was deleted since; part
-    3b, the first part with another clock, refuses such a session instead."""
-    from wl_preproc.schema import pipeline
+    3b, the first part with another clock, refuses such a session instead.
+
+    A session a person landed without its sync box (`wlpp land-without`) is
+    never timed by it, whatever partial log its folder holds: decision 8
+    hands a sync box that failed partway the whole session's backup. Until
+    part 3b no other clock is built, so it says so (amendment 33)."""
+    from wl_preproc.schema import ingest, pipeline
 
     session = {field: session_key[field] for field in ("subject", "session_datetime")}
     if len(pipeline.event.BehaviorRecording & session):
         return Choice(source="syncbox", reason=STAGED_REASON)
+    without = (ingest.LandedWithout & session & {"system": "syncbox"}).to_dicts()
+    if without:
+        (row,) = without
+        raise NoClock(
+            f"{session_dir}: landed without its sync box by {row['actor']} on {row['recorded_at']:%Y-%m-%d}, so its "
+            "partial log is not its clock: the NI (part 3b) or lab time (part 4) keeps its time"
+        )
     return choose(session_dir)
 
 

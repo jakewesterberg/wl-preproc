@@ -185,3 +185,23 @@ def test_populate_gives_a_staged_session_the_sync_boxs_clock(landed):
     key = _staged_without_its_clock(landed)
     timebase.SessionClock.populate(key, suppress_errors=False)
     assert (timebase.SessionClock & key).fetch1("source", "reason") == ("syncbox", STAGED_REASON)
+
+
+def test_a_session_landed_without_its_sync_box_is_never_timed_by_it(landed):
+    """Decision 8: a sync box that failed partway hands the whole session to
+    the backup, so a person's record that the session landed without it
+    keeps the sync box's own partial log from being its clock; until part
+    3b, nothing else can time it, and it says so, naming who and when."""
+    import datetime
+
+    from wl_preproc.schema import ingest, timebase
+    from wl_preproc.timebase.clock import NoClock, clock_for
+
+    key, session_dir = landed()
+    ingest.LandedWithout.insert1({**key, "system": "syncbox", "actor": "J. W.", "reason": "the Pi's card failed",
+                                  "recorded_at": datetime.datetime(2027, 3, 14, 11, 30),
+                                  "session_dir": str(session_dir)})
+    with pytest.raises(NoClock, match=r"landed without its sync box by J\. W\. on 2027-03-14, so its partial log "
+                                      r"is not its clock: the NI \(part 3b\) or lab time \(part 4\) keeps its time"):
+        clock_for(key)
+    assert not len(timebase.SessionClock & key)

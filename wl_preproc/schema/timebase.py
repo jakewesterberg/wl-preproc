@@ -587,7 +587,13 @@ class TimingProvenance(dj.Computed):
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
-    """Bind these tables to `{prefix}timebase`. Idempotent."""
+    """Bind these tables to `{prefix}timebase`. Idempotent. `ingest` too:
+    `SessionClock`'s choice reads which sessions landed and what a person
+    landed them without (`ingest.LandedWithout`; design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` amendment 33)."""
+    from wl_preproc.schema import ingest
+
     core.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
     if not schema.is_activated():
         schema.activate(f"{prefix}timebase", create_tables=True)
