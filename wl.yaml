@@ -73,13 +73,14 @@ status:
     docs/handoffs/2026-10-18-training-records.md); part 4, lab time, is
     designed in full (amendments 20-26, merged 02fd6c0), its asks filed
     by wl-xcon as XC-391 to XC-393; part 3a, taking a session in
-    without the sync box, is built and reviewed on feat/ni-ingest, its
-    review's findings fixed, and not merged
-    (docs/handoffs/2026-10-19-ni-ingest.md); next, the merge; part 3b,
-    the NI as the clock, follows.
+    without the sync box, is merged (f43a014;
+    docs/handoffs/2026-10-19-ni-ingest.md). Next: wl-sync's asks of
+    2026-10-19 (HANDOVER-wl-sync.md; the pinned wl-sync cannot read
+    today's logs, and a real log's barcodes are its B records), and
+    part 3b, the NI as the clock.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: part 1 of the training-records design (b74d4f3). Before it,
-    part 2 (789e825). Before it, the
+    Done: part 3a of the training-records design (f43a014). Before it,
+    part 1 (b74d4f3). Before it, part 2 (789e825). Before it, the
     correction marker's minors and its review's five findings
     (ad9ccb6). Before them, ask 5's five deferred minors (ad52b79). Before
     them, wl-xcon's
@@ -160,6 +161,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `b74d4f3` until part 3a's merge `f43a014` on 2026-10-19 (CI green
+  # on `b74d4f3`, run 39216015572); true when written.
   # Was `789e825` until part 1's merge `b74d4f3` on 2026-10-19 (CI green
   # on `789e825`, run 39152694853); true when written.
   # Was `ad9ccb6` until part 2's merge `789e825` on 2026-10-18 (CI green
@@ -225,7 +228,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "b74d4f3"
+  describes: "f43a014"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

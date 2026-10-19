@@ -1,19 +1,27 @@
 # Where this build actually is
 
-**Last updated 2026-10-19**, describing `main` at `b74d4f3`, the merge of
-`feat/training-records`: part 1 of `specs/2026-10-18-training-records-and-backup-clock-design.md`,
-wl-xcon's training records (amendments 2 and 9-19;
-`handoffs/2026-10-18-training-records.md`). CI read off `b74d4f3` is green on both
-interpreters, 2454 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 39216015572`).
-- **wl-xcon's training records:** `parameter_changes.jsonl` and `controls.jsonl` are
+**Last updated 2026-10-19**, describing `main` at `f43a014`, the merge of
+`feat/ni-ingest`: part 3a of `specs/2026-10-18-training-records-and-backup-clock-design.md`,
+taking a session in without the sync box (amendments 27-38;
+`handoffs/2026-10-19-ni-ingest.md`). CI read off `f43a014` is green on both
+interpreters, 2490 passed on each with 37 skipped, and the manifest
+check is green (`gh run view 39316746072`).
+- **A session without the sync box is taken in:** a manifest need not list it, and
+  `expects_rig_record` holds a session until `xcon/DONE`, a DONE marker listing the
+  rig's files, which are checked on arrival and archived. A person lands a stalled
+  session without a system, or the rig's record, by `wlpp land-without`, recorded
+  with who, why and when; it is never timed by a sync box it was landed without, and
+  the daemon leaves a session no clock can time alone until part 3b or 4 can. Its
+  partial files are archived as they are. wl-xcon has been told the marker's shape.
+- **wl-xcon's training records** were merged just before (`b74d4f3`):
+  `parameter_changes.jsonl` and `controls.jsonl` are
   kept in `core.ParameterChange` and `core.RigControl`, each row timed by the code it
   strobed or, for a control that strobed nothing, by the rig's clock fitted to the
   recording (`core.RigClock`), and otherwise untimed. The NWB file's `rig_record`
   module gains both tables, naming no one; its description and the listing gain their
   counts, and the listing the clock that kept the session's time. wl.works must take
   the two contracts' new fields first (`pending-wl-works-amendments.md`).
-- **The session's clock, recorded,** was merged just before (`789e825`):
+- **The session's clock, recorded,** before them (`789e825`):
   `timebase.SessionClock` records which clock
   keeps each session's time, chosen once, by the daemon before its events stage;
   every stage reads the session's time through `timebase/clock.py`. The sync box
@@ -110,6 +118,9 @@ check is green (`gh run view 39216015572`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `b74d4f3` (part 1's merge, CI green, 2454 passed on each
+interpreter, `39216015572`) until part 3a's merge; true when written.*
 
 *This header named `789e825` (part 2's merge, CI green, 2410 passed on each
 interpreter, `39152694853`) until part 1's merge; true when written.*
@@ -384,12 +395,17 @@ requester chose to merge the same day; true when written.*
 > fixed and four Minor deferred (§6). **Part 4, lab time, is designed in full** (the
 > requester's choice of 2026-10-19: amendments 20-26, merged `02fd6c0`), its asks of
 > wl-xcon filed there as XC-391 to XC-393 (its build C7). **Part 3a, taking a session
-> in without the sync box, is built and reviewed on `feat/ni-ingest`, not merged**
-> (`handoffs/2026-10-19-ni-ingest.md`; amendments 27-38, M2 decided as amendment 28), its
-> review's one Critical and four Important findings fixed and six Minor deferred (§6); the
-> requester chose that `xcon/DONE` lists the rig's files (amendment 35). Next: the merge,
-> then wl-xcon told the marker's shape. Part 3b, the NI as the clock, follows. Fine-tuning
+> in without the sync box, is merged** (`f43a014`, `handoffs/2026-10-19-ni-ingest.md`;
+> amendments 27-38, M2 decided as amendment 28), its review's one Critical and four
+> Important findings fixed and six Minor deferred (§6); `xcon/DONE` lists the rig's files
+> (amendment 35), and wl-xcon has been told the shape. Next: wl-sync's asks of 2026-10-19
+> (`HANDOVER-wl-sync.md`; the pinned wl-sync cannot read the logs the box writes today, and
+> a real log's barcodes are its `B` records, which nothing reads yet), and part 3b, the NI
+> as the clock. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 3a's merge, this said it was built and reviewed, not merged, and that the
+> merge came next; true when written.*
 >
 > *Until part 3a's review, this said it was built and next was the review; true when
 > written.*
@@ -491,7 +507,8 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: part 1 of the training-records design, wl-xcon's training records
+> Done: part 3a of the training-records design, taking a session in without the
+> sync box (`f43a014`). Before it, part 1, wl-xcon's training records
 > (`b74d4f3`). Before it, part 2, the session's clock as a recorded
 > choice (`789e825`). Before it, the correction marker's three deferred minors and
 > its review's five
