@@ -934,3 +934,30 @@ def test_no_nas_root_reports_not_checked_rather_than_a_fabricated_zero(scanned):
     section = _section(body, "Sessions whose rig may clear its copy")
     assert "not checked" in section
     assert "- none" not in section
+
+
+def test_a_session_landed_without_its_sync_box_leaves_the_stalled_list_and_says_who_and_why(scanned):
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 5: a listed sync box that never finishes is stalled, named, until
+    a person lands the session without it; then the report gives that
+    record beside the session it landed. The session is deleted afterwards:
+    one with no clock would fail a later module's daemon pass."""
+    from wl_preproc.ingest.without import land_without
+    from wl_preproc.schema import pipeline
+
+    root, prefix = scanned("rptwo1")
+    generate_session(root, CI_RECIPE.model_copy(update={"session_id": "2027-03-14_06", "subject": "rptwo2"}))
+    layout = SessionLayout(root, "2027-03-14_06")
+    layout.done_marker("syncbox").unlink()
+    later = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5)).replace(microsecond=0)
+    assert _line_for(_section(build_report(root, prefix=prefix, now=later), "Stalled transfers"),
+                     "2027-03-14_06").split("missing:")[1].strip() == "syncbox"
+    try:
+        land_without(layout.dir, "syncbox", actor="J. W.", reason="the Pi's card failed", prefix=prefix, now=later)
+        body = build_report(root, prefix=prefix, now=later)
+        assert "2027-03-14_06" not in _section(body, "Stalled transfers")
+        line = _line_for(_section(body, "Ingested (24 h)"), "2027-03-14_06")
+        assert line.endswith(f" — landed without syncbox by J. W. at {later:%Y-%m-%d %H:%M} UTC: the Pi's card failed")
+    finally:
+        (pipeline.Session & {"subject": "rptwo2"}).delete(prompt=False)
+        (ingest.LandedWithout & {"subject": "rptwo2"}).delete(prompt=False)
