@@ -205,3 +205,33 @@ def test_a_session_landed_without_its_sync_box_is_never_timed_by_it(landed):
                                       r"is not its clock: the NI \(part 3b\) or lab time \(part 4\) keeps its time"):
         clock_for(key)
     assert not len(timebase.SessionClock & key)
+
+
+def test_a_daemon_pass_leaves_a_session_without_a_clock_untouched_until_it_has_one(daemon_module, prefix, landed):
+    """Part 3a's final review, I3: a session landed without its sync box has
+    no clock until part 3b. A pass must not write it a tier-D timing record
+    from checks that never ran, nor park any of its jobs in `error`, where
+    nothing retries them once its clock exists; its events stage says why,
+    on each pass."""
+    import datetime
+
+    from wl_preproc.schema import ingest, timebase
+
+    from wl_preproc.schema import core
+
+    key, session_dir = landed()
+    ingest.LandedWithout.insert1({**key, "system": "syncbox", "actor": "J. W.", "reason": "the Pi's card failed",
+                                  "recorded_at": datetime.datetime(2027, 3, 14, 11, 30),
+                                  "session_dir": str(session_dir)})
+    # And one whose manifest did not list the sync box: no system row, no log.
+    unlisted, unlisted_dir = landed()
+    (core.AcquisitionSystem & unlisted & {"system": "syncbox"}).delete_quick()
+    shutil.rmtree(unlisted_dir / "syncbox")
+    report = daemon_module.run_once(prefix=prefix)
+    for session in (key, unlisted):
+        assert not len(timebase.TimingProvenance & session)
+        assert not len(timebase.SessionClock & session)
+        for table in (timebase.SessionClock, timebase.SystemTimebase, timebase.TimingProvenance):
+            assert not len(table.jobs & session & "status = 'error'"), table.__name__
+    assert any("landed without its sync box" in str(error) for error in report["errors"])
+    assert any("no sync box log" in str(error) for error in report["errors"])
