@@ -40,13 +40,23 @@ def test_naive_datetime_is_rejected():
         )
 
 
-def test_syncbox_must_always_be_expected():
-    """The sync box is present at every session type — spec section 1.1."""
-    with pytest.raises(ValidationError) as exc:
-        SessionManifest.from_yaml(
-            VALID.replace("[syncbox, spikeglx, ohdpi]", "[spikeglx, ohdpi]")
-        )
-    assert "syncbox" in str(exc.value)
+def test_a_session_without_the_sync_box_is_a_valid_manifest():
+    """wl-xcon lists the sync box only when it is running at the open (design
+    spec `2026-10-18-training-records-and-backup-clock-design.md` section 5):
+    the sync box should run at every session, and one without it is still
+    taken in. *Until part 3a this test was
+    `test_syncbox_must_always_be_expected`, which refused such a manifest.*"""
+    m = SessionManifest.from_yaml(VALID.replace("[syncbox, spikeglx, ohdpi]", "[spikeglx, ohdpi]"))
+    assert m.expected_systems == ["spikeglx", "ohdpi"]
+
+
+def test_a_manifest_says_whether_the_rigs_record_is_expected():
+    """`expects_rig_record` holds the session until wl-xcon writes `xcon/DONE`
+    (section 5); a manifest without it behaves exactly as before."""
+    assert SessionManifest.from_yaml(VALID).expects_rig_record is False
+    assert SessionManifest.from_yaml(VALID + "expects_rig_record: true\n").expects_rig_record is True
+    with pytest.raises(ValidationError):
+        SessionManifest.from_yaml(VALID + "expects_rig_record: perhaps\n")
 
 
 def test_unknown_system_is_rejected():
