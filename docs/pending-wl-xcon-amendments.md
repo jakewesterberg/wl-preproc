@@ -40,6 +40,15 @@ cameras, once they can free-run, are brought onto your clock from their host sta
 
 **Nothing on the wire changes,** and nothing here is needed in a session with the sync box running.
 
+**Answered 2026-10-19, filed:** XC-391 to XC-393, all carried by wl-xcon's build C7 (its `main` at
+`243afb9`), after C2b and C3 to C6. The open instant is already written: the `session opened` row of
+`welfare_notes.jsonl`, its `at` the session's `opened_wall_at` (read in its `taskd.py`,
+`Session.open`); a resumed process writes none yet, and XC-392 adds one, perhaps in a file of its own,
+since `stranded.py` reads `welfare_notes.jsonl`. The pairs are written between trials, never inside a
+frame, so "once a minute" may hold only between trials, a trial lasting up to five minutes; wl-xcon will
+say. Each file's name and row shape comes here before C7 is built. No accuracy is stated for any instant
+until wl-xcon has measured its rig's clock.
+
 ---
 
 # OPEN — say which code each training record strobed, and three asks for later
@@ -79,6 +88,21 @@ here before it is written.
    repository times a training session by when neither the sync box nor the NI recorded it.
 
 **Nothing on the wire changes.**
+
+**2026-10-19, this repository's side of the first later ask, built (part 3a, the spec's amendments
+32 and 35):** a manifest may leave `syncbox` out of `expected_systems`; `expects_rig_record: true` holds
+the session until `xcon/DONE` is written; a manifest without the field behaves as before. **`xcon/DONE`
+is a DONE marker, as each system's is** (the requester's choice in part 3a's final review): `system:
+xcon`, `schema_version`, `transfer_finished_at`, and `files`, each of the rig's record files with its
+path relative to `xcon/`, its size in bytes and its blake3, leaving out the XC-288 agent's SQLite file
+and its rebuild's dated snapshot, which the agent may rewrite after the close (XC-357). The files are
+checked on arrival, so a mismatch quarantines the session, and the record is archived against the
+marker. An empty marker declares nothing and the session lands unverified, which the daemon does not
+archive; one that does not parse does not close the record. A stalled transfer, the rig's record
+included, can be landed without by a person (`wlpp land-without`).
+
+*Until part 3a's final review this said, on its branch before the merge, that `xcon/DONE`'s presence
+was the signal and its content never read; true when written, and never sent to wl-xcon.*
 
 **Answered 2026-10-18, and merged:** each row gains `event_code`, an integer or null, a missing key
 read as unknown (wl-xcon's `main` at `67d7028`; the spec's amendment 2, which also records wl-xcon's

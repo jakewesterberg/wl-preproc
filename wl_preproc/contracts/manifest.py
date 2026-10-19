@@ -19,8 +19,12 @@ class StartedAtSource(str, Enum):
 
     The behavioural control system where present; the sync box's NTP-stamped
     start otherwise, since anaesthetised mapping and spontaneous-activity
-    sessions have no task PC. This is the session *label* only — the timebase is
-    always the sync box.
+    sessions have no task PC. This is the session *label* only — which clock
+    keeps the session's time is `timebase.SessionClock`'s choice (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 4).
+
+    *Until part 3a of that design this said the timebase is always the sync
+    box.*
     """
 
     BEHAVIORAL_CONTROL = "behavioral_control"
@@ -37,6 +41,12 @@ class SessionManifest(BaseModel):
     started_at: datetime.datetime
     started_at_source: StartedAtSource
     expected_systems: list[str]
+    # wl-xcon's record of the session: when true, the session lands only once
+    # `xcon/DONE` is written as well as every listed system's marker, so a
+    # session with no acquisition system does not land while the rig still
+    # writes (design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    # section 5). A manifest without it behaves exactly as before.
+    expects_rig_record: bool = False
     acquisition_build_id: str | None = None
     stimulus_calibration_id: str | None = None
     notes: str | None = None
@@ -56,12 +66,15 @@ class SessionManifest(BaseModel):
 
     @field_validator("expected_systems")
     @classmethod
-    def _known_and_include_syncbox(cls, value: list[str]) -> list[str]:
+    def _known(cls, value: list[str]) -> list[str]:
+        """Every listed system is one this pipeline knows. The sync box is
+        listed when it is running at the session's open, which it should be
+        at every session; one without it is still taken in (design spec
+        `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+        *Until part 3a this refused a manifest that did not list it.*"""
         unknown = [system for system in value if system not in SYSTEMS]
         if unknown:
             raise ValueError(f"unknown systems: {unknown}, expected from {list(SYSTEMS)}")
-        if "syncbox" not in value:
-            raise ValueError("syncbox must be present at every session")
         return value
 
     @classmethod

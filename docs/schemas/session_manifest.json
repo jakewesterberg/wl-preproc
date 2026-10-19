@@ -1,7 +1,7 @@
 {
   "$defs": {
     "StartedAtSource": {
-      "description": "Which clock stamped the session's label.\n\nThe behavioural control system where present; the sync box's NTP-stamped\nstart otherwise, since anaesthetised mapping and spontaneous-activity\nsessions have no task PC. This is the session *label* only \u2014 the timebase is\nalways the sync box.",
+      "description": "Which clock stamped the session's label.\n\nThe behavioural control system where present; the sync box's NTP-stamped\nstart otherwise, since anaesthetised mapping and spontaneous-activity\nsessions have no task PC. This is the session *label* only \u2014 which clock\nkeeps the session's time is `timebase.SessionClock`'s choice (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 4).\n\n*Until part 3a of that design this said the timebase is always the sync\nbox.*",
       "enum": [
         "behavioral_control",
         "syncbox_ntp"
@@ -30,6 +30,11 @@
       },
       "title": "Expected Systems",
       "type": "array"
+    },
+    "expects_rig_record": {
+      "default": false,
+      "title": "Expects Rig Record",
+      "type": "boolean"
     },
     "notes": {
       "anyOf": [

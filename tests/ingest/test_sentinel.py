@@ -311,3 +311,61 @@ def test_last_change_at_falling_walk_keeps_a_genuine_stall_visible(session, monk
     monkeypatch.setattr(Path, "rglob", failing_rglob)
 
     assert is_stalled(layout, manifest, now=datetime.datetime.now(datetime.UTC)) is True
+
+
+# -- A session without the sync box (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+
+def _expecting_the_rigs_record(layout):
+    text = layout.manifest_path.read_text()
+    assert "expects_rig_record: false\n" in text
+    layout.manifest_path.write_text(text.replace("expects_rig_record: false\n", "expects_rig_record: true\n"))
+    return SessionManifest.from_yaml(layout.manifest_path.read_text())
+
+
+def test_a_session_expecting_the_rigs_record_waits_for_its_done(session):
+    """wl-xcon writes `xcon/DONE` when it closes its record; until then the
+    session is incomplete, the record named among what is missing. Its
+    presence is the signal: an empty marker closes it."""
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    assert missing_systems(layout, manifest) == ["xcon"]
+    assert session_complete(layout, manifest) is False
+    layout.rig_done_marker.write_text("")
+    assert session_complete(layout, manifest) is True
+
+
+def test_a_manifest_not_expecting_the_rigs_record_does_not_wait_for_it(session):
+    layout, manifest = session
+    assert not layout.rig_done_marker.exists()
+    assert session_complete(layout, manifest) is True
+
+
+def test_a_system_landed_without_is_neither_waited_for_nor_stalled(session):
+    """A person landed the session without its sync box (`wlpp land-without`):
+    the sentinel no longer waits for its marker, and the session is no
+    longer stalled for it."""
+    layout, manifest = session
+    layout.done_marker("syncbox").unlink()
+    quiet_since = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=3)
+    assert is_stalled(layout, manifest, now=quiet_since) is True
+    assert missing_systems(layout, manifest, waived={"syncbox"}) == []
+    assert session_complete(layout, manifest, waived={"syncbox"}) is True
+    assert is_stalled(layout, manifest, now=quiet_since, waived={"syncbox"}) is False
+
+
+def test_the_rigs_record_can_be_landed_without_too(session):
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    assert session_complete(layout, manifest, waived={"xcon"}) is True
+
+
+def test_a_rig_marker_that_is_not_a_marker_does_not_close_the_record(session):
+    """`xcon/DONE` is a DONE marker listing the rig's files (the requester's
+    choice of 2026-10-19, spec amendment 35): one that will not parse leaves
+    the record open, as a system's does; an empty one closes it with nothing
+    declared."""
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    layout.rig_done_marker.write_text("{not: [a marker", encoding="utf-8")
+    assert missing_systems(layout, manifest) == ["xcon"]

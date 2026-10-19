@@ -7,6 +7,7 @@ device that was not recorded is silence.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from enum import StrEnum
 from pathlib import Path
 
@@ -20,6 +21,10 @@ class SystemState(StrEnum):
     ABSENT = "absent"
     UNDECLARED = "undeclared"
     PENDING = "pending"
+    # Declared, and landed without by a person (`ingest.LandedWithout`):
+    # neither waited for nor given an AcquisitionSystem row (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+    WAIVED = "waived"
 
 
 def _has_content(layout: SessionLayout, system: str) -> bool:
@@ -95,7 +100,7 @@ def _has_content(layout: SessionLayout, system: str) -> bool:
 
 
 def discover_topology(
-    layout: SessionLayout, manifest: SessionManifest
+    layout: SessionLayout, manifest: SessionManifest, waived: Collection[str] = ()
 ) -> dict[str, SystemState]:
     """One state per member of SYSTEMS. Total by construction, so a caller
     cannot silently skip a system by forgetting it exists.
@@ -112,7 +117,9 @@ def discover_topology(
             MarkerState.ABSENT,
             MarkerState.INVALID,
         )
-        if system in declared:
+        if system in declared and system in waived:
+            topology[system] = SystemState.WAIVED
+        elif system in declared:
             topology[system] = SystemState.PRESENT if marked else SystemState.PENDING
         elif _has_content(layout, system):
             topology[system] = SystemState.UNDECLARED

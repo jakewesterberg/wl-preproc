@@ -752,6 +752,21 @@ def _not_freed(table, freed: list[dict]) -> tuple:
     return (dj.Not(freed),)
 
 
+def _clocked(table) -> tuple:
+    """The restriction to sessions whose clock is recorded, as a tuple to
+    splat into `table.populate(*...)`, for a stage keyed by session: every
+    such stage reads the session's time through its clock, and a session
+    with none (landed without its sync box, or never recording one, until
+    part 3b or part 4 can time it) would otherwise be given a tier-D timing
+    record from checks that never ran, or park its jobs in `error`, where
+    nothing retries them once its clock exists (part 3a's final review, I3).
+    Empty, as `_not_freed` is, for a stage whose `key_source` does not carry
+    the session key."""
+    if not _SESSION_KEY <= set(table.key_source.primary_key):
+        return ()
+    return (timebase.SessionClock.proj(),)
+
+
 def _link_stage() -> tuple[int, list[str]]:
     """Join each session's wl.works reports to the probes it recorded
     (`ephys.link_insertions`; design spec `2026-09-30-nwb-probes-design.md`
@@ -1052,7 +1067,7 @@ def run_once(
         freed = currently_freed(prefix=prefix)
         try:
             result = table.populate(
-                *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
+                *_not_freed(table, freed), *_clocked(table), reserve_jobs=True, suppress_errors=True
             )
             populated += int(result["success_count"])
             # error_list entries are (key, error) -- datajoint/autopopulate.py.

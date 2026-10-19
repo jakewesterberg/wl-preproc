@@ -295,6 +295,15 @@ def main(argv: list[str] | None = None) -> int:
     reclaim_p.add_argument("--nas-root", type=Path, default=None)
     reclaim_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
+    without_p = subparsers.add_parser(
+        "land-without", help="land a stalled session without a system whose transfer never finished"
+    )
+    without_p.add_argument("--session", required=True, help="path to the session directory")
+    without_p.add_argument("--system", required=True, help="a listed system, or xcon for the rig's record")
+    without_p.add_argument("--actor", required=True)
+    without_p.add_argument("--reason", required=True)
+    without_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     hold_p = subparsers.add_parser("hold", help="block or force reclamation")
     hold_p.add_argument("--session", required=True, help="path to the session directory")
     hold_p.add_argument("--verdict", choices=("hold", "force"), required=True)
@@ -489,7 +498,9 @@ def main(argv: list[str] | None = None) -> int:
         # repository counts a session's expected files (`archive/verify.py`),
         # and re-deriving the count a second way here risks silently
         # disagreeing with what `verify_store` itself checked against.
-        expected_file_count = len(_expected_digests(session_dir))
+        from wl_preproc.ingest.landing import waived_systems
+
+        expected_file_count = len(_expected_digests(session_dir, waived_systems(key, prefix=args.prefix)))
         predicate = archive_reclaim.reclaim_conditions(
             key, expected_file_count, prefix=args.prefix
         )
@@ -618,6 +629,20 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc()
             return 1
         print(f"rehydrated: {outcome.session_dir} ({outcome.bytes_written} bytes)")
+        return 0
+
+    if args.group == "land-without":
+        # Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+        # section 5, decision 10: one command, recorded with who and why.
+        from wl_preproc.ingest.without import Refused, land_without
+
+        try:
+            outcome = land_without(Path(args.session), args.system, actor=args.actor, reason=args.reason,
+                                   prefix=args.prefix)
+        except Refused as exc:
+            print(f"refusing: {exc}")
+            return 1
+        print(f"{args.session}: landing without {args.system}, by {args.actor}: {outcome}")
         return 0
 
     if args.group == "hold":

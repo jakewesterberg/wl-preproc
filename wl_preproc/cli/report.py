@@ -490,7 +490,8 @@ def _unreclaimed_sessions(
             # `reclaim_conditions` below needs the identical number
             # `verify_store` used, not a second, independently-walked one
             # that could silently disagree with it.
-            expected_file_count = len(_expected_digests(session_dir))
+            expected_file_count = len(_expected_digests(session_dir,
+                                                        landing.waived_systems(session_key, prefix=prefix)))
         except Exception:
             # A session archived once can still be MID a second, not-yet-
             # complete transfer of new files, or its markers can be
@@ -1279,6 +1280,13 @@ def gather_readings(
 
     candidates, root_fault = _candidate_dirs(Path(root))
     stalled: list[tuple[Path, list[str]]] = []
+    # What a person landed each session without (`wlpp land-without`) is not
+    # waited for, so not stalled for (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+    # One small table, read once.
+    without: dict[tuple, set[str]] = {}
+    for row in ingest.LandedWithout.proj("system").to_dicts():
+        without.setdefault((row["subject"], row["session_datetime"]), set()).add(row["system"])
     for child in candidates:
         try:
             manifest = SessionManifest.from_yaml((child / MANIFEST_FILENAME).read_text())
@@ -1294,14 +1302,16 @@ def gather_readings(
         # `datetime.min` by design, so that session reported as stalled
         # unconditionally, forever, naming a directory nobody could go look at.
         layout = SessionLayout(child.parent, child.name)
-        if is_stalled(layout, manifest, now=at):
+        key = landing.manifest_session_key(manifest)
+        waived = without.get((key["subject"], key["session_datetime"]), set())
+        if is_stalled(layout, manifest, now=at, waived=waived):
             # `missing_systems`' first real consumer. Design section 4.3 asks
             # for stalled transfers "with the systems still missing" and the
             # report printed only the path, so two stalled sessions missing
             # different systems rendered identically -- with five possible
             # systems that is the difference between knowing a transfer
             # stalled and knowing which rig to go look at.
-            stalled.append((child, missing_systems(layout, manifest)))
+            stalled.append((child, missing_systems(layout, manifest, waived)))
 
     # `walk_error` mirrors `ScanResult.root_error` (wl_preproc/ingest/watcher.py)
     # exactly -- same construction, `f"{type}: {message}"` or `None` -- for the
@@ -1359,6 +1369,19 @@ def gather_readings(
     )
 
 
+def _landed_without(session: dict) -> str:
+    """Who landed the session without which system, when and why
+    (`ingest.LandedWithout`; design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 5), or
+    nothing."""
+    from wl_preproc.schema import ingest
+
+    rows = (ingest.LandedWithout & {"subject": session["subject"],
+                                    "session_datetime": session["session_datetime"]}).to_dicts(order_by="system")
+    return "".join(f" — landed without {row['system']} by {row['actor']} at {row['recorded_at']:%Y-%m-%d %H:%M} "
+                   f"UTC: {row['reason']}" for row in rows)
+
+
 def build_report(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
@@ -1412,7 +1435,7 @@ def build_report(
 
     lines += [f"## Ingested (24 h) — {len(readings.ingested)}", ""]
     lines += [
-        f"- `{row['session_dir']}` ({row['integrity']})" for row in readings.ingested
+        f"- `{row['session_dir']}` ({row['integrity']})" + _landed_without(row) for row in readings.ingested
     ] or ["- none"]
 
     lines += ["", f"## Quarantined ({_QUARANTINE_WINDOW_DAYS} d) — {len(readings.quarantined)}", ""]

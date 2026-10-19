@@ -433,3 +433,62 @@ def test_a_permission_fault_reaching_a_nested_file_is_reported_not_raised(stim_s
     assert all(m.system == "rhs" for m in mismatches)
     actual_by_name = {m.path.rsplit("/", 1)[-1]: m.problem for m in mismatches}
     assert actual_by_name == expected_by_name
+
+
+def test_a_system_landed_without_does_not_downgrade_what_landed(session):
+    """A system a person landed the session without is not part of what
+    landed, so its corrupt marker cannot make the rest `declared_only`, which
+    would keep the session from its automatic archive (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 5)."""
+    layout, manifest = session
+    layout.done_marker("syncbox").write_text("{not: a marker", encoding="utf-8")
+    assert read_marker(layout, "syncbox")[0] is MarkerState.INVALID
+    assert verify_session(layout, manifest)[0] is Integrity.DECLARED_ONLY
+    assert verify_session(layout, manifest, waived={"syncbox"}) == (Integrity.VERIFIED, [])
+
+
+def _expecting_the_rigs_record(layout):
+    """The manifest expects the rig's record, and `xcon/DONE` lists its files,
+    as wl-xcon writes it (spec amendment 35)."""
+    import datetime
+
+    from wl_preproc.contracts.done import blake3_file
+
+    text = layout.manifest_path.read_text().replace("expects_rig_record: false", "expects_rig_record: true")
+    layout.manifest_path.write_text(text)
+    files = [{"path": str(path.relative_to(layout.xcon_dir)), "bytes": path.stat().st_size,
+              "blake3": blake3_file(path)}
+             for path in sorted(layout.xcon_dir.rglob("*")) if path.is_file() and path.name != "DONE"]
+    layout.rig_done_marker.write_text(yaml.safe_dump({
+        "schema_version": 1, "system": "xcon",
+        "transfer_finished_at": datetime.datetime(2027, 3, 14, 10, tzinfo=datetime.UTC).isoformat(),
+        "files": files}, sort_keys=False))
+    return SessionManifest.from_yaml(layout.manifest_path.read_text())
+
+
+def test_the_rigs_record_is_verified_when_the_manifest_expects_it(session):
+    """The final review's C1 and I1, as the requester ruled (amendment 35):
+    the rig's files are checked against their marker, a changed one named."""
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    assert verify_session(layout, manifest) == (Integrity.VERIFIED, [])
+    (layout.xcon_dir / "trials.jsonl").write_text("{}\n")
+    _integrity, mismatches = verify_session(layout, manifest)
+    assert [(m.system, m.path, m.problem) for m in mismatches] == [("xcon", "trials.jsonl", "size")]
+
+
+def test_an_empty_rig_marker_declares_nothing_so_is_declared_only(session):
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    layout.rig_done_marker.write_text("")
+    assert verify_session(layout, manifest)[0] is Integrity.DECLARED_ONLY
+
+
+def test_the_rigs_record_landed_without_is_not_judged(session):
+    """A record a person landed the session without never closed, so it can
+    make the rest neither `declared_only` nor mismatched (amendment 33)."""
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    layout.rig_done_marker.unlink()
+    assert verify_session(layout, manifest)[0] is Integrity.DECLARED_ONLY
+    assert verify_session(layout, manifest, waived={"xcon"}) == (Integrity.VERIFIED, [])

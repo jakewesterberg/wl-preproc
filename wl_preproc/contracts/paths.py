@@ -68,6 +68,19 @@ class SessionLayout:
         """
         return self.dir / XCON_DIRNAME
 
+    @property
+    def rig_done_marker(self) -> Path:
+        """Written by wl-xcon when it closes the session's record, for a
+        manifest that `expects_rig_record` (design spec
+        `2026-10-18-training-records-and-backup-clock-design.md` section 5): a
+        DONE marker like a system's, listing each of the rig's files with its
+        checksum, but for the agent's file, which wl-xcon rebuilds after the
+        close (amendment 35, the requester's choice of 2026-10-19).
+
+        *Until part 3a's final review this said its presence alone was the
+        signal and nothing in it was read.*"""
+        return self.xcon_dir / DONE_MARKER_FILENAME
+
     def system_dir(self, system: str) -> Path:
         if system not in SYSTEMS:
             raise ValueError(f"unknown system: {system!r}, expected one of {SYSTEMS}")

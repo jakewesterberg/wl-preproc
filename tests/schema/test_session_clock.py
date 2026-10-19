@@ -147,3 +147,91 @@ def test_a_clock_another_pass_records_during_this_stages_snapshot_is_read(landed
             assert clock_for(key).source == "syncbox"
     finally:
         other.close()
+
+
+# -- A session already staged keeps the clock that timed it (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendment 28).
+
+def _staged_without_its_clock(landed):
+    """A session whose events were staged, then its clock row deleted, as a
+    session staged before part 2 has none; its sync box log is then removed,
+    as a freed scratch copy's is, so nothing can be read from its folder."""
+    from wl_preproc.schema import events, timebase
+
+    key, session_dir = landed()
+    events.populate_session(key, session_dir)
+    (timebase.SessionClock & key).delete(prompt=False)
+    shutil.rmtree(session_dir / "syncbox")
+    return key
+
+
+def test_a_staged_session_without_a_clock_keeps_the_sync_boxs(landed):
+    """The sync box is the only clock any session has been staged on, so it
+    is the one that timed these events, read from the database and never the
+    folder (amendment 28's first rule)."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import STAGED_REASON, clock_for
+
+    key = _staged_without_its_clock(landed)
+    assert clock_for(key).source == "syncbox"
+    assert (timebase.SessionClock & key).fetch1("source", "reason") == ("syncbox", STAGED_REASON)
+
+
+def test_populate_gives_a_staged_session_the_sync_boxs_clock(landed):
+    """The daemon's first stage records it, as `clock_for` would."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import STAGED_REASON
+
+    key = _staged_without_its_clock(landed)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert (timebase.SessionClock & key).fetch1("source", "reason") == ("syncbox", STAGED_REASON)
+
+
+def test_a_session_landed_without_its_sync_box_is_never_timed_by_it(landed):
+    """Decision 8: a sync box that failed partway hands the whole session to
+    the backup, so a person's record that the session landed without it
+    keeps the sync box's own partial log from being its clock; until part
+    3b, nothing else can time it, and it says so, naming who and when."""
+    import datetime
+
+    from wl_preproc.schema import ingest, timebase
+    from wl_preproc.timebase.clock import NoClock, clock_for
+
+    key, session_dir = landed()
+    ingest.LandedWithout.insert1({**key, "system": "syncbox", "actor": "J. W.", "reason": "the Pi's card failed",
+                                  "recorded_at": datetime.datetime(2027, 3, 14, 11, 30),
+                                  "session_dir": str(session_dir)})
+    with pytest.raises(NoClock, match=r"landed without its sync box by J\. W\. on 2027-03-14, so its partial log "
+                                      r"is not its clock: the NI \(part 3b\) or lab time \(part 4\) keeps its time"):
+        clock_for(key)
+    assert not len(timebase.SessionClock & key)
+
+
+def test_a_daemon_pass_leaves_a_session_without_a_clock_untouched_until_it_has_one(daemon_module, prefix, landed):
+    """Part 3a's final review, I3: a session landed without its sync box has
+    no clock until part 3b. A pass must not write it a tier-D timing record
+    from checks that never ran, nor park any of its jobs in `error`, where
+    nothing retries them once its clock exists; its events stage says why,
+    on each pass."""
+    import datetime
+
+    from wl_preproc.schema import ingest, timebase
+
+    from wl_preproc.schema import core
+
+    key, session_dir = landed()
+    ingest.LandedWithout.insert1({**key, "system": "syncbox", "actor": "J. W.", "reason": "the Pi's card failed",
+                                  "recorded_at": datetime.datetime(2027, 3, 14, 11, 30),
+                                  "session_dir": str(session_dir)})
+    # And one whose manifest did not list the sync box: no system row, no log.
+    unlisted, unlisted_dir = landed()
+    (core.AcquisitionSystem & unlisted & {"system": "syncbox"}).delete_quick()
+    shutil.rmtree(unlisted_dir / "syncbox")
+    report = daemon_module.run_once(prefix=prefix)
+    for session in (key, unlisted):
+        assert not len(timebase.TimingProvenance & session)
+        assert not len(timebase.SessionClock & session)
+        for table in (timebase.SessionClock, timebase.SystemTimebase, timebase.TimingProvenance):
+            assert not len(table.jobs & session & "status = 'error'"), table.__name__
+    assert any("landed without its sync box" in str(error) for error in report["errors"])
+    assert any("no sync box log" in str(error) for error in report["errors"])

@@ -114,6 +114,20 @@ def test_a_manifest_naming_another_session_fails(tmp_path):
     assert [v.relative_path for v in failures] == [MANIFEST_FILENAME]
 
 
+def test_the_marker_of_a_system_landed_without_is_not_read(tmp_path):
+    """Neither the digests recorded at archive time nor the markers the
+    restore lists include a system a person landed the session without,
+    whose marker never finished (part 3a's final review, I2)."""
+    session = _session(tmp_path)
+    (session / "bcam" / DONE_MARKER_FILENAME).write_text("{this is: [not a marker", encoding="utf-8")
+    waived = frozenset({"bcam"})
+
+    verdicts = _check(session, _key(session), _expected_digests(session, waived), _written(session), waived)
+
+    assert verdicts
+    assert all(v.matched for v in verdicts)
+
+
 def test_a_done_marker_that_disagrees_with_the_recorded_digests_fails(tmp_path):
     """The markers carry no rig digest of their own; what proves them is that
     together they list exactly the digests recorded at archive time."""

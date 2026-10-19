@@ -62,6 +62,39 @@ def choose(session_dir: Path) -> Choice:
     )
 
 
+# Why a session staged before its clock was recorded keeps the sync box's
+# (amendment 28): until part 3b the sync box is the only clock built, so it
+# timed every session staged so far.
+STAGED_REASON = "its events were staged on the sync box's clock before its clock was recorded"
+
+
+def choose_for(session_key: dict, session_dir: Path) -> Choice:
+    """`choose`, for a landed session: a session whose events are already
+    staged keeps the clock that timed them, read from the database and never
+    from its folder, which may have been freed (amendment 28). Until part 3b
+    that is the sync box, the only clock built, whether its events were
+    staged before part 2 recorded clocks or its row was deleted since; part
+    3b, the first part with another clock, refuses such a session instead.
+
+    A session a person landed without its sync box (`wlpp land-without`) is
+    never timed by it, whatever partial log its folder holds: decision 8
+    hands a sync box that failed partway the whole session's backup. Until
+    part 3b no other clock is built, so it says so (amendment 33)."""
+    from wl_preproc.schema import ingest, pipeline
+
+    session = {field: session_key[field] for field in ("subject", "session_datetime")}
+    if len(pipeline.event.BehaviorRecording & session):
+        return Choice(source="syncbox", reason=STAGED_REASON)
+    without = (ingest.LandedWithout & session & {"system": "syncbox"}).to_dicts()
+    if without:
+        (row,) = without
+        raise NoClock(
+            f"{session_dir}: landed without its sync box by {row['actor']} on {row['recorded_at']:%Y-%m-%d}, so its "
+            "partial log is not its clock: the NI (part 3b) or lab time (part 4) keeps its time"
+        )
+    return choose(session_dir)
+
+
 def aware_utc(value: datetime.datetime) -> datetime.datetime:
     return value.replace(tzinfo=datetime.timezone.utc) if value.tzinfo is None else value
 
@@ -162,7 +195,7 @@ class Clock:
 
 def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
     """The session's clock, as `timebase.SessionClock` recorded it. A
-    session not yet given one is given it now, by `choose`, and that choice
+    session not yet given one is given it now, by `choose_for`, and that choice
     is recorded and never made again (section 4.1, amendment 3). The daemon
     records every session's clock first, each in its own short transaction
     (`daemon._first_tables`), so a stage asking inside its own transaction
@@ -175,7 +208,7 @@ def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
         session_dir = Path((ingest.Ingestion & session).fetch1("session_dir"))
     rows = (timebase.SessionClock & session).to_dicts()
     if not rows:
-        choice = choose(session_dir)
+        choice = choose_for(session, session_dir)
         timebase.SessionClock.insert1({**session, "source": choice.source, "reason": choice.reason},
                                       allow_direct_insert=True, skip_duplicates=True)
         rows = (timebase.SessionClock & session).to_dicts()

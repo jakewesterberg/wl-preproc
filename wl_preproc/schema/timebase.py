@@ -104,11 +104,18 @@ class SessionClock(dj.Imported):
     def make(self, key: dict) -> None:
         """Imported, not Computed: the choice reads the session folder. It is
         made by `clock_for` when a stage first asks; `populate()` makes the
-        same row."""
+        same row, by the same `choose_for` (amendment 28)."""
         from wl_preproc.schema import ingest
-        from wl_preproc.timebase.clock import choose
+        from wl_preproc.timebase.clock import NoClock, choose_for
 
-        choice = choose(Path((ingest.Ingestion & key).fetch1("session_dir")))
+        try:
+            choice = choose_for(key, Path((ingest.Ingestion & key).fetch1("session_dir")))
+        except NoClock:
+            # Nothing recorded and no error parked: a session no clock built
+            # so far can time is asked again on the next pass, so one part 3b
+            # or part 4 can time is timed once it exists. Its events stage
+            # says why on each pass (part 3a's final review, I3).
+            return
         self.insert1({**key, "source": choice.source, "reason": choice.reason})
 
 
@@ -587,7 +594,13 @@ class TimingProvenance(dj.Computed):
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:
-    """Bind these tables to `{prefix}timebase`. Idempotent."""
+    """Bind these tables to `{prefix}timebase`. Idempotent. `ingest` too:
+    `SessionClock`'s choice reads which sessions landed and what a person
+    landed them without (`ingest.LandedWithout`; design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` amendment 33)."""
+    from wl_preproc.schema import ingest
+
     core.activate(prefix=prefix)
+    ingest.activate(prefix=prefix)
     if not schema.is_activated():
         schema.activate(f"{prefix}timebase", create_tables=True)

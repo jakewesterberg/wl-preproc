@@ -47,7 +47,7 @@ import zarr
 from wl_preproc.archive.layout import SAMPLE_DTYPE
 from wl_preproc.archive.store import ARRAY_GROUP, VERBATIM_GROUP
 from wl_preproc.contracts.done import DoneMarker
-from wl_preproc.contracts.paths import DONE_MARKER_FILENAME
+from wl_preproc.contracts.paths import DONE_MARKER_FILENAME, SYSTEMS, XCON_DIRNAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +58,12 @@ class FileVerdict:
     matched: bool
 
 
-def _expected_digests(session_dir: Path) -> dict[str, str]:
-    """Every `(relative path -> blake3)` the DONE markers claim.
+def _expected_digests(session_dir: Path, exclude: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Every `(relative path -> blake3)` the DONE markers claim: each system's
+    own and the rig's record's (`xcon/DONE`, amendment 35), never another file
+    that happens to be named `DONE`, and none of `exclude`, the systems a
+    person landed the session without (`ingest.LandedWithout`), whose markers
+    never finished and may not parse (part 3a's final review, C1 and I2).
 
     The marker is named `DONE` and is YAML, not JSON -- see
     `contracts/paths.py::DONE_MARKER_FILENAME` and `contracts/done.py`. Parsed
@@ -69,7 +73,10 @@ def _expected_digests(session_dir: Path) -> dict[str, str]:
     `ingest/verify.py` does.
     """
     digests: dict[str, str] = {}
-    for marker in sorted(session_dir.rglob(DONE_MARKER_FILENAME)):
+    for name in (*SYSTEMS, XCON_DIRNAME):
+        marker = session_dir / name / DONE_MARKER_FILENAME
+        if name in exclude or not marker.is_file():
+            continue
         payload = DoneMarker.from_yaml(marker.read_text(encoding="utf-8"))
         system_dir = marker.parent
         for entry in payload.files:
@@ -264,7 +271,7 @@ def verify_against(store_path: Path, expected: dict[str, str]) -> list[FileVerdi
     return verdicts
 
 
-def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
+def verify_store(store_path: Path, session_dir: Path, exclude: frozenset[str] = frozenset()) -> list[FileVerdict]:
     """One verdict per file the session's DONE markers name.
 
     `verify_against` with the markers on scratch as the reference, which at
@@ -275,4 +282,4 @@ def verify_store(store_path: Path, session_dir: Path) -> list[FileVerdict]:
     6). Raises `ValueError` when the markers name nothing -- see
     `_expected_digests` for why that is fatal rather than an empty report.
     """
-    return verify_against(store_path, _expected_digests(session_dir))
+    return verify_against(store_path, _expected_digests(session_dir, exclude))

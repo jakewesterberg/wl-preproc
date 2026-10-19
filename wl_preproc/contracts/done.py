@@ -17,7 +17,7 @@ import blake3 as _blake3
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from wl_preproc.contracts.paths import SYSTEMS
+from wl_preproc.contracts.paths import SYSTEMS, XCON_DIRNAME
 
 DONE_SCHEMA_VERSION = 1
 
@@ -77,8 +77,11 @@ class DoneMarker(BaseModel):
     @field_validator("system")
     @classmethod
     def _known_system(cls, value: str) -> str:
-        if value not in SYSTEMS:
-            raise ValueError(f"unknown system: {value!r}, expected from {list(SYSTEMS)}")
+        # `xcon` too: the rig's record, whose marker lists its files as a
+        # system's does (design spec
+        # `2026-10-18-training-records-and-backup-clock-design.md`, amendment 35).
+        if value not in (*SYSTEMS, XCON_DIRNAME):
+            raise ValueError(f"unknown system: {value!r}, expected from {[*SYSTEMS, XCON_DIRNAME]}")
         return value
 
     @field_validator("transfer_finished_at")

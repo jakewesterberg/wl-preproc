@@ -156,13 +156,18 @@ def _checked(path: Path, n_channels: int) -> StreamLayout:
     return StreamLayout(path, SAMPLE_DTYPE, n_channels, size // stride)
 
 
-def bulk_streams(session_dir: Path) -> list[StreamLayout]:
-    """Every bulk stream under `session_dir`, with its exact layout."""
+def bulk_streams(session_dir: Path, exclude: frozenset[str] = frozenset()) -> list[StreamLayout]:
+    """Every bulk stream under `session_dir`, with its exact layout, but for
+    those of `exclude`, the systems a person landed the session without,
+    whose partial files are stored byte for byte instead (part 3a's final
+    review, I2)."""
     found: list[StreamLayout] = []
 
     # SpikeGLX: nSavedChans is authoritative and includes the SY channel, so it
     # is read rather than derived from the recipe's n_ap_channels.
     for binary in sorted(session_dir.rglob("*.bin")):
+        if binary.relative_to(session_dir).parts[0] in exclude:
+            continue
         meta = binary.with_suffix(".meta")
         if not meta.exists():
             raise LayoutUndetermined(f"{binary} has no .meta beside it")
@@ -176,6 +181,8 @@ def bulk_streams(session_dir: Path) -> list[StreamLayout]:
     # ordinarily) and the one case -- `--no-verify` plus a time.dat torn
     # exactly on a 4-byte boundary -- where nothing but the check below does.
     for amplifier in sorted(session_dir.rglob("amplifier.dat")):
+        if amplifier.relative_to(session_dir).parts[0] in exclude:
+            continue
         time_dat = amplifier.with_name("time.dat")
         if not time_dat.exists():
             raise LayoutUndetermined(f"{amplifier} has no time.dat beside it")

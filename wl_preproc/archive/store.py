@@ -179,7 +179,8 @@ def _write_verbatim(verbatim, path: Path, relative: str, compressor) -> None:
 
 
 def write_store(
-    session_dir: Path, out_dir: Path, codec_name: str = "zstd", clevel: int = 5
+    session_dir: Path, out_dir: Path, codec_name: str = "zstd", clevel: int = 5,
+    exclude: frozenset[str] = frozenset(),
 ) -> StoreResult:
     """Compress `session_dir` into a Zarr store under `out_dir`, one stored
     chunk at a time through one reused buffer per file: peak memory, heap and
@@ -193,7 +194,7 @@ def write_store(
         cname=codec_name, clevel=clevel, shuffle=numcodecs.Blosc.NOSHUFFLE
     )
 
-    streams = bulk_streams(session_dir)
+    streams = bulk_streams(session_dir, exclude)
     stream_paths = {s.path for s in streams}
     arrays = root.create_group(ARRAY_GROUP)
     for stream in streams:
