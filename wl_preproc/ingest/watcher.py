@@ -441,14 +441,18 @@ def _evaluate_session(
 
     layout = SessionLayout(session_dir.parent, manifest.session_id)
 
-    if not session_complete(layout, manifest):
+    # What a person landed the session without (`wlpp land-without`) is not
+    # waited for, verified or given a row (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+    waived = landing.waived_systems(session_key, prefix=prefix)
+    if not session_complete(layout, manifest, waived):
         return (
             Outcome.STALLED
-            if is_stalled(layout, manifest, now=now)
+            if is_stalled(layout, manifest, now=now, waived=waived)
             else Outcome.INCOMPLETE
         )
 
-    integrity, mismatches = verify_session(layout, manifest, enabled=verify)
+    integrity, mismatches = verify_session(layout, manifest, enabled=verify, waived=waived)
     if mismatches:
         landing.quarantine(
             str(session_dir),
@@ -489,7 +493,7 @@ def _evaluate_session(
     landing.land_session(
         layout,
         manifest,
-        discover_topology(layout, manifest),
+        discover_topology(layout, manifest, waived),
         integrity,
         # `raw`, not `text.encode("utf-8")`: see the manifest-read guard's
         # own comment above for why the two are not the same bytes whenever

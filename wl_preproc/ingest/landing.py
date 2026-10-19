@@ -230,6 +230,15 @@ def _now(now: datetime.datetime | None) -> datetime.datetime:
     return to_naive_utc(now or datetime.datetime.now(datetime.UTC))
 
 
+def waived_systems(session_key: dict, prefix: str = DEFAULT_PREFIX) -> frozenset[str]:
+    """What a person landed the session without (`ingest.LandedWithout`):
+    systems, or `xcon` for the rig's record, nothing need wait for (design
+    spec `2026-10-18-training-records-and-backup-clock-design.md` section 5)."""
+    ingest.activate(prefix=prefix)
+    key = {"subject": session_key["subject"], "session_datetime": to_naive_utc(session_key["session_datetime"])}
+    return frozenset((ingest.LandedWithout & key).to_arrays("system").tolist())
+
+
 def already_ingested(session_key: dict, prefix: str = DEFAULT_PREFIX) -> bool:
     """An Ingestion row is what marks a session done.
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datajoint as dj
 
+from wl_preproc.contracts.paths import SYSTEMS, XCON_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, pipeline
 
 schema = dj.Schema()
@@ -115,6 +116,30 @@ class Quarantine(dj.Manual):
     detail       : <blob>
     subject=null    : varchar(32)   # best effort; may be unparseable
     session_dt=null : datetime      # best effort; may be unparseable
+    """
+
+
+_WAIVABLE_ENUM = "enum(" + ",".join(f"'{name}'" for name in (*SYSTEMS, XCON_DIRNAME)) + ")"
+
+
+@schema
+class LandedWithout(dj.Manual):
+    definition = f"""
+    # A system, or the rig's record (xcon), a person landed a session without
+    # because its transfer never finished, by `wlpp land-without` (design spec
+    # 2026-10-18-training-records-and-backup-clock-design.md section 5,
+    # decision 10): who, why and when. Written before the session lands, so
+    # keyed by its manifest's session and naming no parent. The watcher, the
+    # stall check and the report no longer wait for it.
+    # Key: (subject, session_datetime, system).
+    subject          : varchar(8)     # element-animal's width, as the manifest's must fit
+    session_datetime : datetime
+    system           : {_WAIVABLE_ENUM}
+    ---
+    actor       : varchar(64)
+    reason      : varchar(512)
+    recorded_at : datetime
+    session_dir : varchar(255)        # the folder it was landed from
     """
 
 
