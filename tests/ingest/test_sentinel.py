@@ -358,3 +358,14 @@ def test_the_rigs_record_can_be_landed_without_too(session):
     layout, _manifest = session
     manifest = _expecting_the_rigs_record(layout)
     assert session_complete(layout, manifest, waived={"xcon"}) is True
+
+
+def test_a_rig_marker_that_is_not_a_marker_does_not_close_the_record(session):
+    """`xcon/DONE` is a DONE marker listing the rig's files (the requester's
+    choice of 2026-10-19, spec amendment 35): one that will not parse leaves
+    the record open, as a system's does; an empty one closes it with nothing
+    declared."""
+    layout, _manifest = session
+    manifest = _expecting_the_rigs_record(layout)
+    layout.rig_done_marker.write_text("{not: [a marker", encoding="utf-8")
+    assert missing_systems(layout, manifest) == ["xcon"]

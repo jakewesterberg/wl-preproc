@@ -81,9 +81,14 @@ def archive_session(
     and a reader seeing them here would reasonably think the publish path
     itself is host-aware, which it never was.
     """
+    from wl_preproc.ingest.landing import waived_systems
+
+    # What a person landed the session without: stored as it is, verified
+    # against no marker (part 3a's final review, I2).
+    exclude = waived_systems(key, prefix=prefix)
     scratch = session_dir.parent / f".{session_dir.name}.archiving"
-    result = write_store(session_dir, scratch)
-    verdicts = verify_store(result.path, session_dir)
+    result = write_store(session_dir, scratch, exclude=exclude)
+    verdicts = verify_store(result.path, session_dir, exclude)
     all_matched = all(v.matched for v in verdicts)
 
     published = nas_root / result.path.name

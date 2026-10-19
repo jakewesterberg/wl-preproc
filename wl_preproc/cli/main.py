@@ -498,7 +498,9 @@ def main(argv: list[str] | None = None) -> int:
         # repository counts a session's expected files (`archive/verify.py`),
         # and re-deriving the count a second way here risks silently
         # disagreeing with what `verify_store` itself checked against.
-        expected_file_count = len(_expected_digests(session_dir))
+        from wl_preproc.ingest.landing import waived_systems
+
+        expected_file_count = len(_expected_digests(session_dir, waived_systems(key, prefix=args.prefix)))
         predicate = archive_reclaim.reclaim_conditions(
             key, expected_file_count, prefix=args.prefix
         )

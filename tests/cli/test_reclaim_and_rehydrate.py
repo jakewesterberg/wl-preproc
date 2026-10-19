@@ -690,6 +690,38 @@ def test_a_session_survives_reclaim_and_rehydrate_byte_for_byte(landed, prefix):
     assert len(archive.ScratchReclamation & key) == 2
 
 
+def test_a_system_landed_without_neither_blocks_reclaim_nor_rehydrate(landed, prefix):
+    """A system a person landed the session without has a marker that never
+    finished, here one that is not YAML at all. The report's reclaim list,
+    the reclaim preview, the freeing and the restore all read the markers,
+    and none reads that one (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 33;
+    part 3a's final review, I2)."""
+    from wl_preproc.cli.report import _unreclaimed_sessions
+    from wl_preproc.schema import ingest
+
+    session_dir, key = landed("rhwaived")
+    (session_dir / "bcam" / "DONE").write_text("{this is: [not a marker", encoding="utf-8")
+    ingest.activate(prefix=prefix)
+    ingest.LandedWithout.insert1({**key, "system": "bcam", "actor": "J. W.", "reason": "stalled",
+                                  "recorded_at": datetime.datetime(2027, 5, 1, 10),
+                                  "session_dir": str(session_dir)})
+    try:
+        pristine = _files(session_dir)
+        nas_root = _archive(session_dir, prefix)
+        _timing(key, prefix, tier="A")
+        blocked, _ = _unreclaimed_sessions(session_dir.parent, prefix=prefix)
+        assert [row["subject"] for row in blocked] == ["rhwaived"]
+        _verdict(key, "force", hour=11, prefix=prefix)
+
+        assert _reclaim(session_dir, nas_root, prefix) == 0
+        assert _rehydrate(session_dir, nas_root, prefix) == 0
+
+        assert _files(session_dir) == pristine
+    finally:
+        (ingest.LandedWithout & {"subject": "rhwaived"}).delete(prompt=False)
+
+
 def test_rehydrate_refuses_an_existing_destination(landed, prefix, capsys):
     from wl_preproc.schema import archive
 

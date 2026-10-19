@@ -15,7 +15,7 @@ from wl_preproc.contracts.done import blake3_file
 from wl_preproc.contracts.manifest import SessionManifest
 from wl_preproc.contracts.paths import SessionLayout
 from wl_preproc.ingest.discover import SystemState, discover_topology
-from wl_preproc.ingest.sentinel import MarkerState, read_marker
+from wl_preproc.ingest.sentinel import RIG_RECORD, MarkerState, read_marker
 
 
 class Integrity(StrEnum):
@@ -113,104 +113,119 @@ def verify_session(
             saw_empty = True
             continue
 
-        system_dir = layout.system_dir(system)
-        for entry in marker.files:
-            candidate = system_dir / entry.path
-            try:
-                resolved = candidate.resolve()
-                if not resolved.is_relative_to(system_dir.resolve()):
-                    # Checked before anything else touches the file: is_file(),
-                    # .stat(), and blake3_file would all happily follow the
-                    # same symlink right back to wherever it actually points,
-                    # so containment has to be decided first, not used to
-                    # explain a result after the fact.
-                    mismatches.append(
-                        Mismatch(system, entry.path, f"escapes_system_dir: {resolved}")
-                    )
-                elif not candidate.is_file():
-                    mismatches.append(Mismatch(system, entry.path, "missing"))
-                elif candidate.stat().st_size != entry.bytes:
-                    # Checked before hashing: a size mismatch is decisive and
-                    # cheap, and re-reading a truncated 384 GB file to reach the
-                    # same conclusion by digest would cost minutes to learn nothing.
-                    mismatches.append(Mismatch(system, entry.path, "size"))
-                elif blake3_file(candidate) != entry.blake3:
-                    mismatches.append(Mismatch(system, entry.path, "blake3"))
-            except ValueError:
-                # Found while adding the resolve()-first ordering above, not
-                # asked for: a non-encodable path -- e.g. entry.path containing
-                # an embedded NUL byte -- used to be harmless before this
-                # round, because candidate.is_file() was the first call made
-                # on it and pathlib.Path.is_file has its own
-                # `except ValueError: return False` (a path the OS cannot even
-                # represent is treated the same as one that does not exist).
-                # candidate.resolve() now runs first and has no equivalent
-                # catch -- confirmed directly from source and empirically --
-                # so without this clause, the exact case the round-3 review
-                # explicitly named as harmless and told me not to touch would
-                # have silently become fatal to the whole scan as a side
-                # effect of reordering the checks around it. "missing" is not
-                # a new answer invented to paper over that: a path that
-                # cannot be represented to the OS provably cannot exist on
-                # disk either, so it is the same honest answer is_file()
-                # already gave this exact input, reached by construction
-                # rather than by is_file()'s own internal handling now that
-                # it never gets the chance to run.
-                mismatches.append(Mismatch(system, entry.path, "missing"))
-            except (OSError, RuntimeError) as exc:
-                # candidate.is_file() swallows ENOENT/ENOTDIR/EBADF/ELOOP on its
-                # own but not EACCES -- pathlib's own ignored-errno table, whose
-                # CONTENTS are those same four errnos on both of this project's
-                # interpreters but whose module path is NOT: `pathlib._IGNORED_
-                # ERRNOS` on 3.11, where an earlier version of this comment
-                # stopped, and `pathlib._abc._IGNORED_ERRNOS` on 3.13, where the
-                # 3.11 name does not exist at all. Verified on 3.11.15 and
-                # 3.13.12 rather than assumed, and stated the same way
-                # watcher.py's `_candidate_dirs` states it -- which is also why
-                # neither module references that table by name in code, and
-                # catches the one errno neither version swallows instead;
-                # candidate.stat() and blake3_file's open()+read()
-                # are raw passthroughs that swallow nothing at all. A file that
-                # raises here is not "missing" (the manifest is contradicted by
-                # an absence), nor "size"/"blake3" (the check ran and
-                # disagreed) — the check could not run at all, and that is a
-                # different claim from either, so it gets its own name rather
-                # than being folded into one of theirs.
-                #
-                # RuntimeError, not just OSError: candidate.resolve()'s default
-                # strict=False swallows OSError from a missing or permission-
-                # denied component internally (confirmed by reading
-                # posixpath._joinrealpath's source, then empirically on both
-                # 3.11 and 3.13 — chmod 0o000 on the file or its parent does
-                # not make resolve() raise at all, which is *why* it is safe to
-                # call unconditionally, before the missing-file check, without
-                # a separate guard breaking the existing "missing" case). The
-                # one thing resolve() does not swallow is a genuine symlink
-                # loop, and pathlib deliberately reports that as RuntimeError,
-                # not OSError -- confirmed empirically too, and confirmed to be
-                # a live 3.11-vs-3.13 gap the same shape as the rglob one
-                # discover.py already documents: on 3.11.15 a two-symlink loop
-                # (a -> b -> a) raises RuntimeError("Symlink loop from ...")
-                # uncaught by a bare `except OSError`, which would have crashed
-                # this entire scan over one broken symlink; on 3.13.9 the same
-                # loop raises nothing at all and resolve() returns the
-                # unresolved candidate path instead, which falls through to
-                # is_file() correctly returning False. Both are handled here
-                # either way, but only 3.11 actually depends on this branch to
-                # avoid crashing, and 3.11 is this project's floor and half of
-                # CI's matrix.
-                #
-                # The exception is bound and its text kept rather than thrown
-                # away: Task 8 surfaces `problem` directly in a quarantine
-                # record for a human to triage, and errno is exactly what
-                # separates "chmod a directory, minutes, self-service" (EACCES)
-                # from "the storage array has a bad block, escalate to infra"
-                # (EIO) — the latter being this module's own opening scenario,
-                # a file that "met a bad block on the scratch array." Collapsing
-                # both to the bare string "unreadable" would hide the one piece
-                # of information that tells those two apart, for free, sitting
-                # right here at the catch site.
-                mismatches.append(Mismatch(system, entry.path, f"unreadable: {exc}"))
+        _check_files(system, layout.system_dir(system), marker, mismatches)
+
+    # The rig's record, when the manifest expects it and a person did not land
+    # the session without it: its files checked against its own marker, as a
+    # system's are (amendment 35, part 3a's final review).
+    if manifest.expects_rig_record and RIG_RECORD not in waived:
+        marker_state, marker = read_marker(layout, RIG_RECORD)
+        if marker_state is not MarkerState.PARSED or marker is None:
+            saw_empty = True
+        else:
+            _check_files(RIG_RECORD, layout.xcon_dir, marker, mismatches)
 
     integrity = Integrity.DECLARED_ONLY if saw_empty else Integrity.VERIFIED
     return integrity, mismatches
+
+
+def _check_files(system: str, system_dir, marker, mismatches: list) -> None:
+    """Each file `marker` lists, re-hashed under `system_dir`, every
+    disagreement appended to `mismatches`."""
+    for entry in marker.files:
+        candidate = system_dir / entry.path
+        try:
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(system_dir.resolve()):
+                # Checked before anything else touches the file: is_file(),
+                # .stat(), and blake3_file would all happily follow the
+                # same symlink right back to wherever it actually points,
+                # so containment has to be decided first, not used to
+                # explain a result after the fact.
+                mismatches.append(
+                    Mismatch(system, entry.path, f"escapes_system_dir: {resolved}")
+                )
+            elif not candidate.is_file():
+                mismatches.append(Mismatch(system, entry.path, "missing"))
+            elif candidate.stat().st_size != entry.bytes:
+                # Checked before hashing: a size mismatch is decisive and
+                # cheap, and re-reading a truncated 384 GB file to reach the
+                # same conclusion by digest would cost minutes to learn nothing.
+                mismatches.append(Mismatch(system, entry.path, "size"))
+            elif blake3_file(candidate) != entry.blake3:
+                mismatches.append(Mismatch(system, entry.path, "blake3"))
+        except ValueError:
+            # Found while adding the resolve()-first ordering above, not
+            # asked for: a non-encodable path -- e.g. entry.path containing
+            # an embedded NUL byte -- used to be harmless before this
+            # round, because candidate.is_file() was the first call made
+            # on it and pathlib.Path.is_file has its own
+            # `except ValueError: return False` (a path the OS cannot even
+            # represent is treated the same as one that does not exist).
+            # candidate.resolve() now runs first and has no equivalent
+            # catch -- confirmed directly from source and empirically --
+            # so without this clause, the exact case the round-3 review
+            # explicitly named as harmless and told me not to touch would
+            # have silently become fatal to the whole scan as a side
+            # effect of reordering the checks around it. "missing" is not
+            # a new answer invented to paper over that: a path that
+            # cannot be represented to the OS provably cannot exist on
+            # disk either, so it is the same honest answer is_file()
+            # already gave this exact input, reached by construction
+            # rather than by is_file()'s own internal handling now that
+            # it never gets the chance to run.
+            mismatches.append(Mismatch(system, entry.path, "missing"))
+        except (OSError, RuntimeError) as exc:
+            # candidate.is_file() swallows ENOENT/ENOTDIR/EBADF/ELOOP on its
+            # own but not EACCES -- pathlib's own ignored-errno table, whose
+            # CONTENTS are those same four errnos on both of this project's
+            # interpreters but whose module path is NOT: `pathlib._IGNORED_
+            # ERRNOS` on 3.11, where an earlier version of this comment
+            # stopped, and `pathlib._abc._IGNORED_ERRNOS` on 3.13, where the
+            # 3.11 name does not exist at all. Verified on 3.11.15 and
+            # 3.13.12 rather than assumed, and stated the same way
+            # watcher.py's `_candidate_dirs` states it -- which is also why
+            # neither module references that table by name in code, and
+            # catches the one errno neither version swallows instead;
+            # candidate.stat() and blake3_file's open()+read()
+            # are raw passthroughs that swallow nothing at all. A file that
+            # raises here is not "missing" (the manifest is contradicted by
+            # an absence), nor "size"/"blake3" (the check ran and
+            # disagreed) — the check could not run at all, and that is a
+            # different claim from either, so it gets its own name rather
+            # than being folded into one of theirs.
+            #
+            # RuntimeError, not just OSError: candidate.resolve()'s default
+            # strict=False swallows OSError from a missing or permission-
+            # denied component internally (confirmed by reading
+            # posixpath._joinrealpath's source, then empirically on both
+            # 3.11 and 3.13 — chmod 0o000 on the file or its parent does
+            # not make resolve() raise at all, which is *why* it is safe to
+            # call unconditionally, before the missing-file check, without
+            # a separate guard breaking the existing "missing" case). The
+            # one thing resolve() does not swallow is a genuine symlink
+            # loop, and pathlib deliberately reports that as RuntimeError,
+            # not OSError -- confirmed empirically too, and confirmed to be
+            # a live 3.11-vs-3.13 gap the same shape as the rglob one
+            # discover.py already documents: on 3.11.15 a two-symlink loop
+            # (a -> b -> a) raises RuntimeError("Symlink loop from ...")
+            # uncaught by a bare `except OSError`, which would have crashed
+            # this entire scan over one broken symlink; on 3.13.9 the same
+            # loop raises nothing at all and resolve() returns the
+            # unresolved candidate path instead, which falls through to
+            # is_file() correctly returning False. Both are handled here
+            # either way, but only 3.11 actually depends on this branch to
+            # avoid crashing, and 3.11 is this project's floor and half of
+            # CI's matrix.
+            #
+            # The exception is bound and its text kept rather than thrown
+            # away: Task 8 surfaces `problem` directly in a quarantine
+            # record for a human to triage, and errno is exactly what
+            # separates "chmod a directory, minutes, self-service" (EACCES)
+            # from "the storage array has a bad block, escalate to infra"
+            # (EIO) — the latter being this module's own opening scenario,
+            # a file that "met a bad block on the scratch array." Collapsing
+            # both to the bare string "unreadable" would hide the one piece
+            # of information that tells those two apart, for free, sitting
+            # right here at the catch site.
+            mismatches.append(Mismatch(system, entry.path, f"unreadable: {exc}"))

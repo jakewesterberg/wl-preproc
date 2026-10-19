@@ -490,7 +490,8 @@ def _unreclaimed_sessions(
             # `reclaim_conditions` below needs the identical number
             # `verify_store` used, not a second, independently-walked one
             # that could silently disagree with it.
-            expected_file_count = len(_expected_digests(session_dir))
+            expected_file_count = len(_expected_digests(session_dir,
+                                                        landing.waived_systems(session_key, prefix=prefix)))
         except Exception:
             # A session archived once can still be MID a second, not-yet-
             # complete transfer of new files, or its markers can be

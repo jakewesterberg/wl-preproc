@@ -185,7 +185,9 @@ def free_session(
         )
 
     try:
-        listed = _expected_digests(session_dir)
+        from wl_preproc.ingest.landing import waived_systems
+
+        listed = _expected_digests(session_dir, waived_systems(key, prefix=prefix))
     except ValueError as exc:
         raise Refused(str(exc)) from exc
     predicate = reclaim.reclaim_conditions(key, len(listed), prefix=prefix)

@@ -186,7 +186,8 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _check(
-    target: Path, key: dict, expected: dict[str, str], written: dict[str, str]
+    target: Path, key: dict, expected: dict[str, str], written: dict[str, str],
+    waived: frozenset[str] = frozenset(),
 ) -> list[FileVerdict]:
     """Design section 5.4. One verdict per rig-checksummed file, plus one for
     each other check that failed, named for what it checked.
@@ -196,7 +197,9 @@ def _check(
     must describe this session, and the markers together must list exactly
     the digests recorded at archive time. Beyond that they came through the
     same rebuild code as the checksummed files, from a NAS copy whose
-    manifest digest was just re-checked.
+    manifest digest was just re-checked. `waived`, the systems a person
+    landed the session without, have no marker in either set (part 3a's
+    final review, I2).
     """
     from wl_preproc.contracts.manifest import SessionManifest
     from wl_preproc.contracts.paths import MANIFEST_FILENAME
@@ -232,7 +235,7 @@ def _check(
         )
 
     try:
-        markers = _expected_digests(target)
+        markers = _expected_digests(target, waived)
     except Exception as exc:
         markers = {"<unreadable>": f"{type(exc).__name__}: {exc}"}
     if markers != expected:
@@ -265,6 +268,7 @@ def rehydrate_session(
     """
     import datajoint as dj
 
+    from wl_preproc.ingest.landing import waived_systems
     from wl_preproc.schema import archive
 
     session_path = Path(session_path)
@@ -291,6 +295,7 @@ def rehydrate_session(
             f"restoring {need} bytes would leave {session_path.parent} below the scratch floor"
         )
     expected = recorded_digests(key, prefix=prefix)
+    waived = waived_systems(key, prefix=prefix)
     if not expected:
         raise Refused(
             "no recorded rig digests for this session; nothing to check a "
@@ -328,7 +333,7 @@ def rehydrate_session(
         for relative in stored_paths(artifact):
             written[relative], size = _write(artifact, relative, target)
             total += size
-        failures = [v for v in _check(target, key, expected, written) if not v.matched]
+        failures = [v for v in _check(target, key, expected, written, waived) if not v.matched]
         if failures:
             raise NotRestored(failures)
         moved = False

@@ -51,7 +51,8 @@ def read_marker(layout: SessionLayout, system: str) -> tuple[MarkerState, DoneMa
     actually-missing marker produces -- a transfer this function could not
     even check on has not been observed to finish.
     """
-    path = layout.done_marker(system)
+    # The rig's record (`xcon`) has a marker of the same shape (amendment 35).
+    path = layout.rig_done_marker if system == RIG_RECORD else layout.done_marker(system)
     try:
         marker_exists = path.exists()
     except OSError:
@@ -68,12 +69,9 @@ def read_marker(layout: SessionLayout, system: str) -> tuple[MarkerState, DoneMa
 
 
 def rig_record_closed(layout: SessionLayout) -> bool:
-    """`xcon/DONE` is there. Guarded as `read_marker` is: a check that cannot
-    be made has not been observed to succeed."""
-    try:
-        return layout.rig_done_marker.exists()
-    except OSError:
-        return False
+    """`xcon/DONE` is there and is a marker, empty or listing the rig's files,
+    as a system's marker closes its transfer (amendment 35)."""
+    return read_marker(layout, RIG_RECORD)[0] not in (MarkerState.ABSENT, MarkerState.INVALID)
 
 
 def missing_systems(
