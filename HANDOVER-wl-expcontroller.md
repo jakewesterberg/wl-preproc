@@ -455,3 +455,11 @@ two thresholds; the 1° microsaccade cut read in true angle; the shared fixtures
   **A published version is never edited:** true angle arrives as v2 beside v1, from the same inputs, and
   wl-xcon switches to v2 in the commit that changes its `saccade.py`. Nothing here changes `engbert_kliegl`,
   `velocity` or `measure.amplitude` before wl-xcon's contract test reads v1.
+- *Widened by wl-xcon the same day* (its `main` at `fb80a48`, the same section, "Widened the same day"), on
+  the PI's answer "Events and every sample": each detected saccade and fixation also carries its **true
+  direction**, in the eye's frame at its start, and its **endpoints' true eccentricity and polar angle**,
+  `atan(√(tan²x + tan²y))` and `atan2(tan y, tan x)`; and **each eye sample carries its true eccentricity
+  and polar angle** beside its per-axis position. wl-xcon's own eye records (its XC-400) will follow the
+  definitions this repository writes, so they go in the spec. Separately, each shown stimulus's true
+  eccentricity and polar angle goes on its trial's row (its XC-399), whose field names and shape come here
+  before they are written, after its build C2b.
