@@ -12,13 +12,19 @@ as an *alarm*, where being wrong changes a report and never an ingest.
 from __future__ import annotations
 
 import datetime
+from collections.abc import Collection
 from enum import StrEnum
 
 from wl_preproc.contracts.done import DoneMarker
 from wl_preproc.contracts.manifest import SessionManifest
-from wl_preproc.contracts.paths import SessionLayout
+from wl_preproc.contracts.paths import XCON_DIRNAME, SessionLayout
 
 STALL_AFTER_S = 7200  # 2 h. A reporting threshold; see spec section 14.
+# What `missing_systems` names when a manifest expects the rig's record and
+# `xcon/DONE` is not written yet: its folder's name, as each system is named
+# (design spec `2026-10-18-training-records-and-backup-clock-design.md`
+# section 5).
+RIG_RECORD = XCON_DIRNAME
 
 
 class MarkerState(StrEnum):
@@ -61,22 +67,45 @@ def read_marker(layout: SessionLayout, system: str) -> tuple[MarkerState, DoneMa
         return MarkerState.INVALID, None
 
 
-def missing_systems(layout: SessionLayout, manifest: SessionManifest) -> list[str]:
-    """Declared systems without a usable marker, in `expected_systems` order."""
-    return [
+def rig_record_closed(layout: SessionLayout) -> bool:
+    """`xcon/DONE` is there. Guarded as `read_marker` is: a check that cannot
+    be made has not been observed to succeed."""
+    try:
+        return layout.rig_done_marker.exists()
+    except OSError:
+        return False
+
+
+def missing_systems(
+    layout: SessionLayout, manifest: SessionManifest, waived: Collection[str] = ()
+) -> list[str]:
+    """Declared systems without a usable marker, in `expected_systems` order,
+    then the rig's record when the manifest expects it and `xcon/DONE` is not
+    there. `waived` are those a person landed the session without
+    (`ingest.LandedWithout`): nothing waits for them (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 5)."""
+    missing = [
         system
         for system in manifest.expected_systems
-        if read_marker(layout, system)[0] in (MarkerState.ABSENT, MarkerState.INVALID)
+        if system not in waived
+        and read_marker(layout, system)[0] in (MarkerState.ABSENT, MarkerState.INVALID)
     ]
+    if manifest.expects_rig_record and RIG_RECORD not in waived and not rig_record_closed(layout):
+        missing.append(RIG_RECORD)
+    return missing
 
 
-def session_complete(layout: SessionLayout, manifest: SessionManifest) -> bool:
-    """Every system the manifest declared has a marker. Nothing else is consulted.
+def session_complete(
+    layout: SessionLayout, manifest: SessionManifest, waived: Collection[str] = ()
+) -> bool:
+    """Every system the manifest declared has a marker, and the rig's record is
+    closed when the manifest expects it, but for what a person landed the
+    session without. Nothing else is consulted.
 
     A system present on disk but never declared cannot hold this up: nothing was
     waiting for it.
     """
-    return not missing_systems(layout, manifest)
+    return not missing_systems(layout, manifest, waived)
 
 
 def last_change_at(session_dir) -> datetime.datetime:
@@ -157,12 +186,13 @@ def is_stalled(
     manifest: SessionManifest,
     now: datetime.datetime,
     stall_after_s: int = STALL_AFTER_S,
+    waived: Collection[str] = (),
 ) -> bool:
     """Incomplete, and quiet for long enough that it is not merely slow.
 
     `now` is injected rather than read from the clock so the tests state the
     elapsed time they mean instead of sleeping.
     """
-    if session_complete(layout, manifest):
+    if session_complete(layout, manifest, waived):
         return False
     return (now - last_change_at(layout.dir)).total_seconds() >= stall_after_s

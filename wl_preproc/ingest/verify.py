@@ -7,6 +7,7 @@ distinction discover.py depends on to never refuse a session for what it lacks.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -35,6 +36,7 @@ def verify_session(
     layout: SessionLayout,
     manifest: SessionManifest,
     enabled: bool = True,
+    waived: Collection[str] = (),
 ) -> tuple[Integrity, list[Mismatch]]:
     """Verify every system that carries integrity data.
 
@@ -79,7 +81,10 @@ def verify_session(
     mismatches: list[Mismatch] = []
     saw_empty = False
 
-    topology = discover_topology(layout, manifest)
+    # A system a person landed the session without is not part of what
+    # landed, so its marker, corrupt or absent, says nothing about it (design
+    # spec `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+    topology = discover_topology(layout, manifest, waived)
     for system, state in sorted(topology.items()):
         if state not in (SystemState.PRESENT, SystemState.UNDECLARED):
             # discover_topology's PENDING collapses two different reasons a

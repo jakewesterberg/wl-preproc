@@ -201,3 +201,15 @@ def test_a_permission_error_on_is_dir_does_not_crash_the_whole_scan(session, mon
 
     assert set(topology) == set(SYSTEMS)
     assert topology["rhs"] is SystemState.ABSENT
+
+
+def test_a_system_landed_without_is_waived_and_given_no_row(session):
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 5: the session lands without it, so it has no AcquisitionSystem
+    row, and the topology says why rather than calling it pending."""
+    layout, manifest = session
+    layout.done_marker("syncbox").unlink()
+    assert discover_topology(layout, manifest)["syncbox"] is SystemState.PENDING
+    topology = discover_topology(layout, manifest, waived={"syncbox"})
+    assert topology["syncbox"] is SystemState.WAIVED
+    assert "syncbox" not in systems_with_data(topology)

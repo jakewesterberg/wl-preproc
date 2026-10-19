@@ -68,6 +68,16 @@ class SessionLayout:
         """
         return self.dir / XCON_DIRNAME
 
+    @property
+    def rig_done_marker(self) -> Path:
+        """Written by wl-xcon when it closes the session's record, for a
+        manifest that `expects_rig_record` (design spec
+        `2026-10-18-training-records-and-backup-clock-design.md` section 5).
+        Its presence is the signal and nothing in it is read: wl-xcon's agent
+        rebuilds files in `xcon/` after the close, so no list of hashes would
+        stay true."""
+        return self.xcon_dir / DONE_MARKER_FILENAME
+
     def system_dir(self, system: str) -> Path:
         if system not in SYSTEMS:
             raise ValueError(f"unknown system: {system!r}, expected one of {SYSTEMS}")

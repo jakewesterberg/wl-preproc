@@ -433,3 +433,15 @@ def test_a_permission_fault_reaching_a_nested_file_is_reported_not_raised(stim_s
     assert all(m.system == "rhs" for m in mismatches)
     actual_by_name = {m.path.rsplit("/", 1)[-1]: m.problem for m in mismatches}
     assert actual_by_name == expected_by_name
+
+
+def test_a_system_landed_without_does_not_downgrade_what_landed(session):
+    """A system a person landed the session without is not part of what
+    landed, so its corrupt marker cannot make the rest `declared_only`, which
+    would keep the session from its automatic archive (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 5)."""
+    layout, manifest = session
+    layout.done_marker("syncbox").write_text("{not: a marker", encoding="utf-8")
+    assert read_marker(layout, "syncbox")[0] is MarkerState.INVALID
+    assert verify_session(layout, manifest)[0] is Integrity.DECLARED_ONLY
+    assert verify_session(layout, manifest, waived={"syncbox"}) == (Integrity.VERIFIED, [])
