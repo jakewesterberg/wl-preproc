@@ -922,6 +922,26 @@
       "title": "Task",
       "type": "object"
     },
+    "TrainingRecords": {
+      "additionalProperties": false,
+      "description": "How many of wl-xcon's training records the file holds: the live\nchanges the rig applied and the console controls it was sent. Who acted\nis not published (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 0,\ndecision 6).",
+      "properties": {
+        "controls": {
+          "title": "Controls",
+          "type": "integer"
+        },
+        "parameter_changes": {
+          "title": "Parameter Changes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parameter_changes",
+        "controls"
+      ],
+      "title": "TrainingRecords",
+      "type": "object"
+    },
     "TrialCounts": {
       "additionalProperties": false,
       "properties": {
@@ -1031,6 +1051,17 @@
     },
     "subject": {
       "$ref": "#/$defs/SubjectInfo"
+    },
+    "training_records": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrainingRecords"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

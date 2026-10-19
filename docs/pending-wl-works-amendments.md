@@ -1,9 +1,36 @@
 # Amendments to wl-works
 
-**Nine are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14.** The earlier two
+**Ten are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14, one 2026-10-18.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — wl-xcon's training records, counted, and the clock that kept each session's time
+
+**Opened 2026-10-18** with part 1 of
+[`specs/2026-10-18-training-records-and-backup-clock-design.md`](superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md)
+(§3.2, §3.4; amendment 14; the requester's decisions in §0), answering wl-xcon's ask 1 of 2026-10-11
+(its XC-321). Every live change the rig applied and every console control it was sent is kept in this
+host's database and in the NWB file's `rig_record` module, each timed by the code it strobed or by the
+rig's clock fitted to the recording. **wl.works is sent their counts, never the rows.**
+
+- **`GET /sessions`:** each session gains `training_records` (`parameter_changes`, `pauses`,
+  `manual_rewards`; null for a session wl-xcon did not run, zeros for one read before this host carried
+  them) and `clock` (`syncbox`, `nidq` or `lab`, null until chosen; `syncbox` is the only clock built
+  yet). `docs/schemas/session_listing.json` refuses fields it does not know, so wl.works' copy must take
+  these before it validates an entry from a host running this change.
+- **`GET /nwb`:** each description gains `training_records` (`parameter_changes`, `controls`) within
+  version 3, null for a session wl-xcon did not run; `docs/schemas/nwb_description.json` likewise.
+- **Who acted is not sent:** neither the listing nor the file names a person for a change or a
+  control (decision 6).
+- **A `rig_record_problem` flag may now name `parameter_changes.jsonl` or `controls.jsonl`:** a line it
+  could not read, or a count of codes that disagrees, so those rows stay untimed.
+- **Every listed session is listed once more** when this ships: each entry changes, so its digest
+  does.
+- **Later parts add** the timing tiers N and L and further `reference_source` values (the spec's §7);
+  each is sent here when built.
 
 ---
 

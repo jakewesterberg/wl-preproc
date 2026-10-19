@@ -32,8 +32,9 @@ def test_a_run_is_its_start_row_and_its_end_row(tmp_path):
     rows = [_start(0, "fixation_detection"), _end(0, "every block is finished", "completed"),
             _start(1, "rf_map"), _end(1, "stopped by jw", "operator")]
     record = read_rig_runs(_record(tmp_path, rows), "pico")
-    assert record.runs == (RigRun(1, "fixation_detection", "every block is finished", "completed"),
-                           RigRun(2, "rf_map", "stopped by jw", "operator"))
+    assert record.runs == (RigRun(1, "fixation_detection", "every block is finished", "completed", start_at=0.0,
+                                  end_at=1.0),
+                           RigRun(2, "rf_map", "stopped by jw", "operator", start_at=0.0, end_at=1.0))
     assert record.problems == ()
 
 
@@ -89,7 +90,7 @@ def test_a_run_named_twice_keeps_its_first_rows_and_says_so(tmp_path):
     rows = [_start(0, "rf_map"), _end(0, "every block is finished", "completed"),
             _start(0, "fixation"), _end(0, "stopped by jw", "operator")]
     record = read_rig_runs(_record(tmp_path, rows), "pico")
-    assert record.runs == (RigRun(1, "rf_map", "every block is finished", "completed"),)
+    assert record.runs == (RigRun(1, "rf_map", "every block is finished", "completed", start_at=0.0, end_at=1.0),)
     assert record.problems == ("runs.jsonl line 3: run 0 has a second start row; the first is kept",
                                "runs.jsonl line 4: run 0 has a second end row; the first is kept")
 
@@ -129,3 +130,16 @@ def test_a_run_without_its_start_row_maps_to_no_number(tmp_path):
     record = read_rig_runs(_record(tmp_path, rows), "pico")
     assert [run.number for run in record.runs] == [1, 2]
     assert record.run_numbers == {0: 1}
+
+
+def test_a_runs_instants_are_its_rows_on_the_rigs_clock(tmp_path):
+    """Each row's `at`, the rig's anchored wall clock, which the training
+    records' clock fit matches to the run's codes (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.3); an
+    instant that is not a finite number is none."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "rf_map", at=1773478800.5), _end(0, "every block is finished", "completed"),
+            _start(1, "rf_map", at="soon"), json.dumps({"event": "end", "run": 1, "stopped_because": "stopped by jw"})]
+    runs = read_rig_runs(_record(tmp_path, rows), "pico").runs
+    assert [(run.start_at, run.end_at) for run in runs] == [(1773478800.5, 1.0), (None, None)]

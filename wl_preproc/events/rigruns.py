@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from pathlib import Path
 
 from wl_preproc.contracts.paths import XCON_DIRNAME
@@ -44,6 +45,12 @@ class RigRun:
     stopped_because: str | None
     stop_kind: str | None
     calibration: str | None = None  # the start row's display calibration id
+    # Its start and end rows' instants on the rig's anchored wall clock, POSIX
+    # seconds: what the training records' clock fit matches to the run's codes
+    # (design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    # section 3.3). None where a row has none.
+    start_at: float | None = None
+    end_at: float | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -64,6 +71,12 @@ def _integer(value: object) -> bool:
 
 def _text(value: object) -> str | None:
     return None if value is None else str(value)
+
+
+def _instant(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
@@ -106,14 +119,17 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
         if row["event"] == "start":
             run["task"] = _text(row.get("task"))
             run["calibration"] = _text(row.get("calibration"))
+            run["start_at"] = _instant(row.get("at"))
             if _integer(row.get("run_in_session")):
                 run["number"] = row["run_in_session"]
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))
+            run["end_at"] = _instant(row.get("at"))
     runs = tuple(sorted((RigRun(number=run["number"], task=run.get("task"),
                                 stopped_because=run.get("stopped_because"), stop_kind=run.get("stop_kind"),
-                                calibration=run.get("calibration"))
+                                calibration=run.get("calibration"), start_at=run.get("start_at"),
+                                end_at=run.get("end_at"))
                          for run in fields.values()), key=lambda run: run.number))
     return RigRuns(runs=runs, problems=tuple(problems),
                    run_numbers={index: run["number"] for index, run in sorted(fields.items())

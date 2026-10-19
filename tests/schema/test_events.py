@@ -900,3 +900,16 @@ def test_a_warnings_run_that_will_not_fit_is_a_problem_and_names_no_run(events_a
     assert (row["run_index"], row["run_number"]) == (None, None)
     assert [row["problem"] for row in (core.RunRecordProblem & key).to_dicts()] == [
         "warnings.jsonl line 1: run 70000 cannot be stored (0 to 65535), so the warning names no run"]
+
+
+def test_a_lone_surrogate_in_a_warnings_text_is_kept_and_the_stage_completes(events_activated, dj_conn, tmp_path):
+    """The training records' final review's I1, in ask 5's columns: a name
+    typed at the rig with half an emoji is kept as its escape rather than
+    failing the session's events stage on every pass."""
+    from wl_preproc.schema import core
+    from wl_preproc.synth.recipe import RigWarningSpec
+
+    _recipe, key = _populate_generated(tmp_path, "slsurr1", datetime.datetime(2027, 9, 1, 9, 0), runs=True,
+                                       rig_record=_rig_record(warnings=(
+                                           RigWarningSpec(code="head-free", by={"kind": "box", "name": "J\ud83d"}),)))
+    assert (core.AcceptedWarning & key).fetch1("by_name") == "J\\ud83d"

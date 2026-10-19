@@ -52,8 +52,10 @@ from wl_preproc.contracts.events import (
     decode_stream,
 )
 from wl_preproc.events.assemble import AssembledBlock, AssembledTrial, assemble
+from wl_preproc.events.rigrecords import read_rig_records
 from wl_preproc.events.rigruns import read_rig_runs
 from wl_preproc.events.rigsession import read_rig_session
+from wl_preproc.events.rigtiming import code_times, run_instants, time_records
 from wl_preproc.events.rigtrials import read_rig_trials
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 from wl_preproc.timebase.clock import clock_for
@@ -63,10 +65,18 @@ def activate(prefix: str = DEFAULT_PREFIX) -> None:
     """Ensure the tables this module fills are bound. Idempotent.
 
     No `schema.activate` of its own -- there is no schema to activate, because
-    this module declares no table.
+    this module declares no table. `timebase` is among them: the stage reads
+    the session's codes through its clock, which records `timebase.SessionClock`
+    on first ask (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` amendment 3).
+    Until part 1 of that design this bound `pipeline` and `core` only, and a
+    process that activated this module alone failed at the clock.
     """
+    from wl_preproc.schema import timebase
+
     pipeline.activate(prefix=prefix)
     core.activate(prefix=prefix)
+    timebase.activate(prefix=prefix)
 
 
 def sync_event_types() -> None:
@@ -288,8 +298,11 @@ _RIG_PROBLEMS_KEPT = 20
 
 def _clip(value: str | None, width: int) -> str | None:
     """A rig-record value cut to its column: a value too long would fail the
-    session's whole event stage on every pass."""
-    return None if value is None else value[:width]
+    session's whole event stage on every pass. So would a lone UTF-16
+    surrogate, which utf8mb4 cannot store: wl-xcon writes ASCII lines, so half
+    an emoji arrives as a `\\ud83d` escape, which `json.loads` makes one. It is
+    kept as that escape (the training records' final review, I1)."""
+    return None if value is None else value.encode("utf-8", "backslashreplace").decode("utf-8")[:width]
 
 
 def _run_index(value: int | None) -> int | None:
@@ -321,6 +334,61 @@ def _block_type_rows(session_key: dict, block_trial_rows: list[dict], record) ->
         for block_id, found in sorted(names.items())
         if len(found) == 1
     ]
+
+
+def _actor_columns(record) -> dict:
+    return {"by_kind": _clip(record.by_kind, 16), "by_name": _clip(record.by_name, 255),
+            "by_account": _clip(record.by_account, 255), "by_issuer": _clip(record.by_issuer, 255),
+            "by_token_id": _clip(record.by_token_id, 255)}
+
+
+def _keep_training_records(session_key: dict, session_dir: Path, decoded, rig_runs, run_rows: list[dict],
+                           measured: set[int]) -> list[str]:
+    """`core.ParameterChange`, `core.RigControl` and `core.RigClock`: wl-xcon's
+    training records, each timed by its code or the rig's clock fit (design
+    spec `2026-10-18-training-records-and-backup-clock-design.md` sections
+    3.1 and 3.3). Returns what could not be read or timed, for the problem
+    rows."""
+    records = read_rig_records(session_dir)
+    first_runs: dict[int, tuple[float, float | None]] = {}
+    for row in run_rows:
+        first_runs.setdefault(row["run_number"],
+                              (row["run_start_time"], row["run_stop_time"] if row["closed"] else None))
+    timing = time_records(records, code_times(decoded),
+                          run_instants(rig_runs.runs if rig_runs is not None else (), first_runs))
+    numbers = rig_runs.run_numbers if rig_runs is not None else {}
+    problems = [*records.problems]
+
+    def run_columns(record, name: str, what: str) -> dict:
+        if record.run_index is not None and _run_index(record.run_index) is None:
+            problems.append(f"{name} line {record.line}: run {record.run_index} cannot be stored (0 to 65535), so "
+                            f"the {what} names no run")
+        number = numbers.get(record.run_index) if record.run_index is not None else None
+        return {"run_index": _run_index(record.run_index), "run_number": number if number in measured else None}
+
+    change_rows = [{
+        **session_key, "change_line": change.line, "sequence": change.sequence, "name": _clip(change.name, 255),
+        "was": change.was, "now": change.now, "event_code": change.event_code,
+        **run_columns(change, "parameter_changes.jsonl", "change"), **_actor_columns(change),
+        "session_time": time, "row": change.row,
+    } for change, time in zip(records.changes, timing.changes, strict=True)]
+    control_rows = [{
+        **session_key, "control_line": control.line, "kind": _clip(control.kind, 64), "at": control.at,
+        "at_local": _clip(control.at_local, 64), "trial_index": control.trial_index,
+        "event_code": control.event_code, **run_columns(control, "controls.jsonl", "control"),
+        "detail": control.detail, **_actor_columns(control), "session_time": time, "time_source": source,
+        "row": control.row,
+    } for control, (time, source) in zip(records.controls, timing.controls, strict=True)]
+    if change_rows:
+        core.ParameterChange.insert(change_rows, skip_duplicates=True)
+    if control_rows:
+        core.RigControl.insert(control_rows, skip_duplicates=True)
+    if timing.clock is not None:
+        clock = timing.clock
+        core.RigClock.insert1({**session_key, "rig_at_zero": clock.rig_at_zero, "drift_ppm": clock.drift_ppm,
+                               "n_matched": clock.n_matched, "residual_ms_rms": clock.residual_ms_rms,
+                               "residual_ms_max": clock.residual_ms_max}, skip_duplicates=True)
+    return [*problems, *timing.problems]
 
 
 def populate_session(key: dict, session_dir: Path) -> None:
@@ -582,7 +650,8 @@ def populate_session(key: dict, session_dir: Path) -> None:
     # what wl-xcon's record says the session was, its kind, its calibrations
     # and the warnings it accepted (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` sections 2 and 3).
-    # Carried, never acted on.
+    # Carried, never acted on. Then its training records, each timed by the
+    # code it strobed or the rig's clock (`_keep_training_records`).
     calibration_rows = [
         {**session_key, "run_number": run.number, "calibration_id": _clip(run.calibration, 255)}
         for run in (rig_runs.runs if rig_runs is not None else ())
@@ -622,6 +691,7 @@ def populate_session(key: dict, session_dir: Path) -> None:
             })
         if warning_rows:
             core.AcceptedWarning.insert(warning_rows, skip_duplicates=True)
+        unfitting += _keep_training_records(session_key, session_dir, decoded, rig_runs, run_rows, measured)
 
     if rig_runs is not None:
         problems = list(rig_runs.problems)

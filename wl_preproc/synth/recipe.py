@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -177,17 +178,58 @@ class RigWarningSpec(BaseModel):
     by: dict | None = Field(default_factory=lambda: {"kind": "box", "name": "synth"})
 
 
+class RigChangeSpec(BaseModel):
+    """One live change the synthetic rig applied, as wl-xcon's
+    `record.py::SessionRecord.parameter_change` writes it, in trial `trial`
+    (from 1, across the session). Its code is strobed mid-trial unless
+    `event_code` is None. 4130 is `PARAM_CHANGED`'s number in wl-xcon's
+    reference allocation (its `tasks/allocation.py`): a synthetic choice,
+    since nothing in the pipeline reads a number's meaning (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 2)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trial: int = Field(ge=1)
+    name: str = "reward_ml"
+    was: Any = 0.2
+    now: Any = 0.25
+    event_code: int | None = 4130
+    by: dict = Field(default_factory=lambda: {"kind": "box", "name": "synth"})
+
+
+class RigControlSpec(BaseModel):
+    """One console control on the synthetic rig, as wl-xcon's
+    `record.py::SessionRecord.control` writes it, in trial `trial` (from 1,
+    across the session): its kind, the code its act strobed (None for one
+    that strobed nothing, a note or a schedule; 4131 is `PAUSE`'s number in
+    the reference allocation), its own fields, and who sent it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trial: int = Field(ge=1)
+    kind: str = "pause"
+    event_code: int | None = 4131
+    detail: dict = Field(default_factory=dict)
+    by: dict | None = Field(default_factory=lambda: {"kind": "box", "name": "synth"})
+
+
 class RigRecordSpec(BaseModel):
     """What wl-xcon's engine build B adds to a session's record (design spec
     `2026-10-14-session-kind-and-warnings-design.md` section 1): the kind,
     the display calibration the session and each run ran against (`None`:
-    the rig's record would not load), and the warnings accepted."""
+    the rig's record would not load), and the warnings accepted; and its
+    training records, the changes it applied and the controls it was sent
+    (design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 3). None of the latter by default, so every existing profile is
+    byte-identical in them."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     session_kind: str = "training"
     calibration_id: str | None = "rig-synth-2027-03-01"
     warnings: tuple[RigWarningSpec, ...] = ()
+    changes: tuple[RigChangeSpec, ...] = ()
+    controls: tuple[RigControlSpec, ...] = ()
 
 
 class SessionRecipe(BaseModel):
@@ -357,6 +399,12 @@ class SessionRecipe(BaseModel):
             raise ValueError("syncbox is present at every session")
         if self.rig_record is not None and not self.runs:
             raise ValueError("rig_record needs runs: it is written with the run record")
+        if self.rig_record is not None:
+            n_trials = sum(block.n_trials for block in self.blocks)
+            late = sorted(act.trial for act in (*self.rig_record.changes, *self.rig_record.controls)
+                          if act.trial > n_trials)
+            if late:
+                raise ValueError(f"rig_record acts in trials {late}, past the session's {n_trials}")
         covered = sum(m.end_s - m.start_s for m in self.montages)
         if abs(covered - self.duration_s) > 1e-6:
             raise ValueError(

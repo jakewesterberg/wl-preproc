@@ -27,12 +27,17 @@ def daemon_module(dj_conn, prefix):
 def recorded(daemon_module, prefix, tmp_path_factory):
     """A training session wl-xcon ran, two runs, one warning accepted at the
     open by a name typed at the rig and one at run 2's start by a wl.works
-    member; a canonical over both runs and a derivative over run 1."""
+    member; its training records, a change and two controls in run 1 and a
+    change and a manual reward by the member in run 2; a canonical over both
+    runs and a derivative over run 1."""
     recipe, key = _restart_session(
         tmp_path_factory, None, runs=True, subject="rknwb1", session_id="2025-06-29_01",
         rig_record={"session_kind": "training", "warnings": [
             {"code": "default-calibration", "by": {"kind": "box", "name": "Typed Name"}},
-            {"code": "luminance-step", "run": 1, "how": "start", "by": _MEMBER}]})
+            {"code": "luminance-step", "run": 1, "how": "start", "by": _MEMBER}],
+            "changes": [{"trial": 1}, {"trial": 4, "name": "seed", "was": 1, "now": [2, 3], "by": _MEMBER}],
+            "controls": [{"trial": 2}, {"trial": 2, "kind": "note", "event_code": None, "detail": {"note": "ok"}},
+                         {"trial": 4, "kind": "reward", "event_code": 4134, "detail": {"ml": 0.1}, "by": _MEMBER}]})
     daemon_module.run_once(prefix=prefix)
     canonical = _canonical(daemon_module, prefix, key, "rknwb1-k1", [])
     derivative = _canonical(daemon_module, prefix, key, "rknwb1-k2", [], run_numbers=[1])
@@ -76,7 +81,10 @@ def test_the_file_holds_the_kind_the_calibrations_and_the_warnings(recorded, bui
 
 def test_the_file_names_no_one_who_accepted_a_warning(built):
     """Decision 3 of the spec's section 0: the database keeps who, and the
-    listing gives wl.works the name and account; the file names no one."""
+    listing gives wl.works the name and account; the file names no one. Nor
+    anyone who made a change or sent a control (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` decision 6): the
+    member made run 2's change and gave its manual reward."""
     canonical, _derivative = built
     raw = canonical.path.read_bytes()
     for text in ("Typed Name", "Jay Dubya", "acct-rk1", "tok-rk1", "https://wl.works"):
@@ -105,3 +113,35 @@ def test_a_file_of_some_runs_holds_the_warnings_of_the_open_and_of_its_own_runs(
         warnings = handle.read().processing["rig_record"]["accepted_warnings"].to_dataframe()
         assert warnings["code"].tolist() == ["default-calibration"]
     assert derivative.description["accepted_warnings"] == [{"code": "default-calibration", "run_number": None}]
+
+
+def test_the_file_holds_the_training_records_of_its_runs_at_their_session_times(recorded, built):
+    """Design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    section 3.2: the canonical holds every change and control, timed as the
+    database holds them; the derivative over run 1 holds run 1's only
+    (amendment 10)."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.schema import core
+
+    _recipe, canonical_key, _derivative_key = recorded
+    canonical, derivative = built
+    session_key = {name: canonical_key[name] for name in ("subject", "session_datetime")}
+    stored = (core.RigControl & session_key).to_arrays("session_time", order_by="control_line")
+    with NWBHDF5IO(str(canonical.path), "r") as handle:
+        module = handle.read().processing["rig_record"]
+        changes = module["parameter_changes"].to_dataframe()
+        controls = module["controls"].to_dataframe()
+        assert changes[["run_number", "setting", "now", "by_kind"]].values.tolist() == [
+            [1, "reward_ml", "0.25", "box"], [2, "seed", "[2, 3]", "member"]]
+        # The run beside each control's trial, which wl-xcon counts within it
+        # (the final review's M3): run 2's first trial is its 0.
+        assert controls[["kind", "time_source", "by_kind", "run_number", "trial_index"]].values.tolist() == [
+            ["pause", "code", "box", 1, 1], ["note", "rig_clock", "box", 1, 1], ["reward", "code", "member", 2, 0]]
+        assert controls["session_time"].tolist() == pytest.approx(stored.tolist())
+    with NWBHDF5IO(str(derivative.path), "r") as handle:
+        module = handle.read().processing["rig_record"]
+        assert module["parameter_changes"].to_dataframe()["setting"].tolist() == ["reward_ml"]
+        assert module["controls"].to_dataframe()["kind"].tolist() == ["pause", "note"]
+    assert canonical.description["training_records"] == {"parameter_changes": 2, "controls": 3}
+    assert derivative.description["training_records"] == {"parameter_changes": 1, "controls": 2}

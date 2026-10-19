@@ -38,3 +38,7 @@ class GroundTruth:
     units: tuple[UnitTruth, ...]
     spikes: tuple[tuple[float, int], ...]        # (session-time seconds, UNIT id)
     stim_events: tuple[StimEvent, ...] = ()
+    # Each of the rig's training records' acts, in session time: its code's
+    # strobe, or mid-trial for one that strobed nothing; in the recipe's order.
+    change_times: tuple[float, ...] = ()
+    control_times: tuple[float, ...] = ()

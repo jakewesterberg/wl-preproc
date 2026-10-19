@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import datetime
 import json
-from collections.abc import Sequence
+import random
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import yaml
@@ -195,6 +196,27 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
     path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n", encoding="utf-8")
 
 
+# The synthetic rig's anchored wall clock (wl-xcon's `taskd.Session.wall_now`,
+# POSIX seconds): it read `SYNTH_EPOCH` plus a lead at session t = 0, runs
+# `RIG_DRIFT_PPM` fast against the sync box, and stamps each instant up to
+# `RIG_STAMP_JITTER_S` either side of its code. The jitter is the one the
+# training records' clock fit is measured against (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md` section 10, item 10;
+# `events/rigtiming.py::RIG_CLOCK_LIMIT_S`).
+RIG_CLOCK_LEAD_S = 12.5
+RIG_DRIFT_PPM = 20.0
+RIG_STAMP_JITTER_S = 0.005
+
+
+def rig_clock(recipe: SessionRecipe) -> Callable[[float], float]:
+    """The synthetic rig's instant for a session time, its jitter seeded by
+    the recipe, so each call stamps the next instant."""
+    generator = random.Random(recipe.seed)
+    zero = SYNTH_EPOCH.timestamp() + RIG_CLOCK_LEAD_S
+    return lambda session_s: (zero + session_s * (1 + RIG_DRIFT_PPM / 1e6)
+                              + generator.uniform(-RIG_STAMP_JITTER_S, RIG_STAMP_JITTER_S))
+
+
 def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
     """Stands in for wl-xcon's `xcon/runs.jsonl` and `xcon/config.json`, for a
     recipe whose blocks are wrapped in runs (design spec
@@ -206,19 +228,24 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
     writes the end row on every way out (`taskd.py`, read at `c4ee20d`): a run
     whose block is unclosed faulted, and its end row says so in `taskd.py`'s
     words for a fault; the others are its words for a run that finished its
-    blocks."""
+    blocks. Each row's `at` is the rig's clock (`rig_clock`).
+
+    *Until the training records' design, each row's `at` was its session
+    time, which wl-xcon never writes; nothing read it.*"""
     rig = recipe.rig_record
+    stamp = rig_clock(recipe)
     rows = []
     for run_index, block in enumerate(truth.blocks):
         spec = recipe.blocks[run_index]
-        rows.append({"event": "start", "run": run_index, "at": block.start_s, "task": spec.task_type.name.lower(),
+        rows.append({"event": "start", "run": run_index, "at": stamp(block.start_s),
+                     "task": spec.task_type.name.lower(),
                      **({} if rig is None else {"calibration": rig.calibration_id})})
         if run_index + 1 in recipe.unclosed_blocks:
-            rows.append({"event": "end", "run": run_index, "at": block.end_s,
+            rows.append({"event": "end", "run": run_index, "at": stamp(block.end_s),
                          "stopped_because": "fault, session aborted: RuntimeError: a synthetic fault",
                          "stop_kind": "fault"})
         else:
-            rows.append({"event": "end", "run": run_index, "at": block.end_s,
+            rows.append({"event": "end", "run": run_index, "at": stamp(block.end_s),
                          "stopped_because": "every block is finished", "stop_kind": "completed"})
     (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
                                          encoding="utf-8")
@@ -228,7 +255,42 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
         config["calibration"] = None if rig.calibration_id is None else {
             "id": rig.calibration_id, "standard": False, "measured_on": "2027-03-01", "cones": RIG_CONES}
         write_rig_warnings(xcon_dir, recipe, truth)
+        write_rig_records(xcon_dir, recipe, truth, stamp)
     (xcon_dir / "config.json").write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+
+
+def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
+                      stamp: Callable[[float], float]) -> None:
+    """Stands in for wl-xcon's training records as it writes them today,
+    `xcon/parameter_changes.jsonl` and `xcon/controls.jsonl`, in the keys
+    `wl_xcon/record.py`'s `parameter_change` and `control` write (read at
+    wl-xcon's `7398d3e`), `event_code` included (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 2). A
+    run wraps each block, so an act's run is its trial's block's, from 0, and
+    a control's `trial_index` its trial within that run, from 0, as wl-xcon's
+    `taskd.py` counts it (the final review's M3). A file is written only when
+    it has a row, as wl-xcon appends its first."""
+    rig = recipe.rig_record
+    run_of = {position: trial.block_id - 1 for position, trial in enumerate(truth.trials, start=1)}
+    first_of: dict[int, int] = {}
+    for position, trial in enumerate(truth.trials, start=1):
+        first_of.setdefault(trial.block_id, position)
+    index_in_run = {position: position - first_of[trial.block_id]
+                    for position, trial in enumerate(truth.trials, start=1)}
+    changes = [{"sequence": sequence, "name": change.name, "was": change.was, "now": change.now, "by": change.by,
+                "run": run_of[change.trial], "event_code": change.event_code}
+               for sequence, change in enumerate(rig.changes, start=1)]
+    controls = []
+    for control, time in zip(rig.controls, truth.control_times, strict=True):
+        at = stamp(time)
+        controls.append({"kind": control.kind, "by": control.by, "at": at,
+                         "at_local": datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat(),
+                         "trial_index": index_in_run[control.trial], "event_code": control.event_code,
+                         "run": run_of[control.trial], **control.detail})
+    for name, rows in (("parameter_changes.jsonl", changes), ("controls.jsonl", controls)):
+        if rows:
+            (xcon_dir / name).write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                                         encoding="utf-8")
 
 
 # How a calibration's cone colours became light, in the shape wl-xcon's

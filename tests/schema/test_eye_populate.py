@@ -1849,6 +1849,22 @@ def test_the_xcon_log_is_found_in_its_own_directory(tmp_path):
     assert eye._find_xcon_log(tmp_path) == log
 
 
+def test_the_rig_agents_sqlite_file_is_not_the_calibration_map(tmp_path):
+    """wl-xcon's agent rebuilds a SQLite file in `xcon/`; the eye stage's
+    search takes only `*.bhv2` and `*.yaml` there, so it is never the map, and
+    the map beside it is still found (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.5)."""
+    from wl_preproc.contracts.paths import XCON_DIRNAME
+    from wl_preproc.schema import eye
+
+    (tmp_path / XCON_DIRNAME).mkdir()
+    (tmp_path / XCON_DIRNAME / "a-training.sqlite").write_bytes(b"SQLite format 3\x00")
+    assert eye._find_xcon_log(tmp_path) is None
+    log = tmp_path / XCON_DIRNAME / "session.bhv2"
+    _write_walkable_bhv2(log)
+    assert eye._find_xcon_log(tmp_path) == log
+
+
 def test_a_log_outside_the_xcon_directory_is_not_found(tmp_path):
     """THE point of settling the convention.
 

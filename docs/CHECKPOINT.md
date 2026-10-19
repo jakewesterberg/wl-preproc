@@ -368,9 +368,16 @@ requester chose to merge the same day; true when written.*
 > (`specs/2026-10-18-training-records-and-backup-clock-design.md`), in five parts:
 > **part 2, the clock as a recorded choice, is merged** (`789e825`,
 > `handoffs/2026-10-18-clock-choice.md`), its review's one Important finding fixed
-> and five Minor deferred (§6). Part 1, the training records, can be planned:
-> wl-xcon's `event_code` is on its `main` (`67d7028`, read at `e5b9835`). Fine-tuning
+> and five Minor deferred (§6); **part 1, the training records, is built on
+> `feat/training-records`, not merged** (`handoffs/2026-10-18-training-records.md`),
+> reviewed and its three findings fixed (§6). Next: the merge question. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 1's review was answered, this said the review came next; true when
+> written.*
+>
+> *Until part 1 was built, this said it could be planned, wl-xcon's `event_code`
+> being on its `main` (`67d7028`); true when written.*
 >
 > *Until part 2's merge, this said it was built, not merged, and that part 1
 > waited on wl-xcon's `event_code`; true when written.*

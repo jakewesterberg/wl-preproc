@@ -527,6 +527,19 @@ class ListedWarning(BaseModel):
     by: ListedActor | None
 
 
+class ListedTrainingRecords(BaseModel):
+    """How many of wl-xcon's training records the session has: its live
+    parameter changes, and of its console controls the pauses and the manual
+    rewards. The rows are in the database and the NWB file, not here (design
+    spec `2026-10-18-training-records-and-backup-clock-design.md` section 3.4)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    parameter_changes: int
+    pauses: int
+    manual_rewards: int
+
+
 class RejectedFile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -558,6 +571,12 @@ class SessionEntry(BaseModel):
     session_kind: Literal["training", "piloting", "recording"] | None
     calibration: ListedCalibration | None
     accepted_warnings: list[ListedWarning]
+    # Its training records' counts, null for a session wl-xcon did not run;
+    # and the clock that kept its time, null until chosen (design spec
+    # `2026-10-18-training-records-and-backup-clock-design.md` sections 3.4
+    # and 4.1).
+    training_records: ListedTrainingRecords | None
+    clock: Literal["syncbox", "nidq", "lab"] | None
 
 
 class SessionListing(BaseModel):

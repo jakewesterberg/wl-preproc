@@ -111,6 +111,9 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
     _emit(words, 0.0, Marker.SESSION_START.value)
     cursor = 0.0
     trial_id = 1
+    rig = recipe.rig_record
+    acts = [] if rig is None else [*rig.changes, *rig.controls]
+    act_times = [0.0] * len(acts)
 
     for block_index, block in enumerate(recipe.blocks, start=1):
         block_start = cursor
@@ -152,6 +155,18 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
             _emit(words, trial_start, Marker.TRIAL_START.value)
             for word in encode_payload(Escape.TRIAL_NUMBER, _uint32_words(trial_id)):
                 _emit(words, trial_start, word)
+            # The rig's acts in this trial, each code strobed mid-trial, where no
+            # other word is on the bus (design spec
+            # `2026-10-18-training-records-and-backup-clock-design.md` section 3.3).
+            for position, act in enumerate(acts):
+                if act.trial != len(trials):
+                    continue
+                middle = trial_start + block.trial_duration_s / 2
+                if act.event_code is None:
+                    act_times[position] = middle
+                else:
+                    _emit(words, middle, act.event_code)
+                    act_times[position] = words[-1][0]
             # Outcome, then TRIAL_END -- both still inside the trial, and kept
             # CODE_WORD_SPACING_S apart from each other and from trial_end
             # itself (fix round 1, Task 8): TRIAL_END was missing entirely, so
@@ -209,4 +224,6 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
         units=units,
         spikes=spikes,
         stim_events=tuple(stim_events),
+        change_times=tuple(act_times[:len(rig.changes)]) if rig is not None else (),
+        control_times=tuple(act_times[len(rig.changes):]) if rig is not None else (),
     )
