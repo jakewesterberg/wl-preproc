@@ -685,3 +685,20 @@ its mutation checks; the full suite runs once per branch on both interpreters.
     rig does, and checked on a real session once build C7 and the time service exist. The cameras' part
     waits on the fallback's shape. Part 2's deferred question (M2, the clock of a session processed
     before part 2) is decided before part 3 is built.
+
+## Amendments, 2026-10-19, wl-xcon's answer and the clock of a session already processed
+
+27. **wl-xcon's answer to amendment 25:** XC-391 to XC-393, all in its build C7 (its `main` at
+    `243afb9`). **The open instant is already written:** the `session opened` row of
+    `welfare_notes.jsonl`, whose `at` is the session's `opened_wall_at` (its `taskd.py`, `Session.open`),
+    so t = 0 (amendment 21) is read there. A resumed process writes no such row yet; XC-392 adds one,
+    perhaps in a file of its own. The pairs are written between trials, never inside a frame, so "at least
+    once a minute" may hold only between trials (a trial lasts up to five minutes); a map's fit takes
+    them as they come. Each file's name and row shape comes here before C7 is built.
+28. **A session already processed keeps the clock it was timed by** (the requester's choice, 2026-10-19,
+    deciding part 2's deferred M2 before part 3). A session whose events were staged before part 2 has
+    no `timebase.SessionClock` row; the daemon records `syncbox` for it, the clock it was timed by, with
+    that reason. And a session whose clock row is deleted while its events remain is never chosen again:
+    its stage refuses, saying that the events must be deleted for the session to be timed again. No
+    schema changes: built as part 3's first task, since part 3 is the first part with another clock to
+    choose.

@@ -40,6 +40,15 @@ cameras, once they can free-run, are brought onto your clock from their host sta
 
 **Nothing on the wire changes,** and nothing here is needed in a session with the sync box running.
 
+**Answered 2026-10-19, filed:** XC-391 to XC-393, all carried by wl-xcon's build C7 (its `main` at
+`243afb9`), after C2b and C3 to C6. The open instant is already written: the `session opened` row of
+`welfare_notes.jsonl`, its `at` the session's `opened_wall_at` (read in its `taskd.py`,
+`Session.open`); a resumed process writes none yet, and XC-392 adds one, perhaps in a file of its own,
+since `stranded.py` reads `welfare_notes.jsonl`. The pairs are written between trials, never inside a
+frame, so "once a minute" may hold only between trials, a trial lasting up to five minutes; wl-xcon will
+say. Each file's name and row shape comes here before C7 is built. No accuracy is stated for any instant
+until wl-xcon has measured its rig's clock.
+
 ---
 
 # OPEN — say which code each training record strobed, and three asks for later
