@@ -381,9 +381,14 @@ requester chose to merge the same day; true when written.*
 > `handoffs/2026-10-18-clock-choice.md`), its review's one Important finding fixed
 > and five Minor deferred (§6); **part 1, the training records, is merged**
 > (`b74d4f3`, `handoffs/2026-10-18-training-records.md`), its review's three findings
-> fixed and four Minor deferred (§6). Part 3, the NI as the clock, can be planned once
-> part 2's deferred M2 is decided. Fine-tuning
+> fixed and four Minor deferred (§6). **Part 4, lab time, is designed in full** (the
+> requester's choice of 2026-10-19: amendments 20-26, on `spec/lab-time`, not merged), its
+> asks of wl-xcon to be sent once the requester has reviewed it; part 3, the NI, is built
+> while they arrive, once part 2's deferred M2 is decided. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until lab time was designed, this said part 3 could be planned next; true when
+> written.*
 >
 > *Until part 1's merge, this said it was built, not merged, and that the merge
 > question came next; true when written.*
