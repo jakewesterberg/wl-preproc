@@ -14,9 +14,11 @@ v1 is the geometry of 2026-10-19: gaze in degrees per axis, distances by
 `hypot`. Its off-centre traces are where true visual angle will differ (the
 requester's choice, recorded in wl-xcon's XC-398).
 
-`python -m wl_preproc.eye.detect.contract_fixtures [--out DIR]` writes the
-current version; `tests/eye/detect/test_contract_fixtures.py` holds the
-committed file to what this code produces.
+`python -m wl_preproc.eye.detect.contract_fixtures [--out DIR]` wrote v1;
+`tests/eye/detect/test_contract_fixtures.py` pins it by its digest and holds
+this code to every output in it. Its inputs are seeded numpy draws, which
+numpy does not promise across versions, so a later version reads them from
+v1 rather than drawing them again.
 """
 
 from __future__ import annotations

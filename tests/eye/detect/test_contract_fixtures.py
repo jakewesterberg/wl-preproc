@@ -1,19 +1,24 @@
 """The saccade detector's published fixtures (`docs/fixtures/saccade/`), which
 wl-xcon's contract tests read instead of importing this package (its XC-398):
 its online detector mirrors this one, and its CI, which merges nothing red,
-would otherwise go red the moment this one changed. The committed v1 is what
-today's code produces, so a change to the detector, its velocity, its scale or
-an interval's size fails here first; the answer is a new version beside v1,
-never an edit to it."""
+would otherwise go red the moment this one changed. v1 is pinned by its digest,
+and today's code must reproduce every output in it from its inputs, so a change
+to the detector, its velocity, its scale or an interval's size fails here
+first; the answer is a new version beside v1, never an edit to it.
+
+The pin is the file's digest, not a regeneration from `build_v1`: v1's inputs
+are seeded numpy draws, and numpy does not promise the same draws across
+versions, so a regeneration could differ in CI with nothing wrong. Once
+published, the inputs are the file's, and a later version reads them from it."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
-from wl_preproc.eye.detect import contract_fixtures
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
 )
@@ -21,15 +26,15 @@ from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
 from wl_preproc.eye.detect.velocity import velocity
 
 V1 = Path(__file__).resolve().parents[3] / "docs" / "fixtures" / "saccade" / "v1.json"
+V1_SHA256 = "f94ea3a32521e7c5bdfb80040f10fe82303f76550296145b21fbeb94d9667666"
 
 
 def _v1() -> dict:
     return json.loads(V1.read_text(encoding="utf-8"))
 
 
-def test_the_published_v1_is_what_the_detector_does_today():
-    assert _v1() == json.loads(contract_fixtures.dumps(contract_fixtures.build_v1()))
-    assert V1.read_text(encoding="utf-8") == contract_fixtures.dumps(contract_fixtures.build_v1())
+def test_the_published_v1_is_never_edited():
+    assert hashlib.sha256(V1.read_bytes()).hexdigest() == V1_SHA256
 
 
 def test_v1_names_its_geometry_and_the_defaults_it_was_made_with():
