@@ -1,12 +1,23 @@
 # Where this build actually is
 
-**Last updated 2026-10-19**, describing `main` at `f43a014`, the merge of
-`feat/ni-ingest`: part 3a of `specs/2026-10-18-training-records-and-backup-clock-design.md`,
-taking a session in without the sync box (amendments 27-38;
-`handoffs/2026-10-19-ni-ingest.md`). CI read off `f43a014` is green on both
-interpreters, 2490 passed on each with 37 skipped, and the manifest
-check is green (`gh run view 39316746072`).
-- **A session without the sync box is taken in:** a manifest need not list it, and
+**Last updated 2026-10-20**, describing `main` at `065da53`, the merge of
+`feat/saccade-thresholds-v1`: the saccade detector's behaviour published as versioned
+fixtures for wl-xcon (its XC-398; `HANDOVER-wl-expcontroller.md`, section 2026-10-19),
+in three merges: v1 (`10ea913`), its sizes held to 1e-12 rather than to the bit
+(`14daba6`, after CI on `10ea913` was red on a one-unit `np.hypot` difference between
+Linux and macOS), and v1's thresholds companion (`065da53`). CI read off `065da53` is
+green on both interpreters, 2498 passed on each with 37 skipped, and the
+manifest check is green (`gh run view 39417126304`).
+- **The saccade detector's v1 fixtures:** `docs/fixtures/saccade/v1.json`, today's
+  per-axis geometry as inputs and this code's outputs (the median scale, velocity, the
+  intervals detected with their labels, each interval's size), and its companion
+  `v1-thresholds.json` (each v1 trace's thresholds, and two near-threshold traces that
+  catch lambda off by 5% or a wider ellipse), each pinned by its digest and never
+  edited. wl-xcon's contract tests read them rather than import this package, so a
+  change of behaviour reaches them as v2 beside them. Declared in `wl.yaml` as
+  `saccade-detector-fixtures`.
+- **A session without the sync box is taken in** (part 3a, `f43a014`, just before): a
+  manifest need not list it, and
   `expects_rig_record` holds a session until `xcon/DONE`, a DONE marker listing the
   rig's files, which are checked on arrival and archived. A person lands a stalled
   session without a system, or the rig's record, by `wlpp land-without`, recorded
@@ -118,6 +129,9 @@ check is green (`gh run view 39316746072`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `f43a014` (part 3a's merge, CI green, 2490 passed on each
+interpreter, `39316746072`) until the saccade fixtures' merges; true when written.*
 
 *This header named `b74d4f3` (part 1's merge, CI green, 2454 passed on each
 interpreter, `39216015572`) until part 3a's merge; true when written.*
@@ -398,11 +412,19 @@ requester chose to merge the same day; true when written.*
 > in without the sync box, is merged** (`f43a014`, `handoffs/2026-10-19-ni-ingest.md`;
 > amendments 27-38, M2 decided as amendment 28), its review's one Critical and four
 > Important findings fixed and six Minor deferred (§6); `xcon/DONE` lists the rig's files
-> (amendment 35), and wl-xcon has been told the shape. Next: wl-sync's asks of 2026-10-19
+> (amendment 35), and wl-xcon has been told the shape. **wl-xcon's XC-398, saccades in true
+> visual angle** (the PI's choice of 2026-10-19, widened the same day to each event's true
+> direction and endpoints and each sample's true eccentricity and polar angle), is accepted
+> as a spec to write; its v1 fixtures, today's per-axis behaviour, and their thresholds
+> companion are merged (`10ea913`, `065da53`).
+> Next, by the requester's order of 2026-10-19: wl-sync's asks of the same day
 > (`HANDOVER-wl-sync.md`; the pinned wl-sync cannot read the logs the box writes today, and
-> a real log's barcodes are its `B` records, which nothing reads yet), and part 3b, the NI
-> as the clock. Fine-tuning
+> a real log's barcodes are its `B` records, which nothing reads yet); then XC-398's spec
+> and part 3b, the NI as the clock. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until the saccade fixtures' merge, this named wl-sync's asks and part 3b as next, without
+> XC-398; true when written.*
 >
 > *Until part 3a's merge, this said it was built and reviewed, not merged, and that the
 > merge came next; true when written.*
@@ -507,7 +529,9 @@ requester chose to merge the same day; true when written.*
 > *Until 2026-10-07 this named U'n'Eye as item 1, built on `spec/uneye` and
 > not merged; true when written.*
 >
-> Done: part 3a of the training-records design, taking a session in without the
+> Done: the saccade detector's v1 fixtures and their thresholds companion for wl-xcon
+> (`10ea913`, `14daba6`, `065da53`). Before them,
+> part 3a of the training-records design, taking a session in without the
 > sync box (`f43a014`). Before it, part 1, wl-xcon's training records
 > (`b74d4f3`). Before it, part 2, the session's clock as a recorded
 > choice (`789e825`). Before it, the correction marker's three deferred minors and
