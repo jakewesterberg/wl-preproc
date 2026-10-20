@@ -13,6 +13,7 @@ published, the inputs are the file's, and a later version reads them from it."""
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
+    thresholds,
 )
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
 from wl_preproc.eye.detect.velocity import velocity
@@ -85,3 +87,67 @@ def test_v1_covers_what_true_angle_will_change():
     assert any(entry is not None for case in traces for entry in case["available"])
     assert any(case["scale"] == 0.0 and len(case["values"]) == 4 and len(set(case["values"])) == 4
                for case in fixture["median_scale"])
+
+
+# The frozen companion beside v1 (`v1-thresholds.json`): each v1 trace's two
+# thresholds, and traces whose movements sit near them. wl-xcon found v1 pins
+# the threshold only to about +-40% (any lambda from 4.5 to 8.5 gives v1's
+# intervals) and an ellipse limit of 1.5 not at all; these close that.
+
+V1_THRESHOLDS = V1.with_name("v1-thresholds.json")
+V1_THRESHOLDS_SHA256 = "f6da9801eb3f196b50ba546710b27816879acc46011ac117ff7ddbdeaad56e8e"
+
+
+def _thresholds_file() -> dict:
+    return json.loads(V1_THRESHOLDS.read_text(encoding="utf-8"))
+
+
+def test_the_published_thresholds_are_never_edited():
+    assert hashlib.sha256(V1_THRESHOLDS.read_bytes()).hexdigest() == V1_THRESHOLDS_SHA256
+
+
+def test_the_thresholds_name_v1_and_the_rule_they_follow():
+    companion = _thresholds_file()
+    assert companion["companion_to"] == {"file": "v1.json", "sha256": V1_SHA256}
+    assert companion["geometry"] == "per-axis"
+    assert {case["name"] for case in companion["v1_traces"]} == {case["name"] for case in _v1()["traces"]}
+
+
+def test_a_reader_gets_every_threshold_back():
+    """Thresholds are medians, products and `sqrt`, so they are held exactly;
+    a near-threshold trace's intervals too, and its sizes to 1e-12, as v1's."""
+    v1, companion = _v1(), _thresholds_file()
+    fs_hz, by_name = v1["fs_hz"], {case["name"]: case for case in v1["traces"]}
+    for case in companion["v1_traces"]:
+        trace = by_name[case["name"]]
+        speed = velocity(np.array(trace["gaze_deg"]), fs_hz)
+        usable = np.array([entry is None for entry in trace["available"]])
+        assert list(thresholds(speed, usable, DEFAULT_EK_PARAMS)) == case["eta_deg_s"], case["name"]
+    for case in companion["near_threshold_traces"]:
+        gaze = np.array(case["gaze_deg"])
+        speed = velocity(gaze, fs_hz)
+        assert speed.tolist() == case["velocity_deg_s"], case["name"]
+        usable = np.array([entry is None for entry in case["available"]])
+        assert list(thresholds(speed, usable, DEFAULT_EK_PARAMS)) == case["eta_deg_s"], case["name"]
+        runs = detect_engbert_kliegl(gaze, speed, np.array(case["available"], dtype=object), fs_hz,
+                                     DEFAULT_EK_PARAMS)
+        assert [(r.start, r.stop, r.label.value) for r in runs] == [
+            (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
+        for r, run in zip(runs, case["runs"], strict=True):
+            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0)
+
+
+def test_the_near_threshold_traces_catch_a_threshold_off_by_five_percent_or_a_wider_ellipse():
+    """What v1 could not: lambda 5% either way, and the ellipse's limit moved
+    from 1 to 1.1 or 1.5, each change some interval. A limit L is lambda
+    scaled by sqrt(L), since (v/eta)^2 > L is (v/(eta sqrt(L)))^2 > 1."""
+    fs_hz = _v1()["fs_hz"]
+    for scale in (0.95, 1.05, np.sqrt(1.1), np.sqrt(1.5)):
+        params = dataclasses.replace(DEFAULT_EK_PARAMS, lambda_=DEFAULT_EK_PARAMS.lambda_ * scale)
+        changed = False
+        for case in _thresholds_file()["near_threshold_traces"]:
+            gaze = np.array(case["gaze_deg"])
+            runs = detect_engbert_kliegl(gaze, velocity(gaze, fs_hz), np.array(case["available"], dtype=object),
+                                         fs_hz, params)
+            changed |= [(r.start, r.stop) for r in runs] != [(run["start"], run["stop"]) for run in case["runs"]]
+        assert changed, scale

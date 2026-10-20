@@ -14,16 +14,24 @@ v1 is the geometry of 2026-10-19: gaze in degrees per axis, distances by
 `hypot`. Its off-centre traces are where true visual angle will differ (the
 requester's choice, recorded in wl-xcon's XC-398).
 
-`python -m wl_preproc.eye.detect.contract_fixtures [--out DIR]` wrote v1;
-`tests/eye/detect/test_contract_fixtures.py` pins it by its digest and holds
-this code to every output in it. Its inputs are seeded numpy draws, which
-numpy does not promise across versions, so a later version reads them from
-v1 rather than drawing them again.
+`v1-thresholds.json` is a frozen companion beside it: each v1 trace's two
+thresholds as the detector computes them, and two traces whose movements sit
+near them. wl-xcon found that v1 pins the threshold only to about +-40% and an
+ellipse limit above 1 not at all; these close that (the requester's choice of
+2026-10-20).
+
+`python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds}
+[--out DIR]` wrote each, and refuses to write over a published file;
+`tests/eye/detect/test_contract_fixtures.py` pins each by its digest and holds
+this code to every output in it. v1's inputs are seeded numpy draws, which
+numpy does not promise across versions, so whatever comes after reads them
+from v1 rather than drawing them again, as the companion does.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,6 +39,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
+    thresholds,
 )
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
@@ -79,13 +88,22 @@ _SCALE_INPUTS = (
 )
 
 
-def _trace(seed: int, start: tuple[float, float], steps, masked) -> tuple[np.ndarray, list]:
-    gaze = np.random.default_rng(seed).normal(0.0, _NOISE_DEG, (_SAMPLES, 2)) + np.asarray(start)
-    for onset, samples, dx, dy in steps:
+# The companion's two near-threshold traces: (name, seed, direction). Each
+# carries six movements of 12 samples, one every 170 samples from sample 100,
+# along `direction` at each of `_NEAR_RATIOS` times the speed at which that
+# trace's noise alone puts the ellipse in that direction.
+_NEAR_SAMPLES = 1200
+_NEAR_THRESHOLD = (("near-threshold-horizontal", 101, (1.0, 0.0)), ("near-threshold-oblique", 102, (1.0, 1.0)))
+_NEAR_RATIOS = (0.95, 1.05, 1.15, 1.25, 1.4, 1.6)
+
+
+def _trace(seed: int, start: tuple[float, float], steps, masked, samples: int = _SAMPLES) -> tuple[np.ndarray, list]:
+    gaze = np.random.default_rng(seed).normal(0.0, _NOISE_DEG, (samples, 2)) + np.asarray(start)
+    for onset, ramp, dx, dy in steps:
         step = np.array([dx, dy])
         gaze[onset:] += step
-        gaze[onset:onset + samples] -= np.outer(1.0 - np.linspace(0.0, 1.0, samples), step)
-    available: list = [None] * _SAMPLES
+        gaze[onset:onset + ramp] -= np.outer(1.0 - np.linspace(0.0, 1.0, ramp), step)
+    available: list = [None] * samples
     if masked is not None:
         first, stop, label = masked
         gaze[first:stop] = np.asarray(start) + np.array([0.0, -15.0])
@@ -123,6 +141,59 @@ def build_v1() -> dict:
     }
 
 
+def _near_threshold_trace(seed: int, direction: tuple[float, float]) -> tuple[np.ndarray, list]:
+    """Movements at graded multiples of the speed that crosses the ellipse
+    in `direction`, which is set by the noise alone: `1 / sqrt(dx^2/eta_x^2 +
+    dy^2/eta_y^2)` for the unit direction `(dx, dy)`."""
+    still, _ = _trace(seed, (0.0, 0.0), (), None, samples=_NEAR_SAMPLES)
+    eta_x, eta_y = thresholds(velocity(still, FS_HZ), np.ones(_NEAR_SAMPLES, dtype=bool), DEFAULT_EK_PARAMS)
+    unit = np.asarray(direction) / np.hypot(*direction)
+    crossing = 1.0 / np.sqrt(unit[0] ** 2 / eta_x ** 2 + unit[1] ** 2 / eta_y ** 2)
+    steps = tuple((100 + 170 * k, 12, *(unit * ratio * crossing * 12 / FS_HZ)) for k, ratio in enumerate(_NEAR_RATIOS))
+    return _trace(seed, (0.0, 0.0), steps, None, samples=_NEAR_SAMPLES)
+
+
+def build_v1_thresholds(v1: dict, v1_sha256: str) -> dict:
+    """v1's companion: each v1 trace's thresholds, from v1's own inputs, and
+    the near-threshold traces with everything this code makes of them."""
+    fs_hz = v1["fs_hz"]
+    v1_traces = []
+    for case in v1["traces"]:
+        speed = velocity(np.array(case["gaze_deg"]), fs_hz)
+        usable = np.array([entry is None for entry in case["available"]])
+        v1_traces.append({"name": case["name"], "eta_deg_s": list(thresholds(speed, usable, DEFAULT_EK_PARAMS))})
+    near = []
+    for name, seed, direction in _NEAR_THRESHOLD:
+        gaze, available = _near_threshold_trace(seed, direction)
+        speed = velocity(gaze, fs_hz)
+        usable = np.array([entry is None for entry in available])
+        runs = detect_engbert_kliegl(gaze, speed, np.array(available, dtype=object), fs_hz, DEFAULT_EK_PARAMS)
+        near.append({
+            "name": name, "note": f"six movements along {list(direction)} at {list(_NEAR_RATIOS)} times the speed "
+                                  "that crosses the ellipse there, one every 170 samples from sample 100, each over "
+                                  "12 samples; not every one is detected",
+            "gaze_deg": gaze.tolist(), "available": available, "velocity_deg_s": speed.tolist(),
+            "eta_deg_s": list(thresholds(speed, usable, DEFAULT_EK_PARAMS)),
+            "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
+                      "amplitude_deg": amplitude(gaze, run.start, run.stop)} for run in runs],
+        })
+    return {
+        "version": 1,
+        "companion_to": {"file": "v1.json", "sha256": v1_sha256},
+        "geometry": "per-axis",
+        "about": "The thresholds of v1's detector: eta = lambda times each axis's median scale, "
+                 "sqrt(median(v^2) - median(v)^2), or 0 when that is not positive, over the velocity at every "
+                 "sample the mask leaves usable -- the two zero-filled samples at each edge, and any whose "
+                 "five-sample window touches a masked sample, included. A sample is in an event when "
+                 "(vx/eta_x)^2 + (vy/eta_y)^2 > 1. v1_traces gives each v1 trace's [eta_x, eta_y] in deg/s; the "
+                 "near-threshold traces, at v1's fs_hz, move at speeds close to the ellipse, so lambda off by 5% "
+                 "or a limit above 1 changes their runs. A run is [start, stop) in samples; amplitude_deg is "
+                 "np.hypot, which C libraries round differently in the last place. Never edited.",
+        "v1_traces": v1_traces,
+        "near_threshold_traces": near,
+    }
+
+
 def dumps(fixture: dict) -> str:
     """The file's text: one top-level field, or one case, per line, so a
     reader can see its shape and a diff its cases."""
@@ -137,12 +208,20 @@ def dumps(fixture: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="write the saccade detector's current contract fixture")
+    parser = argparse.ArgumentParser(description="write one of the saccade detector's contract fixtures")
+    parser.add_argument("which", choices=("v1", "v1-thresholds"))
     parser.add_argument("--out", type=Path, default=Path("docs/fixtures/saccade"))
     args = parser.parse_args(argv)
+    path = args.out / f"{args.which}.json"
+    if path.exists():
+        parser.error(f"{path} is published, and a published fixture is never edited")
+    if args.which == "v1":
+        text = dumps(build_v1())
+    else:
+        raw = (args.out / "v1.json").read_bytes()
+        text = dumps(build_v1_thresholds(json.loads(raw), hashlib.sha256(raw).hexdigest()))
     args.out.mkdir(parents=True, exist_ok=True)
-    path = args.out / f"v{VERSION}.json"
-    path.write_text(dumps(build_v1()), encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
     print(path)
     return 0
 

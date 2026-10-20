@@ -79,6 +79,16 @@ def _median_scale(component: np.ndarray) -> float:
     return float(np.sqrt(variance)) if variance > 0 else 0.0
 
 
+def thresholds(velocity_deg_s: np.ndarray, usable: np.ndarray, params: EngbertKlieglParams) -> tuple[float, float]:
+    """`(eta_x, eta_y)`: lambda times each axis's median scale, over the
+    velocity at every sample the mask leaves usable -- the two zero-filled
+    samples at each edge (`velocity.py`) and any whose window touches a masked
+    sample included. Published per trace in the detector's contract fixtures
+    (`contract_fixtures.py`), so wl-xcon's online copy is held to them."""
+    return (params.lambda_ * _median_scale(velocity_deg_s[usable, 0]),
+            params.lambda_ * _median_scale(velocity_deg_s[usable, 1]))
+
+
 def detect_engbert_kliegl(
     gaze_deg: np.ndarray,
     velocity_deg_s: np.ndarray,
@@ -113,8 +123,7 @@ def detect_engbert_kliegl(
     if not usable.any():
         return []
 
-    eta_x = params.lambda_ * _median_scale(velocity_deg_s[usable, 0])
-    eta_y = params.lambda_ * _median_scale(velocity_deg_s[usable, 1])
+    eta_x, eta_y = thresholds(velocity_deg_s, usable, params)
     if eta_x <= 0 or eta_y <= 0:
         return []
 
