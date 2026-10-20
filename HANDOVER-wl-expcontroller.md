@@ -463,3 +463,17 @@ two thresholds; the 1° microsaccade cut read in true angle; the shared fixtures
   definitions this repository writes, so they go in the spec. Separately, each shown stimulus's true
   eccentricity and polar angle goes on its trial's row (its XC-399), whose field names and shape come here
   before they are written, after its build C2b.
+- *A frozen companion beside v1, the requester's choice of 2026-10-20.* wl-xcon's review of its vendored v1
+  found that v1 pins the threshold only coarsely: any λ from 4.5 to 8.5 gives v1's intervals and labels, and
+  an ellipse limit of 1.1 or 1.5 is not caught. **`docs/fixtures/saccade/v1-thresholds.json`** names v1 by
+  its SHA-256 and gives each v1 trace's `eta_deg_s` (`[eta_x, eta_y]`, from v1's own inputs, by
+  `engbert_kliegl.thresholds`), and two 1200-sample near-threshold traces, horizontal and oblique, each with
+  six movements at 0.95 to 1.6 times the speed that crosses the ellipse in its direction, with their
+  velocity, thresholds, runs and sizes. λ 5% either way, or a limit of 1.1 or 1.5, changes their runs.
+  Thresholds are held exactly; sizes are `np.hypot`, which C libraries round differently in the last place
+  (Linux CI against macOS on v1, 2026-10-20), so wl-preproc and wl-xcon both hold them to a tolerance.
+- *For the spec, from wl-xcon's review:* `_median_scale` here runs over the velocity at every usable sample,
+  the two zero-filled samples at each edge and any window touching a masked sample included; wl-xcon's
+  online detector leaves out every sample whose five-sample window is incomplete. On v1's and the
+  companion's traces the thresholds differ by about 0.1-0.2% and no interval changes; on a very short trace
+  they could. The XC-398 spec says which is meant, and v2 pins it with a short trace.
