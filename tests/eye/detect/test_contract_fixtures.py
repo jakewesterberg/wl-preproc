@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
@@ -61,8 +62,15 @@ def test_a_reader_of_v1_gets_its_outputs_back_from_its_inputs():
         assert speed.tolist() == case["velocity_deg_s"], case["name"]
         runs = detect_engbert_kliegl(gaze, speed, np.array(case["available"], dtype=object), fs_hz,
                                      DEFAULT_EK_PARAMS)
-        assert [{"start": r.start, "stop": r.stop, "label": r.label.value,
-                 "amplitude_deg": amplitude(gaze, r.start, r.stop)} for r in runs] == case["runs"], case["name"]
+        assert [(r.start, r.stop, r.label.value) for r in runs] == [
+            (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
+        # A size to within a few units in the last place, not to the bit: `np.hypot` is the C library's,
+        # which is not correctly rounded, and Linux's differs from macOS's by one unit on these traces
+        # (CI on 10ea913, 8.001592662084843 against the file's ...844). Everything else here is
+        # arithmetic and `sqrt`, which IEEE 754 rounds the same everywhere, so it is held exactly.
+        for r, run in zip(runs, case["runs"], strict=True):
+            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0), (
+                case["name"])
 
 
 def test_v1_covers_what_true_angle_will_change():
