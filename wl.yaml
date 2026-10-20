@@ -614,15 +614,17 @@ publishes:
 
   - name: saccade-detector-fixtures
     kind: test-fixture
-    at: docs/fixtures/saccade/v1.json
+    at: docs/fixtures/saccade
     stability: stable
     what: >-
       The Engbert-Kliegl saccade detector's behaviour as inputs and this
-      code's outputs: velocity, the median scale, the intervals detected with
-      their labels, and each interval's size. Versioned, and never edited once
-      published. wl-xcon's online detector mirrors this one, and its contract
-      tests read these files rather than import this package, so a change of
-      behaviour reaches it as a new version beside the old (its XC-398).
+      code's outputs: velocity, the median scale, the thresholds, the
+      intervals detected with their labels, and each interval's size.
+      v1.json and its companion v1-thresholds.json, versioned, and never
+      edited once published. wl-xcon's online detector mirrors this one, and
+      its contract tests read these files rather than import this package,
+      so a change of behaviour reaches it as a new version beside the old
+      (its XC-398).
 
   - name: nwb-session
     kind: nwb
