@@ -140,3 +140,12 @@ decisions of 2026-10-20 and 2026-10-22; its part 1 is built on `feat/syncbox-rec
      during a roll can land up to a second on the far side, so a session's last codes could land in
      `unassigned/`, which we never ingest.
 5. **`clock_trusted` and `clock_reason`** are recorded per segment and acted on nowhere, as your note asks.
+6. **A third ask, found in part 1's final review: unwrap code words and edges against the box's one clock.**
+   `wl_sync/service.py::_TickUnwrapper` (at `27c0e97`) unwraps each delivery path on its own and notices a wrap
+   only when a raw tick falls below the one before. Your `B` path, at 1 Hz, sees every wrap; the `W` and `E`
+   paths see one only if a record arrives within each 71.6-minute period. A box started hours before its first
+   session, or a session with a long pause between codes, misses a wrap on `W`, and every later code word is
+   then 4294.97 s early for each wrap missed against the barcodes of the same moment. We place codes by those
+   barcodes, so such a session's codes would be timed that much early, and nothing here can tell. Priming each
+   path from the box's own clock (`now_us()`) when it starts, or re-anchoring each path on every `B`, would
+   close it. Please fix it before the first real session.

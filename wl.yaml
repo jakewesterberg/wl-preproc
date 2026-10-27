@@ -80,8 +80,9 @@ status:
     065da53). wl-sync's asks of 2026-10-19 are designed
     (docs/superpowers/specs/2026-10-22-syncbox-records-and-segments-design.md,
     two parts); part 1, reading the box's logs as it writes them today,
-    is built on feat/syncbox-records and not merged
-    (docs/handoffs/2026-10-22-syncbox-records.md); next, its review;
+    is built and reviewed on feat/syncbox-records, its review's
+    findings fixed, and not merged
+    (docs/handoffs/2026-10-22-syncbox-records.md); next, the merge;
     then part 2, the bridges, XC-398's spec and part 3b, the NI as the
     clock.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.

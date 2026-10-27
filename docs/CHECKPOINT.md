@@ -420,10 +420,14 @@ requester chose to merge the same day; true when written.*
 > **wl-sync's asks of 2026-10-19 are designed**
 > (`specs/2026-10-22-syncbox-records-and-segments-design.md`, the requester's decisions of
 > 2026-10-20 and 2026-10-22, in two parts), and **part 1, reading the box's logs as it writes
-> them today, is built on `feat/syncbox-records`, not merged**
-> (`handoffs/2026-10-22-syncbox-records.md`). Next: its review; then part 2, the bridges,
-> XC-398's spec and part 3b, the NI as the clock. Fine-tuning
+> them today, is built and reviewed on `feat/syncbox-records`, not merged**
+> (`handoffs/2026-10-22-syncbox-records.md`), its review's three Important findings fixed (one
+> re-graded from Minor) and nine Minor deferred (§6); wl-sync is asked to fix how its box
+> unwraps code-word ticks (its ask 6). Next: the merge; then part 2, the bridges, XC-398's spec
+> and part 3b, the NI as the clock. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 1's review, this said it was built and next was the review; true when written.*
 >
 > *Until wl-sync's asks were built, this named them as next, unbuilt; true when written.*
 >

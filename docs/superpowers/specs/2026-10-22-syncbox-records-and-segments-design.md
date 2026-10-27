@@ -225,3 +225,24 @@ This spec; `wl.yaml`'s pin and its `why`; `docs/CHECKPOINT.md`; a handoff for pa
 6. **One test's fixture is corrected, not its meaning:**
    `tests/timebase/test_clock.py::test_a_sync_box_log_with_no_barcode_is_the_clock_and_cannot_time_the_session`
    made its log barcode-less by removing `E` records; it removes `B` records.
+
+## Amendments, 2026-10-27, made in part 1's final review
+
+7. **`TimingProvenance` places only the SpikeGLX runs that share a barcode with session time** (the review's
+   I1). It placed every run with `fit_offset`, which raised on a run begun after a sync box restart, so such a
+   session never got a tier; that run is rejected as `no_shared_barcode` by `Segment.make`, and its codes wait
+   for a bridge. §8's test of a device recording begun after the restart, which the plan had left out, is
+   added.
+8. **The shared-barcode check comes before the unfitted system's** (its I2): a device whose every recording
+   began after the restart has no fit for that reason, and is rejected as `no_shared_barcode`, not as
+   `unfitted_system`, which names a mostly-dead cable.
+9. **The report's "Sync box restarts" lists every segment other than session time's** (its 7, re-graded
+   Important: a tier-D session is not otherwise in the report), so a box that crash-looped for the rest of a
+   session, its later segments holding no barcode, is named too.
+10. **Code words and edges can miss a counter wrap on the box** (its 3; wl-sync's, not this repository's).
+    wl-sync unwraps each kind of record on its own (`wl_sync/service.py::_TickUnwrapper`, one per path, at
+    `27c0e97`), noticing a wrap only when a record's raw tick is below the one before. Barcodes, at 1 Hz, see
+    every wrap; a path with no record for 71.6 minutes or more (the first code of a day hours after the box
+    started, or a long pause between codes) misses one, and every later record on it is 4294.97 s early for
+    each wrap missed. Session time would then place those codes that much early, and no check here catches it.
+    Asked of wl-sync (`HANDOVER-wl-sync.md`, its ask 6); not handled in part 1.
