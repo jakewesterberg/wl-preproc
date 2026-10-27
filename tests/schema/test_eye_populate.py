@@ -115,7 +115,7 @@ def _write_fixations(
 
     merged = tuple(sorted((*truth.code_words, *extra), key=lambda pair: pair[0]))
     new_truth = dataclasses.replace(truth, code_words=merged)
-    write_syncbox_log(session_dir / "syncbox" / "syncbox.log", recipe, new_truth, drift_ppm=0.0)
+    write_syncbox_log(session_dir / "syncbox" / "seg-000.log", recipe, new_truth, drift_ppm=0.0)
 
 
 def _inject_fixations(session_dir, recipe, truth, targets_deg: list[tuple[float, float]]) -> None:

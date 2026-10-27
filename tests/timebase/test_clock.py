@@ -90,17 +90,18 @@ def test_only_the_sync_box_clock_is_built_yet(tmp_path):
 
 
 def test_a_sync_box_log_with_no_barcode_is_the_clock_and_cannot_time_the_session(tmp_path):
-    """A log whose barcode line is dead is still the sync box's: the log is
+    """A log holding no barcode record is still the sync box's: the log is
     there, so the sync box is the clock, and asking it the time raises, as the
     events stage raised before. Nothing chooses another clock (the plan's
-    Review Focus 1)."""
+    Review Focus 1). The barcodes are its `B` records (design spec
+    `2026-10-22-syncbox-records-and-segments-design.md` section 3)."""
     from wl_preproc.timebase.clock import Clock, choose
     from wl_preproc.timebase.extract import find_recordings
 
     session_dir = _session(tmp_path)
     (log,) = find_recordings("syncbox", session_dir / "syncbox")
     header, *records = log.read_text().splitlines()
-    log.write_text("\n".join([header, *(record for record in records if not record.startswith("E,"))]) + "\n")
+    log.write_text("\n".join([header, *(record for record in records if not record.startswith("B,"))]) + "\n")
     assert choose(session_dir).source == "syncbox"
     with pytest.raises(ValueError, match="the sync box log decoded no barcodes"):
         Clock(source="syncbox", session_dir=session_dir).codes()

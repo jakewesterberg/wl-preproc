@@ -1,25 +1,21 @@
 import pytest
-from wl_sync.barcode import decode_edges
-from wl_sync.log import CodeWord, Edge, read_log
+from wl_sync.log import BarcodeEmitted, CodeWord, Edge, read_log
+from wl_sync.pins import BARCODE_PIN, GPIO_MAP
 
 from wl_preproc.synth.recipe import CI_RECIPE
-from wl_preproc.synth.syncbox import BARCODE_GPIO, SYNCBOX_PRE_ROLL_S, write_syncbox_log
+from wl_preproc.synth.syncbox import SYNCBOX_PRE_ROLL_S, write_syncbox_log
 from wl_preproc.synth.timeline import build_timeline
 
 
-def emit(tmp_path, drift_ppm=0.0, name="syncbox.log"):
+def emit(tmp_path, drift_ppm=0.0, name="seg-000.log"):
     truth = build_timeline(CI_RECIPE)
     path = tmp_path / name
     write_syncbox_log(path, CI_RECIPE, truth, drift_ppm=drift_ppm)
     return truth, read_log(path)
 
 
-def barcode_edges(records):
-    return [
-        (r.tick_us, r.level)
-        for r in records
-        if isinstance(r, Edge) and r.gpio == BARCODE_GPIO
-    ]
+def emitted(records):
+    return [r for r in records if isinstance(r, BarcodeEmitted)]
 
 
 def test_header_validates_and_names_the_session(tmp_path):
@@ -29,30 +25,29 @@ def test_header_validates_and_names_the_session(tmp_path):
     assert header.written_at.tzinfo is not None
 
 
-def test_barcodes_round_trip_through_the_real_decoder(tmp_path):
-    """Written with wl-sync's encoder, read with wl-sync's decoder. If the
-    generator and the pipeline ever disagree about the format, this fails."""
-    truth, (_, records) = emit(tmp_path)
-    decoded = decode_edges(barcode_edges(records), start_us=0)
-    assert [b.value for b in decoded] == [v for v, _ in truth.barcodes]
+def test_header_is_the_boards_and_the_first_segment(tmp_path):
+    """The box's own pin map, not names of this project's: the synthetic log
+    is the log the box writes (design spec
+    `2026-10-22-syncbox-records-and-segments-design.md` section 3)."""
+    _, (header, _) = emit(tmp_path)
+    assert header.gpio_map == GPIO_MAP
+    assert header.segment_index == 0
 
 
-def test_first_barcode_is_decodable(tmp_path):
-    """Without a pre-roll the first frame sits at tick 0 with no preceding idle,
-    and wl-sync's decoder correctly refuses it."""
+def test_every_barcode_is_a_record_of_the_box_and_none_is_drawn_on_its_pin(tmp_path):
+    """The box logs each barcode it emits and never captures its own barcode
+    line (wl-sync's `log.py`; its GPIO17 is an output)."""
     truth, (_, records) = emit(tmp_path)
-    assert decode_edges(barcode_edges(records), start_us=0)[0].value == truth.barcodes[0][0]
+    assert [r.value for r in emitted(records)] == [v for v, _ in truth.barcodes]
+    assert not [r for r in records if isinstance(r, Edge) and r.gpio == BARCODE_PIN]
 
 
 def test_barcode_times_match_ground_truth_after_removing_the_pre_roll(tmp_path):
     """The log's tick origin is deliberately not session time. A fixture where
     they coincide lets a pipeline bug that ignores the offset pass."""
     truth, (_, records) = emit(tmp_path)
-    decoded = decode_edges(barcode_edges(records), start_us=0)
-    for barcode, (_, expected_s) in zip(decoded, truth.barcodes):
-        assert barcode.start_us / 1e6 - SYNCBOX_PRE_ROLL_S == pytest.approx(
-            expected_s, abs=1e-3
-        )
+    for record, (_, expected_s) in zip(emitted(records), truth.barcodes, strict=True):
+        assert record.tick_us / 1e6 - SYNCBOX_PRE_ROLL_S == pytest.approx(expected_s, abs=1e-6)
 
 
 def test_every_code_word_is_logged(tmp_path):
@@ -80,3 +75,10 @@ def test_emission_is_deterministic(tmp_path):
     write_syncbox_log(first, CI_RECIPE, truth)
     write_syncbox_log(second, CI_RECIPE, truth)
     assert first.read_text() == second.read_text()
+
+
+def test_a_session_names_its_log_as_the_box_names_its_first_segment(tmp_path):
+    from wl_preproc.synth.session import generate_session
+
+    generate_session(tmp_path, CI_RECIPE)
+    assert sorted(p.name for p in (tmp_path / CI_RECIPE.session_id / "syncbox").glob("*.log")) == ["seg-000.log"]

@@ -61,7 +61,7 @@ def test_syncbox_extraction_recovers_every_ground_truth_barcode(tmp_path: Path):
     """
     truth = generate_session(tmp_path, RECIPES["ci"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
-    stream = extract_syncbox(session_dir / "syncbox" / "syncbox.log")
+    stream = extract_syncbox(session_dir / "syncbox" / "seg-000.log")
 
     assert stream.n_samples > 0
     assert len(stream.edges) > 0
@@ -379,7 +379,7 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
 
     measured: dict[str, tuple[int, int]] = {}
     for profile, cases in (
-        ("ci", (("syncbox", "syncbox/syncbox.log"), ("bcam", "bcam/frames.yaml"))),
+        ("ci", (("syncbox", "syncbox/seg-000.log"), ("bcam", "bcam/frames.yaml"))),
         ("stim", (("rhs", "rhs"),)),
         ("eye", (("ohdpi", f"ohdpi/{FILENAME}"), ("spikeglx", None))),
     ):

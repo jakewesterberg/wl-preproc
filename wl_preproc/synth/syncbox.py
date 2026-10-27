@@ -1,24 +1,25 @@
-"""Emit a sync box log for a planted timeline.
+"""Emit a sync box log for a planted timeline, as the box writes one.
 
-Barcodes go through wl-sync's own encoder rather than a local reimplementation,
-so a format change there breaks these fixtures loudly instead of letting the
-generator and the pipeline drift into disagreeing.
+The box logs each barcode it emits as a `BarcodeEmitted` ('B') record and
+never captures its own barcode line, and its header's `gpio_map` is the
+board's (`wl_sync.pins.GPIO_MAP`). Until 2026-10-22 this drew each barcode as
+edges on GPIO17 and named three pins of this project's own: a log the box does
+not write, read by a reader no real log could satisfy (design spec
+`2026-10-22-syncbox-records-and-segments-design.md` section 3). Every type
+comes from `wl_sync.log`, so a change of format there breaks these fixtures
+loudly instead of letting the generator and the pipeline drift apart.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from wl_sync.barcode import encode
-from wl_sync.log import SCHEMA_VERSION, CodeWord, Edge, Record, SyncBoxLogHeader, write_log
+from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, CodeWord, Record, SyncBoxLogHeader, write_log
+from wl_sync.pins import GPIO_MAP
 
 from wl_preproc.synth.recipe import SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.timeline import apply_drift
 from wl_preproc.synth.truth import GroundTruth
-
-BARCODE_GPIO = 17
-CODE_STROBE_GPIO = 18
-CODE_DATA_BASE_GPIO = 2
 
 # The log's tick origin is not session time, deliberately. Two reasons: the
 # decoder needs an idle before the first frame or it correctly refuses it, and a
@@ -31,25 +32,11 @@ SYNCBOX_PRE_ROLL_S = 1.0
 def write_syncbox_log(
     path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
 ) -> None:
-    records: list[Record] = []
+    def tick(time_s: float) -> int:
+        return int(round((apply_drift(time_s, drift_ppm) + SYNCBOX_PRE_ROLL_S) * 1e6))
 
-    for value, start_s in truth.barcodes:
-        tick = int(round((apply_drift(start_s, drift_ppm) + SYNCBOX_PRE_ROLL_S) * 1e6))
-        for level, duration_us in encode(value):
-            records.append(Edge(tick_us=tick, gpio=BARCODE_GPIO, level=level))
-            tick += duration_us
-        records.append(Edge(tick_us=tick, gpio=BARCODE_GPIO, level=0))
-
-    for time_s, word in truth.code_words:
-        records.append(
-            CodeWord(
-                tick_us=int(
-                    round((apply_drift(time_s, drift_ppm) + SYNCBOX_PRE_ROLL_S) * 1e6)
-                ),
-                word=word,
-            )
-        )
-
+    records: list[Record] = [BarcodeEmitted(tick_us=tick(start_s), value=value) for value, start_s in truth.barcodes]
+    records += [CodeWord(tick_us=tick(time_s), word=word) for time_s, word in truth.code_words]
     records.sort(key=lambda record: record.tick_us)
 
     header = SyncBoxLogHeader(
@@ -58,10 +45,7 @@ def write_syncbox_log(
         rig=recipe.rig,
         boot_id=f"synth{recipe.seed:08x}",
         written_at=SYNTH_EPOCH,
-        gpio_map={
-            "barcode_out": BARCODE_GPIO,
-            "code_strobe": CODE_STROBE_GPIO,
-            "code_data_base": CODE_DATA_BASE_GPIO,
-        },
+        gpio_map=GPIO_MAP,
+        segment_index=0,
     )
     write_log(path, header, records)

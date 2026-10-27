@@ -157,8 +157,9 @@ def _edges_from_bit(
 
 # Which digital-in line carries the barcode is this project's wiring
 # convention, not something the Intan header records: its digital channels are
-# named DIGITAL-IN-00.. and carry no semantics. So it is stated here, the way
-# `_syncbox_log.py` states the sync box's gpio_map key, rather than discovered.
+# named DIGITAL-IN-00.. and carry no semantics. So it is stated here rather than
+# discovered. (The sync box needs no such constant: it logs the barcodes it
+# emits as records of their own, `_syncbox_log.py`.)
 # Zero-based, and it is bit 0 that `wl_preproc/synth/rhs.py` drives -- but the
 # authority for January is the rig's wiring, so this constant is the one place
 # to change when that is measured rather than assumed.
@@ -215,8 +216,7 @@ def extract_rhs(session_dir: Path) -> BitStream:
 # The consuming half of `wl_preproc/synth/spikeglx.py`'s wiring convention:
 # which Port 0 line the barcode is on. Zero-based. SpikeGLX records the digital
 # lines' existence (`niXDChans1`) but nothing about their meaning, so this is
-# stated here rather than discovered -- the same shape as the sync box's
-# gpio_map key and the RHS digital bit.
+# stated here rather than discovered -- the same shape as the RHS digital bit.
 NIDQ_BARCODE_XD_LINE = 0
 
 _NIDQ_META_SUFFIX = ".meta"

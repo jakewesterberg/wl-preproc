@@ -1,12 +1,20 @@
 """The sync box log's one reader.
 
 `wl_sync.log` defines the on-disk shape: a JSON header line, then one CSV
-line per record, type-tagged 'E' (a GPIO transition) or 'W' (a code word
-latched on a strobe edge). The barcode is carried on whichever GPIO the
-header's own `gpio_map` names as the barcode line -- not a hardcoded pin
-number, because the header exists precisely so a reader never has to assume
-one. Recovering "barcode entries" from that line means running wl-sync's own
-frame decoder over its edges, never re-deriving the frame shape by hand.
+line per record, type-tagged 'E' (a transition on an input line), 'W' (a code
+word latched on a strobe edge), 'B' (a barcode the box emitted) or 'T' (a
+segment's trailer, which `read_log` skips). **The barcodes are the 'B'
+records**: the box never captures its own barcode line, which is an output
+(wl-sync's `pins.py`, GPIO17; its edge inputs are GPIO20-27), and logs each
+frame it emits instead, "the emitter's own account of what it put on the wire,
+not a measurement of it" (`wl_sync/log.py`). Until 2026-10-22 this decoded
+edges on the line the header's `gpio_map` named `barcode_out`, the shape only
+this project's synthetic logs had: a real log yielded no barcodes (design spec
+`2026-10-22-syncbox-records-and-segments-design.md` section 1).
+
+A 'B' tick is read before the frame is sent, so it leads the frame's edge on
+the wire by a delay not yet measured; it is used as it is, and recorded as
+uncorrected (that spec's section 5).
 
 Kept in its own module, separate from `extract.py`, so the log format's shape
 has exactly one reader.
@@ -16,48 +24,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wl_sync.barcode import decode_edges
-from wl_sync.log import Edge, read_log
-
-# `wl_preproc.synth.syncbox.write_syncbox_log` is the log's one writer today,
-# and this is the key it stamps into the header's gpio_map for the barcode
-# line. wl_sync treats gpio_map as an opaque dict[str, int] -- the name is
-# this project's own convention, not wl-sync's, so it is restated here as a
-# constant rather than imported from the synth package: a production reader
-# has no business depending on the synthetic fixture generator, even one that
-# happens to share its vocabulary.
-_BARCODE_GPIO_KEY = "barcode_out"
+from wl_sync.log import BarcodeEmitted, read_log
 
 
 def read_barcode_entries(path: Path) -> list[tuple[int, int]]:
-    """Decode the sync box log's barcode line into (value, timestamp_us) pairs.
+    """`(value, tick_us)` for every barcode the box logged emitting, in the
+    order the log holds them.
 
     `wl_sync.log.read_log` validates the header as it parses it (a malformed
-    header raises there, via `SyncBoxLogHeader`'s own pydantic validators) and
-    returns every record the log carries -- interleaving whatever GPIO lines
-    the sync box captured plus any strobed code words. Filtering to the line
-    the header names as the barcode, then handing those edges to
-    `wl_sync.barcode.decode_edges`, is the decode this function exists to own,
-    so every caller gets it for free instead of re-parsing the log itself.
-
-    `start_us=0` is passed to `decode_edges`: tick 0 is the log's own native
-    time origin, and the RP1 tick counter is known LOW there (nothing has
-    driven the line yet). Without it, `decode_edges` cannot verify the idle
-    preceding the very first frame and correctly refuses to decode it -- see
-    that function's own docstring.
+    header raises there, via `SyncBoxLogHeader`'s own pydantic validators),
+    drops a torn last line, and skips the trailer. A log holding no 'B' record
+    yields no barcodes, and a session whose sync box logged none has no
+    session time (`timebase/segments.py::session_reference`).
     """
-    header, records = read_log(path)
-    try:
-        barcode_gpio = header.gpio_map[_BARCODE_GPIO_KEY]
-    except KeyError as exc:
-        raise ValueError(
-            f"{path}: gpio_map has no {_BARCODE_GPIO_KEY!r} entry; found "
-            f"{sorted(header.gpio_map)}"
-        ) from exc
-
-    edges = [
-        (record.tick_us, record.level)
-        for record in records
-        if isinstance(record, Edge) and record.gpio == barcode_gpio
-    ]
-    return [(barcode.value, barcode.start_us) for barcode in decode_edges(edges, start_us=0)]
+    _header, records = read_log(path)
+    return [(record.value, record.tick_us) for record in records if isinstance(record, BarcodeEmitted)]
