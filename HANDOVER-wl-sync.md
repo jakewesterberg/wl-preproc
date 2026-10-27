@@ -115,3 +115,28 @@ animal's visit, at the task PC's request (wl-xcon's XC-087 and XC-088). What tha
   there (`HANDOVER-wl-expcontroller.md:404-405`), so `unassigned/` is never ingested.
 - **An id names the UTC day it opened, and keeps that id across midnight.**
 - **The box writes its own `manifest.json` in each folder.** You do not read it, and do not need to.
+
+## wl-preproc's answers, 2026-10-22
+
+Designed in `docs/superpowers/specs/2026-10-22-syncbox-records-and-segments-design.md`, the requester's
+decisions of 2026-10-20 and 2026-10-22; its part 1 is built on `feat/syncbox-records`, not merged.
+
+1. **The pin moves** to your `main` at `27c0e97`, and `docs/schemas/syncbox_log_header.json` is
+   regenerated from it. **The barcodes are your `B` records**, and nothing is read from the barcode pin;
+   our synthetic logs are written as the box writes them, `B` records and `wl_sync.pins.GPIO_MAP`.
+2. **Yes, tighten `SessionId.parse`.** Nothing here relies on the lenient form: `contracts/manifest.py`
+   validates a manifest's `session_id` through it, and a non-canonical id fails our folder-name check
+   anyway.
+3. **Every segment is read as its own clock**, as your §3.4 expects. Session time comes from the first
+   segment holding a barcode; a later segment, after a restart, gives it nothing until our part 2 bridges
+   it, through a device that recorded through the restart or else the task PC's clock, through the codes
+   both sides record. **Please confirm** that two segments in one session folder never share a clock: that
+   a roll at an open or a close always changes folders.
+4. **Two asks.**
+   - **The measured barcode delay in each segment's header,** from a `B` tick to the frame's lead edge on
+     the wire, as your bench loopback measures it; no value meaning unmeasured. The name and shape are
+     yours. Until it is there we use each tick as it is, and record the delay as unmeasured and uncorrected.
+   - **Records captured before a folder change in the closing segment.** Your §3.4 says records queued
+     during a roll can land up to a second on the far side, so a session's last codes could land in
+     `unassigned/`, which we never ingest.
+5. **`clock_trusted` and `clock_reason`** are recorded per segment and acted on nowhere, as your note asks.

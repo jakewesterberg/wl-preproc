@@ -201,3 +201,27 @@ Answered in `HANDOVER-wl-sync.md`, under its section of 2026-10-19:
 
 This spec; `wl.yaml`'s pin and its `why`; `docs/CHECKPOINT.md`; a handoff for part 1; the answers in
 `HANDOVER-wl-sync.md`.
+
+## Amendments, 2026-10-22, made while proving part 1's plan
+
+1. **A segment's roles, as stored** on `timebase.SyncBoxSegment`: `session_time`, `no_barcode` and
+   `after_restart_unbridged` (`timebase/segments.py::SEGMENT_ROLES`). The second is new to §6: a
+   segment holding no barcode, before session time's segment (a box that crashed within its first
+   second) or after it, places nothing.
+2. **The synthetic log is named as the box names a segment**, `seg-000.log` (wl-sync's
+   `segment.segment_name`). The restart fixture (`synth/recipe.py::SyncBoxRestartSpec`, its `at_s` and
+   `gap_s`) writes `seg-001.log` on a tick origin that starts below the first segment's, so a reader that
+   compared ticks by number would mix the two clocks, and drops every barcode emitted in the gap from every
+   device, since the box emits none while down.
+3. **The events stage failed on a restart too.** `timebase/clock.py::syncbox_codes` ran `fit_offset` on
+   every sync box log, so a restart would have failed the events stage as it failed `Segment.make` (§4); it
+   reads session time's segment alone.
+4. **The pin is wl-sync's `main` at `27c0e97`**, the commit current when planned. Each environment
+   installs it (`uv pip install --python <its python> "wl-sync @ git+…@27c0e97…"`); CI installs it from
+   `pyproject.toml`.
+5. **The report's restart section** (§6) names each later segment's first barcode and that barcode's time
+   by the box's clock (a barcode is seconds since 2020-01-01 UTC, `wl_sync.clock.BARCODE_EPOCH`), and is
+   live, as the reclamation list is: a segment part 2 bridges leaves it.
+6. **One test's fixture is corrected, not its meaning:**
+   `tests/timebase/test_clock.py::test_a_sync_box_log_with_no_barcode_is_the_clock_and_cannot_time_the_session`
+   made its log barcode-less by removing `E` records; it removes `B` records.

@@ -77,10 +77,13 @@ status:
     docs/handoffs/2026-10-19-ni-ingest.md). wl-xcon's XC-398, saccades
     in true visual angle, is accepted as a spec to write; its v1
     fixtures and their thresholds companion are merged (10ea913,
-    065da53). Next: wl-sync's asks of 2026-10-19
-    (HANDOVER-wl-sync.md; the pinned wl-sync cannot read today's logs,
-    and a real log's barcodes are its B records); then XC-398's spec
-    and part 3b, the NI as the clock.
+    065da53). wl-sync's asks of 2026-10-19 are designed
+    (docs/superpowers/specs/2026-10-22-syncbox-records-and-segments-design.md,
+    two parts); part 1, reading the box's logs as it writes them today,
+    is built on feat/syncbox-records and not merged
+    (docs/handoffs/2026-10-22-syncbox-records.md); next, its review;
+    then part 2, the bridges, XC-398's spec and part 3b, the NI as the
+    clock.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: the saccade detector's v1 fixtures and companion (065da53).
     Before them,
