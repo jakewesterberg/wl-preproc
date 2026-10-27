@@ -399,6 +399,9 @@ class Segment(dj.Computed):
                     {**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM}
                 )
                 continue
+            if not any(barcode.value in reference for barcode in scan.barcodes):
+                rejected.append({**key, "file_path": file_path, "reason": segments.NO_SHARED_BARCODE})
+                continue
             offset = fit_offset(scan.barcodes, reference, rate)
             first_barcode_us = min(barcode.start_us for barcode in scan.barcodes)
             accepted.append(

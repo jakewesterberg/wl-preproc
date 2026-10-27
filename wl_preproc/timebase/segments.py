@@ -72,15 +72,26 @@ UNFITTED_SYSTEM = "unfitted_system"
 # to keep up with.
 GAP_CORRUPTED = "gap_corrupted"
 
+# Not a verdict `classify_segment` can reach either: the file decoded barcodes,
+# but none of them is in session time's reference, so nothing places it. The
+# sync box's own segment after a restart is on another clock, and a device
+# recording begun after the restart saw only barcodes that segment emitted;
+# part 2 of the design bridges both (design spec
+# `2026-10-22-syncbox-records-and-segments-design.md` sections 4 and 7). Until
+# 2026-10-22 `timebase/fit.py::fit_offset` raised on such a file and nothing
+# caught it, so the whole stage failed instead of saying why.
+NO_SHARED_BARCODE = "no_shared_barcode"
+
 #: Every reason `RejectedSegment.reason` can hold, and where each is
 #: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
 #: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
-#: exists for it to inherit. `GAP_CORRUPTED` is decided per FILE, in
-#: `Segment.make`, overriding the verdict `classify_segment` returned for
-#: that file rather than adding a fact `classify_segment` itself lacked the
-#: inputs to see.
+#: exists for it to inherit. `NO_SHARED_BARCODE` is decided per FILE, in
+#: `Segment.make`, against session time's reference. `GAP_CORRUPTED` is
+#: decided per FILE, in `Segment.make`, overriding the verdict
+#: `classify_segment` returned for that file rather than adding a fact
+#: `classify_segment` itself lacked the inputs to see.
 REJECTION_REASONS: frozenset[str] = frozenset(
-    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED}
+    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE}
 )
 
 
