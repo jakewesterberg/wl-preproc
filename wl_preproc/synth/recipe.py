@@ -164,6 +164,19 @@ class RestartSpec(BaseModel):
     probe_bank: int | None = Field(default=None, ge=0)
 
 
+class SyncBoxRestartSpec(BaseModel):
+    """The sync box's process stopped at `at_s` (session time) and ran again
+    `gap_s` later, resuming into the open session's folder as its second
+    segment, on a clock that starts again (wl-sync's `segment.py`; design spec
+    `2026-10-22-syncbox-records-and-segments-design.md` section 4). It emits no
+    barcode while down, so no device records one then."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    at_s: float = Field(gt=0)
+    gap_s: float = Field(default=1.2, ge=0)
+
+
 class RigWarningSpec(BaseModel):
     """One warning the synthetic session accepted, as wl-xcon's
     `record.py::SessionRecord.warning` writes it: `run` is wl-xcon's 0-based
@@ -265,6 +278,9 @@ class SessionRecipe(BaseModel):
     # `2026-09-30-nwb-probes-design.md` section 7).
     extra_probes: tuple[ProbeSpec, ...] = ()
     spikeglx_restart: RestartSpec | None = None
+    # The sync box restarting mid-session; None by default, so every existing
+    # profile is byte-identical.
+    syncbox_restart: SyncBoxRestartSpec | None = None
     # wl-xcon's fault shapes (design spec `2026-10-01-runs-and-trials-design.md`
     # section 7), both empty by default so every existing profile is
     # byte-identical. `unclosed_blocks`: block numbers (from 1) whose BLOCK_END

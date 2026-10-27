@@ -22,9 +22,33 @@ has exactly one reader.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from wl_sync.log import BarcodeEmitted, read_log
+
+
+@dataclass(frozen=True, slots=True)
+class SyncBoxLog:
+    """One segment of the sync box's log: one run of its process, on a clock
+    of its own (wl-sync's `segment.py`), with what its header says of it and
+    the barcodes it logged emitting, `(value, tick_us)`."""
+
+    path: Path
+    segment_index: int
+    boot_id: str
+    clock_trusted: bool
+    clock_reason: str
+    barcodes: tuple[tuple[int, int], ...]
+
+
+def read_syncbox_log(path: Path) -> SyncBoxLog:
+    header, records = read_log(path)
+    return SyncBoxLog(
+        path=path, segment_index=header.segment_index, boot_id=header.boot_id,
+        clock_trusted=header.clock_trusted, clock_reason=header.clock_reason,
+        barcodes=tuple((record.value, record.tick_us) for record in records if isinstance(record, BarcodeEmitted)),
+    )
 
 
 def read_barcode_entries(path: Path) -> list[tuple[int, int]]:
@@ -37,5 +61,4 @@ def read_barcode_entries(path: Path) -> list[tuple[int, int]]:
     yields no barcodes, and a session whose sync box logged none has no
     session time (`timebase/segments.py::session_reference`).
     """
-    _header, records = read_log(path)
-    return [(record.value, record.tick_us) for record in records if isinstance(record, BarcodeEmitted)]
+    return list(read_syncbox_log(path).barcodes)

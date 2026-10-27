@@ -131,7 +131,11 @@ def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
     unchanged: the sync box's codes are the session's codes while it is the
     clock, and every stage reads them through `Clock.codes`."""
     reference = segments.session_reference(session_dir)
-    scans = segments.scan_system("syncbox", session_dir / "syncbox")
+    # The segment session time comes from, alone: a later one, after a
+    # restart, is on another clock (design spec
+    # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
+    timed = segments.session_log(session_dir).path
+    scans = [scan for scan in segments.scan_system("syncbox", session_dir / "syncbox") if scan.path == timed]
     if not scans:
         raise FileNotFoundError(
             f"{session_dir}: no syncbox recording, so this session has no "
@@ -157,10 +161,9 @@ def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
         )
 
     # `decode_stream` reads an escape payload by POSITION, not by comparing
-    # timestamps -- see its own docstring -- so a session recorded across more
-    # than one sync box log file needs re-sorting to restore emission order
-    # before decoding. A single file (the common case, and every current
-    # fixture) is already sorted; this is then a no-op.
+    # timestamps -- see its own docstring -- so the stream is sorted into
+    # emission order before decoding. One segment's words already are; this is
+    # then a no-op.
     converted.sort(key=lambda pair: pair[0])
     return converted
 

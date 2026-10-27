@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 
 from wl_sync.barcode import INTERVAL_US
 
+from wl_preproc.timebase._syncbox_log import SyncBoxLog, read_syncbox_log
+
 if TYPE_CHECKING:
     from wl_sync.barcode import Barcode
 
@@ -107,33 +109,59 @@ def classify_segment(duration_s: float, n_barcodes: int) -> str:
 # stay declarations. It also keeps this testable without a database.
 
 
-def session_reference(session_dir: Path) -> dict[int, float]:
-    """Barcode value -> session-time seconds, from the sync box's own log.
+def syncbox_logs(session_dir: Path) -> list[SyncBoxLog]:
+    """Every segment of the session's sync box log, in the order of its
+    header's `segment_index`: a file's name sorts `seg-1000.log` before
+    `seg-999.log`. Each is one run of the box's process on a clock of its own,
+    and a restart resumes into the open session's folder (wl-sync's
+    `segment.py`; design spec `2026-10-22-syncbox-records-and-segments-design.md`
+    section 4), so no tick is ever compared across two of them."""
+    from wl_preproc.timebase.extract import find_recordings
 
-    Session time is t=0 at the sync box's FIRST barcode, on every session type,
-    one code path (spec section 4.5). So the reference is built by decoding that
-    log and rebasing to its first barcode -- never from `GroundTruth`, which
-    exists only in the synthetic generator and will not exist in January.
+    logs = [read_syncbox_log(path) for path in find_recordings("syncbox", session_dir / "syncbox")]
+    return sorted(logs, key=lambda log: (log.segment_index, log.path.name))
 
-    Raises if the sync box recorded nothing decodable: without a reference there
-    is no session time at all, and every other system's fit would silently
-    become a fit against whichever device happened to be read first.
-    """
-    from wl_sync.barcode import decode_edges
 
-    from wl_preproc.timebase.extract import extract_syncbox, find_recordings
+def session_log(session_dir: Path) -> SyncBoxLog:
+    """The segment session time comes from: the first holding a barcode. A box
+    that crashed within its first second logged none in that segment.
 
-    logs = find_recordings("syncbox", session_dir / "syncbox")
+    Raises if the sync box recorded nothing, or no barcode in any segment:
+    without a reference there is no session time at all, and every other
+    system's fit would silently become a fit against whichever device happened
+    to be read first."""
+    logs = syncbox_logs(session_dir)
     if not logs:
         raise FileNotFoundError(
             f"{session_dir}: no sync box log, so this session has no session "
             "time. Every other system is positioned against it, so there is "
             "nothing to align to rather than one system missing"
         )
+    for log in logs:
+        if log.barcodes:
+            return log
+    raise ValueError(
+        f"{session_dir}: the sync box log decoded no barcodes, so session "
+        "time cannot be established"
+    )
 
-    decoded = [
-        barcode for log in logs for barcode in decode_edges(list(extract_syncbox(log).edges))
-    ]
+
+def session_reference(session_dir: Path) -> dict[int, float]:
+    """Barcode value -> session-time seconds, from the sync box's own log.
+
+    Session time is t=0 at the sync box's FIRST barcode, on every session type,
+    one code path (spec section 4.5), within the segment `session_log` names:
+    a later segment, after a restart, is on another clock and gives it nothing
+    (design spec `2026-10-22-syncbox-records-and-segments-design.md` section
+    4). Built by decoding that segment and rebasing to its first barcode --
+    never from `GroundTruth`, which exists only in the synthetic generator and
+    will not exist in January.
+    """
+    from wl_sync.barcode import decode_edges
+
+    from wl_preproc.timebase.extract import extract_syncbox
+
+    decoded = decode_edges(list(extract_syncbox(session_log(session_dir).path).edges))
     if not decoded:
         raise ValueError(
             f"{session_dir}: the sync box log decoded no barcodes, so session "

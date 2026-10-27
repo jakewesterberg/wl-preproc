@@ -6,7 +6,6 @@ import datetime
 from pathlib import Path
 
 import numpy as np
-from wl_sync.segment import segment_name
 from wl_sync.session import SessionId
 
 from wl_preproc.contracts.done import DONE_SCHEMA_VERSION, DoneMarker, FileEntry, blake3_file
@@ -24,7 +23,7 @@ from wl_preproc.synth.ohdpi import write_ohdpi
 from wl_preproc.synth.recipe import Fault, SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.rhs import write_rhs
 from wl_preproc.synth.spikeglx import write_spikeglx
-from wl_preproc.synth.syncbox import write_syncbox_log
+from wl_preproc.synth.syncbox import write_syncbox_segments
 from wl_preproc.synth.timeline import build_timeline
 from wl_preproc.synth.truth import GroundTruth
 
@@ -83,9 +82,7 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
             # drifting it alongside every device, which this did until Phase
             # 1c-4, cancels the drift exactly and leaves every fixture with no
             # relative drift for the rate fit to find.
-            # Named as the box names a session's first segment (wl-sync's
-            # `segment.py`), so the synthetic folder is the box's.
-            write_syncbox_log(directory / segment_name(0), recipe, truth, drift_ppm=0.0)
+            write_syncbox_segments(directory, recipe, truth)
             write_task_file(directory / "task.json", truth)
         elif system == "spikeglx":
             bin_path = write_spikeglx(
