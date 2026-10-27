@@ -538,7 +538,7 @@ third_party:
 # something here.
 requires:
   - name: wl-sync
-    pinned_at: 90b931e8d4714a0b199510d5ccb8813114bb076e
+    pinned_at: 27c0e9780a388cbc120ecfadcb54b6f288740a98
     for: session identity, the barcode codec, and the log format
     why: >-
       The sync box owns everything it produces, and vendoring copies here would
@@ -549,7 +549,11 @@ requires:
       directory. On a moving ref, a commit to wl-sync main would change this
       repository's exported contract with nobody here touching it. The
       dependency runs one way only — wl-sync must never import from wl-preproc,
-      and CI asserts it.
+      and CI asserts it. Moved on 2026-10-22 from 90b931e (2026-08-13) to
+      wl-sync's main of that day: the box's logs since 2026-08-17 carry header
+      fields (segment_index, ordering, clock_trusted, clock_reason) and B and T
+      records the old pin refused, so no real log could be read
+      (HANDOVER-wl-sync.md, 2026-10-19).
 
 publishes:
   - name: session-manifest

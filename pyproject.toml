@@ -25,8 +25,11 @@ dependencies = [
     # current" step re-runs that export and `git diff --exit-code`s the
     # directory. On a moving ref, a commit to wl-sync main changes this repo's
     # published contract -- or reds CI on an unrelated PR -- with no change in
-    # this repo at all. Resolved 2026-08-14 with `git ls-remote <url> main`.
-    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@90b931e8d4714a0b199510d5ccb8813114bb076e",  # main
+    # this repo at all. Resolved 2026-08-14 with `git ls-remote <url> main`;
+    # moved 2026-10-22 to wl-sync's main of that day, because the box's logs
+    # since 2026-08-17 carry header fields and `B`/`T` records the old pin
+    # refused (`HANDOVER-wl-sync.md`, 2026-10-19).
+    "wl-sync @ git+https://github.com/jakewesterberg/wl-sync.git@27c0e9780a388cbc120ecfadcb54b6f288740a98",  # main
     "datajoint>=2.3,<3",
     # `wl_preproc/eye/ohdpi.py` imports pandas directly, for `read_ohdpi`'s
     # column-selective CSV reads. It already arrives unconditionally with

@@ -5,6 +5,16 @@
       "title": "Boot Id",
       "type": "string"
     },
+    "clock_reason": {
+      "default": "",
+      "title": "Clock Reason",
+      "type": "string"
+    },
+    "clock_trusted": {
+      "default": true,
+      "title": "Clock Trusted",
+      "type": "boolean"
+    },
     "gpio_map": {
       "additionalProperties": {
         "type": "integer"
@@ -12,12 +22,27 @@
       "title": "Gpio Map",
       "type": "object"
     },
+    "ordering": {
+      "default": "per-path",
+      "enum": [
+        "per-path",
+        "global"
+      ],
+      "title": "Ordering",
+      "type": "string"
+    },
     "rig": {
       "title": "Rig",
       "type": "string"
     },
     "schema_version": {
       "title": "Schema Version",
+      "type": "integer"
+    },
+    "segment_index": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Segment Index",
       "type": "integer"
     },
     "session_id": {

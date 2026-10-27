@@ -120,3 +120,17 @@ def test_job_request_schema_carries_the_aim_and_the_assignment(tmp_path):
     assignment = schema["$defs"]["InsertionAreaAssignment"]
     assert set(assignment["properties"]["source"]["enum"]) == {
         "histology", "functional_mapping", "waveform_depth", "structural_imaging", "at_rig", "other"}
+
+
+def test_the_committed_syncbox_header_is_the_one_wl_sync_writes_today(tmp_path):
+    """The box's logs since 2026-08-17 carry four header fields the wl-sync
+    pinned until 2026-10-22 did not know, so it could not read them
+    (`HANDOVER-wl-sync.md`, 2026-10-19). The committed export is the installed
+    wl-sync's, and that wl-sync knows them."""
+    from pathlib import Path
+
+    committed = Path(__file__).resolve().parents[2] / "docs" / "schemas" / "syncbox_log_header.json"
+    export_schemas(tmp_path)
+    exported = json.loads((tmp_path / "syncbox_log_header.json").read_text())
+    assert json.loads(committed.read_text()) == exported
+    assert {"segment_index", "ordering", "clock_trusted", "clock_reason"} <= set(exported["properties"])
