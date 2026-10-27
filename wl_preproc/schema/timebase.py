@@ -525,6 +525,13 @@ class TimingProvenance(dj.Computed):
                             word_stream = extract_nidq_words(scan.path)
                         except ValueError:
                             continue
+                        # A run sharing no barcode with session time began after a
+                        # sync box restart; `Segment.make` rejects it as
+                        # `no_shared_barcode`, and nothing places its codes until a
+                        # bridge does (design spec
+                        # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
+                        if not any(barcode.value in reference for barcode in scan.barcodes):
+                            continue
                         offset = fit_offset(scan.barcodes, reference, rate)
                         pairs.extend(
                             (native / word_stream.fs_hz / rate.scale + offset.offset_s, code)

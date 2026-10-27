@@ -1385,17 +1385,19 @@ def _landed_without(session: dict) -> str:
 
 
 def _syncbox_restarts(prefix: str = DEFAULT_PREFIX) -> list[dict]:
-    """Every sync box segment after a restart that waits for a bridge
-    (`timebase.SyncBoxSegment`, role `after_restart_unbridged`; design spec
-    `2026-10-22-syncbox-records-and-segments-design.md` sections 4 and 6),
-    with its session's folder. Live, as the reclamation list is: a segment
-    part 2 bridges changes role and leaves it. Not part of `Readings`, for
+    """Every sync box segment other than session time's, with its session's
+    folder: each came from a restart of the box (`timebase.SyncBoxSegment`;
+    design spec `2026-10-22-syncbox-records-and-segments-design.md` sections 4
+    and 6), whether it waits for a bridge or logged no barcode, as a box that
+    crash-looped does. Live, as the reclamation list is: a segment part 2
+    bridges changes role and leaves it. Not part of `Readings`, for
     `_eye_rows`' reason: only `wlpp report` pays for it."""
     from wl_preproc.schema import ingest, timebase
-    from wl_preproc.timebase.segments import SEGMENT_AFTER_RESTART
+    from wl_preproc.timebase.segments import SEGMENT_AFTER_RESTART, SEGMENT_NO_BARCODE
 
     timebase.activate(prefix=prefix)
-    rows = (timebase.SyncBoxSegment & {"role": SEGMENT_AFTER_RESTART}) * ingest.Ingestion.proj("session_dir")
+    rows = (timebase.SyncBoxSegment & [{"role": SEGMENT_AFTER_RESTART}, {"role": SEGMENT_NO_BARCODE}]) * \
+        ingest.Ingestion.proj("session_dir")
     return rows.to_dicts(order_by=["subject", "session_datetime", "segment_index"])
 
 
@@ -1504,9 +1506,11 @@ def build_report(
     lines += ["", f"## Sync box restarts — {len(restarts)}", ""]
     lines += [
         f"- `{Path(row['session_dir']).name}` — `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
-        f"the sync box restarted: `{row['file_path']}` resumed at barcode {row['first_barcode']} "
-        f"({BARCODE_EPOCH + datetime.timedelta(seconds=row['first_barcode']):%Y-%m-%d %H:%M:%S} UTC by the box's "
-        "clock), on a clock of its own, and its records wait for a bridge"
+        f"the sync box restarted: `{row['file_path']}` "
+        + (f"resumed at barcode {row['first_barcode']} "
+           f"({BARCODE_EPOCH + datetime.timedelta(seconds=row['first_barcode']):%Y-%m-%d %H:%M:%S} UTC by the "
+           "box's clock), on a clock of its own, and its records wait for a bridge"
+           if row["first_barcode"] is not None else "logged no barcode, so nothing in it is timed")
         for row in restarts
     ] or ["- none"]
 
