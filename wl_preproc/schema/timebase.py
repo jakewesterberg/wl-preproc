@@ -69,6 +69,8 @@ _TIER_ENUM = "enum('A','B','C','D')"
 # not fitted -- and it is strictly more informative than absence, which cannot
 # distinguish "checked, could not fit" from "not reached yet".
 _FIT_STATUS_ENUM = "enum('fitted','no_recording','unfittable')"
+# `timebase/segments.py::SEGMENT_ROLES`, which a test holds this to.
+_SEGMENT_ROLE_ENUM = "enum('session_time','no_barcode','after_restart_unbridged')"
 
 # `TimingProvenance` once compared the measured block boundary with wl.works'
 # assertion of it (`block_agreement`), within a tolerance kept here and later
@@ -117,6 +119,53 @@ class SessionClock(dj.Imported):
             # says why on each pass (part 3a's final review, I3).
             return
         self.insert1({**key, "source": choice.source, "reason": choice.reason})
+
+
+@schema
+class SyncBoxSegment(dj.Computed):
+    definition = f"""
+    # One segment of the session's sync box log: one run of the box's process,
+    # on a clock of its own (design spec
+    # `2026-10-22-syncbox-records-and-segments-design.md` section 6).
+    # Key: (subject, session_datetime, segment_index).
+    -> pipeline.Session
+    segment_index : int unsigned  # its header's, which orders a folder's segments
+    ---
+    file_path          : varchar(255)  # relative to the session's syncbox folder
+    boot_id            : varchar(255)  # as its header writes it
+    n_barcodes         : int unsigned  # its 'B' records
+    first_barcode=null : int unsigned  # null when it logged none
+    last_barcode=null  : int unsigned
+    clock_trusted      : tinyint(1)    # the box's judgement of its own wall clock, as written; acted on nowhere
+    clock_reason       : varchar(255)
+    role               : {_SEGMENT_ROLE_ENUM}
+    barcode_delay_us=null : double  # added to every 'B' tick; null while unmeasured and uncorrected (section 5)
+    """
+
+    @property
+    def key_source(self):
+        """Every landed session with a sync box. Imported locally, as
+        `SystemTimebase`'s is."""
+        from wl_preproc.schema import ingest
+
+        return pipeline.Session & ingest.Ingestion & (core.AcquisitionSystem & {"system": "syncbox"})
+
+    def make(self, key: dict) -> None:
+        from wl_preproc.schema import ingest
+        from wl_preproc.timebase import segments
+
+        session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
+        logs = segments.syncbox_logs(session_dir)
+        self.insert([
+            {**key, "segment_index": log.segment_index,
+             "file_path": str(log.path.relative_to(session_dir / "syncbox")), "boot_id": log.boot_id,
+             "n_barcodes": len(log.barcodes),
+             "first_barcode": log.barcodes[0][0] if log.barcodes else None,
+             "last_barcode": log.barcodes[-1][0] if log.barcodes else None,
+             "clock_trusted": log.clock_trusted, "clock_reason": log.clock_reason, "role": role,
+             "barcode_delay_us": None}
+            for log, role in zip(logs, segments.segment_roles(logs), strict=True)
+        ])
 
 
 @schema

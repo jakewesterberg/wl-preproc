@@ -91,3 +91,16 @@ def test_a_box_that_logged_no_barcode_in_any_segment_gives_no_session_time(tmp_p
     _segment(syncbox_dir, "seg-000.log", 0, [CodeWord(tick_us=500_000, word=0x8001)])
     with pytest.raises(ValueError, match="no barcodes"):
         segments.session_reference(tmp_path / "s")
+
+
+def test_each_segment_has_a_role(tmp_path):
+    """Session time's segment; one that logged no barcode, before it (a box
+    that crashed within its first second) or after; and one after a restart,
+    on another clock, waiting for part 2's bridge (section 6)."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [CodeWord(tick_us=500_000, word=0x8001)])
+    _segment(syncbox_dir, "seg-001.log", 1, [BarcodeEmitted(tick_us=2_000_000, value=70)])
+    _segment(syncbox_dir, "seg-002.log", 2, [BarcodeEmitted(tick_us=500_000, value=75)])
+    _segment(syncbox_dir, "seg-003.log", 3, [CodeWord(tick_us=600_000, word=0x8002)])
+    assert segments.segment_roles(segments.syncbox_logs(tmp_path / "s")) == [
+        "no_barcode", "session_time", "after_restart_unbridged", "no_barcode"]

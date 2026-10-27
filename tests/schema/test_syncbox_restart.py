@@ -61,3 +61,38 @@ def test_a_session_whose_box_restarted_is_tier_d(restarted):
 
     key, _, _ = restarted
     assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
+
+
+def test_each_segment_of_the_box_is_recorded_with_its_role(restarted):
+    """`timebase.SyncBoxSegment` (section 6): what each segment's header says,
+    its barcodes, and its role. The barcode delay is null, unmeasured and
+    uncorrected, until wl-sync writes it into the header (section 5)."""
+    from wl_preproc.schema import timebase
+
+    key, _, _ = restarted
+    rows = (timebase.SyncBoxSegment & key).to_dicts(order_by="segment_index")
+    assert [(row["segment_index"], row["file_path"], row["n_barcodes"], row["first_barcode"], row["last_barcode"],
+             row["role"]) for row in rows] == [
+        (0, "seg-000.log", 8, 1_000_000, 1_000_007, "session_time"),
+        (1, "seg-001.log", 6, 1_000_009, 1_000_014, "after_restart_unbridged")]
+    assert {(row["boot_id"][:5], bool(row["clock_trusted"]), row["clock_reason"], row["barcode_delay_us"])
+            for row in rows} == {("synth", True, "", None)}
+
+
+def test_the_report_names_a_session_whose_box_restarted(restarted, prefix):
+    from wl_preproc.cli.report import build_report
+
+    from tests.cli.test_report import _declared_count, _line_for, _section
+
+    key, session_dir, _ = restarted
+    section = _section(build_report(session_dir.parent, prefix=prefix), "Sync box restarts")
+    line = _line_for(section, key["subject"])
+    assert "`seg-001.log`" in line and "wait for a bridge" in line
+    assert _declared_count(section) == len([row for row in section.splitlines() if row.startswith("- ")])
+
+
+def test_the_tables_role_values_are_the_segments_roles(restarted, enum_values):
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.segments import SEGMENT_ROLES
+
+    assert enum_values(timebase.SyncBoxSegment.heading.attributes["role"].type) == set(SEGMENT_ROLES)

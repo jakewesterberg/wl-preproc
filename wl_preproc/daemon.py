@@ -176,6 +176,10 @@ def _computed_tables() -> list:
     this ordering is what avoids the second.
     """
     return [
+        # Reads the sync box's folder alone; nothing here waits on it, and its
+        # rows say which segment keeps session time (design spec
+        # `2026-10-22-syncbox-records-and-segments-design.md` section 6).
+        timebase.SyncBoxSegment,
         timebase.SystemTimebase,
         core.Segment,
         # After `Segment`, whose rows are its key_source and whose `file_path`

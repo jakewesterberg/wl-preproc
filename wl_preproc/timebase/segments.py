@@ -157,6 +157,25 @@ def session_log(session_dir: Path) -> SyncBoxLog:
     )
 
 
+#: A sync box segment's role, as `timebase.SyncBoxSegment` stores it (design
+#: spec `2026-10-22-syncbox-records-and-segments-design.md` section 6). Part 2
+#: adds a role for each bridge.
+SEGMENT_SESSION_TIME = "session_time"
+SEGMENT_NO_BARCODE = "no_barcode"
+SEGMENT_AFTER_RESTART = "after_restart_unbridged"
+SEGMENT_ROLES = (SEGMENT_SESSION_TIME, SEGMENT_NO_BARCODE, SEGMENT_AFTER_RESTART)
+
+
+def segment_roles(logs: list[SyncBoxLog]) -> list[str]:
+    """Each segment's role, in the order of `logs` (`syncbox_logs`'s): the
+    first holding a barcode keeps session time; any other holding one came
+    after a restart, on another clock, and waits for a bridge; one holding
+    none places nothing, before session time's segment or after it."""
+    timed = next((log for log in logs if log.barcodes), None)
+    return [SEGMENT_SESSION_TIME if log is timed else SEGMENT_AFTER_RESTART if log.barcodes else SEGMENT_NO_BARCODE
+            for log in logs]
+
+
 def session_reference(session_dir: Path) -> dict[int, float]:
     """Barcode value -> session-time seconds, from the sync box's own log.
 
