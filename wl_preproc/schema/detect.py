@@ -100,7 +100,7 @@ from pathlib import Path
 import datajoint as dj
 import numpy as np
 
-from wl_preproc.eye.detect.geometry import GEOMETRIES, UNSTATED_GEOMETRY
+from wl_preproc.eye.detect.geometry import DEFAULT_GEOMETRY, GEOMETRIES, PER_AXIS, TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.labels import (
     Label,
     Run,
@@ -554,7 +554,7 @@ class EyeDetection(dj.Computed):
         """
         from wl_preproc.eye.detect.registry import get_detector
         from wl_preproc.eye.detect.validity import ValidityParams
-        from wl_preproc.eye.detect.velocity import velocity
+        from wl_preproc.eye.detect.velocity import local_velocity, velocity
         from wl_preproc.eye.ohdpi import read_ohdpi
         from wl_preproc.schema import eye as eye_schema, ingest
 
@@ -620,6 +620,12 @@ class EyeDetection(dj.Computed):
             )
             gaze, _repaired = _repaired_gaze(path, file_eye, map_, fs_hz, validity_params)
             v = velocity(gaze, fs_hz)
+            # Under true angle, the eye's angular velocity in the local frame at
+            # each sample (true-angle spec section 5): what every run is
+            # measured on, and what a detector that detects in the setting's
+            # geometry is handed (`registry.Detector.detects_in_geometry`).
+            # Under per-axis, the per-axis velocity, as v1.
+            measured_v = local_velocity(gaze, fs_hz) if geometry == TRUE_ANGLE else v
             available = labels_from_runs(
                 [Run(r["run_start"], r["run_stop"], Label(r["label"]))
                  for r in (EyeValidity.Run & {**validity_key, "eye": eye_value}).to_dicts(
@@ -631,8 +637,9 @@ class EyeDetection(dj.Computed):
             # `detector.detect`, never `detector.run`: the wrapper is what
             # holds the detector to its own declared `vocabulary`, and this
             # is the one place in production that runs a detector at all.
-            spans[eye_value] = detector.detect(gaze, v, offered, fs_hz, detector_params)
-            per_eye[eye_value] = (gaze, v, offered)
+            spans[eye_value] = detector.detect(gaze, measured_v if detector.detects_in_geometry else v, offered,
+                                               fs_hz, detector_params)
+            per_eye[eye_value] = (gaze, measured_v, offered)
 
         for eye_value in ("left", "right"):
             if eye_value in refused_reason:
@@ -1749,6 +1756,21 @@ def register_default_paramsets() -> dict[str, int]:
     }
 
 
+def register_per_axis_paramsets(names) -> dict[str, int]:
+    """A per-axis `eye_detection` paramset for each detector named, returned
+    by name: its default paramset with `geometry` `"per-axis"`, v1's
+    behaviour, so its results compare with the per-axis literature
+    (true-angle spec section 3, the requester's decision 2). Registered only
+    on request -- nothing calls this by default, so detection costs what it
+    did; once registered, `EyeDetection` runs it beside the default, as it
+    runs any registered paramset. Idempotent, by content hash."""
+    from wl_preproc.eye.detect.registry import get_detector
+
+    return {name: paramset.register("eye_detection", {**_eye_detection_params(get_detector(name)),
+                                                      "geometry": PER_AXIS})
+            for name in names}
+
+
 def _eye_detection_params(detector) -> dict:
     """One detector's `eye_detection` paramset dict: its own declared
     defaults, plus the keys the whole subsystem shares.
@@ -1781,7 +1803,12 @@ def _eye_detection_params(detector) -> dict:
     exactly the per-detector threshold this paramset shape exists to prevent.
 
     `detector` is the whole `registry.Detector`, not its name, because the
-    name alone is what required a lookup table in the first place."""
+    name alone is what required a lookup table in the first place.
+
+    **`geometry` is written last too, for the same reason** (true-angle spec
+    section 3): a detector that reads sizes declares the field, defaulting to
+    per-axis -- what a paramset without the key means (amendment 3) -- and
+    the registered default is true angle."""
     from dataclasses import asdict
 
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
@@ -1790,6 +1817,7 @@ def _eye_detection_params(detector) -> dict:
         "detector": detector.name,
         **asdict(detector.defaults),
         "microsaccade_max_deg": MICROSACCADE_MAX_DEG,
+        "geometry": DEFAULT_GEOMETRY,
     }
 
 

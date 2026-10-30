@@ -77,7 +77,10 @@ import pytest
 # `__globals__` is still the ENCLOSING MODULE's namespace, never the
 # enclosing function's own locals.
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
-from wl_preproc.eye.detect.geometry import PER_AXIS, wrap_360_deg
+from wl_preproc.eye.detect.geometry import (
+    PER_AXIS, TRUE_ANGLE, directions, local_coordinates_deg, true_angle_deg, wrap_360_deg,
+)
+from wl_preproc.eye.detect.measure import amplitude
 
 TRIAL_DURATION_S = 3.0
 
@@ -1241,10 +1244,10 @@ def test_bmd_microsaccades_are_measured_from_take_off(stepped_session):
                 continue
             if run["reliability"] is None:  # a saccade copied from Engbert-Kliegl
                 assert run["label"] == "saccade", (trace, start, stop)
-                expected = measure(gaze, v, start, stop, fs_hz, geometry=PER_AXIS)
+                expected = measure(gaze, v, start, stop, fs_hz, geometry=TRUE_ANGLE)
             else:  # BMD's own event, either side of the cut (final review I1)
                 takeoff = start >= 1 and offered[start - 1] is None and bool(np.isfinite(gaze[start - 1]).all())
-                expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz, geometry=PER_AXIS)
+                expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz, geometry=TRUE_ANGLE)
                 checked += 1
             assert run["amplitude_deg"] == expected.amplitude_deg, (trace, start, stop)
             assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (trace, start, stop)
@@ -1450,11 +1453,13 @@ def _stored_inputs(session_key, eye_value):
     """What `EyeDetection.make()` measured one eye's runs on, rebuilt the way
     it builds them: `(gaze, velocity, offered, fs_hz)`. The gaze goes through
     that eye's STORED calibration, so a test can recompute a stored
-    measurement from the very numbers it was computed from."""
+    measurement from the very numbers it was computed from. The velocity is
+    the default paramsets' -- true angle's, the local frame's (true-angle
+    spec section 5)."""
     from pathlib import Path
 
     from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs
-    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.detect.velocity import local_velocity
     from wl_preproc.eye.gaze import gaze_trace
     from wl_preproc.eye.ohdpi import read_ohdpi
     from wl_preproc.schema import core, detect, ingest
@@ -1475,7 +1480,7 @@ def _stored_inputs(session_key, eye_value):
         len(gaze),
     )
     offered = np.where(available == Label.FIXATION, None, available)
-    return gaze, velocity(gaze, fs_hz), offered, fs_hz
+    return gaze, local_velocity(gaze, fs_hz), offered, fs_hz
 
 
 def test_no_saccade_row_is_stored_at_zero_amplitude_with_a_nonzero_peak_velocity(stepped_session):
@@ -1614,9 +1619,9 @@ def test_nslr_measures_each_planted_step_to_where_the_eye_lands(stepped_session)
             start, stop = run["run_start"], run["run_stop"]
             assert stop < len(gaze) and offered[stop] is None, "the landing must be interior"
             speed = np.hypot(v[start:stop + 1, 0], v[start:stop + 1, 1])
-            assert run["amplitude_deg"] == _hypot(gaze[stop] - gaze[start]), (trace, start)
+            assert run["amplitude_deg"] == amplitude(gaze, start, stop + 1, geometry=TRUE_ANGLE), (trace, start)
             assert run["peak_velocity_deg_s"] == float(speed.max()), (trace, start)
-            assert run["amplitude_deg"] != _hypot(gaze[stop - 1] - gaze[start]), (trace, start)
+            assert run["amplitude_deg"] != amplitude(gaze, start, stop, geometry=TRUE_ANGLE), (trace, start)
 
 
 def test_every_other_detectors_measurements_are_unchanged(stepped_session):
@@ -1647,7 +1652,7 @@ def test_every_other_detectors_measurements_are_unchanged(stepped_session):
                         < _NSLR_MIN_MEASURED_SACCADE_MS / 1000.0):
                     assert run["amplitude_deg"] is None, (name, trace)
                     continue
-                expected = measure(gaze, v, run["run_start"], run["run_stop"], fs_hz, geometry=PER_AXIS)
+                expected = measure(gaze, v, run["run_start"], run["run_stop"], fs_hz, geometry=TRUE_ANGLE)
                 assert run["amplitude_deg"] == expected.amplitude_deg, (name, trace)
                 assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (name, trace)
                 checked += 1
@@ -4463,8 +4468,9 @@ _DIRECTION_TOLERANCE_DEG = {True: 3.0, False: 15.0}  # keyed on "1 deg or more"
 def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped_session):
     """Spec section 4. On every trace, for every registered detector:
     - a row with an amplitude has its start and end positions, the amplitude
-      is exactly their distance, and the direction is their angle (NULL only
-      where they coincide);
+      is exactly their true angle, and the direction is the end's in the
+      eye's frame at the start (NULL only where they coincide; true-angle
+      spec section 4);
     - a row without an amplitude has none of the five."""
     import math
 
@@ -4480,13 +4486,14 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
                 if row["amplitude_deg"] is None:
                     assert all(row[column] is None for column in geometry), (name, trace, row)
                     continue
-                dx = row["end_x_deg"] - row["start_x_deg"]
-                dy = row["end_y_deg"] - row["start_y_deg"]
-                assert row["amplitude_deg"] == float(np.hypot(dx, dy)), (name, trace, row)
-                if dx == 0.0 and dy == 0.0:
+                start = directions(np.array([row["start_x_deg"], row["start_y_deg"]]))
+                end = directions(np.array([row["end_x_deg"], row["end_y_deg"]]))
+                assert row["amplitude_deg"] == float(true_angle_deg(start, end)), (name, trace, row)
+                if (row["start_x_deg"], row["start_y_deg"]) == (row["end_x_deg"], row["end_y_deg"]):
                     assert row["direction_deg"] is None, (name, trace, row)
                 else:
-                    assert row["direction_deg"] == float(wrap_360_deg(math.degrees(math.atan2(dy, dx)))), (name, trace, row)
+                    lx, ly = local_coordinates_deg(end, start)
+                    assert row["direction_deg"] == float(wrap_360_deg(math.degrees(math.atan2(ly, lx)))), (name, trace, row)
                 measured += 1
     assert measured, "the fixture must give the detectors events to measure"
 
