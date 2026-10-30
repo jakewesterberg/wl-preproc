@@ -77,7 +77,8 @@ A new module, `eye/detect/geometry.py`, holds them, and nothing else computes th
 - **True angle** between directions `u` and `v`: `atan2(|u × v|, u · v)` (exact at small angles, where
   `acos` loses digits). wl-xcon's `geometry.separation_deg` is the same quantity.
 - **Eccentricity and polar angle** of `(x, y)`: `e = atan(√(tan²x + tan²y))`, `θ = atan2(tan y, tan x)`, `θ`
-  counter-clockwise from rightward in `[-180, 180]` as `atan2` returns it, the range `direction_deg` already has. **At `e = 0` the polar angle is undefined**: NULL in the
+  counter-clockwise from rightward in `[0, 360)`: `atan2`'s result mod 360, and 0 where that rounds to 360
+  (amendment 1). **At `e = 0` the polar angle is undefined**: NULL in the
   database, NaN in the NWB file, never 0 (`atan2(0, 0)` would say "rightward"). wl-xcon's `polar_deg` is the
   inverse map.
 - **The local frame at a direction `c`** (wl-xcon's `viewport.local_true_angle`): `ex = normalize(x̂ − (x̂·c)c)`,
@@ -108,8 +109,8 @@ The checked numbers in §1 are held in tests on both sides.
   measured between (the run's first and last, or NSLR's landing and BMD's take-off samples, exactly as
   `measure_event_run` widens today). Under per-axis, `np.hypot`, as today.
 - **Direction** (`direction_deg`): under true angle, `atan2` of the end's local coordinates about the start
-  (§2), the direction in the eye's frame at its start; under per-axis, `atan2(Δy, Δx)`, as today. NULL for a
-  zero displacement under both.
+  (§2), the direction in the eye's frame at its start; under per-axis, `atan2(Δy, Δx)`. Under both, in
+  `[0, 360)` as §2's polar angle is (amendment 1), and NULL for a zero displacement.
 - **Peak speed** (`peak_velocity_deg_s`): under true angle, the largest magnitude of the local-frame velocity
   (§5) over the measured samples; under per-axis, of the per-axis velocity, as today.
 - **Endpoints' eccentricity and polar angle**, of the same two samples, under both settings: they are facts
@@ -254,3 +255,14 @@ unchanged.
 - Running per-axis by default (decision 4).
 - Sizes or speeds for fixations (decision 5).
 - wl-xcon's XC-399, stimulus positions on trial rows (§10).
+
+## Amendments, 2026-10-30
+
+1. **Every stored angle is in `[0, 360)`, counter-clockwise from rightward** (the requester's decision in
+   wl-xcon's session on 2026-10-30, "0 to 360 in both repos", relayed by wl-xcon; extended to event directions
+   here the same day, offered against positions only). A position's or endpoint's polar angle and an event's
+   direction, under both settings: `atan2`'s result in degrees, mod 360, and 0 where that rounds to 360 (a
+   tiny negative angle would). Straight down is 270. The polar angle stays NULL at zero eccentricity, and the
+   direction NULL for a zero displacement ("Empty at center", the same decision). `direction_deg` was
+   `[-180, 180]` (the 2026-09-28 geometry spec §1.2); v1's fixtures hold no direction, so the per-axis setting
+   still matches them.
