@@ -4471,7 +4471,9 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
       is exactly their true angle, and the direction is the end's in the
       eye's frame at the start (NULL only where they coincide; true-angle
       spec section 4);
-    - a row without an amplitude has none of the five."""
+    - a fixation row measured on an eye has its positions and direction and
+      no amplitude (true-angle spec decision 5);
+    - any other row has none of the five."""
     import math
 
     from wl_preproc.schema import detect
@@ -4483,12 +4485,17 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
         for trace in ("left", "right", "conjunction"):
             where = {**session_key, "trace": trace, **_detector(name)}
             for row in (detect.EyeDetection.Run & where).to_dicts():
-                if row["amplitude_deg"] is None:
+                if row["amplitude_deg"] is None and row["label"] != "fixation":
                     assert all(row[column] is None for column in geometry), (name, trace, row)
+                    continue
+                if row["start_x_deg"] is None:
                     continue
                 start = directions(np.array([row["start_x_deg"], row["start_y_deg"]]))
                 end = directions(np.array([row["end_x_deg"], row["end_y_deg"]]))
-                assert row["amplitude_deg"] == float(true_angle_deg(start, end)), (name, trace, row)
+                if row["label"] == "fixation":
+                    assert (row["amplitude_deg"], row["peak_velocity_deg_s"]) == (None, None), (name, trace, row)
+                else:
+                    assert row["amplitude_deg"] == float(true_angle_deg(start, end)), (name, trace, row)
                 if (row["start_x_deg"], row["start_y_deg"]) == (row["end_x_deg"], row["end_y_deg"]):
                     assert row["direction_deg"] is None, (name, trace, row)
                 else:

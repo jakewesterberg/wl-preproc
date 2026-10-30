@@ -184,3 +184,113 @@ def test_a_per_axis_paramset_detects_and_measures_as_v1(session):
             expected = measure(gaze, v, row["run_start"], row["run_stop"], fs_hz, geometry=PER_AXIS)
             assert (row["amplitude_deg"], row["peak_velocity_deg_s"]) == (
                 expected.amplitude_deg, expected.peak_velocity_deg_s), (trace, row["run_start"])
+
+
+_POSITIONS = ("start_x_deg", "start_y_deg", "end_x_deg", "end_y_deg", "start_eccentricity_deg", "end_eccentricity_deg")
+
+
+def test_a_fixation_row_carries_its_positions_and_no_size(session):
+    """Decision 5: from its first sample to its last, the positions, their
+    eccentricity and polar angle, and its direction under the setting; no
+    size and no peak speed."""
+    from wl_preproc.eye.detect.measure import measure_positions
+    from wl_preproc.schema import detect
+
+    session_key, _per_axis = session
+    idx = detect.register_default_paramsets()["engbert_kliegl"]
+    measured = 0
+    for trace in ("left", "right"):
+        gaze, _v, _offered, fs_hz = _stored_inputs(session_key, trace)
+        rows = (detect.EyeDetection.Run & {**session_key, "trace": trace, "paramset_type": "eye_detection",
+                                          "paramset_idx": idx, "label": "fixation"}).to_dicts()
+        for row in rows:
+            expected = measure_positions(gaze, row["run_start"], row["run_stop"], fs_hz, geometry=TRUE_ANGLE)
+            assert (row["amplitude_deg"], row["peak_velocity_deg_s"]) == (None, None)
+            for column in (*_POSITIONS, "start_polar_deg", "end_polar_deg", "direction_deg"):
+                assert row[column] == getattr(expected, column), (trace, row["run_start"], column)
+            measured += 1
+    assert measured
+
+
+def test_an_event_row_carries_its_endpoints_eccentricity_and_polar_angle(session):
+    from wl_preproc.eye.detect.geometry import eccentricity_polar_deg
+    from wl_preproc.schema import detect
+
+    session_key, _per_axis = session
+    rows = _events(session_key, "left", detect.register_default_paramsets()["engbert_kliegl"])
+    for row in rows:
+        import numpy as np
+
+        e, polar = eccentricity_polar_deg(np.array([[row["start_x_deg"], row["start_y_deg"]],
+                                                    [row["end_x_deg"], row["end_y_deg"]]]))
+        assert (row["start_eccentricity_deg"], row["end_eccentricity_deg"]) == (float(e[0]), float(e[1]))
+        assert (row["start_polar_deg"], row["end_polar_deg"]) == (float(polar[0]), float(polar[1]))
+
+
+def test_the_main_sequence_takes_the_rows_it_took_before(session):
+    """A fixation row now has positions but still no size, so the fit picks
+    the same rows from every row as from the event rows alone."""
+    from wl_preproc.eye.detect.main_sequence import DEFAULT_MAIN_SEQUENCE_PARAMS
+    from wl_preproc.schema import detect, main_sequence
+
+    session_key, _per_axis = session
+    idx = detect.register_default_paramsets()["engbert_kliegl"]
+    every = (detect.EyeDetection.Run & {**session_key, "trace": "left", "paramset_type": "eye_detection",
+                                       "paramset_idx": idx}).to_dicts(order_by="run_index")
+    params = DEFAULT_MAIN_SEQUENCE_PARAMS
+    assert main_sequence.selected_runs(every, 500.0, params) == main_sequence.selected_runs(
+        [row for row in every if row["label"] in _EVENTS], 500.0, params)
+
+
+def test_a_database_without_the_new_columns_detects_nothing_and_names_the_statement(session, monkeypatch):
+    """As `EyeValidity` refuses without `frac_feature_lost`: DataJoint adds
+    no column to an existing table and reads a table's columns once per
+    process, so the stage refuses before any job is reserved and says how to
+    fix it."""
+    from wl_preproc.schema import detect
+
+    assert not detect._lacks_polar_columns()
+    monkeypatch.setattr(detect, "_lacks_polar_columns", lambda: True)
+    with pytest.raises(RuntimeError) as raised:
+        detect.EyeDetection.populate()
+    assert detect._polar_statement() in str(raised.value)
+    assert "restart" in str(raised.value)
+
+
+def test_a_part_table_read_without_the_columns_is_refused(session, monkeypatch):
+    from types import SimpleNamespace
+
+    from wl_preproc.schema import detect
+
+    names = [name for name in detect.EyeDetection.Run.heading.names if name != "end_polar_deg"]
+    monkeypatch.setattr(detect.EyeDetection.Run, "_heading", SimpleNamespace(names=names))
+    assert detect._lacks_polar_columns()
+    with pytest.raises(RuntimeError, match="has no columns"):
+        detect.EyeDetection.populate()
+
+
+def test_the_statement_restores_the_columns_as_datajoint_declares_them(session):
+    """Dropped and restored by the named statement on a copy of the part
+    table: type, nullability, default, comment and place match what
+    declaring it wrote, and no row of the table itself is touched."""
+    import datajoint as dj
+
+    from wl_preproc.schema import detect
+
+    table = detect.EyeDetection.Run.full_table_name
+    copy = table[:-1] + '_restore_check`'
+    statement = detect._polar_statement()
+    assert statement.count(table) == 1
+
+    def columns(name):
+        return [row[:2] + row[3:6] + row[8:9] for row in dj.conn().query(f"SHOW FULL COLUMNS FROM {name}").fetchall()]
+
+    dj.conn().query(f"CREATE TABLE {copy} LIKE {table}")
+    try:
+        dj.conn().query(f"ALTER TABLE {copy} " + ", ".join(
+            f"DROP COLUMN {column}" for column in detect._POLAR_COLUMNS))
+        dj.conn().query(statement.replace(table, copy))
+        restored = columns(copy)
+    finally:
+        dj.conn().query(f"DROP TABLE IF EXISTS {copy}")
+    assert restored == columns(table)

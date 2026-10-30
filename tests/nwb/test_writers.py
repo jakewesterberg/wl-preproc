@@ -236,6 +236,28 @@ def test_every_detectors_events_and_sources_and_agreement(tmp_path):
         assert module["detector_agreement"].to_dataframe()["value"].tolist() == [0.8]
 
 
+def test_the_event_tables_carry_each_positions_eccentricity_and_polar_angle(tmp_path):
+    """True-angle spec section 7: four columns beside the positions, and a
+    fixation row's positions with no size."""
+    from wl_preproc.nwb.eye_events import MEASUREMENTS, add_detections
+
+    runs = [{"start_s": 1.0, "stop_s": 1.04, "label": "saccade", "amplitude_deg": 1.8, "start_x_deg": 20.0,
+             "start_y_deg": 0.0, "end_x_deg": 20.0, "end_y_deg": 2.0, "direction_deg": 90.0,
+             "start_eccentricity_deg": 20.0, "start_polar_deg": 0.0, "end_eccentricity_deg": 20.1,
+             "end_polar_deg": 5.4},
+            {"start_s": 1.04, "stop_s": 2.0, "label": "fixation", "start_x_deg": 0.0, "start_y_deg": 0.0,
+             "end_x_deg": 0.0, "end_y_deg": 0.1, "direction_deg": 90.0, "start_eccentricity_deg": 0.0,
+             "start_polar_deg": None, "end_eccentricity_deg": 0.1, "end_polar_deg": 90.0}]
+    assert {"start_eccentricity_deg", "start_polar_deg", "end_eccentricity_deg", "end_polar_deg"} <= set(MEASUREMENTS)
+
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_detections(nwb, [{"name": "t", "description": "d", "runs": runs}]))
+    with io:
+        table = nwb.processing["eye_events"]["t"].to_dataframe()
+        assert table["end_eccentricity_deg"].tolist() == [20.1, 0.1]
+        assert table["end_polar_deg"].tolist() == [5.4, 90.0]
+        assert np.isnan(table["start_polar_deg"].iloc[1]) and np.isnan(table["amplitude_deg"].iloc[1])
+
+
 def test_a_table_with_no_rows_writes(tmp_path):
     from wl_preproc.nwb.intervals import add_task_events
 

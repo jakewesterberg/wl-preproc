@@ -450,7 +450,8 @@ class EyeDetection(dj.Computed):
         run_stop  : int unsigned
         label     : enum({_LABEL_ENUM})
         # A saccade or microsaccade run IS an event, so it carries its own
-        # measurements; every other label leaves them NULL. So does a saccade
+        # measurements; a fixation run carries its positions alone (below);
+        # every other label leaves them NULL. So does a saccade
         # run too brief for its detector's paramset to measure (NSLR's
         # `min_measured_saccade_ms`, on every trace; `_insert_trace`).
         # `reliability` is Otero-Millan's per-detection index; for an event
@@ -465,22 +466,37 @@ class EyeDetection(dj.Computed):
         peak_velocity_deg_s=null : double
         reliability=null         : double
         # Where the event starts and ends, and its direction: the gaze at
-        # the two samples `amplitude_deg` is measured between, so the
-        # amplitude is exactly their distance. Those samples are the run's
-        # first and last, except that NSLR's per-eye saccades end at
-        # `gaze[run_stop]` (its landing sample) and BMD's own per-eye events
-        # start at `gaze[run_start - 1]` (its take-off sample), each when
-        # that sample was offered and is finite (`measure.py::
-        # measure_event_run`). Degrees of visual angle,
-        # positive x rightward and y upward; the direction counterclockwise
-        # from rightward, in [-180, 180], NULL for a zero displacement. On
-        # exactly the rows that carry `amplitude_deg` (design spec
-        # `2026-09-28-saccade-geometry-design.md`).
+        # the two samples `amplitude_deg` is measured between. Those samples
+        # are the run's first and last, except that NSLR's per-eye saccades
+        # end at `gaze[run_stop]` (its landing sample) and BMD's own per-eye
+        # events start at `gaze[run_start - 1]` (its take-off sample), each
+        # when that sample was offered and is finite (`measure.py::
+        # measure_event_run`). Positions in per-axis degrees, positive x
+        # rightward and y upward (design spec
+        # `2026-09-28-saccade-geometry-design.md`). The amplitude, peak
+        # velocity and direction are in the paramset's `geometry` (design
+        # spec `2026-10-30-true-angle-saccades-design.md` section 4): under
+        # true angle, the angle between the two positions' directions, the
+        # local-frame velocity's largest magnitude and the end's direction in
+        # the eye's frame at the start; under per-axis, their distance, the
+        # per-axis speed and `atan2(dy, dx)`. The direction is
+        # counterclockwise from rightward, in [0, 360), NULL for a zero
+        # displacement. On every row that carries `amplitude_deg`, and on a
+        # `fixation` row, measured from its first sample to its last, with
+        # no amplitude or peak velocity (decision 5).
         start_x_deg=null   : double
         start_y_deg=null   : double
         end_x_deg=null     : double
         end_y_deg=null     : double
         direction_deg=null : double
+        # Each position's eccentricity and polar angle (true-angle spec
+        # section 2), the same under either geometry: the polar angle
+        # counterclockwise from rightward in [0, 360), NULL at zero
+        # eccentricity. On the rows that carry positions.
+        start_eccentricity_deg=null : double
+        start_polar_deg=null        : double
+        end_eccentricity_deg=null   : double
+        end_polar_deg=null          : double
         """
 
     class Source(dj.Part):
@@ -532,6 +548,21 @@ class EyeDetection(dj.Computed):
             dj.U("subject", "session_datetime", "validity_paramset_type", "validity_paramset_idx")
             & EyeValidity.proj(validity_paramset_type="paramset_type")
         ) * (paramset.ParamSet & {"paramset_type": "eye_detection"})
+
+    def populate(self, *args, **kwargs):
+        """`AutoPopulate.populate`, refused before any job is reserved while
+        this process reads `EyeDetection.Run` without `_POLAR_COLUMNS`: a
+        database declared before true angle (design spec
+        `2026-10-30-true-angle-saccades-design.md` section 7), refused here
+        for `EyeValidity.populate`'s reason. The daemon reports this stage's
+        error and runs the others."""
+        if _lacks_polar_columns():
+            raise RuntimeError(
+                f"{self.Run.full_table_name} has no columns {', '.join(_POLAR_COLUMNS)}, as read by this "
+                "process: a database declared before 2026-10-30. Nothing is detected until it is altered and "
+                f"the daemon restarted: {_polar_statement()}"
+            )
+        return super().populate(*args, **kwargs)
 
     def make(self, key: dict) -> None:
         """All three traces for one session, one mask and one detector.
@@ -771,7 +802,11 @@ class EyeDetection(dj.Computed):
         Writes each interval's label onto the mask BEFORE encoding -- not
         encode-then-label -- then measures every event run over its own
         final `[start, stop)`, rather than reusing whichever measurement the
-        detector made while labelling it.
+        detector made while labelling it. A `fixation` run is measured for
+        its positions alone, from its first sample to its last, on the eye an
+        event there would be measured on (`measure.py::measure_positions`;
+        true-angle spec decision 5). Every measurement is in the paramset's
+        `geometry`.
 
         **How an event run is measured is its detector's declared rule**
         (`measure.py::measure_event_run`; the requester's decisions of
@@ -936,7 +971,7 @@ class EyeDetection(dj.Computed):
         carries its own reliability (design spec
         `2026-09-28-both-eyes-fallback-design.md` section 2).
         """
-        from wl_preproc.eye.detect.measure import measure_event_run
+        from wl_preproc.eye.detect.measure import measure_event_run, measure_positions
 
         # Read the way `_min_duration_samples` reads a detector's params: a
         # field only NSLR's params declare, so every other detector has no
@@ -984,8 +1019,15 @@ class EyeDetection(dj.Computed):
 
         def _run_row(index: int, run: Run) -> dict:
             measurement = None
-            source = _measured_on(run) if run.label in (Label.SACCADE, Label.MICROSACCADE) else None
-            if source is not None:
+            source = _measured_on(run) if run.label in (Label.SACCADE, Label.MICROSACCADE, Label.FIXATION) else None
+            if source is not None and run.label is Label.FIXATION:
+                # Its positions alone, on the same eye an event there would be
+                # measured on (true-angle spec decision 5). Its samples were
+                # offered, so its gaze is finite: the mask claims every sample
+                # whose gaze or velocity is not (`validity.py`).
+                _measured_as, run_gaze, _run_v, _run_offered = source
+                measurement = measure_positions(run_gaze, run.start, run.stop, fs_hz, geometry=geometry)
+            elif source is not None:
                 span = (run.start, run.stop)
                 measured_as, run_gaze, run_v, run_offered = source
                 # The landing rule is per-eye only: a two-eye span is an
@@ -1018,7 +1060,29 @@ class EyeDetection(dj.Computed):
 _STORED_MEASUREMENTS = (
     "amplitude_deg", "peak_velocity_deg_s",
     "start_x_deg", "start_y_deg", "end_x_deg", "end_y_deg", "direction_deg",
+    "start_eccentricity_deg", "start_polar_deg", "end_eccentricity_deg", "end_polar_deg",
 )
+
+#: `EyeDetection.Run`'s columns added with true angle (2026-10-30), in the
+#: order they follow `direction_deg`.
+_POLAR_COLUMNS = ("start_eccentricity_deg", "start_polar_deg", "end_eccentricity_deg", "end_polar_deg")
+
+
+def _lacks_polar_columns() -> bool:
+    """`EyeDetection.Run`, as this process's DataJoint reads it, lacks one of
+    `_POLAR_COLUMNS`: a database declared before true angle. DataJoint reads a
+    table's columns once per process (`_lacks_feature_lost`)."""
+    return not set(_POLAR_COLUMNS) <= set(EyeDetection.Run.heading.names)
+
+
+def _polar_statement() -> str:
+    """The statement that adds `_POLAR_COLUMNS` to an `EyeDetection.Run`
+    declared before them, as DataJoint declares them: `double`, nullable, no
+    comment, after `direction_deg` in order."""
+    after = ("direction_deg", *_POLAR_COLUMNS[:-1])
+    return f"ALTER TABLE {EyeDetection.Run.full_table_name} " + ", ".join(
+        f"ADD COLUMN {column} double DEFAULT NULL COMMENT '' AFTER {previous}"
+        for column, previous in zip(_POLAR_COLUMNS, after, strict=True))
 
 
 def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:
