@@ -80,13 +80,13 @@ status:
     065da53). wl-sync's asks of 2026-10-19 are designed
     (docs/superpowers/specs/2026-10-22-syncbox-records-and-segments-design.md,
     two parts); part 1, reading the box's logs as it writes them today,
-    is built and reviewed on feat/syncbox-records, its review's
-    findings fixed, and not merged
-    (docs/handoffs/2026-10-22-syncbox-records.md); next, the merge;
-    then part 2, the bridges, XC-398's spec and part 3b, the NI as the
+    is merged (920048a; docs/handoffs/2026-10-22-syncbox-records.md);
+    next, XC-398's true-angle saccades (spec approved 2026-10-30), then
+    part 2, the bridges, and part 3b, the NI as the
     clock.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: the saccade detector's v1 fixtures and companion (065da53).
+    Done: wl-sync part 1, the box's logs read as it writes them (920048a).
+    Before it, the saccade detector's v1 fixtures and companion (065da53).
     Before them,
     part 3a of the training-records design (f43a014). Before it,
     part 1 (b74d4f3). Before it, part 2 (789e825). Before it, the
@@ -170,6 +170,8 @@ status:
   # Was `cadef7e` until the glitch-repair merge `f7095aa` and the xcon rename
   # merge `0aa4928` the same day (CI green on `cadef7e`, run 36449262350);
   # true when written.
+  # Was `065da53` until wl-sync part 1's merge `920048a` (CI green on
+  # `065da53`, run 39417126304); true when written.
   # Was `f43a014` until the saccade fixtures' merges, `065da53` on 2026-10-20
   # (CI green on `f43a014`, run 39316746072); true when written.
   # Was `b74d4f3` until part 3a's merge `f43a014` on 2026-10-19 (CI green
@@ -239,7 +241,7 @@ status:
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "065da53"
+  describes: "920048a"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
