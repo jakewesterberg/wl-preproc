@@ -394,6 +394,14 @@ class Segment(dj.Computed):
                 )
                 rejected.append({**key, "file_path": file_path, "reason": reason})
                 continue
+            # Before the unfitted system's: a recording that began after a sync
+            # box restart shares no barcode with session time, and a system
+            # whose every recording did has no fit for that reason, not for a
+            # mostly-dead cable (design spec
+            # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
+            if not any(barcode.value in reference for barcode in scan.barcodes):
+                rejected.append({**key, "file_path": file_path, "reason": segments.NO_SHARED_BARCODE})
+                continue
             if rate is None:
                 rejected.append(
                     {**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM}

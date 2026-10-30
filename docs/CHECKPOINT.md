@@ -417,11 +417,19 @@ requester chose to merge the same day; true when written.*
 > direction and endpoints and each sample's true eccentricity and polar angle), is accepted
 > as a spec to write; its v1 fixtures, today's per-axis behaviour, and their thresholds
 > companion are merged (`10ea913`, `065da53`).
-> Next, by the requester's order of 2026-10-19: wl-sync's asks of the same day
-> (`HANDOVER-wl-sync.md`; the pinned wl-sync cannot read the logs the box writes today, and
-> a real log's barcodes are its `B` records, which nothing reads yet); then XC-398's spec
+> **wl-sync's asks of 2026-10-19 are designed**
+> (`specs/2026-10-22-syncbox-records-and-segments-design.md`, the requester's decisions of
+> 2026-10-20 and 2026-10-22, in two parts), and **part 1, reading the box's logs as it writes
+> them today, is built and reviewed on `feat/syncbox-records`, not merged**
+> (`handoffs/2026-10-22-syncbox-records.md`), its review's three Important findings fixed (one
+> re-graded from Minor) and nine Minor deferred (§6); wl-sync is asked to fix how its box
+> unwraps code-word ticks (its ask 6). Next: the merge; then part 2, the bridges, XC-398's spec
 > and part 3b, the NI as the clock. Fine-tuning
 > U'n'Eye to the DPI tracker waits for hand-labelled lab data.
+>
+> *Until part 1's review, this said it was built and next was the review; true when written.*
+>
+> *Until wl-sync's asks were built, this named them as next, unbuilt; true when written.*
 >
 > *Until the saccade fixtures' merge, this named wl-sync's asks and part 3b as next, without
 > XC-398; true when written.*

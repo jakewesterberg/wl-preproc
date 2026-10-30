@@ -23,7 +23,7 @@ from wl_preproc.synth.ohdpi import write_ohdpi
 from wl_preproc.synth.recipe import Fault, SYNTH_EPOCH, SessionRecipe
 from wl_preproc.synth.rhs import write_rhs
 from wl_preproc.synth.spikeglx import write_spikeglx
-from wl_preproc.synth.syncbox import write_syncbox_log
+from wl_preproc.synth.syncbox import write_syncbox_segments
 from wl_preproc.synth.timeline import build_timeline
 from wl_preproc.synth.truth import GroundTruth
 
@@ -82,7 +82,7 @@ def generate_session(root: Path, recipe: SessionRecipe) -> GroundTruth:
             # drifting it alongside every device, which this did until Phase
             # 1c-4, cancels the drift exactly and leaves every fixture with no
             # relative drift for the rate fit to find.
-            write_syncbox_log(directory / "syncbox.log", recipe, truth, drift_ppm=0.0)
+            write_syncbox_segments(directory, recipe, truth)
             write_task_file(directory / "task.json", truth)
         elif system == "spikeglx":
             bin_path = write_spikeglx(

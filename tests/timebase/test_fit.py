@@ -210,7 +210,7 @@ def test_residuals_report_a_barcode_that_does_not_fit():
 # Where each system's one recording sits, relative to the session directory.
 # `None` means "glob for it", because SpikeGLX names its file after the run.
 _RECORDING_PATHS: dict[str, str | None] = {
-    "syncbox": "syncbox/syncbox.log",
+    "syncbox": "syncbox/seg-000.log",
     "spikeglx": None,
     "rhs": "rhs",
     "ohdpi": "ohdpi/OpenIris-synthetic.txt",

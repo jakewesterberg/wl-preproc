@@ -15,6 +15,8 @@ import dataclasses
 import datetime
 from pathlib import Path
 
+from wl_sync.clock import BARCODE_EPOCH
+
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.schema import DEFAULT_PREFIX
 
@@ -1382,6 +1384,23 @@ def _landed_without(session: dict) -> str:
                    f"UTC: {row['reason']}" for row in rows)
 
 
+def _syncbox_restarts(prefix: str = DEFAULT_PREFIX) -> list[dict]:
+    """Every sync box segment other than session time's, with its session's
+    folder: each came from a restart of the box (`timebase.SyncBoxSegment`;
+    design spec `2026-10-22-syncbox-records-and-segments-design.md` sections 4
+    and 6), whether it waits for a bridge or logged no barcode, as a box that
+    crash-looped does. Live, as the reclamation list is: a segment part 2
+    bridges changes role and leaves it. Not part of `Readings`, for
+    `_eye_rows`' reason: only `wlpp report` pays for it."""
+    from wl_preproc.schema import ingest, timebase
+    from wl_preproc.timebase.segments import SEGMENT_AFTER_RESTART, SEGMENT_NO_BARCODE
+
+    timebase.activate(prefix=prefix)
+    rows = (timebase.SyncBoxSegment & [{"role": SEGMENT_AFTER_RESTART}, {"role": SEGMENT_NO_BARCODE}]) * \
+        ingest.Ingestion.proj("session_dir")
+    return rows.to_dicts(order_by=["subject", "session_datetime", "segment_index"])
+
+
 def build_report(
     root: Path,
     prefix: str = DEFAULT_PREFIX,
@@ -1481,6 +1500,18 @@ def build_report(
         f"- `{path}` — missing: "
         + (", ".join(missing) if missing else "none (markers landed mid-scan)")
         for path, missing in readings.stalled
+    ] or ["- none"]
+
+    restarts = _syncbox_restarts(prefix)
+    lines += ["", f"## Sync box restarts — {len(restarts)}", ""]
+    lines += [
+        f"- `{Path(row['session_dir']).name}` — `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
+        f"the sync box restarted: `{row['file_path']}` "
+        + (f"resumed at barcode {row['first_barcode']} "
+           f"({BARCODE_EPOCH + datetime.timedelta(seconds=row['first_barcode']):%Y-%m-%d %H:%M:%S} UTC by the "
+           "box's clock), on a clock of its own, and its records wait for a bridge"
+           if row["first_barcode"] is not None else "logged no barcode, so nothing in it is timed")
+        for row in restarts
     ] or ["- none"]
 
     # Design spec section 5.2 (quoting parent spec §8.5): the reclamation
