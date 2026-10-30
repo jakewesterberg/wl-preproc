@@ -11,6 +11,7 @@ true eccentricity and polar angle, and each eye sample its true eccentricity and
 - Chosen on 2026-10-30 as next after wl-sync's part 1 (the requester's order that day); groundwork read on
   2026-10-28; designed in conversation on 2026-10-30, section by section. The requester's decisions are in §0.
 - Branch `spec/true-angle-saccades`, from `main` at `920048a`.
+- **Approved by the requester on 2026-10-30**; wl-xcon told §10's first step the same day.
 - One part. Nothing here waits on another repository.
 
 **Read for this spec,** each passage relied on opened at its source:
