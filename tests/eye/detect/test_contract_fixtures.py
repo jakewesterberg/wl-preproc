@@ -25,6 +25,7 @@ from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
     thresholds,
 )
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
 from wl_preproc.eye.detect.velocity import velocity
 
@@ -71,7 +72,7 @@ def test_a_reader_of_v1_gets_its_outputs_back_from_its_inputs():
         # (CI on 10ea913, 8.001592662084843 against the file's ...844). Everything else here is
         # arithmetic and `sqrt`, which IEEE 754 rounds the same everywhere, so it is held exactly.
         for r, run in zip(runs, case["runs"], strict=True):
-            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0), (
+            assert amplitude(gaze, r.start, r.stop, geometry=PER_AXIS) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0), (
                 case["name"])
 
 
@@ -134,7 +135,7 @@ def test_a_reader_gets_every_threshold_back():
         assert [(r.start, r.stop, r.label.value) for r in runs] == [
             (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
         for r, run in zip(runs, case["runs"], strict=True):
-            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0)
+            assert amplitude(gaze, r.start, r.stop, geometry=PER_AXIS) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0)
 
 
 def test_the_near_threshold_traces_catch_a_threshold_off_by_five_percent_or_a_wider_ellipse():

@@ -19,6 +19,7 @@ from wl_preproc.eye.detect import bmd
 from wl_preproc.eye.detect.bmd_table import compute_table
 from wl_preproc.eye.detect.consensus import cohen_kappa
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.velocity import velocity
 
@@ -192,7 +193,7 @@ def test_bmds_own_events_on_the_recording_are_split_at_the_cut(recording, eye, c
         if r.reliability is not None:
             sizes[r.label].append(measure_event_run(
                 gaze, v, mask, r.start, r.stop, rec.fs_hz, runs_end_before_landing=False,
-                min_measured_ms=None, runs_start_after_takeoff=True).amplitude_deg)
+                min_measured_ms=None, runs_start_after_takeoff=True, geometry=PER_AXIS).amplitude_deg)
     with capsys.disabled():
         print(f"\n  {eye}: BMD's own events over {COMPARISON_SAMPLES} samples: "
               f"{len(sizes[Label.MICROSACCADE])} microsaccades, {len(sizes[Label.SACCADE])} saccades")

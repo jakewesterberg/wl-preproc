@@ -107,3 +107,59 @@ def test_non_linear_input_verifies_the_formula():
     # Compare interior samples only
     assert result[2:18, 0] == pytest.approx(expected[2:18, 0], abs=1e-9)
     assert result[2:18, 1] == pytest.approx(expected[2:18, 1], abs=1e-9)
+
+
+# -- The local-frame velocity (design spec `2026-10-30-true-angle-saccades-design.md` section 5) --
+
+from wl_preproc.eye.detect import geometry  # noqa: E402
+from wl_preproc.eye.detect.velocity import local_velocity  # noqa: E402
+
+
+def _great_circle(start_xy, toward, speed_deg_s, n, fs_hz):
+    """Per-axis gaze of a direction moving along a great circle at a constant
+    true speed, toward `toward` (a 3-vector): Rodrigues' rotation of the
+    start direction about the axis perpendicular to both, read back as
+    per-axis degrees, `(atan(dx/dz), atan(dy/dz))`. The axis must be
+    perpendicular to the start direction, or the path is a small circle and
+    its speed `speed_deg_s` times the sine of the angle between them."""
+    d0 = geometry.directions(np.array(start_xy))
+    k = np.cross(d0, np.asarray(toward, dtype=float))
+    k = k / np.linalg.norm(k)
+    out = []
+    for i in range(n):
+        a = np.radians(speed_deg_s * i / fs_hz)
+        d = d0 * np.cos(a) + np.cross(k, d0) * np.sin(a) + k * (k @ d0) * (1 - np.cos(a))
+        out.append([np.degrees(np.arctan(d[0] / d[2])), np.degrees(np.arctan(d[1] / d[2]))])
+    return np.array(out)
+
+
+def test_a_constant_true_speed_reads_as_that_speed_anywhere():
+    """Section 11: a sweep at constant true speed along a great circle, off
+    centre, reads as that speed; the per-axis velocity does not."""
+    fs_hz = 500.0
+    gaze = _great_circle((25.0, 15.0), (0.3, 1.0, 0.2), 200.0, 40, fs_hz)
+    speed = np.hypot(*local_velocity(gaze, fs_hz)[2:-2].T)
+    np.testing.assert_allclose(speed, 200.0, rtol=1e-9)
+    per_axis = np.hypot(*velocity(gaze, fs_hz)[2:-2].T)
+    assert np.abs(per_axis - 200.0).max() > 2.0
+
+
+def test_at_the_centre_the_local_velocity_is_the_per_axis_one():
+    t = np.arange(30) / 500.0
+    gaze = np.column_stack([0.5 * t, -0.3 * t])
+    np.testing.assert_allclose(local_velocity(gaze, 500.0), velocity(gaze, 500.0), rtol=1e-6, atol=1e-9)
+
+
+def test_the_local_velocity_s_edges_are_zero_and_a_short_trace_is_all_zero():
+    gaze = _great_circle((10.0, 0.0), (0.0, 1.0, 0.0), 100.0, 12, 500.0)
+    v = local_velocity(gaze, 500.0)
+    assert (v[:2] == 0).all() and (v[-2:] == 0).all()
+    assert (local_velocity(gaze[:4], 500.0) == 0).all()
+
+
+def test_a_non_finite_position_propagates_into_the_windows_that_read_it():
+    gaze = _great_circle((10.0, 0.0), (0.0, 1.0, 0.0), 100.0, 12, 500.0)
+    gaze[6] = np.nan
+    v = local_velocity(gaze, 500.0)
+    assert np.isnan(v[4:9]).all()
+    assert np.isfinite(v[2:4]).all() and np.isfinite(v[9:10]).all()

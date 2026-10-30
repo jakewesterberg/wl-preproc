@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Run, true_runs
+from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
 # lambda = 6 and a 6-sample minimum (12 ms at 500 Hz) are the paper's own
@@ -52,6 +53,11 @@ class EngbertKlieglParams:
     # never a copied literal, so this is not a second place the conventional
     # cut could drift to.
     microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+    #: The SHARED `geometry` key (true-angle spec section 3), declared, as
+    #: `microsaccade_max_deg` is, because this detector reads sizes: the
+    #: registered default paramset writes it last. Absent, a paramset means
+    #: per-axis, which every paramset written before the key existed was.
+    geometry: str = UNSTATED_GEOMETRY
 
 
 DEFAULT_EK_PARAMS = EngbertKlieglParams(
@@ -138,7 +144,7 @@ def detect_engbert_kliegl(
         Run(
             start=start,
             stop=stop,
-            label=classify(amplitude(gaze_deg, start, stop), params.microsaccade_max_deg),
+            label=classify(amplitude(gaze_deg, start, stop, geometry=params.geometry), params.microsaccade_max_deg),
         )
         for start, stop in true_runs(outside)
         if stop - start >= params.min_duration_samples

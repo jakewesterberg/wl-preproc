@@ -41,6 +41,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import amplitude
 
 
@@ -164,6 +165,12 @@ class NystromHolmqvistParams:
     #: Table 2: acceleration above this is "not physiologically possible"
     #: and is dropped before detection (p. 194).
     max_acceleration_deg_s2: float
+
+    #: The SHARED `geometry` key (true-angle spec section 3), declared, as
+    #: `microsaccade_max_deg` is, because this detector compares a glissade's size with its saccade's: the
+    #: registered default paramset writes it last. Absent, a paramset means
+    #: per-axis, which every paramset written before the key existed was.
+    geometry: str = UNSTATED_GEOMETRY
 
 
 DEFAULT_NH_PARAMS = NystromHolmqvistParams(
@@ -465,8 +472,8 @@ def _glissade_bounds(
         stop += 1
     stop = min(stop + 1, speed_deg_s.size)
 
-    saccade_amp = amplitude(gaze_deg, saccade_onset, saccade_offset)
-    if amplitude(gaze_deg, saccade_offset, stop) > saccade_amp:
+    saccade_amp = amplitude(gaze_deg, saccade_onset, saccade_offset, geometry=params.geometry)
+    if amplitude(gaze_deg, saccade_offset, stop, geometry=params.geometry) > saccade_amp:
         return None
     return saccade_offset, stop
 

@@ -100,6 +100,7 @@ from pathlib import Path
 import datajoint as dj
 import numpy as np
 
+from wl_preproc.eye.detect.geometry import GEOMETRIES, UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.labels import (
     Label,
     Run,
@@ -581,6 +582,10 @@ class EyeDetection(dj.Computed):
         # their spans are then demonstrably talking about one set of detector
         # parameters rather than about two separate constructions of it.
         detector_params = _params_for(detector, params)
+        # The paramset's geometry (true-angle spec section 3), read from the
+        # dict, not the detector's params: a port that does not declare it is
+        # still measured in it.
+        geometry = _geometry_of(params)
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
@@ -636,7 +641,7 @@ class EyeDetection(dj.Computed):
             else:
                 gaze, v, offered = per_eye[eye_value]
                 self._insert_trace(key, eye_value, gaze, v, offered, spans[eye_value], fs_hz,
-                                   detector, detector_params)
+                                   detector, detector_params, geometry=geometry)
 
         if refused_reason:
             # The conjunction gets a REFUSED ROW here, never an absent one --
@@ -731,7 +736,7 @@ class EyeDetection(dj.Computed):
                 key, "conjunction", gaze, v, fill, intervals,
                 fs_hz, detector, detector_params,
                 kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept},
-                eyes=per_eye,
+                eyes=per_eye, geometry=geometry,
             )
             self.Source.insert(
                 {**key, "trace": "conjunction", "source_index": index,
@@ -740,7 +745,7 @@ class EyeDetection(dj.Computed):
             )
 
     def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
-                      detector, detector_params, kept=None, eyes=None) -> None:
+                      detector, detector_params, kept=None, eyes=None, *, geometry: str) -> None:
         """One trace's master row and its runs.
 
         **This method assigns no labels of its own.** Each interval arrives
@@ -981,7 +986,7 @@ class EyeDetection(dj.Computed):
                 # floor applies to every trace (see this docstring's
                 # conjunction paragraph).
                 measurement = measure_event_run(
-                    run_gaze, run_v, run_offered, run.start, run.stop, fs_hz,
+                    run_gaze, run_v, run_offered, run.start, run.stop, fs_hz, geometry=geometry,
                     runs_end_before_landing=(detector.runs_end_before_landing
                                              and measured_as != "conjunction"),
                     min_measured_ms=min_measured_ms,
@@ -1592,11 +1597,25 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     # too. (This no longer says `detector.vocabulary` itself is that set --
     # only its saccadic slice is, which is the whole point of slicing.)
     microsaccade_max_deg = params["microsaccade_max_deg"]
+    # Read as the cut is, from the paramset dict.
+    geometry = _geometry_of(params)
 
     def label_for(start: int, stop: int) -> Label:
-        return classify(amplitude(gaze, start, stop), microsaccade_max_deg)
+        return classify(amplitude(gaze, start, stop, geometry=geometry), microsaccade_max_deg)
 
     return label_for
+
+
+def _geometry_of(params: dict) -> str:
+    """An `eye_detection` paramset's `geometry` (true-angle spec section 3):
+    absent, per-axis, which every paramset written before the key existed was
+    (amendment 3); a value that is neither setting is refused here, where the
+    stage reads it, rather than detecting per axis and failing in
+    measurement."""
+    geometry = params.get("geometry", UNSTATED_GEOMETRY)
+    if geometry not in GEOMETRIES:
+        raise ValueError(f"eye_detection paramset geometry {geometry!r} is not one of {GEOMETRIES}")
+    return geometry
 
 
 def _repaired_gaze(path, file_eye: str, map_, fs_hz: float, validity_params):

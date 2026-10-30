@@ -16,6 +16,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from wl_preproc.eye.detect.geometry import (
+    GEOMETRIES, PER_AXIS, directions, eccentricity_polar_deg, local_coordinates_deg, true_angle_deg,
+    wrap_360_deg,
+)
 from wl_preproc.eye.detect.labels import Label
 
 # The conventional microsaccade cut. A paramset overrides it; this is the
@@ -29,32 +33,89 @@ class Measurement:
     """One event's measurement. The positions are the gaze at the two
     samples the amplitude is measured between, so `amplitude_deg` is exactly
     the distance from start to end and `direction_deg` its angle (design spec
-    `2026-09-28-saccade-geometry-design.md` section 1)."""
+    `2026-09-28-saccade-geometry-design.md` section 1), each in the geometry
+    it was measured in (`2026-10-30-true-angle-saccades-design.md` section
+    4). A fixation's (`measure_positions`) has no size and no peak speed.
+    The eccentricities and polar angles are facts of the two positions, the
+    same in either geometry; a polar angle is None at the centre."""
 
-    amplitude_deg: float
-    peak_velocity_deg_s: float
+    amplitude_deg: float | None
+    peak_velocity_deg_s: float | None
     duration_s: float
     start_x_deg: float
     start_y_deg: float
     end_x_deg: float
     end_y_deg: float
     direction_deg: float | None
+    start_eccentricity_deg: float
+    start_polar_deg: float | None
+    end_eccentricity_deg: float
+    end_polar_deg: float | None
 
 
 def direction(dx_deg: float, dy_deg: float) -> float | None:
-    """The angle of a displacement, in degrees counterclockwise from
-    rightward: 0 is rightward, 90 upward, +/-180 leftward, -90 downward, in
-    the calibrated frame (positive x rightward, positive y upward; the task
-    code's frame for target positions). `None` for a zero displacement,
-    which has no direction -- `atan2(0, 0)` would say 0, "rightward"
-    (design spec `2026-09-28-saccade-geometry-design.md` section 1.2)."""
+    """The angle of a per-axis displacement, in degrees counterclockwise from
+    rightward in `[0, 360)`: 0 is rightward, 90 upward, 180 leftward, 270
+    downward, in the calibrated frame (positive x rightward, positive y
+    upward; the task code's frame for target positions). `[0, 360)` is the
+    requester's "0 to 360 in both repos" (true-angle spec, amendment 1); it
+    was `[-180, 180]`. `None` for a zero displacement, which has no direction
+    -- `atan2(0, 0)` would say 0, "rightward" (design spec
+    `2026-09-28-saccade-geometry-design.md` section 1.2)."""
     if dx_deg == 0.0 and dy_deg == 0.0:
         return None
-    return math.degrees(math.atan2(dy_deg, dx_deg))
+    return float(wrap_360_deg(math.degrees(math.atan2(dy_deg, dx_deg))))
 
 
-def amplitude(gaze_deg: np.ndarray, start: int, stop: int) -> float:
-    """One interval's amplitude in degrees. `stop` is exclusive, matching `Run`.
+def _checked(geometry: str) -> str:
+    if geometry not in GEOMETRIES:
+        raise ValueError(f"unknown geometry {geometry!r}; one of {GEOMETRIES}")
+    return geometry
+
+
+def _size(first: np.ndarray, last: np.ndarray, geometry: str) -> float:
+    """Per-axis, `hypot` of the displacement, as v1; true angle, the angle
+    between the two positions' directions (true-angle spec section 4)."""
+    if _checked(geometry) == PER_AXIS:
+        displacement = last - first
+        return float(np.hypot(displacement[0], displacement[1]))
+    return float(true_angle_deg(directions(first), directions(last)))
+
+
+def _direction(first: np.ndarray, last: np.ndarray, geometry: str) -> float | None:
+    """Per-axis, `direction` of the displacement; true angle, the end's
+    direction in the eye's frame at the start: `atan2` of its local
+    coordinates about the start, in `[0, 360)`. `None` where the two
+    positions are equal, tested as positions: the local frame's own arithmetic
+    can leave a tangent of rounding size where they are."""
+    if _checked(geometry) == PER_AXIS:
+        return direction(float(last[0] - first[0]), float(last[1] - first[1]))
+    if first[0] == last[0] and first[1] == last[1]:
+        return None
+    lx, ly = local_coordinates_deg(directions(last), directions(first))
+    return float(wrap_360_deg(np.degrees(np.arctan2(ly, lx))))
+
+
+def _positions(gaze_deg: np.ndarray, first: int, last: int, geometry: str) -> dict:
+    """The fields every measurement shares: the two positions, the direction
+    from one to the other, and each one's eccentricity and polar angle."""
+    a, b = gaze_deg[first], gaze_deg[last]
+    eccentricity, polar = eccentricity_polar_deg(np.stack([a, b]))
+    return {
+        "start_x_deg": float(a[0]), "start_y_deg": float(a[1]),
+        "end_x_deg": float(b[0]), "end_y_deg": float(b[1]),
+        "direction_deg": _direction(a, b, geometry),
+        "start_eccentricity_deg": float(eccentricity[0]),
+        "start_polar_deg": None if math.isnan(polar[0]) else float(polar[0]),
+        "end_eccentricity_deg": float(eccentricity[1]),
+        "end_polar_deg": None if math.isnan(polar[1]) else float(polar[1]),
+    }
+
+
+def amplitude(gaze_deg: np.ndarray, start: int, stop: int, *, geometry: str) -> float:
+    """One interval's amplitude in degrees, in `geometry` (true-angle spec
+    section 4; no default, so no caller gets one by omission). `stop` is
+    exclusive, matching `Run`.
 
     **Split out of `measure` so a DETECTOR can call it, and there is still
     exactly one implementation.** Design spec section 3's detector signature
@@ -92,8 +153,7 @@ def amplitude(gaze_deg: np.ndarray, start: int, stop: int) -> float:
     """
     if stop <= start:
         raise ValueError(f"amplitude requires stop > start; got start={start}, stop={stop}")
-    displacement = gaze_deg[stop - 1] - gaze_deg[start]
-    return float(np.hypot(displacement[0], displacement[1]))
+    return _size(gaze_deg[start], gaze_deg[stop - 1], geometry)
 
 
 def measure(
@@ -102,8 +162,10 @@ def measure(
     start: int,
     stop: int,
     fs_hz: float,
+    *,
+    geometry: str,
 ) -> Measurement:
-    """Measure one interval. `stop` is exclusive, matching `Run`.
+    """Measure one interval in `geometry`. `stop` is exclusive, matching `Run`.
 
     **Precondition:** `stop > start`. Empty intervals are invalid; they
     silently read nonsensical indices (e.g., `start=stop=0` accesses
@@ -116,21 +178,32 @@ def measure(
     **Peak velocity is bounded to the interval.** A faster sample just outside
     belongs to a different event. The `speed.size` guard makes this safe; it
     could be removed but is kept for symmetry.
+
+    **Peak velocity is the largest magnitude of the velocity it is handed.**
+    Under true angle the caller hands it `velocity.local_velocity`, whose
+    magnitude is the true speed (true-angle spec section 4); under per-axis,
+    `velocity.velocity`, as v1.
     """
     if stop <= start:
         raise ValueError(f"measure requires stop > start; got start={start}, stop={stop}")
     speed = np.hypot(velocity_deg_s[start:stop, 0], velocity_deg_s[start:stop, 1])
-    first, last = gaze_deg[start], gaze_deg[stop - 1]
     return Measurement(
-        amplitude_deg=amplitude(gaze_deg, start, stop),
+        amplitude_deg=amplitude(gaze_deg, start, stop, geometry=geometry),
         peak_velocity_deg_s=float(speed.max()) if speed.size else 0.0,
         duration_s=float(stop - start) / fs_hz,
-        start_x_deg=float(first[0]),
-        start_y_deg=float(first[1]),
-        end_x_deg=float(last[0]),
-        end_y_deg=float(last[1]),
-        direction_deg=direction(float(last[0] - first[0]), float(last[1] - first[1])),
+        **_positions(gaze_deg, start, stop - 1, geometry),
     )
+
+
+def measure_positions(gaze_deg: np.ndarray, start: int, stop: int, fs_hz: float, *, geometry: str) -> Measurement:
+    """A fixation's measurement (true-angle spec decision 5): its first and
+    last samples' positions, their eccentricity and polar angle, and its
+    direction in `geometry`; no size and no peak speed, so the main sequence
+    and vigor, which read those, never see a fixation. `stop` is exclusive."""
+    if stop <= start:
+        raise ValueError(f"measure_positions requires stop > start; got start={start}, stop={stop}")
+    return Measurement(amplitude_deg=None, peak_velocity_deg_s=None, duration_s=float(stop - start) / fs_hz,
+                       **_positions(gaze_deg, start, stop - 1, _checked(geometry)))
 
 
 def measure_event_run(
@@ -141,6 +214,7 @@ def measure_event_run(
     stop: int,
     fs_hz: float,
     *,
+    geometry: str,
     runs_end_before_landing: bool,
     min_measured_ms: float | None,
     runs_start_after_takeoff: bool = False,
@@ -159,10 +233,10 @@ def measure_event_run(
     meet, declared on its `registry.Detector` entry. NSLR's segment `k` is
     `[J[k], J[k+1])`, and the eye lands at knot `J[k+1]`, the next run's
     first sample (design spec `2026-09-27-nslr-design.md` section 4). So
-    `measure`'s `gaze[stop - 1] - gaze[start]` would miss the last step: a
+    `measure`'s reading of `gaze[start]` and `gaze[stop - 1]` would miss the last step: a
     fraction `1/L` of an `L`-sample run, and all of it when `L` is 1. Such a
     run is measured up to where the eye lands instead -- amplitude
-    `gaze[stop] - gaze[start]`, peak velocity over `[start, stop]` inclusive
+    from `gaze[start]` to `gaze[stop]`, peak velocity over `[start, stop]` inclusive
     -- when `stop` is an interior knot:
     - `stop < n`;
     - the mask offered it (`offered[stop] is None`);
@@ -183,7 +257,7 @@ def measure_event_run(
     (`schema/detect.py::_measured_from_takeoff`). BMD's state-1 run
     `[t1, t2)` carries the eye from sample `t1 - 1` (design spec
     `2026-09-27-bmd-design.md` section 3.5), so such a run is measured from
-    that take-off sample -- amplitude `gaze[stop - 1] - gaze[start - 1]`, peak
+    that take-off sample -- amplitude from `gaze[start - 1]` to `gaze[stop - 1]`, peak
     velocity over `[start - 1, stop)` -- when `start - 1` exists, the mask
     offered it, and its gaze is finite. Otherwise it is measured as `measure`
     measures it. The requester's decision of 2026-09-27.
@@ -210,8 +284,8 @@ def measure_event_run(
     ):
         lo = start - 1
     if (lo, hi) == (start, stop):
-        return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz)
-    widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz)
+        return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz, geometry=geometry)
+    widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz, geometry=geometry)
     return dataclasses.replace(widened, duration_s=float(stop - start) / fs_hz)
 
 

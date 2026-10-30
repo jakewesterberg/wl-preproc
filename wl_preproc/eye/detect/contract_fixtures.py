@@ -41,6 +41,7 @@ from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
     thresholds,
 )
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
 from wl_preproc.eye.detect.velocity import velocity
@@ -122,7 +123,7 @@ def build_v1() -> dict:
             "name": name, "note": note, "gaze_deg": gaze.tolist(), "available": available,
             "velocity_deg_s": speed.tolist(),
             "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
-                      "amplitude_deg": amplitude(gaze, run.start, run.stop)} for run in runs],
+                      "amplitude_deg": amplitude(gaze, run.start, run.stop, geometry=PER_AXIS)} for run in runs],
         })
     return {
         "version": VERSION,
@@ -175,7 +176,7 @@ def build_v1_thresholds(v1: dict, v1_sha256: str) -> dict:
             "gaze_deg": gaze.tolist(), "available": available, "velocity_deg_s": speed.tolist(),
             "eta_deg_s": list(thresholds(speed, usable, DEFAULT_EK_PARAMS)),
             "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
-                      "amplitude_deg": amplitude(gaze, run.start, run.stop)} for run in runs],
+                      "amplitude_deg": amplitude(gaze, run.start, run.stop, geometry=PER_AXIS)} for run in runs],
         })
     return {
         "version": 1,

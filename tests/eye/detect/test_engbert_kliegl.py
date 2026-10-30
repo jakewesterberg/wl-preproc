@@ -4,6 +4,7 @@ import pytest
 from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, EngbertKlieglParams, detect_engbert_kliegl,
 )
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label, Run
 
 FS_HZ = 500.0
@@ -313,7 +314,7 @@ def test_each_label_is_what_classify_gives_for_that_intervals_own_amplitude():
 
     assert found
     for run in found:
-        expected = classify(amplitude(gaze, run.start, run.stop), MICROSACCADE_MAX_DEG)
+        expected = classify(amplitude(gaze, run.start, run.stop, geometry=PER_AXIS), MICROSACCADE_MAX_DEG)
         assert run.label is expected
     # Not vacuous: both sides of the split actually occur above.
     assert {run.label for run in found} == {Label.SACCADE, Label.MICROSACCADE}

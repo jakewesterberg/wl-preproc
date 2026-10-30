@@ -372,3 +372,40 @@ def test_a_bmd_event_of_the_cut_or_more_is_a_saccade(monkeypatch):
     assert events_found == [(200, 206, Label.MICROSACCADE, 1.0), (600, 606, Label.SACCADE, 1.0),
                             (800, 806, Label.SACCADE, 1.0)]
     assert np.hypot(*(x[805] - x[800])) < 1.0 <= np.hypot(*(x[805] - x[799]))
+
+
+def test_under_true_angle_the_saccades_are_still_engbert_kliegls():
+    """True-angle spec amendment 2: the gate is Engbert-Kliegl as registered,
+    so in the same geometry, and `DetectorAgreement` may go on leaving its
+    saccades out of the pair. A 1.2-degree horizontal step 40 degrees up is a
+    saccade per axis and about 0.92 degrees of true angle: neither copies it."""
+    from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE
+    from wl_preproc.eye.detect.velocity import local_velocity
+
+    x = _drifting_trace(3.0, 13, steps=[(1.0, 1.2)]) + np.array([0.0, 40.0])
+    v = local_velocity(x, FS)
+
+    def gate(geometry):
+        params = EngbertKlieglParams(lambda_=LIGHT.gate_lambda, min_duration_samples=LIGHT.gate_min_duration_samples,
+                                     geometry=geometry)
+        return [(r.start, r.stop) for r in detect_engbert_kliegl(x, v, _open(len(x)), FS, params)
+                if r.label is Label.SACCADE]
+
+    runs = bmd.detect_bmd(x, v, _open(len(x)), FS, dataclasses.replace(LIGHT, geometry=TRUE_ANGLE))
+    copied = [(r.start, r.stop) for r in runs if r.label is Label.SACCADE and r.reliability is None]
+    assert gate(PER_AXIS) and copied == gate(TRUE_ANGLE) == []
+
+
+def test_bmds_own_event_is_split_by_the_settings_size():
+    """True-angle spec section 6.2: BMD's own event, measured from its
+    take-off sample, is a saccade at the cut or above in the setting's
+    geometry. 1.12 degrees up from (30, 0) is 0.970 degrees of true angle."""
+    from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE
+    from wl_preproc.eye.detect.labels import Run
+
+    gaze = np.tile([30.0, 0.0], (30, 1))
+    gaze[10:] = [30.0, 1.12]
+    event = Run(start=10, stop=14, label=Label.MICROSACCADE, reliability=0.9)
+    label = {setting: bmd._by_size(event, gaze, np.zeros_like(gaze), _open(30), FS, 1.0, setting).label
+             for setting in (PER_AXIS, TRUE_ANGLE)}
+    assert label == {PER_AXIS: Label.SACCADE, TRUE_ANGLE: Label.MICROSACCADE}

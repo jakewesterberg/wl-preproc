@@ -38,6 +38,7 @@ import numpy as np
 from wl_preproc.eye.detect import bmd_rng
 from wl_preproc.eye.detect.bmd_table import LogATable, compute_table, lookup
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams, detect_engbert_kliegl
+from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.labels import Label, Run, true_runs
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, classify, measure_event_run
 from wl_preproc.eye.detect.numba_threads import keep_off_openmp
@@ -106,6 +107,15 @@ class BmdParams:
     gate_lambda: float
     gate_min_duration_samples: int
     microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+    #: The SHARED `geometry` key (true-angle spec section 3). The gate is
+    #: Engbert-Kliegl at its registered defaults (BMD design spec section 4),
+    #: and `schema/consensus.py::DetectorAgreement` relies on its saccades being
+    #: Engbert-Kliegl's, so the gate runs in this geometry as Engbert-Kliegl
+    #: does, on the velocity it is handed (true-angle spec amendment 2); BMD's
+    #: own events are split by this geometry's size. The sampler, the authors'
+    #: algorithm, reads positions and is unchanged. Absent, a paramset means
+    #: per-axis.
+    geometry: str = UNSTATED_GEOMETRY
 
 
 DEFAULT_BMD_PARAMS = BmdParams(
@@ -794,17 +804,17 @@ def to_origin(piece: np.ndarray) -> np.ndarray:
 
 
 def _by_size(run: Run, gaze: np.ndarray, velocity_deg_s: np.ndarray, available: np.ndarray, fs_hz: float,
-             microsaccade_max_deg: float) -> Run:
+             microsaccade_max_deg: float, geometry: str) -> Run:
     """The requester's decision of 2026-09-27 (final review I1): BMD's own
     event is split by size, as every other detector's is. Its amplitude is
     the one stored for it, measured from its take-off sample (spec 3.5), and
     `classify` names it `saccade` at or above `microsaccade_max_deg`. It
     keeps its mean P as reliability, which is what marks it as BMD's own
     rather than a copied Engbert-Kliegl saccade (`_insert_trace`)."""
-    amplitude = measure_event_run(gaze, velocity_deg_s, available, run.start, run.stop, fs_hz,
-                                  runs_end_before_landing=False, min_measured_ms=None,
-                                  runs_start_after_takeoff=True).amplitude_deg
-    return dataclasses.replace(run, label=classify(amplitude, microsaccade_max_deg))
+    size = measure_event_run(gaze, velocity_deg_s, available, run.start, run.stop, fs_hz, geometry=geometry,
+                             runs_end_before_landing=False, min_measured_ms=None,
+                             runs_start_after_takeoff=True).amplitude_deg
+    return dataclasses.replace(run, label=classify(size, microsaccade_max_deg))
 
 
 def _labelled(probability: np.ndarray, offset: int, threshold: float) -> list[Run]:
@@ -844,9 +854,10 @@ def detect_bmd(
     Runs are half-open and sorted."""
     gaze = np.asarray(gaze_deg, dtype=float)
     usable = np.array([entry is None for entry in available], dtype=bool) & np.isfinite(gaze).all(axis=1)
+    # Engbert-Kliegl as registered, in the same geometry (amendment 2).
     gate_params = EngbertKlieglParams(lambda_=params.gate_lambda,
                                       min_duration_samples=params.gate_min_duration_samples,
-                                      microsaccade_max_deg=params.microsaccade_max_deg)
+                                      microsaccade_max_deg=params.microsaccade_max_deg, geometry=params.geometry)
     saccades = [r for r in detect_engbert_kliegl(gaze, velocity_deg_s, available, fs_hz, gate_params)
                 if r.label is Label.SACCADE]
     gate = np.zeros(len(gaze), dtype=bool)
@@ -876,6 +887,7 @@ def detect_bmd(
         for (a, _e), probability in zip(group, result.probability):
             for run in _labelled(probability, a, params.threshold):
                 if run.label is Label.MICROSACCADE:
-                    run = _by_size(run, gaze, velocity_deg_s, available, fs_hz, params.microsaccade_max_deg)
+                    run = _by_size(run, gaze, velocity_deg_s, available, fs_hz, params.microsaccade_max_deg,
+                                   params.geometry)
                 runs.append(run)
     return sorted(runs, key=lambda r: r.start)

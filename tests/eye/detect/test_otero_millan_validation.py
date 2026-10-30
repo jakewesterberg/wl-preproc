@@ -69,6 +69,7 @@ import time
 import numpy as np
 import pytest
 
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label
 
 # --------------------------------------------------------------------------
@@ -243,7 +244,7 @@ def _measured(runs, gaze, v, fs_hz):
     quantity this pipeline never writes down."""
     from wl_preproc.eye.detect.measure import measure
 
-    rows = [measure(gaze, v, run.start, run.stop, fs_hz) for run in runs]
+    rows = [measure(gaze, v, run.start, run.stop, fs_hz, geometry=PER_AXIS) for run in runs]
     return (
         np.array([row.amplitude_deg for row in rows]),
         np.array([row.peak_velocity_deg_s for row in rows]),
@@ -341,7 +342,7 @@ def _random_span_control(gaze, v, mask, durations, fs_hz, seed=0):
         index = int(rng.choice(len(segments), p=weight))
         lo, hi = segments[index]
         start = int(rng.integers(lo, hi - int(duration)))
-        row = measure(gaze, v, start, start + int(duration), fs_hz)
+        row = measure(gaze, v, start, start + int(duration), fs_hz, geometry=PER_AXIS)
         amplitude.append(row.amplitude_deg)
         peak_velocity.append(row.peak_velocity_deg_s)
     return np.array(amplitude), np.array(peak_velocity)
