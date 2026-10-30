@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Run, true_runs
-from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
+from wl_preproc.eye.detect.geometry import TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
 # lambda = 6 and a 6-sample minimum (12 ms at 500 Hz) are the paper's own
@@ -85,12 +85,29 @@ def _median_scale(component: np.ndarray) -> float:
     return float(np.sqrt(variance)) if variance > 0 else 0.0
 
 
+def complete_windows(usable: np.ndarray) -> np.ndarray:
+    """Where a sample's five-sample velocity window is complete: it and the
+    two samples on each side all usable, which also leaves out the two
+    zero-filled samples at each edge (`velocity.py`)."""
+    complete = np.zeros(usable.size, dtype=bool)
+    if usable.size >= 5:
+        complete[2:-2] = usable[:-4] & usable[1:-3] & usable[2:-2] & usable[3:-1] & usable[4:]
+    return complete
+
+
 def thresholds(velocity_deg_s: np.ndarray, usable: np.ndarray, params: EngbertKlieglParams) -> tuple[float, float]:
-    """`(eta_x, eta_y)`: lambda times each axis's median scale, over the
-    velocity at every sample the mask leaves usable -- the two zero-filled
-    samples at each edge (`velocity.py`) and any whose window touches a masked
-    sample included. Published per trace in the detector's contract fixtures
+    """`(eta_x, eta_y)`: lambda times each axis's median scale.
+
+    **Per-axis, as v1:** over the velocity at every sample the mask leaves
+    usable -- the two zero-filled samples at each edge (`velocity.py`) and any
+    whose window touches a masked sample included. **Under true angle, over
+    complete windows only** (`complete_windows`; true-angle spec section 6.1,
+    wl-xcon's proposal, which its online detector follows): those samples'
+    velocities are not the eye's, and on a short trace they move the scale by
+    a few percent. Published per trace in the detector's contract fixtures
     (`contract_fixtures.py`), so wl-xcon's online copy is held to them."""
+    if params.geometry == TRUE_ANGLE:
+        usable = complete_windows(usable)
     return (params.lambda_ * _median_scale(velocity_deg_s[usable, 0]),
             params.lambda_ * _median_scale(velocity_deg_s[usable, 1]))
 
