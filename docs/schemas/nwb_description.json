@@ -290,6 +290,18 @@
           "title": "Gaze",
           "type": "array"
         },
+        "gaze_polar": {
+          "default": [],
+          "items": {
+            "enum": [
+              "left",
+              "right"
+            ],
+            "type": "string"
+          },
+          "title": "Gaze Polar",
+          "type": "array"
+        },
         "pupil": {
           "items": {
             "enum": [

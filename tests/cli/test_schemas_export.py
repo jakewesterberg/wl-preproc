@@ -106,6 +106,11 @@ def test_the_nwb_description_schema_is_exported_for_wl_works(tmp_path):
     assert set(probe["required"]) == {"serial", "probe_type", "insertion_number", "trajectory_id", "n_electrodes",
                                       "target", "assignment", "area_from"}
     assert set(probe["properties"]["area_from"]["enum"]) == {"assignment", "target", "unknown"}
+    # Within version 3, true angle's polar series (design spec
+    # `2026-10-30-true-angle-saccades-design.md` section 8), defaulted so a
+    # description recorded before it still reads.
+    eye = schema["$defs"]["EyeData"]
+    assert "gaze_polar" in eye["properties"] and "gaze_polar" not in eye["required"]
 
 
 def test_job_request_schema_carries_the_aim_and_the_assignment(tmp_path):

@@ -196,7 +196,8 @@ def test_the_description_describes_the_file(activation, built):
     assert description["identity"]["identifier"] == built.identifier
     assert (description["identity"]["rig"], description["identity"]["role"]) == ("rig-a", "canonical")
     assert description["subject"]["age_days"] == (_SESSION_DATETIME.date() - datetime.date(2016, 3, 2)).days
-    assert description["data_types"]["eye"] == {"gaze": ["left", "right"], "pupil": ["left", "right"]}
+    assert description["data_types"]["eye"] == {"gaze": ["left", "right"], "gaze_polar": ["left", "right"],
+                                                "pupil": ["left", "right"]}
     assert description["data_types"]["eye_events"]["detectors"] == sorted(DETECTORS)
     assert description["schema_version"] == 3
     assert [(run["run_number"], run["works_run_id"]) for run in description["runs"]] == [(1, "wr-1"), (2, "wr-2")]
@@ -385,7 +386,7 @@ def test_an_eye_without_calibration_is_left_out_and_the_rest_is_built(activation
     with NWBHDF5IO(str(result.path), "r") as handle:
         nwb = handle.read()
         behavior = nwb.processing["behavior"]
-        assert list(behavior["EyeTracking"].spatial_series) == ["gaze_left"]
+        assert sorted(behavior["EyeTracking"].spatial_series) == ["gaze_left", "gaze_polar_left"]
         assert "eye_validity_right" not in behavior.data_interfaces
         assert behavior["eye_calibration"].to_dataframe()["eye"].tolist() == ["left"]
         assert "pupil_right" in behavior["PupilTracking"].time_series

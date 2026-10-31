@@ -11,7 +11,9 @@ it, 2026-10-14 added what wl-xcon's record says the session was, its kind, its
 display calibration and each run's, and the warnings it accepted (design spec
 `2026-10-14-session-kind-and-warnings-design.md` section 5), and 2026-10-18 how
 many of wl-xcon's training records the file holds (design spec
-`2026-10-18-training-records-and-backup-clock-design.md` section 3.2).
+`2026-10-18-training-records-and-backup-clock-design.md` section 3.2), and
+2026-10-30 the eyes whose true eccentricity and polar angle it holds (design
+spec `2026-10-30-true-angle-saccades-design.md` section 8).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -73,6 +75,11 @@ class SubjectInfo(_Frozen):
 
 class EyeData(_Frozen):
     gaze: list[Literal["left", "right"]]
+    # The eyes whose true eccentricity and polar angle are in the file,
+    # `gaze_polar_{eye}`: every gazed eye (2026-10-30). Empty for a file
+    # described before, which holds no such series, as every field added
+    # within a version defaults (`nwb/correct.py::as_described_now`).
+    gaze_polar: list[Literal["left", "right"]] = []
     pupil: list[Literal["left", "right"]]
 
 
