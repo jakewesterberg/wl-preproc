@@ -81,9 +81,13 @@ status:
     (docs/superpowers/specs/2026-10-22-syncbox-records-and-segments-design.md,
     two parts); part 1, reading the box's logs as it writes them today,
     is merged (920048a; docs/handoffs/2026-10-22-syncbox-records.md);
-    next, XC-398's true-angle saccades (spec approved 2026-10-30), then
-    part 2, the bridges, and part 3b, the NI as the
-    clock.
+    XC-398's true-angle saccades are built on feat/true-angle-saccades
+    (docs/handoffs/2026-10-30-true-angle-saccades.md), not merged; next,
+    their review and merge; then, in the requester's order of
+    2026-10-31, wl-sync's header follow-up (its fe1ea63), wl-xcon's four
+    asks (C2a, C2b, XC-399, a setting's value that is an appearance), the
+    pipeline's scaling to long sessions, part 3b, the NI as the clock,
+    and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
     Done: wl-sync part 1, the box's logs read as it writes them (920048a).
     Before it, the saccade detector's v1 fixtures and companion (065da53).
@@ -637,7 +641,10 @@ publishes:
       The Engbert-Kliegl saccade detector's behaviour as inputs and this
       code's outputs: velocity, the median scale, the thresholds, the
       intervals detected with their labels, and each interval's size.
-      v1.json and its companion v1-thresholds.json, versioned, and never
+      v1.json and its companion v1-thresholds.json are per axis; v2.json is
+      true visual angle (the local-frame velocity, the complete-window
+      scale, and each interval's size, peak speed, direction and endpoints'
+      eccentricity and polar angle). Versioned, and never
       edited once published. wl-xcon's online detector mirrors this one, and
       its contract tests read these files rather than import this package,
       so a change of behaviour reaches it as a new version beside the old

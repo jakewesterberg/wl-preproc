@@ -266,3 +266,48 @@ unchanged.
    direction NULL for a zero displacement ("Empty at center", the same decision). `direction_deg` was
    `[-180, 180]` (the 2026-09-28 geometry spec §1.2); v1's fixtures hold no direction, so the per-axis setting
    still matches them.
+
+## Amendments, 2026-10-30, made while proving the plan
+
+2. **BMD's gate follows the setting, as Engbert-Kliegl does** (replacing §6.2's "BMD: its own detection is
+   unchanged" for the gate). The gate is Engbert-Kliegl at its registered defaults (BMD design spec §4), and
+   `schema/consensus.py::DetectorAgreement` leaves Engbert-Kliegl's saccade samples out of the BMD and
+   Engbert-Kliegl pair because BMD's copies are identical to them by construction (`registry.Detector.
+   copies_saccades_from`). A per-axis gate beside a true-angle Engbert-Kliegl would break that silently. So
+   `registry.Detector.detects_in_geometry` is true for Engbert-Kliegl and BMD: under true angle both are
+   handed the local-frame velocity, and BMD runs its gate with its own `geometry`. The BMD authors' sampler
+   reads positions and is unchanged, so its fidelity tests stand. BMD's own events are split by the
+   setting's size (`measure_event_run`). **One pair stays approximate:** `DetectorAgreement` excludes a
+   copied saccade by detector name, so a per-axis Engbert-Kliegl registered on request beside a true-angle BMD
+   (or the reverse) is compared with an exclusion that is no longer exact. The blend uses the default
+   paramsets alone, which share one geometry, so it is unaffected; recorded, not fixed.
+3. **A paramset without the key means per-axis.** Every one written before the key existed was detected per
+   axis, so `geometry.UNSTATED_GEOMETRY` is per-axis: a detector's own params dataclass defaults to it, and the
+   schema reads `params.get("geometry", "per-axis")`. The registered default writes `true-angle` after a
+   detector's own defaults (`_eye_detection_params`), so no detector shadows it. This keeps `DEFAULT_*_PARAMS`,
+   the v1 builders and every fidelity test per axis without special code.
+4. **v2 holds only its intervals and labels exactly** (correcting §9's "the thresholds are held exactly"):
+   under true angle every other number passes through `sin`, `cos` and `atan2`, which C libraries, and other
+   forms of the direction (`normalize(tan x, tan y, 1)` against this code's `normalize(sin x cos y, cos x sin y,
+   cos x cos y)`), round differently in the last places, and a velocity component near zero is a cancelling
+   difference that loses relative digits. So every one is held to `|got - want| <= 1e-9 + 1e-12 * |want|`, in
+   its own unit, and nulls as nulls; the file states the rule and the form it computes directions in. A
+   relative 1e-12 alone failed 277 of v2's 11,320 velocity components recomputed with wl-xcon's own
+   `viewport.center` and `local_true_angle` (worst 1.9e-12 deg/s); the rule fails none. The file names its
+   sources' digests (`derived_from`) and each trace's (`inputs_from`); its short trace is 60 samples, three
+   masked, on which the complete-window scale is 9% and 21% from v1's. wl-xcon was told on 2026-10-30.
+5. **A database declared before true angle is refused, not re-declared** (correcting §7's "the table is
+   re-declared"): DataJoint adds no column to an existing table, so `EyeDetection.populate` refuses while this
+   process reads `EyeDetection.Run` without the four new columns and names the `ALTER TABLE` that adds them
+   (`schema/detect.py::_polar_statement`), as `EyeValidity` does for `frac_feature_lost` (the eye-loss design).
+   **After the statement,** the default paramsets registered before the key stay registered and, meaning
+   per-axis, keep running beside the new defaults, their earlier rows holding directions in [-180, 180] and no
+   fixation positions: delete those `eye_detection` paramsets with what was computed from them (nothing real is
+   stored).
+6. **Two points of §8's NWB additions.** `NwbDescription`'s `data_types.eye.gaze_polar` defaults to empty, as
+   every field added within a version does, so a description recorded before it still reads
+   (`nwb/correct.py::as_described_now`, which a correction and publishing's adoption re-read every one with);
+   and `gaze_polar_{eye}`'s polar angle, stored as float32, is 0 where float32 would round it up to 360.
+7. **An `eye_detection` paramset whose `geometry` is neither setting is refused** where the stage reads it
+   (`schema/detect.py::_geometry_of`), rather than detecting per axis and failing in measurement; the daily
+   report names such a paramset's geometry as given rather than failing.
