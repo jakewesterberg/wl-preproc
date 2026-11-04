@@ -159,7 +159,7 @@ def test_the_near_threshold_traces_catch_a_threshold_off_by_five_percent_or_a_wi
 # this code makes of them under the `true-angle` setting.
 
 V2 = V1.with_name("v2.json")
-V2_SHA256 = "481eab5b1a8465da5994af16c5d332778649231261bd58ca5f38639853b46339"
+V2_SHA256 = "501e630945402b8064ea4a32708b8a20adba6d7ae90a3afd7209d96359c281c4"
 _V2_PARAMS = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
 
 
@@ -189,6 +189,17 @@ def test_v2_states_the_tolerance_its_readers_hold():
     """wl-xcon's reader holds v2 to what the file says, so the file says what
     this test holds it to."""
     assert _V2_TOLERANCE in _v2()["about"]
+
+
+def test_v2_says_which_samples_can_be_in_an_event():
+    """The file is all a reader has, and it freezes at its merge: what
+    `available` holds, that an unavailable sample is never in an event, and
+    that a zero threshold on either axis means no event at all (the final
+    review's second finding)."""
+    about = _v2()["about"]
+    assert "available: null where a detector may label, else the label the mask gave" in about
+    assert "An available sample is in an event when" in about
+    assert "an unavailable one never is, and with either eta 0 no sample is" in about
 
 
 def test_v2_names_its_geometry_its_sources_and_its_defaults():
