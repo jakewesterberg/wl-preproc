@@ -257,6 +257,21 @@ def test_a_database_without_the_new_columns_detects_nothing_and_names_the_statem
     assert "restart" in str(raised.value)
 
 
+def test_the_refusal_names_the_old_defaults_to_delete_after_the_statement(session, monkeypatch):
+    """Amendment 5: after the statement, the default paramsets registered
+    before the key, which mean per axis, keep running beside the new ones
+    until deleted; an operator who does only what the refusal says gets
+    seven more detections on every session (the final review's first
+    finding)."""
+    from wl_preproc.schema import detect
+
+    monkeypatch.setattr(detect, "_lacks_polar_columns", lambda: True)
+    with pytest.raises(RuntimeError) as raised:
+        detect.EyeDetection.populate()
+    assert "delete the eye_detection paramsets whose params name no geometry" in str(raised.value)
+    assert "with what was computed from them" in str(raised.value)
+
+
 def test_a_part_table_read_without_the_columns_is_refused(session, monkeypatch):
     from types import SimpleNamespace
 

@@ -29,7 +29,10 @@ Every line of the plan was proven in a scratch branch before the plan was writte
   (`engbert_kliegl.complete_windows`); BMD's gate, which is Engbert-Kliegl, follows it
   (`registry.Detector.detects_in_geometry`).
 - **Stored:** `EyeDetection.Run` gains each endpoint's eccentricity and polar angle; fixation rows carry their
-  positions and direction; a database declared before refuses the stage and names its `ALTER TABLE`.
+  positions and direction; a database declared before refuses the stage and names its `ALTER TABLE`, and
+  then the deletion of the `eye_detection` paramsets whose params name no geometry, with what was computed
+  from them: registered before the setting, they mean per axis and would otherwise keep running beside the
+  new defaults (amendment 5).
 - **Published:** the daily report's vigor names each figure's geometry; the NWB file gains `gaze_polar_{eye}`
   and its description `gaze_polar`; `docs/fixtures/saccade/v2.json`.
 

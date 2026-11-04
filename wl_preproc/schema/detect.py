@@ -560,7 +560,10 @@ class EyeDetection(dj.Computed):
             raise RuntimeError(
                 f"{self.Run.full_table_name} has no columns {', '.join(_POLAR_COLUMNS)}, as read by this "
                 "process: a database declared before 2026-10-30. Nothing is detected until it is altered and "
-                f"the daemon restarted: {_polar_statement()}"
+                f"the daemon restarted: {_polar_statement()}; then delete the eye_detection paramsets whose params "
+                "name no geometry, with what was computed from them: registered before the setting existed, they "
+                "mean per axis and otherwise keep running beside the true-angle defaults (design spec "
+                "2026-10-30-true-angle-saccades-design.md, amendment 5)."
             )
         return super().populate(*args, **kwargs)
 
