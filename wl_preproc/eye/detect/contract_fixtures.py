@@ -1,9 +1,9 @@
 """The saccade detector's behaviour as versioned fixtures, for wl-xcon's
 contract tests (its XC-398; `docs/pending-wl-xcon-amendments.md`).
 
-wl-xcon's online detector mirrors `engbert_kliegl.py` -- velocity per axis,
-the median scale, the elliptic test, and `measure.amplitude` -- and its CI
-checks that the two agree. It imported this package to do so until it asked
+wl-xcon's online detector mirrors `engbert_kliegl.py` -- the velocity, the
+median scale, the elliptic test, and `measure.amplitude`; per axis as of v1,
+in true angle from v2 -- and its CI checks that the two agree. It imported this package to do so until it asked
 for files instead: its CI merges nothing red, and any change here would have
 turned it red before it could match. Each version is one JSON file of inputs
 and this code's outputs under `docs/fixtures/saccade/`. **A published version
@@ -20,7 +20,13 @@ near them. wl-xcon found that v1 pins the threshold only to about +-40% and an
 ellipse limit above 1 not at all; these close that (the requester's choice of
 2026-10-20).
 
-`python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds}
+v2 is true visual angle (design spec `2026-10-30-true-angle-saccades-design.md`
+section 9): v1's traces and the companion's, read from those files, and one
+short trace that pins the threshold's scale over complete windows, each with
+what this code makes of it under the `true-angle` setting -- the local-frame
+velocity, the thresholds, the runs and their measurements.
+
+`python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds,v2}
 [--out DIR]` wrote each, and refuses to write over a published file;
 `tests/eye/detect/test_contract_fixtures.py` pins each by its digest and holds
 this code to every output in it. v1's inputs are seeded numpy draws, which
@@ -31,6 +37,7 @@ from v1 rather than drawing them again, as the companion does.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -41,10 +48,10 @@ from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
     thresholds,
 )
-from wl_preproc.eye.detect.geometry import PER_AXIS
+from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE
 from wl_preproc.eye.detect.labels import Label
-from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
-from wl_preproc.eye.detect.velocity import velocity
+from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, measure
+from wl_preproc.eye.detect.velocity import local_velocity, velocity
 
 VERSION = 1
 #: Both sides' rate: the synthetic tracker's (`synth/ohdpi.py::OHDPI_FPS`) and wl-xcon's contract test's.
@@ -195,6 +202,82 @@ def build_v1_thresholds(v1: dict, v1_sha256: str) -> dict:
     }
 
 
+# v2's short trace: 60 samples of the same noise about (10, 5), three masked
+# as a blink in the middle. Its four edge samples and the eight whose windows
+# touch the blink move the scale by 9% across and 21% up (measured
+# 2026-10-30), so its thresholds tell the complete-window scale from v1's.
+_SHORT = ("short-complete-windows", 22, (10.0, 5.0), 60, (30, 33, Label.BLINK))
+
+#: The measurements each v2 run carries, `measure`'s under true angle.
+_V2_MEASUREMENTS = ("amplitude_deg", "peak_velocity_deg_s", "direction_deg", "start_x_deg", "start_y_deg",
+                    "end_x_deg", "end_y_deg", "start_eccentricity_deg", "start_polar_deg", "end_eccentricity_deg",
+                    "end_polar_deg")
+
+
+def _short_trace() -> tuple[np.ndarray, list]:
+    """Noise alone, with the blink masked but its gaze left as it was: what
+    the trace pins is which samples the scale is taken over."""
+    _name, seed, start, samples, (first, stop, label) = _SHORT
+    gaze, available = _trace(seed, start, (), None, samples=samples)
+    available[first:stop] = [label.value] * (stop - first)
+    return gaze, available
+
+
+def build_v2(v1: dict, v1_sha256: str, companion: dict, companion_sha256: str) -> dict:
+    """v2, true angle: each input with what this code makes of it under the
+    `true-angle` setting (true-angle spec section 9)."""
+    fs_hz = v1["fs_hz"]
+    params = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
+    cases = [(case["name"], case["note"], "v1.json", case["gaze_deg"], case["available"]) for case in v1["traces"]]
+    cases += [(case["name"], case["note"], "v1-thresholds.json", case["gaze_deg"], case["available"])
+              for case in companion["near_threshold_traces"]]
+    gaze, available = _short_trace()
+    cases.append((_SHORT[0], "60 samples of noise about (10, 5), samples 30-32 masked as a blink: its thresholds "
+                             "are the complete-window scale's, which differs from v1's by 9% across and 21% up",
+                  "v2", gaze.tolist(), available))
+    traces = []
+    for name, note, source, gaze_deg, mask in cases:
+        gaze = np.array(gaze_deg, dtype=float)
+        speed = local_velocity(gaze, fs_hz)
+        usable = np.array([entry is None for entry in mask])
+        runs = detect_engbert_kliegl(gaze, speed, np.array(mask, dtype=object), fs_hz, params)
+        traces.append({
+            "name": name, "note": note, "inputs_from": source, "gaze_deg": gaze_deg, "available": mask,
+            "velocity_deg_s": speed.tolist(), "eta_deg_s": list(thresholds(speed, usable, params)),
+            "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
+                      **{field: getattr(measure(gaze, speed, run.start, run.stop, fs_hz, geometry=TRUE_ANGLE), field)
+                         for field in _V2_MEASUREMENTS}} for run in runs],
+        })
+    return {
+        "version": 2,
+        "geometry": TRUE_ANGLE,
+        "derived_from": {"v1.json": v1_sha256, "v1-thresholds.json": companion_sha256},
+        "about": "wl-preproc's Engbert-Kliegl saccade detector in true visual angle (design spec "
+                 "2026-10-30-true-angle-saccades-design.md). Gaze is in degrees per axis; a position (x, y) is the "
+                 "direction normalize(tan x, tan y, 1). velocity_deg_s: for each sample n, samples n-2..n+2 in the "
+                 "local frame at n's direction (azimuthal-equidistant; ex = normalize(x - (x.c)c), ey = c x ex), "
+                 "then (p[n+2] + p[n+1] - p[n-1] - p[n-2]) * fs / 6; the two samples at each edge are 0. "
+                 "eta_deg_s = lambda times each axis's median scale, sqrt(median(v^2) - median(v)^2) or 0, over "
+                 "complete windows only: a sample and the two on each side all available, so neither the edges "
+                 "nor any sample whose window touches a masked one. A sample is in an event when "
+                 "(vx/eta_x)^2 + (vy/eta_y)^2 > 1, runs shorter than min_duration_samples dropped. Size: the angle "
+                 "between the first and last samples' directions, atan2(|u x v|, u.v); a run is a saccade at or "
+                 "above microsaccade_max_deg. Direction: atan2 of the end's local coordinates about the start. "
+                 "Every angle in degrees, polar angles and directions in [0, 360) (mod 360, 0 where that rounds to "
+                 "360); null for a polar angle at zero eccentricity and a direction with no displacement. Peak "
+                 "speed: the largest |velocity| over the run. A direction is computed here as normalize(sin x cos y, "
+                 "cos x sin y, cos x cos y), the same direction as normalize(tan x, tan y, 1); computed otherwise, "
+                 "or on another C library, the last places differ. Intervals and labels are exact; every other "
+                 "number is held to |got - want| <= 1e-9 + 1e-12 * |want|, in its own unit, since a velocity "
+                 "component near zero is a cancelling difference that loses relative digits. inputs_from names the "
+                 "file a trace's inputs were read from. A run is [start, stop) in samples. Never edited.",
+        "fs_hz": fs_hz,
+        "defaults": {"lambda": DEFAULT_LAMBDA, "min_duration_samples": DEFAULT_MIN_DURATION_SAMPLES,
+                     "microsaccade_max_deg": MICROSACCADE_MAX_DEG},
+        "traces": traces,
+    }
+
+
 def dumps(fixture: dict) -> str:
     """The file's text: one top-level field, or one case, per line, so a
     reader can see its shape and a diff its cases."""
@@ -210,7 +293,7 @@ def dumps(fixture: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="write one of the saccade detector's contract fixtures")
-    parser.add_argument("which", choices=("v1", "v1-thresholds"))
+    parser.add_argument("which", choices=("v1", "v1-thresholds", "v2"))
     parser.add_argument("--out", type=Path, default=Path("docs/fixtures/saccade"))
     args = parser.parse_args(argv)
     path = args.out / f"{args.which}.json"
@@ -218,9 +301,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"{path} is published, and a published fixture is never edited")
     if args.which == "v1":
         text = dumps(build_v1())
-    else:
+    elif args.which == "v1-thresholds":
         raw = (args.out / "v1.json").read_bytes()
         text = dumps(build_v1_thresholds(json.loads(raw), hashlib.sha256(raw).hexdigest()))
+    else:
+        raw, companion = (args.out / "v1.json").read_bytes(), (args.out / "v1-thresholds.json").read_bytes()
+        text = dumps(build_v2(json.loads(raw), hashlib.sha256(raw).hexdigest(), json.loads(companion),
+                              hashlib.sha256(companion).hexdigest()))
     args.out.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     print(path)
