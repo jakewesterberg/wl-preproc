@@ -63,3 +63,31 @@ Executed from 2026-10-30 to 2026-11-04 (paused after Task 6 for the requester's 
   Andersson data set, which CI lacks, and `WLPP_OHDPI_REFERENCE` unset, as in CI:
   - 3.11: **2601 passed, 26 skipped, 1 deselected, 1 xfailed, 53 warnings in 2241.65s (0:37:21)**;
   - 3.13: **2601 passed, 27 skipped, 1 xfailed, 53 warnings in 2286.20s (0:38:06)**.
+
+## 6. The final review
+
+A fresh Opus reviewer read the branch (`4bd10f1..33ed22c`) and found **no Critical, no Important and six
+Minor**, judging it ready to merge. The branch's code, tests and fixtures were byte-identical to the proven
+tree, and no reader of the changed stored values, here or in the lab's other repositories, reads a meaning
+that changed. The re-grade by effect raised two Minors to Important; both were fixed, each by a test that
+failed first (the spec's amendments 8 and 9):
+- **The refusal of an older database named only its `ALTER TABLE`**, not the deletion of the keyless
+  paramsets that amendment 5 asks for:
+  `test_the_refusal_names_the_old_defaults_to_delete_after_the_statement` (`1de8fb7`).
+- **v2's `about` left out which samples can be in an event:**
+  `test_v2_says_which_samples_can_be_in_an_event` (`481fc0e`). v2's SHA-256 is now
+  `501e630945402b8064ea4a32708b8a20adba6d7ae90a3afd7209d96359c281c4`, sent to wl-xcon with the merge.
+- **Deferred, Minor:** wl-xcon's pending file cites amendment 1 as `dc3ef56`, which was amended before
+  merging (its commit here is `6173264`, named in the merge message); a test docstring still names the
+  relative 1e-12 (`tests/eye/detect/test_contract_fixtures.py`); the NWB `direction_deg` column's description
+  does not say which rows carry it (`nwb/eye_events.py`); a find-and-replace leftover in a test comment
+  (`tests/schema/test_detect_populate.py`).
+- **Set aside by the reviewer, and the rulings on them** (all stand): the report's events-per-trace lines name
+  neither detector nor geometry (older than this piece); `EyeDetection`'s count comments; agreement lines
+  without a geometry (labels only); a hand-written paramset without the key detects per axis (amendment 3,
+  named "(per axis)" in the report); `gaze_polar_{eye}` inside `EyeTracking` (§8); no command for
+  `register_per_axis_paramsets`; the inexact exclusion across geometries (amendment 2); samples with
+  incomplete windows can still be flagged, and a trace with none complete has no events (§6.1); a fixation's
+  direction from its first sample to its last (decision 5); `local_velocity`'s memory, for the scaling piece.
+
+**The full suite after the fixes,** at `481fc0e`: 3.11, **2603 passed, 26 skipped, 1 deselected, 1 xfailed**; 3.13, **2603 passed, 27 skipped, 1 xfailed**, both exiting 0.

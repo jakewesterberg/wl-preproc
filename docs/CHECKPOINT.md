@@ -434,18 +434,20 @@ requester chose to merge the same day; true when written.*
 > them today, is merged** (`920048a`, `handoffs/2026-10-22-syncbox-records.md`), its review's
 > three Important findings fixed (one re-graded from Minor) and nine Minor deferred (§6); wl-sync
 > fixed how its box unwraps code-word ticks (its ask 6; its `d309bf1`). **XC-398, saccades in
-> true visual angle, is built** on `feat/true-angle-saccades`, not merged
+> true visual angle, is built and reviewed** on `feat/true-angle-saccades`, not merged
 > (`specs/2026-10-30-true-angle-saccades-design.md`, the requester's decisions of 2026-10-30;
 > `handoffs/2026-10-30-true-angle-saccades.md`): every detector measures in true angle by
 > default, Engbert-Kliegl detects in it, per axis is a paramset registered on request, fixations
 > carry positions, the NWB file each eye's eccentricity and polar angle, and v2 of the fixtures
-> is made. Next: its review and merge; then, in the requester's order of 2026-10-31,
+> is made; its final review found nothing Critical or Important, and the two Minors re-graded
+> Important are fixed (handoff §6). Next: its merge; then, in the requester's order of 2026-10-31,
 > wl-sync's header follow-up (its `fe1ea63`), wl-xcon's four asks (engine builds C2a and C2b,
 > XC-399, and a setting's value that is an appearance), the pipeline's scaling to long sessions,
 > part 3b, the NI as the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
-> *Until XC-398 was built, this said its plan was being proved; true when written.*
+> *Until XC-398 was built, this said its plan was being proved; until its review, that the review
+> was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
