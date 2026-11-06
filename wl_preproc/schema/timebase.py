@@ -261,12 +261,17 @@ class SystemTimebase(dj.Computed):
 
         if key["system"] == "syncbox":
             # Session time IS this system's timeline, so its fit against itself
-            # is exactly identity -- the truth, not a placeholder.
+            # is exactly identity -- the truth, not a placeholder. Matched are
+            # the barcodes session time holds: a later process's are the box's
+            # too, but nothing places them until a bridge does (part 1's
+            # deferred finding; design spec `2026-11-04-syncbox-header-design.md`
+            # section 9).
+            reference = clock_for(key, session_dir).barcode_reference() if decoded else {}
             self.insert1(
                 {
                     **row,
                     "fit_status": "fitted",
-                    "n_barcodes_matched": len(decoded),
+                    "n_barcodes_matched": sum(1 for barcode in decoded if barcode.value in reference),
                     "nominal_rate_hz": nominal_rate_hz,
                     "fitted_rate_hz": nominal_rate_hz,
                     "drift_ppm": 0.0,

@@ -60,14 +60,14 @@ def test_the_barcodes_are_the_boxs_own_records_and_nothing_on_its_barcode_pin(tm
                                           (912_345_680, 4_000_000)]
 
 
-def test_the_sync_box_stream_decodes_to_the_boxs_records(tmp_path):
-    """`extract_syncbox` renders them into the edge form every device has,
-    so every stage downstream reads them as it reads any device."""
-    from wl_sync.barcode import decode_edges
+def test_the_sync_box_stream_is_its_extent_alone(tmp_path):
+    """From tick 0 to its last frame's end, with no edges: its barcodes are
+    its records, never rendered into edges and decoded back, which lost one
+    within 400 ms of tick 0 (part 1's deferred finding)."""
+    from wl_sync.barcode import FRAME_US
 
     stream = extract_syncbox(_real_shaped_log(tmp_path / "seg-000.log"))
-    assert [(b.value, b.start_us) for b in decode_edges(list(stream.edges))] == [
-        (912_345_678, 2_000_000), (912_345_679, 3_000_000), (912_345_680, 4_000_000)]
+    assert (stream.edges, stream.fs_hz, stream.n_samples) == ((), 1_000_000.0, 4_000_000 + FRAME_US)
 
 
 def test_a_log_with_no_barcode_record_has_no_barcodes(tmp_path):

@@ -28,6 +28,7 @@ has exactly one reader.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,7 +62,19 @@ def read_syncbox_log(path: Path) -> SyncBoxLog:
     format does not define (`wl_sync.log.read_log` validates both) refuses
     every stage that reads the session's sync box, and the file is what a
     person must open (design spec `2026-11-04-syncbox-header-design.md`
-    section 3)."""
+    section 3).
+
+    Read once per process for as long as the file is unchanged: a stage asks
+    for session time, the box's scans and its codes, and each read the whole
+    log again (part 1's deferred finding). Keyed by the file's modification
+    time and size, so a file written again is read again; the edges, the bulk
+    of a real log, are never kept."""
+    stat = Path(path).stat()
+    return _read(Path(path), stat.st_mtime_ns, stat.st_size)
+
+
+@functools.lru_cache(maxsize=256)
+def _read(path: Path, _mtime_ns: int, _size: int) -> SyncBoxLog:
     try:
         header, records = read_log(path)
     except ValueError as error:

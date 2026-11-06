@@ -63,6 +63,18 @@ def test_a_session_whose_box_restarted_is_tier_d(restarted):
     assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
 
 
+def test_the_sync_box_counts_as_matched_only_the_barcodes_session_time_holds(restarted):
+    """Its identity fit counted the later process's barcodes as matched too,
+    though nothing places them until a bridge does (part 1's deferred
+    finding)."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.segments import session_reference
+
+    key, session_dir, _ = restarted
+    fit = (timebase.SystemTimebase & key & {"system": "syncbox"}).fetch1()
+    assert fit["n_barcodes_matched"] == len(session_reference(session_dir)) < fit["n_barcodes_decoded"]
+
+
 def test_each_segment_of_the_box_is_recorded_with_its_role(restarted):
     """`timebase.SyncBoxSegment` (section 6): what each segment's header says,
     its barcodes, and its role. The barcode delay is null, unmeasured and
