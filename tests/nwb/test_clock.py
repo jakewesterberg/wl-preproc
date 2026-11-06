@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import datetime
 
-import pytest
-
 
 def test_the_first_barcode_places_t0_unless_the_clocks_disagree():
     """Section 4.2. Within 60 s of the manifest the barcode wins; beyond it
@@ -26,10 +24,12 @@ def test_the_first_barcode_places_t0_unless_the_clocks_disagree():
     assert far["reference_time"] == started.replace(tzinfo=datetime.timezone.utc)
 
 
-def test_the_restated_barcode_epoch_is_wl_syncs():
-    """Pinned equal wherever wl-sync's own `clock` module is installed; the
-    commit this repository pins predates it."""
-    clock = pytest.importorskip("wl_sync.clock")
-    from wl_preproc.nwb.gather import BARCODE_EPOCH
+def test_the_barcode_epoch_is_wl_syncs_own():
+    """One definition, wl-sync's: the pinned wl-sync carries its `clock`
+    module, so nothing here restates it (part 1's deferred finding)."""
+    from wl_sync import clock
 
-    assert BARCODE_EPOCH == clock.BARCODE_EPOCH
+    from wl_preproc.nwb.gather import BARCODE_EPOCH
+    from wl_preproc.timebase import clock as timebase_clock
+
+    assert BARCODE_EPOCH is clock.BARCODE_EPOCH is timebase_clock.BARCODE_EPOCH

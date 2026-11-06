@@ -13,9 +13,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-from wl_sync.barcode import BIT_SLOT_US, FRAME_US, edges_from_samples, encode
+from wl_sync.barcode import BIT_SLOT_US, FRAME_US, edges_from_samples
+
+if TYPE_CHECKING:
+    from wl_preproc.timebase._syncbox_log import SyncBoxLog
 
 
 def min_sample_rate_hz() -> float:
@@ -97,42 +101,23 @@ _SYNCBOX_NOMINAL_FS_HZ = 1_000_000.0
 
 
 def extract_syncbox(path: Path) -> BitStream:
-    """The sync box's own log, rendered into the same edge form every other
-    system produces.
+    """The sync box's log as a stream: its extent alone (`syncbox_stream`).
+    Its barcodes are its `B` records, which `timebase/segments.py::
+    syncbox_scans` reads as they are; until 2026-11 this rendered them into
+    edges through `wl_sync.barcode.encode` for every stage to decode back,
+    which lost a barcode within 400 ms of tick 0 and read every log once more
+    than needed (design spec `2026-11-04-syncbox-header-design.md` section 5)."""
+    from wl_preproc.timebase._syncbox_log import read_syncbox_log
 
-    Rendering through `wl_sync.barcode.encode` rather than writing edges by
-    hand: the codec owns the frame's shape, and a second copy of it here is the
-    reimplementation this phase's constraints forbid.
+    return syncbox_stream(read_syncbox_log(path))
 
-    A hand-built edge list has to supply two things `edges_from_samples` gives
-    every *sampled* system for free (its `previous` state starts `None`, so it
-    always emits an edge at its own t0): a LOW edge before the first frame, so
-    that frame's preceding idle is verifiable by a caller who decodes this
-    stream without passing `start_us` itself; and a LOW edge closing each
-    frame's TRAIL pulse, so `decode_edges`'s own completeness check — which
-    requires the edge list to extend to the frame's end — has something to see
-    past the last frame. Native tick 0 is the log's own time origin and is
-    known LOW there, before anything has driven the line.
-    """
-    from wl_preproc.timebase._syncbox_log import read_barcode_entries
 
-    entries = read_barcode_entries(path)
-    edges: list[tuple[int, int]] = []
-    for value, t_us in entries:
-        tick = t_us
-        for level, duration_us in encode(value):
-            edges.append((tick, level))
-            tick += duration_us
-        edges.append((tick, 0))
-    if edges:
-        edges.append((0, 0))
-    edges.sort()
-    last_us = edges[-1][0] if edges else 0
-    return BitStream(
-        edges=tuple(edges),
-        fs_hz=_SYNCBOX_NOMINAL_FS_HZ,
-        n_samples=last_us,
-    )
+def syncbox_stream(log: SyncBoxLog) -> BitStream:
+    """One segment's extent, in its own ticks: from tick 0, the box's clock's
+    origin, to the end of its last barcode frame, as every device's stream
+    runs from its first sample to its last. No edges: nothing reads them."""
+    last_us = max((tick_us for _value, tick_us in log.barcodes), default=None)
+    return BitStream(edges=(), fs_hz=_SYNCBOX_NOMINAL_FS_HZ, n_samples=0 if last_us is None else last_us + FRAME_US)
 
 
 def _edges_from_bit(

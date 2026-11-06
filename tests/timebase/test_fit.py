@@ -253,11 +253,9 @@ def _session_reference(session_dir: Path) -> dict[int, float]:
     on. A reference taken from the oracle would test the fit against a timeline
     the pipeline will never have.
     """
-    from wl_preproc.timebase.extract import extract_syncbox
+    from wl_preproc.timebase.segments import session_reference
 
-    decoded = decode_edges(list(extract_syncbox(_recording(session_dir, "syncbox")).edges))
-    origin_us = decoded[0].start_us
-    return {b.value: (b.start_us - origin_us) / 1e6 for b in decoded}
+    return session_reference(session_dir)
 
 
 def test_the_whole_chain_recovers_each_systems_clock(tmp_path: Path):
@@ -308,15 +306,15 @@ def test_the_syncbox_has_no_drift_against_itself(tmp_path: Path):
     have seen it, because every shipped recipe left the value at zero.
     """
     from wl_preproc.synth.recipe import RECIPES
-    from wl_preproc.timebase.extract import extract_syncbox
+    from wl_preproc.timebase.segments import scan_system
 
     recipe = RECIPES["drift"].model_copy(update={"drift_ppm": 250.0})
     generate_session(tmp_path, recipe)
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
     reference = _session_reference(session_dir)
 
-    decoded = decode_edges(list(extract_syncbox(_recording(session_dir, "syncbox")).edges))
-    fit = fit_rate(decoded, reference, nominal_rate_hz=1_000_000.0)
+    (scan,) = scan_system("syncbox", session_dir / "syncbox")
+    fit = fit_rate(list(scan.barcodes), reference, nominal_rate_hz=1_000_000.0)
 
     assert fit.drift_ppm == pytest.approx(0.0, abs=1e-6)
 

@@ -51,24 +51,24 @@ def test_bitstream_accepts_the_floor_exactly():
     assert stream.fs_hz == 400.0
 
 
-def test_syncbox_extraction_recovers_every_ground_truth_barcode(tmp_path: Path):
+def test_the_sync_box_scan_carries_every_ground_truth_barcode_from_its_records(tmp_path: Path):
     """The sync box is the reference: session time is t=0 at its first barcode
-    (spec section 4.5), so its own log needs no decode — the values and times
-    are already in it.
+    (spec section 4.5), so its own log needs no decode -- the values and times
+    are already in it, and its stream is its extent alone, with no edges to
+    decode back (design spec `2026-11-04-syncbox-header-design.md` section 5).
 
     Checked against GroundTruth rather than against a re-decode of the same
     file, because a reader that mis-parses consistently agrees with itself.
     """
+    from wl_preproc.timebase.segments import scan_system
+
     truth = generate_session(tmp_path, RECIPES["ci"])
     session_dir = next(p for p in tmp_path.iterdir() if p.is_dir())
-    stream = extract_syncbox(session_dir / "syncbox" / "seg-000.log")
+    (scan,) = scan_system("syncbox", session_dir / "syncbox")
 
-    assert stream.n_samples > 0
-    assert len(stream.edges) > 0
-    # Every ground-truth barcode is present, by value.
-    recovered = {b.value for b in decode_edges(list(stream.edges))}
-    expected = {value for value, _ in truth.barcodes}
-    assert expected - recovered == set(), f"missing barcodes: {expected - recovered}"
+    assert scan.stream.n_samples > 0 and scan.stream.edges == ()
+    assert extract_syncbox(scan.path) == scan.stream
+    assert {b.value for b in scan.barcodes} == {value for value, _ in truth.barcodes}
 
 
 def test_rhs_extraction_recovers_ground_truth_barcodes(tmp_path: Path):
@@ -376,6 +376,7 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
     started failing intermittently for no visible reason.
     """
     from wl_preproc.synth.ohdpi import FILENAME
+    from wl_preproc.timebase.segments import scan_system
 
     measured: dict[str, tuple[int, int]] = {}
     for profile, cases in (
@@ -393,8 +394,12 @@ def test_decode_reliability_is_measured_on_every_system(tmp_path: Path, capsys):
                 if relative is None
                 else session_dir / relative
             )
-            stream = EXTRACTORS[system](path)
-            recovered = {b.value for b in decode_edges(list(stream.edges))}
+            if system == "syncbox":
+                # The box's own barcodes are its records, read as they are.
+                recovered = {b.value for scan in scan_system(system, path.parent) for b in scan.barcodes}
+            else:
+                stream = EXTRACTORS[system](path)
+                recovered = {b.value for b in decode_edges(list(stream.edges))}
             emitted = {value for value, _ in truth.barcodes}
             measured[system] = (len(recovered & emitted), len(emitted))
 

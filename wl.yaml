@@ -84,7 +84,9 @@ status:
     XC-398's true-angle saccades are merged (82380d2;
     docs/handoffs/2026-10-30-true-angle-saccades.md). Next, in the
     requester's order of 2026-10-31: wl-sync's header follow-up (its
-    fe1ea63; spec approved 2026-11-06, its plan being proved), wl-xcon's
+    fe1ea63), built on feat/syncbox-header
+    (docs/handoffs/2026-11-04-syncbox-header.md), reviewed, not merged, its
+    merge next; then wl-xcon's
     asks (C2a, C2b, C3, XC-399, a setting's value that is an appearance),
     the pipeline's scaling to long sessions, part 3b, the NI as the clock,
     and part 2, the bridges.
@@ -549,7 +551,7 @@ third_party:
 # something here.
 requires:
   - name: wl-sync
-    pinned_at: 27c0e9780a388cbc120ecfadcb54b6f288740a98
+    pinned_at: fe1ea633972df9590dbe1974aeb66dc3a1eb20ad
     for: session identity, the barcode codec, and the log format
     why: >-
       The sync box owns everything it produces, and vendoring copies here would
@@ -564,7 +566,11 @@ requires:
       wl-sync's main of that day: the box's logs since 2026-08-17 carry header
       fields (segment_index, ordering, clock_trusted, clock_reason) and B and T
       records the old pin refused, so no real log could be read
-      (HANDOVER-wl-sync.md, 2026-10-19).
+      (HANDOVER-wl-sync.md, 2026-10-19). Moved again from 27c0e97 to
+      wl-sync's main of 2026-10-30 (fe1ea63): the box's logs since then carry
+      header fields (process_uuid, barcode_delay_us, timebase) and L records
+      that pin refused, and wl-sync holds the box's deploy until this pin has
+      moved (docs/superpowers/specs/2026-11-04-syncbox-header-design.md).
 
 publishes:
   - name: session-manifest

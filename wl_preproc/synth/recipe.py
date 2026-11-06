@@ -4,10 +4,12 @@ call with thirty keyword arguments."""
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from wl_sync.log import LOSS_SHAPES, Loss
 
 from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.contracts.paths import SYSTEMS
@@ -177,6 +179,57 @@ class SyncBoxRestartSpec(BaseModel):
     gap_s: float = Field(default=1.2, ge=0)
 
 
+class SyncBoxRollSpec(BaseModel):
+    """The sync box's process closed its segment at `at_s` (session time) and
+    went on in the next one, in the same folder, the same process on the same
+    clock (design spec `2026-11-04-syncbox-header-design.md` sections 1 and 10).
+    With `gap_s` 0 it is the roll in place at NTP's first sync: the frame grid
+    is placed again, and the value of the first frame due after it is never
+    emitted, so the barcode steps by two across it. With `gap_s` above 0 the
+    box recorded elsewhere for that long and came back: it emitted barcodes
+    throughout, which every device records, but its records of that stretch
+    are not in this folder."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    at_s: float = Field(gt=0)
+    gap_s: float = Field(default=0.0, ge=0)
+
+
+class SyncBoxLossSpec(BaseModel):
+    """One `L` record the synthetic box writes: its `cause`, from wl-sync's
+    closed set, its `count`, its window in session time, `from_s` to `to_s`,
+    either end None for open, and `gpio`, the line an edge cause names. Built
+    through wl-sync's own `Loss` (`record`), so a fixture cannot write one the
+    format does not define."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cause: str
+    count: int = Field(default=1, ge=1)
+    from_s: float | None = None
+    to_s: float | None = None
+    gpio: int | None = None
+
+    @property
+    def at_s(self) -> float:
+        """Where the record sits in its path's stream: at its window's end, or
+        at its start where the window has no end (a `desync`'s)."""
+        if self.to_s is None and self.from_s is None:
+            raise ValueError("a sync box loss needs an end of its window, which places its record")
+        return self.to_s if self.to_s is not None else self.from_s
+
+    def record(self, tick: Callable[[float], int]) -> Loss:
+        """The record, its session times converted to ticks by `tick`."""
+        if self.cause not in LOSS_SHAPES:
+            raise ValueError(f"a sync box loss's cause is one of {sorted(LOSS_SHAPES)}, got {self.cause!r}")
+        shape = LOSS_SHAPES[self.cause]
+        before = None if self.from_s is None else tick(self.from_s)
+        after = None if self.to_s is None else tick(self.to_s)
+        return Loss(tick_us=tick(self.at_s), path=shape.path, gpio=self.gpio, count=self.count, bound=shape.bound,
+                    cause=self.cause, before_us=before, after_us=after)
+
+
 class RigWarningSpec(BaseModel):
     """One warning the synthetic session accepted, as wl-xcon's
     `record.py::SessionRecord.warning` writes it: `run` is wl-xcon's 0-based
@@ -281,6 +334,17 @@ class SessionRecipe(BaseModel):
     # The sync box restarting mid-session; None by default, so every existing
     # profile is byte-identical.
     syncbox_restart: SyncBoxRestartSpec | None = None
+    # The sync box rolling to a new segment and running on, in the same folder;
+    # None by default (design spec `2026-11-04-syncbox-header-design.md`
+    # section 10).
+    syncbox_roll: SyncBoxRollSpec | None = None
+    # What the box's header says of its clocks, and its measured barcode delay:
+    # "fake", the test backend its unit runs until bench acceptance, and
+    # unmeasured, by default.
+    syncbox_timebase: str = "fake"
+    syncbox_barcode_delay_us: int | None = Field(default=None, ge=0)
+    # The `L` records the box writes; none by default.
+    syncbox_losses: tuple[SyncBoxLossSpec, ...] = ()
     # wl-xcon's fault shapes (design spec `2026-10-01-runs-and-trials-design.md`
     # section 7), both empty by default so every existing profile is
     # byte-identical. `unclosed_blocks`: block numbers (from 1) whose BLOCK_END
@@ -508,6 +572,20 @@ class SessionRecipe(BaseModel):
                                  "first bank's sites while the second run's .meta names others")
             if Fault.TRUNCATED_FILE in self.faults:
                 raise ValueError("TRUNCATED_FILE and a restart together: which run's file is cut is undefined")
+        # The sync box's own changes (part 1's deferred finding: nothing
+        # checked its restart).
+        if self.syncbox_restart is not None and self.syncbox_roll is not None:
+            raise ValueError("syncbox_restart and syncbox_roll together: which process the second segment is "
+                             "would be undefined")
+        for name, change in (("syncbox_restart", self.syncbox_restart), ("syncbox_roll", self.syncbox_roll)):
+            if change is not None and change.at_s + change.gap_s >= self.duration_s:
+                raise ValueError(f"{name} resumes at {change.at_s + change.gap_s} s, at or after the session ends "
+                                 f"at {self.duration_s} s; its second segment would record nothing")
+        for loss in self.syncbox_losses:
+            if any(time_s is not None and not 0.0 <= time_s < self.duration_s for time_s in (loss.from_s, loss.to_s)):
+                raise ValueError(f"a sync box loss's window, {loss.from_s} to {loss.to_s} s, lies outside the "
+                                 f"session's {self.duration_s} s")
+            loss.record(lambda time_s: round((time_s + 1.0) * 1e6))
         return self
 
 

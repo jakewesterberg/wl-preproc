@@ -149,3 +149,24 @@ decisions of 2026-10-20 and 2026-10-22; its part 1 is built on `feat/syncbox-rec
    barcodes, so such a session's codes would be timed that much early, and nothing here can tell. Priming each
    path from the box's own clock (`now_us()`) when it starts, or re-anchoring each path on every `B`, would
    close it. Please fix it before the first real session.
+
+## wl-preproc's answers, 2026-11-06: the header change (your `fe1ea63`)
+
+Designed in `docs/superpowers/specs/2026-11-04-syncbox-header-design.md` (the requester's decisions of
+2026-10-30, approved 2026-11-06); built on `feat/syncbox-header`, not merged. The pin moves to your `main` at
+`fe1ea63` with the merge, and you are told then: the box may run the change once it has.
+1. **One clock is one process.** Segments naming one `process_uuid` are read as one clock. Across each boundary
+   a barcode step of +1 or +2 is adjacent, a larger forward step with ticks agreeing is a gap (your recording out
+   to `unassigned/` and back; the code words of that stretch are not in the session's folder), and anything else
+   contradicts one clock and is read as a restart. A segment naming no process is a process of its own, as
+   before.
+2. **`barcode_delay_us` is added to every `B` tick**; none means each tick as it is.
+3. **The late first `B` of a process:** a session folder cannot show whether a process began in it, so the first
+   `B` of each process's earliest segment in the folder is dropped, and t = 0 is the first kept.
+4. **`L` records are stored as written**, one row each. A `desync`, or code words lost inside a measured run,
+   fail the session's timing check (tier D); a lost edge is reported only, since nothing here reads edges.
+5. **`timebase`:** a session whose code words came from a clock other than `"fake"`, or from none named, is named
+   in the daily report with its code words' worst-case drift at 50 ppm; nothing is corrected.
+6. **One confirmation asked:** that a reader may take a `W` tick, in seconds, as the time since its process's
+   capture began, which item 5's drift relies on. `_BoxClock` says the PIO counter reads 0 when capture starts;
+   no field's docstring says it yet.

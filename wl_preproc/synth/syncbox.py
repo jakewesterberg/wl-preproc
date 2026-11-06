@@ -6,27 +6,36 @@ board's (`wl_sync.pins.GPIO_MAP`). Until 2026-10-22 this drew each barcode as
 edges on GPIO17 and named three pins of this project's own: a log the box does
 not write, read by a reader no real log could satisfy (design spec
 `2026-10-22-syncbox-records-and-segments-design.md` section 3). Every type
-comes from `wl_sync.log`, so a change of format there breaks these fixtures
-loudly instead of letting the generator and the pipeline drift apart.
+comes from `wl_sync.log`, and every segment is written by wl-sync's own
+`SegmentWriter`, trailer and all, so a change of format there breaks these
+fixtures loudly instead of letting the generator and the pipeline drift apart.
+
+Since 2026-10-30 every header names its process, its clocks and, once
+measured, the barcode delay, and each process's first frame goes out later
+than its tick says (design spec `2026-11-04-syncbox-header-design.md` sections
+1 and 10). The session's first process starts with such a frame, one barcode
+interval before session time's first, which no device records; a restarted
+process's first frame is its first barcode.
 """
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
-from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, CodeWord, Record, SyncBoxLogHeader, write_log
+from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, CodeWord, Record, SyncBoxLogHeader
 from wl_sync.pins import GPIO_MAP
-from wl_sync.segment import segment_name
+from wl_sync.segment import SegmentWriter, segment_name
 
 from wl_preproc.synth.recipe import SYNTH_EPOCH, SessionRecipe
-from wl_preproc.synth.timeline import apply_drift
+from wl_preproc.synth.timeline import BARCODE_INTERVAL_S, apply_drift
 from wl_preproc.synth.truth import GroundTruth
 
-# The log's tick origin is not session time, deliberately. Two reasons: the
-# decoder needs an idle before the first frame or it correctly refuses it, and a
-# fixture where tick == session time would let a pipeline bug that ignores the
-# offset pass every alignment test. Each system gets a *different* pre-roll for
-# the same reason — see spikeglx.py.
+# The log's tick origin is not session time, deliberately: a fixture where
+# tick == session time would let a pipeline bug that ignores the offset pass
+# every alignment test. Each system gets a *different* pre-roll for the same
+# reason -- see spikeglx.py. The process's first, late frame goes out at its
+# clock's origin, one interval before session time's first barcode.
 SYNCBOX_PRE_ROLL_S = 1.0
 # A restarted process's first tick before its first barcode. Shorter than the
 # first segment's pre-roll, so the second segment's ticks start again below the
@@ -35,46 +44,70 @@ SYNCBOX_PRE_ROLL_S = 1.0
 SYNCBOX_RESTART_PRE_ROLL_S = 0.6
 
 
+def process_uuid(recipe: SessionRecipe, number: int) -> str:
+    """The synthetic box's `number`th process, as its header names it: one
+    canonical UUID per process, fixed by the recipe's seed."""
+    return str(uuid.UUID(int=(recipe.seed << 32) + number))
+
+
 def write_syncbox_log(
     path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
 ) -> None:
     """The whole session as one segment, the first."""
     _write_segment(path, recipe, truth, index=0, since_s=None, until_s=None, origin_s=0.0,
-                   pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=drift_ppm)
+                   pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=drift_ppm, process=0)
 
 
 def write_syncbox_segments(directory: Path, recipe: SessionRecipe, truth: GroundTruth) -> list[Path]:
     """The session's segments, named as the box names them (`seg-000.log`):
-    one, or, for `recipe.syncbox_restart`, the second written after the
-    restart on a clock that starts again, without what the box missed while
-    down. Never drifted: session time is the box's own timeline."""
-    restart = recipe.syncbox_restart
+    one; or, for `recipe.syncbox_restart`, the second written by a new process
+    on a clock that starts again, without what the box missed while down; or,
+    for `recipe.syncbox_roll`, the second written by the same process on the
+    same clock, from the end of its gap. Never drifted: session time is the
+    box's own timeline."""
     first = directory / segment_name(0)
-    if restart is None:
-        write_syncbox_log(first, recipe, truth)
-        return [first]
-    resumed_s = restart.at_s + restart.gap_s
     second = directory / segment_name(1)
-    _write_segment(first, recipe, truth, index=0, since_s=None, until_s=restart.at_s, origin_s=0.0,
-                   pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=0.0)
-    _write_segment(second, recipe, truth, index=1, since_s=resumed_s, until_s=None, origin_s=resumed_s,
-                   pre_roll_s=SYNCBOX_RESTART_PRE_ROLL_S, drift_ppm=0.0)
-    return [first, second]
+    restart, roll = recipe.syncbox_restart, recipe.syncbox_roll
+    if restart is not None:
+        resumed_s = restart.at_s + restart.gap_s
+        _write_segment(first, recipe, truth, index=0, since_s=None, until_s=restart.at_s, origin_s=0.0,
+                       pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=0.0, process=0)
+        _write_segment(second, recipe, truth, index=1, since_s=resumed_s, until_s=None, origin_s=resumed_s,
+                       pre_roll_s=SYNCBOX_RESTART_PRE_ROLL_S, drift_ppm=0.0, process=1)
+        return [first, second]
+    if roll is not None:
+        _write_segment(first, recipe, truth, index=0, since_s=None, until_s=roll.at_s, origin_s=0.0,
+                       pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=0.0, process=0)
+        _write_segment(second, recipe, truth, index=1, since_s=roll.at_s + roll.gap_s, until_s=None, origin_s=0.0,
+                       pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=0.0, process=0)
+        return [first, second]
+    write_syncbox_log(first, recipe, truth)
+    return [first]
 
 
 def _write_segment(path: Path, recipe: SessionRecipe, truth: GroundTruth, *, index: int, since_s: float | None,
-                   until_s: float | None, origin_s: float, pre_roll_s: float, drift_ppm: float) -> None:
+                   until_s: float | None, origin_s: float, pre_roll_s: float, drift_ppm: float,
+                   process: int) -> None:
     """The records of session time `[since_s, until_s)`, ticked from `origin_s`
-    after `pre_roll_s` of this segment's own clock."""
+    after `pre_roll_s` of this segment's process's clock; a barcode's tick read
+    `barcode_delay_us` before its frame reaches the wire."""
     def kept(time_s: float) -> bool:
         return (since_s is None or time_s >= since_s) and (until_s is None or time_s < until_s)
 
     def tick(time_s: float) -> int:
         return int(round((apply_drift(time_s - origin_s, drift_ppm) + pre_roll_s) * 1e6))
 
-    records: list[Record] = [BarcodeEmitted(tick_us=tick(start_s), value=value)
+    delay_us = recipe.syncbox_barcode_delay_us or 0
+    records: list[Record] = [BarcodeEmitted(tick_us=tick(start_s) - delay_us, value=value)
                              for value, start_s in truth.barcodes if kept(start_s)]
+    if since_s is None and truth.barcodes:
+        # The session's first process's first frame, late by an amount nothing
+        # measures and recorded by no device, which a reader drops.
+        first_value, first_s = truth.barcodes[0]
+        records.insert(0, BarcodeEmitted(tick_us=max(0, tick(first_s - BARCODE_INTERVAL_S) - delay_us),
+                                         value=first_value - 1))
     records += [CodeWord(tick_us=tick(time_s), word=word) for time_s, word in truth.code_words if kept(time_s)]
+    records += [loss.record(tick) for loss in recipe.syncbox_losses if kept(loss.at_s)]
     records.sort(key=lambda record: record.tick_us)
 
     header = SyncBoxLogHeader(
@@ -85,5 +118,15 @@ def _write_segment(path: Path, recipe: SessionRecipe, truth: GroundTruth, *, ind
         written_at=SYNTH_EPOCH,
         gpio_map=GPIO_MAP,
         segment_index=index,
+        process_uuid=process_uuid(recipe, process),
+        barcode_delay_us=recipe.syncbox_barcode_delay_us,
+        timebase=recipe.syncbox_timebase,
     )
-    write_log(path, header, records)
+    # The box's writer refuses a file that exists, a collision on the box; a
+    # synthetic session generated again over its own folder writes its log
+    # again, as it always has.
+    path.unlink(missing_ok=True)
+    writer = SegmentWriter(path, header)
+    for record in records:
+        writer.write(record)
+    writer.close(SYNTH_EPOCH)

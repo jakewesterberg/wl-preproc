@@ -139,3 +139,17 @@ def test_the_committed_syncbox_header_is_the_one_wl_sync_writes_today(tmp_path):
     exported = json.loads((tmp_path / "syncbox_log_header.json").read_text())
     assert json.loads(committed.read_text()) == exported
     assert {"segment_index", "ordering", "clock_trusted", "clock_reason"} <= set(exported["properties"])
+
+
+def test_the_committed_syncbox_header_names_each_segments_process_delay_and_clocks(tmp_path):
+    """The box's headers since 2026-10-30 name the process that wrote the
+    segment, the measured barcode delay and the clocks its ticks count, which
+    the wl-sync pinned until then refused (design spec
+    `2026-11-04-syncbox-header-design.md` section 1)."""
+    from pathlib import Path
+
+    committed = Path(__file__).resolve().parents[2] / "docs" / "schemas" / "syncbox_log_header.json"
+    export_schemas(tmp_path)
+    exported = json.loads((tmp_path / "syncbox_log_header.json").read_text())
+    assert json.loads(committed.read_text()) == exported
+    assert {"process_uuid", "barcode_delay_us", "timebase"} <= set(exported["properties"])

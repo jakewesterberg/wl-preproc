@@ -98,10 +98,14 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
     barcodes: list[tuple[int, float]] = []
     time_s = 0.0
     value = 1_000_000
-    restart = recipe.syncbox_restart
+    restart, roll = recipe.syncbox_restart, recipe.syncbox_roll
     while time_s < recipe.duration_s:
-        # A box that is down emits nothing; its count of seconds runs on.
-        if restart is None or not restart.at_s <= time_s < restart.at_s + restart.gap_s:
+        # A box that is down emits nothing; its count of seconds runs on. A
+        # roll in place places the frame grid again, and the first frame due
+        # after it is never emitted (wl-sync's "+1 or +2").
+        down = restart is not None and restart.at_s <= time_s < restart.at_s + restart.gap_s
+        skipped = roll is not None and roll.gap_s == 0 and roll.at_s <= time_s < roll.at_s + BARCODE_INTERVAL_S
+        if not down and not skipped:
             barcodes.append((value, time_s))
         value += 1
         time_s += BARCODE_INTERVAL_S

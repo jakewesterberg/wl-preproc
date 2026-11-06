@@ -124,9 +124,9 @@ class SessionClock(dj.Imported):
 @schema
 class SyncBoxSegment(dj.Computed):
     definition = f"""
-    # One segment of the session's sync box log: one run of the box's process,
-    # on a clock of its own (design spec
-    # `2026-10-22-syncbox-records-and-segments-design.md` section 6).
+    # One segment of the session's sync box log: one process's records between
+    # two rolls (design specs `2026-10-22-syncbox-records-and-segments-design.md`
+    # section 6 and `2026-11-04-syncbox-header-design.md` section 8).
     # Key: (subject, session_datetime, segment_index).
     -> pipeline.Session
     segment_index : int unsigned  # its header's, which orders a folder's segments
@@ -140,7 +140,33 @@ class SyncBoxSegment(dj.Computed):
     clock_reason       : varchar(255)
     role               : {_SEGMENT_ROLE_ENUM}
     barcode_delay_us=null : double  # added to every 'B' tick; null while unmeasured and uncorrected (section 5)
+    process_uuid=null  : char(36)  # the process that wrote it, its header's; null before 2026-10-30
+    timebase=null      : varchar(64)  # the clocks its ticks count, its header's; null before 2026-10-30
+    follows=null       : varchar(255)  # how it follows the segment before it on its clock; null for a clock's first
+    last_code_tick_us=null : bigint unsigned  # its last code word's tick; null when it logged none
     """
+
+    class Loss(dj.Part):
+        definition = """
+        # A loss of the segment's records: an 'L' record as the box wrote it
+        # (wl-sync's Loss), or a gap before the segment, the box recording
+        # elsewhere on the same clock (design spec
+        # `2026-11-04-syncbox-header-design.md` section 6).
+        # Key: (subject, session_datetime, segment_index, loss_number).
+        -> master
+        loss_number : int unsigned  # from 1, a gap first, then the log's order
+        ---
+        cause          : varchar(32)  # the record's, or gap
+        path           : char(1)  # W, code words, or E, edges; W for a gap
+        gpio=null      : tinyint unsigned  # the line, for an edge loss that names it
+        lost=null      : int unsigned  # how many, at least 1; null for a gap
+        bound=null     : varchar(16)  # exact or at_least; null for a gap
+        tick_us        : bigint unsigned  # where the record sits in its path; a gap's end
+        before_us=null : bigint unsigned  # the last record of its path known to precede it
+        after_us=null  : bigint unsigned  # the first known to follow it
+        start_s=null   : double  # before_us in session time, where the segment keeps it
+        stop_s=null    : double  # after_us in session time, likewise
+        """
 
     @property
     def key_source(self):
@@ -150,12 +176,26 @@ class SyncBoxSegment(dj.Computed):
 
         return pipeline.Session & ingest.Ingestion & (core.AcquisitionSystem & {"system": "syncbox"})
 
+    def populate(self, *args, **kwargs):
+        """`AutoPopulate.populate`, refused before any job is reserved while
+        this process reads the table without `_HEADER_COLUMNS`: a database
+        declared before 2026-11, which DataJoint never alters (design spec
+        `2026-11-04-syncbox-header-design.md` section 8). The daemon reports
+        this stage's error and runs the others."""
+        if _lacks_header_columns():
+            raise RuntimeError(
+                f"{self.full_table_name} has no columns {', '.join(_HEADER_COLUMNS)}, as read by this process: a "
+                "database declared before the sync box's header named its process. Nothing is recorded until it "
+                f"is altered and the daemon restarted: {_header_statement()}"
+            )
+        return super().populate(*args, **kwargs)
+
     def make(self, key: dict) -> None:
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
 
         session_dir = Path((ingest.Ingestion & key).fetch1("session_dir"))
-        logs = segments.syncbox_logs(session_dir)
+        session = segments.read_syncbox_session(session_dir)
         self.insert([
             {**key, "segment_index": log.segment_index,
              "file_path": str(log.path.relative_to(session_dir / "syncbox")), "boot_id": log.boot_id,
@@ -163,9 +203,58 @@ class SyncBoxSegment(dj.Computed):
              "first_barcode": log.barcodes[0][0] if log.barcodes else None,
              "last_barcode": log.barcodes[-1][0] if log.barcodes else None,
              "clock_trusted": log.clock_trusted, "clock_reason": log.clock_reason, "role": role,
-             "barcode_delay_us": None}
-            for log, role in zip(logs, segments.segment_roles(logs), strict=True)
+             "barcode_delay_us": log.barcode_delay_us, "process_uuid": log.process_uuid, "timebase": log.timebase,
+             "follows": follows, "last_code_tick_us": log.codes[-1][0] if log.codes else None}
+            for log, role, follows in zip(session.logs, session.roles(), session.follows, strict=True)
         ])
+        numbers: dict[int, int] = {}
+        rows = []
+        for loss in session.losses():
+            numbers[loss.index] = numbers.get(loss.index, 0) + 1
+            rows.append({**key, "segment_index": session.logs[loss.index].segment_index,
+                         "loss_number": numbers[loss.index], "cause": loss.cause, "path": loss.path,
+                         "gpio": loss.gpio, "lost": loss.lost, "bound": loss.bound, "tick_us": loss.tick_us,
+                         "before_us": loss.before_us, "after_us": loss.after_us, "start_s": loss.start_s,
+                         "stop_s": loss.stop_s})
+        self.Loss.insert(rows)
+
+
+#: `SyncBoxSegment`'s columns from the header of 2026-10-30, after
+#: `barcode_delay_us` in order, as DataJoint declares them: a `char` or
+#: `varchar` column's comment begins with its declared type.
+_HEADER_COLUMNS = ("process_uuid", "timebase", "follows", "last_code_tick_us")
+_HEADER_DECLARATIONS = (
+    "char(36) DEFAULT NULL COMMENT ':char(36):the process that wrote it, its header''s; null before 2026-10-30'",
+    "varchar(64) DEFAULT NULL COMMENT ':varchar(64):the clocks its ticks count, its header''s; null before "
+    "2026-10-30'",
+    "varchar(255) DEFAULT NULL COMMENT ':varchar(255):how it follows the segment before it on its clock; null for "
+    "a clock''s first'",
+    "bigint unsigned DEFAULT NULL COMMENT 'its last code word''s tick; null when it logged none'",
+)
+
+
+def measured_runs(session_key: dict) -> list[tuple[float, float | None]]:
+    """The session's runs in `core.Run`, as the sync box's timing check takes
+    them (`timebase/segments.py::timing_check_fails`): each one's start and
+    stop in session time, its stop None when it faulted, with no RUN_END, its
+    last event not its end."""
+    return [(row["run_start_time"], row["run_stop_time"] if row["closed"] else None)
+            for row in (core.Run & session_key).to_dicts(order_by="run_number")]
+
+
+def _lacks_header_columns() -> bool:
+    """`SyncBoxSegment`, as this process's DataJoint reads it, lacks one of
+    `_HEADER_COLUMNS`. DataJoint reads a table's columns once per process."""
+    return not set(_HEADER_COLUMNS) <= set(SyncBoxSegment.heading.names)
+
+
+def _header_statement() -> str:
+    """The statement that adds `_HEADER_COLUMNS` to a `SyncBoxSegment`
+    declared before them, as DataJoint declares them."""
+    after = ("barcode_delay_us", *_HEADER_COLUMNS[:-1])
+    return f"ALTER TABLE {SyncBoxSegment.full_table_name} " + ", ".join(
+        f"ADD COLUMN {column} {declaration} AFTER {previous}"
+        for column, declaration, previous in zip(_HEADER_COLUMNS, _HEADER_DECLARATIONS, after, strict=True))
 
 
 @schema
@@ -261,12 +350,17 @@ class SystemTimebase(dj.Computed):
 
         if key["system"] == "syncbox":
             # Session time IS this system's timeline, so its fit against itself
-            # is exactly identity -- the truth, not a placeholder.
+            # is exactly identity -- the truth, not a placeholder. Matched are
+            # the barcodes session time holds: a later process's are the box's
+            # too, but nothing places them until a bridge does (part 1's
+            # deferred finding; design spec `2026-11-04-syncbox-header-design.md`
+            # section 9).
+            reference = clock_for(key, session_dir).barcode_reference() if decoded else {}
             self.insert1(
                 {
                     **row,
                     "fit_status": "fitted",
-                    "n_barcodes_matched": len(decoded),
+                    "n_barcodes_matched": sum(1 for barcode in decoded if barcode.value in reference),
                     "nominal_rate_hz": nominal_rate_hz,
                     "fitted_rate_hz": nominal_rate_hz,
                     "drift_ppm": 0.0,
@@ -422,6 +516,16 @@ class TimingProvenance(dj.Computed):
         failed = len(aligned) < len(systems) or bool(rejected)
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+
+        # And if the box lost code words of session time where they mattered:
+        # in a measured run, or by a desync, after which nothing is measured
+        # (design spec `2026-11-04-syncbox-header-design.md` section 6).
+        if "syncbox" in system_names:
+            runs = measured_runs(session_key)
+            try:
+                failed = failed or segments.read_syncbox_session(session_dir).fails_the_timing_check(runs)
+            except (FileNotFoundError, ValueError):
+                pass
 
         # -- The Pi's own canonical code stream, and everything chained off
         # comparing against it. Gated behind `syncbox` actually having a

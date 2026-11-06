@@ -19,10 +19,12 @@ import dataclasses
 import datetime
 from pathlib import Path
 
-from wl_preproc.events.extract import extract_syncbox_words
+# A barcode's value is whole seconds since wl-sync's `BARCODE_EPOCH`, off the
+# sync box's wall clock; read from here by `nwb/gather.py` too.
+from wl_sync.clock import BARCODE_EPOCH
+
 from wl_preproc.timebase import segments
 from wl_preproc.timebase.extract import find_recordings
-from wl_preproc.timebase.fit import RateFit, fit_offset
 
 # What may keep a session's time (section 4.1), as `timebase.SessionClock`
 # declares it.
@@ -31,12 +33,6 @@ SOURCES = ("syncbox", "nidq", "lab")
 # (the NWB builder spec section 4.2). Borrowed from wl-sync's
 # CLOCK_TRUST_TOLERANCE_S.
 CLOCK_DISAGREEMENT_S = 60.0
-# A barcode's value is whole seconds since this instant, off the sync box's
-# wall clock: wl-sync's `wl_sync/clock.py::BARCODE_EPOCH`, since its commit
-# 3ce66b9 (2026-08-17). RESTATED, not imported: the wl-sync commit this
-# repository pins predates that module. `tests/nwb/test_clock.py` pins the
-# two equal wherever a newer wl-sync is installed.
-BARCODE_EPOCH = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 class NoClock(Exception):
@@ -117,55 +113,24 @@ def reference_from(first_barcode_value: int, started_at: datetime.datetime) -> d
 
 
 def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
-    """Every code word the sync box recorded, native time converted to session
-    time via `timebase/fit.py` -- the same fit primitives `core.Segment` and
-    `timebase.SystemTimebase` use, so this does not invent a second
-    conversion.
+    """Every code word of session time's clock, in session seconds and in
+    emission order (`timebase/segments.py::SyncBoxSession.codes`): every
+    segment of the process session time comes from, and no other, since a
+    later process is on another clock (design specs
+    `2026-10-22-syncbox-records-and-segments-design.md` section 4 and
+    `2026-11-04-syncbox-header-design.md` section 4).
 
-    Identity rate, not `fit_rate`: session time IS the sync box's own timeline
-    (spec section 4.5), the same special case `SystemTimebase.make()` applies
-    to this same system for the same reason -- a fit of it against itself is
-    exactly zero drift with zero residual, the truth rather than a placeholder.
-
-    Moved here from `schema/events.py::decode_syncbox_in_session_time`
-    unchanged: the sync box's codes are the session's codes while it is the
-    clock, and every stage reads them through `Clock.codes`."""
-    reference = segments.session_reference(session_dir)
-    # The segment session time comes from, alone: a later one, after a
-    # restart, is on another clock (design spec
-    # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
-    timed = segments.session_log(session_dir).path
-    scans = [scan for scan in segments.scan_system("syncbox", session_dir / "syncbox") if scan.path == timed]
-    if not scans:
-        raise FileNotFoundError(
-            f"{session_dir}: no syncbox recording, so this session has no "
-            "session time and no code stream to decode from -- every session "
-            "has one (SessionRecipe requires it of the synthetic fixtures, and "
-            "spec section 4.3 makes it essential sync infrastructure)"
+    Identity rate: session time IS the sync box's own timeline (spec section
+    4.5), the special case `SystemTimebase.make()` applies to this same system
+    for the same reason. The sync box's codes are the session's codes while it
+    is the clock, and every stage reads them through `Clock.codes`."""
+    session = segments.read_syncbox_session(session_dir)
+    if session.timed is None:
+        raise ValueError(
+            f"{session_dir}: the sync box log decoded no barcodes, so session "
+            "time cannot be established"
         )
-
-    converted: list[tuple[float, int]] = []
-    for scan in scans:
-        rate = RateFit(
-            fitted_rate_hz=scan.stream.fs_hz,
-            drift_ppm=0.0,
-            n_matched=len(scan.barcodes),
-            residual_us_rms=0.0,
-            residual_us_max=0.0,
-        )
-        offset = fit_offset(scan.barcodes, reference, rate)
-        word_stream = extract_syncbox_words(scan.path)
-        converted.extend(
-            (native_pos / word_stream.fs_hz / rate.scale + offset.offset_s, code)
-            for native_pos, code in word_stream.words
-        )
-
-    # `decode_stream` reads an escape payload by POSITION, not by comparing
-    # timestamps -- see its own docstring -- so the stream is sorted into
-    # emission order before decoding. One segment's words already are; this is
-    # then a no-op.
-    converted.sort(key=lambda pair: pair[0])
-    return converted
+    return session.codes()
 
 
 @dataclasses.dataclass(frozen=True)
