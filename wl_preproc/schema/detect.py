@@ -279,6 +279,15 @@ class EyeValidity(dj.Computed):
                 "database declared before 2026-10-11. Nothing is masked until it is altered and the "
                 f"daemon restarted: {_feature_lost_statement()}"
             )
+        if _lacks_region():
+            raise RuntimeError(
+                f"{self.full_table_name} has no columns {', '.join(_REGION_COLUMNS)}, or its runs no label "
+                "`lost`, as read by this process: a database declared before 2026-11-06. Nothing is masked until "
+                f"it is altered and the daemon restarted: {'; '.join(_region_statements())}; then delete the "
+                "eye_validity paramsets whose params name no max_lost_ms, with what was computed from them: "
+                "registered before lost data was carried, they mask as they did and otherwise keep running beside "
+                "the new default (design spec 2026-11-06-eye-lost-data-and-region-design.md section 8)."
+            )
         return super().populate(*args, **kwargs)
 
     def make(self, key: dict) -> None:
@@ -587,6 +596,13 @@ class EyeDetection(dj.Computed):
                 "name no geometry, with what was computed from them: registered before the setting existed, they "
                 "mean per axis and otherwise keep running beside the true-angle defaults (design spec "
                 "2026-10-30-true-angle-saccades-design.md, amendment 5)."
+            )
+        if _lacks_lost_columns():
+            raise RuntimeError(
+                f"{self.Run.full_table_name} has no columns {', '.join(_LOST_COLUMNS)}, or no label `lost`, as "
+                "read by this process: a database declared before 2026-11-06. Nothing is detected until it is "
+                f"altered and the daemon restarted: {'; '.join(_lost_statements())} (design spec "
+                "2026-11-06-eye-lost-data-and-region-design.md section 8)."
             )
         return super().populate(*args, **kwargs)
 
@@ -1130,6 +1146,67 @@ def _polar_statement() -> str:
     return f"ALTER TABLE {EyeDetection.Run.full_table_name} " + ", ".join(
         f"ADD COLUMN {column} double DEFAULT NULL COMMENT '' AFTER {previous}"
         for column, previous in zip(_POLAR_COLUMNS, after, strict=True))
+
+
+#: `EyeValidity`'s columns of 2026-11-06, after `frac_glitch_repaired` in
+#: order, and `EyeDetection.Run`'s, after `end_polar_deg`, each with its type
+#: as DataJoint declares it (design spec
+#: `2026-11-06-eye-lost-data-and-region-design.md` section 8).
+_REGION_COLUMNS = ("region_half_width_deg", "region_half_height_deg", "region_from_setup")
+_REGION_TYPES = ("double", "double", "tinyint(1)")
+_LOST_COLUMNS = ("n_lost", "flagged")
+_LOST_TYPES = ("int unsigned", "tinyint(1)")
+
+
+def _knows_lost(table) -> bool:
+    """`table.Run`'s `label`, as this process reads it, has the value `lost`:
+    an enum DataJoint never alters on an existing table."""
+    return "'lost'" in table.Run.heading.attributes["label"].type
+
+
+def _lacks_region() -> bool:
+    """`EyeValidity`, as this process reads it, lacks one of
+    `_REGION_COLUMNS`, or its runs the label `lost`: a database declared
+    before 2026-11-06. DataJoint reads a table's columns once per process
+    (`_lacks_feature_lost`)."""
+    return not set(_REGION_COLUMNS) <= set(EyeValidity.heading.names) or not _knows_lost(EyeValidity)
+
+
+def _lacks_lost_columns() -> bool:
+    """`EyeDetection.Run`, as this process reads it, lacks one of
+    `_LOST_COLUMNS` or the label `lost` (`_lacks_region`)."""
+    return not set(_LOST_COLUMNS) <= set(EyeDetection.Run.heading.names) or not _knows_lost(EyeDetection)
+
+
+def _label_statement(table) -> str:
+    """The statement that gives `table.Run`'s `label` the value `lost`, as
+    DataJoint declares the column: its comment begins with its declared type,
+    `:enum(...):`, each quote doubled inside the SQL literal."""
+    comment = f":enum({_LABEL_ENUM}):".replace("'", "''")
+    return (f"ALTER TABLE {table.Run.full_table_name} MODIFY COLUMN label enum({_LABEL_ENUM}) NOT NULL "
+            f"COMMENT '{comment}'")
+
+
+def _added(table_name: str, columns, types, after: str) -> str:
+    previous = (after, *columns[:-1])
+    return f"ALTER TABLE {table_name} " + ", ".join(
+        f"ADD COLUMN {column} {kind} DEFAULT NULL COMMENT '' AFTER {before}"
+        for column, kind, before in zip(columns, types, previous, strict=True))
+
+
+def _region_statements() -> list[str]:
+    """The statements that bring an `EyeValidity` declared before 2026-11-06
+    to what DataJoint declares now: its region columns, nullable, no
+    comment, after `frac_glitch_repaired`; and its runs' label `lost`."""
+    return [_added(EyeValidity.full_table_name, _REGION_COLUMNS, _REGION_TYPES, "frac_glitch_repaired"),
+            _label_statement(EyeValidity)]
+
+
+def _lost_statements() -> list[str]:
+    """`_region_statements`' for `EyeDetection.Run`: its lost-sample count and
+    flag after `end_polar_deg`, and its label `lost`."""
+    return [_added(EyeDetection.Run.full_table_name, _LOST_COLUMNS, _LOST_TYPES, "end_polar_deg"),
+            _label_statement(EyeDetection)]
 
 
 def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:
