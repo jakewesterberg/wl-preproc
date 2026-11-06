@@ -751,14 +751,19 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     ]
 
 
-def _placeholder_region_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
+def _placeholder_region_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str] | None:
     """Each eye of a session ingested in the last 24 h whose validity mask
     took the paramset's placeholder screen region, its session having
     recorded no display setup (design spec
-    `2026-11-06-eye-lost-data-and-region-design.md` sections 7 and 10)."""
+    `2026-11-06-eye-lost-data-and-region-design.md` sections 7 and 10).
+    None on a database declared before 2026-11-06, whose `EyeValidity` this
+    process reads without the region columns (`detect._lacks_region`):
+    nothing of them can be read, and `build_report` names the statements."""
     from wl_preproc.schema import detect as detect_schema
 
     detect_schema.activate(prefix=prefix)
+    if detect_schema._lacks_region():
+        return None
     rows = (detect_schema.EyeValidity & {"status": "computed", "region_from_setup": 0}).to_dicts(
         order_by=["subject", "session_datetime", "eye", "validity_paramset_idx"])
     return [f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — {row['eye']} (validity paramset "
@@ -2038,8 +2043,16 @@ def build_report(
     # without bound. Both headings state their own scope, so neither can be
     # read as the other.
     placeholder = _placeholder_region_lines(ingested_keys, prefix=prefix)
-    lines += ["", f"### Eyes masked at the placeholder screen region (24 h) — {len(placeholder)}", ""]
-    lines += placeholder or ["- none"]
+    if placeholder is None:
+        from wl_preproc.schema import detect as detect_schema
+
+        lines += ["", "### Eyes masked at the placeholder screen region (24 h) — not read", "",
+                  "- **The validity mask's table was declared before it recorded its screen region, so which eyes "
+                  "were masked at the placeholder cannot be read, and no mask is computed until it is altered and "
+                  f"the daemon restarted:** `{'; '.join(detect_schema._region_statements())}`"]
+    else:
+        lines += ["", f"### Eyes masked at the placeholder screen region (24 h) — {len(placeholder)}", ""]
+        lines += placeholder or ["- none"]
 
     unusable = _unusable_fractions(validity_label_totals)
     lines += ["", "### Unusable samples, running total across every session (lower bound)", ""]

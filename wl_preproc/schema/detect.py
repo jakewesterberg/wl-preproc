@@ -1066,10 +1066,16 @@ class EyeDetection(dj.Computed):
                 return kept[span]
             if eyes is None:
                 return (trace, gaze, v, offered)
-            for eye in ("left", "right"):
-                eye_gaze, eye_v, eye_offered = eyes[eye]
-                if may_label(eye_offered[run.start:run.stop]).all():
-                    return (trace, eye_gaze, eye_v, offered)
+            # The eye measured throughout it, the left first; failing that, an
+            # eye that lost data in it but withheld none. Measured on that
+            # eye's own mask, so a lost sample's speed is never its peak (the
+            # final review of 2026-11-07, I1).
+            for may in (lambda labels: all(label is None for label in labels),
+                        lambda labels: may_label(labels).all()):
+                for eye in ("left", "right"):
+                    eye_gaze, eye_v, eye_offered = eyes[eye]
+                    if may(eye_offered[run.start:run.stop]):
+                        return (trace, eye_gaze, eye_v, eye_offered)
             return None
 
         def _run_row(index: int, run: Run) -> dict:
@@ -1443,7 +1449,11 @@ def _conjunction_fallback(left, right, left_offered, right_offered):
     `source` a per-sample object array of `both`, `left`, `right` or
     `neither` -- which eyes were usable, with each kept run marked by its
     own eye along its whole length."""
-    usable = {"left": may_label(left_offered), "right": may_label(right_offered)}
+    # Measured, not merely offered: lost data is missing data, so a one-eye
+    # event the other eye lost data during is kept whole, and a loss never
+    # confirms the other eye's event (the final review of 2026-11-07, C1).
+    usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
+              "right": np.array([label is None for label in right_offered], dtype=bool)}
     runs = {"left": sorted(left, key=lambda run: run.start), "right": sorted(right, key=lambda run: run.start)}
     withheld_before = {eye: np.concatenate(([0], np.cumsum(~usable[eye]))) for eye in usable}
 

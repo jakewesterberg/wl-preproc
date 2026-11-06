@@ -1446,13 +1446,14 @@ def test_no_detector_measures_a_missing_gaze_value(missing_gaze_session):
     `2026-11-06-eye-lost-data-and-region-design.md` section 3): every
     registered detector's stored run over it, on the left trace, is the
     mask's own `lost`, or a run of the detector's carried across it and
-    flagged. The conjunction draws on both eyes there, the left eye's loss
-    offered as the right eye's measurement is (design spec
-    `2026-09-28-both-eyes-fallback-design.md` section 1).
+    flagged. The conjunction falls back to the right eye there, lost data
+    being missing data: it carries the right eye's own label, and
+    `EyeDetection.Source` says `right` (design spec
+    `2026-09-28-both-eyes-fallback-design.md` section 1; the final review of
+    2026-11-07, C1).
 
     *Until 2026-11-06 it was withheld, every left run over it the mask's
-    `invalid`, and the conjunction fell back to the right eye there; true
-    when written.*"""
+    `invalid`; true when written.*"""
     from wl_preproc.schema import detect
 
     def covering(table, trace, name, start, stop):
@@ -1464,8 +1465,11 @@ def test_no_detector_measures_a_missing_gaze_value(missing_gaze_session):
     for name in _detector_names():
         left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
         assert left["label"] == "lost" or left["flagged"] == 1, (name, left["label"], left["flagged"])
+        right = covering(detect.EyeDetection.Run, "right", name, "run_start", "run_stop")
+        both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
+        assert both["label"] == right["label"], (name, both["label"], right["label"])
         source = covering(detect.EyeDetection.Source, "conjunction", name, "source_start", "source_stop")
-        assert source["source"] == "both", (name, source)
+        assert source["source"] == "right", (name, source)
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
@@ -4626,6 +4630,22 @@ def test_a_one_eye_event_the_other_eye_could_not_see_is_kept_whole():
     assert list(source) == ["both"] * 10 + ["left"] * 30
 
 
+def test_a_one_eye_event_the_other_eye_lost_data_during_is_kept_whole():
+    """Lost data is missing data: the requester's rule of 2026-09-28 keeps a
+    one-eye event whole when the other eye's data was missing at any point
+    during it. A loss is carried by a run of its own eye, and never confirms
+    the other eye's (the final review of 2026-11-07, C1)."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_fallback
+
+    saccade = Run(10, 20, Label.SACCADE)
+    right = _offered(40)
+    right[14:17] = Label.LOST
+    kept, source = _conjunction_fallback([saccade], [], _offered(40), right)
+    assert kept == [("left", saccade)]
+    assert list(source[10:20]) == ["left"] * 10
+
+
 def test_an_unmatched_event_the_other_eye_could_see_is_still_dropped():
     """The two-eye rule stands wherever both eyes were usable throughout."""
     from wl_preproc.eye.detect.labels import Label, Run
@@ -5143,6 +5163,27 @@ def test_a_paramsets_geometry_is_read_once_and_an_unknown_one_refused():
         _geometry_of({"geometry": "cyclopean"})
 
 
+def test_a_two_eye_saccade_across_a_dropped_frame_is_measured_on_its_eyes_measured_samples(dropped_frame_session):
+    """A two-eye run is measured on one eye's own mask, so its peak speed is
+    that eye's measured samples', never the speed of the rows whose velocity
+    spans the gap, which the even spacing inflates (the final review of
+    2026-11-07, I1)."""
+    from wl_preproc.schema import detect, paramset
+
+    key = dropped_frame_session
+    gap = _DROPPED_FRAME_ROW - 1
+    (ek,) = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+             if row["params"]["detector"] == "engbert_kliegl"]
+
+    def run(trace):
+        (row,) = (detect.EyeDetection.Run & key & {"paramset_idx": ek, "trace": trace}
+                  & f"run_start <= {gap + 2} AND run_stop > {gap - 1}").to_dicts()
+        return row
+
+    assert run("conjunction")["peak_velocity_deg_s"] <= max(run("left")["peak_velocity_deg_s"],
+                                                            run("right")["peak_velocity_deg_s"])
+
+
 def test_a_session_that_recorded_no_field_is_masked_at_the_placeholder(dropped_frame_session):
     """No `config.json`, so no setup: the region is the paramset's own, and
     the mask says so (design spec `2026-11-06-eye-lost-data-and-region-design.md`
@@ -5178,3 +5219,25 @@ def test_a_flagged_saccade_is_left_out_of_each_fit_and_the_report_says_so(droppe
     assert "`engbert_kliegl` (true angle)" in line and "1 flagged saccade left out" in line
     assert [line.split(" — ")[1].split(" (")[0]
             for line in _placeholder_region_lines(session, prefix=prefix)] == ["left", "right"]
+
+
+def test_the_report_on_a_mask_table_read_without_its_region_names_the_statements(dropped_frame_session, prefix,
+                                                                                 monkeypatch, tmp_path):
+    """A database declared before 2026-11-06, its `EyeValidity` read without
+    the region columns, as DataJoint reads a table's columns once per
+    process: the report still builds, and in place of the eyes it cannot
+    read it names the statements (the final review of 2026-11-07)."""
+    import datetime
+
+    from wl_preproc.cli.report import build_report
+    from wl_preproc.schema import detect
+
+    key = dropped_frame_session
+    heading = detect.EyeValidity.heading
+    monkeypatch.setattr(detect.EyeValidity, "_heading", heading.select(
+        [name for name in heading.names if name not in detect._REGION_COLUMNS]))
+    report = build_report(tmp_path, prefix=prefix,
+                          now=(key["session_datetime"] + datetime.timedelta(hours=2)).replace(tzinfo=datetime.UTC))
+
+    assert "### Eyes masked at the placeholder screen region (24 h) — not read" in report
+    assert all(statement in report for statement in detect._region_statements())
