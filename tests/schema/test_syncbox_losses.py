@@ -144,3 +144,68 @@ def test_the_statement_restores_the_columns_as_datajoint_declares_them(landed):
     finally:
         dj.conn().query(f"DROP TABLE IF EXISTS {copy}")
     assert restored == columns(table)
+
+
+def _report(landed, prefix):
+    """The daily report two hours after the fixture's last session, so all
+    four are in its 24 h."""
+    import datetime
+
+    from wl_preproc.cli.report import build_report
+
+    keys, _, root = landed
+    at = max(key["session_datetime"] for key in keys.values()) + datetime.timedelta(hours=2)
+    return build_report(root, prefix=prefix, now=at.replace(tzinfo=datetime.UTC))
+
+
+def _at(key) -> str:
+    return f"@ {key['session_datetime']:%Y-%m-%d %H:%M}"
+
+
+def test_the_report_names_each_loss_and_what_it_did_to_its_session(landed, prefix):
+    """Section 6: path, cause, count with its bound, window in session time,
+    and whether it failed the timing check."""
+    from wl_sync.pins import GPIO_MAP
+
+    from tests.cli.test_report import _declared_count, _line_for, _section
+
+    keys, _, _ = landed
+    section = _section(_report(landed, prefix), "Sync box losses (24 h)")
+    assert ("at least 2 code words lost (desync), from 6.000 s on; fails the session's timing check (tier D)"
+            in _line_for(section, _at(keys["desync"])))
+    assert (f"3 edges lost on GPIO{GPIO_MAP['pd1_comp']} (buffer_overflow), from 1.200 s to 1.400 s; reported only"
+            in _line_for(section, _at(keys["edge"])))
+    gap = _line_for(section, _at(keys["gap"]))
+    assert "the box recorded elsewhere" in gap and gap.endswith("fails the session's timing check (tier D)")
+    assert not [line for line in section.splitlines() if _at(keys["split"]) in line]
+    assert _declared_count(section) == len([line for line in section.splitlines() if line.startswith("- ")])
+
+
+def test_the_report_names_each_session_whose_code_words_are_on_a_split_clock(landed, prefix):
+    """Section 7: with the most its code words can have drifted from its
+    barcodes at 50 ppm; a box on the test backend is not named."""
+    from tests.cli.test_report import _declared_count, _line_for, _section
+
+    keys, _, _ = landed
+    section = _section(_report(landed, prefix), "Code words on a split clock (24 h)")
+    assert ("timebase `split`: its code words can lie up to 0.001 s from its barcodes at 50 ppm, the rate "
+            "unmeasured; nothing is corrected" in _line_for(section, _at(keys["split"])))
+    assert not [line for line in section.splitlines() if _at(keys["edge"]) in line]
+    assert _declared_count(section) == len([line for line in section.splitlines() if line.startswith("- ")])
+
+
+def test_a_loss_or_a_split_clock_older_than_a_day_is_not_listed(landed, prefix):
+    """Both lists are the report's 24 h, as its per-session lists are: a loss
+    is a fact of its session, not a state that clears."""
+    import datetime
+
+    from wl_preproc.cli.report import build_report
+
+    from tests.cli.test_report import _section
+
+    keys, _, root = landed
+    later = max(key["session_datetime"] for key in keys.values()) + datetime.timedelta(days=3)
+    body = build_report(root, prefix=prefix, now=later.replace(tzinfo=datetime.UTC))
+    for heading in ("Sync box losses (24 h)", "Code words on a split clock (24 h)"):
+        section = _section(body, heading)
+        assert not [line for line in section.splitlines() if any(_at(key) in line for key in keys.values())]

@@ -214,3 +214,42 @@ def test_the_report_names_a_restart_whose_later_segment_logged_no_barcode(dj_con
         assert "logged no barcode" in _line_for(section, "`seg-002.log`")
     finally:
         (pipeline.Session & key).delete(prompt=False)
+
+
+def test_the_report_says_why_a_segment_that_contradicts_its_clock_is_read_as_a_restart(dj_conn, prefix, tmp_path):
+    """Design spec `2026-11-04-syncbox-header-design.md` section 4: a segment
+    naming the process of an earlier one whose first tick comes before that
+    one's last is read as after a restart, and the report says why."""
+    import datetime
+
+    from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, SyncBoxLogHeader, write_log
+    from wl_sync.pins import GPIO_MAP
+
+    from wl_preproc import daemon
+    from wl_preproc.cli.report import build_report
+    from wl_preproc.schema import pipeline, timebase
+    from wl_preproc.synth.recipe import RECIPES
+    from wl_preproc.synth.syncbox import process_uuid
+
+    from tests.cli.test_report import _line_for, _section
+
+    def contradicting(syncbox_dir):
+        header = SyncBoxLogHeader(schema_version=SCHEMA_VERSION, session_id=syncbox_dir.parent.name, rig="rig0",
+                                  boot_id="b1", written_at=datetime.datetime(2027, 3, 14, 9, tzinfo=datetime.UTC),
+                                  gpio_map=GPIO_MAP, segment_index=2, process_uuid=process_uuid(RECIPES["ci"], 0))
+        write_log(syncbox_dir / "seg-002.log", header, [BarcodeEmitted(tick_us=500_000, value=1_000_020),
+                                                        BarcodeEmitted(tick_us=1_500_000, value=1_000_021)])
+
+    daemon.activate_all(prefix=prefix)
+    key, session_dir = _land_restarted(prefix, tmp_path, extra_segment=contradicting)
+    try:
+        timebase.SyncBoxSegment.populate(key)
+        assert (timebase.SyncBoxSegment & key & {"segment_index": 2}).fetch1("role", "follows") == (
+            "after_restart_unbridged", "contradiction: its first tick is before the last of the segment it follows")
+        line = _line_for(_section(build_report(session_dir.parent, prefix=prefix), "Sync box restarts"),
+                         "`seg-002.log`")
+        assert ("the sync box's `seg-002.log` names the process of an earlier segment, but its first tick is "
+                "before the last of the segment it follows, so it is read as after a restart: resumed at barcode "
+                "1000020") in line
+    finally:
+        (pipeline.Session & key).delete(prompt=False)
