@@ -323,10 +323,12 @@ def validity_labels(
         # withheld sample is withheld; and a lost stretch no run can be
         # carried across is withheld too.
         unusable = _dilate(blink | outside, params.dilate_samples) | pads
-        lost_raw = feature_lost | too_fast | non_finite
+        # A repaired glitch takes no margin: it was filled in by a straight
+        # line, not lost by a tracking failure (the spec's table; the final
+        # review of 2026-11-07).
+        untrusted = _dilate(feature_lost | too_fast | non_finite, params.dilate_samples)
         if repaired is not None:
-            lost_raw = lost_raw | repaired
-        untrusted = _dilate(lost_raw, params.dilate_samples)
+            untrusted = untrusted | repaired
         lost = (untrusted | across_gap) & ~unusable
         uncarried = _uncarried(lost, unusable, untrusted, frame_numbers(n, frame_gaps),
                                carried_frames(params.max_lost_ms, fs_hz))

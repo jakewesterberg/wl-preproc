@@ -664,6 +664,21 @@ def test_a_repaired_glitch_is_lost():
     assert labels[7] is Label.LOST and sum(label is not None for label in labels) == 1
 
 
+def test_a_repaired_glitch_is_lost_on_its_own_sample_alone():
+    """Filled in by a straight line, not a tracking failure: no margin, as
+    the spec's table and wl-xcon's reading (its R5) have it. With one, a
+    single glitch inside a short saccade erased it (the final review of
+    2026-11-07)."""
+    gaze, vel, loss, gaps = _clean(20)
+    repaired = np.zeros(20, dtype=bool)
+    repaired[7] = True
+    params = ValidityParams(**{**asdict(_CARRY), "dilate_samples": 5})
+
+    labels = validity_labels(gaze, vel, loss, gaps, params, fs_hz=FS_HZ, repaired=repaired).labels
+
+    assert [i for i, label in enumerate(labels) if label is not None] == [7]
+
+
 def test_a_frame_gap_is_lost_and_takes_no_margin():
     """Section 2.2: a dropped frame is not a tracking failure, and its
     neighbours' positions are measurements; only the four velocities that
