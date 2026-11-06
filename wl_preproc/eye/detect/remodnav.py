@@ -27,7 +27,7 @@ import numpy as np
 from scipy.ndimage import median_filter
 from scipy.signal import butter, filtfilt
 
-from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
 from wl_preproc.eye.detect.velocity import _HALF_WINDOW, velocity
 
 #: statsmodels' `mad` normalisation, `scipy.stats.norm.ppf(0.75)` -- the
@@ -614,7 +614,7 @@ def detect_remodnav(
     slice is `{saccade}`, so conjunction runs take `_conjunction_label`'s
     degenerate branch, as Nystrom-Holmqvist's do (spec 4).
     """
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable = may_label(available)
     if not usable.any():
         return []
     signals = Signals(

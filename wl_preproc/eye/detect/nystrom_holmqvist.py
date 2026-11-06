@@ -40,7 +40,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
 from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import amplitude
 
@@ -496,7 +496,7 @@ def detect_nystrom_holmqvist(
     **Assembles the three pure steps above, in the paper's own order**: the
     adaptive peak threshold, then -- for each velocity peak -- saccade
     bounds and the glissade that may follow it, then fixation over whatever
-    is left. `usable` is `available`'s own definition (`entry is None`),
+    is left. `usable` is `available`'s own definition (`labels.may_label`),
     additionally narrowed by Table 2's two rejections (max velocity, max
     acceleration) before either threshold estimation or peak-finding ever
     sees a sample -- the same reasoning `_peak_threshold`'s own docstring
@@ -512,7 +512,7 @@ def detect_nystrom_holmqvist(
     # derives from that one rather than replacing it.
     acceleration = np.abs(np.gradient(speed)) * fs_hz
 
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable = may_label(available)
     usable &= speed <= params.max_velocity_deg_s
     usable &= acceleration <= params.max_acceleration_deg_s2
     if not usable.any():

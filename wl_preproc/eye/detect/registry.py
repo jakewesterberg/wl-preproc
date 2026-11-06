@@ -34,7 +34,7 @@ import numpy as np
 
 from wl_preproc.eye.detect.bmd import DEFAULT_BMD_PARAMS, detect_bmd
 from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbert_kliegl
-from wl_preproc.eye.detect.labels import Label, LabelledInterval, kind_of, true_runs
+from wl_preproc.eye.detect.labels import Label, LabelledInterval, kind_of, may_label, true_runs
 from wl_preproc.eye.detect.nslr import DEFAULT_NSLR_PARAMS, detect_nslr
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS, detect_nystrom_holmqvist,
@@ -193,19 +193,66 @@ class Detector:
                 f"vocabulary {sorted(label.value for label in self.vocabulary)} "
                 "does not contain"
             )
-        return _within_usable(intervals, available)
+        return _within_usable(intervals, available, min_duration_samples(params, fs_hz))
 
 
-def _within_usable(intervals: list[LabelledInterval], available: np.ndarray) -> list[LabelledInterval]:
+def min_duration_samples(detector_params, fs_hz: float) -> int:
+    """The floor a detector's runs are held to: by `_within_usable`, a run
+    carried across lost samples (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 5), and by
+    `schema/detect.py::_overlapping`, the two-eye event, which inherits it
+    from the detector that produced both eyes' spans -- the SAME params
+    object the detector actually ran with, not a second reading of the
+    paramset dict. Moved here from `schema/detect.py` on 2026-11-06.
+
+    **The detector's own declared minimum, and never less than 2 samples**
+    (the requester's decision of 2026-09-28):
+    - `min_duration_samples` where the params declare it (Engbert-Kliegl's
+      6);
+    - otherwise `min_saccade_duration_ms`, counted in samples as the
+      detectors that declare it count it, `round(ms * fs_hz / 1000)`
+      (Nystrom-Holmqvist's and REMoDNaV's 10 ms: 5 samples at the rig's
+      498.55 Hz);
+    - otherwise nothing, so the lab-wide 2.
+
+    A single-sample event's amplitude is 0.0 deg by construction
+    (`measure`'s `gaze_deg[stop - 1] - gaze_deg[start]`), so no two-eye
+    event may be one sample, whatever its detector would accept.
+
+    *Until 2026-09-28 only `min_duration_samples` was read, with a default
+    of 1: the other five detectors' two-eye events could be one sample
+    long, and Nystrom-Holmqvist's and REMoDNaV's 10 ms minimums, declared
+    in milliseconds, were never seen. On the reference recording that
+    stored 3-26 two-eye saccades per detector at exactly 0.0 deg; true when
+    written.*
+    """
+    declared = getattr(detector_params, "min_duration_samples", None)
+    if declared is None:
+        minimum_ms = getattr(detector_params, "min_saccade_duration_ms", None)
+        declared = 1 if minimum_ms is None else int(round(minimum_ms * fs_hz / 1000.0))
+    return max(int(declared), 2)
+
+
+def _within_usable(intervals: list[LabelledInterval], available: np.ndarray, floor: int) -> list[LabelledInterval]:
     """Every interval held to the samples the validity mask offered: the
-    requester's decision of 2026-09-28. The mask, not the detector, owns
-    `blink` and `invalid` (the `vocabulary` comment above), so a run must
-    not overwrite them.
+    requester's decisions of 2026-09-28 and 2026-11-06 (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 5). The mask, not
+    the detector, owns `blink`, `invalid` and `lost` (the `vocabulary`
+    comment above), so a run must not overwrite a withheld sample.
     - With withheld samples only at its ends, a run is trimmed back to its
-      one usable stretch, keeping its label and reliability.
-    - With a withheld stretch inside it and usable data on both sides, a run
-      is dropped: a "saccade" across a blink is not a measurable saccade.
-    - With no usable sample, a run is dropped.
+      one offered stretch, keeping its label and reliability.
+    - With a withheld stretch inside it and offered samples on both sides, a
+      run is dropped: a "saccade" across a blink is not a measurable
+      saccade.
+    - A run is carried across lost samples (`Label.LOST`), at its ends as
+      inside it: a detector that is not Engbert-Kliegl ran on the trace with
+      their positions filled, and where it ended a run in a loss the eye may
+      have landed there. `measure.measure_event_run` measures such a run out
+      to the measured samples beyond its lost ends.
+    - A run holding lost samples is kept only if its measured samples alone
+      reach `floor`, its detector's own minimum: lost samples carry a run but
+      never make one. A run holding none is untouched.
+    - With no measured sample, a run is dropped.
 
     **A glissade goes with its saccade.** A `pso` run starts where its
     saccade ends, so when this guard drops a saccadic run, or trims its end,
@@ -216,16 +263,18 @@ def _within_usable(intervals: list[LabelledInterval], available: np.ndarray) -> 
     edges walked into blinks: 521 of its 5,062 left-eye and 985 of its 5,213
     right-eye saccades, most of them straddling a blink. No other detector
     emitted such a run."""
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    offered = may_label(available)
+    measured = np.array([entry is None for entry in available], dtype=bool)
     fates = []
     broken_saccade_ends = set()
     for interval in intervals:
-        pieces = true_runs(usable[interval.start:interval.stop])
-        if len(pieces) != 1:
-            fate = None
-        else:
-            start, stop = pieces[0]
-            fate = (interval.start + start, interval.start + stop)
+        pieces = true_runs(offered[interval.start:interval.stop])
+        fate = None
+        if len(pieces) == 1:
+            start, stop = interval.start + pieces[0][0], interval.start + pieces[0][1]
+            kept = np.flatnonzero(measured[start:stop])
+            if kept.size and (kept.size == stop - start or kept.size >= floor):
+                fate = (start, stop)
         fates.append(fate)
         if kind_of(interval.label) == "saccadic" and (fate is None or fate[1] != interval.stop):
             broken_saccade_ends.add(interval.stop)

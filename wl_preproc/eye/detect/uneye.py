@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
 from wl_preproc.eye.detect.numba_threads import keep_off_openmp
 
 #: The copied networks, each with two classes: fixation (0) and saccade (1).
@@ -146,7 +146,7 @@ def detect_uneye(
       it: 0.5 to 1 for a run the network found whole, and possibly less for
       one merged across a gap, whose samples there it called fixation.
     """
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable = may_label(available)
     usable &= np.isfinite(np.asarray(gaze_deg, dtype=float)).all(axis=1)
     pieces = [(int(a), int(b)) for a, b in true_runs(usable) if b - a >= MIN_PIECE_SAMPLES]
     if not pieces:

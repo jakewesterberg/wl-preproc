@@ -28,7 +28,7 @@ import numpy as np
 import scipy.interpolate
 import scipy.stats
 
-from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,7 +638,7 @@ def detect_nslr(
     half-open, sorted (spec 3, 4).
 
     - **The mask splits pieces.** Every maximal stretch of samples the
-      validity mask offers (`entry is None`) is a piece. No segment spans a
+      validity mask offers (`labels.may_label`) is a piece. No segment spans a
       gap. A one-sample piece is left unlabelled.
     - **So does non-finite gaze.** A sample whose gaze is NaN or infinite is
       withheld here even where the mask offers it. The noise is pooled over
@@ -653,7 +653,7 @@ def detect_nslr(
     - **The conjunction.** The saccadic slice is `{saccade}`, so conjunction
       runs take `_conjunction_label`'s degenerate branch, and there is no
       minimum duration (spec 4)."""
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable = may_label(available)
     usable &= np.isfinite(np.asarray(gaze_deg, dtype=float)).all(axis=1)
     spans = [(int(a), int(b)) for a, b in true_runs(usable) if b - a >= 2]
     per_piece = classify([np.asarray(gaze_deg[a:b], dtype=float) for a, b in spans], fs_hz, params)
