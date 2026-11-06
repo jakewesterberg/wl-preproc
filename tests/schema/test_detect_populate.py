@@ -4470,7 +4470,9 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
     - a row with an amplitude has its start and end positions, the amplitude
       is exactly their true angle, and the direction is the end's in the
       eye's frame at the start (NULL only where they coincide; true-angle
-      spec section 4);
+      spec section 4), to 1e-12 relative: the stage takes numpy's `arctan2`
+      and this test `math.atan2`, which can differ in the last bit on some
+      processors (3.13 on CI, 2026-11-06, run 42223741914);
     - a fixation row measured on an eye has its positions and direction and
       no amplitude (true-angle spec decision 5);
     - any other row has none of the five."""
@@ -4500,7 +4502,8 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
                     assert row["direction_deg"] is None, (name, trace, row)
                 else:
                     lx, ly = local_coordinates_deg(end, start)
-                    assert row["direction_deg"] == float(wrap_360_deg(math.degrees(math.atan2(ly, lx)))), (name, trace, row)
+                    assert row["direction_deg"] == pytest.approx(
+                        float(wrap_360_deg(math.degrees(math.atan2(ly, lx)))), rel=1e-12), (name, trace, row)
                 measured += 1
     assert measured, "the fixture must give the detectors events to measure"
 
