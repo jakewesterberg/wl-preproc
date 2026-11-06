@@ -25,6 +25,7 @@ from wl_preproc.eye.detect.engbert_kliegl import (
     DEFAULT_EK_PARAMS, DEFAULT_LAMBDA, DEFAULT_MIN_DURATION_SAMPLES, _median_scale, detect_engbert_kliegl,
     thresholds,
 )
+from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude
 from wl_preproc.eye.detect.velocity import velocity
 
@@ -71,7 +72,7 @@ def test_a_reader_of_v1_gets_its_outputs_back_from_its_inputs():
         # (CI on 10ea913, 8.001592662084843 against the file's ...844). Everything else here is
         # arithmetic and `sqrt`, which IEEE 754 rounds the same everywhere, so it is held exactly.
         for r, run in zip(runs, case["runs"], strict=True):
-            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0), (
+            assert amplitude(gaze, r.start, r.stop, geometry=PER_AXIS) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0), (
                 case["name"])
 
 
@@ -134,7 +135,7 @@ def test_a_reader_gets_every_threshold_back():
         assert [(r.start, r.stop, r.label.value) for r in runs] == [
             (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
         for r, run in zip(runs, case["runs"], strict=True):
-            assert amplitude(gaze, r.start, r.stop) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0)
+            assert amplitude(gaze, r.start, r.stop, geometry=PER_AXIS) == pytest.approx(run["amplitude_deg"], rel=1e-12, abs=0.0)
 
 
 def test_the_near_threshold_traces_catch_a_threshold_off_by_five_percent_or_a_wider_ellipse():
@@ -151,3 +152,120 @@ def test_the_near_threshold_traces_catch_a_threshold_off_by_five_percent_or_a_wi
                                          fs_hz, params)
             changed |= [(r.start, r.stop) for r in runs] != [(run["start"], run["stop"]) for run in case["runs"]]
         assert changed, scale
+
+
+# v2, true visual angle (design spec `2026-10-30-true-angle-saccades-design.md`
+# section 9): v1's and the companion's inputs, and a short trace, with what
+# this code makes of them under the `true-angle` setting.
+
+V2 = V1.with_name("v2.json")
+V2_SHA256 = "501e630945402b8064ea4a32708b8a20adba6d7ae90a3afd7209d96359c281c4"
+_V2_PARAMS = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
+
+
+def _v2() -> dict:
+    return json.loads(V2.read_text(encoding="utf-8"))
+
+
+#: v2's one tolerance, as its `about` states it (amendment 4): every number
+#: but the intervals and labels passes through sin, cos or atan2, which C
+#: libraries and other forms of the direction round differently in the last
+#: places, and a velocity component near zero loses relative digits.
+_V2_TOLERANCE = "|got - want| <= 1e-9 + 1e-12 * |want|"
+
+
+def _close(got, want) -> bool:
+    """Both null, or within v2's tolerance."""
+    if want is None or got is None:
+        return got is want
+    return bool(np.all(np.abs(np.asarray(got) - np.asarray(want)) <= 1e-9 + 1e-12 * np.abs(np.asarray(want))))
+
+
+def test_the_published_v2_is_never_edited():
+    assert hashlib.sha256(V2.read_bytes()).hexdigest() == V2_SHA256
+
+
+def test_v2_states_the_tolerance_its_readers_hold():
+    """wl-xcon's reader holds v2 to what the file says, so the file says what
+    this test holds it to."""
+    assert _V2_TOLERANCE in _v2()["about"]
+
+
+def test_v2_says_which_samples_can_be_in_an_event():
+    """The file is all a reader has, and it freezes at its merge: what
+    `available` holds, that an unavailable sample is never in an event, and
+    that a zero threshold on either axis means no event at all (the final
+    review's second finding)."""
+    about = _v2()["about"]
+    assert "available: null where a detector may label, else the label the mask gave" in about
+    assert "An available sample is in an event when" in about
+    assert "an unavailable one never is, and with either eta 0 no sample is" in about
+
+
+def test_v2_names_its_geometry_its_sources_and_its_defaults():
+    fixture = _v2()
+    assert (fixture["version"], fixture["geometry"]) == (2, TRUE_ANGLE)
+    assert fixture["derived_from"] == {"v1.json": V1_SHA256, "v1-thresholds.json": V1_THRESHOLDS_SHA256}
+    assert fixture["defaults"] == _v1()["defaults"] and fixture["fs_hz"] == _v1()["fs_hz"]
+
+
+def test_v2s_inputs_are_v1s_and_the_companions():
+    by_source = {"v1.json": {case["name"]: case for case in _v1()["traces"]},
+                 "v1-thresholds.json": {case["name"]: case for case in _thresholds_file()["near_threshold_traces"]}}
+    traces = _v2()["traces"]
+    assert [case["name"] for case in traces if case["inputs_from"] != "v2"] == [
+        *by_source["v1.json"], *by_source["v1-thresholds.json"]]
+    for case in traces:
+        if case["inputs_from"] != "v2":
+            source = by_source[case["inputs_from"]][case["name"]]
+            assert (case["gaze_deg"], case["available"]) == (source["gaze_deg"], source["available"]), case["name"]
+
+
+def test_a_reader_of_v2_gets_its_outputs_back_from_its_inputs():
+    """What wl-xcon's test will do, from the file alone: the intervals and
+    labels exactly, every other number to a relative 1e-12."""
+    from wl_preproc.eye.detect.measure import measure
+    from wl_preproc.eye.detect.velocity import local_velocity
+
+    fixture = _v2()
+    fs_hz = fixture["fs_hz"]
+    for case in fixture["traces"]:
+        gaze = np.array(case["gaze_deg"])
+        speed = local_velocity(gaze, fs_hz)
+        assert _close(speed, np.array(case["velocity_deg_s"])), case["name"]
+        usable = np.array([entry is None for entry in case["available"]])
+        assert all(_close(got, want) for got, want in zip(thresholds(speed, usable, _V2_PARAMS), case["eta_deg_s"],
+                                                          strict=True)), case["name"]
+        runs = detect_engbert_kliegl(gaze, speed, np.array(case["available"], dtype=object), fs_hz, _V2_PARAMS)
+        assert [(r.start, r.stop, r.label.value) for r in runs] == [
+            (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
+        for r, run in zip(runs, case["runs"], strict=True):
+            got = measure(gaze, speed, r.start, r.stop, fs_hz, geometry=TRUE_ANGLE)
+            for field in ("amplitude_deg", "peak_velocity_deg_s", "direction_deg", "start_eccentricity_deg",
+                          "start_polar_deg", "end_eccentricity_deg", "end_polar_deg"):
+                assert _close(getattr(got, field), run[field]), (case["name"], r.start, field)
+            assert (got.start_x_deg, got.start_y_deg, got.end_x_deg, got.end_y_deg) == (
+                run["start_x_deg"], run["start_y_deg"], run["end_x_deg"], run["end_y_deg"])
+
+
+def test_v2s_short_trace_pins_the_complete_window_scale():
+    """Section 6.1: its thresholds are more than 1% from v1's scale, taken
+    over every usable sample, on both axes, so a reader that keeps v1's scale
+    fails on them."""
+    from wl_preproc.eye.detect.velocity import local_velocity
+
+    (case,) = [case for case in _v2()["traces"] if case["inputs_from"] == "v2"]
+    speed = local_velocity(np.array(case["gaze_deg"]), _v2()["fs_hz"])
+    usable = np.array([entry is None for entry in case["available"]])
+    old = thresholds(speed, usable, DEFAULT_EK_PARAMS)
+    assert all(abs(new / was - 1.0) > 0.01 for new, was in zip(case["eta_deg_s"], old, strict=True))
+
+
+def test_in_v2_the_step_across_the_cut_is_a_microsaccade():
+    """1.12 degrees up from (30, 0), planted: a saccade in v1, and in v2
+    0.970 degrees of true angle as planted, under the cut with the noise too
+    (wl-xcon's proposals 1 and 3)."""
+    (v1_case,) = [case for case in _v1()["traces"] if case["name"] == "off-centre-30-across-the-cut"]
+    (v2_case,) = [case for case in _v2()["traces"] if case["name"] == "off-centre-30-across-the-cut"]
+    assert [run["label"] for run in v1_case["runs"]] == ["saccade"]
+    assert [run["label"] for run in v2_case["runs"]] == ["microsaccade"]

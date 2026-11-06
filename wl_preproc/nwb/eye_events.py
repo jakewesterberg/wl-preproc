@@ -13,13 +13,24 @@ from pynwb.epoch import TimeIntervals
 from wl_preproc.nwb.columns import column
 
 MEASUREMENTS = {
-    "amplitude_deg": "Amplitude, degrees (saccadic rows; NaN otherwise or when unmeasured).",
-    "peak_velocity_deg_s": "Peak velocity, degrees per second (saccadic rows; NaN otherwise).",
-    "start_x_deg": "Gaze x at the start, degrees (saccadic rows; NaN otherwise).",
-    "start_y_deg": "Gaze y at the start, degrees (saccadic rows; NaN otherwise).",
-    "end_x_deg": "Gaze x at the end, degrees (saccadic rows; NaN otherwise).",
-    "end_y_deg": "Gaze y at the end, degrees (saccadic rows; NaN otherwise).",
-    "direction_deg": "Direction, degrees counterclockwise from rightward (NaN otherwise or for no displacement).",
+    "amplitude_deg": "Size, degrees, in the geometry the table's paramset names: true angle, the angle between the "
+                     "start's and end's directions, or per axis, their distance (saccadic rows; NaN otherwise or when "
+                     "unmeasured).",
+    "peak_velocity_deg_s": "Peak speed, degrees per second, in the paramset's geometry (saccadic rows; NaN otherwise).",
+    "start_x_deg": "Gaze x at the start, per-axis degrees (measured saccadic and fixation rows; NaN otherwise).",
+    "start_y_deg": "Gaze y at the start, per-axis degrees (measured saccadic and fixation rows; NaN otherwise).",
+    "end_x_deg": "Gaze x at the end, per-axis degrees (measured saccadic and fixation rows; NaN otherwise).",
+    "end_y_deg": "Gaze y at the end, per-axis degrees (measured saccadic and fixation rows; NaN otherwise).",
+    "direction_deg": "Direction, degrees counterclockwise from rightward in [0, 360), in the paramset's geometry: true "
+                     "angle, in the eye's frame at the start (NaN otherwise or for no displacement).",
+    "start_eccentricity_deg": "The start's eccentricity, degrees of visual angle from straight ahead (rows with "
+                              "positions; NaN otherwise).",
+    "start_polar_deg": "The start's polar angle, degrees counterclockwise from rightward in [0, 360) (NaN at zero "
+                       "eccentricity and otherwise).",
+    "end_eccentricity_deg": "The end's eccentricity, degrees of visual angle from straight ahead (rows with "
+                            "positions; NaN otherwise).",
+    "end_polar_deg": "The end's polar angle, degrees counterclockwise from rightward in [0, 360) (NaN at zero "
+                     "eccentricity and otherwise).",
     "reliability": "The detector's own reliability, where it reports one (NaN otherwise).",
 }
 

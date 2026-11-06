@@ -434,3 +434,21 @@ def test_a_glissade_goes_with_its_saccade_when_the_guard_drops_or_cuts_its_end()
         (41, 46, Label.SACCADE), (46, 50, Label.PSO),
         (60, 66, Label.SACCADE), (66, 70, Label.PSO),
     ]
+
+
+def test_engbert_kliegl_and_bmd_are_handed_the_settings_velocity():
+    """True-angle spec section 6.1 and amendment 2: Engbert-Kliegl detects in
+    the setting's geometry, and BMD's gate is Engbert-Kliegl as registered;
+    every other detector is handed the per-axis velocity under either."""
+    assert {name for name, detector in DETECTORS.items() if detector.detects_in_geometry} == {"engbert_kliegl", "bmd"}
+
+
+def test_a_detectors_own_params_mean_per_axis():
+    """Amendment 3: absent the key, a paramset means per-axis, so every
+    detector that declares `geometry` defaults to it; the registered default
+    paramset writes true angle last."""
+    from wl_preproc.eye.detect.geometry import PER_AXIS
+
+    declared = {name: detector.defaults.geometry for name, detector in DETECTORS.items()
+                if hasattr(detector.defaults, "geometry")}
+    assert declared == dict.fromkeys(("engbert_kliegl", "otero_millan", "nystrom_holmqvist", "bmd"), PER_AXIS)

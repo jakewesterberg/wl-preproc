@@ -79,7 +79,7 @@ def test_the_eye_is_described_by_the_series_and_detectors_it_has():
            "detections": [{"name": "engbert_kliegl_left"}, {"name": "engbert_kliegl_conjunction"}, {"name": "bmd_left"}],
            "usable_fraction": {"left": 0.9, "right": None}}
     out = describe(_gathered(eye=eye), status="invalid", n_critical=1, checksums=[], built_at=BUILT_AT)
-    assert out["data_types"]["eye"] == {"gaze": ["left"], "pupil": ["left", "right"]}
+    assert out["data_types"]["eye"] == {"gaze": ["left"], "gaze_polar": ["left"], "pupil": ["left", "right"]}
     assert out["data_types"]["eye_events"] == {"detectors": ["bmd", "engbert_kliegl"]}
     assert out["quality"]["eye_usable_fraction"] == {"left": 0.9, "right": None}
     assert (out["identity"]["status"], out["identity"]["n_critical"]) == ("invalid", 1)
@@ -184,3 +184,18 @@ def test_a_file_of_a_session_wl_xcon_did_not_run_describes_no_kind():
     assert (out["session_kind"], out["calibration"], out["accepted_warnings"], out["training_records"]) == (
         None, None, [], None)
     assert [run["calibration"] for run in out["runs"]] == [None]
+
+
+def test_a_description_recorded_before_the_polar_series_reads_back_without_it():
+    """True-angle spec section 8: `gaze_polar` was added within version 3, so a
+    description recorded before it reads back with it empty -- the truth for
+    a file that holds no such series -- as every field added within a version
+    does (`nwb/correct.py::as_described_now`)."""
+    from wl_preproc.nwb.correct import as_described_now
+    from wl_preproc.nwb.describe import describe
+
+    eye = {"gaze": {"left": [1], "right": None}, "pupil": {"left": [1], "right": [1]},
+           "detections": [{"name": "engbert_kliegl_left"}], "usable_fraction": {"left": 0.9, "right": None}}
+    out = describe(_gathered(eye=eye), status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
+    del out["data_types"]["eye"]["gaze_polar"]
+    assert as_described_now(out)["data_types"]["eye"]["gaze_polar"] == []

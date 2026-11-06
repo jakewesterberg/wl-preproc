@@ -170,6 +170,44 @@ def test_the_eye_series_share_one_timestamps_dataset(tmp_path):
         assert data.compression == "gzip" and data.chunks == (2000, 2)
 
 
+def test_each_eye_has_its_true_eccentricity_and_polar_angle_beside_its_gaze(tmp_path):
+    """True-angle spec section 8: a second series per eye on the gaze's own
+    timestamps, NaN where the gaze is and the polar angle NaN at the centre;
+    the gaze's reference frame names its convention and its partner."""
+    from wl_preproc.eye.detect.geometry import eccentricity_polar_deg
+    from wl_preproc.nwb.eye import add_eye_series
+
+    times, gaze, pupil = _eye_data(n=20)
+    gaze["left"][3] = [0.0, 0.0]
+    gaze["left"][4] = [np.nan, np.nan]
+    path, io, nwb = _write(tmp_path, lambda nwb: add_eye_series(nwb, times, gaze, pupil))
+    with io:
+        eye = nwb.processing["behavior"]["EyeTracking"]
+        polar = eye["gaze_polar_left"]
+        expected = np.column_stack(eccentricity_polar_deg(gaze["left"])).astype(np.float32)
+        np.testing.assert_array_equal(polar.data[:], expected)
+        assert np.isnan(polar.data[3, 1]) and polar.data[3, 0] == 0.0 and np.isnan(polar.data[4]).all()
+        assert polar.unit == "degrees" and "gaze_polar_left" in eye["gaze_left"].reference_frame
+        assert "per axis" in eye["gaze_left"].reference_frame
+    with h5py.File(path) as handle:
+        base = "processing/behavior/EyeTracking"
+        assert handle[f"{base}/gaze_polar_right/timestamps"].id == handle[f"{base}/gaze_left/timestamps"].id
+
+
+def test_a_polar_angle_just_below_360_is_stored_as_0_not_360(tmp_path):
+    """Gaze a millionth of a degree below the right horizontal meridian has a
+    polar angle of 359.99999433, which float32 rounds to 360.0: the series
+    holds [0, 360)."""
+    from wl_preproc.nwb.eye import add_eye_series
+
+    times, gaze, pupil = _eye_data(n=4, eyes=("left",))
+    gaze["left"][:] = [10.0, -1e-6]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_eye_series(nwb, times, gaze, pupil))
+    with io:
+        polar = nwb.processing["behavior"]["EyeTracking"]["gaze_polar_left"].data[:, 1]
+        assert polar.tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
 def test_continuous_chunks_are_about_256_kb():
     from wl_preproc.nwb.columns import CHUNK_BYTES, continuous
 
@@ -185,7 +223,7 @@ def test_an_eye_with_no_calibration_has_no_gaze(tmp_path):
     times, gaze, pupil = _eye_data(eyes=("left",))
     _path, io, nwb = _write(tmp_path, lambda nwb: add_eye_series(nwb, times, gaze, pupil))
     with io:
-        assert list(nwb.processing["behavior"]["EyeTracking"].spatial_series) == ["gaze_left"]
+        assert sorted(nwb.processing["behavior"]["EyeTracking"].spatial_series) == ["gaze_left", "gaze_polar_left"]
 
 
 def test_the_eye_tables(tmp_path):
@@ -234,6 +272,28 @@ def test_every_detectors_events_and_sources_and_agreement(tmp_path):
         assert np.isnan(left["reliability"].iloc[0])
         assert module["engbert_kliegl_source"].to_dataframe()["source"].tolist() == ["both"]
         assert module["detector_agreement"].to_dataframe()["value"].tolist() == [0.8]
+
+
+def test_the_event_tables_carry_each_positions_eccentricity_and_polar_angle(tmp_path):
+    """True-angle spec section 7: four columns beside the positions, and a
+    fixation row's positions with no size."""
+    from wl_preproc.nwb.eye_events import MEASUREMENTS, add_detections
+
+    runs = [{"start_s": 1.0, "stop_s": 1.04, "label": "saccade", "amplitude_deg": 1.8, "start_x_deg": 20.0,
+             "start_y_deg": 0.0, "end_x_deg": 20.0, "end_y_deg": 2.0, "direction_deg": 90.0,
+             "start_eccentricity_deg": 20.0, "start_polar_deg": 0.0, "end_eccentricity_deg": 20.1,
+             "end_polar_deg": 5.4},
+            {"start_s": 1.04, "stop_s": 2.0, "label": "fixation", "start_x_deg": 0.0, "start_y_deg": 0.0,
+             "end_x_deg": 0.0, "end_y_deg": 0.1, "direction_deg": 90.0, "start_eccentricity_deg": 0.0,
+             "start_polar_deg": None, "end_eccentricity_deg": 0.1, "end_polar_deg": 90.0}]
+    assert {"start_eccentricity_deg", "start_polar_deg", "end_eccentricity_deg", "end_polar_deg"} <= set(MEASUREMENTS)
+
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_detections(nwb, [{"name": "t", "description": "d", "runs": runs}]))
+    with io:
+        table = nwb.processing["eye_events"]["t"].to_dataframe()
+        assert table["end_eccentricity_deg"].tolist() == [20.1, 0.1]
+        assert table["end_polar_deg"].tolist() == [5.4, 90.0]
+        assert np.isnan(table["start_polar_deg"].iloc[1]) and np.isnan(table["amplitude_deg"].iloc[1])
 
 
 def test_a_table_with_no_rows_writes(tmp_path):

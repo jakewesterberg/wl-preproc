@@ -77,6 +77,10 @@ import pytest
 # `__globals__` is still the ENCLOSING MODULE's namespace, never the
 # enclosing function's own locals.
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
+from wl_preproc.eye.detect.geometry import (
+    PER_AXIS, TRUE_ANGLE, directions, local_coordinates_deg, true_angle_deg, wrap_360_deg,
+)
+from wl_preproc.eye.detect.measure import amplitude
 
 TRIAL_DURATION_S = 3.0
 
@@ -1240,10 +1244,10 @@ def test_bmd_microsaccades_are_measured_from_take_off(stepped_session):
                 continue
             if run["reliability"] is None:  # a saccade copied from Engbert-Kliegl
                 assert run["label"] == "saccade", (trace, start, stop)
-                expected = measure(gaze, v, start, stop, fs_hz)
+                expected = measure(gaze, v, start, stop, fs_hz, geometry=TRUE_ANGLE)
             else:  # BMD's own event, either side of the cut (final review I1)
                 takeoff = start >= 1 and offered[start - 1] is None and bool(np.isfinite(gaze[start - 1]).all())
-                expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz)
+                expected = measure(gaze, v, start - 1 if takeoff else start, stop, fs_hz, geometry=TRUE_ANGLE)
                 checked += 1
             assert run["amplitude_deg"] == expected.amplitude_deg, (trace, start, stop)
             assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (trace, start, stop)
@@ -1449,11 +1453,13 @@ def _stored_inputs(session_key, eye_value):
     """What `EyeDetection.make()` measured one eye's runs on, rebuilt the way
     it builds them: `(gaze, velocity, offered, fs_hz)`. The gaze goes through
     that eye's STORED calibration, so a test can recompute a stored
-    measurement from the very numbers it was computed from."""
+    measurement from the very numbers it was computed from. The velocity is
+    the default paramsets' -- true angle's, the local frame's (true-angle
+    spec section 5)."""
     from pathlib import Path
 
     from wl_preproc.eye.detect.labels import Label, Run, labels_from_runs
-    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.detect.velocity import local_velocity
     from wl_preproc.eye.gaze import gaze_trace
     from wl_preproc.eye.ohdpi import read_ohdpi
     from wl_preproc.schema import core, detect, ingest
@@ -1474,7 +1480,7 @@ def _stored_inputs(session_key, eye_value):
         len(gaze),
     )
     offered = np.where(available == Label.FIXATION, None, available)
-    return gaze, velocity(gaze, fs_hz), offered, fs_hz
+    return gaze, local_velocity(gaze, fs_hz), offered, fs_hz
 
 
 def test_no_saccade_row_is_stored_at_zero_amplitude_with_a_nonzero_peak_velocity(stepped_session):
@@ -1613,9 +1619,9 @@ def test_nslr_measures_each_planted_step_to_where_the_eye_lands(stepped_session)
             start, stop = run["run_start"], run["run_stop"]
             assert stop < len(gaze) and offered[stop] is None, "the landing must be interior"
             speed = np.hypot(v[start:stop + 1, 0], v[start:stop + 1, 1])
-            assert run["amplitude_deg"] == _hypot(gaze[stop] - gaze[start]), (trace, start)
+            assert run["amplitude_deg"] == amplitude(gaze, start, stop + 1, geometry=TRUE_ANGLE), (trace, start)
             assert run["peak_velocity_deg_s"] == float(speed.max()), (trace, start)
-            assert run["amplitude_deg"] != _hypot(gaze[stop - 1] - gaze[start]), (trace, start)
+            assert run["amplitude_deg"] != amplitude(gaze, start, stop, geometry=TRUE_ANGLE), (trace, start)
 
 
 def test_every_other_detectors_measurements_are_unchanged(stepped_session):
@@ -1646,7 +1652,7 @@ def test_every_other_detectors_measurements_are_unchanged(stepped_session):
                         < _NSLR_MIN_MEASURED_SACCADE_MS / 1000.0):
                     assert run["amplitude_deg"] is None, (name, trace)
                     continue
-                expected = measure(gaze, v, run["run_start"], run["run_stop"], fs_hz)
+                expected = measure(gaze, v, run["run_start"], run["run_stop"], fs_hz, geometry=TRUE_ANGLE)
                 assert run["amplitude_deg"] == expected.amplitude_deg, (name, trace)
                 assert run["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (name, trace)
                 checked += 1
@@ -2659,10 +2665,10 @@ class _CapturedInserts:
 
 
 def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0, *, detector_name="engbert_kliegl",
-                      trace="left", gaze=None, v=None, offered=None, kept=None, eyes=None):
+                      trace="left", gaze=None, v=None, offered=None, kept=None, eyes=None, geometry=PER_AXIS):
     """`EyeDetection._insert_trace` over a ramp and a fully-available mask
-    unless given others, as `detector_name` at its default params, returning
-    `(master_row, run_rows)`."""
+    unless given others, as `detector_name` at its default params, in
+    `geometry`, returning `(master_row, run_rows)`."""
     from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.schema import detect as detect_schema
 
@@ -2679,7 +2685,7 @@ def _run_insert_trace(intervals, n_samples=200, fs_hz=500.0, *, detector_name="e
     sink = _CapturedInserts()
     detect_schema.EyeDetection._insert_trace(
         sink, {"subject": "s"}, trace, gaze, v, offered, intervals, fs_hz,
-        detector, detector.defaults, kept=kept, eyes=eyes,
+        detector, detector.defaults, kept=kept, eyes=eyes, geometry=geometry,
     )
     (master,) = sink.master
     return master, sink.rows
@@ -2780,7 +2786,7 @@ def test_insert_trace_applies_nslrs_rule_per_eye_and_measure_for_every_other_det
         _master, rows = _run_insert_trace(intervals, detector_name=detector_name, trace=trace,
                                           gaze=gaze, v=v)
         for (start, stop), row in _event_rows(rows).items():
-            expected = measure(gaze, v, start, stop, 500.0)
+            expected = measure(gaze, v, start, stop, 500.0, geometry=PER_AXIS)
             assert row["amplitude_deg"] == expected.amplitude_deg, (detector_name, trace)
             assert row["peak_velocity_deg_s"] == expected.peak_velocity_deg_s, (detector_name, trace)
 
@@ -2812,7 +2818,7 @@ def test_insert_trace_applies_nslrs_floor_but_not_its_landing_rule_to_the_conjun
         # section 1.3; final review M2, 2026-09-28).
         for column in _STORED_MEASUREMENTS:
             assert stored[span][column] is None, (span, column)
-    expected = measure(gaze, v, *long_, 500.0)
+    expected = measure(gaze, v, *long_, 500.0, geometry=PER_AXIS)
     assert stored[long_]["amplitude_deg"] == expected.amplitude_deg
     assert stored[long_]["peak_velocity_deg_s"] == expected.peak_velocity_deg_s
     assert stored[long_]["amplitude_deg"] != _hypot(gaze[80] - gaze[60])
@@ -2954,7 +2960,7 @@ def test_the_conjunction_label_matches_the_amplitude_that_gets_stored():
     detector = get_detector("engbert_kliegl")
     detect_schema.EyeDetection._insert_trace(
         sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0,
-        detector, detector.defaults,
+        detector, detector.defaults, geometry=PER_AXIS,
     )
     events = [row for row in sink.rows if row["label"] in ("saccade", "microsaccade")]
 
@@ -3010,7 +3016,7 @@ def test_two_touching_intersections_become_one_conjunction_event():
     detector = get_detector("engbert_kliegl")
     detect_schema.EyeDetection._insert_trace(
         sink, {"subject": "s"}, "conjunction", gaze, v, offered, spans, 500.0,
-        detector, detector.defaults,
+        detector, detector.defaults, geometry=PER_AXIS,
     )
     (event,) = [row for row in sink.rows if row["label"] != "fixation"]
     assert (event["run_start"], event["run_stop"]) == (100, 140)
@@ -3087,7 +3093,7 @@ def test_the_full_split_still_classifies_by_amplitude():
     from wl_preproc.eye.detect.registry import DETECTORS
     from wl_preproc.schema.detect import _conjunction_label
 
-    # `amplitude()` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an (x, y)
+    # `amplitude(, geometry=PER_AXIS)` reads `gaze_deg[stop - 1] - gaze_deg[start]` as an (x, y)
     # pair -- `measure.py::amplitude`'s own `displacement[0], displacement[1]`
     # -- matching every real gaze array in this codebase (`eye/calibration.py
     # ::apply_map`, which is what `eye/gaze.py::gaze_trace` returns, ends in
@@ -3502,7 +3508,7 @@ def _event_amplitudes(runs, gaze, v, fs_hz):
     from wl_preproc.eye.detect.measure import measure
 
     return [
-        (run, measure(gaze, v, run.start, run.stop, fs_hz).amplitude_deg)
+        (run, measure(gaze, v, run.start, run.stop, fs_hz, geometry=PER_AXIS).amplitude_deg)
         for run in runs
         if run.label in (Label.SACCADE, Label.MICROSACCADE)
     ]
@@ -4462,9 +4468,12 @@ _DIRECTION_TOLERANCE_DEG = {True: 3.0, False: 15.0}  # keyed on "1 deg or more"
 def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped_session):
     """Spec section 4. On every trace, for every registered detector:
     - a row with an amplitude has its start and end positions, the amplitude
-      is exactly their distance, and the direction is their angle (NULL only
-      where they coincide);
-    - a row without an amplitude has none of the five."""
+      is exactly their true angle, and the direction is the end's in the
+      eye's frame at the start (NULL only where they coincide; true-angle
+      spec section 4);
+    - a fixation row measured on an eye has its positions and direction and
+      no amplitude (true-angle spec decision 5);
+    - any other row has none of the five."""
     import math
 
     from wl_preproc.schema import detect
@@ -4476,16 +4485,22 @@ def test_every_stored_event_row_carries_the_geometry_its_amplitude_reads(stepped
         for trace in ("left", "right", "conjunction"):
             where = {**session_key, "trace": trace, **_detector(name)}
             for row in (detect.EyeDetection.Run & where).to_dicts():
-                if row["amplitude_deg"] is None:
+                if row["amplitude_deg"] is None and row["label"] != "fixation":
                     assert all(row[column] is None for column in geometry), (name, trace, row)
                     continue
-                dx = row["end_x_deg"] - row["start_x_deg"]
-                dy = row["end_y_deg"] - row["start_y_deg"]
-                assert row["amplitude_deg"] == float(np.hypot(dx, dy)), (name, trace, row)
-                if dx == 0.0 and dy == 0.0:
+                if row["start_x_deg"] is None:
+                    continue
+                start = directions(np.array([row["start_x_deg"], row["start_y_deg"]]))
+                end = directions(np.array([row["end_x_deg"], row["end_y_deg"]]))
+                if row["label"] == "fixation":
+                    assert (row["amplitude_deg"], row["peak_velocity_deg_s"]) == (None, None), (name, trace, row)
+                else:
+                    assert row["amplitude_deg"] == float(true_angle_deg(start, end)), (name, trace, row)
+                if (row["start_x_deg"], row["start_y_deg"]) == (row["end_x_deg"], row["end_y_deg"]):
                     assert row["direction_deg"] is None, (name, trace, row)
                 else:
-                    assert row["direction_deg"] == math.degrees(math.atan2(dy, dx)), (name, trace, row)
+                    lx, ly = local_coordinates_deg(end, start)
+                    assert row["direction_deg"] == float(wrap_360_deg(math.degrees(math.atan2(ly, lx)))), (name, trace, row)
                 measured += 1
     assert measured, "the fixture must give the detectors events to measure"
 
@@ -4662,7 +4677,7 @@ def test_a_kept_one_eye_event_is_stored_as_its_own_eyes_row(detector_name, rule,
                                       kept={(60, 80): ("left", left_gaze, v, offered)})
 
     row = _event_rows(rows)[(60, 80)]
-    expected = measure_event_run(left_gaze, v, offered, 60, 80, 500.0, **rule)
+    expected = measure_event_run(left_gaze, v, offered, 60, 80, 500.0, **rule, geometry=PER_AXIS)
     assert row["amplitude_deg"] == expected.amplitude_deg
     assert (row["start_x_deg"], row["end_x_deg"]) == (float(left_gaze[first, 0]), float(left_gaze[last, 0]))
     assert row["reliability"] == 0.9
@@ -5017,3 +5032,53 @@ def test_the_share_of_gaze_repaired_is_stored_per_eye(glitch_session):
     left = rows["left"]
     assert left["frac_glitch_repaired"] == pytest.approx(sum(w for _, w in _GLITCHES) / left["n_samples"])
     assert rows["right"]["frac_glitch_repaired"] == 0.0
+
+
+# -- True visual angle (design spec `2026-10-30-true-angle-saccades-design.md`) --
+
+
+def _across_the_cut(n_samples=30):
+    """1.12 degrees up from (30, 0) at sample 10: a saccade per axis, 0.970
+    degrees of true angle."""
+    gaze = np.tile([30.0, 0.0], (n_samples, 1))
+    gaze[10:] = [30.0, 1.12]
+    return gaze
+
+
+def test_the_conjunction_label_reads_the_paramsets_geometry():
+    """As it reads the cut, from the paramset dict; a paramset without the key
+    means per-axis (amendment 3)."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema.detect import _conjunction_label
+
+    detector, gaze = get_detector("engbert_kliegl"), _across_the_cut()
+    true = _conjunction_label(detector, {"microsaccade_max_deg": 1.0, "geometry": "true-angle"}, gaze)
+    unstated = _conjunction_label(detector, {"microsaccade_max_deg": 1.0}, gaze)
+    assert (true(5, 15), unstated(5, 15)) == (Label.MICROSACCADE, Label.SACCADE)
+
+
+def test_insert_trace_measures_in_the_geometry_it_is_given():
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.eye.detect.measure import amplitude
+
+    gaze = _across_the_cut()
+    sizes = {}
+    for setting in ("true-angle", "per-axis"):
+        _master, rows = _run_insert_trace([Run(5, 15, Label.SACCADE)], n_samples=30, gaze=gaze, geometry=setting)
+        (event,) = [row for row in rows if row["label"] == "saccade"]
+        sizes[setting] = event["amplitude_deg"]
+        assert event["amplitude_deg"] == amplitude(gaze, 5, 15, geometry=setting)
+    assert sizes["per-axis"] == pytest.approx(1.12) and sizes["true-angle"] < 1.0
+
+
+def test_a_paramsets_geometry_is_read_once_and_an_unknown_one_refused():
+    """True-angle spec section 3, amendment 3: absent, per-axis; a value that
+    is neither setting is refused where the stage reads it, rather than
+    detecting per axis and failing later in measurement."""
+    from wl_preproc.schema.detect import _geometry_of
+
+    assert _geometry_of({}) == "per-axis"
+    assert _geometry_of({"geometry": "true-angle"}) == "true-angle"
+    with pytest.raises(ValueError, match="geometry"):
+        _geometry_of({"geometry": "cyclopean"})

@@ -18,6 +18,7 @@ from pathlib import Path
 from wl_sync.clock import BARCODE_EPOCH
 
 from wl_preproc.cli.doctor import scratch_headroom
+from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.schema import DEFAULT_PREFIX
 
 # Ingested is windowed to 24 h because "what landed since yesterday's report"
@@ -1028,6 +1029,18 @@ def _agreement_line(row: dict, detector_names: dict[int, str]) -> str:
     )
 
 
+# How a figure names the geometry its sizes were measured in.
+_GEOMETRY_TEXT = {TRUE_ANGLE: "true angle", PER_AXIS: "per axis"}
+
+
+def _geometry_text(params: dict) -> str:
+    """A paramset's geometry in words; a value neither setting names, as
+    given, so one odd paramset cannot take the report down (detection
+    refuses it: `schema/detect.py::_geometry_of`)."""
+    geometry = params.get("geometry", UNSTATED_GEOMETRY)
+    return _GEOMETRY_TEXT.get(geometry, geometry)
+
+
 def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
     """`### Saccade vigor per session per eye (24 h)`'s lines (main-sequence
     design spec `2026-10-07-main-sequence-design.md` section 5): for each
@@ -1050,7 +1063,10 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
 
     main_sequence.activate(prefix=prefix)
     table = main_sequence.SaccadeMainSequence
-    names = {row["paramset_idx"]: row["params"]["detector"]
+    # Each figure names the geometry its paramset measured sizes in (true-angle
+    # spec section 7): a per-axis paramset's vigor is not comparable with a
+    # true-angle one's. A paramset without the key was detected per axis.
+    names = {row["paramset_idx"]: f"`{row['params']['detector']}` ({_geometry_text(row['params'])})"
              for row in (paramset_schema.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()}
     fit_params = {row["paramset_idx"]: MainSequenceParams(**row["params"])
                   for row in (paramset_schema.ParamSet & {"paramset_type": "main_sequence"}).to_dicts()}
@@ -1087,7 +1103,7 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
                 groups.setdefault((detection["trace"], detection["validity_paramset_idx"], fit_idx), []).append(
                     detection)
         for (trace, validity_idx, fit_idx), members in sorted(groups.items()):
-            figures = ", ".join(f"`{names[detection['paramset_idx']]}` {figure(detection, fit_idx)}"
+            figures = ", ".join(f"{names[detection['paramset_idx']]} {figure(detection, fit_idx)}"
                                 for detection in sorted(members, key=lambda row: row["paramset_idx"]))
             lines.append(f"- `{subject}` @ {session_datetime:%Y-%m-%d %H:%M} — {trace} (validity paramset "
                          f"{validity_idx}, fit paramset {fit_idx}): {figures}")

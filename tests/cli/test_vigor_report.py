@@ -119,25 +119,25 @@ def test_a_session_gets_each_detectors_vigor_against_its_earlier_sessions(vigor_
     _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9))
     line = _line(tmp_path, prefix, session, "left")
     assert line.endswith(f"(validity paramset {vigor_schema.validity}, fit paramset {vigor_schema.fit}): "
-                         "`engbert_kliegl` 90% (3 earlier)")
+                         "`engbert_kliegl` (true angle) 90% (3 earlier)")
 
 
 def test_fewer_than_three_earlier_sessions_is_no_history_yet(vigor_schema, tmp_path, prefix):
     session = _animal_with_history(vigor_schema, 2)
     _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9))
-    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` no history yet (2 earlier)")
+    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (true angle) no history yet (2 earlier)")
 
 
 def test_too_few_saccades_say_how_many(vigor_schema, tmp_path, prefix):
     session = _animal_with_history(vigor_schema, 3)
     _detect(vigor_schema, session, "left", saccades=_saccades(10, 0.9))
-    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` too few saccades (10)")
+    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (true angle) too few saccades (10)")
 
 
 def test_a_refused_detection_says_so(vigor_schema, tmp_path, prefix):
     session = _animal_with_history(vigor_schema, 3)
     _detect(vigor_schema, session, "right", status="refused")
-    assert _line(tmp_path, prefix, session, "right").endswith("`engbert_kliegl` detection refused")
+    assert _line(tmp_path, prefix, session, "right").endswith("`engbert_kliegl` (true angle) detection refused")
 
 
 def test_a_detection_without_its_row_is_not_computed_yet(vigor_schema, tmp_path, prefix):
@@ -146,7 +146,7 @@ def test_a_detection_without_its_row_is_not_computed_yet(vigor_schema, tmp_path,
     session = _animal_with_history(vigor_schema, 3)
     key = _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9), master=False)
     try:
-        assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` not computed yet")
+        assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (true angle) not computed yet")
     finally:
         # A later `daemon.run_once()` in this suite would try to fit it.
         (detect.EyeDetection & key).delete()
@@ -171,7 +171,7 @@ def test_a_line_carries_every_detectors_figure_in_paramset_order(vigor_schema, t
     in_order = sorted(figures, key=vigor_schema.detections.get)
     assert in_order != sorted(figures)
     assert _line(tmp_path, prefix, session, "left").endswith(
-        ": " + ", ".join(f"`{name}` {figures[name]}" for name in in_order))
+        ": " + ", ".join(f"`{name}` (true angle) {figures[name]}" for name in in_order))
 
 
 def test_vigor_is_shown_where_the_sessions_own_fit_was_refused(vigor_schema, tmp_path, prefix):
@@ -180,4 +180,63 @@ def test_vigor_is_shown_where_the_sessions_own_fit_was_refused(vigor_schema, tmp
     vigor. The main-sequence review's minor."""
     session = _animal_with_history(vigor_schema, 3)
     _detect(vigor_schema, session, "left", saccades=_saccades(40, 0.9), own_fit_refused=True)
-    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` 90% (3 earlier)")
+    assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (true angle) 90% (3 earlier)")
+
+
+def test_a_figure_names_the_geometry_its_sizes_were_measured_in(vigor_schema, tmp_path, prefix):
+    """True-angle spec section 7: the default paramsets measure in true
+    angle and a per-axis one, registered on request, per axis; a figure says
+    which, since the two are not comparable. The per-axis paramset is
+    removed afterwards, with what was planted under it."""
+    from wl_preproc.schema import detect, paramset
+
+    per_axis = detect.register_per_axis_paramsets(["engbert_kliegl"])["engbert_kliegl"]
+    vigor_schema.detections["engbert_kliegl:per-axis"] = per_axis
+    try:
+        session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl:per-axis",))
+        _detect(vigor_schema, session, "left", detector="engbert_kliegl:per-axis", saccades=_saccades(40, 0.9))
+        assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (per axis) 90% (3 earlier)")
+    finally:
+        del vigor_schema.detections["engbert_kliegl:per-axis"]
+        (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": per_axis}).delete(
+            part_integrity="cascade")
+
+
+def test_a_paramset_without_the_setting_is_named_per_axis(vigor_schema, tmp_path, prefix):
+    """True-angle spec amendment 3: a paramset written before the key
+    existed was detected per axis, and its figure says so."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema import detect, paramset
+
+    params = detect._eye_detection_params(get_detector("engbert_kliegl"))
+    del params["geometry"]
+    older = paramset.register("eye_detection", params)
+    vigor_schema.detections["engbert_kliegl:unstated"] = older
+    try:
+        session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl:unstated",))
+        _detect(vigor_schema, session, "left", detector="engbert_kliegl:unstated", saccades=_saccades(40, 0.9))
+        assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (per axis) 90% (3 earlier)")
+    finally:
+        del vigor_schema.detections["engbert_kliegl:unstated"]
+        (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": older}).delete(
+            part_integrity="cascade")
+
+
+def test_a_paramset_with_an_unknown_geometry_is_named_as_given(vigor_schema, tmp_path, prefix):
+    """One paramset with a geometry neither setting names does not take the
+    report down: its figure names the value as given. (Detection refuses it:
+    `schema/detect.py::_geometry_of`.)"""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.schema import detect, paramset
+
+    odd = paramset.register("eye_detection", {**detect._eye_detection_params(get_detector("engbert_kliegl")),
+                                              "geometry": "cyclopean"})
+    vigor_schema.detections["engbert_kliegl:cyclopean"] = odd
+    try:
+        session = _animal_with_history(vigor_schema, 3, detectors=("engbert_kliegl:cyclopean",))
+        _detect(vigor_schema, session, "left", detector="engbert_kliegl:cyclopean", saccades=_saccades(40, 0.9))
+        assert _line(tmp_path, prefix, session, "left").endswith("`engbert_kliegl` (cyclopean) 90% (3 earlier)")
+    finally:
+        del vigor_schema.detections["engbert_kliegl:cyclopean"]
+        (paramset.ParamSet & {"paramset_type": "eye_detection", "paramset_idx": odd}).delete(
+            part_integrity="cascade")

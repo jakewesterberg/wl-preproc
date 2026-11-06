@@ -131,6 +131,16 @@ class Detector:
     # `2026-09-27-bmd-design.md` section 3.5). The requester's decision of
     # 2026-09-27. Off by default, so every other detector is unchanged.
     runs_start_after_takeoff: bool = False
+    # **True when this detector is handed the velocity of the paramset's
+    # geometry**: under true angle, `velocity.local_velocity`, the eye's
+    # angular velocity in the local frame at each sample; under per-axis, and
+    # for every other detector under either, `velocity.velocity`
+    # (`schema/detect.py::EyeDetection.make`). Engbert-Kliegl's is: it
+    # detects in true angle, as wl-xcon's online copy does (true-angle spec
+    # section 6.1). BMD's is too: its gate is Engbert-Kliegl at its
+    # registered defaults (amendment 2). Off by default: the ports detect per
+    # axis, as their references do.
+    detects_in_geometry: bool = False
     # **The registered detector whose saccades this one copies**, if any.
     # BMD's gate runs Engbert-Kliegl at its registered defaults and stores
     # those saccades as its own, so the two agree on them by construction.
@@ -238,6 +248,7 @@ DETECTORS: dict[str, Detector] = {
         vocabulary=frozenset({Label.SACCADE, Label.MICROSACCADE}),
         run=detect_engbert_kliegl,
         defaults=DEFAULT_EK_PARAMS,
+        detects_in_geometry=True,
     ),
     # **`saccade` AND `microsaccade`, per design spec section 3.1 as corrected
     # 2026-09-01.** That table gave this detector `microsaccade` alone, from
@@ -327,6 +338,7 @@ DETECTORS: dict[str, Detector] = {
         run=detect_bmd,
         defaults=DEFAULT_BMD_PARAMS,
         runs_start_after_takeoff=True,
+        detects_in_geometry=True,
         copies_saccades_from="engbert_kliegl",
     ),
     # **U'n'Eye** (design spec `2026-10-06-uneye-design.md`), the only

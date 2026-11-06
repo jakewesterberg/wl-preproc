@@ -10,6 +10,7 @@ from pynwb.behavior import EyeTracking, PupilTracking, SpatialSeries
 from pynwb.core import DynamicTable
 from pynwb.epoch import TimeIntervals
 
+from wl_preproc.eye.detect.geometry import eccentricity_polar_deg
 from wl_preproc.nwb.columns import column, continuous
 
 EYES = ("left", "right")
@@ -36,7 +37,9 @@ def add_eye_series(nwb: NWBFile, times: np.ndarray, gaze: dict, pupil: dict) -> 
     resampled). `gaze[eye]` is `(n, 2)` degrees in the calibrated frame, the
     glitch-repaired gaze every stored detection was made from, or None for
     an eye with no calibration (section 10). `pupil[eye]` is `(n, 5)`,
-    OpenIris's `PUPIL_COLUMNS`, uncalibrated."""
+    OpenIris's `PUPIL_COLUMNS`, uncalibrated. Each gazed eye also gets
+    `gaze_polar_{eye}`, the same gaze's true eccentricity and polar angle
+    (design spec `2026-10-30-true-angle-saccades-design.md` section 8)."""
     module = behavior_module(nwb)
     shared = None
     gaze_series, pupil_series = [], []
@@ -49,12 +52,29 @@ def add_eye_series(nwb: NWBFile, times: np.ndarray, gaze: dict, pupil: dict) -> 
                          "from; NaN where the recording has no finite value."),
             data=continuous(np.asarray(gaze[eye], dtype=np.float32)),
             timestamps=shared if shared is not None else continuous(np.asarray(times, dtype=np.float64)),
-            reference_frame="Degrees of visual angle in the calibrated frame: x rightward, y upward.",
+            reference_frame=("Degrees of visual angle per axis in the calibrated frame, x rightward and y upward: a "
+                             "point (X, Y) from straight ahead at distance D is (atan(X/D), atan(Y/D)). Its true "
+                             f"eccentricity and polar angle are gaze_polar_{eye}."),
             unit="degrees",
         )
         if shared is None:
             shared = series
         gaze_series.append(series)
+        eccentricity, polar = eccentricity_polar_deg(np.asarray(gaze[eye], dtype=float))
+        angles = np.column_stack([eccentricity, polar]).astype(np.float32)
+        # A polar angle just below 360 rounds up to 360 in float32; the
+        # series holds [0, 360), as `geometry.wrap_360_deg` does.
+        angles[angles[:, 1] >= 360.0, 1] = 0.0
+        gaze_series.append(SpatialSeries(
+            name=f"gaze_polar_{eye}",
+            description=("The same gaze's true eccentricity, degrees of visual angle from straight ahead, and its polar "
+                         "angle, degrees counterclockwise from rightward in [0, 360); NaN where the gaze is, and the "
+                         "polar angle NaN at zero eccentricity."),
+            data=continuous(angles),
+            timestamps=shared,
+            reference_frame="Eccentricity from straight ahead, then polar angle counterclockwise from rightward.",
+            unit="degrees",
+        ))
     for eye in EYES:
         if pupil.get(eye) is None:
             continue

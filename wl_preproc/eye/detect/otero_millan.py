@@ -92,6 +92,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from wl_preproc.eye.detect.labels import Run
+from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
 # The reference's `SACCADELIMITTH`, in deg/s. **Not a detection threshold**: no
@@ -189,6 +190,11 @@ class OteroMillanParams:
     #: detector's vocabulary splits by amplitude, so it consumes the SHARED
     #: cut rather than owning one. See `schema/detect.py::_params_for`.
     microsaccade_max_deg: float = MICROSACCADE_MAX_DEG
+    #: The SHARED `geometry` key (true-angle spec section 3), declared, as
+    #: `microsaccade_max_deg` is, because this detector reads sizes (its 0.2-degree floor and its 1-degree split): the
+    #: registered default paramset writes it last. Absent, a paramset means
+    #: per-axis, which every paramset written before the key existed was.
+    geometry: str = UNSTATED_GEOMETRY
 
 
 DEFAULT_OM_PARAMS = OteroMillanParams(
@@ -246,7 +252,7 @@ def detect_otero_millan(
         return []
 
     peak_velocity, accel_onset, accel_brake, displacement = _features(
-        gaze_deg, speed, accel, spans
+        gaze_deg, speed, accel, spans, params.geometry
     )
     # **Z-scoring and whitening are GLOBAL; only the clustering is chunked.**
     # The reference calls `GetFeatures` once over every peak in the recording
@@ -499,6 +505,7 @@ def _features(
     speed: np.ndarray,
     accel: np.ndarray,
     spans: list[tuple[int, int]],
+    geometry: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per candidate: peak velocity, peak acceleration at onset and at braking,
     and displacement.
@@ -558,7 +565,7 @@ def _features(
         accel_onset[i] = float(accel[start:onset_stop].max())
         brake_start = min(start + at + 1, stop - 1)
         accel_brake[i] = float(accel[brake_start:stop].max())
-        displacement[i] = amplitude(gaze_deg, start, stop)
+        displacement[i] = amplitude(gaze_deg, start, stop, geometry=geometry)
     return peak_velocity, accel_onset, accel_brake, displacement
 
 

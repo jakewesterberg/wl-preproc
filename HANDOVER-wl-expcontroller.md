@@ -477,3 +477,19 @@ two thresholds; the 1° microsaccade cut read in true angle; the shared fixtures
   online detector leaves out every sample whose five-sample window is incomplete. On v1's and the
   companion's traces the thresholds differ by about 0.1-0.2% and no interval changes; on a very short trace
   they could. The XC-398 spec says which is meant, and v2 pins it with a short trace.
+- *wl-preproc's answer, 2026-10-30: the spec* (`docs/superpowers/specs/2026-10-30-true-angle-saccades-design.md`,
+  the requester's decisions of 2026-10-30), *sent to wl-xcon the same day.* Yes to all four proposals. Every
+  detector's sizes, peak speeds and directions, and its endpoints' eccentricity and polar angle, are in true
+  angle, and the 1-degree cut is read in true angle; Engbert-Kliegl (and BMD's gate, which is Engbert-Kliegl)
+  detects on the local-frame velocity, its scale over complete windows only, as wl-xcon's online copy does;
+  the four detectors ported from their authors' code keep their own detection per axis. Per axis stays here
+  as a paramset setting, registered on request; true angle is the default. Every angle is in [0, 360) (mod
+  360, 0 where that rounds to 360), the polar angle null at zero eccentricity and a direction null for no
+  displacement (amendment 1, the PI's "0 to 360 in both repos" and "Empty at center"). Fixations carry their
+  positions, eccentricity, polar angle and direction, and no size. Each NWB file gains each eye's true
+  eccentricity and polar angle, `gaze_polar_{eye}`.
+- *v2:* `docs/fixtures/saccade/v2.json`, made by `python -m wl_preproc.eye.detect.contract_fixtures v2` from
+  v1's and the companion's inputs and one short trace. Intervals and labels exact; every other number to
+  `|got - want| <= 1e-9 + 1e-12 * |want|`, since it passes through `sin`, `cos` or `atan2` and a velocity
+  component near zero loses relative digits (amendment 4). Built on `feat/true-angle-saccades`, not merged; its
+  SHA-256 goes to wl-xcon with the merge.

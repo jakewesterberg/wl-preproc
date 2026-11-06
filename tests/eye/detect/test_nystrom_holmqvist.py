@@ -1356,3 +1356,33 @@ def test_a_recomputed_glissade_does_not_duplicate_an_already_claimed_one():
     sorted_runs = sorted(runs, key=lambda run: run.start)
     for earlier, later in zip(sorted_runs, sorted_runs[1:]):
         assert earlier.stop <= later.start, (earlier, later)
+
+
+def test_a_glissade_is_compared_with_its_saccade_in_the_settings_geometry():
+    """True-angle spec decision 3: a 2-degree saccade straight up at
+    (40, 0) is about 1.53 degrees of true angle, so the 1.8-degree
+    horizontal movement after it is smaller per axis and kept, larger in
+    true angle and omitted."""
+    import dataclasses
+
+    import numpy as np
+
+    from wl_preproc.eye.detect.geometry import TRUE_ANGLE
+    from wl_preproc.eye.detect.nystrom_holmqvist import (
+        DEFAULT_NH_PARAMS, PeakThreshold, _glissade_bounds,
+    )
+
+    fs = 500.0
+    speed = np.full(600, 2.0)
+    speed[300:320] = 300.0
+    speed[320:330] = 150.0
+    gaze = np.tile([40.0, 0.0], (600, 1))
+    gaze[300:320, 1] = np.linspace(0.0, 2.0, 20)
+    gaze[320:, 1] = 2.0
+    gaze[320:330, 0] = np.linspace(40.0, 41.8, 10)
+    gaze[330:, 0] = 41.8
+    thresholds = PeakThreshold(100.0, 20.0, 2, True)
+
+    assert _glissade_bounds(speed, gaze, 300, 320, 25.0, thresholds, fs, DEFAULT_NH_PARAMS) is not None
+    assert _glissade_bounds(speed, gaze, 300, 320, 25.0, thresholds, fs,
+                            dataclasses.replace(DEFAULT_NH_PARAMS, geometry=TRUE_ANGLE)) is None

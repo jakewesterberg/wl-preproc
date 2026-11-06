@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from wl_preproc.nwb.describe import task_name
+from wl_preproc.nwb.eye_events import MEASUREMENTS
 from wl_preproc.nwb.trim import BlockSet
 # Where the wall-clock time of t = 0 comes from is the session clock's to
 # answer (`timebase/clock.py`); these stay importable here, where
@@ -519,9 +520,7 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
                 if row["label"] in MASK_LABELS or not blocks.contains([start_s])[0]:
                     continue
                 runs.append({"start_s": start_s, "stop_s": float(edges[row["run_stop"]]), "label": row["label"],
-                             **{field: row.get(field) for field in ("amplitude_deg", "peak_velocity_deg_s", "start_x_deg",
-                                                                    "start_y_deg", "end_x_deg", "end_y_deg",
-                                                                    "direction_deg", "reliability")}})
+                             **{field: row.get(field) for field in MEASUREMENTS}})
             detections.append({"name": f"{name}_{trace}",
                                "description": f"{name}, the {trace} trace; eye_detection paramset {idx}: {params}",
                                "runs": runs})

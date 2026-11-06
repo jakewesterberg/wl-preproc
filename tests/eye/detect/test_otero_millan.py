@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.otero_millan import (
     DEFAULT_OM_PARAMS,
@@ -624,7 +625,7 @@ def test_whitening_is_what_makes_a_small_event_findable_at_all():
     speed = np.hypot(v[:, 0], v[:, 1])
     spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
     peak_velocity, onset, brake, displacement = _features(
-        gaze, speed, _acceleration(v), spans
+        gaze, speed, _acceleration(v), spans, geometry=PER_AXIS
     )
     raw = np.column_stack([
         _zscore(_log_finite(peak_velocity)), _zscore(_log_finite(onset)),
@@ -669,7 +670,7 @@ def test_the_silhouette_margin_is_what_chooses_the_cluster_count():
     speed = np.hypot(v[:, 0], v[:, 1])
     spans = _candidate_spans(speed, np.ones(len(gaze), dtype=bool), 10)
     peak_velocity, onset, brake, _displacement = _features(
-        gaze, speed, _acceleration(v), spans
+        gaze, speed, _acceleration(v), spans, geometry=PER_AXIS
     )
     whitened = _whiten(np.column_stack([
         _zscore(_log_finite(peak_velocity)), _zscore(_log_finite(onset)),
@@ -716,7 +717,7 @@ def test_the_onset_window_reaches_one_sample_past_the_velocity_peak():
     accel = np.array([1.0, 2.0, 3.0, 99.0, 4.0])         # max at index 3 == peak + 1
     gaze = np.column_stack([np.arange(5) * 0.5, np.zeros(5)])
 
-    _pv, onset, brake, _disp = _features(gaze, speed, accel, [(0, 5)])
+    _pv, onset, brake, _disp = _features(gaze, speed, accel, [(0, 5)], geometry=PER_AXIS)
 
     assert onset[0] == 99.0
     assert brake[0] == 99.0
@@ -839,7 +840,7 @@ def test_a_velocity_peak_on_an_events_last_sample_is_handled_at_both_ends():
     accel = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 999.0])     # 999 is OUTSIDE [0, 5)
     gaze = np.column_stack([np.arange(6) * 0.5, np.zeros(6)])
 
-    peak_velocity, onset, brake, _displacement = _features(gaze, speed, accel, [(0, 5)])
+    peak_velocity, onset, brake, _displacement = _features(gaze, speed, accel, [(0, 5)], geometry=PER_AXIS)
 
     assert peak_velocity[0] == 40.0
     assert onset[0] == 5.0    # unclamped this reads accel[5] and returns 999.0
@@ -934,3 +935,20 @@ def test_runs_from_labels_gives_reconstructed_runs_no_reliability():
     labels = np.array([Label.FIXATION] * 3 + [Label.SACCADE] * 2, dtype=object)
 
     assert all(run.reliability is None for run in runs_from_labels(labels))
+
+
+def test_the_displacement_is_the_settings_size():
+    """True-angle spec decision 3: the displacement the 0.2-degree floor and
+    the 1-degree split read is `measure.amplitude` in the paramset's
+    geometry. A 2-degree step up from (30, 0) is 1.732 degrees of true
+    angle."""
+    from wl_preproc.eye.detect.geometry import TRUE_ANGLE
+    from wl_preproc.eye.detect.otero_millan import _features
+
+    speed = np.array([0.0, 10.0, 50.0, 20.0, 5.0])
+    accel = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    gaze = np.column_stack([np.full(5, 30.0), np.linspace(0.0, 2.0, 5)])
+    *_, per_axis = _features(gaze, speed, accel, [(0, 5)], geometry=PER_AXIS)
+    *_, true = _features(gaze, speed, accel, [(0, 5)], geometry=TRUE_ANGLE)
+    assert per_axis[0] == 2.0
+    assert true[0] == pytest.approx(1.732, abs=5e-4)

@@ -96,6 +96,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
         "data_types": {
             "eye": None if eye is None else {
                 "gaze": sorted(side for side, gaze in eye["gaze"].items() if gaze is not None),
+                "gaze_polar": sorted(side for side, gaze in eye["gaze"].items() if gaze is not None),
                 "pupil": sorted(eye["pupil"]),
             },
             "eye_events": None if eye is None else {

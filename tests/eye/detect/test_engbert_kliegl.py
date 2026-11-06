@@ -1,9 +1,14 @@
+import dataclasses
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from wl_preproc.eye.detect.engbert_kliegl import (
-    DEFAULT_EK_PARAMS, EngbertKlieglParams, detect_engbert_kliegl,
+    DEFAULT_EK_PARAMS, EngbertKlieglParams, complete_windows, detect_engbert_kliegl, thresholds,
 )
+from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE
 from wl_preproc.eye.detect.labels import Label, Run
 
 FS_HZ = 500.0
@@ -313,7 +318,7 @@ def test_each_label_is_what_classify_gives_for_that_intervals_own_amplitude():
 
     assert found
     for run in found:
-        expected = classify(amplitude(gaze, run.start, run.stop), MICROSACCADE_MAX_DEG)
+        expected = classify(amplitude(gaze, run.start, run.stop, geometry=PER_AXIS), MICROSACCADE_MAX_DEG)
         assert run.label is expected
     # Not vacuous: both sides of the split actually occur above.
     assert {run.label for run in found} == {Label.SACCADE, Label.MICROSACCADE}
@@ -353,3 +358,48 @@ def test_the_default_threshold_is_the_shared_constant_not_a_second_copy():
     from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG
 
     assert DEFAULT_EK_PARAMS.microsaccade_max_deg == MICROSACCADE_MAX_DEG
+
+
+# -- True visual angle (design spec `2026-10-30-true-angle-saccades-design.md` section 6.1) --
+
+_TRUE = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
+
+
+def _v1_case(name):
+    v1 = json.loads((Path(__file__).parents[3] / "docs/fixtures/saccade/v1.json").read_text())
+    case = next(case for case in v1["traces"] if case["name"] == name)
+    return np.array(case["gaze_deg"]), np.array(case["available"], dtype=object)
+
+
+def test_a_complete_window_is_five_usable_samples_clear_of_the_edges():
+    usable = np.ones(12, dtype=bool)
+    usable[6] = False
+    assert np.flatnonzero(complete_windows(usable)).tolist() == [2, 3, 9]
+
+
+def test_under_true_angle_the_scale_leaves_out_incomplete_windows():
+    """wl-xcon's proposal: the two zero-filled samples at each edge and every
+    sample whose window touches a masked one are left out of the scale."""
+    v = np.random.default_rng(5).normal(0.0, 3.0, (40, 2))
+    v[:2] = v[-2:] = 0.0
+    usable = np.ones(40, dtype=bool)
+    usable[20] = False
+    assert thresholds(v, usable, _TRUE) == thresholds(v, complete_windows(usable), DEFAULT_EK_PARAMS)
+    assert thresholds(v, usable, _TRUE) != thresholds(v, usable, DEFAULT_EK_PARAMS)
+
+
+def test_per_axis_is_v1s_scale():
+    """The default params are per-axis, so v1 and its companion stand."""
+    assert DEFAULT_EK_PARAMS.geometry == PER_AXIS
+
+
+def test_under_true_angle_the_step_across_the_cut_is_a_microsaccade():
+    """1.12 degrees up from (30, 0) is 0.970 degrees of true angle: a saccade
+    per axis, a microsaccade in true angle (wl-xcon's proposals 1 and 3)."""
+    from wl_preproc.eye.detect.velocity import local_velocity, velocity
+
+    gaze, available = _v1_case("off-centre-30-across-the-cut")
+    true = detect_engbert_kliegl(gaze, local_velocity(gaze, 500.0), available, 500.0, _TRUE)
+    per_axis = detect_engbert_kliegl(gaze, velocity(gaze, 500.0), available, 500.0, DEFAULT_EK_PARAMS)
+    assert [r.label for r in true] == [Label.MICROSACCADE]
+    assert [r.label for r in per_axis] == [Label.SACCADE]
