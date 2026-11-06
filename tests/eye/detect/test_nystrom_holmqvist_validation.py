@@ -85,6 +85,7 @@ from collections import Counter, namedtuple
 import numpy as np
 import pytest
 
+from tests.eye.detect._offered import offered
 from wl_preproc.eye.detect.labels import Label, kind_of
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS,
@@ -1491,15 +1492,13 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
     the pipeline stores detections from."""
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.glitch import repair_glitches
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
-    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
-    gaze, _repaired = repair_glitches(
+    gaze, repaired = repair_glitches(
         apply_map(_scaled_affine_map(scale), raw_xy), fs_hz,
         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
     )
-    v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
+    return offered(gaze, loss, frame_gaps, fs_hz, repaired=repaired)
 
 
 class _Trace:

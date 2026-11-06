@@ -22,6 +22,7 @@ from wl_preproc.eye.detect.engbert_kliegl import DEFAULT_EK_PARAMS, detect_engbe
 from wl_preproc.eye.detect.geometry import PER_AXIS
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.velocity import velocity
+from tests.eye.detect._offered import offered
 
 COMPARISON_SAMPLES = 120_000
 EXACT_STRETCH = 5_000
@@ -41,7 +42,6 @@ def recording():
     if not sample:
         pytest.skip("WLPP_OHDPI_REFERENCE is not set -- see test_nystrom_holmqvist_validation.py")
     from wl_preproc.eye.calibration import apply_map
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
     from wl_preproc.eye.gaze import purkinje_vector
     from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
@@ -53,9 +53,8 @@ def recording():
     scale = _SCALE_P99_AT_DEG / max(float(np.percentile(pooled_x, 99)), float(np.percentile(pooled_y, 99)))
     eyes = {}
     for eye in ("left", "right"):
-        gaze = apply_map(_scaled_affine_map(scale), raw[eye])
-        v = velocity(gaze, rec.fs_hz)
-        mask = validity_labels(gaze, v, loss[eye], rec.frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=rec.fs_hz).labels
+        gaze, v, mask = offered(apply_map(_scaled_affine_map(scale), raw[eye]), loss[eye], rec.frame_gaps,
+                                rec.fs_hz)
         eyes[eye] = (gaze, v, mask)
     return rec, eyes
 
