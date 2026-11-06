@@ -796,3 +796,48 @@ def test_lost_positions_are_filled_along_frame_time_and_a_dropped_frames_neighbo
     assert filled[5:7, 0].tolist() == [5.0, 6.0]
     assert filled[13, 0] == 99.0 and filled[12, 0] == 12.0
     assert np.isfinite(filled).all() and filled[[0, 4, 7, 19], 0].tolist() == [0.0, 4.0, 7.0, 19.0]
+
+
+
+# Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 7: the
+# screen region is each session's visible field plus a margin, on each axis;
+# a session that recorded no field keeps the placeholder.
+_SETUP = ValidityParams(**{**asdict(_QUIET), "region_from_setup": True, "region_margin_deg": 2.0})
+
+
+def test_the_screen_region_is_the_sessions_visible_field_plus_its_margin():
+    gaze, vel, loss, gaps = _clean(4)
+    gaze[:] = [(32.5, 0.0), (32.6, 0.0), (0.0, 20.4), (0.0, 20.5)]
+
+    mask = validity_labels(gaze, vel, loss, gaps, _SETUP, fs_hz=FS_HZ, field_deg=(30.54, 18.41))
+
+    assert list(mask.labels) == [None, Label.INVALID, None, Label.INVALID]
+    assert mask.region_deg == pytest.approx((32.54, 20.41)) and mask.region_from_setup is True
+
+
+def test_a_session_with_no_recorded_field_keeps_the_placeholder():
+    gaze, vel, loss, gaps = _clean(2)
+    gaze[:] = [(19.9, 0.0), (20.1, 0.0)]
+
+    mask = validity_labels(gaze, vel, loss, gaps, _SETUP, fs_hz=FS_HZ, field_deg=None)
+
+    assert list(mask.labels) == [None, Label.INVALID]
+    assert (mask.region_deg, mask.region_from_setup) == ((20.0, 15.0), False)
+
+
+def test_a_paramset_stored_before_the_region_came_from_the_session_keeps_its_own():
+    """Loaded without the two fields, it masks at its stored region whatever
+    the session recorded, so its content hash still names what it does."""
+    stored = {name: value for name, value in asdict(DEFAULT_VALIDITY_PARAMS).items()
+              if name not in ("region_from_setup", "region_margin_deg")}
+    params = ValidityParams(**stored)
+    gaze, vel, loss, gaps = _clean(1)
+
+    mask = validity_labels(gaze, vel, loss, gaps, params, fs_hz=FS_HZ, field_deg=(30.54, 18.41))
+
+    assert (params.region_from_setup, params.region_margin_deg) == (False, 0.0)
+    assert (mask.region_deg, mask.region_from_setup) == ((20.0, 15.0), False)
+
+
+def test_the_default_takes_the_region_from_the_session_with_a_2_degree_margin():
+    assert (DEFAULT_VALIDITY_PARAMS.region_from_setup, DEFAULT_VALIDITY_PARAMS.region_margin_deg) == (True, 2.0)

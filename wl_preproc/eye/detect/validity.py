@@ -106,6 +106,13 @@ class ValidityParams:
     # `max_gap_s`). 0 by default, as the pads are: a paramset stored before
     # it carries nothing and masks as it did.
     max_lost_ms: float = 0.0
+    # The screen region from the session's own recorded display setup: each
+    # eye's visible field plus `region_margin_deg` on each axis, where the
+    # session recorded one (design spec
+    # `2026-11-06-eye-lost-data-and-region-design.md` section 7). Off and 0
+    # by default, so a paramset stored before them masks at its own region.
+    region_margin_deg: float = 0.0
+    region_from_setup: bool = False
 
 
 # **These are placeholders with no measured basis on this rig** (design spec
@@ -131,6 +138,12 @@ DEFAULT_VALIDITY_PARAMS = ValidityParams(
     # wl-xcon's online detector's bound, which the requester's decision of
     # 2026-11-06 makes both detectors' (its `max_gap_s`, 0.05 s).
     max_lost_ms=50.0,
+    # The requester's decision of 2026-11-06: the visible field the session
+    # recorded, plus 2 degrees for calibration error and fixation scatter
+    # about a target at its edge. The placeholder region above stays for a
+    # session that recorded none.
+    region_margin_deg=2.0,
+    region_from_setup=True,
 )
 
 
@@ -183,6 +196,11 @@ class ValidityMask:
 
     labels: np.ndarray
     fractions: Mapping[str, float]
+    # The screen region the mask applied, `(half-width, half-height)` in
+    # per-axis degrees, and whether it was the session's own field plus the
+    # margin or the paramset's placeholder (`screen_region`).
+    region_deg: tuple[float, float]
+    region_from_setup: bool
 
 
 def validity_labels(
@@ -194,6 +212,7 @@ def validity_labels(
     *,
     fs_hz: float,
     repaired: np.ndarray | None = None,
+    field_deg: tuple[float, float] | None = None,
 ) -> ValidityMask:
     """One entry per sample: a `Label` where the sample is unusable, `None`
     where a detector may label it -- and beside it each criterion's own
@@ -201,7 +220,9 @@ def validity_labels(
     and for what they deliberately do not sum to. `fs_hz` is the
     recording's rate, which turns the blink pads' and the bound's
     milliseconds into samples. `repaired` marks the samples
-    `glitch.repair_glitches` filled in, lost where lost data is carried."""
+    `glitch.repair_glitches` filled in, lost where lost data is carried.
+    `field_deg` is each eye's visible field as the session recorded it, or
+    None (`screen_region`)."""
     n = gaze_deg.shape[0]
     # Eye open, read by the rule: a blink (the pupil not found), and a lost
     # reflection (P1 or P4 at 0, or `DataQuality` below 100), where `CR1 -
@@ -210,9 +231,8 @@ def validity_labels(
     blink = loss.blink
     feature_lost = loss.feature_lost
 
-    outside = (np.abs(gaze_deg[:, 0]) > params.region_half_width_deg) | (
-        np.abs(gaze_deg[:, 1]) > params.region_half_height_deg
-    )
+    width, height, from_setup = screen_region(params, field_deg)
+    outside = (np.abs(gaze_deg[:, 0]) > width) | (np.abs(gaze_deg[:, 1]) > height)
     too_fast = np.hypot(velocity_deg_s[:, 0], velocity_deg_s[:, 1]) > params.max_speed_deg_s
 
     # A gap sits between rows `row` and `row + 1`. The velocity estimator spans
@@ -359,7 +379,20 @@ def validity_labels(
             "short_epoch": _fraction(short_epoch),
             "non_finite": _fraction(non_finite),
         },
+        region_deg=(width, height),
+        region_from_setup=from_setup,
     )
+
+
+def screen_region(params: ValidityParams, field_deg: tuple[float, float] | None) -> tuple[float, float, bool]:
+    """`(half-width, half-height, from_setup)`: the session's visible field
+    plus `region_margin_deg` on each axis, where the paramset takes it from
+    the setup and the session recorded one; otherwise the paramset's own
+    region (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    if params.region_from_setup and field_deg is not None:
+        return (field_deg[0] + params.region_margin_deg, field_deg[1] + params.region_margin_deg, True)
+    return (params.region_half_width_deg, params.region_half_height_deg, False)
 
 
 def rows_across_gaps(n: int, frame_gaps: Sequence[FrameGap]) -> np.ndarray:

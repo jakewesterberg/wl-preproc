@@ -5141,3 +5141,14 @@ def test_a_paramsets_geometry_is_read_once_and_an_unknown_one_refused():
     assert _geometry_of({"geometry": "true-angle"}) == "true-angle"
     with pytest.raises(ValueError, match="geometry"):
         _geometry_of({"geometry": "cyclopean"})
+
+
+def test_a_session_that_recorded_no_field_is_masked_at_the_placeholder(dropped_frame_session):
+    """No `config.json`, so no setup: the region is the paramset's own, and
+    the mask says so (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    from wl_preproc.schema import detect
+
+    rows = (detect.EyeValidity & dropped_frame_session & {"status": "computed"}).to_dicts()
+    assert rows and {(row["region_half_width_deg"], row["region_half_height_deg"], row["region_from_setup"])
+                     for row in rows} == {(20.0, 15.0, 0)}

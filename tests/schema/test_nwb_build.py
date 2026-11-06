@@ -1658,3 +1658,16 @@ def test_a_trial_in_no_run_is_named_in_the_canonicals_description(activation, tm
     assert [note for note in result.description["notes"] if "in no measured run" in note] == [
         "1 trial(s) and 0 block(s) start in montage 0's window but in no measured run, so the file leaves them "
         "out: their run's RUN_START was lost, or they were strobed outside a run"]
+
+
+def test_the_masks_screen_region_is_the_sessions_field_plus_its_margin(activation):
+    """A session whose `config.json` records its setup (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 7)."""
+    from wl_preproc.schema import detect
+    from wl_preproc.synth.peripherals import RIG_SETUP
+
+    session_key, _key, _runs = activation
+    rows = (detect.EyeValidity & session_key & {"status": "computed"}).to_dicts()
+    width, height = RIG_SETUP["half_field_deg"]
+    assert rows and {(row["region_half_width_deg"], row["region_half_height_deg"], row["region_from_setup"])
+                     for row in rows} == {(width + 2.0, height + 2.0, 1)}

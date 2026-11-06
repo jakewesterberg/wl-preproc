@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 CALIBRATION = {"id": "rig-a-2026-10-01", "standard": False, "measured_on": "2026-10-01",
                "cones": {"observer": {"name": "CIE2006_10"}, "via": "spectra", "luminance": None, "dkl": "unit"}}
 
@@ -196,3 +198,41 @@ def test_each_warning_keeps_its_line_in_the_file(tmp_path):
     warnings = read_rig_session(_record(tmp_path, {"subject": "pico"}, [
         _warning("default-calibration"), "{not json", _warning("head-free")]), "pico").warnings
     assert [(warning.code, warning.line) for warning in warnings] == [("default-calibration", 1), ("head-free", 3)]
+
+
+#: `config.json`'s `setup` as wl-xcon's `taskd.Session._fixed_config` writes it
+#: (its `main` at `957ec98`), this rig in direct view.
+SETUP = {"view": "direct", "viewing_distance_cm": 50.0, "half_field_deg": [30.54, 18.41], "mask_deg": None}
+
+
+def test_the_display_setup_is_read_from_config(tmp_path):
+    """Each eye's visible field, from which the validity mask's screen region
+    comes (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    from wl_preproc.events.rigsession import RigSetup, read_rig_session
+
+    session = read_rig_session(_record(tmp_path, {"subject": "pico", "setup": SETUP}), "pico")
+
+    assert session.setup == RigSetup(view="direct", half_field_deg=(30.54, 18.41))
+    assert session.problems == ()
+
+
+def test_a_config_written_before_the_setup_has_none_and_no_problem(tmp_path):
+    """wl-xcon writes it since its `c634749`, 2026-09-29."""
+    from wl_preproc.events.rigsession import read_rig_session
+
+    session = read_rig_session(_record(tmp_path, {"subject": "pico"}), "pico")
+
+    assert (session.setup, session.problems) == (None, ())
+
+
+@pytest.mark.parametrize("field", [None, [30.0], [30.0, "wide"], [30.0, -1.0], [30.0, float("inf")]])
+def test_a_setup_naming_no_visible_field_is_a_problem_and_none(tmp_path, field):
+    from wl_preproc.events.rigsession import read_rig_session
+
+    session = read_rig_session(_record(tmp_path, {"subject": "pico", "setup": {**SETUP, "half_field_deg": field}}),
+                               "pico")
+
+    assert session.setup is None
+    assert session.problems == (
+        "config.json: setup names no visible field, [horizontal, vertical] half-angles in degrees",)

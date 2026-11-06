@@ -179,6 +179,14 @@ class EyeValidity(dj.Computed):
     # recording (6,684 of 10,969) and 45% of the right's, and with the
     # margin and the blink pads 84% and 75%.
     frac_glitch_repaired=null : double
+    # The screen region the mask applied, half-width and half-height in
+    # per-axis degrees, and whether it was the session's own visible field
+    # plus the paramset's margin (`core.SessionSetup`) or the paramset's
+    # placeholder (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    # section 7). `NULL` on a refused row.
+    region_half_width_deg=null  : double
+    region_half_height_deg=null : double
+    region_from_setup=null      : tinyint(1)
     reason='' : varchar(255)
     """
 
@@ -300,6 +308,10 @@ class EyeValidity(dj.Computed):
         # `fs_hz`/`frame_gaps` describe the FILE's own sync line, not either
         # eye's gaze -- read once per session rather than once per eye.
         recording = read_ohdpi(path)
+        # The session's own visible field, where its config recorded one
+        # (design spec `2026-11-06-eye-lost-data-and-region-design.md` section 7).
+        setup = (core.SessionSetup & session_key).to_dicts()
+        field_deg = (setup[0]["half_field_h_deg"], setup[0]["half_field_v_deg"]) if setup else None
 
         for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
             calibration = (eye_schema.EyeCalibration & {**session_key, "eye": eye_value})
@@ -316,7 +328,7 @@ class EyeValidity(dj.Computed):
             gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
             mask = validity_labels(
                 gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
-                recording.frame_gaps, params, fs_hz=recording.fs_hz, repaired=repaired,
+                recording.frame_gaps, params, fs_hz=recording.fs_hz, repaired=repaired, field_deg=field_deg,
             )
             labels = mask.labels
             # `validity_labels` returns `None` for a usable sample; encoded
@@ -362,6 +374,8 @@ class EyeValidity(dj.Computed):
                 # short version for a reader looking only at the schema.
                 **{f"frac_{criterion}": value
                    for criterion, value in mask.fractions.items()},
+                "region_half_width_deg": mask.region_deg[0], "region_half_height_deg": mask.region_deg[1],
+                "region_from_setup": int(mask.region_from_setup),
                 "reason": "",
             })
             self.Run.insert(
