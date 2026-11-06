@@ -19,6 +19,10 @@ import dataclasses
 import datetime
 from pathlib import Path
 
+# A barcode's value is whole seconds since wl-sync's `BARCODE_EPOCH`, off the
+# sync box's wall clock; read from here by `nwb/gather.py` too.
+from wl_sync.clock import BARCODE_EPOCH
+
 from wl_preproc.events.extract import extract_syncbox_words
 from wl_preproc.timebase import segments
 from wl_preproc.timebase.extract import find_recordings
@@ -31,12 +35,6 @@ SOURCES = ("syncbox", "nidq", "lab")
 # (the NWB builder spec section 4.2). Borrowed from wl-sync's
 # CLOCK_TRUST_TOLERANCE_S.
 CLOCK_DISAGREEMENT_S = 60.0
-# A barcode's value is whole seconds since this instant, off the sync box's
-# wall clock: wl-sync's `wl_sync/clock.py::BARCODE_EPOCH`, since its commit
-# 3ce66b9 (2026-08-17). RESTATED, not imported: the wl-sync commit this
-# repository pins predates that module. `tests/nwb/test_clock.py` pins the
-# two equal wherever a newer wl-sync is installed.
-BARCODE_EPOCH = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 class NoClock(Exception):

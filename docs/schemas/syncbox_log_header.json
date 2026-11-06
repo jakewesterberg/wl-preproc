@@ -1,6 +1,19 @@
 {
   "additionalProperties": false,
   "properties": {
+    "barcode_delay_us": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Barcode Delay Us"
+    },
     "boot_id": {
       "title": "Boot Id",
       "type": "string"
@@ -31,6 +44,18 @@
       "title": "Ordering",
       "type": "string"
     },
+    "process_uuid": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Process Uuid"
+    },
     "rig": {
       "title": "Rig",
       "type": "string"
@@ -48,6 +73,19 @@
     "session_id": {
       "title": "Session Id",
       "type": "string"
+    },
+    "timebase": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timebase"
     },
     "written_at": {
       "format": "date-time",

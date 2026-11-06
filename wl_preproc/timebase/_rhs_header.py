@@ -26,9 +26,9 @@ import struct
 from pathlib import Path
 
 # Intan's own format identifier, and the vendor document's, not this project's.
-# It is restated rather than imported from `wl_preproc.synth.rhs_header` for
-# the reason `_syncbox_log.py` restates its gpio key: a production reader has
-# no business depending on the synthetic fixture generator. The direction of
+# It is restated rather than imported from `wl_preproc.synth.rhs_header`: a
+# production reader has no business depending on the synthetic fixture
+# generator. The direction of
 # the check matters too -- January's real files are written by Intan, not by
 # that emitter, so agreeing with the emitter is not the property under test.
 _MAGIC = 0xD69127AC
