@@ -1,20 +1,29 @@
 # Where this build actually is
 
-**Last updated 2026-10-30**, describing `main` at `920048a`, the merge of
-`feat/syncbox-records`: part 1 of `specs/2026-10-22-syncbox-records-and-segments-design.md`,
-reading the sync box's logs as it writes them today (wl-sync's asks of 2026-10-19;
-`handoffs/2026-10-22-syncbox-records.md`). CI read off `920048a` is green on both
-interpreters, 2520 passed on each with 36 skipped, and the manifest check is
-green (`gh run view 41023961314`).
-- **The sync box's logs are read as the box writes them:** the wl-sync pin moved to
+**Last updated 2026-11-06**, describing `main` at `82380d2`, the merge of
+`feat/true-angle-saccades`: wl-xcon's XC-398, saccades in true visual angle
+(`specs/2026-10-30-true-angle-saccades-design.md`, the requester's decisions of 2026-10-30;
+`handoffs/2026-10-30-true-angle-saccades.md`). CI read off `82380d2` is green on both
+interpreters, 2594 passed on each with 36 skipped, and the manifest check is green
+(`gh run view 42184114399`).
+- **Saccades in true visual angle:** every detector measures size, peak speed and direction
+  in true angle by default, and each event's endpoints carry their eccentricity and polar
+  angle; Engbert-Kliegl detects in the eye's local frame; per axis is a paramset registered on
+  request; fixations carry their positions; each NWB file holds each eye's `gaze_polar_{eye}`.
+  v2 of the saccade fixtures (`docs/fixtures/saccade/v2.json`, SHA-256 `501e6309...`) and
+  amendment 1's commit were sent to wl-xcon with the merge, and wl.works told of the NWB
+  series, both on 2026-11-06.
+- **The sync box's logs are read as the box writes them** (wl-sync part 1, `920048a`, just
+  before): the wl-sync pin moved to
   `27c0e97`; barcodes come from its `B` records; each segment is its own clock, session time
   from the first holding a barcode, a restart never mixed in: a recording sharing no barcode
   with session time is rejected as `no_shared_barcode`, `timebase.SyncBoxSegment` records each
   segment, and the daily report names every restart. Synthetic logs are written as the box
   writes them. wl-sync fixed how its box unwraps code-word ticks (`HANDOVER-wl-sync.md`, ask 6)
-  on 2026-10-30, its `d309bf1`; the pin moves past it with wl-sync's coming header commit: a
-  per-process id, asked the same day so that a roll within one process is not read as a
-  restart, and the measured barcode delay.
+  on 2026-10-30, its `d309bf1`, and pushed its header change on 2026-10-30 (`fe1ea63`): a
+  per-process id, so that a roll within one process is not read as a restart, the measured
+  barcode delay, the clocks the ticks count, and lost events. The pin moves past both with the
+  header follow-up, next.
 - **The saccade detector's v1 fixtures** were merged just before (`065da53`):
   `docs/fixtures/saccade/v1.json`, today's
   per-axis geometry as inputs and this code's outputs (the median scale, velocity, the
@@ -137,6 +146,9 @@ green (`gh run view 41023961314`).
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `920048a` (wl-sync part 1's merge, CI green, 2520 passed on each
+interpreter, `41023961314`) until XC-398's merge; true when written.*
 
 *This header named `065da53` (the saccade fixtures' merges, CI green, 2498 passed on each
 interpreter, `39417126304`) until wl-sync part 1's merge; true when written.*
@@ -434,20 +446,22 @@ requester chose to merge the same day; true when written.*
 > them today, is merged** (`920048a`, `handoffs/2026-10-22-syncbox-records.md`), its review's
 > three Important findings fixed (one re-graded from Minor) and nine Minor deferred (§6); wl-sync
 > fixed how its box unwraps code-word ticks (its ask 6; its `d309bf1`). **XC-398, saccades in
-> true visual angle, is built and reviewed** on `feat/true-angle-saccades`, not merged
-> (`specs/2026-10-30-true-angle-saccades-design.md`, the requester's decisions of 2026-10-30;
+> true visual angle, is merged** (`82380d2`, CI green, `42184114399`;
+> `specs/2026-10-30-true-angle-saccades-design.md`, the requester's decisions of 2026-10-30;
 > `handoffs/2026-10-30-true-angle-saccades.md`): every detector measures in true angle by
 > default, Engbert-Kliegl detects in it, per axis is a paramset registered on request, fixations
 > carry positions, the NWB file each eye's eccentricity and polar angle, and v2 of the fixtures
 > is made; its final review found nothing Critical or Important, and the two Minors re-graded
-> Important are fixed (handoff §6). Next: its merge; then, in the requester's order of 2026-10-31,
-> wl-sync's header follow-up (its `fe1ea63`), wl-xcon's four asks (engine builds C2a and C2b,
-> XC-399, and a setting's value that is an appearance), the pipeline's scaling to long sessions,
-> part 3b, the NI as the clock, part 2, the bridges, and the older minors in one branch.
+> Important are fixed (handoff §6); wl-xcon and wl.works were told on 2026-11-06. Next, in the
+> requester's order of 2026-10-31: wl-sync's header follow-up (its `fe1ea63`; spec approved on
+> 2026-11-06, `specs/2026-11-04-syncbox-header-design.md` on `spec/syncbox-header`, its plan
+> being proved), wl-xcon's asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a
+> setting's value that is an appearance), the pipeline's scaling to long sessions, part 3b, the
+> NI as the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until XC-398 was built, this said its plan was being proved; until its review, that the review
-> was next; each true when written.*
+> was next; until its merge, that the merge was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
