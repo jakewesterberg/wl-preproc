@@ -265,3 +265,42 @@ In `HANDOVER-wl-sync.md`, under wl-preproc's answers, and by message when this m
 
 This spec; `wl.yaml`'s pin, its `why` and `status`; `docs/CHECKPOINT.md`; a handoff for the piece; the
 answers in `HANDOVER-wl-sync.md`.
+
+## Amendments, 2026-11-06, made while proving the plan
+
+1. **An older log's first barcode is kept** (narrowing §5): wl-sync states the late first frame of each
+   `process_uuid`, and a log written before the field names no process. Every such log is synthetic or a
+   test's, since no real session ran the box before it, so part 1's reading stands for them and their t = 0 is
+   unchanged.
+2. **The synthetic box's late first frame** (§10): the session's first process starts with an extra frame at its
+   clock's origin, one barcode interval before session time's first, which no device records and every reader
+   drops; a restarted process's first frame is its first barcode. Every synthetic session's t = 0 stays at its
+   timeline's first barcode, and a reader that kept the frame would put it one second early, which every timing
+   test sees.
+3. **A segment of session time's clock that no barcode places is not scanned** (§4, §5): its codes are placed by
+   its clock, and it is neither a `core.Segment` nor a rejection, which would fail the timing check of a session
+   that lost nothing.
+4. **A gap's window runs from the last record of the segment before it, a barcode or a code word, to the first
+   of the later segment** (correcting §4's "last code word"): the box recorded here until its last record of any
+   kind. **A gap is stored as a `Loss` row with cause `gap`**, its count and bound null (widening §6's "one row
+   per `L` record"), so one table holds what a session's records are missing, and the report and the timing
+   check read one list.
+5. **`SyncBoxSegment`'s new columns** (§8): `process_uuid`, `timebase`, `follows` (how a segment follows the one
+   before it on its clock: `adjacent`, `gap`, or `contradiction: <why>`; null for a clock's first), and
+   `last_code_tick_us`, from which §7's worst-case drift is read. DataJoint writes a `char` or `varchar`
+   column's declared type at the start of its comment (`:char(36):...`), so the named `ALTER TABLE` writes it
+   too, or the columns it restores would differ from declared ones.
+6. **The timing check is computed from the files** by `TimingProvenance`, as its other evidence is, and the
+   report reads the stored rows; both decide through one rule, `timebase/segments.py::timing_check_fails`. Of
+   the `W` causes only `desync` and the reserved `fifo_full` exist, so a `desync` and a gap are what fail a
+   session today.
+7. **The report's two new sections cover its 24 h**, as its per-session lists do (§6 and §7 did not say): a loss
+   is a fact of its session, not a state that clears. `"fake"` is the one `timebase` taken to share one rate.
+8. **The box's identity fit counts as matched only the barcodes session time holds** (§9's fourth finding:
+   `SystemTimebase.n_barcodes_matched` for the sync box counted a later process's barcodes too).
+9. **A synthetic session generated again over its own folder writes its log again** (§10): wl-sync's
+   `SegmentWriter` refuses a file that exists, as the box must, so the synthesizer removes its own file first.
+10. **The roll fixture** (§10) is `synth/recipe.py::SyncBoxRollSpec`, `at_s` and `gap_s`: with `gap_s` 0 the roll
+    in place, the first frame due after it never emitted, so the value steps by two; above 0 the box recorded
+    elsewhere that long. The synthetic box's `timebase` is `"fake"`, as the box's unit writes until bench
+    acceptance, and its delay unmeasured, unless a recipe says otherwise.
