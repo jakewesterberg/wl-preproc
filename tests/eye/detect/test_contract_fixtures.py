@@ -275,7 +275,7 @@ def test_in_v2_the_step_across_the_cut_is_a_microsaccade():
 # a run carried across a short loss of data, the requester's decision of
 # 2026-11-06, which wl-xcon's online detector follows.
 V3 = V1.with_name("v3.json")
-V3_SHA256 = "4f6301413431bb4483b1a89ce41c17c344319390780aa4991de29b73db640f35"
+V3_SHA256 = "9b3f16d2a573c1178d0f57e94ef3551994e10f32693d8332da7f216250f4c915"
 
 
 def _v3() -> dict:
@@ -294,6 +294,7 @@ def test_v3_says_how_a_loss_of_data_is_carried():
     assert "Each maximal stretch of unknown velocities is judged whole" in about
     assert "nor among the two at each end of the trace" in about
     assert "flagged: a sample of a carried stretch" in about
+    assert "the last sample with a known velocity before it, where the eye took off" in about
     assert _V2_TOLERANCE in about
 
 
@@ -355,6 +356,9 @@ def test_v3s_own_traces_carry_a_short_loss_end_at_a_blink_and_at_a_long_loss():
     ((start, stop, flagged, _),) = saccades("a-long-loss-inside-a-saccade")
     assert (start, flagged) == (whole["start"], False) and stop <= 207
     assert saccades("lost-samples-alone") == [(whole["start"], whole["stop"], False, 0)]
+    (take_off,) = [run for run in traces["a-short-loss-at-a-saccades-take-off"]["runs"] if run["label"] == "saccade"]
+    assert (take_off["flagged"], take_off["stop"]) == (True, whole["stop"]) and take_off["start"] > whole["start"]
+    assert abs(take_off["amplitude_deg"] - whole["amplitude_deg"]) < 0.1
     (landing,) = [run for run in traces["a-short-loss-at-a-saccades-landing"]["runs"] if run["label"] == "saccade"]
     assert (landing["start"], landing["flagged"]) == (whole["start"], True) and landing["stop"] > whole["stop"]
     assert abs(landing["amplitude_deg"] - whole["amplitude_deg"]) < 0.1

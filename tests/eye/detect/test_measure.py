@@ -442,3 +442,18 @@ def test_a_run_with_lost_ends_is_measured_out_to_the_measured_samples_beyond_the
                             runs_end_before_landing=False, min_measured_ms=None)
 
     assert (got.start_x_deg, got.end_x_deg, got.amplitude_deg) == (9.0, 16.0, 7.0)
+
+
+def test_a_run_whose_take_off_a_carried_loss_hides_is_measured_from_the_sample_before_it():
+    """An unknown velocity never opens a run, so a run whose take-off fell in
+    a short loss starts mid-flight; it is measured from the last measured
+    sample before that loss, where the eye took off (the final review of
+    2026-11-07, I2, agreed with wl-xcon for v3)."""
+    gaze = np.column_stack([np.arange(40, dtype=float), np.zeros(40)])
+    offered = _offered(40)
+    offered[[8, 9]] = Label.LOST
+
+    got = measure_event_run(gaze, _speeds(), offered, 10, 16, 500.0, geometry=PER_AXIS,
+                            runs_end_before_landing=False, min_measured_ms=None)
+
+    assert (got.start_x_deg, got.end_x_deg, got.amplitude_deg) == (7.0, 15.0, 8.0)

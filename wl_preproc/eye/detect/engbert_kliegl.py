@@ -176,9 +176,17 @@ def detect_engbert_kliegl(
         first, last = int(events[0]), int(events[-1]) + 1
         if last < stop < usable.size and usable[stop]:
             last = stop + 1
+        # Its size, which labels it, is from the last measured sample before a
+        # carried loss that hides its take-off, as `measure.measure_event_run`
+        # measures it (the final review of 2026-11-07).
+        take_off = first
+        while take_off > 0 and lost[take_off - 1]:
+            take_off -= 1
+        if take_off < first:
+            take_off = max(take_off - 1, 0)
         runs.append(Run(
             start=first,
             stop=last,
-            label=classify(amplitude(gaze_deg, first, last, geometry=params.geometry), params.microsaccade_max_deg),
+            label=classify(amplitude(gaze_deg, take_off, last, geometry=params.geometry), params.microsaccade_max_deg),
         ))
     return runs

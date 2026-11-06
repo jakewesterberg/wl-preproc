@@ -286,7 +286,12 @@ def measure_event_run(
     # A run carried across a loss at its ends is measured out to the
     # measured samples beyond it, where the eye took off and landed (design
     # spec `2026-11-06-eye-lost-data-and-region-design.md`, the correction
-    # of 2026-11-06); the mask carries only a loss with one on each side.
+    # of 2026-11-06); the mask carries only a loss with one on each side. So
+    # is a run whose take-off a loss just before it hides: an unknown
+    # velocity never opens a run, so it opened mid-flight (the final review
+    # of 2026-11-07, I2).
+    while lo > 0 and offered[lo - 1] is Label.LOST:
+        lo -= 1
     while lo > 0 and offered[lo] is Label.LOST:
         lo -= 1
     while hi < gaze_deg.shape[0] and offered[hi - 1] is Label.LOST:

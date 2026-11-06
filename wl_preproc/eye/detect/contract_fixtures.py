@@ -29,8 +29,8 @@ velocity, the thresholds, the runs and their measurements.
 v3 carries a run across a short loss of data (design spec
 `2026-11-06-eye-lost-data-and-region-design.md` section 9, the requester's
 decision of 2026-11-06, which wl-xcon's online detector follows): v2's traces,
-read from v2, and five of its own, each v1's `centre-horizontal` step with a
-loss or a blink inside it or at its landing. A sample may have no position; `detector_input` is
+read from v2, and six of its own, each v1's `centre-horizontal` step with a
+loss or a blink inside it, at its take-off or at its landing. A sample may have no position; `detector_input` is
 the rule that reads such a trace.
 
 `python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds,v2,v3}
@@ -295,6 +295,11 @@ _V3_TRACES = (
     ("a-lost-sample-inside-a-saccade",
      "v1's centre-horizontal step with sample 206 having no position: one saccade, carried across it and flagged",
      (206, 207), None),
+    ("a-short-loss-at-a-saccades-take-off",
+     "v1's centre-horizontal step with samples 199-201, where it takes off, having no position: the run opens at "
+     "the first known velocity over the threshold after the loss, its size from the last known velocity before "
+     "it, whole, and flagged",
+     (199, 202), None),
     ("a-short-loss-at-a-saccades-landing",
      "v1's centre-horizontal step with samples 209-213, where it lands, having no position: the run is carried "
      "across the loss and ends at the first known velocity after it, its size reaching the landing, and flagged",
@@ -384,8 +389,8 @@ def build_v3(v2: dict, v2_sha256: str) -> dict:
         "derived_from": {"v2.json": v2_sha256},
         "about": "wl-preproc's Engbert-Kliegl saccade detector in true visual angle, carrying a run across a short "
                  "loss of data (design spec 2026-11-06-eye-lost-data-and-region-design.md): v2's traces, read from "
-                 "v2.json, and five of its own, each v1's centre-horizontal step with a loss or a blink inside it "
-                 "or at its landing. "
+                 "v2.json, and six of its own, each v1's centre-horizontal step with a loss or a blink inside it, "
+                 "at its take-off or at its landing. "
                  "Gaze is in degrees per axis, null where the sample has no position; a position (x, y) is the "
                  "direction normalize(tan x, tan y, 1). available: null where a detector may label, \"lost\" where "
                  "the sample has no position, a loss of data a run is carried across, else the label the mask gave, "
@@ -410,7 +415,9 @@ def build_v3(v2: dict, v2_sha256: str) -> dict:
                  "over the threshold number fewer than min_duration_samples. flagged: a sample of a carried stretch, its "
                  "velocity unknown, lies inside the run or in the two samples before its start; n_lost: the samples "
                  "of a carried stretch inside it. Size, direction, "
-                 "positions and polar angles are as in v2, from the run's first and last samples; peak speed is "
+                 "positions and polar angles are as in v2, from the run's first sample, or, where a carried "
+                 "stretch adjoins its start, the last sample with a known velocity before it, where the eye took "
+                 "off, to its last; a run's label is by that size. Peak speed is "
                  "the largest |velocity| over its known velocities. Intervals, labels, flags and counts are exact; "
                  "every other number is held to |got - want| <= 1e-9 + 1e-12 * |want|, in its own unit. "
                  "inputs_from names the file a trace's inputs were read from. A run is [start, stop) in samples. "
