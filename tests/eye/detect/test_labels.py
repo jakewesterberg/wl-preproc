@@ -15,11 +15,13 @@ from wl_preproc.eye.detect.labels import (
 )
 
 
-def test_all_eight_labels_are_declared_even_though_stage_one_uses_five():
+def test_all_nine_labels_are_declared_even_though_stage_one_uses_six():
     """The enum ships complete. Adding a value later is a schema change, and
-    the migration window closes January 2027."""
+    the migration window closes January 2027: `lost` joined inside it, on
+    2026-11-06 (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 8)."""
     assert {label.value for label in Label} == {
-        "blink", "invalid", "saccade", "microsaccade",
+        "blink", "invalid", "lost", "saccade", "microsaccade",
         "pso", "pursuit", "drift", "fixation",
     }
 

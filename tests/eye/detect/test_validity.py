@@ -1,6 +1,7 @@
 from dataclasses import asdict
 
 import numpy as np
+import pytest
 
 from wl_preproc.eye.detect.labels import Label
 from wl_preproc.eye.detect.validity import (
@@ -619,3 +620,179 @@ def test_a_blink_at_the_recording_s_edge_is_padded_only_inward():
     assert [labels[i] for i in range(5, 15)] == [Label.INVALID] * 10
     assert [labels[i] for i in range(30, 35)] == [Label.INVALID] * 5
     assert all(labels[i] is None for i in range(15, 30))
+
+
+# Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 2: a
+# sample not offered is LOST (no measurement, or none to trust), carried
+# across by a run where the loss is short, or INVALID (a measurement, of the
+# wrong thing), which ends one. `_QUIET` above names no bound, so it masks as
+# every paramset stored before lost data was carried; `_CARRY` carries it.
+_CARRY = ValidityParams(**{**asdict(_QUIET), "max_lost_ms": 50.0})
+
+
+def test_a_lost_reflection_a_value_that_is_not_a_number_and_an_impossible_speed_are_lost():
+    gaze, vel, loss, gaps = _clean(40)
+    loss.feature_lost[10] = True
+    gaze[20] = np.nan
+    vel[30] = (2000.0, 0.0)
+
+    labels = validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ).labels
+
+    assert [labels[i] for i in (10, 20, 30)] == [Label.LOST] * 3
+    assert sum(label is not None for label in labels) == 3
+
+
+def test_a_blink_and_gaze_off_the_screen_are_invalid():
+    gaze, vel, loss, gaps = _clean(20)
+    loss.blink[5] = True
+    gaze[12] = (25.0, 0.0)
+
+    labels = validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ).labels
+
+    assert labels[5] is Label.BLINK and labels[12] is Label.INVALID
+
+
+def test_a_repaired_glitch_is_lost():
+    """Filled in by a straight line before the mask reads it: offered, but no
+    measurement (section 2)."""
+    gaze, vel, loss, gaps = _clean(20)
+    repaired = np.zeros(20, dtype=bool)
+    repaired[7] = True
+
+    labels = validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ, repaired=repaired).labels
+
+    assert labels[7] is Label.LOST and sum(label is not None for label in labels) == 1
+
+
+def test_a_frame_gap_is_lost_and_takes_no_margin():
+    """Section 2.2: a dropped frame is not a tracking failure, and its
+    neighbours' positions are measurements; only the four velocities that
+    span it are lost."""
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    gaze, vel, loss, _ = _clean(30)
+    params = ValidityParams(**{**asdict(_CARRY), "dilate_samples": 5})
+
+    labels = validity_labels(gaze, vel, loss, (FrameGap(row=14, n_missing=1),), params, fs_hz=FS_HZ).labels
+
+    assert [i for i, label in enumerate(labels) if label is not None] == [13, 14, 15, 16]
+    assert all(labels[i] is Label.LOST for i in (13, 14, 15, 16))
+
+
+def test_a_lost_margin_is_lost():
+    """Section 2.1: a margin takes the kind of what it grows."""
+    gaze, vel, loss, gaps = _clean(30)
+    loss.feature_lost[10] = True
+    params = ValidityParams(**{**asdict(_CARRY), "dilate_samples": 2})
+
+    labels = validity_labels(gaze, vel, loss, gaps, params, fs_hz=FS_HZ).labels
+
+    assert [i for i, label in enumerate(labels) if label is Label.LOST] == [8, 9, 10, 11, 12]
+    assert sum(label is not None for label in labels) == 5
+
+
+@pytest.mark.parametrize("where", [
+    pytest.param({"blink": 11}, id="beside-a-blink"),
+    pytest.param({"lost": 0}, id="at-the-recordings-start"),
+    pytest.param({"lost": 19}, id="at-its-end"),
+    pytest.param({"lost": 2}, id="beside-the-start's-zero-filled-velocities"),
+    pytest.param({"lost": 17}, id="beside-the-end's-zero-filled-velocities"),
+])
+def test_a_lost_stretch_not_between_two_measured_samples_is_withheld(where):
+    """A run is carried across a loss from one measured sample to the next;
+    a loss with a withheld sample or the recording's edge on a side carries
+    nothing, and is withheld (section 3). The two samples at each end have
+    zero-filled velocities, not measured ones, so a loss beside them is
+    withheld too (the rule both sessions agreed on 2026-11-07)."""
+    gaze, vel, loss, gaps = _clean(20)
+    lost = where.get("lost", 10)
+    loss.feature_lost[lost] = True
+    if "blink" in where:
+        loss.blink[where["blink"]] = True
+
+    labels = validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ).labels
+
+    assert labels[lost] is Label.INVALID
+
+
+@pytest.mark.parametrize("lost", [3, 16])
+def test_a_lost_stretch_between_two_measured_samples_inside_the_ends_is_carried(lost):
+    gaze, vel, loss, gaps = _clean(20)
+    loss.feature_lost[lost] = True
+
+    assert validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ).labels[lost] is Label.LOST
+
+
+@pytest.mark.parametrize(("n_lost", "kind"), [(24, Label.LOST), (25, Label.INVALID)])
+def test_a_lost_stretch_is_carried_while_its_measured_neighbours_are_50_ms_apart(n_lost, kind):
+    """Section 3: inclusive, as wl-xcon's `max_gap_s` is, and counted in whole
+    frames, 25 at 500 Hz: 24 lost samples leave their neighbours 50 ms apart,
+    25 leave them 52 ms apart."""
+    gaze, vel, loss, gaps = _clean(60)
+    loss.feature_lost[10:10 + n_lost] = True
+
+    labels = validity_labels(gaze, vel, loss, gaps, _CARRY, fs_hz=FS_HZ).labels
+
+    assert {labels[i] for i in range(10, 10 + n_lost)} == {kind}
+    assert labels[9] is None and labels[10 + n_lost] is None
+
+
+@pytest.mark.parametrize(("n_missing", "kind"), [(24, Label.LOST), (25, Label.INVALID)])
+def test_the_bound_counts_the_frames_the_camera_dropped(n_missing, kind):
+    """The bound is the loss of data, from the last position measured to the
+    next (wl-xcon's `max_gap_s`): a gap after row 14 makes rows 13-16 lost,
+    their velocities spanning it, but their positions are measured, so the
+    loss is the `1 + n_missing` frames from row 14 to row 15."""
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    gaze, vel, loss, _ = _clean(40)
+
+    labels = validity_labels(gaze, vel, loss, (FrameGap(row=14, n_missing=n_missing),), _CARRY,
+                             fs_hz=FS_HZ).labels
+
+    assert {labels[i] for i in (13, 14, 15, 16)} == {kind}
+
+
+def test_the_default_carries_lost_data_for_50_ms():
+    assert DEFAULT_VALIDITY_PARAMS.max_lost_ms == 50.0
+
+
+def test_a_paramset_stored_before_lost_data_was_carried_masks_as_before():
+    """A stored paramset without `max_lost_ms` loads with 0, so its content
+    hash still names what it does: every loss withheld as `invalid`, a frame
+    gap with its margin (section 8)."""
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    stored = {name: value for name, value in asdict(DEFAULT_VALIDITY_PARAMS).items() if name != "max_lost_ms"}
+    params = ValidityParams(**{**stored, "dilate_samples": 2, "min_epoch_samples": 1})
+    gaze, vel, loss, _ = _clean(40)
+    loss.feature_lost[30] = True
+
+    labels = validity_labels(gaze, vel, loss, (FrameGap(row=10, n_missing=1),), params, fs_hz=FS_HZ).labels
+
+    assert params.max_lost_ms == 0.0
+    assert [i for i, label in enumerate(labels) if label is not None] == [*range(7, 15), *range(28, 33)]
+    assert all(labels[i] is Label.INVALID for i in [*range(7, 15), *range(28, 33)])
+
+
+def test_lost_positions_are_filled_along_frame_time_and_a_dropped_frames_neighbours_keep_theirs():
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 3:
+    what a detector is offered over a carried loss. A position that is not a
+    measurement is filled by the straight line between the measured samples
+    either side, placed at its own frame's time; the rows whose velocity
+    spans a dropped frame keep their measured positions."""
+    from wl_preproc.eye.detect.validity import fill_lost, frame_numbers, rows_across_gaps
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    gaze = np.column_stack([np.arange(20, dtype=float), np.zeros(20)])
+    gaze[5:7] = np.nan
+    gaze[13, 0] = 99.0
+    gaps = (FrameGap(row=13, n_missing=2),)
+    offered = np.full(20, None, dtype=object)
+    offered[[5, 6, 12, 13, 14, 15]] = Label.LOST
+
+    filled = fill_lost(gaze, offered, frame_numbers(20, gaps), rows_across_gaps(20, gaps))
+
+    assert filled[5:7, 0].tolist() == [5.0, 6.0]
+    assert filled[13, 0] == 99.0 and filled[12, 0] == 12.0
+    assert np.isfinite(filled).all() and filled[[0, 4, 7, 19], 0].tolist() == [0.0, 4.0, 7.0, 19.0]

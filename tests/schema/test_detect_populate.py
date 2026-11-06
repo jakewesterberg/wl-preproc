@@ -1359,14 +1359,19 @@ def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
             assert row[column] is None, f"{eye_value}: refused row has {column} populated"
 
 
-def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_session):
+def test_a_missing_gaze_value_is_lost_and_counted_end_to_end(missing_gaze_session):
     """The sixth validity criterion through a real database (added
     2026-09-27). One `NaN` in the left eye's recording: that sample and the
     four velocity estimates it spoils are `non_finite`, the left row's
-    `frac_non_finite` counts exactly those five, the stored mask withholds the
-    sample, and the right eye -- untouched -- counts nothing. Before the
+    `frac_non_finite` counts exactly those five, the stored mask marks the
+    sample `lost`, and the right eye -- untouched -- counts nothing. Before the
     criterion, `abs(NaN) > half-width` was false and the sample was offered to
-    every detector as usable."""
+    every detector as usable.
+
+    *Until 2026-11-06 the mask withheld it as `invalid`; since then nothing
+    measured is lost, carried by a run where the loss is short (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 2); true when
+    written.*"""
     from wl_preproc.schema import detect
 
     session_key, _report, missing_row = missing_gaze_session
@@ -1381,19 +1386,20 @@ def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_se
         detect.EyeValidity.Run & {**session_key, "eye": "left"}
         & f"run_start <= {missing_row}" & f"run_stop > {missing_row}"
     ).to_dicts()
-    assert covering["label"] == "invalid"
+    assert covering["label"] == "lost"
 
 
 def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
     """The point of withholding it: every registered detector's stored run
-    over the missing sample, on the left trace, is the mask's own `invalid`
+    over the missing sample, on the left trace, is the mask's own `lost`
     -- no detector was handed the sample to label. The conjunction falls
     back to the right eye there: it carries the right eye's own label, and
     `EyeDetection.Source` says `right` (design spec
     `2026-09-28-both-eyes-fallback-design.md` section 1).
 
     *Until 2026-09-28 the conjunction was labelled from the left eye's mask
-    alone, and read `invalid` here too; true when written.*"""
+    alone, and read `invalid` here too; until 2026-11-06 the mask's own run
+    was `invalid`; true when written.*"""
     from wl_preproc.schema import detect
 
     def covering(table, trace, name, start, stop):
@@ -1404,7 +1410,7 @@ def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
     session_key, _report, missing_row = missing_gaze_session
     for name in _detector_names():
         left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
-        assert left["label"] == "invalid", (name, left["label"])
+        assert left["label"] == "lost", (name, left["label"])
         right = covering(detect.EyeDetection.Run, "right", name, "run_start", "run_stop")
         both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
         assert both["label"] == right["label"], (name, both["label"], right["label"])
