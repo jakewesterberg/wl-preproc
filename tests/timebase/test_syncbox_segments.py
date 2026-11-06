@@ -158,8 +158,25 @@ def test_a_gap_within_one_process_keeps_one_clock_and_is_named(tmp_path):
     assert session.gaps() == [(1, 3_000_000, 40_000_000)]
 
 
+@pytest.mark.parametrize("tick_s", [
+    pytest.param(2.9, id="captured-before-the-roll-and-delivered-after-its-wait"),
+    pytest.param(2.6, id="on-a-split-clock-and-drifted-behind-the-frames"),
+])
+def test_a_code_word_that_crosses_a_roll_behind_a_barcode_leaves_one_clock(tmp_path, tick_s):
+    """The box orders its records within each path, not across them
+    (wl-sync's `SyncBoxLogHeader.ordering`): a word its path delivered after
+    the roll's wait lands in the next segment, and a word on a split clock can
+    carry a tick behind the frames by the crystal's drift. Each path still
+    goes forward across the roll, so it is one clock, and every code word is
+    placed."""
+    session = _rolled(tmp_path, *_codes((tick_s, 0x8002)), *_barcodes((4.0, 103), (5.0, 104)))
+    assert (session.follows[1], session.roles()) == ("adjacent", ["session_time", "session_time"])
+    assert session.codes() == [(0.5, 0x8001), (pytest.approx(tick_s - 2.0), 0x8002)]
+
+
 @pytest.mark.parametrize(("later", "why"), [
     (_barcodes((0.5, 103)), "its first tick is before the last of the segment it follows"),
+    (_codes((2.4, 0x8002)) + _barcodes((4.0, 103)), "its first tick is before the last of the segment it follows"),
     (_barcodes((4.0, 101)), "its barcode values do not go forward"),
     (_barcodes((30.0, 103)), "its ticks step 27.0 s and its barcode values 1 s"),
 ])
@@ -279,6 +296,8 @@ RUNS = [(1.0, 3.0), (5.0, 9.0)]
     ("W", "fifo_full", 4.0, None, True),
     ("W", "gap", 2.5, 6.0, True),
     ("W", "gap", 3.2, 4.8, False),
+    ("W", "fifo_full", 3.0, 5.0, False),
+    ("W", "gap", 9.0, 9.5, False),
     ("W", "desync", 9.5, None, True),
     ("W", "desync", None, None, True),
     ("E", "buffer_overflow", 2.0, 2.5, False),
@@ -287,8 +306,24 @@ RUNS = [(1.0, 3.0), (5.0, 9.0)]
 def test_a_loss_fails_the_timing_check_where_it_can_have_cost_a_runs_codes(path, cause, start_s, stop_s, fails):
     """Decision 3.5: a lost code word, or a gap, inside a measured run fails
     it; a desync always does, since no run after it can be measured to show
-    what it lost; a lost edge never does, since no stage here reads edges."""
+    what it lost; a lost edge never does, since no stage here reads edges. A
+    window's ends are records the box captured, so one that ends on a run's
+    RUN_END, or begins on the next run's RUN_START, lost nothing of either."""
     assert segments.timing_check_fails(path, cause, start_s, stop_s, RUNS) is fails
+
+
+@pytest.mark.parametrize(("start_s", "stop_s", "runs", "fails"), [
+    (3.5, 4.5, [(1.0, None), (5.0, 9.0)], True),
+    (9.5, 10.0, [(1.0, 3.0), (5.0, None)], True),
+    (0.2, 0.5, [(1.0, None), (5.0, 9.0)], False),
+    (9.5, 10.0, [(1.0, None), (5.0, 9.0)], False),
+    (5.0, 5.0, [(1.0, None), (5.0, 9.0)], False),
+])
+def test_a_faulted_runs_end_is_unknown_until_the_next_run_starts(start_s, stop_s, runs, fails):
+    """A run with no RUN_END stops at its last event, which is not its end:
+    a gap after it may hold the rest of it. Runs do not overlap, so it is over
+    by the next run's start; the last run's has no end."""
+    assert segments.timing_check_fails("W", "gap", start_s, stop_s, runs) is fails
 
 
 def test_each_loss_is_kept_as_the_box_wrote_it_and_placed_in_session_time(tmp_path):

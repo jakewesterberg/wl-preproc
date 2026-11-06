@@ -14,17 +14,18 @@ from tests.identities import new_animal
 
 @pytest.fixture(scope="module")
 def landed(dj_conn, prefix, tmp_path_factory):
-    """Four `ci` sessions of one animal on one day, in runs, after one daemon
+    """Six `ci` sessions of one animal on one day, in runs, after one daemon
     pass, deleted after the module: the box's word pump stopped by a desync at
     6 s; an edge lost on a photodiode inside the first run; a gap of 3 s from
-    5.5 s, inside a run; and a box whose code words are on a split clock.
-    Yields their keys, by name, the daemon's report, and the folder they were
-    landed from."""
+    5.5 s, inside a run; a box whose code words are on a split clock; a box
+    that restarted at 7.5 s; and a photodiode line that garbled three pairs
+    of edges. Yields their keys, by name, the daemon's report, and the folder
+    they were landed from."""
     from wl_sync.pins import GPIO_MAP
 
     from wl_preproc import daemon
     from wl_preproc.schema import pipeline
-    from wl_preproc.synth.recipe import RECIPES, SyncBoxLossSpec, SyncBoxRollSpec
+    from wl_preproc.synth.recipe import RECIPES, SyncBoxLossSpec, SyncBoxRestartSpec, SyncBoxRollSpec
     from wl_preproc.synth.session import generate_session
 
     from tests.schema.test_eye_populate import _land
@@ -39,6 +40,10 @@ def landed(dj_conn, prefix, tmp_path_factory):
                                                      gpio=GPIO_MAP["pd1_comp"]),)}),
         ("gap", {"syncbox_roll": SyncBoxRollSpec(at_s=5.5, gap_s=3.0)}),
         ("split", {"syncbox_timebase": "split"}),
+        ("restart", {"syncbox_restart": SyncBoxRestartSpec(at_s=7.5, gap_s=1.2)}),
+        ("noisy", {"syncbox_losses": tuple(
+            SyncBoxLossSpec(cause="coalesced", from_s=from_s, to_s=to_s, gpio=GPIO_MAP["pd1_comp"])
+            for from_s, to_s in ((1.21, 1.22), (1.5, 1.51), (2.0, 2.01)))}),
     ):
         session = animal.session(on=animal.first_day)
         recipe = RECIPES["ci"].model_copy(update={"subject": session.subject, "session_id": session.session_id,
@@ -73,8 +78,9 @@ def test_a_desync_or_a_gap_in_a_run_fails_the_timing_check_and_a_lost_edge_does_
     from wl_preproc.schema import timebase
 
     keys, report, _ = landed
-    assert {name: (timebase.TimingProvenance & key).fetch1("tier") for name, key in keys.items()} == {
-        "desync": "D", "edge": "A", "gap": "D", "split": "A"}
+    assert {name: (timebase.TimingProvenance & keys[name]).fetch1("tier")
+            for name in ("desync", "edge", "gap", "split", "noisy")} == {
+        "desync": "D", "edge": "A", "gap": "D", "split": "A", "noisy": "A"}
     assert not [error for error in report["errors"] if any(key["subject"] in str(error) for key in keys.values())]
 
 
@@ -117,6 +123,37 @@ def test_a_table_read_without_the_columns_is_refused(landed, monkeypatch):
     assert timebase._lacks_header_columns()
     with pytest.raises(RuntimeError, match="has no columns"):
         timebase.SyncBoxSegment.populate()
+
+
+def test_a_faulted_runs_stop_reaches_the_timing_check_as_unknown(landed):
+    """A run with no RUN_END stops, in `core.Run`, at its last event, which
+    is not its end: the timing check is handed None for it."""
+    from wl_preproc.schema import core, timebase
+
+    keys, _, _ = landed
+    first, *rest = (core.Run & keys["gap"]).to_dicts(order_by="run_number")
+    key = {name: first[name] for name in core.Run.primary_key}
+    core.Run.update1({**key, "closed": 0})
+    try:
+        runs = timebase.measured_runs(keys["gap"])
+    finally:
+        core.Run.update1({**key, "closed": 1})
+    assert runs == [(first["run_start_time"], None), *((run["run_start_time"], run["run_stop_time"]) for run in rest)]
+
+
+def test_a_segment_keeps_more_losses_than_a_smallint_counts(landed):
+    """A chattering line writes a `coalesced` record for each pair of edges
+    it garbles, so one segment can hold far more than 65,535."""
+    from wl_preproc.schema import timebase
+
+    keys, _, _ = landed
+    row = {**(timebase.SyncBoxSegment.Loss & keys["edge"]).to_dicts()[0], "loss_number": 70_000}
+    key = {name: row[name] for name in timebase.SyncBoxSegment.Loss.primary_key}
+    try:
+        timebase.SyncBoxSegment.Loss.insert1(row, allow_direct_insert=True)
+        assert len(timebase.SyncBoxSegment.Loss & key) == 1
+    finally:
+        (timebase.SyncBoxSegment.Loss & key).delete_quick()
 
 
 def test_the_statement_restores_the_columns_as_datajoint_declares_them(landed):
@@ -209,3 +246,39 @@ def test_a_loss_or_a_split_clock_older_than_a_day_is_not_listed(landed, prefix):
     for heading in ("Sync box losses (24 h)", "Code words on a split clock (24 h)"):
         section = _section(body, heading)
         assert not [line for line in section.splitlines() if any(_at(key) in line for key in keys.values())]
+
+
+def test_a_lines_many_edge_losses_are_one_line_of_the_report(landed, prefix):
+    """A chattering line writes a record for each pair of edges it garbles:
+    the report names the line once, with how many records and their span,
+    their counts not added, as wl-sync's counts do not add across records."""
+    from wl_sync.pins import GPIO_MAP
+
+    from tests.cli.test_report import _declared_count, _line_for, _section
+
+    keys, _, _ = landed
+    section = _section(_report(landed, prefix), "Sync box losses (24 h)")
+    assert (f"3 records of edges lost on GPIO{GPIO_MAP['pd1_comp']} (coalesced), from 1.210 s to 2.010 s; "
+            "reported only" in _line_for(section, _at(keys["noisy"])))
+    assert _declared_count(section) == len([line for line in section.splitlines() if line.startswith("- ")])
+
+
+def test_the_report_on_a_table_read_without_the_columns_names_the_statement(landed, prefix, monkeypatch):
+    """A database declared before the header named its process, its rows read
+    without the new columns, as DataJoint reads a table's columns once per
+    process: the report still lists the box's restarts, and in place of the
+    split clocks it cannot read names the statement that alters the table
+    (section 8)."""
+    from wl_preproc.schema import timebase
+
+    from tests.cli.test_report import _line_for, _section
+
+    keys, _, _ = landed
+    heading = timebase.SyncBoxSegment.heading
+    monkeypatch.setattr(timebase.SyncBoxSegment, "_heading", heading.select(
+        [name for name in heading.names if name not in timebase._HEADER_COLUMNS]))
+    report = _report(landed, prefix)
+    assert "the sync box restarted" in _line_for(_section(report, "Sync box restarts"), _at(keys["restart"]))
+    split = _section(report, "Code words on a split clock (24 h)")
+    assert split.startswith(" — not read\n")
+    assert timebase._header_statement() in split

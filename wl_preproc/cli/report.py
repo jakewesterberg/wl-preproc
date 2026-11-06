@@ -1417,23 +1417,43 @@ def _syncbox_losses(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[di
     session's measured runs (`timebase/segments.py::timing_check_fails`;
     design spec `2026-11-04-syncbox-header-design.md` section 6). Windowed as
     the per-session lists are: a loss is a fact of its session, not a state
-    that clears."""
-    from wl_preproc.schema import core, ingest, timebase
+    that clears.
+
+    One entry per loss, but a segment's losses of edges on one line by one
+    cause are one: a chattering line writes a `coalesced` record for each
+    pair of edges it garbles. Its `records` counts them, and its window runs
+    from the first one's start to the last one's end. Their counts are not
+    added, as wl-sync's counts do not add across records."""
+    from wl_preproc.schema import ingest, timebase
     from wl_preproc.timebase.segments import SEGMENT_SESSION_TIME, timing_check_fails
 
     timebase.activate(prefix=prefix)
-    rows = (timebase.SyncBoxSegment.Loss * timebase.SyncBoxSegment.proj("file_path", "role")
+    if not ingested_keys:
+        return []
+    sessions = [{"subject": subject, "session_datetime": at} for subject, at in ingested_keys]
+    rows = ((timebase.SyncBoxSegment.Loss & sessions) * timebase.SyncBoxSegment.proj("file_path", "role")
             * ingest.Ingestion.proj("session_dir")).to_dicts(
         order_by=["subject", "session_datetime", "segment_index", "loss_number"])
+    runs: dict[tuple, list] = {}
+    edges: dict[tuple, dict] = {}
     out = []
     for row in rows:
-        if (row["subject"], row["session_datetime"]) not in ingested_keys:
-            continue
-        runs = [(run["run_start_time"], run["run_stop_time"]) for run in (
-            core.Run & {"subject": row["subject"], "session_datetime": row["session_datetime"]}).to_dicts()]
+        session = (row["subject"], row["session_datetime"])
+        if session not in runs:
+            runs[session] = timebase.measured_runs({"subject": row["subject"],
+                                                    "session_datetime": row["session_datetime"]})
         fails = row["role"] == SEGMENT_SESSION_TIME and timing_check_fails(
-            row["path"], row["cause"], row["start_s"], row["stop_s"], runs)
-        out.append({**row, "fails": fails})
+            row["path"], row["cause"], row["start_s"], row["stop_s"], runs[session])
+        if row["path"] == "E":
+            line = (session, row["segment_index"], row["gpio"], row["cause"])
+            if line in edges:
+                edges[line]["records"] += 1
+                edges[line]["stop_s"] = row["stop_s"]
+                continue
+            edges[line] = {**row, "fails": fails, "records": 1}
+            out.append(edges[line])
+            continue
+        out.append({**row, "fails": fails, "records": 1})
     return out
 
 
@@ -1442,6 +1462,9 @@ def _loss_line(row: dict) -> str:
     in session time, and what it did to the session."""
     if row["cause"] == "gap":
         what = "the box recorded elsewhere, and the code words of that stretch are not in this folder"
+    elif row["records"] > 1:
+        line = "" if row["gpio"] is None else f" on GPIO{row['gpio']}"
+        what = f"{row['records']} records of edges lost{line} ({row['cause']})"
     else:
         amount = f"{'at least ' if row['bound'] == 'at_least' else ''}{row['lost']}"
         kind = "code word" if row["path"] == "W" else "edge"
@@ -1460,6 +1483,19 @@ def _loss_line(row: dict) -> str:
     verdict = "fails the session's timing check (tier D)" if row["fails"] else "reported only"
     return (f"- `{Path(row['session_dir']).name}` — `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
             f"`{row['file_path']}`: {what}, {when}; {verdict}")
+
+
+def _syncbox_header_statement(prefix: str = DEFAULT_PREFIX) -> str | None:
+    """The statement that alters `timebase.SyncBoxSegment` when this process
+    reads it without the columns of the sync box's header of 2026-10-30, a
+    database declared before them (`timebase._lacks_header_columns`); None
+    when it has them. Its rows then lack those columns, so nothing that reads
+    them can be reported (design spec `2026-11-04-syncbox-header-design.md`
+    section 8)."""
+    from wl_preproc.schema import timebase
+
+    timebase.activate(prefix=prefix)
+    return timebase._header_statement() if timebase._lacks_header_columns() else None
 
 
 def _split_clocks(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[dict]:
@@ -1622,7 +1658,7 @@ def build_report(
         f"- `{Path(row['session_dir']).name}` — `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — "
         + (f"the sync box's `{row['file_path']}` names the process of an earlier segment, but "
            f"{row['follows'].split(': ', 1)[1]}, so it is read as after a restart: "
-           if (row["follows"] or "").startswith("contradiction") else
+           if (row.get("follows") or "").startswith("contradiction") else
            f"the sync box restarted: `{row['file_path']}` ")
         + (f"resumed at barcode {row['first_barcode']} "
            f"({BARCODE_EPOCH + datetime.timedelta(seconds=row['first_barcode']):%Y-%m-%d %H:%M:%S} UTC by the "
@@ -1636,9 +1672,16 @@ def build_report(
     losses = _syncbox_losses(recent, prefix)
     lines += ["", f"## Sync box losses (24 h) — {len(losses)}", ""]
     lines += [_loss_line(row) for row in losses] or ["- none"]
-    split = _split_clocks(recent, prefix)
-    lines += ["", f"## Code words on a split clock (24 h) — {len(split)}", ""]
-    lines += [_split_clock_line(row) for row in split] or ["- none"]
+    unaltered = _syncbox_header_statement(prefix)
+    if unaltered is None:
+        split = _split_clocks(recent, prefix)
+        lines += ["", f"## Code words on a split clock (24 h) — {len(split)}", ""]
+        lines += [_split_clock_line(row) for row in split] or ["- none"]
+    else:
+        lines += ["", "## Code words on a split clock (24 h) — not read", "",
+                  "- **The sync box's segments were declared before its header named the clocks its ticks count, "
+                  "so which sessions' code words are on a split clock cannot be read, and no segment is recorded "
+                  f"until the table is altered and the daemon restarted:** `{unaltered}`"]
 
     # Design spec section 5.2 (quoting parent spec §8.5): the reclamation
     # gate, surfaced here "since an ungated session is what will eventually

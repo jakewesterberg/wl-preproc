@@ -263,10 +263,10 @@ class SyncBoxSession:
                     for loss in log.losses]
         return out
 
-    def fails_the_timing_check(self, runs: list[tuple[float, float]]) -> bool:
+    def fails_the_timing_check(self, runs: list[tuple[float, float | None]]) -> bool:
         """Whether a loss of session time's code words fails the session's
-        timing check, against its measured runs `(start_s, stop_s)`
-        (`timing_check_fails`)."""
+        timing check, against its measured runs `(start_s, stop_s)`, `stop_s`
+        None for a run that faulted (`timing_check_fails`)."""
         return any(timing_check_fails(loss.path, loss.cause, loss.start_s, loss.stop_s, runs)
                    for loss in self.losses() if self.in_session_time(loss.index))
 
@@ -307,20 +307,41 @@ class SegmentLoss:
 
 
 def timing_check_fails(path: str, cause: str, start_s: float | None, stop_s: float | None,
-                       runs: list[tuple[float, float]]) -> bool:
+                       runs: list[tuple[float, float | None]]) -> bool:
     """Whether one loss of session time's records fails the session's timing
     check (design spec `2026-11-04-syncbox-header-design.md` section 6,
     decision 3.5): a loss of code words, or a gap, whose window overlaps a
     measured run, and any `desync`, whose window has no end and after which no
     run can be measured to show what it lost. A lost edge is reported only:
-    no stage here reads the box's edges."""
+    no stage here reads the box's edges.
+
+    A window's ends are records the box captured (wl-sync's `Loss`), so one
+    that ends on a run's RUN_END, or begins on the next run's RUN_START, lost
+    nothing of either: the overlap is open at both ends. A run's stop is None
+    when it faulted, with no RUN_END: its end is not known, and it is taken
+    to last until the next run starts, runs not overlapping, or, the last
+    run, without end."""
     if path != "W":
         return False
     if cause == "desync":
         return True
     low = -math.inf if start_s is None else start_s
     high = math.inf if stop_s is None else stop_s
-    return any(low <= run_stop_s and high >= run_start_s for run_start_s, run_stop_s in runs)
+    starts = sorted(run_start_s for run_start_s, _stop in runs)
+
+    def end_s(run_start_s: float, run_stop_s: float | None) -> float:
+        if run_stop_s is not None:
+            return run_stop_s
+        return next((start_s for start_s in starts if start_s > run_start_s), math.inf)
+
+    return any(low < end_s(run_start_s, run_stop_s) and high > run_start_s for run_start_s, run_stop_s in runs)
+
+
+def _path_ticks(log: SyncBoxLog) -> tuple[list[int], list[int]]:
+    """Its barcodes' ticks and its code words', each path apart: the box
+    orders its records within each path, not across them (wl-sync's
+    `SyncBoxLogHeader.ordering`)."""
+    return [tick_us for _value, tick_us in log.barcodes], [tick_us for tick_us, _word in log.codes]
 
 
 def _ticks(log: SyncBoxLog) -> list[int]:
@@ -329,14 +350,19 @@ def _ticks(log: SyncBoxLog) -> list[int]:
 
 def _follows(members: list[SyncBoxLog], log: SyncBoxLog) -> str:
     """How `log` follows the segments before it on its clock, `members`:
-    by the barcode values across the boundary where each side has one,
-    otherwise by its ticks alone."""
+    each capture path's ticks go forward across the boundary, a path's late
+    records landing in the next segment and a split clock's code words
+    drifting from its frames (wl-sync's `cli._await_delivery`); then by the
+    barcode values across the boundary where each side has one, otherwise by
+    its ticks alone."""
     before = sorted(tick for member in members for tick in _ticks(member))
     after = _ticks(log)
     if not before or not after:
         return FOLLOWS_ADJACENT
-    if after[0] < before[-1]:
-        return f"{FOLLOWS_CONTRADICTION}: its first tick is before the last of the segment it follows"
+    for earlier, later in zip(zip(*(_path_ticks(member) for member in members)), _path_ticks(log), strict=True):
+        last = max((tick for ticks in earlier for tick in ticks), default=None)
+        if later and last is not None and min(later) < last:
+            return f"{FOLLOWS_CONTRADICTION}: its first tick is before the last of the segment it follows"
     last = max(((tick_us, value) for member in members for value, tick_us in member.barcodes), default=None)
     first = min(((tick_us, value) for value, tick_us in log.barcodes), default=None)
     if last is None or first is None:

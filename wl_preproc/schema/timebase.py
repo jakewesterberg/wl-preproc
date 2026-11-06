@@ -154,7 +154,7 @@ class SyncBoxSegment(dj.Computed):
         # `2026-11-04-syncbox-header-design.md` section 6).
         # Key: (subject, session_datetime, segment_index, loss_number).
         -> master
-        loss_number : smallint unsigned  # from 1, a gap first, then the log's order
+        loss_number : int unsigned  # from 1, a gap first, then the log's order
         ---
         cause          : varchar(32)  # the record's, or gap
         path           : char(1)  # W, code words, or E, edges; W for a gap
@@ -231,6 +231,15 @@ _HEADER_DECLARATIONS = (
     "a clock''s first'",
     "bigint unsigned DEFAULT NULL COMMENT 'its last code word''s tick; null when it logged none'",
 )
+
+
+def measured_runs(session_key: dict) -> list[tuple[float, float | None]]:
+    """The session's runs in `core.Run`, as the sync box's timing check takes
+    them (`timebase/segments.py::timing_check_fails`): each one's start and
+    stop in session time, its stop None when it faulted, with no RUN_END, its
+    last event not its end."""
+    return [(row["run_start_time"], row["run_stop_time"] if row["closed"] else None)
+            for row in (core.Run & session_key).to_dicts(order_by="run_number")]
 
 
 def _lacks_header_columns() -> bool:
@@ -512,7 +521,7 @@ class TimingProvenance(dj.Computed):
         # in a measured run, or by a desync, after which nothing is measured
         # (design spec `2026-11-04-syncbox-header-design.md` section 6).
         if "syncbox" in system_names:
-            runs = [(row["run_start_time"], row["run_stop_time"]) for row in (core.Run & session_key).to_dicts()]
+            runs = measured_runs(session_key)
             try:
                 failed = failed or segments.read_syncbox_session(session_dir).fails_the_timing_check(runs)
             except (FileNotFoundError, ValueError):
