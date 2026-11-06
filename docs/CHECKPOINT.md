@@ -1,12 +1,21 @@
 # Where this build actually is
 
-**Last updated 2026-11-06**, describing `main` at `82380d2`, the merge of
-`feat/true-angle-saccades`: wl-xcon's XC-398, saccades in true visual angle
-(`specs/2026-10-30-true-angle-saccades-design.md`, the requester's decisions of 2026-10-30;
-`handoffs/2026-10-30-true-angle-saccades.md`). CI read off `82380d2` is green on both
-interpreters, 2594 passed on each with 36 skipped, and the manifest check is green
-(`gh run view 42184114399`).
-- **Saccades in true visual angle:** every detector measures size, peak speed and direction
+**Last updated 2026-11-06**, describing `main` at `71771b3`: the merge of
+`feat/syncbox-header` (`915a825`), reading wl-sync's header change
+(`specs/2026-11-04-syncbox-header-design.md`, approved 2026-11-06;
+`handoffs/2026-11-04-syncbox-header.md`), and a test-only fix after it. CI read off `71771b3` is
+green on both interpreters, 2669 passed on each with 36 skipped, and the manifest check is green
+(`gh run view 42236157334`). The merge's own run (`42223741914`) failed on 3.13 alone: an XC-398
+test compared a stored direction exactly, and numpy's `arctan2` and `math.atan2` differed in the
+last bit on that runner; `71771b3` compares it to 1e-12.
+- **wl-sync's header change is read:** the pin moved to wl-sync's `fe1ea63`; a clock is a process,
+  a roll in place one clock; the barcode delay is added and each process's late first barcode
+  dropped; the box's `L` records are stored and fail a session where they cost a run's codes; code
+  words on a split clock are named in the report. wl-sync was told on 2026-11-06 that the box may
+  run its change, and asked to confirm that a `W` tick is the time since its process's capture
+  began. A gap that swallows a whole run fails a session only where it overlaps a measured run
+  (the requester's answer of 2026-11-06).
+- **Saccades in true visual angle** (XC-398, `82380d2`, just before): every detector measures size, peak speed and direction
   in true angle by default, and each event's endpoints carry their eccentricity and polar
   angle; Engbert-Kliegl detects in the eye's local frame; per axis is a paramset registered on
   request; fixations carry their positions; each NWB file holds each eye's `gaze_polar_{eye}`.
@@ -22,8 +31,8 @@ interpreters, 2594 passed on each with 36 skipped, and the manifest check is gre
   writes them. wl-sync fixed how its box unwraps code-word ticks (`HANDOVER-wl-sync.md`, ask 6)
   on 2026-10-30, its `d309bf1`, and pushed its header change on 2026-10-30 (`fe1ea63`): a
   per-process id, so that a roll within one process is not read as a restart, the measured
-  barcode delay, the clocks the ticks count, and lost events. The pin moves past both with the
-  header follow-up, next.
+  barcode delay, the clocks the ticks count, and lost events. The pin moved past both with the
+  header follow-up (above).
 - **The saccade detector's v1 fixtures** were merged just before (`065da53`):
   `docs/fixtures/saccade/v1.json`, today's
   per-axis geometry as inputs and this code's outputs (the median scale, velocity, the
@@ -146,6 +155,9 @@ interpreters, 2594 passed on each with 36 skipped, and the manifest check is gre
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `82380d2` (XC-398's merge, CI green, 2594 passed on each interpreter,
+`42184114399`) until the header follow-up's merge; true when written.*
 
 *This header named `920048a` (wl-sync part 1's merge, CI green, 2520 passed on each
 interpreter, `41023961314`) until XC-398's merge; true when written.*
@@ -453,20 +465,25 @@ requester chose to merge the same day; true when written.*
 > carry positions, the NWB file each eye's eccentricity and polar angle, and v2 of the fixtures
 > is made; its final review found nothing Critical or Important, and the two Minors re-graded
 > Important are fixed (handoff §6); wl-xcon and wl.works were told on 2026-11-06. **wl-sync's
-> header follow-up is built and reviewed** on `feat/syncbox-header`, not merged
-> (`specs/2026-11-04-syncbox-header-design.md`, approved 2026-11-06;
+> header follow-up is merged** (`915a825`, CI green at `71771b3`, `42236157334`;
+> `specs/2026-11-04-syncbox-header-design.md`, approved 2026-11-06;
 > `handoffs/2026-11-04-syncbox-header.md`): the pin moves to wl-sync's `fe1ea63`, a clock is a
 > process, the barcode delay is added and each process's late first barcode dropped, the box's
 > lost events are stored and fail a session where they cost a run's codes, and a split clock is
-> named in the report; its final review's four findings are fixed (handoff §6). Next: its merge; then, in the requester's order of 2026-10-31, wl-xcon's
-> asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a setting's value that is
-> an appearance), the pipeline's scaling to long sessions, part 3b, the NI as the clock, part 2,
-> the bridges, and the older minors in one branch.
+> named in the report; its final review's four findings are fixed (handoff §6); wl-sync was told
+> on 2026-11-06. Next, first of wl-xcon's asks by the requester's decision of 2026-11-06: lost data
+> and the screen region (`specs/2026-11-06-eye-lost-data-and-region-design.md` on
+> `spec/eye-lost-and-region`, approved that day; its plan being proved), a saccade carried across a
+> short loss of data and the mask at each session's recorded field; then, in the requester's order
+> of 2026-10-31, wl-xcon's asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a
+> setting's value that is an appearance), the pipeline's scaling to long sessions, part 3b, the NI
+> as the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until XC-398 was built, this said its plan was being proved; until its review, that the review
 > was next; until its merge, that the merge was next; until the header follow-up was built, that
-> its plan was being proved; until its review, that the review was next; each true when written.*
+> its plan was being proved; until its review, that the review was next; until its merge, that the
+> merge was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

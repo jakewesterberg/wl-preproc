@@ -82,16 +82,18 @@ status:
     two parts); part 1, reading the box's logs as it writes them today,
     is merged (920048a; docs/handoffs/2026-10-22-syncbox-records.md);
     XC-398's true-angle saccades are merged (82380d2;
-    docs/handoffs/2026-10-30-true-angle-saccades.md). Next, in the
-    requester's order of 2026-10-31: wl-sync's header follow-up (its
-    fe1ea63), built on feat/syncbox-header
-    (docs/handoffs/2026-11-04-syncbox-header.md), reviewed, not merged, its
-    merge next; then wl-xcon's
-    asks (C2a, C2b, C3, XC-399, a setting's value that is an appearance),
-    the pipeline's scaling to long sessions, part 3b, the NI as the clock,
-    and part 2, the bridges.
+    docs/handoffs/2026-10-30-true-angle-saccades.md); wl-sync's header
+    follow-up is merged (915a825; docs/handoffs/2026-11-04-syncbox-header.md).
+    Next, first of wl-xcon's asks by the requester's decision of
+    2026-11-06: lost data and the screen region
+    (docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md,
+    approved, its plan being proved); then, in the requester's order of
+    2026-10-31, wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value
+    that is an appearance), the pipeline's scaling to long sessions, part
+    3b, the NI as the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: XC-398, saccades in true visual angle (82380d2). Before it,
+    Done: wl-sync's header follow-up (915a825). Before it, XC-398, saccades
+    in true visual angle (82380d2). Before it,
     wl-sync part 1, the box's logs read as it writes them (920048a).
     Before it, the saccade detector's v1 fixtures and companion (065da53).
     Before them,

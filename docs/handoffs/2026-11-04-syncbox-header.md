@@ -74,9 +74,10 @@ test (8 of 8):
   `test_a_lines_many_edge_losses_are_one_line_of_the_report`.
 - **The report on a database declared before the header** (amendment 14):
   `test_the_report_on_a_table_read_without_the_columns_names_the_statement`.
-- **Asked of the requester:** a gap that swallows a whole run is reported only. It overlaps no measured run,
-  since the box lost every code word that would have measured it; the NI agreement and the task file's checks
-  usually catch it. Whether it fails the session, as a desync does, is theirs to decide.
+- **Asked of the requester, and answered on 2026-11-06:** a gap that swallows a whole run is reported only. It
+  overlaps no measured run, since the box lost every code word that would have measured it; the NI agreement and
+  the task file's checks usually catch it. The requester kept the rule: a gap fails a session only where it
+  overlaps a measured run, since a gap within one process is the box recording another session's folder.
 - **Deferred, Minor:** after a roll, a later segment's `core.Segment` extent runs from its process's origin, so
   the extents overlap and a gap's stretch reads as covered, though the session is tier D when the gap is in a
   run (`timebase/extract.py`); the log cache's key misses a replacement that keeps size and mtime, and it holds
