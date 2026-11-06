@@ -250,8 +250,17 @@ def selected_runs(runs: list[dict], fs_hz: float, params: MainSequenceParams) ->
         [np.nan if run["amplitude_deg"] is None else run["amplitude_deg"] for run in runs],
         [run["run_stop"] - run["run_start"] for run in runs],
         fs_hz, params,
+        flagged=[bool(run.get("flagged")) for run in runs],
     )
     return [run for run, taken in zip(runs, take, strict=True) if taken]
+
+
+def flagged_left_out(runs: list[dict], fs_hz: float, params: MainSequenceParams) -> int:
+    """How many of `runs` a fit would take but for their flag (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 6), for the daily
+    report to say."""
+    unflagged = [{**run, "flagged": 0} for run in runs]
+    return len(selected_runs(unflagged, fs_hz, params)) - len(selected_runs(runs, fs_hz, params))
 
 
 def register_default_paramsets() -> dict[str, int]:

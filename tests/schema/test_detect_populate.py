@@ -5152,3 +5152,29 @@ def test_a_session_that_recorded_no_field_is_masked_at_the_placeholder(dropped_f
     rows = (detect.EyeValidity & dropped_frame_session & {"status": "computed"}).to_dicts()
     assert rows and {(row["region_half_width_deg"], row["region_half_height_deg"], row["region_from_setup"])
                      for row in rows} == {(20.0, 15.0, 0)}
+
+
+def test_a_flagged_saccade_is_left_out_of_each_fit_and_the_report_says_so(dropped_frame_session, prefix):
+    """The requester's decision of 2026-11-06 (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` sections 6 and 10): the
+    main sequence and vigor fit only saccades measured throughout, and the
+    daily report counts what each fit left out, and names each eye masked at
+    the placeholder region."""
+    from wl_preproc.cli.report import _placeholder_region_lines, _vigor_lines
+    from wl_preproc.eye.detect.main_sequence import DEFAULT_MAIN_SEQUENCE_PARAMS
+    from wl_preproc.schema import detect, main_sequence, paramset
+
+    key = dropped_frame_session
+    (ek,) = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+             if row["params"]["detector"] == "engbert_kliegl"]
+    runs = (detect.EyeDetection.Run & key & {"paramset_idx": ek, "trace": "left"}
+            & 'label in ("saccade", "microsaccade")').to_dicts(order_by="run_index")
+
+    taken = main_sequence.selected_runs(runs, 500.0, DEFAULT_MAIN_SEQUENCE_PARAMS)
+    assert taken and not any(run["flagged"] for run in taken)
+    assert main_sequence.flagged_left_out(runs, 500.0, DEFAULT_MAIN_SEQUENCE_PARAMS) == 1
+    session = {(key["subject"], key["session_datetime"])}
+    (line,) = [line for line in _vigor_lines(session, prefix=prefix) if "— left (" in line]
+    assert "`engbert_kliegl` (true angle)" in line and "1 flagged saccade left out" in line
+    assert [line.split(" — ")[1].split(" (")[0]
+            for line in _placeholder_region_lines(session, prefix=prefix)] == ["left", "right"]

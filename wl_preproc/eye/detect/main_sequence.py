@@ -118,18 +118,29 @@ class Vigor:
     reason: str
 
 
-def selected(labels, amplitude_deg, n_samples, fs_hz: float, params: MainSequenceParams) -> np.ndarray:
+def selected(labels, amplitude_deg, n_samples, fs_hz: float, params: MainSequenceParams,
+             flagged=None) -> np.ndarray:
     """Which stored runs a fit takes (spec section 4.1): a `saccade` or
     `microsaccade` of at least `min_amplitude_deg`, lasting at most
     `max_duration_ms`. By size, not label: five of the seven detectors call
     every saccadic event `saccade`, whatever its size. A NULL amplitude, an
-    unmeasured run, arrives as NaN and is never taken."""
+    unmeasured run, arrives as NaN and is never taken.
+
+    **Never a flagged run** (`flagged`, one truth value per run): its peak
+    speed is its measured samples', and where a loss fell on the peak it is
+    understated (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 6, the requester's decision of 2026-11-06). A saccade with a
+    dropped frame inside holds lost samples, so every run a fit takes is
+    evenly sampled, and its rows are its duration."""
     amplitude = np.asarray(amplitude_deg, dtype=float)
     duration_ms = 1000.0 * np.asarray(n_samples, dtype=float) / fs_hz
+    measured = (np.ones(amplitude.shape, dtype=bool) if flagged is None
+                else ~np.asarray(flagged, dtype=bool))
     with np.errstate(invalid="ignore"):
         return (np.isin(np.asarray(labels, dtype=object), _SACCADIC)
                 & (amplitude >= params.min_amplitude_deg)
-                & (duration_ms <= params.max_duration_ms))
+                & (duration_ms <= params.max_duration_ms)
+                & measured)
 
 
 def _range(amplitude: np.ndarray) -> tuple[float | None, float | None]:

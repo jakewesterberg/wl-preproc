@@ -310,7 +310,7 @@ def _insert_detection(schema, row: dict) -> None:
 
 
 def _raw_totals(schema=None, run_rows: list[dict] | None = None):
-    """`({"blink": n, "invalid": n}, total)` counted row by row off
+    """`({"blink": n, "invalid": n, "lost": n}, total)` counted row by row off
     `EyeValidity.Run`, INDEPENDENTLY of `_unusable_fractions` and of the
     database aggregation that feeds it.
 
@@ -325,7 +325,7 @@ def _raw_totals(schema=None, run_rows: list[dict] | None = None):
     if run_rows is None:
         run_rows = schema.EyeValidity.Run.to_dicts()
     total = sum(row["run_stop"] - row["run_start"] for row in run_rows)
-    counts = {"blink": 0, "invalid": 0}
+    counts = {"blink": 0, "invalid": 0, "lost": 0}
     for row in run_rows:
         if row["label"] in counts:
             counts[row["label"]] += row["run_stop"] - row["run_start"]
@@ -727,7 +727,7 @@ def test_an_empty_pipeline_reports_zero_unusable_rather_than_a_wrong_number():
     """
     from wl_preproc.cli.report import _unusable_fractions
 
-    assert _unusable_fractions([]) == {"blink": 0.0, "invalid": 0.0}
+    assert _unusable_fractions([]) == {"blink": 0.0, "invalid": 0.0, "lost": 0.0}
 
 
 def test_a_mostly_blink_session_is_visible_per_session_rather_than_only_in_the_total(
@@ -829,9 +829,13 @@ def _pre_m8_fractions(run_rows: list[dict]) -> dict[str, float]:
                 counts[row["label"]] += row["run_stop"] - row["run_start"]
         return {label: (counts[label] / total if total else 0.0)
                 for label in ("blink", "invalid")}
+
+    Extended to `lost`, the mask's third label since 2026-11-06 (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 10), by the same
+    arithmetic.
     """
     counts, total = _raw_totals(run_rows=run_rows)
-    return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid")}
+    return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid", "lost")}
 
 
 def test_the_database_aggregation_matches_the_full_table_scan_it_replaced(

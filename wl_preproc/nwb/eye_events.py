@@ -32,6 +32,10 @@ MEASUREMENTS = {
     "end_polar_deg": "The end's polar angle, degrees counterclockwise from rightward in [0, 360) (NaN at zero "
                      "eccentricity and otherwise).",
     "reliability": "The detector's own reliability, where it reports one (NaN otherwise).",
+    "n_lost": "The lost samples inside the run, carried across: no position or none to trust, or a velocity "
+              "spanning a dropped frame (design spec 2026-11-06-eye-lost-data-and-region-design.md).",
+    "flagged": "1 when a lost sample lies inside the run or in the two samples before its start, else 0; such a "
+               "saccade's peak speed is its measured samples', and the main sequence leaves it out.",
 }
 
 

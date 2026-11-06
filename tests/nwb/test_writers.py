@@ -464,3 +464,18 @@ def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_t
                 session["calibration_cones"]) == ("", "", -1, "")
         assert "accepted_warnings" not in module.data_interfaces
         assert "parameter_changes" not in module.data_interfaces and "controls" not in module.data_interfaces
+
+
+def test_each_event_carries_its_lost_samples_and_its_flag(tmp_path):
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 10."""
+    from wl_preproc.nwb.eye_events import add_detections
+    from wl_preproc.nwb.gather import MASK_LABELS
+
+    runs = [{"start_s": 1.0, "stop_s": 1.04, "label": "saccade", "n_lost": 4, "flagged": 1},
+            {"start_s": 1.04, "stop_s": 2.0, "label": "fixation", "n_lost": 0, "flagged": 0}]
+
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_detections(nwb, [{"name": "t", "description": "d", "runs": runs}]))
+    with io:
+        table = nwb.processing["eye_events"]["t"].to_dataframe()
+        assert table["n_lost"].tolist() == [4, 0] and table["flagged"].tolist() == [1, 0]
+    assert MASK_LABELS == ("blink", "invalid", "lost")

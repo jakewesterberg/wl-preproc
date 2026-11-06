@@ -751,6 +751,22 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     ]
 
 
+def _placeholder_region_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
+    """Each eye of a session ingested in the last 24 h whose validity mask
+    took the paramset's placeholder screen region, its session having
+    recorded no display setup (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` sections 7 and 10)."""
+    from wl_preproc.schema import detect as detect_schema
+
+    detect_schema.activate(prefix=prefix)
+    rows = (detect_schema.EyeValidity & {"status": "computed", "region_from_setup": 0}).to_dicts(
+        order_by=["subject", "session_datetime", "eye", "validity_paramset_idx"])
+    return [f"- `{row['subject']}` @ {row['session_datetime']:%Y-%m-%d %H:%M} — {row['eye']} (validity paramset "
+            f"{row['validity_paramset_idx']}): no display setup recorded, so the screen region is the placeholder, "
+            f"±{row['region_half_width_deg']:g} × ±{row['region_half_height_deg']:g} degrees"
+            for row in rows if (row["subject"], row["session_datetime"]) in ingested_keys]
+
+
 def _unusable_fractions(label_totals: list[dict]) -> dict[str, float]:
     """`{"blink": fraction, "invalid": fraction}` of the samples covered by
     whatever `_detection_rows` rows it is handed -- every one of them for
@@ -787,11 +803,11 @@ def _unusable_fractions(label_totals: list[dict]) -> dict[str, float]:
     section 9's.
     """
     total = sum(row["samples"] for row in label_totals)
-    counts = {"blink": 0, "invalid": 0}
+    counts = {"blink": 0, "invalid": 0, "lost": 0}
     for row in label_totals:
         if row["label"] in counts:
             counts[row["label"]] += row["samples"]
-    return {label: (counts[label] / total if total else 0.0) for label in ("blink", "invalid")}
+    return {label: (counts[label] / total if total else 0.0) for label in counts}
 
 
 def _unusable_per_eye(label_totals: list[dict]) -> list[dict]:
@@ -1080,9 +1096,10 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
         if not rows:
             return "not computed yet"
         params = fit_params[fit_idx]
-        runs = main_sequence.selected_runs(
-            (detect_schema.EyeDetection.Run & {name: detection[name] for name in detect_schema.EyeDetection.primary_key}
-             & 'label in ("saccade", "microsaccade")').to_dicts(order_by="run_index"), rows[0]["fs_hz"], params)
+        every = (detect_schema.EyeDetection.Run
+                 & {name: detection[name] for name in detect_schema.EyeDetection.primary_key}
+                 & 'label in ("saccade", "microsaccade")').to_dicts(order_by="run_index")
+        runs = main_sequence.selected_runs(every, rows[0]["fs_hz"], params)
         earlier = (table & {name: value for name, value in key.items() if name != "session_datetime"}
                    & f"session_datetime < '{detection['session_datetime']:%Y-%m-%d %H:%M:%S}'"
                    & 'fit_status = "computed"').to_dicts()
@@ -1091,7 +1108,11 @@ def _vigor_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
                               row["saturation_se_deg"], row["r_squared"], "") for row in earlier]
         result = vigor([run["amplitude_deg"] for run in runs], [run["peak_velocity_deg_s"] for run in runs],
                        history, params)
-        return result.reason if result.value is None else f"{result.value:.0%} ({result.n_history} earlier)"
+        text = result.reason if result.value is None else f"{result.value:.0%} ({result.n_history} earlier)"
+        # Flagged saccades are left out of the fits (design spec
+        # `2026-11-06-eye-lost-data-and-region-design.md` section 6).
+        left_out = main_sequence.flagged_left_out(every, rows[0]["fs_hz"], params)
+        return text + (f"; {left_out} flagged saccade{'' if left_out == 1 else 's'} left out" if left_out else "")
 
     lines = []
     for subject, session_datetime in sorted(ingested_keys):
@@ -2004,7 +2025,7 @@ def build_report(
     lines += [
         f"- `{entry['subject']}` @ {entry['session_datetime']:%Y-%m-%d %H:%M} — "
         f"{entry['eye']} (validity paramset {entry['validity_paramset_idx']}): "
-        f"blink {entry['blink']:.1%}, invalid {entry['invalid']:.1%} "
+        f"blink {entry['blink']:.1%}, invalid {entry['invalid']:.1%}, lost {entry['lost']:.1%} "
         f"of {entry['n_samples']} samples"
         for entry in per_eye
     ] or ["- none"]
@@ -2016,9 +2037,13 @@ def build_report(
     # "Calibration model" breakdowns are: two numbers that cannot grow
     # without bound. Both headings state their own scope, so neither can be
     # read as the other.
+    placeholder = _placeholder_region_lines(ingested_keys, prefix=prefix)
+    lines += ["", f"### Eyes masked at the placeholder screen region (24 h) — {len(placeholder)}", ""]
+    lines += placeholder or ["- none"]
+
     unusable = _unusable_fractions(validity_label_totals)
     lines += ["", "### Unusable samples, running total across every session (lower bound)", ""]
-    lines += [f"- {label}: {unusable[label]:.1%}" for label in ("blink", "invalid")]
+    lines += [f"- {label}: {unusable[label]:.1%}" for label in ("blink", "invalid", "lost")]
     # One note for the pair, placed after both: it opens on "these", and
     # both headings above it already carry the "lower bound" qualifier it
     # explains.

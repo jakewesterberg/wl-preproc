@@ -961,3 +961,14 @@ def test_a_session_landed_without_its_sync_box_leaves_the_stalled_list_and_says_
     finally:
         (pipeline.Session & {"subject": "rptwo2"}).delete(prompt=False)
         (ingest.LandedWithout & {"subject": "rptwo2"}).delete(prompt=False)
+
+
+def test_the_unusable_shares_name_the_lost_samples_beside_blink_and_invalid():
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 10:
+    a lost sample is not measured, carried by a run or not."""
+    from wl_preproc.cli.report import _unusable_fractions
+
+    shares = _unusable_fractions([{"label": "lost", "samples": 1}, {"label": "blink", "samples": 1},
+                                  {"label": "fixation", "samples": 2}])
+
+    assert shares == {"blink": 0.25, "invalid": 0.0, "lost": 0.25}
