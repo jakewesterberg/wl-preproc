@@ -304,3 +304,28 @@ answers in `HANDOVER-wl-sync.md`.
     in place, the first frame due after it never emitted, so the value steps by two; above 0 the box recorded
     elsewhere that long. The synthetic box's `timebase` is `"fake"`, as the box's unit writes until bench
     acceptance, and its delay unmeasured, unless a recipe says otherwise.
+
+## Amendments, 2026-11-06, made in the final review
+
+11. **A segment of one process follows the one before it when each capture path goes forward** (§4, the
+    review's first Important finding). The box orders its records within each path and not across them; a path
+    late for a roll's wait delivers into the next segment, and a split clock's code words drift behind its frames
+    (wl-sync's `SyncBoxLogHeader.ordering` and `cli._await_delivery`). A boundary is a contradiction when a
+    path's first tick in the later segment is before its last in the segments before; the rule on the barcode
+    values is unchanged. Mixing the paths read a code word that crossed a roll behind a frame as a restart, and
+    its session tier D.
+12. **A loss window's overlap with a run is open at both ends** (§6, decision 3.5; a Minor re-graded Important).
+    A window's ends are records the box captured, so one that ends on a run's RUN_END, or begins on the next
+    run's RUN_START, lost nothing of either. A run's stop is its RUN_END's own session time, so a closed overlap
+    would fail every session with a code-word loss between runs once the box writes `fifo_full`. A run that
+    faulted, with no RUN_END, stops in `core.Run` at its last event, not its end: it reaches the check with its
+    stop unknown (`timebase.measured_runs`) and is taken to last until the next run starts, or, the last run,
+    without end.
+13. **`SyncBoxSegment.Loss.loss_number` is an `int`** (§8; a Minor re-graded Important). wl-sync writes a
+    `coalesced` record for each pair of edges a line garbles, so a chattering line can pass 65,535 in one
+    segment, and a `smallint` refused that segment on every pass. The report lists a segment's losses of edges
+    on one line by one cause as one entry, with how many records and their span, their counts not added, and
+    reads each session's runs once and only the losses of its 24 h.
+14. **The report on a database declared before the header** (§8, the review's second Important finding). Its
+    rows lack the new columns as this process reads them, and the report raised. It now lists the restarts it
+    can read and, in place of the split clocks, names the `ALTER TABLE`.

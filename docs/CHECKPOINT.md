@@ -453,12 +453,12 @@ requester chose to merge the same day; true when written.*
 > carry positions, the NWB file each eye's eccentricity and polar angle, and v2 of the fixtures
 > is made; its final review found nothing Critical or Important, and the two Minors re-graded
 > Important are fixed (handoff §6); wl-xcon and wl.works were told on 2026-11-06. **wl-sync's
-> header follow-up is built** on `feat/syncbox-header`, not merged
+> header follow-up is built and reviewed** on `feat/syncbox-header`, not merged
 > (`specs/2026-11-04-syncbox-header-design.md`, approved 2026-11-06;
 > `handoffs/2026-11-04-syncbox-header.md`): the pin moves to wl-sync's `fe1ea63`, a clock is a
 > process, the barcode delay is added and each process's late first barcode dropped, the box's
 > lost events are stored and fail a session where they cost a run's codes, and a split clock is
-> named in the report. Next: its review; then, in the requester's order of 2026-10-31, wl-xcon's
+> named in the report; its final review's four findings are fixed (handoff §6). Next: its merge; then, in the requester's order of 2026-10-31, wl-xcon's
 > asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a setting's value that is
 > an appearance), the pipeline's scaling to long sessions, part 3b, the NI as the clock, part 2,
 > the bridges, and the older minors in one branch.
@@ -466,7 +466,7 @@ requester chose to merge the same day; true when written.*
 >
 > *Until XC-398 was built, this said its plan was being proved; until its review, that the review
 > was next; until its merge, that the merge was next; until the header follow-up was built, that
-> its plan was being proved; each true when written.*
+> its plan was being proved; until its review, that the review was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
