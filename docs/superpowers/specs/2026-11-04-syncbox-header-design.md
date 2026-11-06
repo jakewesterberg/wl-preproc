@@ -11,7 +11,8 @@ has moved: "nothing is deployed until the pin has moved, the same hold as the he
 **Status.**
 - Chosen on 2026-10-30 (the requester's order of that evening): right after XC-398. Designed from the
   groundwork of 2026-10-30, whose decisions the requester took that evening (§0).
-- Branch `spec/syncbox-header`, from `main` at `4bd10f1`.
+- Branch `spec/syncbox-header`, from `main` at `4bd10f1`, rebased onto `82380d2` (XC-398's merge).
+- **Approved by the requester on 2026-11-06**, with its five rulings.
 - One part. It must merge before the box runs wl-sync's change (§2). Part 2 of the 2026-10-22 design, the
   bridges, comes after it: a restart now means a new process, which is what part 2 bridges.
 
