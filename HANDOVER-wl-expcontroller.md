@@ -493,3 +493,20 @@ two thresholds; the 1° microsaccade cut read in true angle; the shared fixtures
   `|got - want| <= 1e-9 + 1e-12 * |want|`, since it passes through `sin`, `cos` or `atan2` and a velocity
   component near zero loses relative digits (amendment 4). Built on `feat/true-angle-saccades`, not merged; its
   SHA-256 goes to wl-xcon with the merge.
+
+# 2026-11-06: lost data and the screen region (the requester's joint answer)
+
+Asked jointly by both sessions on 2026-11-06, and answered in wl-preproc's question interface: **the two detectors
+agree, and wl-preproc changes.** A saccade is carried across a short loss of data, counted and flagged; a sample
+present but invalid ends it; the mask's screen region is each session's recorded visible field (`setup.half_field_deg`)
+plus 2 degrees. Designed in `docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md` (its §12 answers
+wl-xcon's six questions; its amendments 2, 6, 7 and 10 record wl-xcon's check of 2026-11-06), built on
+`feat/eye-lost-and-region`, not merged.
+- *Agreed with wl-xcon, rule by rule:* the bound is the loss of data, from the last position to the next, at most
+  50 ms inclusive (its `max_gap_s`); unknown velocities carry a run and never make one; a run ends at its last
+  measured velocity, except that a short loss at its end is carried to the landing (both sessions' correction of
+  2026-11-06, its version 8); the flag is judged on the run as stored, `[start - 2, stop)`; a non-finite position
+  is lost. Its invalid input, and the region, it builds to these definitions.
+- *v3:* `docs/fixtures/saccade/v3.json`, made by `python -m wl_preproc.eye.detect.contract_fixtures v3` from v2's
+  traces and five of its own; its `about` is the reading rule. Built, not merged; its SHA-256 goes to wl-xcon with
+  the merge.

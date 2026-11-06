@@ -207,3 +207,13 @@ settle what the sections above left open; §0 stands.
      are the tests gated on the reference recording, which mask gaze not repaired.
    - **wl-xcon's figure in fixation** (§1's last bullet) is 0.008% in the left eye and 0.009% in
      the right (its spike's §7b.3 table), not 0.009% in both.
+
+## Amendment, 2026-11-06: lost data and the screen region
+
+§3's line keeping a frame gap's margin is superseded where a paramset carries lost data (`max_lost_ms` above 0), as
+the default does since 2026-11-06 (design spec `2026-11-06-eye-lost-data-and-region-design.md`, the requester's
+decisions of that day): a sample not offered as measured is lost (a lost reflection, a value that is not a
+number, an impossible speed, a repaired glitch, the four velocities a dropped frame spans, which take no margin)
+or invalid (a blink with its padding, gaze off the screen), a saccade is carried across a short loss, and the
+screen region is each session's recorded visible field plus 2 degrees, the placeholder only where none was
+recorded. A paramset stored before masks as it did.

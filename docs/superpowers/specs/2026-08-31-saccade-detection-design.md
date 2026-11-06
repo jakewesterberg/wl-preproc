@@ -1649,3 +1649,13 @@ appears in no source, and these numbers drive design decisions.
 
 Licence and maintenance facts (§3.2, §8) were read from the GitHub and PyPI
 APIs on 2026-08-31, not assumed.
+
+## Amendment, 2026-11-06: lost data and the screen region
+
+§2 and §11's open question 1 is superseded where a paramset carries lost data (`max_lost_ms` above 0), as
+the default does since 2026-11-06 (design spec `2026-11-06-eye-lost-data-and-region-design.md`, the requester's
+decisions of that day): a sample not offered as measured is lost (a lost reflection, a value that is not a
+number, an impossible speed, a repaired glitch, the four velocities a dropped frame spans, which take no margin)
+or invalid (a blink with its padding, gaze off the screen), a saccade is carried across a short loss, and the
+screen region is each session's recorded visible field plus 2 degrees, the placeholder only where none was
+recorded. A paramset stored before masks as it did.

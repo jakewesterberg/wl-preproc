@@ -84,10 +84,10 @@ status:
     XC-398's true-angle saccades are merged (82380d2;
     docs/handoffs/2026-10-30-true-angle-saccades.md); wl-sync's header
     follow-up is merged (915a825; docs/handoffs/2026-11-04-syncbox-header.md).
-    Next, first of wl-xcon's asks by the requester's decision of
-    2026-11-06: lost data and the screen region
-    (docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md,
-    approved, its plan being proved); then, in the requester's order of
+    Lost data and the screen region, first of wl-xcon's asks by the
+    requester's decision of 2026-11-06, is built on
+    feat/eye-lost-and-region (docs/handoffs/2026-11-06-eye-lost-data-and-region.md),
+    not merged, its review next; then, in the requester's order of
     2026-10-31, wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value
     that is an appearance), the pipeline's scaling to long sessions, part
     3b, the NI as the clock, and part 2, the bridges.

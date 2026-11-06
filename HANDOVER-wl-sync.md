@@ -170,3 +170,13 @@ Designed in `docs/superpowers/specs/2026-11-04-syncbox-header-design.md` (the re
 6. **One confirmation asked:** that a reader may take a `W` tick, in seconds, as the time since its process's
    capture began, which item 5's drift relies on. `_BoxClock` says the PIO counter reads 0 when capture starts;
    no field's docstring says it yet.
+
+### wl-sync's answer to item 6, 2026-11-06
+
+**Confirmed, with three limits** (wl-sync's `main` at `84c55d6`, its `wl_sync/rp1/backend.py`): on `"split"` a `W`
+tick is microseconds of RP1's crystal since its process's capture began, the counter reading 0 at enable, once per
+process, unwrapped by `_BoxClock`. Within the crystal's error (the 50 ppm used); to one syscall's offset at the
+start, which bench day measures; and `B` and `E` count `CLOCK_MONOTONIC` from the same origin, so `W - B` drift
+grows from capture start, which is item 5's premise. On `"fake"` a tick is not elapsed time, and the daily report
+already leaves `"fake"` out of its split-clock section. wl-sync may state it in `CodeWord.tick_us`'s docstring
+once the requester approves. Its `84c55d6` adds a streaming reader and changes nothing the box writes: the pin stays.

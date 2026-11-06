@@ -291,3 +291,51 @@ its code:
 - Re-deriving the speed ceiling (`max_speed_deg_s`, 1000), the other half of §11's open question 1.
 - Rebuilding the gaze trace at true length, with a row for each dropped frame: considered and not chosen, since it
   moves every row index after a gap in stored data and the NWB files for the same result.
+
+## Amendments, 2026-11-06, made while proving the plan
+
+1. **The mask applies the bound** (§3): a lost stretch no run can be carried across, longer than `max_lost_ms` or
+   without a measured sample on a side, is stored `invalid`, so every detector meets exactly what is stored:
+   measured, `lost` (carried), or withheld. Its criteria's fractions still say what it was.
+2. **The bound is the loss of data, from the last position measured to the next** (§3; wl-xcon's check of
+   2026-11-06, its R10, which its detector already did): a dropped frame's neighbours have measured positions,
+   though their velocities span it, so one dropped frame is `1 + n_missing` frames, not `5 + n_missing`. A lost
+   reflection's, a value's that is not a number, an impossible speed's and a filled glitch's positions, and their
+   margins', are not measurements. Each stretch of lost samples is judged whole, so two losses within two samples
+   of each other are one stretch (wl-xcon's question of 2026-11-06). The two samples at each end of the
+   recording, whose velocities are zero-filled, are no measured sample beside a stretch, so a loss beside them is
+   withheld (both sessions, 2026-11-07). v3's `about` says both.
+3. **A paramset stored before** names no bound, no margin and no setup, and loads with 0, 0 and false: it masks as
+   it always did, every criterion withheld as `invalid` with its margin, a frame gap's included, at its own
+   region (§8).
+4. **What a detector is offered over a carried loss** (§3): every lost sample's position is filled along frame
+   time by the straight line between the samples either side, except a row whose velocity spans a dropped frame,
+   whose position is a measurement; the velocities are the filled gaze's (`validity.fill_lost`).
+5. **No duration by frame time** (§6): a saccade with a dropped frame inside holds lost samples and is flagged, so
+   every saccade a fit takes is evenly sampled and its rows are its duration.
+6. **A short loss at a run's end is carried to the landing** (§4, §5.2; found by wl-xcon's review of its own
+   detector on 2026-11-06, and agreed by both): trimming a run back to its last measured velocity cut a saccade
+   that landed inside a short loss down to a fraction of its size, unflagged (an 8-degree saccade reported as
+   0.45 degrees). Engbert-Kliegl carries a run through a carried loss, and where the first measured velocity
+   after it is not over the threshold the run ends there, that sample its last, so its size reaches the
+   landing. The other six detectors' runs keep their lost ends, and `measure.measure_event_run` measures such a
+   run out to the measured samples beyond them. A run ends at its last measured velocity over the threshold only
+   at a withheld stretch, a long loss among them, or the trace's end. An unknown velocity still never opens a run.
+7. **The flag is judged on the run as stored** (§5.4; wl-xcon's question of 2026-11-06): a lost sample inside it
+   or in the two samples before its start, clipped to the trace. A run ended by a withheld stretch is unflagged,
+   as a run ending at a blink is, and the two zero-filled velocities at each edge are not lost. On the
+   conjunction, either eye's lost samples count.
+8. **The field is kept in a table of its own, `core.SessionSetup`** (§7, §8), not in columns of `SessionRecord`,
+   so the event stage needs no `ALTER TABLE`. **The frame is cyclopean** (wl-xcon, 2026-11-06: each eye's map is
+   fitted to the one cyclopean target, its stereoscope calibration task not yet built), so §7's ruling stands
+   with no offset term.
+9. **The NWB columns are `n_lost` and `flagged`**, the stored names (§10). **The report** gives each eye's lost
+   share beside its blink and invalid shares, each detector's flagged saccades left out of its fit on its vigor
+   line, and each eye masked at the placeholder.
+10. **v3's `lost` is a sample with no position** (§9), as wl-xcon's detector represents a lost datagram: a
+    velocity is unknown where its window holds one, and `contract_fixtures.detector_input` is the rule reading
+    such a trace into the mask's terms. Its five traces: one lost sample inside v1's 8-degree step (one saccade,
+    flagged, five unknown velocities); a short loss at its landing (carried to the landing, its size whole,
+    flagged); a blink inside it (no run crosses it); 74 ms with no position inside it (the run ends before the
+    loss, kept, unflagged); lost samples alone in fixation (no event). A test rebuilds v3 and compares it with
+    the file, so the builder's every rule is held.
