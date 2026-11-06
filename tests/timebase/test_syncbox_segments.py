@@ -43,7 +43,7 @@ def test_a_restarted_box_writes_two_segments_on_unrelated_clocks(tmp_path):
     first, second = segments.syncbox_logs(session_dir)
     assert (first.path.name, first.segment_index, second.path.name, second.segment_index) == (
         "seg-000.log", 0, "seg-001.log", 1)
-    assert [value for value, _ in first.barcodes] == list(range(1_000_000, 1_000_008))
+    assert [value for value, _ in first.barcodes] == [999_999, *range(1_000_000, 1_000_008)]
     assert [value for value, _ in second.barcodes] == list(range(1_000_009, 1_000_015))
     assert second.barcodes[0][1] < first.barcodes[-1][1]
 
@@ -220,3 +220,47 @@ def test_each_log_is_read_once_however_many_answers_a_stage_asks_for(tmp_path, m
     segments.scan_system("syncbox", session_dir / "syncbox")
     syncbox_codes(session_dir)
     assert sorted(reads) == ["seg-000.log", "seg-001.log"]
+
+
+def _synthetic(tmp_path, **update):
+    recipe = CI_RECIPE.model_copy(update=update)
+    truth = generate_session(tmp_path, recipe)
+    return tmp_path / recipe.session_id, truth
+
+
+def test_a_synthetic_session_is_timed_from_its_first_barcode_with_the_late_frame_dropped(tmp_path):
+    session_dir, truth = _synthetic(tmp_path)
+    reference = segments.session_reference(session_dir)
+    assert reference == pytest.approx({value: start_s for value, start_s in truth.barcodes}, abs=1e-6)
+
+
+def test_a_synthetic_roll_in_place_is_one_clock_and_every_code_is_placed(tmp_path):
+    from wl_preproc.synth.recipe import SyncBoxRollSpec
+
+    session_dir, truth = _synthetic(tmp_path, syncbox_roll=SyncBoxRollSpec(at_s=7.5))
+    session = segments.read_syncbox_session(session_dir)
+    assert (session.follows, session.roles()) == ((None, "adjacent"), ["session_time", "session_time"])
+    assert session.reference() == pytest.approx(dict(truth.barcodes), abs=1e-6)
+    codes = syncbox_codes(session_dir)
+    assert [word for _, word in codes] == [word for _, word in truth.code_words]
+    assert [time_s for time_s, _ in codes] == pytest.approx([time_s for time_s, _ in truth.code_words], abs=1e-5)
+
+
+def test_a_synthetic_gap_keeps_one_clock_and_names_the_stretch_whose_codes_are_elsewhere(tmp_path):
+    from wl_preproc.synth.recipe import SyncBoxRollSpec
+
+    session_dir, truth = _synthetic(tmp_path, syncbox_roll=SyncBoxRollSpec(at_s=5.5, gap_s=3.0))
+    session = segments.read_syncbox_session(session_dir)
+    assert session.follows == (None, "gap")
+    ((index, start_us, stop_us),) = session.gaps()
+    assert index == 1 and session.seconds(start_us) < 5.5 and 8.5 <= session.seconds(stop_us) < 9.5
+    assert [word for _, word in syncbox_codes(session_dir)] == [
+        word for time_s, word in truth.code_words if not 5.5 <= time_s < 8.5]
+
+
+def test_a_measured_barcode_delay_leaves_session_time_where_the_devices_see_it(tmp_path):
+    """The box reads each barcode's tick that long before its frame is on
+    the wire, which every device records: the reader adds it back."""
+    session_dir, truth = _synthetic(tmp_path, syncbox_barcode_delay_us=1_500)
+    assert segments.session_reference(session_dir) == pytest.approx(dict(truth.barcodes), abs=1e-6)
+    assert syncbox_codes(session_dir)[0][0] == pytest.approx(truth.code_words[0][0], abs=1e-6)

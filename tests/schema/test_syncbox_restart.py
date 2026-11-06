@@ -77,7 +77,8 @@ def test_the_sync_box_counts_as_matched_only_the_barcodes_session_time_holds(res
 
 def test_each_segment_of_the_box_is_recorded_with_its_role(restarted):
     """`timebase.SyncBoxSegment` (section 6): what each segment's header says,
-    its barcodes, and its role. The barcode delay is null, unmeasured and
+    its barcodes as the box logged them, its process's late first frame
+    among them, and its role. The barcode delay is null, unmeasured and
     uncorrected, until wl-sync writes it into the header (section 5)."""
     from wl_preproc.schema import timebase
 
@@ -85,7 +86,7 @@ def test_each_segment_of_the_box_is_recorded_with_its_role(restarted):
     rows = (timebase.SyncBoxSegment & key).to_dicts(order_by="segment_index")
     assert [(row["segment_index"], row["file_path"], row["n_barcodes"], row["first_barcode"], row["last_barcode"],
              row["role"]) for row in rows] == [
-        (0, "seg-000.log", 8, 1_000_000, 1_000_007, "session_time"),
+        (0, "seg-000.log", 9, 999_999, 1_000_007, "session_time"),
         (1, "seg-001.log", 6, 1_000_009, 1_000_014, "after_restart_unbridged")]
     assert {(row["boot_id"][:5], bool(row["clock_trusted"]), row["clock_reason"], row["barcode_delay_us"])
             for row in rows} == {("synth", True, "", None)}
