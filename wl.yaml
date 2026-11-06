@@ -653,8 +653,10 @@ publishes:
       v1.json and its companion v1-thresholds.json are per axis; v2.json is
       true visual angle (the local-frame velocity, the complete-window
       scale, and each interval's size, peak speed, direction and endpoints'
-      eccentricity and polar angle). Versioned, and never
-      edited once published. wl-xcon's online detector mirrors this one, and
+      eccentricity and polar angle); v3.json carries a run across a short
+      loss of data, a sample with no position, flagged, as wl-xcon's online
+      detector does (design spec 2026-11-06-eye-lost-data-and-region-design.md).
+      Versioned, and never edited once published. wl-xcon's online detector mirrors this one, and
       its contract tests read these files rather than import this package,
       so a change of behaviour reaches it as a new version beside the old
       (its XC-398).
