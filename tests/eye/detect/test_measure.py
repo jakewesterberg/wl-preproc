@@ -410,3 +410,35 @@ def test_a_one_sample_fixation_has_no_direction():
 def test_an_unknown_geometry_is_refused():
     with pytest.raises(ValueError, match="geometry"):
         amplitude(np.zeros((5, 2)), 0, 5, geometry="cyclopean")
+
+
+def test_a_runs_peak_speed_is_its_measured_samples_alone():
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 6:
+    a lost sample's speed is not a measurement, so it is never the peak; the
+    run is flagged instead."""
+    velocity = _speeds()
+    velocity[12, 0] = 900.0
+    velocity[14, 0] = 300.0
+    offered = _offered(40)
+    offered[12] = Label.LOST
+
+    got = measure_event_run(np.zeros((40, 2)), velocity, offered, 10, 16, 500.0, geometry=PER_AXIS,
+                            runs_end_before_landing=False, min_measured_ms=None)
+
+    assert got.peak_velocity_deg_s == 300.0
+
+
+def test_a_run_with_lost_ends_is_measured_out_to_the_measured_samples_beyond_them():
+    """A detector that ran on the filled trace may end a run in a loss, where
+    the eye landed: its size reaches the first measured sample after it, and
+    its start the last before (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md`, the correction of
+    2026-11-06)."""
+    gaze = np.column_stack([np.arange(40, dtype=float), np.zeros(40)])
+    offered = _offered(40)
+    offered[[10, 15]] = Label.LOST
+
+    got = measure_event_run(gaze, _speeds(), offered, 10, 16, 500.0, geometry=PER_AXIS,
+                            runs_end_before_landing=False, min_measured_ms=None)
+
+    assert (got.start_x_deg, got.end_x_deg, got.amplitude_deg) == (9.0, 16.0, 7.0)

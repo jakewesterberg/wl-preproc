@@ -738,6 +738,58 @@ def _inject_missing_left_gaze(session_dir) -> None:
     ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
 
 
+def _drop_a_frame_inside_the_first_step(session_dir) -> None:
+    """One frame of the eye camera dropped half-way through the first planted
+    ramp, A to B, 2.4 degrees: its row removed from the file, so its frame
+    number is missing for both eyes, as the camera drops one."""
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    del lines[1 + _DROPPED_FRAME_ROW]
+    ohdpi_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+#: The file row `dropped_frame_session` removes: eight frames into the first
+#: ramp, which lasts sixteen (`_DURATIONS_S[0]`).
+_DROPPED_FRAME_ROW = _first_row_at(4 * TRIAL_DURATION_S + _ONSET_OFFSETS_S[0]) + 8
+
+
+@pytest.fixture(scope="module")
+def dropped_frame_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_stepped_session`'s own construction with one frame dropped
+    inside its first planted saccade (`_drop_a_frame_inside_the_first_step`),
+    and the daemon run immediately after (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 11). Date,
+    subject and seed checked unclaimed across `tests/` on 2026-11-06.
+    Returns the session's key."""
+    session_key, _segment, _onset_times = _build_stepped_session(
+        tmp_path_factory,
+        dirname="detectdrop", session_id="2027-06-24_01", subject="detdrop1",
+        session_datetime=datetime.datetime(2027, 6, 24, 9, 0), seed=624,
+        after_generate=_drop_a_frame_inside_the_first_step,
+    )
+    daemon_module.run_once(prefix=prefix)
+    return session_key
+
+
+def test_a_saccade_across_a_dropped_frame_is_one_saccade_flagged_with_its_lost_samples(dropped_frame_session):
+    """The requester's question of 2026-11-06 began here: one frame dropped
+    inside a saccade split it in two, or erased it. The four rows whose
+    velocity spans the gap are lost, and each trace's saccade is carried
+    across them: one saccade, its four lost samples counted, flagged."""
+    from wl_preproc.schema import detect, paramset
+
+    key = dropped_frame_session
+    gap = _DROPPED_FRAME_ROW - 1
+    ek = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+          if row["params"]["detector"] == "engbert_kliegl"]
+    for trace in ("left", "right", "conjunction"):
+        runs = (detect.EyeDetection.Run & key & {"paramset_idx": ek[0], "trace": trace}
+                & f"run_start <= {gap + 2} AND run_stop > {gap - 1}").to_dicts()
+        assert [(row["label"], row["n_lost"], row["flagged"]) for row in runs] == [("saccade", 4, 1)], (trace, runs)
+    lost = (detect.EyeValidity.Run & key & {"eye": "left", "label": "lost"}).to_dicts()
+    assert [(row["run_start"], row["run_stop"]) for row in lost] == [(gap - 1, gap + 3)]
+
+
 @pytest.fixture(scope="module")
 def missing_gaze_session(daemon_module, prefix, tmp_path_factory):
     """`_build_stepped_session`'s own construction with one missing left-eye
@@ -1389,17 +1441,18 @@ def test_a_missing_gaze_value_is_lost_and_counted_end_to_end(missing_gaze_sessio
     assert covering["label"] == "lost"
 
 
-def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
-    """The point of withholding it: every registered detector's stored run
-    over the missing sample, on the left trace, is the mask's own `lost`
-    -- no detector was handed the sample to label. The conjunction falls
-    back to the right eye there: it carries the right eye's own label, and
-    `EyeDetection.Source` says `right` (design spec
+def test_no_detector_measures_a_missing_gaze_value(missing_gaze_session):
+    """Lost, the sample is offered with its position filled (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 3): every
+    registered detector's stored run over it, on the left trace, is the
+    mask's own `lost`, or a run of the detector's carried across it and
+    flagged. The conjunction draws on both eyes there, the left eye's loss
+    offered as the right eye's measurement is (design spec
     `2026-09-28-both-eyes-fallback-design.md` section 1).
 
-    *Until 2026-09-28 the conjunction was labelled from the left eye's mask
-    alone, and read `invalid` here too; until 2026-11-06 the mask's own run
-    was `invalid`; true when written.*"""
+    *Until 2026-11-06 it was withheld, every left run over it the mask's
+    `invalid`, and the conjunction fell back to the right eye there; true
+    when written.*"""
     from wl_preproc.schema import detect
 
     def covering(table, trace, name, start, stop):
@@ -1410,12 +1463,9 @@ def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
     session_key, _report, missing_row = missing_gaze_session
     for name in _detector_names():
         left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
-        assert left["label"] == "lost", (name, left["label"])
-        right = covering(detect.EyeDetection.Run, "right", name, "run_start", "run_stop")
-        both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
-        assert both["label"] == right["label"], (name, both["label"], right["label"])
+        assert left["label"] == "lost" or left["flagged"] == 1, (name, left["label"], left["flagged"])
         source = covering(detect.EyeDetection.Source, "conjunction", name, "source_start", "source_stop")
-        assert source["source"] == "right", (name, source)
+        assert source["source"] == "both", (name, source)
 
 
 def test_saccade_runs_carry_measurements_and_others_do_not(stepped_session):
