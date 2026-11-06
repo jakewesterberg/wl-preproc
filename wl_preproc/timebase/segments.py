@@ -26,6 +26,7 @@ has none.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -239,6 +240,36 @@ class SyncBoxSession:
                 out.append((index, before, _ticks(self.logs[index])[0]))
         return out
 
+    def losses(self) -> list[SegmentLoss]:
+        """Every loss of the box's records, segment by segment in `logs`'
+        order: a gap before a segment on session time's clock, then its `L`
+        records as the box wrote them, each window placed in session time
+        where the segment keeps it (design spec
+        `2026-11-04-syncbox-header-design.md` section 6)."""
+        gaps = {index: (start_us, stop_us) for index, start_us, stop_us in self.gaps()}
+        out = []
+        for index, log in enumerate(self.logs):
+            def placed(tick_us: int | None, index: int = index) -> float | None:
+                return None if tick_us is None or not self.in_session_time(index) else self.seconds(tick_us)
+
+            if index in gaps:
+                start_us, stop_us = gaps[index]
+                out.append(SegmentLoss(index=index, cause=GAP, path="W", gpio=None, lost=None, bound=None,
+                                       tick_us=stop_us, before_us=start_us, after_us=stop_us,
+                                       start_s=placed(start_us), stop_s=placed(stop_us)))
+            out += [SegmentLoss(index=index, cause=loss.cause, path=loss.path, gpio=loss.gpio, lost=loss.count,
+                                bound=loss.bound, tick_us=loss.tick_us, before_us=loss.before_us,
+                                after_us=loss.after_us, start_s=placed(loss.before_us), stop_s=placed(loss.after_us))
+                    for loss in log.losses]
+        return out
+
+    def fails_the_timing_check(self, runs: list[tuple[float, float]]) -> bool:
+        """Whether a loss of session time's code words fails the session's
+        timing check, against its measured runs `(start_s, stop_s)`
+        (`timing_check_fails`)."""
+        return any(timing_check_fails(loss.path, loss.cause, loss.start_s, loss.stop_s, runs)
+                   for loss in self.losses() if self.in_session_time(loss.index))
+
     def roles(self) -> list[str]:
         """Each segment's role, as `timebase.SyncBoxSegment` stores it: every
         segment of session time's clock keeps session time, holding a barcode
@@ -247,6 +278,49 @@ class SyncBoxSession:
         nothing."""
         return [SEGMENT_SESSION_TIME if self.in_session_time(i) else SEGMENT_AFTER_RESTART if log.barcodes
                 else SEGMENT_NO_BARCODE for i, log in enumerate(self.logs)]
+
+
+#: A loss the reader finds rather than one the box writes: a gap on one
+#: clock, the box recording elsewhere (`SyncBoxSession.gaps`).
+GAP = "gap"
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentLoss:
+    """One loss of a segment's records, as `timebase.SyncBoxSegment.Loss`
+    stores it: an `L` record as the box wrote it (wl-sync's `Loss`), or a gap
+    before the segment, whose `lost` and `bound` are None; its window placed in
+    session time, `start_s` to `stop_s`, where the segment keeps session time
+    and the end is known."""
+
+    index: int
+    cause: str
+    path: str
+    gpio: int | None
+    lost: int | None
+    bound: str | None
+    tick_us: int
+    before_us: int | None
+    after_us: int | None
+    start_s: float | None
+    stop_s: float | None
+
+
+def timing_check_fails(path: str, cause: str, start_s: float | None, stop_s: float | None,
+                       runs: list[tuple[float, float]]) -> bool:
+    """Whether one loss of session time's records fails the session's timing
+    check (design spec `2026-11-04-syncbox-header-design.md` section 6,
+    decision 3.5): a loss of code words, or a gap, whose window overlaps a
+    measured run, and any `desync`, whose window has no end and after which no
+    run can be measured to show what it lost. A lost edge is reported only:
+    no stage here reads the box's edges."""
+    if path != "W":
+        return False
+    if cause == "desync":
+        return True
+    low = -math.inf if start_s is None else start_s
+    high = math.inf if stop_s is None else stop_s
+    return any(low <= run_stop_s and high >= run_start_s for run_start_s, run_stop_s in runs)
 
 
 def _ticks(log: SyncBoxLog) -> list[int]:

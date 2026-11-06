@@ -264,3 +264,56 @@ def test_a_measured_barcode_delay_leaves_session_time_where_the_devices_see_it(t
     session_dir, truth = _synthetic(tmp_path, syncbox_barcode_delay_us=1_500)
     assert segments.session_reference(session_dir) == pytest.approx(dict(truth.barcodes), abs=1e-6)
     assert syncbox_codes(session_dir)[0][0] == pytest.approx(truth.code_words[0][0], abs=1e-6)
+
+
+# Section 6: the box's losses, and which fail the session's timing check.
+
+RUNS = [(1.0, 3.0), (5.0, 9.0)]
+
+
+@pytest.mark.parametrize(("path", "cause", "start_s", "stop_s", "fails"), [
+    ("W", "fifo_full", 2.0, 2.5, True),
+    ("W", "fifo_full", 3.5, 4.5, False),
+    ("W", "fifo_full", None, 0.5, False),
+    ("W", "fifo_full", 9.5, None, False),
+    ("W", "fifo_full", 4.0, None, True),
+    ("W", "gap", 2.5, 6.0, True),
+    ("W", "gap", 3.2, 4.8, False),
+    ("W", "desync", 9.5, None, True),
+    ("W", "desync", None, None, True),
+    ("E", "buffer_overflow", 2.0, 2.5, False),
+    ("E", "unaccounted", None, 6.0, False),
+])
+def test_a_loss_fails_the_timing_check_where_it_can_have_cost_a_runs_codes(path, cause, start_s, stop_s, fails):
+    """Decision 3.5: a lost code word, or a gap, inside a measured run fails
+    it; a desync always does, since no run after it can be measured to show
+    what it lost; a lost edge never does, since no stage here reads edges."""
+    assert segments.timing_check_fails(path, cause, start_s, stop_s, RUNS) is fails
+
+
+def test_each_loss_is_kept_as_the_box_wrote_it_and_placed_in_session_time(tmp_path):
+    from wl_sync.log import Loss
+
+    session = _rolled(tmp_path, *_barcodes((40.0, 140), (41.0, 141)),
+                      Loss(tick_us=40_500_000, path="E", gpio=GPIO_MAP["pd1_comp"], count=2, bound="exact",
+                           cause="buffer_overflow", before_us=40_400_000, after_us=40_500_000),
+                      Loss(tick_us=40_600_000, path="W", gpio=None, count=1, bound="at_least", cause="desync",
+                           before_us=40_600_000, after_us=None))
+    assert [(loss.index, loss.cause, loss.path, loss.lost, loss.bound, loss.start_s, loss.stop_s)
+            for loss in session.losses()] == [
+        (1, "gap", "W", None, None, 1.0, 38.0),
+        (1, "buffer_overflow", "E", 2, "exact", 38.4, 38.5),
+        (1, "desync", "W", 1, "at_least", 38.6, None)]
+    assert session.fails_the_timing_check([])
+
+
+def test_a_loss_on_another_clock_is_not_placed_and_does_not_fail_session_time(tmp_path):
+    """A restarted process's segment is already tier D and waits for a bridge;
+    its losses are kept, unplaced."""
+    from wl_sync.log import Loss
+
+    session = _rolled(tmp_path, *_barcodes((0.4, 200), (1.4, 201)),
+                      Loss(tick_us=1_000_000, path="W", gpio=None, count=1, bound="at_least", cause="desync",
+                           before_us=1_000_000, after_us=None), process=LATER_PROCESS)
+    assert [(loss.cause, loss.start_s) for loss in session.losses()] == [("desync", None)]
+    assert not session.fails_the_timing_check([(0.0, 10.0)])
