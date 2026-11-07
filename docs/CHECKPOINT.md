@@ -476,7 +476,8 @@ requester chose to merge the same day; true when written.*
 > approved 2026-11-06; `handoffs/2026-11-06-eye-lost-data-and-region.md`): a saccade is carried
 > across a short loss of data, counted and flagged, an invalid sample still ending it; the mask's
 > region is each session's recorded field plus 2 degrees; v3 of the saccade fixtures is made.
-> Next: its review; then, in the requester's order
+> Its final review's one Critical and five Important are fixed (handoff §6). Next: its merge; then, in the
+> requester's order
 > of 2026-10-31, wl-xcon's asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a
 > setting's value that is an appearance), the pipeline's scaling to long sessions, part 3b, the NI
 > as the clock, part 2, the bridges, and the older minors in one branch.
@@ -486,7 +487,7 @@ requester chose to merge the same day; true when written.*
 > was next; until its merge, that the merge was next; until the header follow-up was built, that
 > its plan was being proved; until its review, that the review was next; until its merge, that the
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
-> each true when written.*
+> until its review, that the review was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

@@ -87,7 +87,7 @@ status:
     Lost data and the screen region, first of wl-xcon's asks by the
     requester's decision of 2026-11-06, is built on
     feat/eye-lost-and-region (docs/handoffs/2026-11-06-eye-lost-data-and-region.md),
-    not merged, its review next; then, in the requester's order of
+    reviewed, not merged, its merge next; then, in the requester's order of
     2026-10-31, wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value
     that is an appearance), the pipeline's scaling to long sessions, part
     3b, the NI as the clock, and part 2, the bridges.

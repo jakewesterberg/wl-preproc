@@ -339,3 +339,40 @@ its code:
     flagged); a blink inside it (no run crosses it); 74 ms with no position inside it (the run ends before the
     loss, kept, unflagged); lost samples alone in fixation (no event). A test rebuilds v3 and compares it with
     the file, so the builder's every rule is held.
+
+## Amendments, 2026-11-07, made in the final review
+
+11. **The two-eye fallback counts lost data as missing** (§6; the review's C1). The plan had it count a lost
+    sample as offered, so a one-eye event the other eye lost data during was no longer kept whole, and where the
+    other eye's detector, running on filled gaze, found nothing, the event left the two-eye trace: 3.7% of
+    Engbert-Kliegl's two-eye events on the reference recording's first ten minutes, by the reviewer's measure.
+    The requester's rule of 2026-09-28 keeps such an event whole when the other eye's data was missing at any
+    point during it, and lost data is missing data. Where both eyes lost data the two-eye trace stores `lost`.
+    Re-measured on the whole recording, Nystrom-Holmqvist keeps 613 left and 202 right saccades whole (281 and
+    177 before lost data): 535 of the left's because the right eye lost data in them and withheld none, mostly
+    the repaired glitches the mask did not mark before (amendment 14), much as before the glitch repair of
+    2026-09-28 (587 and 205). That trace's reference check asserted it `neither` wherever both masks are set; a
+    kept run now carries across its own short loss, so the check asserts that outside the kept runs, that each
+    kept run is marked by its own eye, and that none covers a sample its own eye withholds (all 1197 samples
+    where the old assertion failed lie in 103 kept runs, each on its own eye's carried loss).
+12. **A two-eye run is measured on its eye's own mask** (§6; the review's I1): on the eye measured throughout it,
+    the left first, else on one that lost data in it but withheld none, so a lost sample's speed is never its
+    peak. Measured on the two-eye trace's own fill, a flagged two-eye saccade's peak read up to 27% high.
+13. **A saccade whose take-off a short loss hides is measured, and labelled, from the last measured sample before
+    the loss** (§4, §6; the review's I2, the mirror of amendment 6). An unknown velocity still never opens a run,
+    and the run's start stays its first measured velocity over the threshold, which on wl-xcon's rig is the onset
+    its states are timed by; only the size, direction, start position and polar angle reach back. Agreed by
+    wl-xcon on 2026-11-07 and built as its version 11 (`991191c`, on its branch saccade-rules-2026-11-04, under
+    its review), which agrees with ours everywhere it checked but v3's blink trace, which its input cannot yet
+    express (no mask, its invalid input being still to build); v3 gains a trace pinning it. On its detector,
+    version 10 measured v1's 8-degree step with one sample lost at take-off at 6.551 degrees (5.802 with two,
+    5.082 with three); nothing on its rig reads a saccade's size yet (its XC-400 and XC-427 will).
+14. **A repaired glitch is lost on its own sample alone, with no margin** (§2), as the table says and wl-xcon read
+    it (its R5): with the margin, one glitch inside a short saccade erased it.
+15. **The daily report on a database declared before** names the statements in place of the eyes it cannot read
+    at the placeholder, rather than raising.
+16. **The reference-recording validations hand each detector what `EyeDetection.make` does** (§11; the review's
+    I3): the mask with the repaired glitches lost, then the gaze over a carried loss filled and its velocity
+    (`tests/eye/detect/_offered.py`). Re-measured with the recording set: the six reference-gated modules' 68
+    tests pass, Nystrom-Holmqvist's both-eyes fallback keeping 613 left and 202 right saccades whole (amendment
+    11).

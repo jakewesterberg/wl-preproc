@@ -502,11 +502,14 @@ present but invalid ends it; the mask's screen region is each session's recorded
 plus 2 degrees. Designed in `docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md` (its §12 answers
 wl-xcon's six questions; its amendments 2, 6, 7 and 10 record wl-xcon's check of 2026-11-06), built on
 `feat/eye-lost-and-region`, not merged.
-- *Agreed with wl-xcon, rule by rule:* the bound is the loss of data, from the last position to the next, at most
-  50 ms inclusive (its `max_gap_s`); unknown velocities carry a run and never make one; a run ends at its last
-  measured velocity, except that a short loss at its end is carried to the landing (both sessions' correction of
-  2026-11-06, its version 8); the flag is judged on the run as stored, `[start - 2, stop)`; a non-finite position
-  is lost. Its invalid input, and the region, it builds to these definitions.
+- *Agreed with wl-xcon, rule by rule:* the bound is the loss of data, from the last position to the next, at most 50
+  ms inclusive (its `max_gap_s`); unknown velocities carry a run and never make one; a run ends at its last measured
+  velocity, except that a short loss at its end is carried to the landing (both sessions' correction of 2026-11-06,
+  its version 8); a take-off a short loss hides is measured from the last measured sample before it, detection
+  unchanged (its version 11, `991191c`, 2026-11-07); the flag is judged on the run as stored, `[start - 2, stop)`; a
+  repaired glitch is lost on its own sample alone, with no margin (its R5); a non-finite position is lost. Its
+  invalid input, and the region, it builds to these definitions.
 - *v3:* `docs/fixtures/saccade/v3.json`, made by `python -m wl_preproc.eye.detect.contract_fixtures v3` from v2's
-  traces and five of its own; its `about` is the reading rule. Built, not merged; its SHA-256 goes to wl-xcon with
+  traces and six of its own (the sixth, a short loss at a saccade's take-off, added in the final review); its
+  `about` is the reading rule. Built, not merged; its SHA-256 goes to wl-xcon with
   the merge.
