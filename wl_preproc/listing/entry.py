@@ -22,6 +22,7 @@ import dataclasses
 import datetime
 from pathlib import Path
 
+from wl_preproc.events.rigrecords import acts, change_fields
 from wl_preproc.events.runs import starts_inside, stored_doubles
 
 from wl_preproc.contracts.protocol import SessionEntry
@@ -56,7 +57,7 @@ class SessionFacts:
     # How many of wl-xcon's training records it has, and the clock that kept
     # its time (design spec `2026-10-18-training-records-and-backup-clock-design.md`
     # section 3.4).
-    parameter_changes: int  # its core.ParameterChange rows
+    parameter_changes: int  # a person's acts on a setting among its core.ParameterChange rows
     control_kinds: dict[str, int]  # control kind -> its core.RigControl rows
     clock: str | None  # timebase.SessionClock's source; None until chosen
 
@@ -270,9 +271,12 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
         "session_kind", *_CALIBRATION_COLUMNS).to_dicts()}
     run_calibrations = _by_session((core.RunCalibration & keys).to_dicts())
     warnings = _by_session((core.AcceptedWarning & keys).to_dicts(order_by="warning_number"))
-    # Counted by the database, since the rows are not listed.
-    changes = {_session(row): int(row["n"]) for row in (pipeline.Session & keys).aggr(
-        core.ParameterChange, n="count(*)", exclude_nonmatching=True).to_dicts()}
+    # A person's acts on a setting, read from each row's stored line (design
+    # spec `2026-11-07-rig-record-fields-design.md` section 7).
+    lines = collections.defaultdict(list)
+    for row in (core.ParameterChange & keys).proj("row").to_dicts(order_by="change_line"):
+        lines[_session(row)].append(row["row"])
+    changes = {session: acts(change_fields(rows)[0]) for session, rows in lines.items()}
     control_kinds = collections.defaultdict(dict)
     for row in dj.U("subject", "session_datetime", "kind").aggr(core.RigControl & keys, n="count(*)").to_dicts():
         control_kinds[_session(row)][row["kind"]] = int(row["n"])

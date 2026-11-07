@@ -53,7 +53,11 @@ def _rig_record(record: dict | None) -> dict:
     kind: the calibration without its colour model, and each warning by its
     code and run (design spec `2026-10-14-session-kind-and-warnings-design.md`
     section 5); and how many training records the file holds (design spec
-    `2026-10-18-training-records-and-backup-clock-design.md` section 3.2)."""
+    `2026-10-18-training-records-and-backup-clock-design.md` section 3.2), its
+    live parameter changes counted as a person's acts on a setting (design
+    spec `2026-11-07-rig-record-fields-design.md` section 7)."""
+    from wl_preproc.events.rigrecords import acts
+
     if record is None:
         return {"session_kind": None, "calibration": None, "accepted_warnings": [], "training_records": None}
     calibration = record["calibration"]
@@ -63,7 +67,7 @@ def _rig_record(record: dict | None) -> dict:
             name: calibration[name] for name in ("id", "standard", "measured_on")},
         "accepted_warnings": [{"code": warning["code"], "run_number": warning["run_number"]}
                               for warning in record["warnings"]],
-        "training_records": {"parameter_changes": len(record["parameter_changes"]),
+        "training_records": {"parameter_changes": acts([change["fields"] for change in record["parameter_changes"]]),
                              "controls": len(record["controls"])},
     }
 

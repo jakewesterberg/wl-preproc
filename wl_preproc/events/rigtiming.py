@@ -16,7 +16,13 @@ measured `RUN_START`, its end row to its `RUN_END` when it closed, and each
 control timed by its code to that code -- they fit the rig's clock as a rate and
 an offset, residuals kept. A control that strobed nothing (a note, a schedule,
 a pause its allocation has no code for) is timed through the fit, and is
-otherwise untimed. Fewer than two matches, a residual past `RIG_CLOCK_LIMIT_S`,
+otherwise untimed. **So is a change row** (design spec
+`2026-11-07-rig-record-fields-design.md` section 7): since wl-xcon's engine
+build C3 each carries its instant, so a clear or a switch, which strobes
+nothing, is timed through the fit, and one its code times joins the fit's
+pairs, as a coded control does, **unless with them the fit would fail**: then
+it is made without them, and a problem says so, so no session timed before is
+left untimed by them. Fewer than two matches, a residual past `RIG_CLOCK_LIMIT_S`,
 or a rate no clock runs at (`RIG_CLOCK_DRIFT_LIMIT_PPM`), and there is no fit:
 a resumed session's process anchors the rig's clock again (wl-xcon's
 `welfare.SessionClock`), which one line cannot follow.
@@ -168,11 +174,20 @@ def time_records(records: RigRecords, codes: Mapping[int, list[float]],
                  instants: Sequence[tuple[float, float]]) -> Timing:
     """Each record's session time. `codes` is `code_times` of the session's
     decoded codes; `instants` is `run_instants` of its runs."""
-    change_times, change_problems = _join(records.changes, codes, CHANGES_NAME)
+    coded_changes, change_problems = _join(records.changes, codes, CHANGES_NAME)
     coded_times, control_problems = _join(records.controls, codes, CONTROLS_NAME)
     pairs = [*instants, *((control.at, time) for control, time in zip(records.controls, coded_times, strict=True)
                           if time is not None and control.at is not None)]
-    fitted = fit_rig_clock(pairs)
+    changed = [(change.at, time) for change, time in zip(records.changes, coded_changes, strict=True)
+               if time is not None and change.at is not None]
+    fitted = fit_rig_clock([*pairs, *changed])
+    fit_problems = []
+    if changed and not isinstance(fitted, RigClock):
+        without = fit_rig_clock(pairs)
+        if isinstance(without, RigClock):
+            fit_problems.append(f"{CHANGES_NAME}: with its rows the rig's clock would not fit ({fitted}), so it is "
+                                "fitted without them")
+            fitted = without
     clock = fitted if isinstance(fitted, RigClock) else None
     controls, unfitted = [], 0
     for control, time in zip(records.controls, coded_times, strict=True):
@@ -184,9 +199,17 @@ def time_records(records: RigRecords, codes: Mapping[int, list[float]],
         else:
             unfitted += strobed_nothing
             controls.append((None, None))
-    problems = [*change_problems, *control_problems]
-    if unfitted:
-        one = unfitted == 1
-        problems.append(f"{CONTROLS_NAME}: {_rows(unfitted)} strobed nothing, and the rig's clock could not be fitted "
-                        f"to the recording ({fitted}), so {'it is' if one else 'they are'} not timed")
+    change_times, changes_unfitted = [], 0
+    for change, time in zip(records.changes, coded_changes, strict=True):
+        strobed_nothing = change.coded and change.event_code is None and change.at is not None
+        if time is None and strobed_nothing and clock is not None:
+            time = clock.session_time(change.at)
+        changes_unfitted += time is None and strobed_nothing
+        change_times.append(time)
+    problems = [*change_problems, *control_problems, *fit_problems]
+    for name, n in ((CONTROLS_NAME, unfitted), (CHANGES_NAME, changes_unfitted)):
+        if n:
+            one = n == 1
+            problems.append(f"{name}: {_rows(n)} strobed nothing, and the rig's clock could not be fitted "
+                            f"to the recording ({fitted}), so {'it is' if one else 'they are'} not timed")
     return Timing(changes=tuple(change_times), controls=tuple(controls), clock=clock, problems=tuple(problems))

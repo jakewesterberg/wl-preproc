@@ -217,7 +217,10 @@ class TrainingRecords(_Frozen):
     changes the rig applied and the console controls it was sent. Who acted
     is not published (design spec
     `2026-10-18-training-records-and-backup-clock-design.md` section 0,
-    decision 6)."""
+    decision 6). Since 2026-11-07 `parameter_changes` counts a person's acts
+    on a setting, one per act among a set, a hand-back, a range edit and a
+    revert, not the change log's rows (design spec
+    `2026-11-07-rig-record-fields-design.md` section 7)."""
 
     parameter_changes: int
     controls: int

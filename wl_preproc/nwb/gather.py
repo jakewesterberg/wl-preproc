@@ -96,7 +96,11 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
     training records are chosen by the same rule (design spec
     `2026-10-18-training-records-and-backup-clock-design.md`, amendment 10).
     Who acted is read by kind only: the file names no one (decision 3 of the
-    first; decision 6 of the second)."""
+    first; decision 6 of the second). Each change's kind, act and the rest of
+    what wl-xcon's engine build C3 adds are read from its stored line (design
+    spec `2026-11-07-rig-record-fields-design.md` section 7), and what could
+    not be read is in `change_notes`."""
+    from wl_preproc.events.rigrecords import change_fields
     from wl_preproc.schema import core
 
     def the_files(row: dict) -> bool:
@@ -106,6 +110,9 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
     if not rows:
         return None
     (row,) = rows
+    changes = [change for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line")
+               if the_files(change)]
+    fields, change_notes = change_fields([change["row"] for change in changes])
     recorded = any(row[column] is not None for column in ("calibration_id", "calibration_standard",
                                                           "calibration_measured_on"))
     return {
@@ -120,9 +127,13 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
                      for warning in (core.AcceptedWarning & session_key).to_dicts(order_by="warning_number")
                      if the_files(warning)],
         "parameter_changes": [
-            {name: change[name] for name in ("session_time", "run_number", "name", "was", "now", "sequence",
-                                             "by_kind")}
-            for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line") if the_files(change)],
+            {**{name: change[name] for name in ("session_time", "run_number", "name", "was", "now", "sequence",
+                                                "by_kind")},
+             "fields": these,
+             "time_source": "" if change["session_time"] is None else (
+                 "rig_clock" if these.strobed_nothing else "code")}
+            for change, these in zip(changes, fields, strict=True)],
+        "change_notes": change_notes,
         "controls": [
             {name: control[name] for name in ("session_time", "time_source", "at", "kind", "run_number",
                                               "trial_index", "detail", "by_kind")}
@@ -739,6 +750,9 @@ def gather(activation_key: dict) -> Gathered:
     run_tables, run_notes = run_record(run_out, blocks, rig_runs, places(record))
     rig_tables.update(run_tables)
     condition_notes += run_notes
+    rig_record = _rig_record(session_key, {row["run_number"] for row in run_rows})
+    if rig_record is not None:
+        condition_notes += rig_record["change_notes"]
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),
@@ -768,6 +782,6 @@ def gather(activation_key: dict) -> Gathered:
         probes=probes,
         probe_notes=probe_notes,
         trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
-        rig_record=_rig_record(session_key, {row["run_number"] for row in run_rows}),
+        rig_record=rig_record,
         rig_tables=rig_tables,
     )

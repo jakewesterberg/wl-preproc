@@ -507,9 +507,9 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
 
     record = {**RIG_RECORD, "parameter_changes": [
         {"session_time": 2.5, "run_number": 1, "name": "reward_ml", "was": "0.2", "now": "0.25", "sequence": 1,
-         "by_kind": "member"},
+         "by_kind": "member", "fields": a_set(), "time_source": "code"},
         {"session_time": None, "run_number": None, "name": "seed", "was": None, "now": "[8, 9]", "sequence": None,
-         "by_kind": None}],
+         "by_kind": None, "fields": a_set(), "time_source": ""}],
         "controls": [
         {"session_time": 4.0, "time_source": "code", "at": 1773478804.0, "kind": "pause", "run_number": 1,
          "trial_index": 1, "detail": "{}", "by_kind": "box"},
@@ -526,6 +526,44 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
         assert controls[["time_source", "kind", "run_number", "trial_index", "detail", "by_kind"]].values.tolist() == [
             ["code", "pause", 1, 1, "{}", "box"], ["", "note", -1, -1, '{"note": "lid droop"}', ""]]
         assert controls["rig_at"].iloc[0] == 1773478804.0 and math.isnan(controls["rig_at"].iloc[1])
+
+
+def a_set(**fields):
+    """A change line's fields as `events/rigrecords.py::change_fields` reads
+    them: a person's value, as every row before wl-xcon's engine build C3."""
+    from wl_preproc.events.rigrecords import ChangeFields
+
+    return ChangeFields(**{"kind": "set", "change": None, "trial_number": None, "went": None, "step": None,
+                           "to": None, "from_draw": None, "block": None, "moment": None, "strobed_nothing": False,
+                           **fields})
+
+
+def test_the_change_log_is_published_by_kind_and_act(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7: a
+    revert's rows share their act; a clear, which strobed nothing, is timed
+    by the rig's clock; a range's values are draws."""
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    def change(name, fields, time_source="code"):
+        return {"session_time": 1.0, "run_number": 1, "name": name, "was": "1", "now": "2", "sequence": None,
+                "by_kind": "member", "fields": fields, "time_source": time_source}
+
+    record = {**RIG_RECORD, "parameter_changes": [
+        change("contrast", a_set(change=3, trial_number=12, went="easier", step=-0.1)),
+        change("hold", a_set(kind="range", change=4, from_draw="block", block="easy")),
+        change("contrast", a_set(kind="revert", change=5, moment=0)),
+        change("hold", a_set(kind="revert", change=5, moment=0)),
+        change("owed", a_set(kind="clear", change=6, strobed_nothing=True), "rig_clock")], "controls": []}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
+    with io:
+        changes = nwb.processing["rig_record"]["parameter_changes"].to_dataframe()
+        assert changes["kind"].tolist() == ["set", "range", "revert", "revert", "clear"]
+        assert changes["change"].tolist() == [3, 4, 5, 5, 6]
+        assert (changes["trial_id"].tolist()[:2], changes["went"].tolist()[0], changes["step"].iloc[0]) == (
+            [12, -1], "easier", -0.1)
+        assert (changes["from_draw"].tolist()[1], changes["block"].tolist()[1], changes["moment"].tolist()) == (
+            "block", "easy", [-1, -1, 0, 0, -1])
+        assert changes["time_source"].tolist() == ["code", "code", "code", "code", "rig_clock"]
 
 
 def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_table(tmp_path):

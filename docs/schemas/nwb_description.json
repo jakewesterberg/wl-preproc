@@ -1004,7 +1004,7 @@
     },
     "TrainingRecords": {
       "additionalProperties": false,
-      "description": "How many of wl-xcon's training records the file holds: the live\nchanges the rig applied and the console controls it was sent. Who acted\nis not published (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 0,\ndecision 6).",
+      "description": "How many of wl-xcon's training records the file holds: the live\nchanges the rig applied and the console controls it was sent. Who acted\nis not published (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 0,\ndecision 6). Since 2026-11-07 `parameter_changes` counts a person's acts\non a setting, one per act among a set, a hand-back, a range edit and a\nrevert, not the change log's rows (design spec\n`2026-11-07-rig-record-fields-design.md` section 7).",
       "properties": {
         "controls": {
           "title": "Controls",

@@ -182,8 +182,11 @@ def _add_warnings(module, warnings: list[dict]) -> None:
 
 
 def _add_changes(module, changes: list[dict]) -> None:
+    fields = [change["fields"] for change in changes]
     module.add(DynamicTable(name="parameter_changes", description=(
-        "Each live change the rig applied, from wl-xcon's parameter_changes.jsonl, timed by the code it strobed."),
+        "Each change the rig applied to what the animal experienced, from wl-xcon's parameter_changes.jsonl, by its "
+        "kind and the act it belongs to, timed by the code it strobed or, for one that strobed nothing, by the rig's "
+        "clock fitted to the recording."),
         columns=[
             column("session_time", "When, in session seconds: its code's time (NaN if untimed).",
                    [_time(change["session_time"]) for change in changes]),
@@ -198,6 +201,27 @@ def _add_changes(module, changes: list[dict]) -> None:
                    [-1 if change["sequence"] is None else change["sequence"] for change in changes]),
             column("by_kind", "Who made it, by kind only: box or member ('' if not recorded).",
                    [change["by_kind"] or "" for change in changes]),
+            column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
+                           "revert, clear, drum or training; a row written before wl-xcon's engine build C3 is a "
+                           "set.", [field.kind for field in fields]),
+            column("change", "The act it belongs to, an id a revert's rows share (-1 if not recorded).",
+                   [-1 if field.change is None else field.change for field in fields]),
+            column("trial_id", "The first trial it applies to (-1 if not recorded).",
+                   [-1 if field.trial_number is None else field.trial_number for field in fields]),
+            column("went", "Which way it went by the setting's declared meaning: easier or harder ('' where that "
+                           "cannot be read, or not recorded).", [field.went or "" for field in fields]),
+            column("step", "now minus was, in the setting's unit (NaN where either is not a number).",
+                   [math.nan if field.step is None else field.step for field in fields]),
+            column("to", "What takes a handed-back setting in the open block: conditions, draw or run ('' "
+                         "otherwise).", [field.to or "" for field in fields]),
+            column("from_draw", "Whose draw a range changed or a revert restored: task or block ('' otherwise).",
+                   [field.from_draw or "" for field in fields]),
+            column("block", "That block type, where it is a block's own draw ('' otherwise).",
+                   [field.block or "" for field in fields]),
+            column("moment", "The act a revert goes back to, 0 for the run's start (-1 otherwise).",
+                   [-1 if field.moment is None else field.moment for field in fields]),
+            column("time_source", "How its time was found: code, or rig_clock for the rig's clock fit ('' if "
+                                  "untimed).", [change["time_source"] for change in changes]),
         ]))
 
 

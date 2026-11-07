@@ -130,3 +130,41 @@ def test_a_session_without_either_file_has_no_records_and_no_problem(tmp_path):
     from wl_preproc.events.rigrecords import RigRecords, read_rig_records
 
     assert read_rig_records(_record(tmp_path)) == RigRecords(changes=(), controls=(), problems=())
+
+
+def test_since_c3_a_change_line_names_its_kind_its_act_and_its_instant(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7: read
+    from the stored line, so no column is added; a line written before C3
+    is a person's value with no act id."""
+    import json
+
+    from wl_preproc.events.rigrecords import ChangeFields, acts, change_fields, read_rig_records
+
+    rows = [{"name": "contrast", "was": 0.5, "now": 0.4, "event_code": 4130},
+            {"name": "contrast", "was": 0.4, "now": 0.5, "kind": "set", "change": 3, "at": 1773478800.5,
+             "trial_number": 12, "meaning": {"went": "harder", "step": 0.1}, "event_code": 4130},
+            {"name": "hold", "was": None, "now": None, "kind": "hand_back", "change": 4, "to": "draw",
+             "event_code": 4130},
+            {"name": "owed", "was": 2, "now": 0, "kind": "clear", "change": 5, "event_code": None,
+             "at": 1773478801.0}]
+    (tmp_path / "xcon").mkdir()
+    (tmp_path / "xcon" / "parameter_changes.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    records = read_rig_records(tmp_path)
+    assert [change.at for change in records.changes] == [None, 1773478800.5, None, 1773478801.0]
+    fields, problems = change_fields([change.row for change in records.changes])
+    assert fields[0] == ChangeFields("set", None, None, None, None, None, None, None, None, False)
+    assert (fields[1].change, fields[1].trial_number, fields[1].went, fields[1].step) == (3, 12, "harder", 0.1)
+    assert (fields[2].kind, fields[2].to, fields[3].kind, fields[3].strobed_nothing) == ("hand_back", "draw",
+                                                                                       "clear", True)
+    assert problems == [] and acts(fields) == 3
+
+
+def test_a_change_field_it_cannot_read_is_none_and_said_once():
+    import json
+
+    from wl_preproc.events.rigrecords import change_fields
+
+    fields, problems = change_fields([json.dumps({"name": "a", "change": "3", "meaning": {"step": "big"}})])
+    assert (fields[0].change, fields[0].step, fields[0].kind) == (None, None, "set")
+    assert problems == ["1 change row: `change` is not a whole number or null, so it is read as none",
+                        "1 change row: `meaning.step` is not a finite number or null, so it is read as none"]

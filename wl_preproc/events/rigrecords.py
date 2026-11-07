@@ -20,7 +20,17 @@ it has no key, which is read as unknown, never as null; so is a value that is
 not a 16-bit code. `events/rigtiming.py` joins the rows to the recording by it.
 
 **This session's only:** the caller reads these for a session whose
-`config.json` is its own (`events/rigsession.py`'s `of_this_session`)."""
+`config.json` is its own (`events/rigsession.py`'s `of_this_session`).
+
+**The change log by kind** (design spec `2026-11-07-rig-record-fields-design.md`
+section 7): since wl-xcon's engine build C3 a change row names its `kind`
+(`set`, `hand_back`, `range`, `revert`, `clear`, `drum`, `training`; a row
+written before has none, and is a `set`), the act it belongs to (`change`, a
+revert's rows sharing one), the first trial it applies to, which way it went,
+the kind's own fields, and its instant (`at`). Its instant times a row that
+strobed nothing through the rig's clock fit, as a control's does; the rest is
+read from the stored line when the file is built (`change_fields`), so no
+column is added. `acts` counts a person's acts on a setting."""
 
 from __future__ import annotations
 
@@ -30,6 +40,7 @@ import math
 from pathlib import Path
 
 from wl_preproc.contracts.paths import XCON_DIRNAME
+from wl_preproc.events.rigfields import NUMBER, TEXT, WHOLE, Fields
 
 CHANGES_NAME = "parameter_changes.jsonl"
 CONTROLS_NAME = "controls.jsonl"
@@ -60,6 +71,7 @@ class ParameterChange:
     by_issuer: str | None
     by_token_id: str | None
     row: str
+    at: float | None = None  # its instant on the rig's anchored clock, since C3
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -168,7 +180,8 @@ def read_rig_records(session_dir: Path) -> RigRecords:
         changes.append(ParameterChange(
             line=line, sequence=_count(row.get("sequence")), name=row["name"],
             was=_json(row["was"]) if "was" in row else None, now=_json(row["now"]) if "now" in row else None,
-            run_index=_integer(row.get("run")), event_code=code, coded=coded, **_actor(row), row=text))
+            run_index=_integer(row.get("run")), event_code=code, coded=coded, **_actor(row), row=text,
+            at=_number(row.get("at"))))
     controls = []
     for line, text, row in _rows(xcon / CONTROLS_NAME, problems, "kind", "not a control naming its kind"):
         code, coded = _code(row)
@@ -178,3 +191,61 @@ def read_rig_records(session_dir: Path) -> RigRecords:
             coded=coded, detail=_json({key: value for key, value in row.items() if key not in _CONTROL_FIELDS}),
             **_actor(row), row=text))
     return RigRecords(changes=tuple(changes), controls=tuple(controls), problems=tuple(problems))
+
+
+# The kinds that change a setting, as a person's act; a clear and the two
+# switches are not (the requester's decision of 2026-11-07).
+SETTING_KINDS = ("set", "hand_back", "range", "revert")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ChangeFields:
+    """What a stored change line says beyond its setting and values (C3):
+    `kind` (`set` for a row written before C3), the act's id, the first trial
+    it applies to, which way it went and by how much, a hand-back's `to`, a
+    range's draw (`from`) and `block`, a revert's `moment` (0 the run's
+    start), and whether its act strobed nothing."""
+
+    kind: str
+    change: int | None
+    trial_number: int | None
+    went: str | None
+    step: float | None
+    to: str | None
+    from_draw: str | None
+    block: str | None
+    moment: int | None
+    strobed_nothing: bool
+
+
+def change_fields(rows: list[str]) -> tuple[list[ChangeFields], list[str]]:
+    """Each stored line's `ChangeFields`, and what could not be read, once
+    per field (`events/rigfields.py`'s rule)."""
+    fields = Fields(("change row", "change rows"))
+    out = []
+    for text in rows:
+        row = json.loads(text)
+        meaning = row.get("meaning") if isinstance(row.get("meaning"), dict) else {}
+        kind = fields.read(row, "kind", TEXT) or "set"
+        out.append(ChangeFields(
+            kind=kind, change=fields.read(row, "change", WHOLE), trial_number=fields.read(row, "trial_number", WHOLE),
+            went=fields.read(meaning, "went", TEXT, field="meaning.went"),
+            step=fields.read(meaning, "step", NUMBER, field="meaning.step"), to=fields.read(row, "to", TEXT),
+            from_draw=fields.read(row, "from", TEXT), block=fields.read(row, "block", TEXT),
+            moment=fields.read(row, "moment", WHOLE),
+            strobed_nothing="event_code" in row and row["event_code"] is None))
+    return out, fields.problems()
+
+
+def acts(changes: list[ChangeFields]) -> int:
+    """A person's acts on a setting: one per act id among rows of
+    `SETTING_KINDS`, a row with no id (written before C3) an act of its own."""
+    ids, alone = set(), 0
+    for change in changes:
+        if change.kind not in SETTING_KINDS:
+            continue
+        if change.change is None:
+            alone += 1
+        else:
+            ids.add(change.change)
+    return len(ids) + alone

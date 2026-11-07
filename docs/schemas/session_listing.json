@@ -454,7 +454,7 @@
     },
     "ListedTrainingRecords": {
       "additionalProperties": false,
-      "description": "How many of wl-xcon's training records the session has: its live\nparameter changes, and of its console controls the pauses and the manual\nrewards. The rows are in the database and the NWB file, not here (design\nspec `2026-10-18-training-records-and-backup-clock-design.md` section 3.4).",
+      "description": "How many of wl-xcon's training records the session has: its live\nparameter changes, and of its console controls the pauses and the manual\nrewards. The rows are in the database and the NWB file, not here (design\nspec `2026-10-18-training-records-and-backup-clock-design.md` section 3.4).\nSince 2026-11-07 `parameter_changes` counts a person's acts on a setting,\none per act among a set, a hand-back, a range edit and a revert; a clear\nand a switch are not counted (design spec\n`2026-11-07-rig-record-fields-design.md` section 7).",
       "properties": {
         "manual_rewards": {
           "title": "Manual Rewards",

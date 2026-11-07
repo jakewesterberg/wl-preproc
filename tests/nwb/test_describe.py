@@ -173,10 +173,30 @@ def test_the_description_counts_the_training_records_the_file_holds():
     from tests.nwb.test_writers import RIG_RECORD
     from wl_preproc.nwb.describe import describe
 
-    record = {**RIG_RECORD, "parameter_changes": [{"by_kind": "member"}] * 2, "controls": [{"by_kind": "box"}] * 3}
+    from tests.nwb.test_writers import a_set
+
+    record = {**RIG_RECORD, "parameter_changes": [{"by_kind": "member", "fields": a_set()}] * 2,
+              "controls": [{"by_kind": "box"}] * 3}
     out = describe(_gathered(rig_record=record), status="written", n_critical=0, checksums=[CHECKSUM],
                    built_at=BUILT_AT)
     assert out["training_records"] == {"parameter_changes": 2, "controls": 3}
+
+
+def test_the_live_changes_counted_are_a_persons_acts_on_a_setting():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7, the
+    requester's decision of 2026-11-07: a revert of two settings is one act;
+    a clear and a switch are not changes of a setting; a row written before
+    wl-xcon's engine build C3, with no act id, is an act of its own."""
+    from tests.nwb.test_writers import RIG_RECORD, a_set
+    from wl_preproc.nwb.describe import describe
+
+    fields = [a_set(), a_set(change=3), a_set(kind="hand_back", change=4), a_set(kind="range", change=5),
+              a_set(kind="revert", change=6), a_set(kind="revert", change=6), a_set(kind="clear", change=7),
+              a_set(kind="drum", change=8), a_set(kind="training", change=9)]
+    record = {**RIG_RECORD, "parameter_changes": [{"fields": these} for these in fields], "controls": []}
+    out = describe(_gathered(rig_record=record), status="written", n_critical=0, checksums=[CHECKSUM],
+                   built_at=BUILT_AT)
+    assert out["training_records"] == {"parameter_changes": 5, "controls": 0}
 
 
 def test_a_file_of_a_session_wl_xcon_did_not_run_describes_no_kind():
