@@ -390,8 +390,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
     and 2.2). `record` is the session's `events/rigtrials.py::RigRecord`, or
     None; `directions` the settings its runs name as directions, each run's
     own in `run_directions` by run number, which shape that run's conditions
-    alone (the rig record fields' final review, M5), the session's pooled
-    summary taking any run's. Returns the
+    alone (the rig record fields' final review, M5), the file's pooled
+    summary taking those of the runs it holds. Returns the
     file's conditions, the notes on what did not join, and
     the stimulus tables' rows (design spec
     `2026-11-07-rig-record-fields-design.md` section 4)."""
@@ -413,6 +413,10 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
         trial["record"] = {key: values[position] for key, values in columns.items()}
+    if run_directions is not None:
+        # The file pools its own runs' trials, so it takes their directions
+        # alone (the minors' review, its issue 2).
+        directions = frozenset().union(*(run_directions.get(run["run_number"], frozenset()) for run in runs))
     for run in runs:
         inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)

@@ -226,3 +226,18 @@ def test_a_runs_directions_shape_its_own_conditions_only():
     assert runs[0]["conditions"][0]["varying"]["dir"] == {"from": 330.0, "to": 40.0}
     assert "from" not in runs[1]["conditions"][0]["varying"]["dir"]
     assert session[0]["varying"]["dir"] == {"from": 330.0, "to": 40.0}
+
+
+def test_a_files_pooled_summary_takes_its_own_runs_directions_only():
+    """A file holding some of a session's runs pools their trials alone, so
+    a setting only a run outside the file names is no direction there (the
+    minors' review, its issue 2)."""
+    from wl_preproc.events.rigtrials import RigRecord
+    from wl_preproc.nwb.gather import _conditions
+
+    trials = [{**_trial(number, float(number)), "run_number": 2} for number in (3, 4)]
+    record = RigRecord(trials=(_rig(3, "c", dir=300.0), _rig(4, "c", dir=10.0)), problems=())
+    runs = [{"run_number": 2}]
+    session, _notes, _tables = _conditions(trials, [], runs, record, frozenset({"dir"}), {1: frozenset({"dir"})})
+    assert session[0]["varying"]["dir"] == runs[0]["conditions"][0]["varying"]["dir"]
+    assert "from" not in session[0]["varying"]["dir"]
