@@ -265,6 +265,13 @@ class RigChangeSpec(BaseModel):
     # `2026-11-07-rig-record-fields-design.md` section 7), written only by a
     # record with `fields`; a clear or a switch strobes nothing.
     kind: str = "set"
+    # Its act's id where it shares one, as a revert's rows do (None: an act of
+    # its own, numbered by its place), and its kind's own fields, written as
+    # given (`wl_xcon/record.py`'s change row, read at engine-c3 `7ea7913`):
+    # a hand-back's `to`, a range's `from` and `block`, a revert's `moment`, a
+    # clear's and a switch's control fields. Written only with `fields`.
+    change: int | None = Field(default=None, ge=1)
+    detail: dict = Field(default_factory=dict)
 
 
 class RigControlSpec(BaseModel):

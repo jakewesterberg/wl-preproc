@@ -371,11 +371,106 @@ def test_a_rig_record_with_fields_writes_what_wl_xcons_later_builds_add():
     first = [trial for trial in trials.trials if trial.run == 0]
     assert [trial.repeat_of for trial in first] == [None, 0, None] and first[2].live == ("contrast",)
     assert [len(trial.stimuli) for trial in first] == [2, 2, 3]
+    # The second run is plain (`synth/peripherals.py::RUN_DESIGNS`).
     assert [(run.plan, run.presentations) for run in runs.runs] == [
-        ("synthetic", sum(1 for trial in trials.trials if trial.run == index)) for index in range(len(runs.runs))]
+        (plan, sum(1 for trial in trials.trials if trial.run == index))
+        for index, plan in enumerate(["synthetic", None])]
     assert [run.block_ends[0].block_in_session for run in runs.runs] == [1, 2]
     assert ["sequence" in row for row in changes] == [True, False]
     fields, problems = change_fields([change.row for change in records.changes])
     assert [(field.kind, field.change, field.strobed_nothing) for field in fields] == [("set", 1, False),
                                                                                     ("clear", 2, True)]
     assert problems == []
+
+
+# Spec section 10's mix (the final review's I3): the synthetic stream wraps each
+# block in a run of its own, so the mix is spread over three runs -- a plan's
+# factorial played sequence-balanced, a plain run, and a plan's priming block a
+# person moves on from to a block that runs no trial -- and its change log holds
+# every kind, a revert of two settings one act. Trials 1-3 are the first run's,
+# 4 the second's, 5-6 the third's.
+_MEMBER = {"kind": "member", "name": "synth"}
+MIX_BLOCKS = [*(block.model_dump() for block in CI_RECIPE.blocks), {**CI_RECIPE.blocks[0].model_dump(), "n_trials": 2}]
+MIX_MONTAGES = [{"start_s": 0.0, "end_s": 21.0}]
+MIX_RIG = {
+    "fields": True,
+    "changes": [
+        {"trial": 1},
+        {"trial": 2, "kind": "clear", "name": "owed", "was": 2, "now": 0, "event_code": None, "by": _MEMBER,
+         "detail": {"condition": "contrast-50", "block": "block-1", "rest": True, "cleared": 2}},
+        {"trial": 3, "kind": "hand_back", "name": "contrast", "was": 0.5, "now": None, "by": _MEMBER,
+         "detail": {"to": "conditions"}},
+        {"trial": 3, "kind": "range", "name": "fix_hold_s", "by": _MEMBER,
+         "was": {"class": "Uniform", "fields": {"high": 0.35, "low": 0.3, "repeat": "fresh"}},
+         "now": {"class": "Uniform", "fields": {"high": 0.4, "low": 0.3, "repeat": "fresh"}},
+         "detail": {"from": "block", "block": "block-1"}},
+        {"trial": 4, "kind": "revert", "name": "contrast", "was": 0.4, "now": 0.5, "change": 5, "by": _MEMBER,
+         "detail": {"moment": 0}},
+        {"trial": 4, "kind": "revert", "name": "fix_hold_s", "was": 0.4, "now": 0.3, "change": 5, "by": _MEMBER,
+         "detail": {"moment": 0}},
+        {"trial": 5, "kind": "drum", "name": "drumming", "was": None, "now": "block", "event_code": None,
+         "by": _MEMBER, "detail": {"scope": "block", "block": "block-3"}},
+        {"trial": 5, "kind": "training", "name": "clear", "was": False, "now": True, "event_code": None,
+         "by": _MEMBER, "detail": {"setting": "clear"}},
+    ],
+    "controls": [{"trial": 2},
+                 {"trial": 6, "kind": "next_block", "event_code": None, "by": _MEMBER,
+                  "detail": {"block": "block-3", "to": "probe", "dropped": None}}],
+}
+
+
+def test_a_rig_record_with_fields_writes_section_10s_mix():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 10, each
+    shape as wl-xcon's own writers make it (`record.py`'s `_stimuli` and change
+    row, `taskd.py`'s start row, `_generated`, `_logged` and `_move`, read at
+    engine-c3 `7ea7913`): a plain run beside two runs of plans, a factorial, a
+    sequence-balanced and a priming block, an appearance-valued setting, a
+    Blank, a set, a hand-back, a range edit, a revert of two settings, a clear,
+    a drum, a training switch and a next_block, all read back with nothing to
+    report (the final review's I3)."""
+    import tempfile
+    from pathlib import Path
+
+    from wl_preproc.events.rigrecords import acts, change_fields, read_rig_records
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.synth.peripherals import write_rig_runs, write_rig_trials
+    from wl_preproc.synth.recipe import SessionRecipe
+
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "blocks": MIX_BLOCKS,
+                                           "montages": MIX_MONTAGES, "rig_record": MIX_RIG})
+    truth = build_timeline(recipe)
+    with tempfile.TemporaryDirectory() as directory:
+        xcon = Path(directory) / "xcon"
+        xcon.mkdir()
+        write_rig_trials(xcon / "trials.jsonl", recipe, truth)
+        write_rig_runs(xcon, recipe, truth)
+        trials = read_rig_trials(Path(directory), recipe.subject)
+        runs = read_rig_runs(Path(directory), recipe.subject)
+        records = read_rig_records(Path(directory))
+    assert (trials.problems, runs.problems, records.problems) == ((), (), ())
+    assert [run.plan for run in runs.runs] == ["synthetic", None, "priming"]
+    balanced, plain, priming = runs.runs
+    assert [condition["name"] for condition in balanced.generated[0]["conditions"]] == [
+        "contrast-10", "contrast-25", "contrast-50", "contrast-100"]
+    assert (plain.generated, priming.generated) == ([], [])
+    assert [(end.block, end.ended, end.by_kind, end.block_in_session) for end in priming.block_ends] == [
+        ("block-3", "next", "member", 3), ("probe", "run", None, None)]
+    assert [(shortfall.condition, shortfall.because) for shortfall in balanced.shortfalls] == [
+        ("contrast-50", "cleared")]
+    by_run = {index: [trial for trial in trials.trials if trial.run == index] for index in range(3)}
+    assert [trial.planned.lead_in for trial in by_run[0]] == [True, False, False]
+    assert [trial.planned for trial in by_run[1]] == [None]
+    assert [(trial.planned.run, trial.planned.switch) for trial in by_run[2]] == [(0, True), (1, True)]
+    assert [trial.params["target_appearance"]["class"] for trial in by_run[2]] == ["Disc", "Square"]
+    assert [(stimulus.name, stimulus.drawn) for stimulus in by_run[1][0].stimuli][-1] == ("mask", False)
+    fields, problems = change_fields([change.row for change in records.changes])
+    assert [field.kind for field in fields] == ["set", "clear", "hand_back", "range", "revert", "revert", "drum",
+                                                "training"]
+    assert [field.change for field in fields] == [1, 2, 3, 4, 5, 5, 7, 8]
+    assert (fields[2].to, fields[3].from_draw, fields[3].block, fields[4].moment) == (
+        "conditions", "block", "block-1", 0)
+    assert json.loads(fields[1].detail)["condition"] == "contrast-50" and json.loads(fields[6].detail) == {
+        "block": "block-3", "scope": "block"}
+    assert [field.strobed_nothing for field in fields] == [False, True, False, False, False, False, True, True]
+    assert problems == [] and acts(fields) == 4

@@ -180,31 +180,66 @@ def _place(x: float, y: float) -> dict:
     return {"eccentricity": eccentricity, "direction": None if np.isnan(polar) else polar, "x": x, "y": y}
 
 
-def _stimuli(index_in_run: int) -> list[dict]:
+def _stimuli(index_in_run: int, design: str) -> list[dict]:
     """The fixation point and the target (`rig_condition`'s `target_xy_deg`);
-    a run's third trial shows a two-object array beside them."""
+    a run's third trial shows a two-object array beside them, and a plain
+    run's trials a `Blank` mask after the fixation point, which wl-xcon's
+    `record.py::_stimuli` writes as drawn false."""
     shown = {"kind": "show", "changed": None, "drawn": True, "unresolved": None}
     entries = [{"name": "fix", "frame": 1, "off": 61, **shown, **_place(0.0, 0.0)},
                {"name": "target", "frame": 85, "off": None, **shown, **_place(0.0, 5.0)}]
     if index_in_run == 2:
         entries.append({"name": "search", "frame": 85, "off": None, **shown, **_place(0.0, 0.0), "target": 0,
                         "objects": [_place(8.0, 0.0), _place(-8.0, 0.0)]})
+    if design == "plain":
+        entries.append({"name": "mask", "frame": 61, "off": 85, **shown, "drawn": False, **_place(0.0, 0.0)})
     return entries
 
 
-def _trial_fields(index: int, previous: str | None) -> dict:
+#: Each run's design in a record with `fields` (design spec
+#: `2026-11-07-rig-record-fields-design.md` section 10's mix): the stream
+#: wraps each block in a run of its own, so the mix is spread over the
+#: session's runs -- the first a run of a plan whose block is a factorial
+#: played sequence-balanced, the second a plain run, the third a run of a
+#: plan whose block primes, which a person moves on from to a block that runs
+#: no trial; any later run is plain.
+RUN_DESIGNS = ("balanced", "plain", "priming")
+
+#: The appearances the priming block plans, one run of one value each, in
+#: wl-xcon's appearance form (accepted 2026-10-30): an appearance-valued
+#: setting, `target_appearance`, on each of its trials' lines.
+PRIMED = ({"class": "Disc", "fields": {"size": 1.0}}, {"class": "Square", "fields": {"size": 1.0}})
+
+
+def _design(run_index: int) -> str:
+    return RUN_DESIGNS[run_index] if run_index < len(RUN_DESIGNS) else "plain"
+
+
+def _planned(index: int, design: str) -> dict | None:
+    """A designed block's planned place for a trial, as wl-xcon's engine build
+    C3 writes it: a sequence-balanced block's cycle, position and lead-in; a
+    priming block's run of one value, whether it is that run's first, and the
+    value; none in a plain run."""
+    if design == "balanced":
+        return {"cycle": 0, "position": index, "lead_in": index == 0}
+    if design == "priming":
+        return {"run": index, "switch": True, "value": PRIMED[index % len(PRIMED)]}
+    return None
+
+
+def _trial_fields(index: int, previous: str | None, design: str = "balanced") -> dict:
     """What wl-xcon's engine builds C2a, C2b and C3 and its XC-399 add to a
     trial line (design spec `2026-11-07-rig-record-fields-design.md` section
-    10): each run's first trial in a sequence-balanced block's lead-in, its
-    second a drum's repeat of its first, straight after it and owed, its third
-    held by a person at a contrast that kept it out of moving up, with an
-    array beside its target; each trial's hold drawn by the task, and its
+    10): each run's first trial its block's first, in a sequence-balanced
+    block's lead-in, its second a drum's repeat of its first, straight after
+    it and owed, its third held by a person at a contrast that kept it out of
+    moving up, with an array beside its target; each trial's planned place by
+    its run's design (`_planned`), its hold drawn by the task, and its
     fluid."""
     fields = {"counting": "counted", "shown": True, "repeat_of": None, "at_once": False, "previous": previous,
               "drummed": False, "drumming": None, "aids": [], "structure": "default", "overridden": [],
-              "drawn": {"fix_hold_s": "task"}, "live": [], "eased": [],
-              "planned": {"cycle": 0, "position": index, "lead_in": index == 0}, "fluid_ml": 0.1,
-              "stimuli": _stimuli(index)}
+              "drawn": {"fix_hold_s": "task"}, "live": [], "eased": [], "planned": _planned(index, design),
+              "fluid_ml": 0.1, "stimuli": _stimuli(index, design)}
     if index == 1:
         fields.update(counting="owed", repeat_of=0, at_once=True, drummed=True, drumming="block", aids=["drumming"])
     if index == 2:
@@ -227,6 +262,9 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
         if position in recipe.faulted_trials:
             continue  # a trial that faults leaves no line (wl-xcon, 2026-10-01)
         condition, params = rig_condition(trial.trial_id)
+        design = _design(trial.block_id - 1)
+        if fields and design == "priming":
+            params = {**params, "target_appearance": _planned(index, design)["value"]}
         lines.append({
             "index": index,
             "run": trial.block_id - 1,
@@ -236,7 +274,7 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
             "block": f"block-{trial.block_id}",
             "condition": condition,
             "params": params,
-            **(_trial_fields(index, previous.get(trial.block_id)) if fields else {}),
+            **(_trial_fields(index, previous.get(trial.block_id), design) if fields else {}),
         })
         previous[trial.block_id] = condition
     if Fault.MISMATCHED_RIG_LINE in recipe.faults:
@@ -288,7 +326,7 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
         rows.append({"event": "start", "run": run_index, "at": stamp(block.start_s),
                      "task": spec.task_type.name.lower(),
                      **({} if rig is None else {"calibration": rig.calibration_id}),
-                     **(_start_fields(recipe) if rig is not None and rig.fields else {})})
+                     **(_start_fields(recipe, run_index) if rig is not None and rig.fields else {})})
         faulted = run_index + 1 in recipe.unclosed_blocks
         if faulted:
             rows.append({"event": "end", "run": run_index, "at": stamp(block.end_s),
@@ -313,20 +351,35 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
     (xcon_dir / "config.json").write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
 
 
-def _start_fields(recipe: SessionRecipe) -> dict:
-    """What wl-xcon's engine builds C2b and C3 add to a run's start row: a
-    plan, its task's content hash, the seed, and the task's draw of the hold."""
-    return {"plan": "synthetic", "plan_form": {"class": "Plan", "fields": {"blocks": ["block"]}},
+def _start_fields(recipe: SessionRecipe, run_index: int) -> dict:
+    """What wl-xcon's engine builds C2b and C3 add to a run's start row
+    (`taskd.py`'s `run_row("start", ...)`, read at engine-c3 `7ea7913`): its
+    plan and the plan as declared, or null for a plain run, which names its
+    planned trials instead; its task's content hash; the seed; the task's
+    draw of the hold; and what a factorial block made (`_generated`), `[]`
+    where no block makes any."""
+    design = _design(run_index)
+    block = f"block-{run_index + 1}"
+    plan = {"balanced": "synthetic", "priming": "priming"}.get(design)
+    blocks = {"balanced": [block], "priming": [block, "probe"]}.get(design)
+    generated = [] if design != "balanced" else [{
+        "block": block, "excluded": [],
+        "conditions": [{"name": f"contrast-{round(contrast * 100)}", "values": {"contrast": contrast}, "target": None}
+                       for contrast in RIG_CONTRASTS]}]
+    return {"plan": plan, "plan_form": None if plan is None else {"class": "Plan", "fields": {"blocks": blocks}},
             "versions": {"task": "sha256:synthetic", "allocation": "synthetic"}, "seed": recipe.seed,
             "draws": {"fix_hold_s": {"class": "Uniform", "fields": {"high": 0.35, "low": 0.3, "repeat": "fresh"}}},
-            "generated": [], "directions": []}
+            "generated": generated, "directions": [],
+            "trials": recipe.blocks[run_index].n_trials if plan is None else None}
 
 
 def _end_fields(recipe: SessionRecipe, truth: GroundTruth, run_index: int, faulted: bool) -> dict:
     """What wl-xcon's engine builds C2a, C2b and C3 add to a run's end row,
     counted from the run's own trial lines (`_trial_fields`): its trials, a
     drum's repeat one with the trial it repeats, its presentations, its
-    block's end, and each condition's counts."""
+    block's end -- a priming run's moved on by a person (`next_block`,
+    `taskd.py::_move`) to a block that ran no trial before the plan's time ran
+    out -- a shortfall for each clear in it, and each condition's counts."""
     lines = [trial for position, trial in enumerate(truth.trials, start=1)
              if trial.block_id == run_index + 1 and position not in recipe.faulted_trials]
     conditions: dict[str, int] = {}
@@ -334,13 +387,26 @@ def _end_fields(recipe: SessionRecipe, truth: GroundTruth, run_index: int, fault
         name = rig_condition(trial.trial_id)[0]
         conditions[name] = conditions.get(name, 0) + 1
     repeats = 1 if len(lines) > 1 else 0
+    block = f"block-{run_index + 1}"
+    moved = _design(run_index) == "priming" and not faulted
+    ends = [{"block": block, "ended": "run" if faulted else "next" if moved else "rule",
+             "by": {"kind": "member", "name": "synth"} if moved else None,
+             "after_trial": len(lines) - 1 if lines else None, "block_in_session": run_index + 1,
+             "position": 0, "passed_at": None, "varied": {"fix_hold_s": [{"by": "draw"}]},
+             "planned": None, "counts": {}}]
+    if moved:
+        ends.append({"block": "probe", "ended": "run", "by": None, "after_trial": None, "block_in_session": None,
+                     "position": 1, "passed_at": None, "varied": {}, "planned": None, "counts": {}})
+    first = 1 + sum(spec.n_trials for spec in recipe.blocks[:run_index])
+    clears = [change for change in recipe.rig_record.changes
+              if change.kind == "clear" and first <= change.trial < first + recipe.blocks[run_index].n_trials]
     return {"trials": len(lines) - repeats, "presentations": len(lines),
-            "end_reason": None if faulted else "plan_done",
-            "block_ends": [{"block": f"block-{run_index + 1}", "ended": "run" if faulted else "rule", "by": None,
-                            "after_trial": len(lines) - 1 if lines else None, "block_in_session": run_index + 1,
-                            "position": 0, "passed_at": None, "varied": {"fix_hold_s": [{"by": "draw"}]},
-                            "planned": None, "counts": {}}],
-            "shortfalls": [],
+            "end_reason": None if faulted else "plan_time" if moved else "plan_done",
+            "block_ends": ends,
+            "shortfalls": [{"block": change.detail.get("block", block), "condition": change.detail.get("condition"),
+                            "trials": change.detail.get("cleared", 0), "because": "cleared",
+                            "possible_avoidance": False, "after_trial": change.trial - first, "by": change.by}
+                           for change in clears],
             "conditions": [{"block": f"block-{run_index + 1}", "condition": name, "trials": n, "presentations": n,
                             "right": n, "wrong": 0, "right_first": n, "owed": 0, "repeats": 0, "moved_past": 0,
                             "possible_avoidance": False, "drummed": 0, "failing": 0}
@@ -385,18 +451,19 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
 
 def _c3_changes(rig, truth: GroundTruth, run_of: dict[int, int], stamp: Callable[[float], float]) -> list[dict]:
     """Change rows in the shape wl-xcon's engine build C3 writes them
-    (`wl_xcon/record.py`'s change row): each its kind, its act's id, its
-    instant on the rig's clock, the first trial it applies to and the
-    setting's meaning; a `sequence` only on a row whose act strobed
+    (`wl_xcon/record.py`'s change row): each its kind, its act's id (its
+    place, unless it shares an act's, as a revert's rows do), its instant on
+    the rig's clock, the first trial it applies to, the setting's meaning and
+    its kind's own fields; a `sequence` only on a row whose act strobed
     `PARAM_CHANGED`, so a clear or a switch carries none."""
     rows, sequence = [], 0
-    for change_id, (change, time) in enumerate(zip(rig.changes, truth.change_times, strict=True), start=1):
+    for place, (change, time) in enumerate(zip(rig.changes, truth.change_times, strict=True), start=1):
         at = stamp(time)
-        row = {"change": change_id, "kind": change.kind, "name": change.name, "was": change.was, "now": change.now,
-               "by": change.by, "at": at,
+        row = {"change": place if change.change is None else change.change, "kind": change.kind,
+               "name": change.name, "was": change.was, "now": change.now, "by": change.by, "at": at,
                "at_local": datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat(),
                "trial_number": change.trial, "run": run_of[change.trial], "meaning": None, "offered": [],
-               "odds": None, "event_code": change.event_code}
+               "odds": None, "event_code": change.event_code, **change.detail}
         if change.event_code is not None:
             sequence += 1
             row["sequence"] = sequence
