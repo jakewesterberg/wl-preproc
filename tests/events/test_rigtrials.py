@@ -148,3 +148,55 @@ def test_a_field_it_cannot_read_is_none_said_once_and_its_line_kept(tmp_path):
         "1 trial line: `planned` is not a planned place, so it is read as none",
         "2 trial lines: `shown` is not true, false or null, so it is read as none",
     )
+
+
+_FIX = {"name": "fix", "kind": "show", "frame": 1, "off": 61, "changed": None, "drawn": True, "unresolved": None,
+        "eccentricity": 0.0, "direction": None, "x": 0.0, "y": 0.0}
+_TARGET = {"name": "target", "kind": "update", "frame": 97, "off": None, "changed": ["opacity"], "drawn": True,
+           "unresolved": None, "eccentricity": 27.23631347517073, "direction": 45.0, "x": 20.0, "y": 20.0}
+
+
+def test_each_stimulus_a_trial_showed_is_read_with_where_and_when(tmp_path):
+    """wl-xcon's XC-399 (design spec `2026-11-07-rig-record-fields-design.md`
+    section 4): a `Show` or `Update` per entry, its frames, its cyclopean
+    position and true angles; an array's objects and target; a per-eye
+    stimulus's two positions. The polar angle is read from `direction` today
+    and from `polar` once wl-xcon renames it."""
+    from wl_preproc.events.rigtrials import Place, read_rig_trials
+
+    search = {**_FIX, "name": "search", "frame": 85, "off": None, "target": 1,
+              "objects": [{"eccentricity": 8.0, "direction": 0.0, "x": 8.0, "y": 0.0},
+                          {"eccentricity": 8.0, "polar": 180.0, "x": -8.0, "y": 0.0}]}
+    eyes = {**_FIX, "name": "dot", "eccentricity": None, "direction": None, "x": None, "y": None,
+            "left": {"eccentricity": 1.0, "direction": 0.0, "x": 1.0, "y": 0.0,
+                     "objects": [{"eccentricity": 2.0, "direction": 0.0, "x": 2.0, "y": 0.0}]},
+            "right": {"eccentricity": 1.0, "direction": 180.0, "x": -1.0, "y": 0.0}}
+    rows = [_line155(1, 0, 0, stimuli=None)]
+    rows[0] = json.dumps({**json.loads(rows[0]), "stimuli": [_FIX, _TARGET, search, {**_TARGET, "polar": 46.0}, eyes]})
+    (trial,) = read_rig_trials(_record(tmp_path, rows), "pico").trials
+    fix, target, array, renamed, dot = trial.stimuli
+    assert (fix.name, fix.kind, fix.frame, fix.off, fix.changed, fix.drawn) == ("fix", "show", 1, 61, (), True)
+    assert fix.at == Place(x=0.0, y=0.0, eccentricity=0.0, polar=None)
+    assert (target.kind, target.off, target.changed, target.at.polar) == ("update", None, ("opacity",), 45.0)
+    assert array.target == 1 and array.objects == (Place(8.0, 0.0, 8.0, 0.0), Place(-8.0, 0.0, 8.0, 180.0))
+    assert renamed.at.polar == 46.0
+    assert dot.at == Place() and dot.left["x"] == 1.0 and dot.right["direction"] == 180.0
+    assert dot.eye_objects == (("left", (Place(2.0, 0.0, 2.0, 0.0),)),)
+    assert "stimuli" in trial.carries
+
+
+def test_a_stimulus_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    row = json.loads(_line155(1, 0, 0))
+    rows = [json.dumps({**row, "stimuli": [{**_FIX, "frame": "1", "x": "0"}]}),
+            json.dumps({**row, "trial_number": 2, "index": 1, "stimuli": "none"})]
+    record = read_rig_trials(_record(tmp_path, rows), "pico")
+    first, second = record.trials
+    assert (first.stimuli[0].frame, first.stimuli[0].at.x, first.stimuli[0].at.y) == (None, None, 0.0)
+    assert second.stimuli is None
+    assert record.problems == (
+        "1 trial line: `stimuli` is not a list of objects or null, so it is read as none",
+        "1 trial line: `stimuli[].frame` is not a whole number or null, so it is read as none",
+        "1 trial line: `stimuli[].x` is not a finite number or null, so it is read as none",
+    )

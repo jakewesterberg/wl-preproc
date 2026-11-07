@@ -57,6 +57,10 @@ def _texts(value):
     return (), False
 
 
+def _mapping(value):
+    return (value, True) if value is None or isinstance(value, dict) else (None, False)
+
+
 def _objects(value):
     if value is None:
         return None, True
@@ -83,6 +87,7 @@ NUMBER = Kind(_number, "a finite number or null")
 TEXT = Kind(_text, "text or null")
 TEXTS = Kind(_texts, "a list of text")
 OBJECTS = Kind(_objects, "a list of objects or null")
+MAPPING = Kind(_mapping, "an object or null")
 DRAWN = Kind(_drawn, "an object naming each drawn setting's source")
 ANY = Kind(lambda value: (value, True), "a value")
 

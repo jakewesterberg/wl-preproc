@@ -17,6 +17,12 @@ change the rig applied, in `parameter_changes`, and each console control, in
 detail as JSON text. The file gives only the kind of actor, never a name,
 account, issuer or token (its decision 6).
 
+**Where each trial's stimuli were** (design spec
+`2026-11-07-rig-record-fields-design.md` section 4): `stimuli` and
+`stimulus_objects`, from the trial lines (`nwb/stimuli.py`), by
+`add_rig_tables`, which makes the module if the session has no record of its
+own.
+
 Written only for a session wl-xcon ran (`gather.py::_rig_record`)."""
 
 from __future__ import annotations
@@ -30,8 +36,67 @@ from pynwb.core import DynamicTable
 from wl_preproc.nwb.columns import column
 
 
+DESCRIPTION = ("What wl-xcon's record says the session was: the kind it was run as, the display calibration it "
+               "opened with, the warnings it accepted, its training records, the changes it applied and the controls "
+               "it was sent, and where each trial's stimuli were. Carried as the rig wrote them.")
+
+_POSITION = (
+    ("x_deg", "Its cyclopean per-axis position across, degrees, atan(X/D) (NaN if none). Through the stereoscope "
+              "no image is drawn there: each eye's is offset by half its disparity and the vergence offset."),
+    ("y_deg", "Its cyclopean per-axis position up, degrees, atan(Y/D) (NaN if none)."),
+    ("eccentricity_deg", "Its true angle from straight ahead, degrees of visual angle (NaN if none)."),
+    ("polar_deg", "Its polar angle, degrees counter-clockwise from rightward in [0, 360) (NaN at eccentricity 0, "
+                  "or if none)."),
+)
+# Each table `add_rig_tables` may add, with its description and its columns'.
+TABLES: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+    "stimuli": (
+        "Each stimulus a trial put on the screen, or changed while it was up, for at least one frame, from the "
+        "rig's record (xcon/trials.jsonl, wl-xcon's XC-399), in the order they took effect. Frames, not times.",
+        (("trial_id", "The trial."),
+         ("entry", "Its order among the trial's entries, from 0."),
+         ("stimulus", "The stimulus's name in its task (a table's own name is `name`, so not that)."),
+         ("kind", "show: a Show put it up; update: an Update changed it while it was up."),
+         ("frame", "The trial's frame from which it was so, from 1 at the trial's first (-1 if not recorded)."),
+         ("off", "The first frame its presentation was no longer on the screen; -1 when it stayed on to the "
+                 "trial's end, or not recorded."),
+         ("changed", "The fields an update set, comma-joined ('' for a show)."),
+         ("drawn", "1 when its appearance is something to draw, 0 for a Blank (a catch trial's stimulus), -1 when "
+                   "its appearance is a setting with no value."),
+         ("unresolved", "Why a field could not be given ('' when everything resolved)."),
+         *_POSITION,
+         ("target", "An array's target, its index among its objects (-1 if none)."),
+         ("n_objects", "An array's objects, in stimulus_objects (0 for one stimulus)."),
+         ("left", "A per-eye stimulus's left-eye position, after the vergence offset, as JSON text ('' if none)."),
+         ("right", "A per-eye stimulus's right-eye position, likewise ('' if none)."))),
+    "stimulus_objects": (
+        "Each object of an array the stimuli table names, by its trial and entry.",
+        (("trial_id", "The trial."),
+         ("entry", "The array's entry in the stimuli table."),
+         ("eye", "'' for an array drawn once, left or right for a per-eye array's ring about that eye's position."),
+         ("object", "Its index among the array's objects, from 0."),
+         *_POSITION)),
+}
+
+
 def _time(value: float | None) -> float:
     return math.nan if value is None else value
+
+
+def _module(nwb: NWBFile):
+    """The file's `rig_record` module, made if it is not there yet."""
+    if "rig_record" in nwb.processing:
+        return nwb.processing["rig_record"]
+    return nwb.create_processing_module(name="rig_record", description=DESCRIPTION)
+
+
+def add_rig_tables(nwb: NWBFile, tables: dict[str, list[dict]]) -> None:
+    """Each table of `TABLES` that has a row."""
+    for name, (description, columns) in TABLES.items():
+        rows = tables.get(name) or []
+        if rows:
+            _module(nwb).add(DynamicTable(name=name, description=description, columns=[
+                column(field, text, [row[field] for row in rows]) for field, text in columns]))
 
 
 def add_rig_record(nwb: NWBFile, record: dict) -> None:
@@ -39,12 +104,7 @@ def add_rig_record(nwb: NWBFile, record: dict) -> None:
     `controls` table when the file has any such row."""
     calibration = record["calibration"] or {}
     standard = calibration.get("standard")
-    module = nwb.create_processing_module(
-        name="rig_record",
-        description=("What wl-xcon's record says the session was: the kind it was run as, the display calibration "
-                     "it opened with, the warnings it accepted, and its training records, the changes it applied "
-                     "and the controls it was sent. Carried as the rig wrote them."),
-    )
+    module = _module(nwb)
     module.add(DynamicTable(name="session", description="The session's kind and display calibration.", columns=[
         column("session_kind", "training, piloting or recording ('' if not recorded).",
                [record["session_kind"] or ""]),

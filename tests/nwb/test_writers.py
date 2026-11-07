@@ -121,6 +121,28 @@ def test_the_trials_carry_what_the_rigs_record_says_of_each_trial(tmp_path):
         assert "never its answer" in nwb.trials["counting"].description
 
 
+def test_the_stimulus_tables_join_the_rig_record_module_or_make_it(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 4: a
+    table with no row is not written; the module is made when the session
+    has no record of its own."""
+    from wl_preproc.nwb.rig_record import add_rig_tables
+
+    entry = {"trial_id": 1, "entry": 0, "stimulus": "fix", "kind": "show", "frame": 1, "off": -1, "changed": "",
+             "drawn": 1, "unresolved": "", "x_deg": 0.0, "y_deg": 0.0, "eccentricity_deg": 0.0,
+             "polar_deg": float("nan"), "target": -1, "n_objects": 0, "left": "", "right": ""}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_tables(nwb, {"stimuli": [entry], "stimulus_objects": []}))
+    with io:
+        module = nwb.processing["rig_record"]
+        assert set(module.data_interfaces) == {"stimuli"}
+        frame = module["stimuli"].to_dataframe()
+        assert (frame["stimulus"].tolist(), frame["frame"].tolist(), frame["off"].tolist()) == (["fix"], [1], [-1])
+        assert "Frames, not times" in module["stimuli"].description
+    (tmp_path / "none").mkdir()
+    _path, io, nwb = _write(tmp_path / "none", lambda nwb: add_rig_tables(nwb, {}))
+    with io:
+        assert "rig_record" not in nwb.processing
+
+
 def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
     from wl_preproc.nwb.intervals import add_conditions
 

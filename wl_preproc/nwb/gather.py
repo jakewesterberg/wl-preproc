@@ -62,6 +62,10 @@ class Gathered:
     # `2026-10-14-session-kind-and-warnings-design.md` section 5); None for a
     # session wl-xcon did not run. See `_rig_record`.
     rig_record: dict | None = None
+    # The rows of the `rig_record` module's tables read from the rig's own
+    # files when the file is built, by table (`nwb/rig_record.py::TABLES`;
+    # design spec `2026-11-07-rig-record-fields-design.md` section 2).
+    rig_tables: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
 
 
 def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
@@ -367,16 +371,18 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
 
 
 def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
-                subject: str) -> tuple[list[dict], list[str]]:
+                subject: str) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
     """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
-    and 2.2). Returns the file's conditions and the notes on what did not
-    join."""
+    and 2.2). Returns the file's conditions, the notes on what did not
+    join, and the stimulus tables' rows (design spec
+    `2026-11-07-rig-record-fields-design.md` section 4)."""
     import collections
 
     from wl_preproc.events.rigtrials import read_rig_trials
     from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
+    from wl_preproc.nwb.stimuli import stimulus_rows
     from wl_preproc.nwb.trial_record import places, record_columns
 
     trials.sort(key=lambda trial: trial["start_s"])
@@ -385,7 +391,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], sessio
     codes = stream_codes(trials, events)
     names, settings = trial_columns(trials, matched, codes)
     columns, record_notes = record_columns(trials, matched, places(record))
-    notes += record_notes
+    stimuli, stimulus_objects, stimulus_notes = stimulus_rows(trials, matched)
+    notes += record_notes + stimulus_notes
     for position, trial in enumerate(trials):
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
@@ -395,7 +402,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], sessio
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
         run["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
         run["conditions"] = block_conditions(inside, matched, codes)
-    return block_conditions(trials, matched, codes), notes
+    return (block_conditions(trials, matched, codes), notes,
+            {"stimuli": stimuli, "stimulus_objects": stimulus_objects})
 
 
 def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
@@ -719,7 +727,7 @@ def gather(activation_key: dict) -> Gathered:
     blocks = _blocks(run_rows, session_key)
     for block in blocks:
         block["n_trials"] = sum(1 for trial in trials if trial["block_id"] == block["block_number"])
-    conditions, condition_notes = _conditions(trials, events, run_out, session_dir, key["subject"])
+    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, session_dir, key["subject"])
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),
@@ -750,4 +758,5 @@ def gather(activation_key: dict) -> Gathered:
         probe_notes=probe_notes,
         trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
         rig_record=_rig_record(session_key, {row["run_number"] for row in run_rows}),
+        rig_tables=rig_tables,
     )
