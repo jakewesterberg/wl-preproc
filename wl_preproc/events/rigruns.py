@@ -174,7 +174,7 @@ class RigRun:
     # as written).
     plan: str | None = None
     plan_form: object = None
-    task_hash: str | None = None  # `versions.task`, the task file's content hash
+    task_hash: str | None = None  # `versions.task` where it is the task's content hash (`_content_hash`)
     seed: int | None = None
     draws: object = None
     generated: object = None
@@ -215,6 +215,14 @@ def _instant(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     return float(value)
+
+
+def _content_hash(version: str | None) -> str | None:
+    """A start row's `versions.task` where it is the task's content hash,
+    `sha256:` and its digest (wl-xcon's `declarations.content_hash`); from
+    2026-09-29 until wl-xcon's engine build C1 (`ef23b25`, 2026-10-11) it was
+    the task's path, which is no hash (the final review's I2)."""
+    return version if version is not None and version.startswith("sha256:") else None
 
 
 def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
@@ -262,13 +270,14 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
             if _integer(row.get("run_in_session")):
                 run["number"] = row["run_in_session"]
             versions = optional.read(row, "versions", MAPPING) or {}
+            task_hash = _content_hash(optional.read(versions, "task", TEXT, field="versions.task"))
             run.update(plan=optional.read(row, "plan", TEXT), plan_form=optional.read(row, "plan_form", ANY),
-                       task_hash=optional.read(versions, "task", TEXT, field="versions.task"),
+                       task_hash=task_hash,
                        seed=optional.read(row, "seed", WHOLE), draws=optional.read(row, "draws", ANY),
                        generated=optional.read(row, "generated", ANY),
                        directions=optional.read(row, "directions", TEXTS))
             run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions")
-                               if name in row} | ({"task_hash"} if "task" in versions else set())
+                               if name in row} | ({"task_hash"} if task_hash is not None else set())
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))

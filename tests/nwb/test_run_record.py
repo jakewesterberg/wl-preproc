@@ -20,16 +20,21 @@ def _file(*numbers):
 
 
 def test_a_run_column_is_written_only_where_some_run_carries_its_field():
-    """A record from before C2b gains its runs' stop kind and sentence (long
-    in the listing, missing from the file) and nothing else."""
+    """A record from before C2b gains what its runs carried before it: the
+    stop kind and sentence (long in the listing, missing from the file), the
+    rig's count of its trials, its task's content hash and its seed (the
+    final review's I2), and nothing else."""
     from wl_preproc.nwb.run_record import run_record
 
     runs, blocks = _file(1, 2)
-    old = RigRuns(runs=(RigRun(1, "rf_map", "done", "completed", index=0,
-                               carries=frozenset({"stopped_because", "stop_kind"})),), problems=())
+    old = RigRuns(runs=(RigRun(1, "rf_map", "done", "completed", index=0, rig_trials=38, task_hash="sha256:5d1f",
+                               seed=7, carries=frozenset({"stopped_because", "stop_kind", "rig_trials",
+                                                          "task_hash", "seed"})),), problems=())
     tables, notes = run_record(runs, blocks, old, {})
-    assert runs[0]["record"] == {"stop_kind": "completed", "stopped_because": "done"}
-    assert runs[1]["record"] == {"stop_kind": "", "stopped_because": ""}
+    assert runs[0]["record"] == {"stop_kind": "completed", "stopped_because": "done", "rig_trials": 38,
+                                 "task_hash": "sha256:5d1f", "seed": "7"}
+    assert runs[1]["record"] == {"stop_kind": "", "stopped_because": "", "rig_trials": -1, "task_hash": "",
+                                 "seed": ""}
     assert (runs[0]["plan"], runs[0]["end_reason"], "record" in blocks[0]) == (None, None, False)
     assert tables == {"unopened_blocks": [], "shortfalls": [], "condition_counts": []} and notes == []
 

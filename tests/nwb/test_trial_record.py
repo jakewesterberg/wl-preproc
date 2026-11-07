@@ -19,11 +19,14 @@ def _trials(*numbers):
 
 
 def test_a_column_is_written_only_where_some_line_carries_its_field():
-    """A record from before wl-xcon's engine build C2a gains no column; a
-    trial with no line has -1, '' or NaN."""
+    """A record from before wl-xcon's engine build C2a gains its fluid alone,
+    the one such field its lines carried (the final review's I2); a trial
+    with no line has -1, '' or NaN."""
     from wl_preproc.nwb.trial_record import record_columns
 
     assert record_columns(_trials(1, 2), {1: _rig(1, 0)}, {}) == ({}, [])
+    columns, notes = record_columns(_trials(1, 2), {1: _rig(1, 0, fluid_ml=0.0)}, {})
+    assert sorted(columns) == ["fluid_ml"] and columns["fluid_ml"][0] == 0.0 and notes == []
     matched = {1: _rig(1, 0, counting="spent", shown=False, aids=("drumming", "clear"), fluid_ml=0.1)}
     columns, notes = record_columns(_trials(1, 2), matched, {})
     assert sorted(columns) == ["aids", "counting", "fluid_ml", "shown"]

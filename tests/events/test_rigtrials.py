@@ -119,14 +119,18 @@ def test_a_line_since_c2a_says_what_the_trial_paid_and_where_it_sits(tmp_path):
     assert "planned" in third.carries and "counting" in third.carries
 
 
-def test_a_line_before_c2a_carries_none_of_them(tmp_path):
-    """A record written before the builds reads exactly as before."""
+def test_a_line_before_c2a_carries_only_its_fluid(tmp_path):
+    """A line as wl-xcon wrote it before its engine build C2a (`record.py`'s
+    `trial`, read at its `main` of 2026-10-16) has carried the fluid it
+    commanded since 2026-10-01 (`7e56b51`): that is read; none of the
+    builds' fields is (the final review's I2)."""
     from wl_preproc.events.rigtrials import read_rig_trials
 
-    (trial,) = read_rig_trials(_record(tmp_path, [_line155(1, 0, 0)]), "pico").trials
-    assert trial.carries == frozenset()
+    line = {**json.loads(_line155(1, 0, 0)), "fluid_ml": 0.0, "last_reward_at": None}
+    (trial,) = read_rig_trials(_record(tmp_path, [json.dumps(line)]), "pico").trials
+    assert trial.carries == frozenset({"fluid_ml"})
     assert (trial.counting, trial.shown, trial.aids, trial.drawn, trial.planned, trial.fluid_ml) == (
-        None, None, (), None, None, None)
+        None, None, (), None, None, 0.0)
 
 
 def test_a_field_it_cannot_read_is_none_said_once_and_its_line_kept(tmp_path):

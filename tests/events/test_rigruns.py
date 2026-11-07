@@ -183,13 +183,50 @@ def test_since_c2b_a_run_names_its_plan_and_how_each_block_ended(tmp_path):
     assert run.carries >= {"plan", "task_hash", "seed", "rig_trials", "block_ends", "stop_kind"}
 
 
-def test_rows_before_c2a_carry_none_of_them(tmp_path):
+def _start_before_c2a(run, task_version):
+    """A start row as wl-xcon wrote it before its engine build C2a
+    (`taskd.py`'s `run_row("start", ...)`, read at its `main` of
+    2026-10-16): the allocation and the task's version, the planned count,
+    the seed, the blocks and the values it started with."""
+    return _start(run, "rf_map", calibration=None, allocation="tasks/allocation.py",
+                  versions={"task": task_version, "allocation": "tasks/allocation.py"}, trials=40, seed=7,
+                  blocks=None, layers={"task": {}, "run": {}}, resolved={}, bounded={})
+
+
+def _end_before_c2a(run):
+    """An end row as wl-xcon wrote it before C2a: why it stopped, the trials
+    it ran, its blocks and whether its code went out."""
+    return json.dumps({**json.loads(_end(run, "every block is finished", "completed")), "trials": 38,
+                       "blocks_run": ["main"], "strobed": True})
+
+
+def test_rows_before_c2a_carry_what_wl_xcon_wrote_before_it(tmp_path):
+    """Every start row since runs.jsonl began (wl-xcon's `8855083`,
+    2026-09-29) names the task's version and the seed, and every end row the
+    trials it ran: those are read; none of C2a's, C2b's or C3's fields is
+    (the final review's I2)."""
     from wl_preproc.events.rigruns import read_rig_runs
 
-    rows = [_start(0, "rf_map"), _end(0, "every block is finished", "completed")]
-    (run,) = read_rig_runs(_record(tmp_path, rows), "pico").runs
-    assert run.carries == {"stopped_because", "stop_kind"}
-    assert (run.plan, run.block_ends, run.shortfalls, run.rig_trials, run.task_hash) == (None, (), (), None, None)
+    rows = [_start_before_c2a(0, "sha256:5d1f"), _end_before_c2a(0)]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    (run,) = record.runs
+    assert run.carries == {"stopped_because", "stop_kind", "task_hash", "seed", "rig_trials"}
+    assert (run.task_hash, run.seed, run.rig_trials) == ("sha256:5d1f", 7, 38)
+    assert (run.plan, run.block_ends, run.shortfalls, run.presentations, run.end_reason) == (None, (), (), None, None)
+    assert record.problems == ()
+
+
+def test_a_task_named_by_its_path_has_no_content_hash(tmp_path):
+    """From 2026-09-29 until its engine build C1 (`ef23b25`, 2026-10-11)
+    wl-xcon's `versions.task` was the task's path; only a content hash,
+    `sha256:` and its digest (`declarations.content_hash`), is published as
+    one, and a path is not a problem to report (the final review's I2)."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start_before_c2a(0, "tasks/fixation_detection.py"), _end_before_c2a(0)]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    (run,) = record.runs
+    assert (run.task_hash, "task_hash" in run.carries, record.problems) == (None, False, ())
 
 
 def test_a_run_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):

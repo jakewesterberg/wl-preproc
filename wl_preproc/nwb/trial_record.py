@@ -5,9 +5,10 @@ section 3).
 Pure functions over plain data, beside `nwb/conditions.py`: the trials are this
 file's own, joined to the rig's lines by trial number. **A column is written
 only where some line carries its field**, as a setting column is written only
-where it varies, so a record from before wl-xcon's engine build C2a gains none;
-the six planned-place columns only where a designed block ran. A trial with no
-line has -1, NaN or '' in each, as each description says.
+where it varies, so a record from before wl-xcon's engine build C2a gains its
+fluid alone, the one such field its lines carried; the six planned-place
+columns only where a designed block ran. A trial with no line has -1, NaN or
+'' in each, as each description says.
 
 **A trial index is published as a trial id** (section 2): the rig names the
 trial a repeat shows again by its `index` in its run; the column gives that

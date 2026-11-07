@@ -32,7 +32,8 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
                                  "recorded)."),
     "presentations": ("rig_presentations", "Its presentations as the rig counts them, one per trial line (-1 if "
                                            "not recorded)."),
-    "task_hash": ("task_hash", "The content hash of the task file it ran ('' if not recorded)."),
+    "task_hash": ("task_hash", "The content hash of the task file it ran ('' if not recorded, or if the rig named "
+                               "the task by its path, as before wl-xcon's engine build C1 of 2026-10-11)."),
     "seed": ("seed", "The seed its random draws came from, as text ('' if not recorded)."),
     "draws": ("draws", "The task's random draws as declared, each with every field, as JSON text; a direction "
                        "draw with equal ends is the whole turn ('' if none)."),
