@@ -1,15 +1,19 @@
 # Where this build actually is
 
-**Last updated 2026-11-07**, describing `main` at `01f2a57`: the merge of
-`feat/eye-lost-and-region` (`7ec509e`), lost data and the screen region, first of wl-xcon's asks
-(`specs/2026-11-06-eye-lost-data-and-region-design.md`, approved 2026-11-06;
-`handoffs/2026-11-06-eye-lost-data-and-region.md`), and a test-only fix after it. CI read off
-`01f2a57` is green on both interpreters, 2741 passed on each with 36 skipped, and the
-manifest check is green (`gh run view 42355463512`). The merge's own run (`42350642258`) failed on both:
-v3's rebuild was compared to its text, and CI's Linux runners round 1,107 of its numbers in the last
-places otherwise than the macOS that made it, at most a relative 5.6e-11; `01f2a57` holds them to
-the tolerance v3 states, its intervals, labels and flags exact.
-- **Lost data and the screen region:** a saccade is carried across a short loss of data, counted
+**Last updated 2026-11-07**, describing `main` at `295f9c9`: the merge of
+`feat/rig-record-fields`, the rest of wl-xcon's asks (engine builds C2a, C2b and C3; XC-399; and a
+setting's value that is an appearance; `specs/2026-11-07-rig-record-fields-design.md`, approved
+2026-11-07; `handoffs/2026-11-07-rig-record-fields.md`). CI read off `295f9c9` is green on both
+interpreters, 2785 passed on each with 36 skipped, and the manifest check is green
+(`gh run view 42374492163`).
+- **The rig's record, read whole:** each trial's count, repeats, aids, structure, draws and
+  planned place; where each stimulus was; each run's plan and end, each block's end and what each
+  run owed; a condition's own values apart from drawn and person-held ones; the change log by kind
+  and act, each row's own fields as `detail`, a row that strobed nothing timed through the rig's
+  clock. All read when the NWB file is built, with no database change. wl-xcon was told on
+  2026-11-07 that it may stop writing clears and switches twice (its XC-442), and wl.works of the
+  description's new fields and the count of a person's acts.
+- **Lost data and the screen region** (`7ec509e`, just before): a saccade is carried across a short loss of data, counted
   and flagged, while a sample present but invalid still ends it; the mask's screen region is each
   session's recorded visible field plus 2 degrees, the placeholder only where none was recorded
   (`core.SessionSetup`). v3 of the saccade fixtures (`docs/fixtures/saccade/v3.json`, SHA-256
@@ -163,6 +167,9 @@ the tolerance v3 states, its intervals, labels and flags exact.
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `01f2a57` (lost data and the screen region's merge and its test-only fix, CI green,
+2741 passed on each interpreter, `42355463512`) until the rig's record's merge; true when written.*
 
 *This header named `71771b3` (the header follow-up's merge and its test-only fix, CI green, 2669
 passed on each interpreter, `42236157334`) until lost data and the screen region's merge; true when
@@ -490,11 +497,11 @@ requester chose to merge the same day; true when written.*
 > region is each session's recorded field plus 2 degrees; v3 of the saccade fixtures is made.
 > Its final review's one Critical and five Important are fixed (handoff §6); wl-xcon was sent
 > v3's digest on 2026-11-07. **The rest of wl-xcon's asks (engine builds C2a, C2b and C3;
-> XC-399; and a setting's value that is an appearance) are built and reviewed** as one piece on
-> `feat/rig-record-fields`, not merged (`specs/2026-11-07-rig-record-fields-design.md`,
-> approved 2026-11-07; `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three
-> fixes): the rig's new fields are read when the NWB file is built, with no database change.
-> Next: its merge; then, in the
+> XC-399; and a setting's value that is an appearance) are merged** (`295f9c9`, CI green,
+> `42374492163`; `specs/2026-11-07-rig-record-fields-design.md`, approved 2026-11-07;
+> `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three fixes): the rig's new
+> fields are read when the NWB file is built, with no database change. Next: its seven minors,
+> which the requester chose to fix at once (`fix/rig-record-minors`); then, in the
 > requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
 > the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
@@ -504,7 +511,8 @@ requester chose to merge the same day; true when written.*
 > its plan was being proved; until its review, that the review was next; until its merge, that the
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
 > until its review, that the review was next; until its merge, that the merge was next; until
-> wl-xcon's other asks were built, that their plan was being proved; each true when written.*
+> wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
+> next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

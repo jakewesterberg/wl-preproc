@@ -88,13 +88,15 @@ status:
     requester's decision of 2026-11-06, is merged (7ec509e;
     docs/handoffs/2026-11-06-eye-lost-data-and-region.md). The rest of
     wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value that is an
-    appearance) are built as one piece on feat/rig-record-fields
-    (docs/handoffs/2026-11-07-rig-record-fields.md), reviewed, not
-    merged, its merge next; then, in the requester's order of
+    appearance) are merged (295f9c9;
+    docs/handoffs/2026-11-07-rig-record-fields.md), their seven minors
+    next; then, in the requester's order of
     2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
     the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: lost data and the screen region (7ec509e). Before it, wl-sync's
+    Done: the rest of wl-xcon's asks, the rig's record read whole
+    (295f9c9). Before it, lost data and the screen region (7ec509e).
+    Before it, wl-sync's
     header follow-up (915a825). Before it, XC-398, saccades
     in true visual angle (82380d2). Before it,
     wl-sync part 1, the box's logs read as it writes them (920048a).
