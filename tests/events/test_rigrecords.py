@@ -257,3 +257,21 @@ def test_the_pop_out_searchs_suggestions_and_declines_are_known_and_counted_nowh
     assert json.loads(fields[1].detail) == {"at_hardest": False, "bar": {"correct": 8, "of": 10}, "block": "Alone",
                                             "move": "up"}
     assert json.loads(fields[2].detail) == {"suggestion": 2}
+
+
+def test_a_confirming_move_keeps_the_suggestion_it_answers(tmp_path):
+    """A person's confirmation of the rig's suggestion is the next_block or
+    back_block control it was before, its detail naming the suggestion it
+    answers (the pop-out search, agreed with wl-xcon on 2026-11-07): kept,
+    with the move's own fields, in the control's detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import read_rig_records
+
+    row = {"kind": "next_block", "by": {"kind": "member", "name": "jw"}, "at": 1773478801.0, "at_local": "x",
+           "trial_index": 4, "event_code": None, "run": 0, "block": "Alone", "to": "Fade-in", "dropped": None,
+           "suggestion": 7}
+    (tmp_path / "xcon").mkdir()
+    (tmp_path / "xcon" / "controls.jsonl").write_text(json.dumps(row) + "\n")
+    (control,) = read_rig_records(tmp_path).controls
+    assert json.loads(control.detail) == {"block": "Alone", "dropped": None, "suggestion": 7, "to": "Fade-in"}
