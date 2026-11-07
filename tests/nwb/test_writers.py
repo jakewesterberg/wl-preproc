@@ -180,10 +180,28 @@ def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
         assert frame["settings"].tolist() == ["", '{"contrast": 0.5}']
         assert frame["varying"].tolist() == ["", '{"hold": {"max": 0.35, "min": 0.3}}']
         assert frame["n_trials"].tolist() == [1, 2]
+        assert "drawn" not in frame and "n_eased" not in frame
     (tmp_path / "empty").mkdir()
     _path, io, nwb = _write(tmp_path / "empty", lambda nwb: add_conditions(nwb, []))
     with io:
         assert "behavior" not in nwb.processing
+
+
+def test_the_conditions_table_carries_drawn_and_person_held_values_where_recorded(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 6."""
+    from wl_preproc.nwb.intervals import add_conditions
+
+    conditions = [{"name": "c", "code": None, "settings": {}, "varying": {},
+                   "drawn": {"hold": {"sources": ["task"], "min": 0.2, "max": 0.8}}, "live": {},
+                   "trials": {"total": 4, "by_outcome": {"correct": 4}, "eased": 1}},
+                  {"name": "d", "code": None, "settings": {}, "varying": {}, "drawn": None, "live": None,
+                   "trials": {"total": 1, "by_outcome": {"correct": 1}}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_conditions(nwb, conditions))
+    with io:
+        frame = nwb.processing["behavior"]["conditions"].to_dataframe()
+        assert frame["drawn"].tolist() == ['{"hold": {"max": 0.8, "min": 0.2, "sources": ["task"]}}', ""]
+        assert frame["live"].tolist() == ["{}", ""]
+        assert frame["n_eased"].tolist() == [1, 0]
 
 def test_the_timebase_tables(tmp_path):
     from wl_preproc.nwb.timebase import add_timebase

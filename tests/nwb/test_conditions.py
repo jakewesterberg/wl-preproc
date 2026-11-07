@@ -113,3 +113,62 @@ def test_a_setting_whose_type_differs_between_trials_is_text():
     assert settings["target"] == ["5.0", '"left"']
     (entry,) = block_conditions(trials, matched, {})
     assert entry["varying"] == {"target": {"values": [5.0, "left"], "n_distinct": 2}}
+
+
+def _c3(index, condition, drawn=None, live=(), eased=(), **params):
+    """A line as wl-xcon's engine build C3 writes it: each drawn setting's
+    source, the settings a person held, and those that kept it out of moving
+    up."""
+    from wl_preproc.events.rigtrials import RigTrial
+
+    return RigTrial(number=index, index=index, outcome="correct", block="main", condition=condition, params=params,
+                    drawn=drawn or {}, live=tuple(live), eased=tuple(eased),
+                    carries=frozenset({"drawn", "live", "eased"}))
+
+
+def test_a_conditions_own_values_are_kept_apart_from_drawn_and_person_held_ones():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 6, the
+    requester's decision of 2026-11-07: a setting drawn on a trial, or held
+    there by a person, is not the condition's own on that trial. A person's
+    value on every trial no longer reads as the condition's constant."""
+    from wl_preproc.nwb.conditions import block_conditions
+
+    trials = [_trial(number, float(number)) for number in (1, 2, 3, 4)]
+    matched = {1: _c3(1, "c", contrast=0.5, hold=0.3, size=2.0, drawn={"hold": "task"}, live=["size"]),
+               2: _c3(2, "c", contrast=0.5, hold=0.6, size=2.0, drawn={"hold": 4}, live=["size"]),
+               3: _c3(3, "c", contrast=0.25, hold=0.4, size=2.0, drawn={"hold": "task"}, live=["size", "contrast"],
+                      eased=["contrast"]),
+               4: _c3(4, "c", contrast=0.5, hold=0.5, size=2.0, drawn={"hold": "task"}, live=["size"])}
+    (entry,) = block_conditions(trials, matched, {})
+    assert entry["settings"] == {"contrast": 0.5} and entry["varying"] == {}
+    assert entry["drawn"] == {"hold": {"sources": [4, "task"], "min": 0.3, "max": 0.6}}
+    assert entry["live"] == {"contrast": {"trials": 1, "min": 0.25, "max": 0.25},
+                             "size": {"trials": 4, "min": 2.0, "max": 2.0}}
+    assert entry["trials"] == {"total": 4, "by_outcome": {"correct": 4}, "eased": 1}
+
+
+def test_a_direction_is_summarised_as_the_smallest_arc_holding_it():
+    """A -45 to 45 degree draw, written 315 to 45, is that arc, never 0 to
+    360; a value given as -90 is 270."""
+    from wl_preproc.nwb.conditions import block_conditions
+
+    trials = [_trial(number, float(number)) for number in (1, 2, 3)]
+    matched = {1: _c3(1, "c", target_dir=330.0, drawn={"target_dir": "block"}),
+               2: _c3(2, "c", target_dir=40.0, drawn={"target_dir": "block"}),
+               3: _c3(3, "c", target_dir=10.0, drawn={"target_dir": "block"})}
+    (entry,) = block_conditions(trials, matched, {}, frozenset({"target_dir"}))
+    assert entry["drawn"]["target_dir"] == {"sources": ["block"], "from": 330.0, "to": 40.0}
+    held = {1: _c3(1, "c", dir=-90.0), 2: _c3(2, "c", dir=80.0)}
+    (entry,) = block_conditions(trials[:2], held, {}, frozenset({"dir"}))
+    assert entry["varying"]["dir"] == {"from": 270.0, "to": 80.0}
+
+
+def test_the_arc_leaves_out_the_widest_gap():
+    """Section 6's ruling: the circle less its widest gap between neighbours,
+    the first from 0 degrees where gaps tie; one value is its own arc."""
+    from wl_preproc.nwb.conditions import arc
+
+    assert arc([10.0]) == {"from": 10.0, "to": 10.0}
+    assert arc([350.0, 20.0, 5.0]) == {"from": 350.0, "to": 20.0}
+    assert arc([0.0, 90.0, 180.0, 270.0]) == {"from": 90.0, "to": 0.0}
+    assert arc([100.0, 200.0]) == {"from": 100.0, "to": 200.0}

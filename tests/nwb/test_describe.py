@@ -61,7 +61,8 @@ def test_the_description_of_a_file_without_eye_data():
     assert run["task"] == {"code": "2", "name": "rf_map"}
     assert run["measured"] == {"start_s": 0.5, "stop_s": 29.5}
     assert run["coverage"] == {"ohdpi": {"coverage": "full", "covered_s": 29.0}}
-    assert run["conditions"] == [CONDITION]
+    assert run["conditions"] == [{**CONDITION, "trials": {**CONDITION["trials"], "eased": 0}, "drawn": None,
+                                  "live": None}]
     # The measured blocks inside the run (design spec
     # `2026-10-01-session-listing-and-run-requests-design.md` section 4).
     assert run["blocks"] == [{"block_number": 1, "block_in_run": 1, "block_type": "Bt1",
@@ -218,3 +219,19 @@ def test_a_run_says_its_plan_and_end_reason_and_a_block_how_it_ended():
     assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == ("training", "plan_done", "rule")
     run = described(RUN, BLOCK)
     assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == (None, None, None)
+
+
+def test_a_condition_says_its_drawn_and_person_held_values_and_its_eased_trials():
+    """Design spec `2026-11-07-rig-record-fields-design.md` sections 6 and 8."""
+    from wl_preproc.nwb.describe import describe
+    from wl_preproc.nwb.gather import Gathered
+
+    condition = {**CONDITION, "drawn": {"hold": {"sources": ["task"], "min": 0.2, "max": 0.8}},
+                 "live": {"contrast": {"trials": 1, "min": 0.25, "max": 0.25}},
+                 "trials": {**CONDITION["trials"], "eased": 1}}
+    data = Gathered(session=SESSION, systems=["ohdpi"], runs=[{**RUN, "conditions": [condition]}], blocks=[BLOCK],
+                    trials=[{"trial_id": 1}], events=[{}, {}], timebase={}, eye=None, conditions=[condition])
+    (described,) = describe(data, status="written", n_critical=0, checksums=[CHECKSUM],
+                            built_at=BUILT_AT)["runs"][0]["conditions"]
+    assert (described["drawn"], described["live"], described["trials"]["eased"]) == (
+        condition["drawn"], condition["live"], 1)

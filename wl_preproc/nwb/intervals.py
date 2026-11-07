@@ -148,6 +148,25 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
     )
 
 
+def _apart_columns(rows: list[dict]) -> list:
+    """A condition's drawn and person-held values and its eased trials, each
+    where some condition has them (design spec
+    `2026-11-07-rig-record-fields-design.md` section 6)."""
+    out = []
+    for name, description in (
+            ("drawn", "Each setting drawn at random on its trials: where its ranges came from and a summary of the "
+                      "values drawn, as JSON ('' where none, or not recorded)."),
+            ("live", "Each setting a person held on its trials: on how many, and a summary of the values, as JSON "
+                     "('' where none, or not recorded).")):
+        if any(name in row for row in rows):
+            out.append(column(name, description, ["" if row.get(name) is None else json.dumps(row[name], sort_keys=True)
+                                                  for row in rows]))
+    if any("eased" in row["trials"] for row in rows):
+        out.append(column("n_eased", "How many of them a live change kept out of moving up (0 where not recorded).",
+                          [row["trials"].get("eased", 0) for row in rows]))
+    return out
+
+
 def add_conditions(nwb: NWBFile, conditions: list[dict]) -> None:
     """`processing/behavior/conditions`: one row per condition that ran, with
     the settings constant across its trials and those that varied (design
@@ -177,6 +196,7 @@ def add_conditions(nwb: NWBFile, conditions: list[dict]) -> None:
             column("varying", "Each setting that varied within it: a range for numbers, else its distinct values, as JSON.",
                    ["" if row["varying"] is None else json.dumps(row["varying"], sort_keys=True) for row in rows]),
             column("n_trials", "How many of the file's trials ran under it.", [row["trials"]["total"] for row in rows]),
+            *_apart_columns(rows),
         ],
     ))
 

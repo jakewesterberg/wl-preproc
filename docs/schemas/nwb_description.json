@@ -84,6 +84,38 @@
           ],
           "title": "Code"
         },
+        "drawn": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Drawn"
+        },
+        "live": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Live"
+        },
         "name": {
           "anyOf": [
             {
@@ -999,6 +1031,11 @@
           },
           "title": "By Outcome",
           "type": "object"
+        },
+        "eased": {
+          "default": 0,
+          "title": "Eased",
+          "type": "integer"
         },
         "total": {
           "title": "Total",

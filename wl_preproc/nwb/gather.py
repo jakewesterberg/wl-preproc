@@ -370,13 +370,14 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
             "outside a run"]
 
 
-def _conditions(trials: list[dict], events: list[dict], runs: list[dict],
-                record) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
+def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record,
+                directions: frozenset[str] = frozenset()) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
     """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
     and 2.2). `record` is the session's `events/rigtrials.py::RigRecord`, or
-    None. Returns the file's conditions, the notes on what did not join, and
+    None; `directions` the settings its runs name as directions. Returns the
+    file's conditions, the notes on what did not join, and
     the stimulus tables' rows (design spec
     `2026-11-07-rig-record-fields-design.md` section 4)."""
     import collections
@@ -400,8 +401,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict],
         inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
         run["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
-        run["conditions"] = block_conditions(inside, matched, codes)
-    return (block_conditions(trials, matched, codes), notes,
+        run["conditions"] = block_conditions(inside, matched, codes, directions)
+    return (block_conditions(trials, matched, codes, directions), notes,
             {"stimuli": stimuli, "stimulus_objects": stimulus_objects})
 
 
@@ -732,8 +733,10 @@ def gather(activation_key: dict) -> Gathered:
     from wl_preproc.nwb.trial_record import places
 
     record = read_rig_trials(session_dir, key["subject"])
-    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record)
-    run_tables, run_notes = run_record(run_out, blocks, read_rig_runs(session_dir, key["subject"]), places(record))
+    rig_runs = read_rig_runs(session_dir, key["subject"])
+    directions = frozenset() if rig_runs is None else frozenset().union(*(rig.directions for rig in rig_runs.runs))
+    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record, directions)
+    run_tables, run_notes = run_record(run_out, blocks, rig_runs, places(record))
     rig_tables.update(run_tables)
     condition_notes += run_notes
     return Gathered(
