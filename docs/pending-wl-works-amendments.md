@@ -26,6 +26,9 @@ batches are closed; their records are kept below, because
   place), runs- and blocks-table columns (plan, end reason, stop, counts, each block's end), and `rig_record`
   tables (`stimuli`, `stimulus_objects`, `unopened_blocks`, `shortfalls`, `condition_counts`); none is in the
   description beyond the fields above.
+- **`rig_record_problem` flags also say a run row's new field that could not be read**, once per field per
+  session ("2 run rows: `seed` is not a whole number or null, so it is read as none"), beside the run rows' other
+  problems; the run is kept.
 - **A question:** should the listing's runs carry `plan` and `end_reason`? `ListedRun` refuses unknown fields,
   so nothing is added until wl.works says yes.
 - **Every listed session whose change log holds C3 rows is listed once more** when this ships: its count, and so

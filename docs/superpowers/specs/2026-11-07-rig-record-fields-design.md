@@ -121,8 +121,8 @@ From each trial's line (decision 3.2):
 | `fluid_ml` | the line's `fluid_ml` (beyond the asks) | the fluid commanded; NaN |
 
 - **A group of columns is written when any line in the file carries its field**, as a setting column is written
-  only when it varies: a record from before C2a gains none, and the six `planned_` columns appear only when a
-  designed block ran.
+  only when it varies: a record from before C2a gains none of them but its fluid (amendment 11), and the six
+  `planned_` columns appear only when a designed block ran.
 - The descriptions say where each comes from and what -1, NaN and '' mean.
 
 ## 4. Where each stimulus was (XC-399)
@@ -277,8 +277,8 @@ pending wl.works amendments; the checkpoint's and `wl.yaml`'s status lines.
 
 1. **Every new column of the runs and blocks tables is written only where some run carries its field** (§5), as a
    trial's are (§3): a record from before wl-xcon's engine build C2b gains `stop_kind` and `stopped_because`, which
-   every end row carries, and nothing else; the blocks table's columns appear where some run's end row carries
-   `block_ends`, a block no entry names reading '' and -1. **The change log's new columns are written for every
+   every end row carries, and nothing else (amendment 11 corrects this: such a record carried older fields too);
+   the blocks table's columns appear where some run's end row carries `block_ends`, a block no entry names reading '' and -1. **The change log's new columns are written for every
    row** (§7): a row from before C3 reads `set`, -1 and ''.
 2. **The stimulus's name is published as `stimulus`** (§4): a table's own `name` attribute would shadow a column
    called that, as the conditions table's `condition` already avoids.
@@ -300,3 +300,29 @@ pending wl.works amendments; the checkpoint's and `wl.yaml`'s status lines.
 10. **Where an unreadable field is said** (§2): a trial line's or a change row's, which only the build reads, in
     the description's `notes`; a run row's where the run rows' other problems already are, `core.RunRecordProblem`,
     which the listing sends wl.works as a `rig_record_problem` flag, since the event stage reads the run rows too.
+
+## Amendments, 2026-11-07, from the final review
+
+11. **A record from before wl-xcon's engine build C2a publishes the older fields it carries** (§2, §3, §5;
+    correcting amendment 1 and §3): every start row since `runs.jsonl` began (wl-xcon's `8855083`, 2026-09-29)
+    names the task's version and the seed, every end row the trials it ran, and every trial line since 2026-10-01
+    (`7e56b51`) its fluid, so such a record gains `fluid_ml`, `seed`, `rig_trials` and, since wl-xcon's engine
+    build C1, `task_hash`, beside `stop_kind` and `stopped_because`; none of C2a's, C2b's or C3's own fields. Its
+    tests use the shapes wl-xcon wrote. **Ruling:** these are published, as the requester's additions of §2 ask
+    and since each is a true value; the spec's "publishes exactly as today" was written of C2a's own fields.
+12. **`task_hash` is a content hash or nothing** (§5): from 2026-09-29 until wl-xcon's engine build C1 (`ef23b25`,
+    2026-10-11), `versions.task` was the task's path. Only `sha256:` and its digest
+    (wl-xcon's `declarations.content_hash`) is published as one; a path is no problem to report, and its
+    description says a run named by its path has none.
+13. **The change log keeps each row's own fields** (§7): `parameter_changes.detail`, the row's fields beyond those
+    every change row carries, as JSON text, as `controls.detail` is: a hand-back's `to`, a range's `from` and
+    `block`, a revert's `moment`, a clear's `condition`, `block`, `rest` and `cleared`, a drum's `scope` and
+    `block`, a training switch's `setting`. So the file loses nothing when wl-xcon stops writing clears and
+    switches to `controls.jsonl` too (its XC-442), which it is told it may do after the merge. The `block` column
+    names a clear's block too.
+14. **Section 10's mix is spread over three runs** (§10): the synthetic stream wraps each block in a run of its
+    own, so the first run is a plan's factorial played sequence-balanced, the second a plain run, and the third a
+    plan's priming block, which a person moves on from (`next_block`) to a block that runs no trial. A change's
+    act id and its kind's own fields are the recipe's (`RigChangeSpec.change` and `.detail`), so a revert of two
+    settings is one act. **Ruling:** a run of several blocks is generator work beyond this piece; wl-xcon's
+    simulated folder, the contract fixture, holds its own plans whole.
