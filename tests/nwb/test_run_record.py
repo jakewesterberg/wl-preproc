@@ -107,3 +107,17 @@ def test_a_plain_runs_empty_generated_is_published_as_its_description_says():
     run_record(runs, blocks, RigRuns(runs=(_run(generated=[]),), problems=()), {})
     assert (runs[0]["record"]["generated"], runs[1]["record"]["generated"]) == ("[]", "")
     assert "'[]'" in RUN_COLUMNS["generated"][1] and "''" in RUN_COLUMNS["generated"][1]
+
+
+def test_a_block_ended_twice_keeps_its_first_end_and_says_so():
+    """Two entries of one run's `block_ends` naming one measured block: the
+    first is kept, as everywhere a number repeats here, and a note says so
+    (the rig record fields' final review, M6)."""
+    from wl_preproc.nwb.run_record import run_record
+
+    runs, blocks = _file(1)
+    rig = _run(block_ends=(BlockEnd("easy", "rule", None, 0, 11, 0, None),
+                           BlockEnd("easy", "time", None, 0, 11, 1, None)))
+    _tables, notes = run_record(runs, blocks, RigRuns(runs=(rig,), problems=()), {(0, 0): 101})
+    assert (blocks[0]["ended"], blocks[0]["record"]["position"]) == ("rule", 0)
+    assert notes == ["run 1: the rig's record ends block 11 twice; the first end is kept"]

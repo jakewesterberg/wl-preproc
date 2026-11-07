@@ -126,6 +126,12 @@ def run_record(runs: list[dict], blocks: list[dict], rig_runs: RigRuns | None,
                 notes.append(f"run {number}: the rig's record ends block {end.block_in_session}, which the "
                              "recording never opened in it, so that end is on no block")
                 continue
+            if end.block_in_session in named:
+                # The first is kept, as everywhere a number repeats here (the
+                # final review's M6).
+                notes.append(f"run {number}: the rig's record ends block {end.block_in_session} twice; the first "
+                             "end is kept")
+                continue
             named.add(end.block_in_session)
             block["ended"] = end.ended
             block["record"] = {**fields, "passed_at": trial_id(rig, end.passed_at), "varied": _text(end.varied),
