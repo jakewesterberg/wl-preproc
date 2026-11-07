@@ -24,8 +24,9 @@ not a 16-bit code. `events/rigtiming.py` joins the rows to the recording by it.
 
 **The change log by kind** (design spec `2026-11-07-rig-record-fields-design.md`
 section 7): since wl-xcon's engine build C3 a change row names its `kind`
-(`set`, `hand_back`, `range`, `revert`, `clear`, `drum`, `training`; a row
-written before has none, and is a `set`), the act it belongs to (`change`, a
+(`set`, `hand_back`, `range`, `revert`, `clear`, `drum`, `training`, and since
+its pop-out search `suggested` and `declined`; a row written before C3 has
+none, and is a `set`), the act it belongs to (`change`, a
 revert's rows sharing one), the first trial it applies to, which way it went,
 the kind's own fields, and its instant (`at`). Its instant times a row that
 strobed nothing through the rig's clock fit, as a control's does; the rest is
@@ -199,10 +200,11 @@ def read_rig_records(session_dir: Path) -> RigRecords:
 SETTING_KINDS = ("set", "hand_back", "range", "revert")
 # Every kind wl-xcon's change log holds (`wl_xcon/record.py::KINDS`, read at
 # engine-c3 `7ea7913`), and the pop-out search's two (agreed with wl-xcon on
-# 2026-11-07, its `docs/pending-wl-preproc-amendments.md` at `35a3d18`): the
-# rig's suggestion of a move, and a person's declining it, neither strobed nor
-# a person's act on a setting. One outside them is published as written and
-# counted nowhere.
+# 2026-11-07, its `docs/pending-wl-preproc-amendments.md` at `35a3d18`; their
+# shape its `record.py::KINDS` at `389a0e7`): the rig's suggestion of a move,
+# named `block`, was and now the stages, by nobody, and a person's declining
+# it, neither strobed nor a person's act on a setting. One outside them is
+# published as written and counted nowhere.
 KINDS = (*SETTING_KINDS, "clear", "drum", "training", "suggested", "declined")
 # What every change row carries (`wl_xcon/record.py`'s change row, read at
 # engine-c3 `7ea7913`); the rest of a row is its kind's own fields, a clear's

@@ -193,7 +193,9 @@ def _add_changes(module, changes: list[dict]) -> None:
     module.add(DynamicTable(name="parameter_changes", description=(
         "Each change the rig applied to what the animal experienced, from wl-xcon's parameter_changes.jsonl, by its "
         "kind and the act it belongs to, timed by the code it strobed or, for one that strobed nothing, by the rig's "
-        "clock fitted to the recording."),
+        "clock fitted to the recording. A pop-out search's suggested and declined rows change nothing: the rig "
+        "suggested a move between stages, or a person held instead; a move itself is a next_block or back_block "
+        "row of the controls table."),
         columns=[
             column("session_time", "When, in session seconds: its code's time, or, for one that strobed "
                                    "nothing, the rig's clock fitted to the recording, as time_source says (NaN if "
@@ -201,14 +203,16 @@ def _add_changes(module, changes: list[dict]) -> None:
                    [_time(change["session_time"]) for change in changes]),
             column("run_number", "The run it was applied in (-1: none, or a run the recording did not measure).",
                    [-1 if change["run_number"] is None else change["run_number"] for change in changes]),
-            column("setting", "The setting it changed.", [change["name"] for change in changes]),
+            column("setting", "The setting it changed; block for a suggestion or a decline, whose was and now are "
+                              "stages.", [change["name"] for change in changes]),
             column("was", "Its old value, as JSON text ('' if the row has none).",
                    [change["was"] or "" for change in changes]),
             column("now", "Its new value, as JSON text ('' if the row has none).",
                    [change["now"] or "" for change in changes]),
             column("sequence", "wl-xcon's number for the change (-1 if the row has none).",
                    [-1 if change["sequence"] is None else change["sequence"] for change in changes]),
-            column("by_kind", "Who made it, by kind only: box or member ('' if not recorded).",
+            column("by_kind", "Who made it, by kind only: box or member ('' if not recorded, and for the rig's own "
+                              "suggestion).",
                    [change["by_kind"] or "" for change in changes]),
             column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
                            "revert, clear, drum, training, suggested (the rig suggested a move: its detail says which, "
@@ -228,8 +232,8 @@ def _add_changes(module, changes: list[dict]) -> None:
                          "otherwise).", [field.to or "" for field in fields]),
             column("from_draw", "Whose draw a range changed or a revert restored: task or block ('' otherwise).",
                    [field.from_draw or "" for field in fields]),
-            column("block", "The block type whose own draw a range changed, or the block a clear names ('' "
-                            "otherwise).", [field.block or "" for field in fields]),
+            column("block", "The block type whose own draw a range changed, the block a clear names, or the stage "
+                            "a suggestion was judged in ('' otherwise).", [field.block or "" for field in fields]),
             column("moment", "The act a revert goes back to, 0 for the run's start (-1 otherwise).",
                    [-1 if field.moment is None else field.moment for field in fields]),
             column("time_source", "How its time was found: code, or rig_clock for the rig's clock fit ('' if "

@@ -247,10 +247,15 @@ def test_the_pop_out_searchs_suggestions_and_declines_are_known_and_counted_nowh
 
     from wl_preproc.events.rigrecords import acts, change_fields
 
+    # As wl-xcon's `taskd.py` writes them (`_logged`, read at `389a0e7`): named
+    # "block", was and now the stages, the suggestion by nobody.
+    common = {"at": 1773478801.0, "at_local": "2026-03-14T10:00:01+01:00", "trial_number": 9, "run": 0,
+              "meaning": None, "offered": [], "odds": None, "event_code": None}
     rows = [{"name": "contrast", "kind": "set", "change": 1, "event_code": 4130, "sequence": 1},
-            {"name": "stage", "kind": "suggested", "change": 2, "event_code": None, "move": "up", "block": "Alone",
-             "bar": {"correct": 8, "of": 10}, "at_hardest": False},
-            {"name": "stage", "kind": "declined", "change": 3, "event_code": None, "suggestion": 2}]
+            {**common, "change": 2, "kind": "suggested", "name": "block", "was": "Alone", "now": "Fade-in",
+             "by": None, "move": "up", "block": "Alone", "bar": {"correct": 8, "of": 10}, "at_hardest": False},
+            {**common, "change": 3, "kind": "declined", "name": "block", "was": "Alone", "now": "Alone",
+             "by": {"kind": "member", "name": "jw"}, "suggestion": 2}]
     fields, problems = change_fields([json.dumps(row) for row in rows])
     assert [field.kind for field in fields] == ["set", "suggested", "declined"]
     assert problems == [] and acts(fields) == 1
