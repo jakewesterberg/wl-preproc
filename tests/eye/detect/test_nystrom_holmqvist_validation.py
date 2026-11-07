@@ -85,6 +85,7 @@ from collections import Counter, namedtuple
 import numpy as np
 import pytest
 
+from tests.eye.detect._offered import offered
 from wl_preproc.eye.detect.labels import Label, kind_of
 from wl_preproc.eye.detect.nystrom_holmqvist import (
     DEFAULT_NH_PARAMS,
@@ -1491,15 +1492,13 @@ def _gaze_velocity_mask(raw_xy, loss, fs_hz, frame_gaps, scale):
     the pipeline stores detections from."""
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.glitch import repair_glitches
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
-    from wl_preproc.eye.detect.velocity import velocity
+    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
-    gaze, _repaired = repair_glitches(
+    gaze, repaired = repair_glitches(
         apply_map(_scaled_affine_map(scale), raw_xy), fs_hz,
         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms,
     )
-    v = velocity(gaze, fs_hz)
-    return gaze, v, validity_labels(gaze, v, loss, frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
+    return offered(gaze, loss, frame_gaps, fs_hz, repaired=repaired)
 
 
 class _Trace:
@@ -2157,14 +2156,29 @@ def test_why_one_eye_alone_detects_a_saccade(reference, capsys):
 def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
     """The both-eyes trace's fallback to the usable eye (design spec
     `2026-09-28-both-eyes-fallback-design.md` section 6), on this detector's
-    two eyes. Recorded, and one thing asserted: after the usable-data guard
-    no run covers a withheld sample, so the which-eye trace is `neither`
-    exactly where both eyes' masks withhold. Measured 2026-10-11, on
-    glitch-repaired gaze, with the mask reading where the tracker lost the
-    eye and padding each blink's flanks (design specs
-    `2026-10-11-eye-loss-design.md` and `2026-10-11-blink-padding-design.md`):
-    281 left and 177 right saccades kept whole, and the trace is `both` on
-    93.05%, `left` 1.09%, `right` 1.15% and `neither` 4.70%.
+    two eyes. Recorded, and two things asserted: after the usable-data guard
+    no kept run covers a sample its own eye withholds (a blink or invalid),
+    and outside the kept runs the which-eye trace is `neither` exactly where
+    neither eye was measured. A kept run is marked by its own eye along its
+    whole length, so it is that eye's over its own short losses of data
+    too, which it carries (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md`). Measured 2026-11-07,
+    lost data being missing data (its amendment 11) and a repaired glitch
+    lost on its own sample (amendment 14): 613 left and 202 right saccades
+    kept whole, and the trace is `both` on 92.07%, `left` 1.98%, `right`
+    1.30% and `neither` 4.66%. Of the 613, 535 were kept because the right
+    eye lost data in them and withheld none, mostly the repaired glitches
+    the mask did not mark before; 1197 samples lie in a kept run where both
+    eyes were unmeasured, each its own eye's carried loss.
+
+    *Measured 2026-10-11, before lost data, on glitch-repaired gaze, with
+    the mask reading where the tracker lost the eye and padding each blink's
+    flanks (design specs `2026-10-11-eye-loss-design.md` and
+    `2026-10-11-blink-padding-design.md`): 281 left and 177 right saccades
+    kept whole, and the trace is `both` on 93.05%, `left` 1.09%, `right`
+    1.15% and `neither` 4.70%; then one thing was asserted, that the trace
+    is `neither` exactly where both eyes' masks withhold; true when
+    written.*
 
     *Measured the same day before the blink pads: 306 and 184, with `both`
     on 93.58%, `left` 1.24%, `right` 1.15% and `neither` 4.04%; true when
@@ -2191,5 +2205,11 @@ def test_the_both_eyes_fallback_on_the_reference_recording(reference, capsys):
         print(f"\n  both-eyes fallback (Nystrom-Holmqvist): saccades kept whole, left "
               f"{kinds['left', 'saccadic']}, right {kinds['right', 'saccadic']}; all kept runs {len(kept)}")
         print("  which eye: " + ", ".join(f"{value} {share:.2%}" for value, share in shares.items()))
+    masks = {"left": left.mask, "right": right.mask}
+    in_kept = np.zeros(len(source), dtype=bool)
+    for eye, run in kept:
+        assert all(label in (None, Label.LOST) for label in masks[eye][run.start:run.stop]), (eye, run)
+        assert (source[run.start:run.stop] == eye).all(), (eye, run)
+        in_kept[run.start:run.stop] = True
     neither = np.array([a is not None and b is not None for a, b in zip(left.mask, right.mask)])
-    assert np.array_equal(source == "neither", neither)
+    assert np.array_equal((source == "neither")[~in_kept], neither[~in_kept])

@@ -306,3 +306,13 @@ what the sections above left open; §0 stands.
    at 0 on 13,275 left-eye frames (1.13%) and 2,626 right (0.22%), with the pupil high in the image
    (median Y 87 px against 222 px otherwise; right 90 against 255): the eye looking up, P1 at 0 too
    on 12,947 of the left eye's. These are counted in §1's 44,804 and 41,391.
+
+## Amendment, 2026-11-06: lost data and the screen region
+
+§3's withholding of `feature_lost` as `invalid` is superseded where a paramset carries lost data (`max_lost_ms` above 0), as
+the default does since 2026-11-06 (design spec `2026-11-06-eye-lost-data-and-region-design.md`, the requester's
+decisions of that day): a sample not offered as measured is lost (a lost reflection, a value that is not a
+number, an impossible speed, a repaired glitch, the four velocities a dropped frame spans, which take no margin)
+or invalid (a blink with its padding, gaze off the screen), a saccade is carried across a short loss, and the
+screen region is each session's recorded visible field plus 2 degrees, the placeholder only where none was
+recorded. A paramset stored before masks as it did.

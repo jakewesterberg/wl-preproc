@@ -671,6 +671,12 @@ def populate_session(key: dict, session_dir: Path) -> None:
             "calibration_measured_on": None if calibration is None else _clip(calibration.measured_on, 32),
             "calibration_cones": None if calibration is None else calibration.cones,
         }, skip_duplicates=True)
+        if rig_session.setup is not None:
+            core.SessionSetup.insert1({
+                **session_key, "view": _clip(rig_session.setup.view, 16),
+                "half_field_h_deg": rig_session.setup.half_field_deg[0],
+                "half_field_v_deg": rig_session.setup.half_field_deg[1],
+            }, skip_duplicates=True)
         numbers = rig_runs.run_numbers if rig_runs is not None else {}
         warning_rows = []
         for number, warning in enumerate(rig_session.warnings, start=1):

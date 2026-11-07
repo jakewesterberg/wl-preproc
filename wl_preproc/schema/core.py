@@ -94,6 +94,28 @@ class RunRecordProblem(dj.Manual):
 
 
 @schema
+class SessionSetup(dj.Manual):
+    definition = """
+    # The display a session ran on, from `xcon/config.json`'s `setup`, read by
+    # `schema/events.py::populate_session`: its view, and each eye's visible
+    # field as wl-xcon records it, half-angles in per-axis degrees capped by
+    # the stereoscope's mask (wl-xcon's `taskd.Session._fixed_config`, since
+    # its `c634749`, 2026-09-29). The validity mask's screen region is that
+    # field plus a margin (`schema/detect.py::EyeValidity`; design spec
+    # 2026-11-06-eye-lost-data-and-region-design.md section 7). Its own table
+    # rather than columns of `SessionRecord`, so a database declared before it
+    # needs no ALTER. Only a session whose config.json of its own animal
+    # records one has a row.
+    # Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    view = null      : varchar(16)  # stereoscope or direct, as written
+    half_field_h_deg : double       # each eye's horizontal half-field
+    half_field_v_deg : double       # each eye's vertical half-field
+    """
+
+
+@schema
 class SessionRecord(dj.Manual):
     definition = """
     # What wl-xcon's record says the session was, from `xcon/config.json`: the

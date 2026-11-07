@@ -106,6 +106,7 @@ from wl_preproc.eye.detect.labels import (
     Run,
     kind_of,
     labels_from_runs,
+    may_label,
     runs_from_labels,
     true_runs,
 )
@@ -178,6 +179,14 @@ class EyeValidity(dj.Computed):
     # recording (6,684 of 10,969) and 45% of the right's, and with the
     # margin and the blink pads 84% and 75%.
     frac_glitch_repaired=null : double
+    # The screen region the mask applied, half-width and half-height in
+    # per-axis degrees, and whether it was the session's own visible field
+    # plus the paramset's margin (`core.SessionSetup`) or the paramset's
+    # placeholder (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    # section 7). `NULL` on a refused row.
+    region_half_width_deg=null  : double
+    region_half_height_deg=null : double
+    region_from_setup=null      : tinyint(1)
     reason='' : varchar(255)
     """
 
@@ -270,6 +279,15 @@ class EyeValidity(dj.Computed):
                 "database declared before 2026-10-11. Nothing is masked until it is altered and the "
                 f"daemon restarted: {_feature_lost_statement()}"
             )
+        if _lacks_region():
+            raise RuntimeError(
+                f"{self.full_table_name} has no columns {', '.join(_REGION_COLUMNS)}, or its runs no label "
+                "`lost`, as read by this process: a database declared before 2026-11-06. Nothing is masked until "
+                f"it is altered and the daemon restarted: {'; '.join(_region_statements())}; then delete the "
+                "eye_validity paramsets whose params name no max_lost_ms, with what was computed from them: "
+                "registered before lost data was carried, they mask as they did and otherwise keep running beside "
+                "the new default (design spec 2026-11-06-eye-lost-data-and-region-design.md section 8)."
+            )
         return super().populate(*args, **kwargs)
 
     def make(self, key: dict) -> None:
@@ -299,6 +317,10 @@ class EyeValidity(dj.Computed):
         # `fs_hz`/`frame_gaps` describe the FILE's own sync line, not either
         # eye's gaze -- read once per session rather than once per eye.
         recording = read_ohdpi(path)
+        # The session's own visible field, where its config recorded one
+        # (design spec `2026-11-06-eye-lost-data-and-region-design.md` section 7).
+        setup = (core.SessionSetup & session_key).to_dicts()
+        field_deg = (setup[0]["half_field_h_deg"], setup[0]["half_field_v_deg"]) if setup else None
 
         for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
             calibration = (eye_schema.EyeCalibration & {**session_key, "eye": eye_value})
@@ -315,7 +337,7 @@ class EyeValidity(dj.Computed):
             gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
             mask = validity_labels(
                 gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
-                recording.frame_gaps, params, fs_hz=recording.fs_hz,
+                recording.frame_gaps, params, fs_hz=recording.fs_hz, repaired=repaired, field_deg=field_deg,
             )
             labels = mask.labels
             # `validity_labels` returns `None` for a usable sample; encoded
@@ -361,6 +383,8 @@ class EyeValidity(dj.Computed):
                 # short version for a reader looking only at the schema.
                 **{f"frac_{criterion}": value
                    for criterion, value in mask.fractions.items()},
+                "region_half_width_deg": mask.region_deg[0], "region_half_height_deg": mask.region_deg[1],
+                "region_from_setup": int(mask.region_from_setup),
                 "reason": "",
             })
             self.Run.insert(
@@ -497,6 +521,14 @@ class EyeDetection(dj.Computed):
         start_polar_deg=null        : double
         end_eccentricity_deg=null   : double
         end_polar_deg=null          : double
+        # The lost samples inside a detector's run, 0 for one measured
+        # throughout, and whether it is flagged: a lost sample inside it or in
+        # the two samples before its start, where its onset was decided
+        # (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+        # sections 5 and 8). On the conjunction, either eye's. NULL on the
+        # mask's own runs.
+        n_lost=null  : int unsigned
+        flagged=null : tinyint(1)
         """
 
     class Source(dj.Part):
@@ -565,6 +597,13 @@ class EyeDetection(dj.Computed):
                 "mean per axis and otherwise keep running beside the true-angle defaults (design spec "
                 "2026-10-30-true-angle-saccades-design.md, amendment 5)."
             )
+        if _lacks_lost_columns():
+            raise RuntimeError(
+                f"{self.Run.full_table_name} has no columns {', '.join(_LOST_COLUMNS)}, or no label `lost`, as "
+                "read by this process: a database declared before 2026-11-06. Nothing is detected until it is "
+                f"altered and the daemon restarted: {'; '.join(_lost_statements())} (design spec "
+                "2026-11-06-eye-lost-data-and-region-design.md section 8)."
+            )
         return super().populate(*args, **kwargs)
 
     def make(self, key: dict) -> None:
@@ -587,7 +626,7 @@ class EyeDetection(dj.Computed):
         refused session wearing one eye's excuse for the other's silence.
         """
         from wl_preproc.eye.detect.registry import get_detector
-        from wl_preproc.eye.detect.validity import ValidityParams
+        from wl_preproc.eye.detect.validity import ValidityParams, fill_lost, frame_numbers, rows_across_gaps
         from wl_preproc.eye.detect.velocity import local_velocity, velocity
         from wl_preproc.eye.ohdpi import read_ohdpi
         from wl_preproc.schema import eye as eye_schema, ingest
@@ -624,7 +663,8 @@ class EyeDetection(dj.Computed):
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
         path = session_dir / "ohdpi" / segment["file_path"]
-        fs_hz = read_ohdpi(path).fs_hz
+        recording = read_ohdpi(path)
+        fs_hz = recording.fs_hz
 
         spans: dict[str, list[Run]] = {}
         per_eye: dict[str, tuple] = {}
@@ -653,13 +693,6 @@ class EyeDetection(dj.Computed):
                 (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()
             )
             gaze, _repaired = _repaired_gaze(path, file_eye, map_, fs_hz, validity_params)
-            v = velocity(gaze, fs_hz)
-            # Under true angle, the eye's angular velocity in the local frame at
-            # each sample (true-angle spec section 5): what every run is
-            # measured on, and what a detector that detects in the setting's
-            # geometry is handed (`registry.Detector.detects_in_geometry`).
-            # Under per-axis, the per-axis velocity, as v1.
-            measured_v = local_velocity(gaze, fs_hz) if geometry == TRUE_ANGLE else v
             available = labels_from_runs(
                 [Run(r["run_start"], r["run_stop"], Label(r["label"]))
                  for r in (EyeValidity.Run & {**validity_key, "eye": eye_value}).to_dicts(
@@ -668,6 +701,19 @@ class EyeDetection(dj.Computed):
             )
             # The mask stored `fixation` where a sample is available.
             offered = np.where(available == Label.FIXATION, None, available)
+            # Over a carried loss, a position that is not a measurement is
+            # filled along frame time, so every detector reads finite gaze
+            # (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+            # section 3); the velocities are the filled gaze's.
+            gaze = fill_lost(gaze, offered, frame_numbers(len(gaze), recording.frame_gaps),
+                             rows_across_gaps(len(gaze), recording.frame_gaps))
+            v = velocity(gaze, fs_hz)
+            # Under true angle, the eye's angular velocity in the local frame at
+            # each sample (true-angle spec section 5): what every run is
+            # measured on, and what a detector that detects in the setting's
+            # geometry is handed (`registry.Detector.detects_in_geometry`).
+            # Under per-axis, the per-axis velocity, as v1.
+            measured_v = local_velocity(gaze, fs_hz) if geometry == TRUE_ANGLE else v
             # `detector.detect`, never `detector.run`: the wrapper is what
             # holds the detector to its own declared `vocabulary`, and this
             # is the one place in production that runs a detector at all.
@@ -1007,6 +1053,12 @@ class EyeDetection(dj.Computed):
         # unmeasured (design spec `2026-09-28-both-eyes-fallback-design.md`
         # section 3).
         kept = kept or {}
+        # The lost samples a run's flag and count read: its trace's, or, on the
+        # conjunction, either eye's (design spec
+        # `2026-11-06-eye-lost-data-and-region-design.md` section 6).
+        lost = np.logical_or.reduce([np.array([label is Label.LOST for label in mask], dtype=bool)
+                                     for mask in ([offered] if eyes is None
+                                                  else [eyes["left"][2], eyes["right"][2]])])
 
         def _measured_on(run: Run):
             span = (run.start, run.stop)
@@ -1014,10 +1066,16 @@ class EyeDetection(dj.Computed):
                 return kept[span]
             if eyes is None:
                 return (trace, gaze, v, offered)
-            for eye in ("left", "right"):
-                eye_gaze, eye_v, eye_offered = eyes[eye]
-                if all(label is None for label in eye_offered[run.start:run.stop]):
-                    return (trace, eye_gaze, eye_v, offered)
+            # The eye measured throughout it, the left first; failing that, an
+            # eye that lost data in it but withheld none. Measured on that
+            # eye's own mask, so a lost sample's speed is never its peak (the
+            # final review of 2026-11-07, I1).
+            for may in (lambda labels: all(label is None for label in labels),
+                        lambda labels: may_label(labels).all()):
+                for eye in ("left", "right"):
+                    eye_gaze, eye_v, eye_offered = eyes[eye]
+                    if may(eye_offered[run.start:run.stop]):
+                        return (trace, eye_gaze, eye_v, eye_offered)
             return None
 
         def _run_row(index: int, run: Run) -> dict:
@@ -1052,9 +1110,17 @@ class EyeDetection(dj.Computed):
                 **{column: None if measurement is None else getattr(measurement, column)
                    for column in _STORED_MEASUREMENTS},
                 "reliability": reliability_by_span.get((run.start, run.stop)),
+                **({"n_lost": None, "flagged": None} if run.label in _MASK_LABELS else
+                   {"n_lost": int(lost[run.start:run.stop].sum()),
+                    "flagged": int(lost[max(run.start - 2, 0):run.stop].any())}),
             }
 
         self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
+
+
+#: The labels the validity mask, not a detector, writes into a trace: no
+#: lost-sample count or flag (`EyeDetection.Run`).
+_MASK_LABELS = frozenset({Label.BLINK, Label.INVALID, Label.LOST})
 
 
 #: The `Measurement` fields `EyeDetection.Run` stores, each under its own
@@ -1086,6 +1152,67 @@ def _polar_statement() -> str:
     return f"ALTER TABLE {EyeDetection.Run.full_table_name} " + ", ".join(
         f"ADD COLUMN {column} double DEFAULT NULL COMMENT '' AFTER {previous}"
         for column, previous in zip(_POLAR_COLUMNS, after, strict=True))
+
+
+#: `EyeValidity`'s columns of 2026-11-06, after `frac_glitch_repaired` in
+#: order, and `EyeDetection.Run`'s, after `end_polar_deg`, each with its type
+#: as DataJoint declares it (design spec
+#: `2026-11-06-eye-lost-data-and-region-design.md` section 8).
+_REGION_COLUMNS = ("region_half_width_deg", "region_half_height_deg", "region_from_setup")
+_REGION_TYPES = ("double", "double", "tinyint(1)")
+_LOST_COLUMNS = ("n_lost", "flagged")
+_LOST_TYPES = ("int unsigned", "tinyint(1)")
+
+
+def _knows_lost(table) -> bool:
+    """`table.Run`'s `label`, as this process reads it, has the value `lost`:
+    an enum DataJoint never alters on an existing table."""
+    return "'lost'" in table.Run.heading.attributes["label"].type
+
+
+def _lacks_region() -> bool:
+    """`EyeValidity`, as this process reads it, lacks one of
+    `_REGION_COLUMNS`, or its runs the label `lost`: a database declared
+    before 2026-11-06. DataJoint reads a table's columns once per process
+    (`_lacks_feature_lost`)."""
+    return not set(_REGION_COLUMNS) <= set(EyeValidity.heading.names) or not _knows_lost(EyeValidity)
+
+
+def _lacks_lost_columns() -> bool:
+    """`EyeDetection.Run`, as this process reads it, lacks one of
+    `_LOST_COLUMNS` or the label `lost` (`_lacks_region`)."""
+    return not set(_LOST_COLUMNS) <= set(EyeDetection.Run.heading.names) or not _knows_lost(EyeDetection)
+
+
+def _label_statement(table) -> str:
+    """The statement that gives `table.Run`'s `label` the value `lost`, as
+    DataJoint declares the column: its comment begins with its declared type,
+    `:enum(...):`, each quote doubled inside the SQL literal."""
+    comment = f":enum({_LABEL_ENUM}):".replace("'", "''")
+    return (f"ALTER TABLE {table.Run.full_table_name} MODIFY COLUMN label enum({_LABEL_ENUM}) NOT NULL "
+            f"COMMENT '{comment}'")
+
+
+def _added(table_name: str, columns, types, after: str) -> str:
+    previous = (after, *columns[:-1])
+    return f"ALTER TABLE {table_name} " + ", ".join(
+        f"ADD COLUMN {column} {kind} DEFAULT NULL COMMENT '' AFTER {before}"
+        for column, kind, before in zip(columns, types, previous, strict=True))
+
+
+def _region_statements() -> list[str]:
+    """The statements that bring an `EyeValidity` declared before 2026-11-06
+    to what DataJoint declares now: its region columns, nullable, no
+    comment, after `frac_glitch_repaired`; and its runs' label `lost`."""
+    return [_added(EyeValidity.full_table_name, _REGION_COLUMNS, _REGION_TYPES, "frac_glitch_repaired"),
+            _label_statement(EyeValidity)]
+
+
+def _lost_statements() -> list[str]:
+    """`_region_statements`' for `EyeDetection.Run`: its lost-sample count and
+    flag after `end_polar_deg`, and its label `lost`."""
+    return [_added(EyeDetection.Run.full_table_name, _LOST_COLUMNS, _LOST_TYPES, "end_polar_deg"),
+            _label_statement(EyeDetection)]
 
 
 def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:
@@ -1322,6 +1449,9 @@ def _conjunction_fallback(left, right, left_offered, right_offered):
     `source` a per-sample object array of `both`, `left`, `right` or
     `neither` -- which eyes were usable, with each kept run marked by its
     own eye along its whole length."""
+    # Measured, not merely offered: lost data is missing data, so a one-eye
+    # event the other eye lost data during is kept whole, and a loss never
+    # confirms the other eye's event (the final review of 2026-11-07, C1).
     usable = {"left": np.array([label is None for label in left_offered], dtype=bool),
               "right": np.array([label is None for label in right_offered], dtype=bool)}
     runs = {"left": sorted(left, key=lambda run: run.start), "right": sorted(right, key=lambda run: run.start)}
@@ -1705,36 +1835,11 @@ def _repaired_gaze(path, file_eye: str, map_, fs_hz: float, validity_params):
 
 
 def _min_duration_samples(detector_params, fs_hz: float) -> int:
-    """The floor `_overlapping` inherits from the detector that produced both
-    eyes' spans -- the SAME params object the detector actually ran with, not
-    a second reading of the paramset dict.
+    """`registry.min_duration_samples`, where it moved on 2026-11-06: the
+    shared rule holds every detector's runs to it as well."""
+    from wl_preproc.eye.detect.registry import min_duration_samples
 
-    **The detector's own declared minimum, and never less than 2 samples**
-    (the requester's decision of 2026-09-28):
-    - `min_duration_samples` where the params declare it (Engbert-Kliegl's
-      6);
-    - otherwise `min_saccade_duration_ms`, counted in samples as the
-      detectors that declare it count it, `round(ms * fs_hz / 1000)`
-      (Nystrom-Holmqvist's and REMoDNaV's 10 ms: 5 samples at the rig's
-      498.55 Hz);
-    - otherwise nothing, so the lab-wide 2.
-
-    A single-sample event's amplitude is 0.0 deg by construction
-    (`measure`'s `gaze_deg[stop - 1] - gaze_deg[start]`), so no two-eye
-    event may be one sample, whatever its detector would accept.
-
-    *Until 2026-09-28 only `min_duration_samples` was read, with a default
-    of 1: the other five detectors' two-eye events could be one sample
-    long, and Nystrom-Holmqvist's and REMoDNaV's 10 ms minimums, declared
-    in milliseconds, were never seen. On the reference recording that
-    stored 3-26 two-eye saccades per detector at exactly 0.0 deg; true when
-    written.*
-    """
-    declared = getattr(detector_params, "min_duration_samples", None)
-    if declared is None:
-        minimum_ms = getattr(detector_params, "min_saccade_duration_ms", None)
-        declared = 1 if minimum_ms is None else int(round(minimum_ms * fs_hz / 1000.0))
-    return max(int(declared), 2)
+    return min_duration_samples(detector_params, fs_hz)
 
 
 def _params_for(detector, params: dict):

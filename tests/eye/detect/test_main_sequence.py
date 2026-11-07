@@ -205,3 +205,15 @@ def test_vigor_needs_enough_saccades_the_history_covers():
     result = vigor(amplitude, PLANTED(amplitude), history, PARAMS)
     assert result.value is None
     assert result.reason == "too few saccades (10)"
+
+
+def test_a_flagged_saccade_is_left_out_of_the_fits():
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 6,
+    the requester's decision: its peak speed may be understated where the
+    loss fell on its peak."""
+    from wl_preproc.eye.detect.main_sequence import DEFAULT_MAIN_SEQUENCE_PARAMS, selected
+
+    taken = selected(["saccade", "saccade"], [5.0, 5.0], [20, 20], 500.0, DEFAULT_MAIN_SEQUENCE_PARAMS,
+                     flagged=[False, True])
+
+    assert taken.tolist() == [True, False]

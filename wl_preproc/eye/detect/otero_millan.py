@@ -91,7 +91,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Run
+from wl_preproc.eye.detect.labels import Run, may_label
 from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
@@ -236,7 +236,7 @@ def detect_otero_millan(
     formula, so design spec section 3's guarantee that a disagreement is "never
     a disagreement about measurement" holds literally.
     """
-    usable = np.array([entry is None for entry in available], dtype=bool)
+    usable = may_label(available)
     if not usable.any():
         return []
 

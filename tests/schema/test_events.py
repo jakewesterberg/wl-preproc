@@ -913,3 +913,19 @@ def test_a_lone_surrogate_in_a_warnings_text_is_kept_and_the_stage_completes(eve
                                        rig_record=_rig_record(warnings=(
                                            RigWarningSpec(code="head-free", by={"kind": "box", "name": "J\ud83d"}),)))
     assert (core.AcceptedWarning & key).fetch1("by_name") == "J\\ud83d"
+
+
+def test_populate_session_keeps_the_rigs_display_setup(events_activated, dj_conn, tmp_path):
+    """Each eye's visible field, where the session's `config.json` records
+    one (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7); a session whose config records none has no row."""
+    from wl_preproc.schema import core
+    from wl_preproc.synth.peripherals import RIG_SETUP
+
+    _recipe, key = _populate_generated(tmp_path / "with", "slsetup1", datetime.datetime(2027, 7, 27, 9, 0), runs=True)
+    _recipe, bare = _populate_generated(tmp_path / "without", "slsetup2", datetime.datetime(2027, 7, 27, 9, 0),
+                                        runs=True, setup_recorded=False)
+
+    assert (core.SessionSetup & key).fetch1("view", "half_field_h_deg", "half_field_v_deg") == (
+        "direct", *RIG_SETUP["half_field_deg"])
+    assert len(core.SessionSetup & bare) == 0

@@ -84,10 +84,10 @@ status:
     XC-398's true-angle saccades are merged (82380d2;
     docs/handoffs/2026-10-30-true-angle-saccades.md); wl-sync's header
     follow-up is merged (915a825; docs/handoffs/2026-11-04-syncbox-header.md).
-    Next, first of wl-xcon's asks by the requester's decision of
-    2026-11-06: lost data and the screen region
-    (docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md,
-    approved, its plan being proved); then, in the requester's order of
+    Lost data and the screen region, first of wl-xcon's asks by the
+    requester's decision of 2026-11-06, is built on
+    feat/eye-lost-and-region (docs/handoffs/2026-11-06-eye-lost-data-and-region.md),
+    reviewed, not merged, its merge next; then, in the requester's order of
     2026-10-31, wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value
     that is an appearance), the pipeline's scaling to long sessions, part
     3b, the NI as the clock, and part 2, the bridges.
@@ -653,8 +653,10 @@ publishes:
       v1.json and its companion v1-thresholds.json are per axis; v2.json is
       true visual angle (the local-frame velocity, the complete-window
       scale, and each interval's size, peak speed, direction and endpoints'
-      eccentricity and polar angle). Versioned, and never
-      edited once published. wl-xcon's online detector mirrors this one, and
+      eccentricity and polar angle); v3.json carries a run across a short
+      loss of data, a sample with no position, flagged, as wl-xcon's online
+      detector does (design spec 2026-11-06-eye-lost-data-and-region-design.md).
+      Versioned, and never edited once published. wl-xcon's online detector mirrors this one, and
       its contract tests read these files rather than import this package,
       so a change of behaviour reaches it as a new version beside the old
       (its XC-398).

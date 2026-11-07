@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import random
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -250,6 +251,8 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
     (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
                                          encoding="utf-8")
     config = {"session_id": recipe.session_id, "subject": recipe.subject}
+    if recipe.setup_recorded:
+        config["setup"] = RIG_SETUP
     if rig is not None:
         config["session_kind"] = rig.session_kind
         config["calibration"] = None if rig.calibration_id is None else {
@@ -301,6 +304,16 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
 # `luminosity_weights` are placeholders: carried verbatim and read by nothing.
 # `via` and `luminance` are null, as wl-xcon writes them where no cone colour
 # converts, so the nulls a nested record holds are carried too.
+#: The display setup the synthetic rig records in `config.json`, as wl-xcon's
+#: `taskd.Session._fixed_config` writes it (its `main` at `957ec98`): this
+#: rig in direct view, its panel 58.997 x 33.293 cm at 50 cm (wl-xcon's
+#: `tasks/rig.py`), so each eye's field is `atan(half-size / distance)` per
+#: axis, as its `geometry.py` computes it (design spec
+#: `2026-11-06-eye-lost-data-and-region-design.md` section 7).
+RIG_SETUP = {"view": "direct", "viewing_distance_cm": 50.0, "mask_deg": None,
+             "half_field_deg": [math.degrees(math.atan(58.997 / 2 / 50.0)),
+                                math.degrees(math.atan(33.293 / 2 / 50.0))]}
+
 RIG_CONES = {
     "observer": {"name": "CIE 2006 10°", "data": "10.25039/CIE.DS.nxsqeri8", "field_deg": 10.0,
                  "peak_optical_density": [0.38, 0.38, 0.30], "macular_density_460nm": 0.095,

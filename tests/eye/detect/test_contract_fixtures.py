@@ -269,3 +269,103 @@ def test_in_v2_the_step_across_the_cut_is_a_microsaccade():
     (v2_case,) = [case for case in _v2()["traces"] if case["name"] == "off-centre-30-across-the-cut"]
     assert [run["label"] for run in v1_case["runs"]] == ["saccade"]
     assert [run["label"] for run in v2_case["runs"]] == ["microsaccade"]
+
+
+# v3 (design spec `2026-11-06-eye-lost-data-and-region-design.md` section 9):
+# a run carried across a short loss of data, the requester's decision of
+# 2026-11-06, which wl-xcon's online detector follows.
+V3 = V1.with_name("v3.json")
+V3_SHA256 = "9b3f16d2a573c1178d0f57e94ef3551994e10f32693d8332da7f216250f4c915"
+
+
+def _v3() -> dict:
+    return json.loads(V3.read_text(encoding="utf-8"))
+
+
+def test_the_published_v3_is_never_edited():
+    assert hashlib.sha256(V3.read_bytes()).hexdigest() == V3_SHA256
+
+
+def test_v3_says_how_a_loss_of_data_is_carried():
+    about = _v3()["about"]
+    assert '"lost" where the sample has no position' in about
+    assert "continues a run open before it and never opens one" in about
+    assert "floor(max_lost_ms * fs / 1000 + 1e-9)" in about
+    assert "Each maximal stretch of unknown velocities is judged whole" in about
+    assert "nor among the two at each end of the trace" in about
+    assert "flagged: a sample of a carried stretch" in about
+    assert "the last sample with a known velocity before it, where the eye took off" in about
+    assert _V2_TOLERANCE in about
+
+
+def test_v3_names_its_source_and_its_bound():
+    fixture = _v3()
+    assert (fixture["version"], fixture["geometry"]) == (3, TRUE_ANGLE)
+    assert fixture["derived_from"] == {"v2.json": V2_SHA256}
+    assert fixture["defaults"] == {**_v2()["defaults"], "max_lost_ms": 50.0}
+
+
+def test_v3s_traces_from_v2_keep_v2s_runs_measured_throughout():
+    v2 = {case["name"]: case for case in _v2()["traces"]}
+    for case in _v3()["traces"]:
+        if case["inputs_from"] == "v2.json":
+            source = v2[case["name"]]
+            assert (case["gaze_deg"], case["available"]) == (source["gaze_deg"], source["available"]), case["name"]
+            assert [(run["start"], run["stop"], run["label"], run["flagged"], run["n_lost"]) for run in case["runs"]] == [
+                (run["start"], run["stop"], run["label"], False, 0) for run in source["runs"]], case["name"]
+    assert [case["name"] for case in _v3()["traces"] if case["inputs_from"] == "v2.json"] == list(v2)
+
+
+def test_a_reader_of_v3_gets_its_outputs_back_from_its_inputs():
+    """What wl-xcon's test will do, from the file alone."""
+    from wl_preproc.eye.detect.contract_fixtures import detector_input
+    from wl_preproc.eye.detect.measure import measure_event_run
+    from wl_preproc.eye.detect.velocity import local_velocity
+
+    fixture = _v3()
+    fs_hz = fixture["fs_hz"]
+    for case in fixture["traces"]:
+        gaze, offered = detector_input(case["gaze_deg"], case["available"], fs_hz, fixture["defaults"]["max_lost_ms"])
+        speed = local_velocity(gaze, fs_hz)
+        known = np.array([entry is None for entry in offered])
+        want = case["velocity_deg_s"]
+        assert all(_close(speed[n] if known[n] else None, want[n]) for n in range(len(want))), case["name"]
+        assert all(_close(got, want) for got, want in zip(thresholds(speed, known, _V2_PARAMS), case["eta_deg_s"],
+                                                          strict=True)), case["name"]
+        runs = detect_engbert_kliegl(gaze, speed, offered, fs_hz, _V2_PARAMS)
+        assert [(r.start, r.stop, r.label.value) for r in runs] == [
+            (run["start"], run["stop"], run["label"]) for run in case["runs"]], case["name"]
+        for r, run in zip(runs, case["runs"], strict=True):
+            got = measure_event_run(gaze, speed, offered, r.start, r.stop, fs_hz, geometry=TRUE_ANGLE,
+                                    runs_end_before_landing=False, min_measured_ms=None)
+            for field in ("amplitude_deg", "peak_velocity_deg_s", "direction_deg", "start_eccentricity_deg",
+                          "start_polar_deg", "end_eccentricity_deg", "end_polar_deg"):
+                assert _close(getattr(got, field), run[field]), (case["name"], r.start, field)
+
+
+def test_v3s_own_traces_carry_a_short_loss_end_at_a_blink_and_at_a_long_loss():
+    traces = {case["name"]: case for case in _v3()["traces"]}
+    (whole,) = traces["centre-horizontal"]["runs"]
+
+    def saccades(name):
+        return [(run["start"], run["stop"], run["flagged"], run["n_lost"]) for run in traces[name]["runs"]
+                if run["label"] == "saccade"]
+
+    assert saccades("a-lost-sample-inside-a-saccade") == [(whole["start"], whole["stop"], True, 5)]
+    assert all(run["stop"] <= 205 or run["start"] >= 207 for run in traces["a-blink-inside-a-saccade"]["runs"])
+    ((start, stop, flagged, _),) = saccades("a-long-loss-inside-a-saccade")
+    assert (start, flagged) == (whole["start"], False) and stop <= 207
+    assert saccades("lost-samples-alone") == [(whole["start"], whole["stop"], False, 0)]
+    (take_off,) = [run for run in traces["a-short-loss-at-a-saccades-take-off"]["runs"] if run["label"] == "saccade"]
+    assert (take_off["flagged"], take_off["stop"]) == (True, whole["stop"]) and take_off["start"] > whole["start"]
+    assert abs(take_off["amplitude_deg"] - whole["amplitude_deg"]) < 0.1
+    (landing,) = [run for run in traces["a-short-loss-at-a-saccades-landing"]["runs"] if run["label"] == "saccade"]
+    assert (landing["start"], landing["flagged"]) == (whole["start"], True) and landing["stop"] > whole["stop"]
+    assert abs(landing["amplitude_deg"] - whole["amplitude_deg"]) < 0.1
+
+
+def test_v3_is_what_this_code_makes_of_v2():
+    """The file is this code's output, the builder's every rule included."""
+    from wl_preproc.eye.detect.contract_fixtures import build_v3, dumps
+
+    assert dumps(build_v3(_v2(), V2_SHA256)) == V3.read_text(encoding="utf-8")

@@ -738,6 +738,58 @@ def _inject_missing_left_gaze(session_dir) -> None:
     ohdpi_txt.write_text("\n".join([header_line, *data_lines]) + "\n", encoding="utf-8")
 
 
+def _drop_a_frame_inside_the_first_step(session_dir) -> None:
+    """One frame of the eye camera dropped half-way through the first planted
+    ramp, A to B, 2.4 degrees: its row removed from the file, so its frame
+    number is missing for both eyes, as the camera drops one."""
+    (ohdpi_txt,) = (session_dir / "ohdpi").glob("*.txt")
+    lines = ohdpi_txt.read_text(encoding="utf-8").splitlines()
+    del lines[1 + _DROPPED_FRAME_ROW]
+    ohdpi_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+#: The file row `dropped_frame_session` removes: eight frames into the first
+#: ramp, which lasts sixteen (`_DURATIONS_S[0]`).
+_DROPPED_FRAME_ROW = _first_row_at(4 * TRIAL_DURATION_S + _ONSET_OFFSETS_S[0]) + 8
+
+
+@pytest.fixture(scope="module")
+def dropped_frame_session(daemon_module, prefix, tmp_path_factory):
+    """`_build_stepped_session`'s own construction with one frame dropped
+    inside its first planted saccade (`_drop_a_frame_inside_the_first_step`),
+    and the daemon run immediately after (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 11). Date,
+    subject and seed checked unclaimed across `tests/` on 2026-11-06.
+    Returns the session's key."""
+    session_key, _segment, _onset_times = _build_stepped_session(
+        tmp_path_factory,
+        dirname="detectdrop", session_id="2027-06-24_01", subject="detdrop1",
+        session_datetime=datetime.datetime(2027, 6, 24, 9, 0), seed=624,
+        after_generate=_drop_a_frame_inside_the_first_step,
+    )
+    daemon_module.run_once(prefix=prefix)
+    return session_key
+
+
+def test_a_saccade_across_a_dropped_frame_is_one_saccade_flagged_with_its_lost_samples(dropped_frame_session):
+    """The requester's question of 2026-11-06 began here: one frame dropped
+    inside a saccade split it in two, or erased it. The four rows whose
+    velocity spans the gap are lost, and each trace's saccade is carried
+    across them: one saccade, its four lost samples counted, flagged."""
+    from wl_preproc.schema import detect, paramset
+
+    key = dropped_frame_session
+    gap = _DROPPED_FRAME_ROW - 1
+    ek = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+          if row["params"]["detector"] == "engbert_kliegl"]
+    for trace in ("left", "right", "conjunction"):
+        runs = (detect.EyeDetection.Run & key & {"paramset_idx": ek[0], "trace": trace}
+                & f"run_start <= {gap + 2} AND run_stop > {gap - 1}").to_dicts()
+        assert [(row["label"], row["n_lost"], row["flagged"]) for row in runs] == [("saccade", 4, 1)], (trace, runs)
+    lost = (detect.EyeValidity.Run & key & {"eye": "left", "label": "lost"}).to_dicts()
+    assert [(row["run_start"], row["run_stop"]) for row in lost] == [(gap - 1, gap + 3)]
+
+
 @pytest.fixture(scope="module")
 def missing_gaze_session(daemon_module, prefix, tmp_path_factory):
     """`_build_stepped_session`'s own construction with one missing left-eye
@@ -1359,14 +1411,19 @@ def test_a_refused_mask_leaves_every_fraction_null(uncalibrated_session):
             assert row[column] is None, f"{eye_value}: refused row has {column} populated"
 
 
-def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_session):
+def test_a_missing_gaze_value_is_lost_and_counted_end_to_end(missing_gaze_session):
     """The sixth validity criterion through a real database (added
     2026-09-27). One `NaN` in the left eye's recording: that sample and the
     four velocity estimates it spoils are `non_finite`, the left row's
-    `frac_non_finite` counts exactly those five, the stored mask withholds the
-    sample, and the right eye -- untouched -- counts nothing. Before the
+    `frac_non_finite` counts exactly those five, the stored mask marks the
+    sample `lost`, and the right eye -- untouched -- counts nothing. Before the
     criterion, `abs(NaN) > half-width` was false and the sample was offered to
-    every detector as usable."""
+    every detector as usable.
+
+    *Until 2026-11-06 the mask withheld it as `invalid`; since then nothing
+    measured is lost, carried by a run where the loss is short (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 2); true when
+    written.*"""
     from wl_preproc.schema import detect
 
     session_key, _report, missing_row = missing_gaze_session
@@ -1381,19 +1438,22 @@ def test_a_missing_gaze_value_is_withheld_and_counted_end_to_end(missing_gaze_se
         detect.EyeValidity.Run & {**session_key, "eye": "left"}
         & f"run_start <= {missing_row}" & f"run_stop > {missing_row}"
     ).to_dicts()
-    assert covering["label"] == "invalid"
+    assert covering["label"] == "lost"
 
 
-def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
-    """The point of withholding it: every registered detector's stored run
-    over the missing sample, on the left trace, is the mask's own `invalid`
-    -- no detector was handed the sample to label. The conjunction falls
-    back to the right eye there: it carries the right eye's own label, and
+def test_no_detector_measures_a_missing_gaze_value(missing_gaze_session):
+    """Lost, the sample is offered with its position filled (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 3): every
+    registered detector's stored run over it, on the left trace, is the
+    mask's own `lost`, or a run of the detector's carried across it and
+    flagged. The conjunction falls back to the right eye there, lost data
+    being missing data: it carries the right eye's own label, and
     `EyeDetection.Source` says `right` (design spec
-    `2026-09-28-both-eyes-fallback-design.md` section 1).
+    `2026-09-28-both-eyes-fallback-design.md` section 1; the final review of
+    2026-11-07, C1).
 
-    *Until 2026-09-28 the conjunction was labelled from the left eye's mask
-    alone, and read `invalid` here too; true when written.*"""
+    *Until 2026-11-06 it was withheld, every left run over it the mask's
+    `invalid`; true when written.*"""
     from wl_preproc.schema import detect
 
     def covering(table, trace, name, start, stop):
@@ -1404,7 +1464,7 @@ def test_no_detector_labels_a_missing_gaze_value(missing_gaze_session):
     session_key, _report, missing_row = missing_gaze_session
     for name in _detector_names():
         left = covering(detect.EyeDetection.Run, "left", name, "run_start", "run_stop")
-        assert left["label"] == "invalid", (name, left["label"])
+        assert left["label"] == "lost" or left["flagged"] == 1, (name, left["label"], left["flagged"])
         right = covering(detect.EyeDetection.Run, "right", name, "run_start", "run_stop")
         both = covering(detect.EyeDetection.Run, "conjunction", name, "run_start", "run_stop")
         assert both["label"] == right["label"], (name, both["label"], right["label"])
@@ -4570,6 +4630,22 @@ def test_a_one_eye_event_the_other_eye_could_not_see_is_kept_whole():
     assert list(source) == ["both"] * 10 + ["left"] * 30
 
 
+def test_a_one_eye_event_the_other_eye_lost_data_during_is_kept_whole():
+    """Lost data is missing data: the requester's rule of 2026-09-28 keeps a
+    one-eye event whole when the other eye's data was missing at any point
+    during it. A loss is carried by a run of its own eye, and never confirms
+    the other eye's (the final review of 2026-11-07, C1)."""
+    from wl_preproc.eye.detect.labels import Label, Run
+    from wl_preproc.schema.detect import _conjunction_fallback
+
+    saccade = Run(10, 20, Label.SACCADE)
+    right = _offered(40)
+    right[14:17] = Label.LOST
+    kept, source = _conjunction_fallback([saccade], [], _offered(40), right)
+    assert kept == [("left", saccade)]
+    assert list(source[10:20]) == ["left"] * 10
+
+
 def test_an_unmatched_event_the_other_eye_could_see_is_still_dropped():
     """The two-eye rule stands wherever both eyes were usable throughout."""
     from wl_preproc.eye.detect.labels import Label, Run
@@ -5085,3 +5161,83 @@ def test_a_paramsets_geometry_is_read_once_and_an_unknown_one_refused():
     assert _geometry_of({"geometry": "true-angle"}) == "true-angle"
     with pytest.raises(ValueError, match="geometry"):
         _geometry_of({"geometry": "cyclopean"})
+
+
+def test_a_two_eye_saccade_across_a_dropped_frame_is_measured_on_its_eyes_measured_samples(dropped_frame_session):
+    """A two-eye run is measured on one eye's own mask, so its peak speed is
+    that eye's measured samples', never the speed of the rows whose velocity
+    spans the gap, which the even spacing inflates (the final review of
+    2026-11-07, I1)."""
+    from wl_preproc.schema import detect, paramset
+
+    key = dropped_frame_session
+    gap = _DROPPED_FRAME_ROW - 1
+    (ek,) = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+             if row["params"]["detector"] == "engbert_kliegl"]
+
+    def run(trace):
+        (row,) = (detect.EyeDetection.Run & key & {"paramset_idx": ek, "trace": trace}
+                  & f"run_start <= {gap + 2} AND run_stop > {gap - 1}").to_dicts()
+        return row
+
+    assert run("conjunction")["peak_velocity_deg_s"] <= max(run("left")["peak_velocity_deg_s"],
+                                                            run("right")["peak_velocity_deg_s"])
+
+
+def test_a_session_that_recorded_no_field_is_masked_at_the_placeholder(dropped_frame_session):
+    """No `config.json`, so no setup: the region is the paramset's own, and
+    the mask says so (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    from wl_preproc.schema import detect
+
+    rows = (detect.EyeValidity & dropped_frame_session & {"status": "computed"}).to_dicts()
+    assert rows and {(row["region_half_width_deg"], row["region_half_height_deg"], row["region_from_setup"])
+                     for row in rows} == {(20.0, 15.0, 0)}
+
+
+def test_a_flagged_saccade_is_left_out_of_each_fit_and_the_report_says_so(dropped_frame_session, prefix):
+    """The requester's decision of 2026-11-06 (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` sections 6 and 10): the
+    main sequence and vigor fit only saccades measured throughout, and the
+    daily report counts what each fit left out, and names each eye masked at
+    the placeholder region."""
+    from wl_preproc.cli.report import _placeholder_region_lines, _vigor_lines
+    from wl_preproc.eye.detect.main_sequence import DEFAULT_MAIN_SEQUENCE_PARAMS
+    from wl_preproc.schema import detect, main_sequence, paramset
+
+    key = dropped_frame_session
+    (ek,) = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+             if row["params"]["detector"] == "engbert_kliegl"]
+    runs = (detect.EyeDetection.Run & key & {"paramset_idx": ek, "trace": "left"}
+            & 'label in ("saccade", "microsaccade")').to_dicts(order_by="run_index")
+
+    taken = main_sequence.selected_runs(runs, 500.0, DEFAULT_MAIN_SEQUENCE_PARAMS)
+    assert taken and not any(run["flagged"] for run in taken)
+    assert main_sequence.flagged_left_out(runs, 500.0, DEFAULT_MAIN_SEQUENCE_PARAMS) == 1
+    session = {(key["subject"], key["session_datetime"])}
+    (line,) = [line for line in _vigor_lines(session, prefix=prefix) if "— left (" in line]
+    assert "`engbert_kliegl` (true angle)" in line and "1 flagged saccade left out" in line
+    assert [line.split(" — ")[1].split(" (")[0]
+            for line in _placeholder_region_lines(session, prefix=prefix)] == ["left", "right"]
+
+
+def test_the_report_on_a_mask_table_read_without_its_region_names_the_statements(dropped_frame_session, prefix,
+                                                                                 monkeypatch, tmp_path):
+    """A database declared before 2026-11-06, its `EyeValidity` read without
+    the region columns, as DataJoint reads a table's columns once per
+    process: the report still builds, and in place of the eyes it cannot
+    read it names the statements (the final review of 2026-11-07)."""
+    import datetime
+
+    from wl_preproc.cli.report import build_report
+    from wl_preproc.schema import detect
+
+    key = dropped_frame_session
+    heading = detect.EyeValidity.heading
+    monkeypatch.setattr(detect.EyeValidity, "_heading", heading.select(
+        [name for name in heading.names if name not in detect._REGION_COLUMNS]))
+    report = build_report(tmp_path, prefix=prefix,
+                          now=(key["session_datetime"] + datetime.timedelta(hours=2)).replace(tzinfo=datetime.UTC))
+
+    assert "### Eyes masked at the placeholder screen region (24 h) — not read" in report
+    assert all(statement in report for statement in detect._region_statements())

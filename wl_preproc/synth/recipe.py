@@ -368,6 +368,11 @@ class SessionRecipe(BaseModel):
     # runs', so it needs them. Off by default, so every existing profile is
     # byte-identical.
     rig_record: RigRecordSpec | None = None
+    # Whether `config.json` records the display setup, as wl-xcon's has since
+    # 2026-09-29 (`peripherals.RIG_SETUP`; design spec
+    # `2026-11-06-eye-lost-data-and-region-design.md` section 7). On by
+    # default, so every synthetic session with runs is masked at its field.
+    setup_recorded: bool = True
 
     # How many neurons this session contains. Zero is legal and is what every
     # timing-only fixture wants: Phase 1c's recipes care about barcodes and

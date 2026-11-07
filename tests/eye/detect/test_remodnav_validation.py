@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from tests.eye.detect._andersson import ANDERSSON_FILES, load_andersson
+from tests.eye.detect._offered import offered
 from tests.eye.detect._remodnav_traces import (
     gaze_trace,
     oracle_labels,
@@ -102,8 +103,6 @@ def reference():
         pytest.skip("WLPP_OHDPI_REFERENCE is not set -- see test_nystrom_holmqvist_validation.py")
     remodnav = pytest.importorskip("remodnav")
     from wl_preproc.eye.calibration import apply_map
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
-    from wl_preproc.eye.detect.velocity import velocity
     from wl_preproc.eye.gaze import purkinje_vector
     from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
 
@@ -118,9 +117,7 @@ def reference():
 
     eyes = {}
     for eye in ("left", "right"):
-        gaze = apply_map(_scaled_affine_map(scale), raw[eye])
-        v = velocity(gaze, fs)
-        mask = validity_labels(gaze, v, loss[eye], recording.frame_gaps, DEFAULT_VALIDITY_PARAMS, fs_hz=fs).labels
+        gaze, v, mask = offered(apply_map(_scaled_affine_map(scale), raw[eye]), loss[eye], recording.frame_gaps, fs)
         started = time.monotonic()
         full_runs = detect_remodnav(gaze, v, mask, fs, DEFAULT_REMODNAV_PARAMS)
         full_s = time.monotonic() - started

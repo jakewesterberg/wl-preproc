@@ -21,6 +21,8 @@ import pytest
 from wl_preproc.eye.detect.consensus import PSO_AS_SACCADE, blended_agreement, krippendorff_alpha
 from wl_preproc.eye.detect.labels import Label
 
+from tests.eye.detect._offered import offered as offered_to_detectors
+
 MINUTES = 10
 NOISE_SD_DEG = 0.05
 _SCALE_P99_AT_DEG = 15.0
@@ -61,24 +63,22 @@ def left_eye():
     pooled_x = np.concatenate([np.abs(raw["Left"][:, 0]), np.abs(raw["Right"][:, 0])])
     pooled_y = np.concatenate([np.abs(raw["Left"][:, 1]), np.abs(raw["Right"][:, 1])])
     scale = _SCALE_P99_AT_DEG / max(float(np.percentile(pooled_x, 99)), float(np.percentile(pooled_y, 99)))
-    gaze, _repaired = repair_glitches(gaze_trace(sample, "Left", _scaled_affine_map(scale)), rec.fs_hz,
-                                      DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms)
+    gaze, repaired = repair_glitches(gaze_trace(sample, "Left", _scaled_affine_map(scale)), rec.fs_hz,
+                                     DEFAULT_VALIDITY_PARAMS.max_speed_deg_s, DEFAULT_VALIDITY_PARAMS.max_glitch_ms)
     n = int(MINUTES * 60 * rec.fs_hz)
     loss = read_tracker_loss(sample, "Left")
     return gaze[:n], TrackerLoss(blink=loss.blink[:n], feature_lost=loss.feature_lost[:n],
-                                 unreadable=loss.unreadable[:n]), rec.fs_hz
+                                 unreadable=loss.unreadable[:n]), rec.fs_hz, repaired[:n]
 
 
-def _seven_way(gaze, loss, fs_hz) -> tuple[float, float]:
+def _seven_way(gaze, loss, fs_hz, repaired) -> tuple[float, float]:
     """Krippendorff's alpha over every registered detector, glissades as
     saccade, BMD abstaining on the saccades it copies; and the share of
     samples the mask offered."""
     from wl_preproc.eye.detect.registry import DETECTORS
-    from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS, validity_labels
-    from wl_preproc.eye.detect.velocity import velocity
 
-    v = velocity(gaze, fs_hz)
-    offered = np.asarray(validity_labels(gaze, v, loss, (), DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels, dtype=object)
+    gaze, v, mask = offered_to_detectors(gaze, loss, (), fs_hz, repaired=repaired)
+    offered = np.asarray(mask, dtype=object)
     labels = {}
     for name, detector in DETECTORS.items():
         trace = offered.copy()
@@ -95,9 +95,9 @@ def test_noise_the_mask_keeps_lowers_the_seven_way_score(left_eye):
     """Spec section 1.3 measured 0.684 with no noise and 0.594 under 0.05
     degrees, the mask keeping 0.991 of samples at both. A drop of more than
     0.05 is asked for, with the mask's share unmoved."""
-    gaze, loss, fs_hz = left_eye
-    clean, clean_share = _seven_way(gaze, loss, fs_hz)
+    gaze, loss, fs_hz, repaired = left_eye
+    clean, clean_share = _seven_way(gaze, loss, fs_hz, repaired)
     noisy_gaze = gaze + np.random.default_rng(0).normal(0.0, NOISE_SD_DEG, gaze.shape)
-    noisy, noisy_share = _seven_way(noisy_gaze, loss, fs_hz)
+    noisy, noisy_share = _seven_way(noisy_gaze, loss, fs_hz, repaired)
     assert noisy_share == pytest.approx(clean_share, abs=0.001)
     assert noisy < clean - 0.05, (clean, noisy)

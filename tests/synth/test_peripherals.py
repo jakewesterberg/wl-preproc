@@ -215,8 +215,10 @@ def test_a_recipe_without_a_rig_record_writes_config_as_before(tmp_path):
     recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True})
     (tmp_path / "xcon").mkdir()
     write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    from wl_preproc.synth.peripherals import RIG_SETUP
+
     assert json.loads((tmp_path / "xcon" / "config.json").read_text()) == {
-        "session_id": recipe.session_id, "subject": recipe.subject}
+        "session_id": recipe.session_id, "subject": recipe.subject, "setup": RIG_SETUP}
     assert "calibration" not in (tmp_path / "xcon" / "runs.jsonl").read_text()
     assert not (tmp_path / "xcon" / "warnings.jsonl").exists()
 
@@ -316,3 +318,22 @@ def test_an_act_past_the_sessions_trials_is_refused():
 
     with pytest.raises(ValueError, match=r"rig_record acts in trials \[5\], past the session's 4"):
         _training(controls=(RigControlSpec(trial=5),))
+
+
+def test_the_config_records_this_rigs_display_setup_unless_a_recipe_says_not(tmp_path):
+    """As wl-xcon's does since 2026-09-29, this rig in direct view: each eye's
+    field `atan(half-size / distance)` per axis, as wl-xcon's `geometry.py`
+    computes it (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    import math
+
+    from wl_preproc.synth.peripherals import RIG_SETUP, write_rig_runs
+    from wl_preproc.synth.recipe import SessionRecipe
+
+    assert RIG_SETUP["view"] == "direct"
+    assert RIG_SETUP["half_field_deg"] == [math.degrees(math.atan(58.997 / 2 / 50.0)),
+                                           math.degrees(math.atan(33.293 / 2 / 50.0))]
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "setup_recorded": False})
+    (tmp_path / "xcon").mkdir()
+    write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
+    assert "setup" not in json.loads((tmp_path / "xcon" / "config.json").read_text())

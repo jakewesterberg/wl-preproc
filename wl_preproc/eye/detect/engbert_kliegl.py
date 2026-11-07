@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, true_runs
 from wl_preproc.eye.detect.geometry import TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, amplitude, classify
 
@@ -141,8 +141,19 @@ def detect_engbert_kliegl(
     `gaze_deg` is what that split reads -- velocity alone finds the events
     (the elliptic test below), and position is what says how far the eye
     actually went.
+
+    **A lost sample's velocity is unknown** (`Label.LOST`; design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 4, wl-xcon's
+    online copy's rule): it continues an open run and never opens one, and
+    only measured velocities count toward `min_duration_samples`. A run that
+    reaches a carried loss goes on through it, and where the first measured
+    velocity after it is not over the threshold the run ends there, that
+    sample its last: the eye landed in the loss, and the run's size reaches
+    the landing (the correction both sessions agreed on 2026-11-06, wl-xcon's
+    version 8). A run's ends are measured samples.
     """
     usable = np.array([entry is None for entry in available], dtype=bool)
+    lost = np.array([entry is Label.LOST for entry in available], dtype=bool)
     if not usable.any():
         return []
 
@@ -157,12 +168,25 @@ def detect_engbert_kliegl(
     ) ** 2 > 1.0
     outside &= usable
 
-    return [
-        Run(
-            start=start,
-            stop=stop,
-            label=classify(amplitude(gaze_deg, start, stop, geometry=params.geometry), params.microsaccade_max_deg),
-        )
-        for start, stop in true_runs(outside)
-        if stop - start >= params.min_duration_samples
-    ]
+    runs = []
+    for start, stop in true_runs(outside | lost):
+        events = start + np.flatnonzero(outside[start:stop])
+        if events.size == 0 or events.size < params.min_duration_samples:
+            continue
+        first, last = int(events[0]), int(events[-1]) + 1
+        if last < stop < usable.size and usable[stop]:
+            last = stop + 1
+        # Its size, which labels it, is from the last measured sample before a
+        # carried loss that hides its take-off, as `measure.measure_event_run`
+        # measures it (the final review of 2026-11-07).
+        take_off = first
+        while take_off > 0 and lost[take_off - 1]:
+            take_off -= 1
+        if take_off < first:
+            take_off = max(take_off - 1, 0)
+        runs.append(Run(
+            start=first,
+            stop=last,
+            label=classify(amplitude(gaze_deg, take_off, last, geometry=params.geometry), params.microsaccade_max_deg),
+        ))
+    return runs

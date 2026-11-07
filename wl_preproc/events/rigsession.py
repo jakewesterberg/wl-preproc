@@ -1,5 +1,6 @@
-"""What wl-xcon's record says the session was: its kind and the display
-calibration it opened with, from `xcon/config.json`, and the warnings it
+"""What wl-xcon's record says the session was: its kind, the display
+calibration it opened with and the display it ran on, from
+`xcon/config.json`, and the warnings it
 accepted, from `xcon/warnings.jsonl` (design spec
 `2026-10-14-session-kind-and-warnings-design.md` sections 1 and 2).
 
@@ -48,6 +49,19 @@ class RigCalibration:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class RigSetup:
+    """The display a session ran on, from `config.json`'s `setup` (wl-xcon's
+    `taskd.Session._fixed_config`, since its `c634749`, 2026-09-29): its view,
+    and each eye's visible field, `[horizontal, vertical]` half-angles in
+    per-axis degrees, capped by the stereoscope's mask. The validity mask's
+    screen region is that field plus a margin (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 7)."""
+
+    view: str | None
+    half_field_deg: tuple[float, float]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class RigWarning:
     """One accepted warning, as wl-xcon wrote it. `run_index` is wl-xcon's
     0-based run, null for one accepted at the session's open. `at` is the
@@ -78,6 +92,7 @@ class RigSession:
     # False for a record whose `config.json` names another animal: nothing of
     # it is kept but its problem.
     of_this_session: bool = True
+    setup: RigSetup | None = None
 
 
 def _text(value: object) -> str | None:
@@ -106,6 +121,19 @@ def _calibration(value: object, problems: list[str]) -> RigCalibration | None:
     cones = value.get("cones")
     return RigCalibration(id=_text(value.get("id")), standard=standard if isinstance(standard, bool) else None,
                           measured_on=_text(value.get("measured_on")), cones=cones if isinstance(cones, dict) else None)
+
+
+def _setup(value: object, problems: list[str]) -> RigSetup | None:
+    """A config written before wl-xcon recorded its setup has none, which is
+    not a problem; one whose field is not two positive finite numbers is."""
+    if value is None:
+        return None
+    field = value.get("half_field_deg") if isinstance(value, dict) else None
+    halves = [_number(half) for half in field] if isinstance(field, list) and len(field) == 2 else [None]
+    if any(half is None or half <= 0 for half in halves):
+        problems.append(f"{CONFIG_NAME}: setup names no visible field, [horizontal, vertical] half-angles in degrees")
+        return None
+    return RigSetup(view=_text(value.get("view")), half_field_deg=(halves[0], halves[1]))
 
 
 def _warning(row: dict, line: int) -> RigWarning:
@@ -146,6 +174,7 @@ def read_rig_session(session_dir: Path, subject: str) -> RigSession | None:
         problems.append(f"{CONFIG_NAME}: session kind {kind!r} is not one of {', '.join(SESSION_KINDS)}")
         kind = None
     calibration = _calibration(config.get("calibration"), problems)
+    setup = _setup(config.get("setup"), problems)
     warnings = []
     record = xcon / WARNINGS_NAME
     lines = record.read_text(encoding="utf-8").splitlines() if record.is_file() else []
@@ -161,4 +190,5 @@ def read_rig_session(session_dir: Path, subject: str) -> RigSession | None:
             problems.append(f"{WARNINGS_NAME} line {number_of_line}: not a warning naming its code")
             continue
         warnings.append(_warning(row, number_of_line))
-    return RigSession(kind=kind, calibration=calibration, warnings=tuple(warnings), problems=tuple(problems))
+    return RigSession(kind=kind, calibration=calibration, warnings=tuple(warnings), problems=tuple(problems),
+                      setup=setup)

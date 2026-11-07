@@ -28,8 +28,21 @@ hold constant.
 Returns `None` for a sample a detector may label, and a `Label` for one it may
 not. Precedence is enforced HERE, by not offering the sample at all, rather
 than by asking every detector to respect an ordering -- and the one ordering
-that is genuinely a ranking, `blink` over `invalid`, is `MASK_PRECEDENCE`
-below.
+that is genuinely a ranking, `blink` over `invalid` over `lost`, is
+`MASK_PRECEDENCE` below.
+
+**Lost or invalid** (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+section 2, the requester's decisions of 2026-11-06). Where a paramset carries
+lost data (`max_lost_ms` above 0), a sample not offered as measured is one of
+two kinds. LOST: nothing was measured, or nothing to trust -- a lost
+reflection, a value that is not a number, an impossible speed, a repaired
+glitch, and the four velocities a dropped frame spans. INVALID: a
+measurement, of the wrong thing -- a blink with its padding, and gaze off the
+screen. A run is carried across a lost stretch that lies between two measured
+samples at most `max_lost_ms` apart; any other lost stretch is withheld as
+`invalid`, and a detector meets exactly what is stored. A paramset stored
+before, naming no bound, masks as it always did: every criterion withheld as
+`invalid`, with its margin.
 """
 
 from __future__ import annotations
@@ -39,7 +52,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wl_preproc.eye.detect.labels import Label
+from wl_preproc.eye.detect.labels import Label, true_runs
 from wl_preproc.eye.detect.velocity import _HALF_WINDOW
 from wl_preproc.eye.ohdpi import FrameGap, TrackerLoss
 
@@ -61,7 +74,11 @@ from wl_preproc.eye.ohdpi import FrameGap, TrackerLoss
 # conjunction, where it ranked a pair section 1 says is a split -- see
 # `schema/detect.py::_conjunction_label`. Trimmed to the pair that is
 # genuinely ranked, and moved to where the ranking is genuinely applied.
-MASK_PRECEDENCE: tuple[Label, ...] = (Label.BLINK, Label.INVALID)
+#
+# `lost` joined it on 2026-11-06, last: a lost margin that meets a withheld
+# sample is withheld (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+# section 2.1).
+MASK_PRECEDENCE: tuple[Label, ...] = (Label.BLINK, Label.INVALID, Label.LOST)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +100,19 @@ class ValidityParams:
     # what it does; `DEFAULT_VALIDITY_PARAMS` sets the measured values.
     blink_pad_before_ms: float = 0.0
     blink_pad_after_ms: float = 0.0
+    # How far apart, at most, the measured samples either side of a lost
+    # stretch may be for a run to be carried across it (design spec
+    # `2026-11-06-eye-lost-data-and-region-design.md` section 3; wl-xcon's
+    # `max_gap_s`). 0 by default, as the pads are: a paramset stored before
+    # it carries nothing and masks as it did.
+    max_lost_ms: float = 0.0
+    # The screen region from the session's own recorded display setup: each
+    # eye's visible field plus `region_margin_deg` on each axis, where the
+    # session recorded one (design spec
+    # `2026-11-06-eye-lost-data-and-region-design.md` section 7). Off and 0
+    # by default, so a paramset stored before them masks at its own region.
+    region_margin_deg: float = 0.0
+    region_from_setup: bool = False
 
 
 # **These are placeholders with no measured basis on this rig** (design spec
@@ -105,6 +135,15 @@ DEFAULT_VALIDITY_PARAMS = ValidityParams(
     # (design spec `2026-10-11-blink-padding-design.md` section 1).
     blink_pad_before_ms=50.0,
     blink_pad_after_ms=80.0,
+    # wl-xcon's online detector's bound, which the requester's decision of
+    # 2026-11-06 makes both detectors' (its `max_gap_s`, 0.05 s).
+    max_lost_ms=50.0,
+    # The requester's decision of 2026-11-06: the visible field the session
+    # recorded, plus 2 degrees for calibration error and fixation scatter
+    # about a target at its edge. The placeholder region above stays for a
+    # session that recorded none.
+    region_margin_deg=2.0,
+    region_from_setup=True,
 )
 
 
@@ -157,6 +196,11 @@ class ValidityMask:
 
     labels: np.ndarray
     fractions: Mapping[str, float]
+    # The screen region the mask applied, `(half-width, half-height)` in
+    # per-axis degrees, and whether it was the session's own field plus the
+    # margin or the paramset's placeholder (`screen_region`).
+    region_deg: tuple[float, float]
+    region_from_setup: bool
 
 
 def validity_labels(
@@ -167,13 +211,18 @@ def validity_labels(
     params: ValidityParams,
     *,
     fs_hz: float,
+    repaired: np.ndarray | None = None,
+    field_deg: tuple[float, float] | None = None,
 ) -> ValidityMask:
     """One entry per sample: a `Label` where the sample is unusable, `None`
     where a detector may label it -- and beside it each criterion's own
     rejected fraction. See `ValidityMask` for what the seven fractions are,
     and for what they deliberately do not sum to. `fs_hz` is the
-    recording's rate, which turns the blink pads' milliseconds into
-    samples."""
+    recording's rate, which turns the blink pads' and the bound's
+    milliseconds into samples. `repaired` marks the samples
+    `glitch.repair_glitches` filled in, lost where lost data is carried.
+    `field_deg` is each eye's visible field as the session recorded it, or
+    None (`screen_region`)."""
     n = gaze_deg.shape[0]
     # Eye open, read by the rule: a blink (the pupil not found), and a lost
     # reflection (P1 or P4 at 0, or `DataQuality` below 100), where `CR1 -
@@ -182,9 +231,8 @@ def validity_labels(
     blink = loss.blink
     feature_lost = loss.feature_lost
 
-    outside = (np.abs(gaze_deg[:, 0]) > params.region_half_width_deg) | (
-        np.abs(gaze_deg[:, 1]) > params.region_half_height_deg
-    )
+    width, height, from_setup = screen_region(params, field_deg)
+    outside = (np.abs(gaze_deg[:, 0]) > width) | (np.abs(gaze_deg[:, 1]) > height)
     too_fast = np.hypot(velocity_deg_s[:, 0], velocity_deg_s[:, 1]) > params.max_speed_deg_s
 
     # A gap sits between rows `row` and `row + 1`. The velocity estimator spans
@@ -238,9 +286,7 @@ def validity_labels(
     # full. The reference recording still has zero gaps across 1,177,799
     # rows, so real (non-synthetic) data has still not exercised this loop --
     # only a planted gap has, so far.
-    across_gap = np.zeros(n, dtype=bool)
-    for gap in frame_gaps:
-        across_gap[max(gap.row + 1 - _HALF_WINDOW, 0) : min(gap.row + _HALF_WINDOW + 1, n)] = True
+    across_gap = rows_across_gaps(n, frame_gaps)
 
     # **The guard, and the one criterion not from OpenIrisDPI's notebook.**
     # Every comparison above is false for a NaN: `abs(NaN) > half-width`,
@@ -260,17 +306,38 @@ def validity_labels(
         | loss.unreadable
     )
 
-    unusable = blink | feature_lost | outside | too_fast | across_gap | non_finite
-    unusable = _dilate(unusable, params.dilate_samples)
     # Each blink's flanks, measured from its edges, after the margin so that
     # the margin sits inside a pad rather than adding to it, and before
     # `short_epoch`, so a fragment stranded between two pads is dropped as
     # any short epoch is (design spec `2026-10-11-blink-padding-design.md`).
-    unusable = unusable | _blink_pads(
+    pads = _blink_pads(
         blink,
         round(params.blink_pad_before_ms * fs_hz / 1000.0),
         round(params.blink_pad_after_ms * fs_hz / 1000.0),
     )
+    if params.max_lost_ms > 0:
+        # Each kind grown by its own margin (design spec
+        # `2026-11-06-eye-lost-data-and-region-design.md` section 2): a
+        # dropped frame by none, since it is not a tracking failure and its
+        # neighbours' positions are measurements; a lost margin that meets a
+        # withheld sample is withheld; and a lost stretch no run can be
+        # carried across is withheld too.
+        unusable = _dilate(blink | outside, params.dilate_samples) | pads
+        # A repaired glitch takes no margin: it was filled in by a straight
+        # line, not lost by a tracking failure (the spec's table; the final
+        # review of 2026-11-07).
+        untrusted = _dilate(feature_lost | too_fast | non_finite, params.dilate_samples)
+        if repaired is not None:
+            untrusted = untrusted | repaired
+        lost = (untrusted | across_gap) & ~unusable
+        uncarried = _uncarried(lost, unusable, untrusted, frame_numbers(n, frame_gaps),
+                               carried_frames(params.max_lost_ms, fs_hz))
+        unusable = unusable | uncarried
+        lost = lost & ~uncarried
+    else:
+        unusable = _dilate(blink | feature_lost | outside | too_fast | across_gap | non_finite,
+                           params.dilate_samples) | pads
+        lost = np.zeros(n, dtype=bool)
     # Bound to a name rather than folded straight into `unusable`, because
     # `_short_valid_epochs`' own docstring says it is returned as its own
     # mask "so the caller can see that these samples were dropped for being
@@ -279,6 +346,7 @@ def validity_labels(
     # distinction was computed on every session and immediately discarded.
     short_epoch = _short_valid_epochs(unusable, params.min_epoch_samples)
     unusable = unusable | short_epoch
+    lost = lost & ~short_epoch
 
     # Walked in REVERSE precedence order, so the most specific label is
     # assigned last and wins. `MASK_PRECEDENCE` is what decides that, not the
@@ -288,7 +356,7 @@ def validity_labels(
     # test_mask_precedence_is_what_decides_which_criterion_wins` reverses it
     # and checks exactly that). A label added to the tuple with no criterion
     # beside it raises `KeyError` here rather than being silently skipped.
-    claimed = {Label.BLINK: blink, Label.INVALID: unusable}
+    claimed = {Label.BLINK: blink, Label.INVALID: unusable, Label.LOST: lost}
     out = np.full(n, None, dtype=object)
     for label in reversed(MASK_PRECEDENCE):
         out[claimed[label]] = label
@@ -313,7 +381,88 @@ def validity_labels(
             "short_epoch": _fraction(short_epoch),
             "non_finite": _fraction(non_finite),
         },
+        region_deg=(width, height),
+        region_from_setup=from_setup,
     )
+
+
+def screen_region(params: ValidityParams, field_deg: tuple[float, float] | None) -> tuple[float, float, bool]:
+    """`(half-width, half-height, from_setup)`: the session's visible field
+    plus `region_margin_deg` on each axis, where the paramset takes it from
+    the setup and the session recorded one; otherwise the paramset's own
+    region (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    section 7)."""
+    if params.region_from_setup and field_deg is not None:
+        return (field_deg[0] + params.region_margin_deg, field_deg[1] + params.region_margin_deg, True)
+    return (params.region_half_width_deg, params.region_half_height_deg, False)
+
+
+def rows_across_gaps(n: int, frame_gaps: Sequence[FrameGap]) -> np.ndarray:
+    """The rows whose velocity spans a dropped frame: `[row-1, row+2]` for a
+    gap after `row`, coupled to `_HALF_WINDOW` (`validity_labels`)."""
+    out = np.zeros(n, dtype=bool)
+    for gap in frame_gaps:
+        out[max(gap.row + 1 - _HALF_WINDOW, 0) : min(gap.row + _HALF_WINDOW + 1, n)] = True
+    return out
+
+
+
+def fill_lost(gaze_deg: np.ndarray, offered: np.ndarray, frames: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """The gaze a detector is offered over carried losses (design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 3): each lost
+    sample's position (`Label.LOST` in `offered`) filled by the straight line
+    between the samples either side, placed at its own frame's time, except
+    where `keep` says its position is a measurement -- a row whose velocity
+    spans a dropped frame (`rows_across_gaps`). The mask carries only a loss with a
+    measured sample on both sides, so every filled stretch has two."""
+    out = gaze_deg.copy()
+    filled = np.array([entry is Label.LOST for entry in offered], dtype=bool) & ~keep
+    for start, stop in true_runs(filled):
+        before, after = start - 1, stop
+        share = (frames[start:stop] - frames[before]) / (frames[after] - frames[before])
+        out[start:stop] = gaze_deg[before] + share[:, None] * (gaze_deg[after] - gaze_deg[before])
+    return out
+
+
+def frame_numbers(n: int, frame_gaps: Sequence[FrameGap]) -> np.ndarray:
+    """Each row's frame, counted from the first row's: its index, plus every
+    frame the camera dropped before it."""
+    frames = np.arange(n, dtype=np.int64)
+    for gap in frame_gaps:
+        frames[gap.row + 1:] += gap.n_missing
+    return frames
+
+
+def carried_frames(max_lost_ms: float, fs_hz: float) -> int:
+    """How many frames apart, at most, the measured samples either side of a
+    lost stretch may be for a run to be carried across it: `max_lost_ms` in
+    whole frames, inclusive, so no float rounding decides a boundary (design
+    spec `2026-11-06-eye-lost-data-and-region-design.md` section 3)."""
+    return int(np.floor(max_lost_ms * fs_hz / 1000.0 + 1e-9))
+
+
+def _uncarried(lost: np.ndarray, withheld: np.ndarray, untrusted: np.ndarray, frames: np.ndarray,
+               max_frames: int) -> np.ndarray:
+    """The lost stretches no run can be carried across: each without a
+    measured sample on both sides, or across which two positions measured in
+    turn are more than `max_frames` apart. The bound is the loss of data, from
+    the last position measured to the next, as wl-xcon's `max_gap_s` is: a
+    dropped frame's neighbours have positions, though their velocities span
+    it (`untrusted` marks the positions that are not measurements). The two
+    samples at each end of the recording are no measured sample beside a
+    stretch: their velocities are zero-filled (`velocity.py`), so they neither
+    end a carried run nor bound a stretch (the rule both sessions agreed on
+    2026-11-07)."""
+    out = np.zeros_like(lost)
+    for start, stop in true_runs(lost):
+        before, after = start - 1, stop
+        if before < _HALF_WINDOW or after >= lost.size - _HALF_WINDOW or withheld[before] or withheld[after]:
+            out[start:stop] = True
+            continue
+        measured = before + np.flatnonzero(~untrusted[before:after + 1])
+        if np.diff(frames[measured]).max() > max_frames:
+            out[start:stop] = True
+    return out
 
 
 def _fraction(mask: np.ndarray) -> float:

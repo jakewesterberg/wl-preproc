@@ -452,3 +452,44 @@ def test_a_detectors_own_params_mean_per_axis():
     declared = {name: detector.defaults.geometry for name, detector in DETECTORS.items()
                 if hasattr(detector.defaults, "geometry")}
     assert declared == dict.fromkeys(("engbert_kliegl", "otero_millan", "nystrom_holmqvist", "bmd"), PER_AXIS)
+
+
+@dataclass(frozen=True)
+class _Floor:
+    """A detector's declared minimum, as `registry.min_duration_samples` reads
+    it."""
+
+    min_duration_samples: int = 6
+
+
+def test_a_run_may_span_lost_samples_and_its_measured_samples_make_it():
+    """Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 5,
+    the one rule every detector's runs are held to:
+    - a run is carried across lost samples, at its ends as inside it, and
+      keeps its label and reliability (the correction of 2026-11-06:
+      `measure.measure_event_run` measures it out to the measured samples
+      beyond its lost ends);
+    - a run holding lost samples is kept only if its measured samples alone
+      reach its detector's minimum; one holding none is untouched."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.labels import Run
+    from wl_preproc.eye.detect.registry import Detector
+
+    n = 60
+    available = np.full(n, None, dtype=object)
+    available[[4, 5, 18, 19, 20, 31, 32, 33, 34]] = Label.LOST
+    runs = [
+        Run(0, 10, Label.SACCADE),                     # 4-5 lost inside: kept
+        Run(10, 20, Label.SACCADE),                    # 18-19 lost at its end: kept
+        Run(20, 30, Label.SACCADE, reliability=0.6),   # 20 lost at its start: kept
+        Run(30, 36, Label.SACCADE),                    # 2 measured of 6: dropped
+        Run(40, 43, Label.SACCADE),                    # none lost: untouched
+    ]
+    detector = Detector(name="fake", vocabulary=frozenset({Label.SACCADE}), run=lambda *_: list(runs),
+                        defaults=None)
+
+    got = detector.detect(np.zeros((n, 2)), np.zeros((n, 2)), available, 500.0, _Floor())
+
+    assert [(r.start, r.stop, r.reliability) for r in got] == [(0, 10, None), (10, 20, None), (20, 30, 0.6),
+                                                               (40, 43, None)]

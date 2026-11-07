@@ -283,10 +283,32 @@ def measure_event_run(
         and bool(np.isfinite(gaze_deg[start - 1]).all())
     ):
         lo = start - 1
+    # A run carried across a loss at its ends is measured out to the
+    # measured samples beyond it, where the eye took off and landed (design
+    # spec `2026-11-06-eye-lost-data-and-region-design.md`, the correction
+    # of 2026-11-06); the mask carries only a loss with one on each side. So
+    # is a run whose take-off a loss just before it hides: an unknown
+    # velocity never opens a run, so it opened mid-flight (the final review
+    # of 2026-11-07, I2).
+    while lo > 0 and offered[lo - 1] is Label.LOST:
+        lo -= 1
+    while lo > 0 and offered[lo] is Label.LOST:
+        lo -= 1
+    while hi < gaze_deg.shape[0] and offered[hi - 1] is Label.LOST:
+        hi += 1
     if (lo, hi) == (start, stop):
-        return measure(gaze_deg, velocity_deg_s, start, stop, fs_hz, geometry=geometry)
-    widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz, geometry=geometry)
-    return dataclasses.replace(widened, duration_s=float(stop - start) / fs_hz)
+        measurement = measure(gaze_deg, velocity_deg_s, start, stop, fs_hz, geometry=geometry)
+    else:
+        widened = measure(gaze_deg, velocity_deg_s, lo, hi, fs_hz, geometry=geometry)
+        measurement = dataclasses.replace(widened, duration_s=float(stop - start) / fs_hz)
+    # A lost sample's speed is not a measurement, so the peak is its measured
+    # samples' (design spec `2026-11-06-eye-lost-data-and-region-design.md`
+    # section 6); where the loss fell on the peak, the run's flag says so.
+    measured = np.array([entry is None for entry in offered[lo:hi]], dtype=bool)
+    if not measured.all():
+        speed = np.hypot(velocity_deg_s[lo:hi, 0], velocity_deg_s[lo:hi, 1])[measured]
+        measurement = dataclasses.replace(measurement, peak_velocity_deg_s=float(speed.max()) if speed.size else 0.0)
+    return measurement
 
 
 def classify(amplitude_deg: float, microsaccade_max_deg: float) -> Label:

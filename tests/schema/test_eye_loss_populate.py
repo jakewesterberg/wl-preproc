@@ -116,11 +116,14 @@ def test_p1_off_camera_is_stored_as_invalid_in_its_eye_only(lost_session):
     assert set(_stored_mask(session_key, "right")[start:stop]) == {"fixation"}
 
 
-def test_an_unreadable_pupil_is_stored_as_invalid_not_a_blink(lost_session):
+def test_an_unreadable_pupil_is_stored_as_lost_not_a_blink(lost_session):
+    """Nothing was measured, and nothing declared: lost, carried where short
+    (design spec `2026-11-06-eye-lost-data-and-region-design.md` section 2).
+    *Until 2026-11-06 it was stored as `invalid`; true when written.*"""
     session_key, _segment, _report = lost_session
     start = _first_row_at(_UNREADABLE_S)
 
-    assert set(_stored_mask(session_key, "right")[start:start + _UNREADABLE_ROWS]) == {"invalid"}
+    assert set(_stored_mask(session_key, "right")[start:start + _UNREADABLE_ROWS]) == {"lost"}
 
 
 def test_the_mask_counts_the_lost_features_and_the_blinks(lost_session):

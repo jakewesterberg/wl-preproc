@@ -39,7 +39,7 @@ from wl_preproc.eye.detect import bmd_rng
 from wl_preproc.eye.detect.bmd_table import LogATable, compute_table, lookup
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams, detect_engbert_kliegl
 from wl_preproc.eye.detect.geometry import UNSTATED_GEOMETRY
-from wl_preproc.eye.detect.labels import Label, Run, true_runs
+from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
 from wl_preproc.eye.detect.measure import MICROSACCADE_MAX_DEG, classify, measure_event_run
 from wl_preproc.eye.detect.numba_threads import keep_off_openmp
 
@@ -853,7 +853,7 @@ def detect_bmd(
 
     Runs are half-open and sorted."""
     gaze = np.asarray(gaze_deg, dtype=float)
-    usable = np.array([entry is None for entry in available], dtype=bool) & np.isfinite(gaze).all(axis=1)
+    usable = may_label(available) & np.isfinite(gaze).all(axis=1)
     # Engbert-Kliegl as registered, in the same geometry (amendment 2).
     gate_params = EngbertKlieglParams(lambda_=params.gate_lambda,
                                       min_duration_samples=params.gate_min_duration_samples,

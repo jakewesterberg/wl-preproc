@@ -22,7 +22,7 @@ from wl_preproc.nwb.trim import BlockSet
 from wl_preproc.timebase.clock import BARCODE_EPOCH, CLOCK_DISAGREEMENT_S, clock_for, reference_from  # noqa: F401
 from wl_preproc.timebase.clock import aware_utc as _aware_utc
 
-MASK_LABELS = ("blink", "invalid")
+MASK_LABELS = ("blink", "invalid", "lost")
 
 
 class Refused(Exception):

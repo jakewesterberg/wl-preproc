@@ -4,6 +4,11 @@
 an enum value later is a schema change, and the migration window closes
 January 2027 -- so the vocabulary is declared complete now and filled in as
 detectors that can emit `pso`, `pursuit` and `drift` arrive.
+
+**A ninth, `lost`, joined on 2026-11-06, inside that window:** a sample the
+validity mask did not offer as measured because nothing was measured there,
+or nothing to trust, which a run is carried across where the loss is short
+(design spec `2026-11-06-eye-lost-data-and-region-design.md` section 2).
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import numpy as np
 class Label(StrEnum):
     BLINK = "blink"
     INVALID = "invalid"
+    LOST = "lost"
     SACCADE = "saccade"
     MICROSACCADE = "microsaccade"
     PSO = "pso"
@@ -95,7 +101,7 @@ KIND_OF: dict[Label, str] = {
 #: nested loop over the largest runs in the trace for no observable difference
 #: (spec section 1.2). `blink` and `invalid` come from the validity mask,
 #: never from a detector, and are in no detector's vocabulary at all.
-NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID})
+NOT_INTERSECTED = frozenset({Label.FIXATION, Label.BLINK, Label.INVALID, Label.LOST})
 
 
 def kind_of(label) -> str | None:
@@ -214,6 +220,16 @@ def labels_from_runs(runs: list[Run], n_samples: int) -> np.ndarray:
     if cursor != n_samples:
         raise TilingError(f"runs end at {cursor}, which does not reach {n_samples}")
     return out
+
+
+def may_label(available) -> np.ndarray:
+    """Where a detector may label: each sample the validity mask offered,
+    measured (`None`) or lost and carried (`Label.LOST`; design spec
+    `2026-11-06-eye-lost-data-and-region-design.md` section 3). Every
+    detector but Engbert-Kliegl, which tells the two apart (section 4), runs
+    on these as its own usable samples, unchanged; `registry.Detector.detect`
+    then holds its runs to the shared rule (section 5)."""
+    return np.array([entry is None or entry is Label.LOST for entry in available], dtype=bool)
 
 
 def true_runs(mask: np.ndarray) -> list[tuple[int, int]]:

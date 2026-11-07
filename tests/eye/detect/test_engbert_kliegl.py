@@ -403,3 +403,87 @@ def test_under_true_angle_the_step_across_the_cut_is_a_microsaccade():
     per_axis = detect_engbert_kliegl(gaze, velocity(gaze, 500.0), available, 500.0, DEFAULT_EK_PARAMS)
     assert [r.label for r in true] == [Label.MICROSACCADE]
     assert [r.label for r in per_axis] == [Label.SACCADE]
+
+
+# Design spec `2026-11-06-eye-lost-data-and-region-design.md` section 4: a
+# lost sample's velocity is unknown. It continues an open run and never opens
+# one or counts toward the minimum, as wl-xcon's online copy does.
+
+
+def _lost(n, *spans):
+    available = np.full(n, None, dtype=object)
+    for start, stop in spans:
+        available[start:stop] = Label.LOST
+    return available
+
+
+def _detected(gaze, available, params=DEFAULT_EK_PARAMS):
+    from wl_preproc.eye.detect.velocity import velocity
+
+    return [(run.start, run.stop)
+            for run in detect_engbert_kliegl(gaze, velocity(gaze, FS_HZ), available, FS_HZ, params)]
+
+
+def test_a_lost_stretch_inside_a_run_carries_it():
+    gaze, _ = _trace_with_saccades([500], n=1000)
+    ((start, stop),) = _detected(gaze, _lost(1000))
+
+    assert _detected(gaze, _lost(1000, (start + 2, start + 6))) == [(start, stop)]
+
+
+def test_lost_samples_never_open_a_run():
+    gaze, _ = _trace_with_saccades([500], n=1000)
+    ((start, stop),) = _detected(gaze, _lost(1000))
+
+    assert _detected(gaze, _lost(1000, (start - 3, start + 1))) == [(start + 1, stop)]
+
+
+def test_a_short_loss_at_a_runs_end_is_carried_to_the_landing():
+    """The eye landed in the loss: the run goes on through it and ends at the
+    first measured sample after it, that sample its last (the correction both
+    sessions agreed on 2026-11-06). Withheld, as a long loss is, the loss ends
+    the run before it."""
+    gaze, _ = _trace_with_saccades([500], n=1000)
+    ((start, stop),) = _detected(gaze, _lost(1000))
+    withheld = _lost(1000)
+    withheld[stop - 1:stop + 3] = Label.INVALID
+
+    assert _detected(gaze, _lost(1000, (stop - 1, stop + 3))) == [(start, stop + 4)]
+    assert _detected(gaze, withheld) == [(start, stop - 1)]
+
+
+def test_only_measured_velocities_count_toward_the_minimum():
+    """wl-xcon's rule since its version 3: unknowns carry a run but never make
+    one."""
+    gaze, _ = _trace_with_saccades([500], n=1000)
+    ((start, stop),) = _detected(gaze, _lost(1000))
+    params = dataclasses.replace(DEFAULT_EK_PARAMS, min_duration_samples=stop - start)
+
+    assert _detected(gaze, _lost(1000), params) == [(start, stop)]
+    assert _detected(gaze, _lost(1000, (start + 3, start + 4)), params) == []
+
+
+def test_lost_samples_alone_make_no_run():
+    gaze, _ = _trace_with_saccades([500], n=1000)
+
+    assert _detected(gaze, _lost(1000, (100, 120))) == _detected(gaze, _lost(1000)) != []
+
+
+def test_a_saccade_whose_take_off_fell_in_a_short_loss_is_labelled_by_its_whole_size():
+    """The run opens at its first measured velocity over the threshold, but
+    its size is from the last measured sample before the loss: a 1.2-degree
+    saccade stays a saccade (the final review of 2026-11-07, I2)."""
+    gaze, _ = _trace_with_saccades([500], amplitude_deg=1.2, n=1000)
+    (whole,) = detect_engbert_kliegl(*_ek_input(gaze, _lost(1000)))
+    lost = _lost(1000, (whole.start - 1, whole.start + 3))
+
+    (run,) = detect_engbert_kliegl(*_ek_input(gaze, lost))
+
+    assert whole.label is Label.SACCADE
+    assert run.start > whole.start and run.label is Label.SACCADE
+
+
+def _ek_input(gaze, available):
+    from wl_preproc.eye.detect.velocity import velocity
+
+    return gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS
