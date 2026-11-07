@@ -261,6 +261,10 @@ class RigChangeSpec(BaseModel):
     now: Any = 0.25
     event_code: int | None = 4130
     by: dict = Field(default_factory=lambda: {"kind": "box", "name": "synth"})
+    # Its kind, as wl-xcon's engine build C3 writes it (design spec
+    # `2026-11-07-rig-record-fields-design.md` section 7), written only by a
+    # record with `fields`; a clear or a switch strobes nothing.
+    kind: str = "set"
 
 
 class RigControlSpec(BaseModel):
@@ -296,6 +300,11 @@ class RigRecordSpec(BaseModel):
     warnings: tuple[RigWarningSpec, ...] = ()
     changes: tuple[RigChangeSpec, ...] = ()
     controls: tuple[RigControlSpec, ...] = ()
+    # Write each trial line and run row with what wl-xcon's engine builds
+    # C2a, C2b and C3 and its XC-399 add, and each change row in C3's shape
+    # (design spec `2026-11-07-rig-record-fields-design.md` section 10). Off
+    # by default, so every existing profile is byte-identical.
+    fields: bool = False
 
 
 class SessionRecipe(BaseModel):

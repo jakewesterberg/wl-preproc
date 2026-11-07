@@ -172,3 +172,39 @@ def test_the_arc_leaves_out_the_widest_gap():
     assert arc([350.0, 20.0, 5.0]) == {"from": 350.0, "to": 20.0}
     assert arc([0.0, 90.0, 180.0, 270.0]) == {"from": 90.0, "to": 0.0}
     assert arc([100.0, 200.0]) == {"from": 100.0, "to": 200.0}
+
+
+_DISC = {"class": "Disc", "fields": {"color": {"class": "Gray", "fields": {"cd_m2": {"class": "P", "fields": {
+    "name": "target_luminance"}}}}, "contrast": None, "size": 1.0}}
+
+
+def test_an_appearance_is_published_as_its_objects_sorted_json_text():
+    """wl-xcon's appearance ask, its form accepted on 2026-10-30 (design spec
+    `2026-11-07-rig-record-fields-design.md` section 9): an appearance in
+    `params` is its object's text with sorted keys in the trials table, and
+    a condition's constant or varying values keep it whole."""
+    import json
+
+    from wl_preproc.nwb.conditions import block_conditions, trial_columns
+
+    square = {**_DISC, "class": "Square"}
+    trials = [_trial(1, 0.0), _trial(2, 1.0), _trial(3, 2.0)]
+    matched = {1: _rig(1, "disc", target_appearance=_DISC), 2: _rig(2, "disc", target_appearance=_DISC),
+               3: _rig(3, "square", target_appearance=square)}
+    _names, settings = trial_columns(trials, matched, {})
+    assert settings["target_appearance"][0] == json.dumps(_DISC, sort_keys=True)
+    disc, square_entry = sorted(block_conditions(trials, matched, {}), key=lambda entry: entry["name"])
+    assert disc["settings"]["target_appearance"] == _DISC and square_entry["settings"]["target_appearance"] == square
+
+
+def test_a_condition_name_too_long_for_the_main_sequence_is_noted():
+    """Section 9: a large factorial's generated name past 255 characters
+    gets no main-sequence group; the file says so rather than the column
+    widening."""
+    from wl_preproc.nwb.conditions import long_names
+
+    matched = {1: _rig(1, "x" * 256), 2: _rig(2, "x" * 255), 3: _rig(3, "y" * 300)}
+    assert long_names(matched, 255) == [
+        "2 trial(s) name a condition longer than 255 characters, so the main sequence groups none of them by "
+        "condition"]
+    assert long_names({2: _rig(2, "x" * 255)}, 255) == []

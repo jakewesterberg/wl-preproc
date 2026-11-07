@@ -159,6 +159,24 @@ def test_since_c3_a_change_line_names_its_kind_its_act_and_its_instant(tmp_path)
     assert problems == [] and acts(fields) == 3
 
 
+def test_an_appearance_in_a_change_is_kept_as_its_sorted_json_text(tmp_path):
+    """wl-xcon's appearance ask (design spec
+    `2026-11-07-rig-record-fields-design.md` section 9): a change of
+    appearance's `was` and `now` are the objects' text, keys sorted, a
+    setting it refers to kept as its reference."""
+    import json
+
+    from wl_preproc.events.rigrecords import read_rig_records
+
+    disc = {"class": "Disc", "fields": {"size": 1.0, "color": {"class": "P", "fields": {"name": "lum"}}}}
+    row = {"name": "target_appearance", "was": disc, "now": {**disc, "class": "Square"}, "event_code": 4130}
+    (tmp_path / "xcon").mkdir()
+    (tmp_path / "xcon" / "parameter_changes.jsonl").write_text(json.dumps(row) + "\n")
+    (change,) = read_rig_records(tmp_path).changes
+    assert change.was == json.dumps(disc, sort_keys=True)
+    assert json.loads(change.now)["class"] == "Square"
+
+
 def test_a_change_field_it_cannot_read_is_none_and_said_once():
     import json
 

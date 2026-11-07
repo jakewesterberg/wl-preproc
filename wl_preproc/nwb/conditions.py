@@ -58,6 +58,18 @@ def join(trials: list[dict], record: RigRecord | None) -> tuple[dict[int, RigTri
     return matched, notes
 
 
+def long_names(matched: dict[int, RigTrial], width: int) -> list[str]:
+    """A note on the trials whose condition's name is longer than `width`,
+    the main sequence's column (design spec
+    `2026-11-07-rig-record-fields-design.md` section 9): a large factorial's
+    generated name can be, and wl-xcon warns its author past 200."""
+    long = sum(1 for rig in matched.values() if len(rig.condition) > width)
+    if not long:
+        return []
+    return [f"{long} trial(s) name a condition longer than {width} characters, so the main sequence groups none "
+            "of them by condition"]
+
+
 def stream_codes(trials: list[dict], events: list[dict]) -> dict[int, int]:
     """`{trial_id: code}` where exactly one `CONDITION` event was sent inside
     the trial, `[start, stop)`."""

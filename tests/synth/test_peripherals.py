@@ -337,3 +337,45 @@ def test_the_config_records_this_rigs_display_setup_unless_a_recipe_says_not(tmp
     (tmp_path / "xcon").mkdir()
     write_rig_runs(tmp_path / "xcon", recipe, build_timeline(recipe))
     assert "setup" not in json.loads((tmp_path / "xcon" / "config.json").read_text())
+
+
+def test_a_rig_record_with_fields_writes_what_wl_xcons_later_builds_add():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 10: each
+    trial line, run row and change row in the shape wl-xcon's engine builds
+    C2a, C2b and C3 and its XC-399 write, read back with nothing to report;
+    the end row's presentations are the run's lines. Without `fields` none
+    is written (`test_the_rig_record_has_wl_xcons_line_shape`)."""
+    import tempfile
+    from pathlib import Path
+
+    from wl_preproc.events.rigrecords import change_fields, read_rig_records
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.synth.peripherals import write_rig_runs, write_rig_trials
+    from wl_preproc.synth.recipe import RigChangeSpec, RigRecordSpec, SessionRecipe
+
+    rig = RigRecordSpec(fields=True, changes=(RigChangeSpec(trial=1),
+                                              RigChangeSpec(trial=2, kind="clear", name="owed", event_code=None)))
+    recipe = SessionRecipe.model_validate({**CI_RECIPE.model_dump(), "runs": True, "rig_record": rig.model_dump()})
+    truth = build_timeline(recipe)
+    with tempfile.TemporaryDirectory() as directory:
+        xcon = Path(directory) / "xcon"
+        xcon.mkdir()
+        write_rig_trials(xcon / "trials.jsonl", recipe, truth)
+        write_rig_runs(xcon, recipe, truth)
+        trials = read_rig_trials(Path(directory), recipe.subject)
+        runs = read_rig_runs(Path(directory), recipe.subject)
+        records = read_rig_records(Path(directory))
+        changes = [json.loads(line) for line in (xcon / "parameter_changes.jsonl").read_text().splitlines()]
+    assert (trials.problems, runs.problems, records.problems) == ((), (), ())
+    first = [trial for trial in trials.trials if trial.run == 0]
+    assert [trial.repeat_of for trial in first] == [None, 0, None] and first[2].live == ("contrast",)
+    assert [len(trial.stimuli) for trial in first] == [2, 2, 3]
+    assert [(run.plan, run.presentations) for run in runs.runs] == [
+        ("synthetic", sum(1 for trial in trials.trials if trial.run == index)) for index in range(len(runs.runs))]
+    assert [run.block_ends[0].block_in_session for run in runs.runs] == [1, 2]
+    assert ["sequence" in row for row in changes] == [True, False]
+    fields, problems = change_fields([change.row for change in records.changes])
+    assert [(field.kind, field.change, field.strobed_nothing) for field in fields] == [("set", 1, False),
+                                                                                    ("clear", 2, True)]
+    assert problems == []

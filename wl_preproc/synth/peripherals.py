@@ -169,13 +169,58 @@ def rig_condition(trial_id: int) -> tuple[str, dict]:
     }
 
 
+def _place(x: float, y: float) -> dict:
+    """A position as wl-xcon's XC-399 writes one: its true eccentricity and
+    polar angle beside its per-axis (x, y), the angle null at the centre."""
+    import numpy as np
+
+    from wl_preproc.eye.detect.geometry import eccentricity_polar_deg
+
+    eccentricity, polar = (float(value) for value in eccentricity_polar_deg(np.array([x, y])))
+    return {"eccentricity": eccentricity, "direction": None if np.isnan(polar) else polar, "x": x, "y": y}
+
+
+def _stimuli(index_in_run: int) -> list[dict]:
+    """The fixation point and the target (`rig_condition`'s `target_xy_deg`);
+    a run's third trial shows a two-object array beside them."""
+    shown = {"kind": "show", "changed": None, "drawn": True, "unresolved": None}
+    entries = [{"name": "fix", "frame": 1, "off": 61, **shown, **_place(0.0, 0.0)},
+               {"name": "target", "frame": 85, "off": None, **shown, **_place(0.0, 5.0)}]
+    if index_in_run == 2:
+        entries.append({"name": "search", "frame": 85, "off": None, **shown, **_place(0.0, 0.0), "target": 0,
+                        "objects": [_place(8.0, 0.0), _place(-8.0, 0.0)]})
+    return entries
+
+
+def _trial_fields(index: int, previous: str | None) -> dict:
+    """What wl-xcon's engine builds C2a, C2b and C3 and its XC-399 add to a
+    trial line (design spec `2026-11-07-rig-record-fields-design.md` section
+    10): each run's first trial in a sequence-balanced block's lead-in, its
+    second a drum's repeat of its first, straight after it and owed, its third
+    held by a person at a contrast that kept it out of moving up, with an
+    array beside its target; each trial's hold drawn by the task, and its
+    fluid."""
+    fields = {"counting": "counted", "shown": True, "repeat_of": None, "at_once": False, "previous": previous,
+              "drummed": False, "drumming": None, "aids": [], "structure": "default", "overridden": [],
+              "drawn": {"fix_hold_s": "task"}, "live": [], "eased": [],
+              "planned": {"cycle": 0, "position": index, "lead_in": index == 0}, "fluid_ml": 0.1,
+              "stimuli": _stimuli(index)}
+    if index == 1:
+        fields.update(counting="owed", repeat_of=0, at_once=True, drummed=True, drumming="block", aids=["drumming"])
+    if index == 2:
+        fields.update(overridden=["contrast"], live=["contrast"], eased=["contrast"])
+    return fields
+
+
 def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> None:
     """Stands in for wl-xcon's `xcon/trials.jsonl`: one JSON object per line,
     per trial, with the subject on every line. In wl-xcon's shape since its
     XC-155: the run (counted from 0, as wl-xcon counts them; one run per
     block), the trial's index within its run, and `trial_number`, counted
-    across the session and equal to the stream's TRIAL_NUMBER."""
-    lines, per_run = [], {}
+    across the session and equal to the stream's TRIAL_NUMBER; and, for a
+    record with `fields`, what its later builds add (`_trial_fields`)."""
+    fields = recipe.rig_record is not None and recipe.rig_record.fields
+    lines, per_run, previous = [], {}, {}
     for position, trial in enumerate(truth.trials, start=1):
         index = per_run.get(trial.block_id, 0)
         per_run[trial.block_id] = index + 1  # a faulted trial still used its index
@@ -191,7 +236,9 @@ def write_rig_trials(path: Path, recipe: SessionRecipe, truth: GroundTruth) -> N
             "block": f"block-{trial.block_id}",
             "condition": condition,
             "params": params,
+            **(_trial_fields(index, previous.get(trial.block_id)) if fields else {}),
         })
+        previous[trial.block_id] = condition
     if Fault.MISMATCHED_RIG_LINE in recipe.faults:
         lines = mismatch_rig_line(lines)
     path.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n", encoding="utf-8")
@@ -240,14 +287,18 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
         spec = recipe.blocks[run_index]
         rows.append({"event": "start", "run": run_index, "at": stamp(block.start_s),
                      "task": spec.task_type.name.lower(),
-                     **({} if rig is None else {"calibration": rig.calibration_id})})
-        if run_index + 1 in recipe.unclosed_blocks:
+                     **({} if rig is None else {"calibration": rig.calibration_id}),
+                     **(_start_fields(recipe) if rig is not None and rig.fields else {})})
+        faulted = run_index + 1 in recipe.unclosed_blocks
+        if faulted:
             rows.append({"event": "end", "run": run_index, "at": stamp(block.end_s),
                          "stopped_because": "fault, session aborted: RuntimeError: a synthetic fault",
                          "stop_kind": "fault"})
         else:
             rows.append({"event": "end", "run": run_index, "at": stamp(block.end_s),
                          "stopped_because": "every block is finished", "stop_kind": "completed"})
+        if rig is not None and rig.fields:
+            rows[-1].update(_end_fields(recipe, truth, run_index, faulted))
     (xcon_dir / "runs.jsonl").write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
                                          encoding="utf-8")
     config = {"session_id": recipe.session_id, "subject": recipe.subject}
@@ -260,6 +311,40 @@ def write_rig_runs(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth) ->
         write_rig_warnings(xcon_dir, recipe, truth)
         write_rig_records(xcon_dir, recipe, truth, stamp)
     (xcon_dir / "config.json").write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+
+
+def _start_fields(recipe: SessionRecipe) -> dict:
+    """What wl-xcon's engine builds C2b and C3 add to a run's start row: a
+    plan, its task's content hash, the seed, and the task's draw of the hold."""
+    return {"plan": "synthetic", "plan_form": {"class": "Plan", "fields": {"blocks": ["block"]}},
+            "versions": {"task": "sha256:synthetic", "allocation": "synthetic"}, "seed": recipe.seed,
+            "draws": {"fix_hold_s": {"class": "Uniform", "fields": {"high": 0.35, "low": 0.3, "repeat": "fresh"}}},
+            "generated": [], "directions": []}
+
+
+def _end_fields(recipe: SessionRecipe, truth: GroundTruth, run_index: int, faulted: bool) -> dict:
+    """What wl-xcon's engine builds C2a, C2b and C3 add to a run's end row,
+    counted from the run's own trial lines (`_trial_fields`): its trials, a
+    drum's repeat one with the trial it repeats, its presentations, its
+    block's end, and each condition's counts."""
+    lines = [trial for position, trial in enumerate(truth.trials, start=1)
+             if trial.block_id == run_index + 1 and position not in recipe.faulted_trials]
+    conditions: dict[str, int] = {}
+    for trial in lines:
+        name = rig_condition(trial.trial_id)[0]
+        conditions[name] = conditions.get(name, 0) + 1
+    repeats = 1 if len(lines) > 1 else 0
+    return {"trials": len(lines) - repeats, "presentations": len(lines),
+            "end_reason": None if faulted else "plan_done",
+            "block_ends": [{"block": f"block-{run_index + 1}", "ended": "run" if faulted else "rule", "by": None,
+                            "after_trial": len(lines) - 1 if lines else None, "block_in_session": run_index + 1,
+                            "position": 0, "passed_at": None, "varied": {"fix_hold_s": [{"by": "draw"}]},
+                            "planned": None, "counts": {}}],
+            "shortfalls": [],
+            "conditions": [{"block": f"block-{run_index + 1}", "condition": name, "trials": n, "presentations": n,
+                            "right": n, "wrong": 0, "right_first": n, "owed": 0, "repeats": 0, "moved_past": 0,
+                            "possible_avoidance": False, "drummed": 0, "failing": 0}
+                           for name, n in sorted(conditions.items())]}
 
 
 def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
@@ -283,6 +368,8 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
     changes = [{"sequence": sequence, "name": change.name, "was": change.was, "now": change.now, "by": change.by,
                 "run": run_of[change.trial], "event_code": change.event_code}
                for sequence, change in enumerate(rig.changes, start=1)]
+    if rig.fields:
+        changes = _c3_changes(rig, truth, run_of, stamp)
     controls = []
     for control, time in zip(rig.controls, truth.control_times, strict=True):
         at = stamp(time)
@@ -294,6 +381,27 @@ def write_rig_records(xcon_dir: Path, recipe: SessionRecipe, truth: GroundTruth,
         if rows:
             (xcon_dir / name).write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
                                          encoding="utf-8")
+
+
+def _c3_changes(rig, truth: GroundTruth, run_of: dict[int, int], stamp: Callable[[float], float]) -> list[dict]:
+    """Change rows in the shape wl-xcon's engine build C3 writes them
+    (`wl_xcon/record.py`'s change row): each its kind, its act's id, its
+    instant on the rig's clock, the first trial it applies to and the
+    setting's meaning; a `sequence` only on a row whose act strobed
+    `PARAM_CHANGED`, so a clear or a switch carries none."""
+    rows, sequence = [], 0
+    for change_id, (change, time) in enumerate(zip(rig.changes, truth.change_times, strict=True), start=1):
+        at = stamp(time)
+        row = {"change": change_id, "kind": change.kind, "name": change.name, "was": change.was, "now": change.now,
+               "by": change.by, "at": at,
+               "at_local": datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat(),
+               "trial_number": change.trial, "run": run_of[change.trial], "meaning": None, "offered": [],
+               "odds": None, "event_code": change.event_code}
+        if change.event_code is not None:
+            sequence += 1
+            row["sequence"] = sequence
+        rows.append(row)
+    return rows
 
 
 # How a calibration's cone colours became light, in the shape wl-xcon's

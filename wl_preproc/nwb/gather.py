@@ -393,7 +393,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
     `2026-11-07-rig-record-fields-design.md` section 4)."""
     import collections
 
-    from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
+    from wl_preproc.nwb.conditions import block_conditions, join, long_names, stream_codes, trial_columns
+    from wl_preproc.schema.main_sequence import CONDITION_WIDTH
     from wl_preproc.nwb.stimuli import stimulus_rows
     from wl_preproc.nwb.trial_record import places, record_columns
 
@@ -403,7 +404,7 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
     names, settings = trial_columns(trials, matched, codes)
     columns, record_notes = record_columns(trials, matched, places(record))
     stimuli, stimulus_objects, stimulus_notes = stimulus_rows(trials, matched)
-    notes += record_notes + stimulus_notes
+    notes += record_notes + stimulus_notes + long_names(matched, CONDITION_WIDTH)
     for position, trial in enumerate(trials):
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
