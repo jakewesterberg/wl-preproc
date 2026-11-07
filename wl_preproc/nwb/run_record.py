@@ -23,6 +23,8 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
     "plan": ("plan", "The plan the run played, by its name in its task ('' for a plain run of N trials, or if not "
                      "recorded)."),
     "plan_form": ("plan_form", "That plan as declared, as JSON text ('' if none)."),
+    "start_block": ("start_block", "The block its trainer started it at, by name ('' where it started at its first "
+                                   "block, or its row does not say)."),
     "end_reason": ("end_reason", "Why a completed run ended: plan_done, plan_time, stalled or cannot_draw ('' for "
                                  "a run that ended any other way, or if not recorded)."),
     "stop_kind": ("stop_kind", "How the run stopped, as the rig's record says: completed, operator, limit, fault "

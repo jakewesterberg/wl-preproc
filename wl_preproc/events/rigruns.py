@@ -179,6 +179,9 @@ class RigRun:
     draws: object = None
     generated: object = None
     directions: tuple[str, ...] = ()
+    # The block its trainer started it at, by name; None for the first (the
+    # pop-out search's, agreed with wl-xcon on 2026-11-07).
+    start_block: str | None = None
     # The end row's, since C2a and C2b.
     rig_trials: int | None = None  # a trial and its drummed repeats one
     presentations: int | None = None  # its trial lines
@@ -275,9 +278,10 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
                        task_hash=task_hash,
                        seed=optional.read(row, "seed", WHOLE), draws=optional.read(row, "draws", ANY),
                        generated=optional.read(row, "generated", ANY),
-                       directions=optional.read(row, "directions", TEXTS))
-            run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions")
-                               if name in row} | ({"task_hash"} if task_hash is not None else set())
+                       directions=optional.read(row, "directions", TEXTS),
+                       start_block=optional.read(row, "start_block", TEXT))
+            run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions",
+                                                 "start_block") if name in row} | ({"task_hash"} if task_hash is not None else set())
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))

@@ -121,3 +121,15 @@ def test_a_block_ended_twice_keeps_its_first_end_and_says_so():
     _tables, notes = run_record(runs, blocks, RigRuns(runs=(rig,), problems=()), {(0, 0): 101})
     assert (blocks[0]["ended"], blocks[0]["record"]["position"]) == ("rule", 0)
     assert notes == ["run 1: the rig's record ends block 11 twice; the first end is kept"]
+
+
+def test_the_runs_table_says_the_block_each_run_started_at():
+    """'' where a run started at its first block or its row does not say,
+    written only where some run carries it (agreed with wl-xcon on
+    2026-11-07)."""
+    from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
+
+    runs, blocks = _file(1, 2)
+    run_record(runs, blocks, RigRuns(runs=(_run(start_block="Fade-in"),), problems=()), {})
+    assert (runs[0]["record"]["start_block"], runs[1]["record"]["start_block"]) == ("Fade-in", "")
+    assert RUN_COLUMNS["start_block"][0] == "start_block"

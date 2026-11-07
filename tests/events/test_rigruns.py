@@ -244,3 +244,18 @@ def test_a_run_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
         "1 run row: `presentations` is not a whole number or null, so it is read as none",
         "1 run row: `seed` is not a whole number or null, so it is read as none",
     )
+
+
+def test_a_run_says_the_block_it_started_at(tmp_path):
+    """The pop-out search's start row names the block its trainer started the
+    run at, null for the first (agreed with wl-xcon on 2026-11-07); a row
+    without it does not carry it."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "popout", start_block="Fade-in"), _end(0, "done", "completed"),
+            _start(1, "popout", start_block=None), _end(1, "done", "completed"),
+            _start(2, "rf_map"), _end(2, "done", "completed")]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    assert [run.start_block for run in record.runs] == ["Fade-in", None, None]
+    assert ["start_block" in run.carries for run in record.runs] == [True, True, False]
+    assert record.problems == ()
