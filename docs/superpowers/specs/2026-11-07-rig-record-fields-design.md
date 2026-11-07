@@ -272,3 +272,31 @@ pending wl.works amendments; the checkpoint's and `wl.yaml`'s status lines.
   (C6), the timed event log (C7), a random pick's odds (D).
 - The trial line's other unread fields (its ten position counters, `last_reward_at`) and the start row's
   `allocation`, `layers`, `resolved`, `bounded` and `preflight`: kept in the session folder.
+
+## Amendments, 2026-11-07, made while proving the plan
+
+1. **Every new column of the runs and blocks tables is written only where some run carries its field** (§5), as a
+   trial's are (§3): a record from before wl-xcon's engine build C2b gains `stop_kind` and `stopped_because`, which
+   every end row carries, and nothing else; the blocks table's columns appear where some run's end row carries
+   `block_ends`, a block no entry names reading '' and -1. **The change log's new columns are written for every
+   row** (§7): a row from before C3 reads `set`, -1 and ''.
+2. **The stimulus's name is published as `stimulus`** (§4): a table's own `name` attribute would shadow a column
+   called that, as the conditions table's `condition` already avoids.
+3. **A condition's new keys appear only where some line carries their field** (§6): `drawn` where a line carries
+   `drawn`, `live` where one carries `live`, `eased` in its counts where one carries `eased`. The description
+   defaults them to null, null and 0, so an old record's description reads as before. The NWB conditions table
+   gains `drawn`, `live` and `n_eased` columns by the same rule.
+4. **A run's own trial index is joined through its trial lines** (§2's ruling): `RigTrial.run` is read for it,
+   and a run's `index` and the fields it carries are bookkeeping, left out of a run's equality.
+5. **The rig's clock fit without the change rows** (§7's ruling) says so in a problem: "with its rows the rig's
+   clock would not fit (...), so it is fitted without them". A change row that strobed nothing and could not be
+   timed is named as such a control is.
+6. **The listing counts acts from each change's stored line** (§7), not by counting rows in the database.
+7. **The note on long names reads the main sequence's own width** (§9), `schema/main_sequence.CONDITION_WIDTH`.
+8. **The synthetic rig writes the new fields only with `RigRecordSpec.fields`** (§10), so every existing profile
+   stays byte-identical; a change's `kind` makes a clear or a switch, which carries no `sequence`.
+9. **wl-xcon's simulated session folder** (§10) had not arrived when the plan was written; its own task follows
+   the records, and the merge waits for neither.
+10. **Where an unreadable field is said** (§2): a trial line's or a change row's, which only the build reads, in
+    the description's `notes`; a run row's where the run rows' other problems already are, `core.RunRecordProblem`,
+    which the listing sends wl.works as a `rig_record_problem` flag, since the event stage reads the run rows too.
