@@ -377,14 +377,19 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], sessio
 
     from wl_preproc.events.rigtrials import read_rig_trials
     from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
+    from wl_preproc.nwb.trial_record import places, record_columns
 
     trials.sort(key=lambda trial: trial["start_s"])
-    matched, notes = join(trials, read_rig_trials(session_dir, subject))
+    record = read_rig_trials(session_dir, subject)
+    matched, notes = join(trials, record)
     codes = stream_codes(trials, events)
     names, settings = trial_columns(trials, matched, codes)
+    columns, record_notes = record_columns(trials, matched, places(record))
+    notes += record_notes
     for position, trial in enumerate(trials):
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
+        trial["record"] = {key: values[position] for key, values in columns.items()}
     for run in runs:
         inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)

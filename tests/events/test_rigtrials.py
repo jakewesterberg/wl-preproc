@@ -81,3 +81,70 @@ def test_a_line_naming_a_run_without_its_number_is_left_out(tmp_path):
     assert [trial.number for trial in record.trials] == [2]
     assert [problem.split(":")[0] for problem in record.problems] == ["line 1", "line 3"]
     assert "trial_number" in record.problems[0]
+
+
+def _line_c3(trial_number, index, **fields):
+    """A line as wl-xcon writes it since its engine builds C2a, C2b and C3
+    (`wl_xcon/record.py::Recorder.trial`), with the fluid it commanded."""
+    return json.dumps({**json.loads(_line155(trial_number, 0, index)), "counting": "counted", "shown": True,
+                       "repeat_of": None, "at_once": False, "previous": "contrast-50", "drummed": False,
+                       "drumming": None, "aids": [], "structure": "default", "overridden": [], "drawn": {},
+                       "live": [], "eased": [], "planned": None, "fluid_ml": 0.12, **fields})
+
+
+def test_a_line_since_c2a_says_what_the_trial_paid_and_where_it_sits(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 3: C2a's
+    count and sequence, C2b's structure and overrides, C3's draws, a person's
+    holds, eased settings and planned place, and the fluid commanded. What it
+    paid is not its answer: a wrong answer under drumming is `owed`."""
+    from wl_preproc.events.rigtrials import Planned, read_rig_trials
+
+    rows = [_line_c3(1, 0),
+            _line_c3(2, 1, counting="owed", repeat_of=0, at_once=True, drummed=True, drumming="block",
+                     aids=["drumming", "clear"], overridden=["contrast"], live=["contrast", "hold"],
+                     eased=["contrast"], drawn={"hold": "task", "jitter": 7},
+                     planned={"cycle": 0, "position": 1, "lead_in": False}),
+            _line_c3(3, 2, planned={"run": 2, "switch": True, "value": {"class": "Disc", "fields": {}}})]
+    first, second, third = read_rig_trials(_record(tmp_path, rows), "pico").trials
+    assert (first.run, first.counting, first.shown, first.repeat_of, first.at_once, first.previous) == (
+        0, "counted", True, None, False, "contrast-50")
+    assert (first.structure, first.fluid_ml, first.drawn, first.planned) == ("default", 0.12, {}, None)
+    assert (second.counting, second.repeat_of, second.at_once, second.drummed, second.drumming) == (
+        "owed", 0, True, True, "block")
+    assert (second.aids, second.overridden, second.live, second.eased) == (
+        ("drumming", "clear"), ("contrast",), ("contrast", "hold"), ("contrast",))
+    assert second.drawn == {"hold": "task", "jitter": 7}
+    assert second.planned == Planned(cycle=0, position=1, lead_in=False)
+    assert third.planned == Planned(run=2, switch=True, value={"class": "Disc", "fields": {}})
+    assert "planned" in third.carries and "counting" in third.carries
+
+
+def test_a_line_before_c2a_carries_none_of_them(tmp_path):
+    """A record written before the builds reads exactly as before."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    (trial,) = read_rig_trials(_record(tmp_path, [_line155(1, 0, 0)]), "pico").trials
+    assert trial.carries == frozenset()
+    assert (trial.counting, trial.shown, trial.aids, trial.drawn, trial.planned, trial.fluid_ml) == (
+        None, None, (), None, None, None)
+
+
+def test_a_field_it_cannot_read_is_none_said_once_and_its_line_kept(tmp_path):
+    """Read, never repaired (section 2): a value of the wrong type is read as
+    none and reported once per field, with how many lines; the line stays."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    rows = [_line_c3(1, 0, shown="yes"), _line_c3(2, 1, shown=1, aids="clear"),
+            _line_c3(3, 2, planned={"cycle": "0"}, drawn={"hold": None}, fluid_ml=float("nan"))]
+    record = read_rig_trials(_record(tmp_path, rows), "pico")
+    assert [trial.number for trial in record.trials] == [1, 2, 3]
+    assert [trial.shown for trial in record.trials] == [None, None, True]
+    assert (record.trials[1].aids, record.trials[2].planned, record.trials[2].drawn,
+            record.trials[2].fluid_ml) == ((), None, None, None)
+    assert record.problems == (
+        "1 trial line: `aids` is not a list of text, so it is read as none",
+        "1 trial line: `drawn` is not an object naming each drawn setting's source, so it is read as none",
+        "1 trial line: `fluid_ml` is not a finite number or null, so it is read as none",
+        "1 trial line: `planned` is not a planned place, so it is read as none",
+        "2 trial lines: `shown` is not true, false or null, so it is read as none",
+    )

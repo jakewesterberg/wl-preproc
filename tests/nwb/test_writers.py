@@ -104,6 +104,23 @@ def test_the_trials_carry_their_condition_and_the_settings_that_varied(tmp_path)
         assert frame["setting_xy"].tolist() == ["[0, 5]", ""]
 
 
+def test_the_trials_carry_what_the_rigs_record_says_of_each_trial(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 3: one
+    column per field some trial's line carries, described."""
+    from wl_preproc.nwb.intervals import add_trials
+
+    trials = [{**TRIALS[0], "record": {"counting": "owed", "repeat_of": -1, "planned_lead_in": 1}},
+              {**TRIALS[0], "trial_id": 2, "start_s": 4.0, "stop_s": 5.0,
+               "record": {"counting": "", "repeat_of": 1, "planned_lead_in": -1}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_trials(nwb, trials, ["ohdpi"]))
+    with io:
+        frame = nwb.trials.to_dataframe()
+        assert frame["counting"].tolist() == ["owed", ""]
+        assert frame["repeat_of"].tolist() == [-1, 1]
+        assert frame["planned_lead_in"].tolist() == [1, -1]
+        assert "never its answer" in nwb.trials["counting"].description
+
+
 def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
     from wl_preproc.nwb.intervals import add_conditions
 

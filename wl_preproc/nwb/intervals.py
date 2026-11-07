@@ -92,9 +92,21 @@ def _setting_columns(rows: list[dict]) -> list:
             for key in keys]
 
 
+def _record_columns(rows: list[dict]) -> list:
+    """One column per field of the rig's line that some trial's line carries
+    (design spec `2026-11-07-rig-record-fields-design.md` section 3), in
+    `nwb/trial_record.py`'s order."""
+    from wl_preproc.nwb.trial_record import COLUMNS, PLANNED_COLUMNS
+
+    present = set().union(*(row.get("record", {}).keys() for row in rows)) if rows else set()
+    return [column(name, description, [row["record"][name] for row in rows])
+            for name, description in {**COLUMNS, **PLANNED_COLUMNS}.items() if name in present]
+
+
 def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
     """`/intervals/trials`: trial id, outcome, block, condition, the
-    settings that varied, and per-system coverage."""
+    settings that varied, what the rig's record says of each trial beyond
+    them, and per-system coverage."""
     rows = sorted(trials, key=lambda row: row["start_s"])
     nwb.trials = TimeIntervals(
         name="trials",
@@ -112,6 +124,7 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
                                  "(xcon/trials.jsonl), else the CONDITION number sent inside it, else ''."),
                    [r.get("condition", "") for r in rows]),
             *_setting_columns(rows),
+            *_record_columns(rows),
             *_coverage_columns(rows, systems),
         ],
     )
