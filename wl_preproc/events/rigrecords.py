@@ -198,9 +198,12 @@ def read_rig_records(session_dir: Path) -> RigRecords:
 # switches are not (the requester's decision of 2026-11-07).
 SETTING_KINDS = ("set", "hand_back", "range", "revert")
 # Every kind wl-xcon's change log holds (`wl_xcon/record.py::KINDS`, read at
-# engine-c3 `7ea7913`); one outside them is published as written and counted
-# nowhere.
-KINDS = (*SETTING_KINDS, "clear", "drum", "training")
+# engine-c3 `7ea7913`), and the pop-out search's two (agreed with wl-xcon on
+# 2026-11-07, its `docs/pending-wl-preproc-amendments.md` at `35a3d18`): the
+# rig's suggestion of a move, and a person's declining it, neither strobed nor
+# a person's act on a setting. One outside them is published as written and
+# counted nowhere.
+KINDS = (*SETTING_KINDS, "clear", "drum", "training", "suggested", "declined")
 # What every change row carries (`wl_xcon/record.py`'s change row, read at
 # engine-c3 `7ea7913`); the rest of a row is its kind's own fields, a clear's
 # and a switch's being its control row's.

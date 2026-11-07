@@ -234,3 +234,26 @@ def test_a_kind_it_cannot_read_or_does_not_know_is_published_as_read_and_counted
         "1 change row: `kind` is not text or null, so it is read as none",
         "2 change rows: `kind` is 'ease', which no build of wl-xcon this reader knows writes, so it is published "
         "as written and not counted as a person's act"]
+
+
+def test_the_pop_out_searchs_suggestions_and_declines_are_known_and_counted_nowhere():
+    """wl-xcon's pop-out search (agreed 2026-11-07; its
+    `docs/pending-wl-preproc-amendments.md` at `35a3d18`): the rig's
+    suggestion of a move and a person's declining it are change rows of two
+    kinds after `training`, unstrobed. Neither is a person's act on a
+    setting, so neither is counted, and neither is an unknown kind; each
+    keeps its own fields as its detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import acts, change_fields
+
+    rows = [{"name": "contrast", "kind": "set", "change": 1, "event_code": 4130, "sequence": 1},
+            {"name": "stage", "kind": "suggested", "change": 2, "event_code": None, "move": "up", "block": "Alone",
+             "bar": {"correct": 8, "of": 10}, "at_hardest": False},
+            {"name": "stage", "kind": "declined", "change": 3, "event_code": None, "suggestion": 2}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert [field.kind for field in fields] == ["set", "suggested", "declined"]
+    assert problems == [] and acts(fields) == 1
+    assert json.loads(fields[1].detail) == {"at_hardest": False, "bar": {"correct": 8, "of": 10}, "block": "Alone",
+                                            "move": "up"}
+    assert json.loads(fields[2].detail) == {"suggestion": 2}

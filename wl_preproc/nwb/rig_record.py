@@ -211,7 +211,9 @@ def _add_changes(module, changes: list[dict]) -> None:
             column("by_kind", "Who made it, by kind only: box or member ('' if not recorded).",
                    [change["by_kind"] or "" for change in changes]),
             column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
-                           "revert, clear, drum or training; a row written before wl-xcon's engine build C3 is a "
+                           "revert, clear, drum, training, suggested (the rig suggested a move: its detail says which, "
+                           "in which block, and the bar it met) or declined (a person held instead: its detail names "
+                           "the suggestion); a row written before wl-xcon's engine build C3 is a "
                            "set, one whose kind could not be read is '', and a kind outside these is as written, "
                            "each of the last two said in the notes.", [field.kind for field in fields]),
             column("change", "The act it belongs to, an id a revert's rows share (-1 if not recorded).",
@@ -233,8 +235,9 @@ def _add_changes(module, changes: list[dict]) -> None:
             column("time_source", "How its time was found: code, or rig_clock for the rig's clock fit ('' if "
                                   "untimed).", [change["time_source"] for change in changes]),
             column("detail", "The row's own fields beyond those every change row carries, as JSON text: a "
-                             "hand-back's to, a range's from and block, a revert's moment, and a clear's or a "
-                             "switch's control fields ('{}' if none).", [field.detail for field in fields]),
+                             "hand-back's to, a range's from and block, a revert's moment, a clear's or a "
+                             "switch's control fields, a suggestion's move, block, bar and at_hardest, and a "
+                             "decline's suggestion ('{}' if none).", [field.detail for field in fields]),
         ]))
 
 
