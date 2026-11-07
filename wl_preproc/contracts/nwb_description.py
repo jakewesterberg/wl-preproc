@@ -13,7 +13,9 @@ display calibration and each run's, and the warnings it accepted (design spec
 many of wl-xcon's training records the file holds (design spec
 `2026-10-18-training-records-and-backup-clock-design.md` section 3.2), and
 2026-10-30 the eyes whose true eccentricity and polar angle it holds (design
-spec `2026-10-30-true-angle-saccades-design.md` section 8).
+spec `2026-10-30-true-angle-saccades-design.md` section 8), and 2026-11-07
+each run's plan and end reason and each block's end (design spec
+`2026-11-07-rig-record-fields-design.md` section 8).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -147,6 +149,10 @@ class RunBlock(_Frozen):
     measured: Interval
     closed: bool | None
     trials: int
+    # How it ended, from its run's end row in wl-xcon's record: rule, time,
+    # fall_back, next, back, run_time or run; null where not recorded (design
+    # spec `2026-11-07-rig-record-fields-design.md` section 8).
+    ended: str | None = None
 
 
 class Run(_Frozen):
@@ -166,6 +172,12 @@ class Run(_Frozen):
     # wl-xcon's record; null where it names none (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` section 5).
     calibration: str | None = None
+    # The plan it played, by its name in its task, and why a completed run
+    # ended (plan_done, plan_time, stalled, cannot_draw), from wl-xcon's record;
+    # null where not recorded (design spec
+    # `2026-11-07-rig-record-fields-design.md` section 8).
+    plan: str | None = None
+    end_reason: str | None = None
 
 
 class RigCalibration(_Frozen):

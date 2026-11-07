@@ -143,3 +143,67 @@ def test_a_runs_instants_are_its_rows_on_the_rigs_clock(tmp_path):
             _start(1, "rf_map", at="soon"), json.dumps({"event": "end", "run": 1, "stopped_because": "stopped by jw"})]
     runs = read_rig_runs(_record(tmp_path, rows), "pico").runs
     assert [(run.start_at, run.end_at) for run in runs] == [(1773478800.5, 1.0), (None, None)]
+
+
+def test_since_c2b_a_run_names_its_plan_and_how_each_block_ended(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 5, in
+    the shape `wl_xcon/taskd.py`'s two `run_row` calls write: the start row's
+    plan, plan as declared, task hash, seed, draws, factorial and direction
+    settings; the end row's counts, end reason, block ends, shortfalls and
+    per-condition counts."""
+    from wl_preproc.events.rigruns import BlockEnd, ConditionCount, Shortfall, read_rig_runs
+
+    start = _start(0, "visual_search", plan="training", plan_form={"class": "Plan", "fields": {}},
+                   versions={"task": "sha256:ab12", "allocation": "a.yaml"}, seed=1234,
+                   draws={"hold": {"class": "Uniform", "fields": {"high": 0.8, "low": 0.2, "repeat": "fresh"}}},
+                   generated=[], directions=["target_dir"])
+    end = json.dumps({**json.loads(_end(0, "its plan's last block ended", "completed")), "trials": 40,
+                      "presentations": 43, "end_reason": "plan_done",
+                      "block_ends": [{"block": "easy", "ended": "rule", "by": None, "after_trial": 19,
+                                      "block_in_session": 1, "position": 0, "passed_at": None,
+                                      "varied": {"hold": [{"by": "draw"}]}, "planned": None, "counts": {}},
+                                     {"block": "hard", "ended": "next", "by": {"kind": "member", "name": "jw"},
+                                      "after_trial": 42, "block_in_session": None, "position": 1,
+                                      "passed_at": None}],
+                      "shortfalls": [{"block": "easy", "condition": "c1", "trials": 2, "because": "cap",
+                                      "possible_avoidance": True, "after_trial": 17, "by": None}],
+                      "conditions": [{"block": "easy", "condition": "c1", "trials": 20, "presentations": 23,
+                                      "right": 15, "wrong": 5, "right_first": 12, "owed": 0, "repeats": 3,
+                                      "moved_past": 2, "possible_avoidance": True, "drummed": 3, "failing": 0}]})
+    (run,) = read_rig_runs(_record(tmp_path, [start, end]), "pico").runs
+    assert (run.plan, run.plan_form, run.task_hash, run.seed, run.directions) == (
+        "training", {"class": "Plan", "fields": {}}, "sha256:ab12", 1234, ("target_dir",))
+    assert run.draws["hold"]["class"] == "Uniform" and run.generated == []
+    assert (run.rig_trials, run.presentations, run.end_reason, run.index) == (40, 43, "plan_done", 0)
+    assert run.block_ends == (
+        BlockEnd("easy", "rule", None, 19, 1, 0, None, varied={"hold": [{"by": "draw"}]}, planned=None, counts={}),
+        BlockEnd("hard", "next", "member", 42, None, 1, None))
+    assert run.shortfalls == (Shortfall("easy", "c1", 2, "cap", True, 17, None),)
+    assert run.conditions == (ConditionCount("easy", "c1", 20, 23, 15, 5, 12, 0, 3, 2, True, 3, 0),)
+    assert run.carries >= {"plan", "task_hash", "seed", "rig_trials", "block_ends", "stop_kind"}
+
+
+def test_rows_before_c2a_carry_none_of_them(tmp_path):
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "rf_map"), _end(0, "every block is finished", "completed")]
+    (run,) = read_rig_runs(_record(tmp_path, rows), "pico").runs
+    assert run.carries == {"stopped_because", "stop_kind"}
+    assert (run.plan, run.block_ends, run.shortfalls, run.rig_trials, run.task_hash) == (None, (), (), None, None)
+
+
+def test_a_run_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    end = json.dumps({**json.loads(_end(0, "done", "completed")), "presentations": "43",
+                      "block_ends": [{"block": "easy", "ended": 3, "after_trial": 1.5}]})
+    record = read_rig_runs(_record(tmp_path, [_start(0, "rf_map", seed="1234"), end]), "pico")
+    (run,) = record.runs
+    assert (run.seed, run.presentations, run.block_ends[0].ended, run.block_ends[0].after_trial) == (
+        None, None, None, None)
+    assert record.problems == (
+        "1 run row: `block_ends[].after_trial` is not a whole number or null, so it is read as none",
+        "1 run row: `block_ends[].ended` is not text or null, so it is read as none",
+        "1 run row: `presentations` is not a whole number or null, so it is read as none",
+        "1 run row: `seed` is not a whole number or null, so it is read as none",
+    )

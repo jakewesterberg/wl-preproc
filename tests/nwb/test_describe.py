@@ -65,7 +65,8 @@ def test_the_description_of_a_file_without_eye_data():
     # The measured blocks inside the run (design spec
     # `2026-10-01-session-listing-and-run-requests-design.md` section 4).
     assert run["blocks"] == [{"block_number": 1, "block_in_run": 1, "block_type": "Bt1",
-                              "measured": {"start_s": 0.6, "stop_s": 29.4}, "closed": None, "trials": 1}]
+                              "measured": {"start_s": 0.6, "stop_s": 29.4}, "closed": None, "trials": 1,
+                              "ended": None}]
     assert out["quality"] == {"timing_tier": "B", "reference_source": "manifest",
                               "eye_usable_fraction": {"left": None, "right": None}}
     assert out["notes"] == ["no rig trial record (xcon/trials.jsonl)"]
@@ -199,3 +200,21 @@ def test_a_description_recorded_before_the_polar_series_reads_back_without_it():
     out = describe(_gathered(eye=eye), status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
     del out["data_types"]["eye"]["gaze_polar"]
     assert as_described_now(out)["data_types"]["eye"]["gaze_polar"] == []
+
+
+def test_a_run_says_its_plan_and_end_reason_and_a_block_how_it_ended():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 8: within
+    version 3, each defaulted to null where the rig's record says none."""
+    from wl_preproc.nwb.describe import describe
+
+    def described(run, block):
+        from wl_preproc.nwb.gather import Gathered
+
+        data = Gathered(session=SESSION, systems=["ohdpi"], runs=[run], blocks=[block], trials=[{"trial_id": 1}],
+                        events=[{}, {}], timebase={}, eye=None, conditions=[CONDITION])
+        return describe(data, status="written", n_critical=0, checksums=[CHECKSUM], built_at=BUILT_AT)["runs"][0]
+
+    run = described({**RUN, "plan": "training", "end_reason": "plan_done"}, {**BLOCK, "ended": "rule"})
+    assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == ("training", "plan_done", "rule")
+    run = described(RUN, BLOCK)
+    assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == (None, None, None)

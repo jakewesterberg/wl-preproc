@@ -370,23 +370,22 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
             "outside a run"]
 
 
-def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
-                subject: str) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
+def _conditions(trials: list[dict], events: list[dict], runs: list[dict],
+                record) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
     """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
-    and 2.2). Returns the file's conditions, the notes on what did not
-    join, and the stimulus tables' rows (design spec
+    and 2.2). `record` is the session's `events/rigtrials.py::RigRecord`, or
+    None. Returns the file's conditions, the notes on what did not join, and
+    the stimulus tables' rows (design spec
     `2026-11-07-rig-record-fields-design.md` section 4)."""
     import collections
 
-    from wl_preproc.events.rigtrials import read_rig_trials
     from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
     from wl_preproc.nwb.stimuli import stimulus_rows
     from wl_preproc.nwb.trial_record import places, record_columns
 
     trials.sort(key=lambda trial: trial["start_s"])
-    record = read_rig_trials(session_dir, subject)
     matched, notes = join(trials, record)
     codes = stream_codes(trials, events)
     names, settings = trial_columns(trials, matched, codes)
@@ -727,7 +726,16 @@ def gather(activation_key: dict) -> Gathered:
     blocks = _blocks(run_rows, session_key)
     for block in blocks:
         block["n_trials"] = sum(1 for trial in trials if trial["block_id"] == block["block_number"])
-    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, session_dir, key["subject"])
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.nwb.run_record import run_record
+    from wl_preproc.nwb.trial_record import places
+
+    record = read_rig_trials(session_dir, key["subject"])
+    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record)
+    run_tables, run_notes = run_record(run_out, blocks, read_rig_runs(session_dir, key["subject"]), places(record))
+    rig_tables.update(run_tables)
+    condition_notes += run_notes
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),

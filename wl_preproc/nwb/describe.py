@@ -132,8 +132,11 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
                 "measured": {"start_s": block["start_s"], "stop_s": block["stop_s"]},
                 "closed": block["closed"],
                 "trials": block["n_trials"],
+                "ended": block.get("ended"),
             } for block in data.blocks if block["run_number"] == run["run_number"]],
             "calibration": run.get("calibration"),
+            "plan": run.get("plan"),
+            "end_reason": run.get("end_reason"),
         } for run in data.runs],
         "quality": {
             "timing_tier": session["timing_tier"],

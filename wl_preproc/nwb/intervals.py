@@ -49,6 +49,7 @@ def add_runs(nwb: NWBFile, runs: list[dict], systems: list[str]) -> None:
             column("closed", "Whether a RUN_END arrived.", [bool(r["closed"]) for r in rows]),
             column("calibration", "The display calibration the run ran against, from its start row in the rig's "
                                   "record ('' if it names none).", [r.get("calibration") or "" for r in rows]),
+            *_record_columns(rows, _run_columns()),
             *_coverage_columns(rows, systems),
         ],
     ))
@@ -77,6 +78,7 @@ def add_blocks(nwb: NWBFile, blocks: list[dict]) -> None:
             column("closed", "1 when a BLOCK_END arrived, 0 when not, -1 when never recorded.",
                    [-1 if r["closed"] is None else int(r["closed"]) for r in rows]),
             column("n_trials", "The block's trials in this file.", [r["n_trials"] for r in rows]),
+            *_record_columns(rows, _block_columns()),
         ],
     ))
 
@@ -92,15 +94,31 @@ def _setting_columns(rows: list[dict]) -> list:
             for key in keys]
 
 
-def _record_columns(rows: list[dict]) -> list:
-    """One column per field of the rig's line that some trial's line carries
-    (design spec `2026-11-07-rig-record-fields-design.md` section 3), in
-    `nwb/trial_record.py`'s order."""
-    from wl_preproc.nwb.trial_record import COLUMNS, PLANNED_COLUMNS
-
+def _record_columns(rows: list[dict], descriptions: dict[str, str]) -> list:
+    """One column per field of the rig's record some row carries (design spec
+    `2026-11-07-rig-record-fields-design.md` sections 3 and 5), in
+    `descriptions`' order."""
     present = set().union(*(row.get("record", {}).keys() for row in rows)) if rows else set()
     return [column(name, description, [row["record"][name] for row in rows])
-            for name, description in {**COLUMNS, **PLANNED_COLUMNS}.items() if name in present]
+            for name, description in descriptions.items() if name in present]
+
+
+def _trial_columns() -> dict[str, str]:
+    from wl_preproc.nwb.trial_record import COLUMNS, PLANNED_COLUMNS
+
+    return {**COLUMNS, **PLANNED_COLUMNS}
+
+
+def _run_columns() -> dict[str, str]:
+    from wl_preproc.nwb.run_record import RUN_COLUMNS
+
+    return dict(RUN_COLUMNS.values())
+
+
+def _block_columns() -> dict[str, str]:
+    from wl_preproc.nwb.run_record import BLOCK_COLUMNS
+
+    return BLOCK_COLUMNS
 
 
 def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
@@ -124,7 +142,7 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
                                  "(xcon/trials.jsonl), else the CONDITION number sent inside it, else ''."),
                    [r.get("condition", "") for r in rows]),
             *_setting_columns(rows),
-            *_record_columns(rows),
+            *_record_columns(rows, _trial_columns()),
             *_coverage_columns(rows, systems),
         ],
     )

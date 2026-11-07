@@ -17,11 +17,12 @@ change the rig applied, in `parameter_changes`, and each console control, in
 detail as JSON text. The file gives only the kind of actor, never a name,
 account, issuer or token (its decision 6).
 
-**Where each trial's stimuli were** (design spec
-`2026-11-07-rig-record-fields-design.md` section 4): `stimuli` and
-`stimulus_objects`, from the trial lines (`nwb/stimuli.py`), by
-`add_rig_tables`, which makes the module if the session has no record of its
-own.
+**Where each trial's stimuli were, and what each run owed** (design spec
+`2026-11-07-rig-record-fields-design.md` sections 4 and 5): `stimuli` and
+`stimulus_objects`, from the trial lines (`nwb/stimuli.py`), and
+`unopened_blocks`, `shortfalls` and `condition_counts`, from the run rows
+(`nwb/run_record.py`), by `add_rig_tables`, which makes the module if the
+session has no record of its own.
 
 Written only for a session wl-xcon ran (`gather.py::_rig_record`)."""
 
@@ -38,7 +39,8 @@ from wl_preproc.nwb.columns import column
 
 DESCRIPTION = ("What wl-xcon's record says the session was: the kind it was run as, the display calibration it "
                "opened with, the warnings it accepted, its training records, the changes it applied and the controls "
-               "it was sent, and where each trial's stimuli were. Carried as the rig wrote them.")
+               "it was sent, where each trial's stimuli were, and what each run owed. Carried as the rig wrote "
+               "them.")
 
 _POSITION = (
     ("x_deg", "Its cyclopean per-axis position across, degrees, atan(X/D) (NaN if none). Through the stereoscope "
@@ -76,6 +78,44 @@ TABLES: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
          ("eye", "'' for an array drawn once, left or right for a per-eye array's ring about that eye's position."),
          ("object", "Its index among the array's objects, from 0."),
          *_POSITION)),
+    "unopened_blocks": (
+        "Each block a run's end row says ended without running a trial, so the stream never opened it: a plan's "
+        "block can be over before it draws one.",
+        (("run_number", "The run."),
+         ("block", "Its block type."),
+         ("ended", "How it ended: rule, time, fall_back, next, back, run_time or run."),
+         ("ended_by", "Who moved the run on or back, by kind only ('' for nobody)."),
+         ("after_trial", "The trial_id of the run's last trial before it ended (-1 if none)."),
+         ("position", "Its place in the run's sequence of blocks, from 0 (-1 if not recorded)."))),
+    "shortfalls": (
+        "What each condition of a run left unrun, and why, from the run's end row.",
+        (("run_number", "The run."),
+         ("block", "The block type."),
+         ("condition", "The condition."),
+         ("trials", "The trials it left unrun (-1 if not recorded)."),
+         ("because", "cap (its repeat limit), rig, cleared (by a person), time (its block's), run_time (the run's) "
+                     "or designed (a designed block's broken trial not played again)."),
+         ("possible_avoidance", "1 when the animal's own failures reached the cap, 0 when not, -1 if not "
+                                "recorded."),
+         ("after_trial", "The trial_id after which it was left (-1 if none)."),
+         ("by_kind", "Who cleared it, by kind only ('' for nobody)."))),
+    "condition_counts": (
+        "Each condition's counts in each block of a run, from the run's end row. A run that ended in a fault can "
+        "leave these one try ahead of the trial lines.",
+        (("run_number", "The run."),
+         ("block", "The block type."),
+         ("condition", "The condition."),
+         ("trials", "Its trials, a trial and its drummed repeats one."),
+         ("presentations", "Its tries recorded."),
+         ("right", "Its right answers."),
+         ("wrong", "Its wrong answers."),
+         ("right_first", "Its trials right at the first try."),
+         ("owed", "What it still owed."),
+         ("repeats", "Its repeats."),
+         ("moved_past", "Its trials moved past."),
+         ("possible_avoidance", "1 when flagged as possible avoidance, 0 when not, -1 if not recorded."),
+         ("drummed", "Its drummed tries."),
+         ("failing", "Its failed tries in a row while being drummed as the run ended."))),
 }
 
 

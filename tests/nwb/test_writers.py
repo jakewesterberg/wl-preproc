@@ -143,6 +143,28 @@ def test_the_stimulus_tables_join_the_rig_record_module_or_make_it(tmp_path):
         assert "rig_record" not in nwb.processing
 
 
+def test_runs_and_blocks_carry_what_the_rigs_record_says_of_them(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 5."""
+    from wl_preproc.nwb.intervals import add_blocks, add_runs
+
+    runs = [{**RUNS[0], "record": {"plan": "training", "end_reason": "plan_done", "seed": "7", "rig_trials": 4}},
+            {**RUNS[1], "record": {"plan": "", "end_reason": "", "seed": "", "rig_trials": -1}}]
+    blocks = [{**BLOCKS[0], "record": {"ended": "rule", "after_trial": 1}},
+              {**BLOCKS[1], "record": {"ended": "", "after_trial": -1}}]
+
+    def build(nwb):
+        add_runs(nwb, runs, ["ohdpi"])
+        add_blocks(nwb, blocks)
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        frame = nwb.intervals["runs"].to_dataframe()
+        assert (frame["plan"].tolist(), frame["seed"].tolist(), frame["rig_trials"].tolist()) == (
+            ["training", ""], ["7", ""], [4, -1])
+        blocks_frame = nwb.intervals["blocks"].to_dataframe()
+        assert (blocks_frame["ended"].tolist(), blocks_frame["after_trial"].tolist()) == (["rule", ""], [1, -1])
+
+
 def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
     from wl_preproc.nwb.intervals import add_conditions
 

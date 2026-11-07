@@ -767,8 +767,32 @@
           "title": "Coverage",
           "type": "object"
         },
+        "end_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Reason"
+        },
         "measured": {
           "$ref": "#/$defs/Interval"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan"
         },
         "run_number": {
           "title": "Run Number",
@@ -839,6 +863,18 @@
             }
           ],
           "title": "Closed"
+        },
+        "ended": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended"
         },
         "measured": {
           "$ref": "#/$defs/Interval"
