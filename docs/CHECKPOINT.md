@@ -489,20 +489,22 @@ requester chose to merge the same day; true when written.*
 > across a short loss of data, counted and flagged, an invalid sample still ending it; the mask's
 > region is each session's recorded field plus 2 degrees; v3 of the saccade fixtures is made.
 > Its final review's one Critical and five Important are fixed (handoff §6); wl-xcon was sent
-> v3's digest on 2026-11-07. Next, the rest of wl-xcon's asks (engine builds C2a, C2b and C3;
-> XC-399; and a setting's value that is an appearance), designed as one piece
-> (`specs/2026-11-07-rig-record-fields-design.md` on `spec/rig-record-fields`, approved
-> 2026-11-07; its plan being proved); then, in the requester's order of 2026-10-31, the
-> pipeline's scaling to long sessions, part 3b, the NI as the clock, part 2, the bridges, and the
-> older minors in one branch.
+> v3's digest on 2026-11-07. **The rest of wl-xcon's asks (engine builds C2a, C2b and C3;
+> XC-399; and a setting's value that is an appearance) are built and reviewed** as one piece on
+> `feat/rig-record-fields`, not merged (`specs/2026-11-07-rig-record-fields-design.md`,
+> approved 2026-11-07; `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three
+> fixes): the rig's new fields are read when the NWB file is built, with no database change.
+> Next: its merge; then, in the
+> requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
+> the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until XC-398 was built, this said its plan was being proved; until its review, that the review
 > was next; until its merge, that the merge was next; until the header follow-up was built, that
 > its plan was being proved; until its review, that the review was next; until its merge, that the
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
-> until its review, that the review was next; until its merge, that the merge was next; each
-> true when written.*
+> until its review, that the review was next; until its merge, that the merge was next; until
+> wl-xcon's other asks were built, that their plan was being proved; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

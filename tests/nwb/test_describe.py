@@ -61,11 +61,13 @@ def test_the_description_of_a_file_without_eye_data():
     assert run["task"] == {"code": "2", "name": "rf_map"}
     assert run["measured"] == {"start_s": 0.5, "stop_s": 29.5}
     assert run["coverage"] == {"ohdpi": {"coverage": "full", "covered_s": 29.0}}
-    assert run["conditions"] == [CONDITION]
+    assert run["conditions"] == [{**CONDITION, "trials": {**CONDITION["trials"], "eased": 0}, "drawn": None,
+                                  "live": None}]
     # The measured blocks inside the run (design spec
     # `2026-10-01-session-listing-and-run-requests-design.md` section 4).
     assert run["blocks"] == [{"block_number": 1, "block_in_run": 1, "block_type": "Bt1",
-                              "measured": {"start_s": 0.6, "stop_s": 29.4}, "closed": None, "trials": 1}]
+                              "measured": {"start_s": 0.6, "stop_s": 29.4}, "closed": None, "trials": 1,
+                              "ended": None}]
     assert out["quality"] == {"timing_tier": "B", "reference_source": "manifest",
                               "eye_usable_fraction": {"left": None, "right": None}}
     assert out["notes"] == ["no rig trial record (xcon/trials.jsonl)"]
@@ -171,10 +173,30 @@ def test_the_description_counts_the_training_records_the_file_holds():
     from tests.nwb.test_writers import RIG_RECORD
     from wl_preproc.nwb.describe import describe
 
-    record = {**RIG_RECORD, "parameter_changes": [{"by_kind": "member"}] * 2, "controls": [{"by_kind": "box"}] * 3}
+    from tests.nwb.test_writers import a_set
+
+    record = {**RIG_RECORD, "parameter_changes": [{"by_kind": "member", "fields": a_set()}] * 2,
+              "controls": [{"by_kind": "box"}] * 3}
     out = describe(_gathered(rig_record=record), status="written", n_critical=0, checksums=[CHECKSUM],
                    built_at=BUILT_AT)
     assert out["training_records"] == {"parameter_changes": 2, "controls": 3}
+
+
+def test_the_live_changes_counted_are_a_persons_acts_on_a_setting():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7, the
+    requester's decision of 2026-11-07: a revert of two settings is one act;
+    a clear and a switch are not changes of a setting; a row written before
+    wl-xcon's engine build C3, with no act id, is an act of its own."""
+    from tests.nwb.test_writers import RIG_RECORD, a_set
+    from wl_preproc.nwb.describe import describe
+
+    fields = [a_set(), a_set(change=3), a_set(kind="hand_back", change=4), a_set(kind="range", change=5),
+              a_set(kind="revert", change=6), a_set(kind="revert", change=6), a_set(kind="clear", change=7),
+              a_set(kind="drum", change=8), a_set(kind="training", change=9)]
+    record = {**RIG_RECORD, "parameter_changes": [{"fields": these} for these in fields], "controls": []}
+    out = describe(_gathered(rig_record=record), status="written", n_critical=0, checksums=[CHECKSUM],
+                   built_at=BUILT_AT)
+    assert out["training_records"] == {"parameter_changes": 5, "controls": 0}
 
 
 def test_a_file_of_a_session_wl_xcon_did_not_run_describes_no_kind():
@@ -199,3 +221,37 @@ def test_a_description_recorded_before_the_polar_series_reads_back_without_it():
     out = describe(_gathered(eye=eye), status="written", n_critical=0, checksums=[], built_at=BUILT_AT)
     del out["data_types"]["eye"]["gaze_polar"]
     assert as_described_now(out)["data_types"]["eye"]["gaze_polar"] == []
+
+
+def test_a_run_says_its_plan_and_end_reason_and_a_block_how_it_ended():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 8: within
+    version 3, each defaulted to null where the rig's record says none."""
+    from wl_preproc.nwb.describe import describe
+
+    def described(run, block):
+        from wl_preproc.nwb.gather import Gathered
+
+        data = Gathered(session=SESSION, systems=["ohdpi"], runs=[run], blocks=[block], trials=[{"trial_id": 1}],
+                        events=[{}, {}], timebase={}, eye=None, conditions=[CONDITION])
+        return describe(data, status="written", n_critical=0, checksums=[CHECKSUM], built_at=BUILT_AT)["runs"][0]
+
+    run = described({**RUN, "plan": "training", "end_reason": "plan_done"}, {**BLOCK, "ended": "rule"})
+    assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == ("training", "plan_done", "rule")
+    run = described(RUN, BLOCK)
+    assert (run["plan"], run["end_reason"], run["blocks"][0]["ended"]) == (None, None, None)
+
+
+def test_a_condition_says_its_drawn_and_person_held_values_and_its_eased_trials():
+    """Design spec `2026-11-07-rig-record-fields-design.md` sections 6 and 8."""
+    from wl_preproc.nwb.describe import describe
+    from wl_preproc.nwb.gather import Gathered
+
+    condition = {**CONDITION, "drawn": {"hold": {"sources": ["task"], "min": 0.2, "max": 0.8}},
+                 "live": {"contrast": {"trials": 1, "min": 0.25, "max": 0.25}},
+                 "trials": {**CONDITION["trials"], "eased": 1}}
+    data = Gathered(session=SESSION, systems=["ohdpi"], runs=[{**RUN, "conditions": [condition]}], blocks=[BLOCK],
+                    trials=[{"trial_id": 1}], events=[{}, {}], timebase={}, eye=None, conditions=[condition])
+    (described,) = describe(data, status="written", n_critical=0, checksums=[CHECKSUM],
+                            built_at=BUILT_AT)["runs"][0]["conditions"]
+    assert (described["drawn"], described["live"], described["trials"]["eased"]) == (
+        condition["drawn"], condition["live"], 1)

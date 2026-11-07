@@ -81,3 +81,126 @@ def test_a_line_naming_a_run_without_its_number_is_left_out(tmp_path):
     assert [trial.number for trial in record.trials] == [2]
     assert [problem.split(":")[0] for problem in record.problems] == ["line 1", "line 3"]
     assert "trial_number" in record.problems[0]
+
+
+def _line_c3(trial_number, index, **fields):
+    """A line as wl-xcon writes it since its engine builds C2a, C2b and C3
+    (`wl_xcon/record.py::Recorder.trial`), with the fluid it commanded."""
+    return json.dumps({**json.loads(_line155(trial_number, 0, index)), "counting": "counted", "shown": True,
+                       "repeat_of": None, "at_once": False, "previous": "contrast-50", "drummed": False,
+                       "drumming": None, "aids": [], "structure": "default", "overridden": [], "drawn": {},
+                       "live": [], "eased": [], "planned": None, "fluid_ml": 0.12, **fields})
+
+
+def test_a_line_since_c2a_says_what_the_trial_paid_and_where_it_sits(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 3: C2a's
+    count and sequence, C2b's structure and overrides, C3's draws, a person's
+    holds, eased settings and planned place, and the fluid commanded. What it
+    paid is not its answer: a wrong answer under drumming is `owed`."""
+    from wl_preproc.events.rigtrials import Planned, read_rig_trials
+
+    rows = [_line_c3(1, 0),
+            _line_c3(2, 1, counting="owed", repeat_of=0, at_once=True, drummed=True, drumming="block",
+                     aids=["drumming", "clear"], overridden=["contrast"], live=["contrast", "hold"],
+                     eased=["contrast"], drawn={"hold": "task", "jitter": 7},
+                     planned={"cycle": 0, "position": 1, "lead_in": False}),
+            _line_c3(3, 2, planned={"run": 2, "switch": True, "value": {"class": "Disc", "fields": {}}})]
+    first, second, third = read_rig_trials(_record(tmp_path, rows), "pico").trials
+    assert (first.run, first.counting, first.shown, first.repeat_of, first.at_once, first.previous) == (
+        0, "counted", True, None, False, "contrast-50")
+    assert (first.structure, first.fluid_ml, first.drawn, first.planned) == ("default", 0.12, {}, None)
+    assert (second.counting, second.repeat_of, second.at_once, second.drummed, second.drumming) == (
+        "owed", 0, True, True, "block")
+    assert (second.aids, second.overridden, second.live, second.eased) == (
+        ("drumming", "clear"), ("contrast",), ("contrast", "hold"), ("contrast",))
+    assert second.drawn == {"hold": "task", "jitter": 7}
+    assert second.planned == Planned(cycle=0, position=1, lead_in=False)
+    assert third.planned == Planned(run=2, switch=True, value={"class": "Disc", "fields": {}})
+    assert "planned" in third.carries and "counting" in third.carries
+
+
+def test_a_line_before_c2a_carries_only_its_fluid(tmp_path):
+    """A line as wl-xcon wrote it before its engine build C2a (`record.py`'s
+    `trial`, read at its `main` of 2026-10-16) has carried the fluid it
+    commanded since 2026-10-01 (`7e56b51`): that is read; none of the
+    builds' fields is (the final review's I2)."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    line = {**json.loads(_line155(1, 0, 0)), "fluid_ml": 0.0, "last_reward_at": None}
+    (trial,) = read_rig_trials(_record(tmp_path, [json.dumps(line)]), "pico").trials
+    assert trial.carries == frozenset({"fluid_ml"})
+    assert (trial.counting, trial.shown, trial.aids, trial.drawn, trial.planned, trial.fluid_ml) == (
+        None, None, (), None, None, 0.0)
+
+
+def test_a_field_it_cannot_read_is_none_said_once_and_its_line_kept(tmp_path):
+    """Read, never repaired (section 2): a value of the wrong type is read as
+    none and reported once per field, with how many lines; the line stays."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    rows = [_line_c3(1, 0, shown="yes"), _line_c3(2, 1, shown=1, aids="clear"),
+            _line_c3(3, 2, planned={"cycle": "0"}, drawn={"hold": None}, fluid_ml=float("nan"))]
+    record = read_rig_trials(_record(tmp_path, rows), "pico")
+    assert [trial.number for trial in record.trials] == [1, 2, 3]
+    assert [trial.shown for trial in record.trials] == [None, None, True]
+    assert (record.trials[1].aids, record.trials[2].planned, record.trials[2].drawn,
+            record.trials[2].fluid_ml) == ((), None, None, None)
+    assert record.problems == (
+        "1 trial line: `aids` is not a list of text, so it is read as none",
+        "1 trial line: `drawn` is not an object naming each drawn setting's source, so it is read as none",
+        "1 trial line: `fluid_ml` is not a finite number or null, so it is read as none",
+        "1 trial line: `planned` is not a planned place, so it is read as none",
+        "2 trial lines: `shown` is not true, false or null, so it is read as none",
+    )
+
+
+_FIX = {"name": "fix", "kind": "show", "frame": 1, "off": 61, "changed": None, "drawn": True, "unresolved": None,
+        "eccentricity": 0.0, "direction": None, "x": 0.0, "y": 0.0}
+_TARGET = {"name": "target", "kind": "update", "frame": 97, "off": None, "changed": ["opacity"], "drawn": True,
+           "unresolved": None, "eccentricity": 27.23631347517073, "direction": 45.0, "x": 20.0, "y": 20.0}
+
+
+def test_each_stimulus_a_trial_showed_is_read_with_where_and_when(tmp_path):
+    """wl-xcon's XC-399 (design spec `2026-11-07-rig-record-fields-design.md`
+    section 4): a `Show` or `Update` per entry, its frames, its cyclopean
+    position and true angles; an array's objects and target; a per-eye
+    stimulus's two positions. The polar angle is read from `direction` today
+    and from `polar` once wl-xcon renames it."""
+    from wl_preproc.events.rigtrials import Place, read_rig_trials
+
+    search = {**_FIX, "name": "search", "frame": 85, "off": None, "target": 1,
+              "objects": [{"eccentricity": 8.0, "direction": 0.0, "x": 8.0, "y": 0.0},
+                          {"eccentricity": 8.0, "polar": 180.0, "x": -8.0, "y": 0.0}]}
+    eyes = {**_FIX, "name": "dot", "eccentricity": None, "direction": None, "x": None, "y": None,
+            "left": {"eccentricity": 1.0, "direction": 0.0, "x": 1.0, "y": 0.0,
+                     "objects": [{"eccentricity": 2.0, "direction": 0.0, "x": 2.0, "y": 0.0}]},
+            "right": {"eccentricity": 1.0, "direction": 180.0, "x": -1.0, "y": 0.0}}
+    rows = [_line155(1, 0, 0, stimuli=None)]
+    rows[0] = json.dumps({**json.loads(rows[0]), "stimuli": [_FIX, _TARGET, search, {**_TARGET, "polar": 46.0}, eyes]})
+    (trial,) = read_rig_trials(_record(tmp_path, rows), "pico").trials
+    fix, target, array, renamed, dot = trial.stimuli
+    assert (fix.name, fix.kind, fix.frame, fix.off, fix.changed, fix.drawn) == ("fix", "show", 1, 61, (), True)
+    assert fix.at == Place(x=0.0, y=0.0, eccentricity=0.0, polar=None)
+    assert (target.kind, target.off, target.changed, target.at.polar) == ("update", None, ("opacity",), 45.0)
+    assert array.target == 1 and array.objects == (Place(8.0, 0.0, 8.0, 0.0), Place(-8.0, 0.0, 8.0, 180.0))
+    assert renamed.at.polar == 46.0
+    assert dot.at == Place() and dot.left["x"] == 1.0 and dot.right["direction"] == 180.0
+    assert dot.eye_objects == (("left", (Place(2.0, 0.0, 2.0, 0.0),)),)
+    assert "stimuli" in trial.carries
+
+
+def test_a_stimulus_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    row = json.loads(_line155(1, 0, 0))
+    rows = [json.dumps({**row, "stimuli": [{**_FIX, "frame": "1", "x": "0"}]}),
+            json.dumps({**row, "trial_number": 2, "index": 1, "stimuli": "none"})]
+    record = read_rig_trials(_record(tmp_path, rows), "pico")
+    first, second = record.trials
+    assert (first.stimuli[0].frame, first.stimuli[0].at.x, first.stimuli[0].at.y) == (None, None, 0.0)
+    assert second.stimuli is None
+    assert record.problems == (
+        "1 trial line: `stimuli` is not a list of objects or null, so it is read as none",
+        "1 trial line: `stimuli[].frame` is not a whole number or null, so it is read as none",
+        "1 trial line: `stimuli[].x` is not a finite number or null, so it is read as none",
+    )

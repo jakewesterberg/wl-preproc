@@ -49,6 +49,7 @@ def add_runs(nwb: NWBFile, runs: list[dict], systems: list[str]) -> None:
             column("closed", "Whether a RUN_END arrived.", [bool(r["closed"]) for r in rows]),
             column("calibration", "The display calibration the run ran against, from its start row in the rig's "
                                   "record ('' if it names none).", [r.get("calibration") or "" for r in rows]),
+            *_record_columns(rows, _run_columns()),
             *_coverage_columns(rows, systems),
         ],
     ))
@@ -77,6 +78,7 @@ def add_blocks(nwb: NWBFile, blocks: list[dict]) -> None:
             column("closed", "1 when a BLOCK_END arrived, 0 when not, -1 when never recorded.",
                    [-1 if r["closed"] is None else int(r["closed"]) for r in rows]),
             column("n_trials", "The block's trials in this file.", [r["n_trials"] for r in rows]),
+            *_record_columns(rows, _block_columns()),
         ],
     ))
 
@@ -92,9 +94,37 @@ def _setting_columns(rows: list[dict]) -> list:
             for key in keys]
 
 
+def _record_columns(rows: list[dict], descriptions: dict[str, str]) -> list:
+    """One column per field of the rig's record some row carries (design spec
+    `2026-11-07-rig-record-fields-design.md` sections 3 and 5), in
+    `descriptions`' order."""
+    present = set().union(*(row.get("record", {}).keys() for row in rows)) if rows else set()
+    return [column(name, description, [row["record"][name] for row in rows])
+            for name, description in descriptions.items() if name in present]
+
+
+def _trial_columns() -> dict[str, str]:
+    from wl_preproc.nwb.trial_record import COLUMNS, PLANNED_COLUMNS
+
+    return {**COLUMNS, **PLANNED_COLUMNS}
+
+
+def _run_columns() -> dict[str, str]:
+    from wl_preproc.nwb.run_record import RUN_COLUMNS
+
+    return dict(RUN_COLUMNS.values())
+
+
+def _block_columns() -> dict[str, str]:
+    from wl_preproc.nwb.run_record import BLOCK_COLUMNS
+
+    return BLOCK_COLUMNS
+
+
 def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
     """`/intervals/trials`: trial id, outcome, block, condition, the
-    settings that varied, and per-system coverage."""
+    settings that varied, what the rig's record says of each trial beyond
+    them, and per-system coverage."""
     rows = sorted(trials, key=lambda row: row["start_s"])
     nwb.trials = TimeIntervals(
         name="trials",
@@ -112,9 +142,29 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
                                  "(xcon/trials.jsonl), else the CONDITION number sent inside it, else ''."),
                    [r.get("condition", "") for r in rows]),
             *_setting_columns(rows),
+            *_record_columns(rows, _trial_columns()),
             *_coverage_columns(rows, systems),
         ],
     )
+
+
+def _apart_columns(rows: list[dict]) -> list:
+    """A condition's drawn and person-held values and its eased trials, each
+    where some condition has them (design spec
+    `2026-11-07-rig-record-fields-design.md` section 6)."""
+    out = []
+    for name, description in (
+            ("drawn", "Each setting drawn at random on its trials: where its ranges came from and a summary of the "
+                      "values drawn, as JSON ('' where none, or not recorded)."),
+            ("live", "Each setting a person held on its trials: on how many, and a summary of the values, as JSON "
+                     "('' where none, or not recorded).")):
+        if any(name in row for row in rows):
+            out.append(column(name, description, ["" if row.get(name) is None else json.dumps(row[name], sort_keys=True)
+                                                  for row in rows]))
+    if any("eased" in row["trials"] for row in rows):
+        out.append(column("n_eased", "How many of them a live change kept out of moving up (0 where not recorded).",
+                          [row["trials"].get("eased", 0) for row in rows]))
+    return out
 
 
 def add_conditions(nwb: NWBFile, conditions: list[dict]) -> None:
@@ -146,6 +196,7 @@ def add_conditions(nwb: NWBFile, conditions: list[dict]) -> None:
             column("varying", "Each setting that varied within it: a range for numbers, else its distinct values, as JSON.",
                    ["" if row["varying"] is None else json.dumps(row["varying"], sort_keys=True) for row in rows]),
             column("n_trials", "How many of the file's trials ran under it.", [row["trials"]["total"] for row in rows]),
+            *_apart_columns(rows),
         ],
     ))
 

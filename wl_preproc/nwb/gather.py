@@ -62,6 +62,10 @@ class Gathered:
     # `2026-10-14-session-kind-and-warnings-design.md` section 5); None for a
     # session wl-xcon did not run. See `_rig_record`.
     rig_record: dict | None = None
+    # The rows of the `rig_record` module's tables read from the rig's own
+    # files when the file is built, by table (`nwb/rig_record.py::TABLES`;
+    # design spec `2026-11-07-rig-record-fields-design.md` section 2).
+    rig_tables: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
 
 
 def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
@@ -92,7 +96,11 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
     training records are chosen by the same rule (design spec
     `2026-10-18-training-records-and-backup-clock-design.md`, amendment 10).
     Who acted is read by kind only: the file names no one (decision 3 of the
-    first; decision 6 of the second)."""
+    first; decision 6 of the second). Each change's kind, act and the rest of
+    what wl-xcon's engine build C3 adds are read from its stored line (design
+    spec `2026-11-07-rig-record-fields-design.md` section 7), and what could
+    not be read is in `change_notes`."""
+    from wl_preproc.events.rigrecords import change_fields
     from wl_preproc.schema import core
 
     def the_files(row: dict) -> bool:
@@ -102,6 +110,9 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
     if not rows:
         return None
     (row,) = rows
+    changes = [change for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line")
+               if the_files(change)]
+    fields, change_notes = change_fields([change["row"] for change in changes])
     recorded = any(row[column] is not None for column in ("calibration_id", "calibration_standard",
                                                           "calibration_measured_on"))
     return {
@@ -116,9 +127,13 @@ def _rig_record(session_key: dict, run_numbers: set[int]) -> dict | None:
                      for warning in (core.AcceptedWarning & session_key).to_dicts(order_by="warning_number")
                      if the_files(warning)],
         "parameter_changes": [
-            {name: change[name] for name in ("session_time", "run_number", "name", "was", "now", "sequence",
-                                             "by_kind")}
-            for change in (core.ParameterChange & session_key).to_dicts(order_by="change_line") if the_files(change)],
+            {**{name: change[name] for name in ("session_time", "run_number", "name", "was", "now", "sequence",
+                                                "by_kind")},
+             "fields": these,
+             "time_source": "" if change["session_time"] is None else (
+                 "rig_clock" if these.strobed_nothing else "code")}
+            for change, these in zip(changes, fields, strict=True)],
+        "change_notes": change_notes,
         "controls": [
             {name: control[name] for name in ("session_time", "time_source", "at", "kind", "run_number",
                                               "trial_index", "detail", "by_kind")}
@@ -366,31 +381,41 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
             "outside a run"]
 
 
-def _conditions(trials: list[dict], events: list[dict], runs: list[dict], session_dir: Path,
-                subject: str) -> tuple[list[dict], list[str]]:
+def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record,
+                directions: frozenset[str] = frozenset()) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
     """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
-    and 2.2). Returns the file's conditions and the notes on what did not
-    join."""
+    and 2.2). `record` is the session's `events/rigtrials.py::RigRecord`, or
+    None; `directions` the settings its runs name as directions. Returns the
+    file's conditions, the notes on what did not join, and
+    the stimulus tables' rows (design spec
+    `2026-11-07-rig-record-fields-design.md` section 4)."""
     import collections
 
-    from wl_preproc.events.rigtrials import read_rig_trials
-    from wl_preproc.nwb.conditions import block_conditions, join, stream_codes, trial_columns
+    from wl_preproc.nwb.conditions import block_conditions, join, long_names, stream_codes, trial_columns
+    from wl_preproc.schema.main_sequence import CONDITION_WIDTH
+    from wl_preproc.nwb.stimuli import stimulus_rows
+    from wl_preproc.nwb.trial_record import places, record_columns
 
     trials.sort(key=lambda trial: trial["start_s"])
-    matched, notes = join(trials, read_rig_trials(session_dir, subject))
+    matched, notes = join(trials, record)
     codes = stream_codes(trials, events)
     names, settings = trial_columns(trials, matched, codes)
+    columns, record_notes = record_columns(trials, matched, places(record))
+    stimuli, stimulus_objects, stimulus_notes = stimulus_rows(trials, matched)
+    notes += record_notes + stimulus_notes + long_names(matched, CONDITION_WIDTH)
     for position, trial in enumerate(trials):
         trial["condition"] = names[position]
         trial["settings"] = {key: values[position] for key, values in settings.items()}
+        trial["record"] = {key: values[position] for key, values in columns.items()}
     for run in runs:
         inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
         run["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
-        run["conditions"] = block_conditions(inside, matched, codes)
-    return block_conditions(trials, matched, codes), notes
+        run["conditions"] = block_conditions(inside, matched, codes, directions)
+    return (block_conditions(trials, matched, codes, directions), notes,
+            {"stimuli": stimuli, "stimulus_objects": stimulus_objects})
 
 
 def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
@@ -714,7 +739,21 @@ def gather(activation_key: dict) -> Gathered:
     blocks = _blocks(run_rows, session_key)
     for block in blocks:
         block["n_trials"] = sum(1 for trial in trials if trial["block_id"] == block["block_number"])
-    conditions, condition_notes = _conditions(trials, events, run_out, session_dir, key["subject"])
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.events.rigtrials import read_rig_trials
+    from wl_preproc.nwb.run_record import run_record
+    from wl_preproc.nwb.trial_record import places
+
+    record = read_rig_trials(session_dir, key["subject"])
+    rig_runs = read_rig_runs(session_dir, key["subject"])
+    directions = frozenset() if rig_runs is None else frozenset().union(*(rig.directions for rig in rig_runs.runs))
+    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record, directions)
+    run_tables, run_notes = run_record(run_out, blocks, rig_runs, places(record))
+    rig_tables.update(run_tables)
+    condition_notes += run_notes
+    rig_record = _rig_record(session_key, {row["run_number"] for row in run_rows})
+    if rig_record is not None:
+        condition_notes += rig_record["change_notes"]
     return Gathered(
         session={
             "identifier": identifier_for(key, session_id),
@@ -744,5 +783,6 @@ def gather(activation_key: dict) -> Gathered:
         probes=probes,
         probe_notes=probe_notes,
         trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
-        rig_record=_rig_record(session_key, {row["run_number"] for row in run_rows}),
+        rig_record=rig_record,
+        rig_tables=rig_tables,
     )

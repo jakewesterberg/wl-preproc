@@ -32,6 +32,9 @@ schema = dj.Schema()
 #: The width of `reason`, and of `.Condition`'s `condition`: a longer reason
 #: is cut to it, and a longer condition name is no condition.
 _VARCHAR_LEN = 255
+#: That width, for the NWB file's note on such a name (design spec
+#: `2026-11-07-rig-record-fields-design.md` section 9).
+CONDITION_WIDTH = _VARCHAR_LEN
 
 
 @schema

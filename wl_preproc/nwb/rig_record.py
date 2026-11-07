@@ -17,6 +17,13 @@ change the rig applied, in `parameter_changes`, and each console control, in
 detail as JSON text. The file gives only the kind of actor, never a name,
 account, issuer or token (its decision 6).
 
+**Where each trial's stimuli were, and what each run owed** (design spec
+`2026-11-07-rig-record-fields-design.md` sections 4 and 5): `stimuli` and
+`stimulus_objects`, from the trial lines (`nwb/stimuli.py`), and
+`unopened_blocks`, `shortfalls` and `condition_counts`, from the run rows
+(`nwb/run_record.py`), by `add_rig_tables`, which makes the module if the
+session has no record of its own.
+
 Written only for a session wl-xcon ran (`gather.py::_rig_record`)."""
 
 from __future__ import annotations
@@ -30,8 +37,106 @@ from pynwb.core import DynamicTable
 from wl_preproc.nwb.columns import column
 
 
+DESCRIPTION = ("What wl-xcon's record says the session was: the kind it was run as, the display calibration it "
+               "opened with, the warnings it accepted, its training records, the changes it applied and the controls "
+               "it was sent, where each trial's stimuli were, and what each run owed. Carried as the rig wrote "
+               "them.")
+
+_POSITION = (
+    ("x_deg", "Its cyclopean per-axis position across, degrees, atan(X/D) (NaN if none). Through the stereoscope "
+              "no image is drawn there: each eye's is offset by half its disparity and the vergence offset."),
+    ("y_deg", "Its cyclopean per-axis position up, degrees, atan(Y/D) (NaN if none)."),
+    ("eccentricity_deg", "Its true angle from straight ahead, degrees of visual angle (NaN if none)."),
+    ("polar_deg", "Its polar angle, degrees counter-clockwise from rightward in [0, 360) (NaN at eccentricity 0, "
+                  "or if none)."),
+)
+# Each table `add_rig_tables` may add, with its description and its columns'.
+TABLES: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+    "stimuli": (
+        "Each stimulus a trial put on the screen, or changed while it was up, for at least one frame, from the "
+        "rig's record (xcon/trials.jsonl, wl-xcon's XC-399), in the order they took effect. Frames, not times.",
+        (("trial_id", "The trial."),
+         ("entry", "Its order among the trial's entries, from 0."),
+         ("stimulus", "The stimulus's name in its task (a table's own name is `name`, so not that)."),
+         ("kind", "show: a Show put it up; update: an Update changed it while it was up."),
+         ("frame", "The trial's frame from which it was so, from 1 at the trial's first (-1 if not recorded)."),
+         ("off", "The first frame its presentation was no longer on the screen; -1 when it stayed on to the "
+                 "trial's end, or not recorded."),
+         ("changed", "The fields an update set, comma-joined ('' for a show)."),
+         ("drawn", "1 when its appearance is something to draw, 0 for a Blank (a catch trial's stimulus), -1 when "
+                   "its appearance is a setting with no value."),
+         ("unresolved", "Why a field could not be given ('' when everything resolved)."),
+         *_POSITION,
+         ("target", "An array's target, its index among its objects (-1 if none)."),
+         ("n_objects", "An array's objects, in stimulus_objects (0 for one stimulus)."),
+         ("left", "A per-eye stimulus's left-eye position, after the vergence offset, as JSON text ('' if none)."),
+         ("right", "A per-eye stimulus's right-eye position, likewise ('' if none)."))),
+    "stimulus_objects": (
+        "Each object of an array the stimuli table names, by its trial and entry.",
+        (("trial_id", "The trial."),
+         ("entry", "The array's entry in the stimuli table."),
+         ("eye", "'' for an array drawn once, left or right for a per-eye array's ring about that eye's position."),
+         ("object", "Its index among the array's objects, from 0."),
+         *_POSITION)),
+    "unopened_blocks": (
+        "Each block a run's end row says ended without running a trial, so the stream never opened it: a plan's "
+        "block can be over before it draws one.",
+        (("run_number", "The run."),
+         ("block", "Its block type."),
+         ("ended", "How it ended: rule, time, fall_back, next, back, run_time or run."),
+         ("ended_by", "Who moved the run on or back, by kind only ('' for nobody)."),
+         ("after_trial", "The trial_id of the run's last trial before it ended (-1 if none)."),
+         ("position", "Its place in the run's sequence of blocks, from 0 (-1 if not recorded)."))),
+    "shortfalls": (
+        "What each condition of a run left unrun, and why, from the run's end row.",
+        (("run_number", "The run."),
+         ("block", "The block type."),
+         ("condition", "The condition."),
+         ("trials", "The trials it left unrun (-1 if not recorded)."),
+         ("because", "cap (its repeat limit), rig, cleared (by a person), time (its block's), run_time (the run's) "
+                     "or designed (a designed block's broken trial not played again)."),
+         ("possible_avoidance", "1 when the animal's own failures reached the cap, 0 when not, -1 if not "
+                                "recorded."),
+         ("after_trial", "The trial_id after which it was left (-1 if none)."),
+         ("by_kind", "Who cleared it, by kind only ('' for nobody)."))),
+    "condition_counts": (
+        "Each condition's counts in each block of a run, from the run's end row. A run that ended in a fault can "
+        "leave these one try ahead of the trial lines.",
+        (("run_number", "The run."),
+         ("block", "The block type."),
+         ("condition", "The condition."),
+         ("trials", "Its trials, a trial and its drummed repeats one."),
+         ("presentations", "Its tries recorded."),
+         ("right", "Its right answers."),
+         ("wrong", "Its wrong answers."),
+         ("right_first", "Its trials right at the first try."),
+         ("owed", "What it still owed."),
+         ("repeats", "Its repeats."),
+         ("moved_past", "Its trials moved past."),
+         ("possible_avoidance", "1 when flagged as possible avoidance, 0 when not, -1 if not recorded."),
+         ("drummed", "Its drummed tries."),
+         ("failing", "Its failed tries in a row while being drummed as the run ended."))),
+}
+
+
 def _time(value: float | None) -> float:
     return math.nan if value is None else value
+
+
+def _module(nwb: NWBFile):
+    """The file's `rig_record` module, made if it is not there yet."""
+    if "rig_record" in nwb.processing:
+        return nwb.processing["rig_record"]
+    return nwb.create_processing_module(name="rig_record", description=DESCRIPTION)
+
+
+def add_rig_tables(nwb: NWBFile, tables: dict[str, list[dict]]) -> None:
+    """Each table of `TABLES` that has a row."""
+    for name, (description, columns) in TABLES.items():
+        rows = tables.get(name) or []
+        if rows:
+            _module(nwb).add(DynamicTable(name=name, description=description, columns=[
+                column(field, text, [row[field] for row in rows]) for field, text in columns]))
 
 
 def add_rig_record(nwb: NWBFile, record: dict) -> None:
@@ -39,12 +144,7 @@ def add_rig_record(nwb: NWBFile, record: dict) -> None:
     `controls` table when the file has any such row."""
     calibration = record["calibration"] or {}
     standard = calibration.get("standard")
-    module = nwb.create_processing_module(
-        name="rig_record",
-        description=("What wl-xcon's record says the session was: the kind it was run as, the display calibration "
-                     "it opened with, the warnings it accepted, and its training records, the changes it applied "
-                     "and the controls it was sent. Carried as the rig wrote them."),
-    )
+    module = _module(nwb)
     module.add(DynamicTable(name="session", description="The session's kind and display calibration.", columns=[
         column("session_kind", "training, piloting or recording ('' if not recorded).",
                [record["session_kind"] or ""]),
@@ -82,8 +182,11 @@ def _add_warnings(module, warnings: list[dict]) -> None:
 
 
 def _add_changes(module, changes: list[dict]) -> None:
+    fields = [change["fields"] for change in changes]
     module.add(DynamicTable(name="parameter_changes", description=(
-        "Each live change the rig applied, from wl-xcon's parameter_changes.jsonl, timed by the code it strobed."),
+        "Each change the rig applied to what the animal experienced, from wl-xcon's parameter_changes.jsonl, by its "
+        "kind and the act it belongs to, timed by the code it strobed or, for one that strobed nothing, by the rig's "
+        "clock fitted to the recording."),
         columns=[
             column("session_time", "When, in session seconds: its code's time (NaN if untimed).",
                    [_time(change["session_time"]) for change in changes]),
@@ -98,6 +201,30 @@ def _add_changes(module, changes: list[dict]) -> None:
                    [-1 if change["sequence"] is None else change["sequence"] for change in changes]),
             column("by_kind", "Who made it, by kind only: box or member ('' if not recorded).",
                    [change["by_kind"] or "" for change in changes]),
+            column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
+                           "revert, clear, drum or training; a row written before wl-xcon's engine build C3 is a "
+                           "set.", [field.kind for field in fields]),
+            column("change", "The act it belongs to, an id a revert's rows share (-1 if not recorded).",
+                   [-1 if field.change is None else field.change for field in fields]),
+            column("trial_id", "The first trial it applies to (-1 if not recorded).",
+                   [-1 if field.trial_number is None else field.trial_number for field in fields]),
+            column("went", "Which way it went by the setting's declared meaning: easier or harder ('' where that "
+                           "cannot be read, or not recorded).", [field.went or "" for field in fields]),
+            column("step", "now minus was, in the setting's unit (NaN where either is not a number).",
+                   [math.nan if field.step is None else field.step for field in fields]),
+            column("to", "What takes a handed-back setting in the open block: conditions, draw or run ('' "
+                         "otherwise).", [field.to or "" for field in fields]),
+            column("from_draw", "Whose draw a range changed or a revert restored: task or block ('' otherwise).",
+                   [field.from_draw or "" for field in fields]),
+            column("block", "The block type whose own draw a range changed, or the block a clear names ('' "
+                            "otherwise).", [field.block or "" for field in fields]),
+            column("moment", "The act a revert goes back to, 0 for the run's start (-1 otherwise).",
+                   [-1 if field.moment is None else field.moment for field in fields]),
+            column("time_source", "How its time was found: code, or rig_clock for the rig's clock fit ('' if "
+                                  "untimed).", [change["time_source"] for change in changes]),
+            column("detail", "The row's own fields beyond those every change row carries, as JSON text: a "
+                             "hand-back's to, a range's from and block, a revert's moment, and a clear's or a "
+                             "switch's control fields ('{}' if none).", [field.detail for field in fields]),
         ]))
 
 

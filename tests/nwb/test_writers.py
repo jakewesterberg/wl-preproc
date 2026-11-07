@@ -104,6 +104,67 @@ def test_the_trials_carry_their_condition_and_the_settings_that_varied(tmp_path)
         assert frame["setting_xy"].tolist() == ["[0, 5]", ""]
 
 
+def test_the_trials_carry_what_the_rigs_record_says_of_each_trial(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 3: one
+    column per field some trial's line carries, described."""
+    from wl_preproc.nwb.intervals import add_trials
+
+    trials = [{**TRIALS[0], "record": {"counting": "owed", "repeat_of": -1, "planned_lead_in": 1}},
+              {**TRIALS[0], "trial_id": 2, "start_s": 4.0, "stop_s": 5.0,
+               "record": {"counting": "", "repeat_of": 1, "planned_lead_in": -1}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_trials(nwb, trials, ["ohdpi"]))
+    with io:
+        frame = nwb.trials.to_dataframe()
+        assert frame["counting"].tolist() == ["owed", ""]
+        assert frame["repeat_of"].tolist() == [-1, 1]
+        assert frame["planned_lead_in"].tolist() == [1, -1]
+        assert "never its answer" in nwb.trials["counting"].description
+
+
+def test_the_stimulus_tables_join_the_rig_record_module_or_make_it(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 4: a
+    table with no row is not written; the module is made when the session
+    has no record of its own."""
+    from wl_preproc.nwb.rig_record import add_rig_tables
+
+    entry = {"trial_id": 1, "entry": 0, "stimulus": "fix", "kind": "show", "frame": 1, "off": -1, "changed": "",
+             "drawn": 1, "unresolved": "", "x_deg": 0.0, "y_deg": 0.0, "eccentricity_deg": 0.0,
+             "polar_deg": float("nan"), "target": -1, "n_objects": 0, "left": "", "right": ""}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_tables(nwb, {"stimuli": [entry], "stimulus_objects": []}))
+    with io:
+        module = nwb.processing["rig_record"]
+        assert set(module.data_interfaces) == {"stimuli"}
+        frame = module["stimuli"].to_dataframe()
+        assert (frame["stimulus"].tolist(), frame["frame"].tolist(), frame["off"].tolist()) == (["fix"], [1], [-1])
+        assert "Frames, not times" in module["stimuli"].description
+    (tmp_path / "none").mkdir()
+    _path, io, nwb = _write(tmp_path / "none", lambda nwb: add_rig_tables(nwb, {}))
+    with io:
+        assert "rig_record" not in nwb.processing
+
+
+def test_runs_and_blocks_carry_what_the_rigs_record_says_of_them(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 5."""
+    from wl_preproc.nwb.intervals import add_blocks, add_runs
+
+    runs = [{**RUNS[0], "record": {"plan": "training", "end_reason": "plan_done", "seed": "7", "rig_trials": 4}},
+            {**RUNS[1], "record": {"plan": "", "end_reason": "", "seed": "", "rig_trials": -1}}]
+    blocks = [{**BLOCKS[0], "record": {"ended": "rule", "after_trial": 1}},
+              {**BLOCKS[1], "record": {"ended": "", "after_trial": -1}}]
+
+    def build(nwb):
+        add_runs(nwb, runs, ["ohdpi"])
+        add_blocks(nwb, blocks)
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        frame = nwb.intervals["runs"].to_dataframe()
+        assert (frame["plan"].tolist(), frame["seed"].tolist(), frame["rig_trials"].tolist()) == (
+            ["training", ""], ["7", ""], [4, -1])
+        blocks_frame = nwb.intervals["blocks"].to_dataframe()
+        assert (blocks_frame["ended"].tolist(), blocks_frame["after_trial"].tolist()) == (["rule", ""], [1, -1])
+
+
 def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
     from wl_preproc.nwb.intervals import add_conditions
 
@@ -119,10 +180,28 @@ def test_the_conditions_table_and_none_when_no_condition_is_known(tmp_path):
         assert frame["settings"].tolist() == ["", '{"contrast": 0.5}']
         assert frame["varying"].tolist() == ["", '{"hold": {"max": 0.35, "min": 0.3}}']
         assert frame["n_trials"].tolist() == [1, 2]
+        assert "drawn" not in frame and "n_eased" not in frame
     (tmp_path / "empty").mkdir()
     _path, io, nwb = _write(tmp_path / "empty", lambda nwb: add_conditions(nwb, []))
     with io:
         assert "behavior" not in nwb.processing
+
+
+def test_the_conditions_table_carries_drawn_and_person_held_values_where_recorded(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 6."""
+    from wl_preproc.nwb.intervals import add_conditions
+
+    conditions = [{"name": "c", "code": None, "settings": {}, "varying": {},
+                   "drawn": {"hold": {"sources": ["task"], "min": 0.2, "max": 0.8}}, "live": {},
+                   "trials": {"total": 4, "by_outcome": {"correct": 4}, "eased": 1}},
+                  {"name": "d", "code": None, "settings": {}, "varying": {}, "drawn": None, "live": None,
+                   "trials": {"total": 1, "by_outcome": {"correct": 1}}}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_conditions(nwb, conditions))
+    with io:
+        frame = nwb.processing["behavior"]["conditions"].to_dataframe()
+        assert frame["drawn"].tolist() == ['{"hold": {"max": 0.8, "min": 0.2, "sources": ["task"]}}', ""]
+        assert frame["live"].tolist() == ["{}", ""]
+        assert frame["n_eased"].tolist() == [1, 0]
 
 def test_the_timebase_tables(tmp_path):
     from wl_preproc.nwb.timebase import add_timebase
@@ -428,9 +507,9 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
 
     record = {**RIG_RECORD, "parameter_changes": [
         {"session_time": 2.5, "run_number": 1, "name": "reward_ml", "was": "0.2", "now": "0.25", "sequence": 1,
-         "by_kind": "member"},
+         "by_kind": "member", "fields": a_set(), "time_source": "code"},
         {"session_time": None, "run_number": None, "name": "seed", "was": None, "now": "[8, 9]", "sequence": None,
-         "by_kind": None}],
+         "by_kind": None, "fields": a_set(), "time_source": ""}],
         "controls": [
         {"session_time": 4.0, "time_source": "code", "at": 1773478804.0, "kind": "pause", "run_number": 1,
          "trial_index": 1, "detail": "{}", "by_kind": "box"},
@@ -447,6 +526,47 @@ def test_the_rig_record_holds_its_training_records_with_who_acted_by_kind_only(t
         assert controls[["time_source", "kind", "run_number", "trial_index", "detail", "by_kind"]].values.tolist() == [
             ["code", "pause", 1, 1, "{}", "box"], ["", "note", -1, -1, '{"note": "lid droop"}', ""]]
         assert controls["rig_at"].iloc[0] == 1773478804.0 and math.isnan(controls["rig_at"].iloc[1])
+
+
+def a_set(**fields):
+    """A change line's fields as `events/rigrecords.py::change_fields` reads
+    them: a person's value, as every row before wl-xcon's engine build C3."""
+    from wl_preproc.events.rigrecords import ChangeFields
+
+    return ChangeFields(**{"kind": "set", "change": None, "trial_number": None, "went": None, "step": None,
+                           "to": None, "from_draw": None, "block": None, "moment": None, "strobed_nothing": False,
+                           **fields})
+
+
+def test_the_change_log_is_published_by_kind_and_act(tmp_path):
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7: a
+    revert's rows share their act; a clear, which strobed nothing, is timed
+    by the rig's clock; a range's values are draws."""
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    def change(name, fields, time_source="code"):
+        return {"session_time": 1.0, "run_number": 1, "name": name, "was": "1", "now": "2", "sequence": None,
+                "by_kind": "member", "fields": fields, "time_source": time_source}
+
+    record = {**RIG_RECORD, "parameter_changes": [
+        change("contrast", a_set(change=3, trial_number=12, went="easier", step=-0.1)),
+        change("hold", a_set(kind="range", change=4, from_draw="block", block="easy")),
+        change("contrast", a_set(kind="revert", change=5, moment=0)),
+        change("hold", a_set(kind="revert", change=5, moment=0)),
+        change("owed", a_set(kind="clear", change=6, strobed_nothing=True,
+                             detail='{"block": "easy", "condition": "c-50", "rest": true}'), "rig_clock")],
+        "controls": []}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
+    with io:
+        changes = nwb.processing["rig_record"]["parameter_changes"].to_dataframe()
+        assert changes["kind"].tolist() == ["set", "range", "revert", "revert", "clear"]
+        assert changes["detail"].tolist() == ["{}"] * 4 + ['{"block": "easy", "condition": "c-50", "rest": true}']
+        assert changes["change"].tolist() == [3, 4, 5, 5, 6]
+        assert (changes["trial_id"].tolist()[:2], changes["went"].tolist()[0], changes["step"].iloc[0]) == (
+            [12, -1], "easier", -0.1)
+        assert (changes["from_draw"].tolist()[1], changes["block"].tolist()[1], changes["moment"].tolist()) == (
+            "block", "easy", [-1, -1, 0, 0, -1])
+        assert changes["time_source"].tolist() == ["code", "code", "code", "code", "rig_clock"]
 
 
 def test_a_kind_and_calibration_not_recorded_are_empty_and_no_warnings_mean_no_table(tmp_path):

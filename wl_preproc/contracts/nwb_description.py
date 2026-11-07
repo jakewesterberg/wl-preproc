@@ -13,7 +13,10 @@ display calibration and each run's, and the warnings it accepted (design spec
 many of wl-xcon's training records the file holds (design spec
 `2026-10-18-training-records-and-backup-clock-design.md` section 3.2), and
 2026-10-30 the eyes whose true eccentricity and polar angle it holds (design
-spec `2026-10-30-true-angle-saccades-design.md` section 8).
+spec `2026-10-30-true-angle-saccades-design.md` section 8), and 2026-11-07
+each run's plan and end reason, each block's end, and each condition's drawn
+and person-held values and eased trials (design spec
+`2026-11-07-rig-record-fields-design.md` section 8).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -106,6 +109,10 @@ class DataTypes(_Frozen):
 class TrialCounts(_Frozen):
     total: int
     by_outcome: dict[str, int]
+    # A condition's trials a live change kept out of moving up, from
+    # wl-xcon's record; 0 where none is recorded (design spec
+    # `2026-11-07-rig-record-fields-design.md` section 6).
+    eased: int = 0
 
 
 class Condition(_Frozen):
@@ -119,6 +126,13 @@ class Condition(_Frozen):
     settings: dict[str, Any] | None
     varying: dict[str, dict[str, Any]] | None
     trials: TrialCounts
+    # Since 2026-11-07 its settings and varying are its own values only, from
+    # the trials where a setting was neither drawn nor held by a person; its
+    # drawn and person-held values are summarised here, null where the rig's
+    # record names none (design spec `2026-11-07-rig-record-fields-design.md`
+    # section 6).
+    drawn: dict[str, dict[str, Any]] | None = None
+    live: dict[str, dict[str, Any]] | None = None
 
 
 class Interval(_Frozen):
@@ -147,6 +161,10 @@ class RunBlock(_Frozen):
     measured: Interval
     closed: bool | None
     trials: int
+    # How it ended, from its run's end row in wl-xcon's record: rule, time,
+    # fall_back, next, back, run_time or run; null where not recorded (design
+    # spec `2026-11-07-rig-record-fields-design.md` section 8).
+    ended: str | None = None
 
 
 class Run(_Frozen):
@@ -166,6 +184,12 @@ class Run(_Frozen):
     # wl-xcon's record; null where it names none (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` section 5).
     calibration: str | None = None
+    # The plan it played, by its name in its task, and why a completed run
+    # ended (plan_done, plan_time, stalled, cannot_draw), from wl-xcon's record;
+    # null where not recorded (design spec
+    # `2026-11-07-rig-record-fields-design.md` section 8).
+    plan: str | None = None
+    end_reason: str | None = None
 
 
 class RigCalibration(_Frozen):
@@ -193,7 +217,10 @@ class TrainingRecords(_Frozen):
     changes the rig applied and the console controls it was sent. Who acted
     is not published (design spec
     `2026-10-18-training-records-and-backup-clock-design.md` section 0,
-    decision 6)."""
+    decision 6). Since 2026-11-07 `parameter_changes` counts a person's acts
+    on a setting, one per act among a set, a hand-back, a range edit and a
+    revert, not the change log's rows (design spec
+    `2026-11-07-rig-record-fields-design.md` section 7)."""
 
     parameter_changes: int
     controls: int

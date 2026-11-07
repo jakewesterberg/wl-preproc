@@ -513,3 +513,42 @@ wl-xcon's six questions; its amendments 2, 6, 7 and 10 record wl-xcon's check of
   traces and six of its own (the sixth, a short loss at a saccade's take-off, added in the final review); its
   `about` is the reading rule. Published with the merge, SHA-256
   `9b3f16d2a573c1178d0f57e94ef3551994e10f32693d8332da7f216250f4c915`, sent to wl-xcon on 2026-11-07.
+
+# 2026-11-07: the rig's record, read whole (wl-xcon's asks C2a, C2b, C3, XC-399 and appearances)
+
+Designed in `docs/superpowers/specs/2026-11-07-rig-record-fields-design.md`, its six sections approved by the
+requester on 2026-11-07; built on `feat/rig-record-fields`, not merged. **Every new field is read when the NWB
+file is built, from the session folder, with no database change**, and each is optional: a record from before a
+build reads as it did, and publishes the older fields it carries (each trial's `fluid_ml`; each run's `seed`, the
+end row's `trials` and the task's content hash). **A `versions.task` that is the task's path, as before your
+engine build C1, is published as no hash.**
+- *C2a and C2b:* each trial's `counting` (published with the warning that it is what the trial paid, never its
+  answer), `shown`, `repeat_of` (as the repeated trial's `trial_id`), `at_once`, `previous`, `drummed`,
+  `drumming`, `aids`, `structure` and `overridden` are trials-table columns; each run's `plan`, `end_reason`,
+  `stop_kind` and `stopped_because`, and `rig_trials` and `rig_presentations` (the end row's `trials` and
+  `presentations`), are runs-table columns, its `plan_form` JSON text.
+  **Your two questions:** `plan` is on the runs table and in the NWB description's run, not yet on the listing,
+  which waits for wl.works; **the blocks table carries each block's end** (`ended`, `ended_by` by kind,
+  `after_trial`, `position`, `passed_at`). A block that ran no trial, with no `block_in_session`, is a row of
+  `unopened_blocks`; `shortfalls` and `condition_counts` are tables of their own.
+- *XC-399:* **two tables of their own**, `stimuli` (one row per entry) and `stimulus_objects` (one row per array
+  object, by eye for a per-eye array), in the file's `rig_record` module. The angle is published as `polar_deg`
+  beside `eccentricity_deg`, read from `direction` today and from `polar` after your rename; each position's
+  angles are checked against ours, a disagreement past 1e-9 degrees a note, never a correction. Frames stay
+  frames until your screen log.
+- *Appearances:* the form is accepted as written (2026-10-30); a test pins it as its object's sorted JSON text.
+- *C3, your four asks:* (1) `drawn`, `live`, `eased` and `planned` are trials-table columns, and **a condition's
+  summary keeps its own values apart from drawn and person-held ones**, summarising those beside them, with its
+  eased trials counted (the requester's decision of 2026-11-07); (2) the start row's `draws` and `generated` are
+  runs-table columns as JSON text, `directions` makes a setting's summary an arc, and each block end's `varied`,
+  `planned` and `counts` and the `designed` shortfall are published; (3) the change log is published by `kind`
+  and `change`, with `trial_id`, `went`, `step`, `to`, `from_draw`, `block` and `moment`, and **wl.works' count
+  of live parameter changes becomes a person's acts on a setting**, one per act among `set`, `hand_back`,
+  `range` and `revert` (the requester's decision of 2026-11-07); (4) a change row that strobed nothing is timed
+  through the rig's clock fit, as a control is, and a coded change row's instant joins the fit unless with it the
+  fit would fail. **Each change row's own fields are kept**, as the `parameter_changes` table's `detail`,
+  JSON text: a clear's `condition`, `block`, `rest` and `cleared`, a drum's `scope` and `block`, a training
+  switch's `setting`, a hand-back's, a range's and a revert's. **So once this is merged you may stop writing
+  clears and switches to `controls.jsonl`** (your XC-442); we will say so with the merge.
+- *Asked of wl-xcon, 2026-11-07, and agreed:* one simulated session's `xcon/` folder from your C3 build, vendored
+  here as a contract fixture.

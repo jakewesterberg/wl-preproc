@@ -209,3 +209,43 @@ def test_the_measured_runs_give_the_rigs_start_and_end_instants():
     measured = {1: (0.5, 9.5), 2: (10.0, None), 3: (16.0, 18.0)}
     assert run_instants(runs, measured) == [(_rig(0.5), 0.5), (_rig(9.5), 9.5), (_rig(10.0), 10.0),
                                             (_rig(16.0), 16.0)]
+
+
+def _c3_change(line, code=4130, at=None, coded=True):
+    """A change row as wl-xcon's engine build C3 writes it, with its instant."""
+    import dataclasses
+
+    return dataclasses.replace(_change(line, code, coded), at=at)
+
+
+def test_a_change_that_strobed_nothing_is_timed_through_the_rigs_clock():
+    """Design spec `2026-11-07-rig-record-fields-design.md` section 7: a clear
+    or a switch, written to the change log since C3, strobes nothing, and is
+    timed as such a control is."""
+    from wl_preproc.events.rigtiming import time_records
+
+    instants = [(_rig(0.0), 0.0), (_rig(100.0), 100.0)]
+    timing = time_records(_records(changes=[_c3_change(1, code=None, at=_rig(40.0))]), {}, instants)
+    assert timing.changes[0] == pytest.approx(40.0, abs=1e-6)
+    assert timing.problems == ()
+    unfitted = time_records(_records(changes=[_c3_change(1, code=None, at=_rig(40.0))]), {}, [])
+    assert unfitted.changes == (None,)
+    assert unfitted.problems == ("parameter_changes.jsonl: 1 row strobed nothing, and the rig's clock could not be "
+                                 "fitted to the recording (none of its instants matched a code), so it is not timed",)
+
+
+def test_a_coded_change_joins_the_clock_fit_unless_with_it_the_fit_would_fail():
+    """Its instant and its code are one more pair, as a coded control's are;
+    a change whose instant misses its code past the fit's limit is left out
+    of the fit, never leaving untimed what was timed before."""
+    from wl_preproc.events.rigtiming import time_records
+
+    instants = [(_rig(0.0), 0.0), (_rig(100.0), 100.0)]
+    joined = time_records(_records(changes=[_c3_change(1, at=_rig(50.0))]), {4130: [50.0]}, instants)
+    assert joined.clock.n_matched == 3 and joined.problems == ()
+    late = time_records(_records(changes=[_c3_change(1, at=_rig(50.0) + 1.0),
+                                          _c3_change(2, code=None, at=_rig(60.0))]), {4130: [50.0]}, instants)
+    assert late.clock.n_matched == 2
+    assert late.changes[0] == 50.0 and late.changes[1] == pytest.approx(60.0, abs=1e-6)
+    assert late.problems == ("parameter_changes.jsonl: with its rows the rig's clock would not fit (its instants miss "
+                             "their codes by up to 0.667 s, past the 0.05 s limit), so it is fitted without them",)

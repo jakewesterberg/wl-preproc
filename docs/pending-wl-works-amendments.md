@@ -1,9 +1,38 @@
 # Amendments to wl-works
 
-**Ten are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14, one 2026-10-18.** The earlier two
+**Eleven are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14, one 2026-10-18, one 2026-11-07.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — the rig's record, read whole: new fields in the NWB description, and the live-change count's meaning
+
+**Opened 2026-11-07** with
+[`specs/2026-11-07-rig-record-fields-design.md`](superpowers/specs/2026-11-07-rig-record-fields-design.md)
+(§7, §8; the requester's decisions of 2026-11-07 in §0), answering wl-xcon's asks C2a, C2b, C3 and XC-399.
+
+- **`GET /nwb`:** each description gains, within version 3 and each defaulted so a description written before
+  reads unchanged: each run's `plan` and `end_reason`; each block's `ended`; each condition's `drawn` and
+  `live` (its drawn and person-held values, which no longer read as its own `settings` or `varying`) and its
+  trial counts' `eased`. `docs/schemas/nwb_description.json` refuses fields it does not know, so wl.works' copy
+  must take these first.
+- **The count of live parameter changes changes meaning**, in the listing's `training_records` and the
+  description's: since wl-xcon's engine build C3 the change log also holds hand-backs, range edits, reverts,
+  clears and switches; the count is a person's acts on a setting, one per act among a set, a hand-back, a range
+  edit and a revert. A session from before C3 counts as before.
+- **The file gains** trials-table columns (what each trial paid, its sequence, aids, draws, holds and planned
+  place), runs- and blocks-table columns (plan, end reason, stop, counts, each block's end), and `rig_record`
+  tables (`stimuli`, `stimulus_objects`, `unopened_blocks`, `shortfalls`, `condition_counts`); none is in the
+  description beyond the fields above.
+- **`rig_record_problem` flags also say a run row's new field that could not be read**, once per field per
+  session ("2 run rows: `seed` is not a whole number or null, so it is read as none"), beside the run rows' other
+  problems; the run is kept.
+- **A question:** should the listing's runs carry `plan` and `end_reason`? `ListedRun` refuses unknown fields,
+  so nothing is added until wl.works says yes.
+- **Every listed session whose change log holds C3 rows is listed once more** when this ships: its count, and so
+  its digest, changes.
 
 ---
 

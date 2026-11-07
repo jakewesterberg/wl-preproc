@@ -84,6 +84,38 @@
           ],
           "title": "Code"
         },
+        "drawn": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Drawn"
+        },
+        "live": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Live"
+        },
         "name": {
           "anyOf": [
             {
@@ -767,8 +799,32 @@
           "title": "Coverage",
           "type": "object"
         },
+        "end_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Reason"
+        },
         "measured": {
           "$ref": "#/$defs/Interval"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan"
         },
         "run_number": {
           "title": "Run Number",
@@ -839,6 +895,18 @@
             }
           ],
           "title": "Closed"
+        },
+        "ended": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended"
         },
         "measured": {
           "$ref": "#/$defs/Interval"
@@ -936,7 +1004,7 @@
     },
     "TrainingRecords": {
       "additionalProperties": false,
-      "description": "How many of wl-xcon's training records the file holds: the live\nchanges the rig applied and the console controls it was sent. Who acted\nis not published (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 0,\ndecision 6).",
+      "description": "How many of wl-xcon's training records the file holds: the live\nchanges the rig applied and the console controls it was sent. Who acted\nis not published (design spec\n`2026-10-18-training-records-and-backup-clock-design.md` section 0,\ndecision 6). Since 2026-11-07 `parameter_changes` counts a person's acts\non a setting, one per act among a set, a hand-back, a range edit and a\nrevert, not the change log's rows (design spec\n`2026-11-07-rig-record-fields-design.md` section 7).",
       "properties": {
         "controls": {
           "title": "Controls",
@@ -963,6 +1031,11 @@
           },
           "title": "By Outcome",
           "type": "object"
+        },
+        "eased": {
+          "default": 0,
+          "title": "Eased",
+          "type": "integer"
         },
         "total": {
           "title": "Total",
