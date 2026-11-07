@@ -196,6 +196,11 @@ def read_rig_records(session_dir: Path) -> RigRecords:
 # The kinds that change a setting, as a person's act; a clear and the two
 # switches are not (the requester's decision of 2026-11-07).
 SETTING_KINDS = ("set", "hand_back", "range", "revert")
+# What every change row carries (`wl_xcon/record.py`'s change row, read at
+# engine-c3 `7ea7913`); the rest of a row is its kind's own fields, a clear's
+# and a switch's being its control row's.
+_CHANGE_FIELDS = frozenset({"change", "kind", "name", "was", "now", "by", "at", "at_local", "trial_number", "run",
+                            "meaning", "offered", "odds", "event_code", "sequence"})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -204,7 +209,9 @@ class ChangeFields:
     `kind` (`set` for a row written before C3), the act's id, the first trial
     it applies to, which way it went and by how much, a hand-back's `to`, a
     range's draw (`from`) and `block`, a revert's `moment` (0 the run's
-    start), and whether its act strobed nothing."""
+    start), whether its act strobed nothing, and `detail`, the row's own
+    fields beyond those every change row carries as JSON text, a clear's and
+    a switch's control fields among them (`{}` if none)."""
 
     kind: str
     change: int | None
@@ -216,6 +223,7 @@ class ChangeFields:
     block: str | None
     moment: int | None
     strobed_nothing: bool
+    detail: str = "{}"
 
 
 def change_fields(rows: list[str]) -> tuple[list[ChangeFields], list[str]]:
@@ -233,7 +241,8 @@ def change_fields(rows: list[str]) -> tuple[list[ChangeFields], list[str]]:
             step=fields.read(meaning, "step", NUMBER, field="meaning.step"), to=fields.read(row, "to", TEXT),
             from_draw=fields.read(row, "from", TEXT), block=fields.read(row, "block", TEXT),
             moment=fields.read(row, "moment", WHOLE),
-            strobed_nothing="event_code" in row and row["event_code"] is None))
+            strobed_nothing="event_code" in row and row["event_code"] is None,
+            detail=_json({key: value for key, value in row.items() if key not in _CHANGE_FIELDS})))
     return out, fields.problems()
 
 

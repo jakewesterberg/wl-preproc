@@ -159,6 +159,34 @@ def test_since_c3_a_change_line_names_its_kind_its_act_and_its_instant(tmp_path)
     assert problems == [] and acts(fields) == 3
 
 
+def test_a_clear_and_a_switch_keep_their_own_fields_as_the_rows_detail():
+    """wl-xcon's change row carries a kind's own fields as given
+    (`wl_xcon/record.py`'s change row, read at engine-c3 `7ea7913`): a
+    clear's and a switch's are its control row's, so the change log keeps
+    them once wl-xcon stops writing them to `controls.jsonl` too (its
+    XC-442); a row with none of its own, as every row before C3, keeps an
+    empty object (the final review's I1)."""
+    import json
+
+    from wl_preproc.events.rigrecords import change_fields
+
+    common = {"by": None, "at": 1773478801.0, "at_local": "2026-03-14T10:00:01+01:00", "trial_number": 7,
+              "run": 0, "meaning": None, "offered": [], "odds": None, "event_code": None}
+    rows = [{"name": "contrast", "was": 0.5, "now": 0.4, "event_code": 4130, "sequence": 1},
+            {**common, "change": 2, "kind": "clear", "name": "owed", "was": 2, "now": 0, "condition": "c-50",
+             "block": "easy", "rest": True, "cleared": 2},
+            {**common, "change": 3, "kind": "drum", "name": "drumming", "was": None, "now": "block",
+             "scope": "block"},
+            {**common, "change": 4, "kind": "hand_back", "name": "hold", "was": 0.3, "now": None, "to": "draw",
+             "event_code": 4130, "sequence": 2}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert [json.loads(field.detail) for field in fields] == [
+        {}, {"block": "easy", "cleared": 2, "condition": "c-50", "rest": True}, {"scope": "block"}, {"to": "draw"}]
+    assert fields[1].detail == json.dumps({"block": "easy", "cleared": 2, "condition": "c-50", "rest": True},
+                                          sort_keys=True)
+    assert problems == []
+
+
 def test_an_appearance_in_a_change_is_kept_as_its_sorted_json_text(tmp_path):
     """wl-xcon's appearance ask (design spec
     `2026-11-07-rig-record-fields-design.md` section 9): a change of

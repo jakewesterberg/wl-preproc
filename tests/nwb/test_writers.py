@@ -553,11 +553,14 @@ def test_the_change_log_is_published_by_kind_and_act(tmp_path):
         change("hold", a_set(kind="range", change=4, from_draw="block", block="easy")),
         change("contrast", a_set(kind="revert", change=5, moment=0)),
         change("hold", a_set(kind="revert", change=5, moment=0)),
-        change("owed", a_set(kind="clear", change=6, strobed_nothing=True), "rig_clock")], "controls": []}
+        change("owed", a_set(kind="clear", change=6, strobed_nothing=True,
+                             detail='{"block": "easy", "condition": "c-50", "rest": true}'), "rig_clock")],
+        "controls": []}
     _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
     with io:
         changes = nwb.processing["rig_record"]["parameter_changes"].to_dataframe()
         assert changes["kind"].tolist() == ["set", "range", "revert", "revert", "clear"]
+        assert changes["detail"].tolist() == ["{}"] * 4 + ['{"block": "easy", "condition": "c-50", "rest": true}']
         assert changes["change"].tolist() == [3, 4, 5, 5, 6]
         assert (changes["trial_id"].tolist()[:2], changes["went"].tolist()[0], changes["step"].iloc[0]) == (
             [12, -1], "easier", -0.1)

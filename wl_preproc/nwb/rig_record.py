@@ -216,12 +216,15 @@ def _add_changes(module, changes: list[dict]) -> None:
                          "otherwise).", [field.to or "" for field in fields]),
             column("from_draw", "Whose draw a range changed or a revert restored: task or block ('' otherwise).",
                    [field.from_draw or "" for field in fields]),
-            column("block", "That block type, where it is a block's own draw ('' otherwise).",
-                   [field.block or "" for field in fields]),
+            column("block", "The block type whose own draw a range changed, or the block a clear names ('' "
+                            "otherwise).", [field.block or "" for field in fields]),
             column("moment", "The act a revert goes back to, 0 for the run's start (-1 otherwise).",
                    [-1 if field.moment is None else field.moment for field in fields]),
             column("time_source", "How its time was found: code, or rig_clock for the rig's clock fit ('' if "
                                   "untimed).", [change["time_source"] for change in changes]),
+            column("detail", "The row's own fields beyond those every change row carries, as JSON text: a "
+                             "hand-back's to, a range's from and block, a revert's moment, and a clear's or a "
+                             "switch's control fields ('{}' if none).", [field.detail for field in fields]),
         ]))
 
 
