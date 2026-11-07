@@ -41,7 +41,9 @@ Every line of the plan was proven in a scratch branch before the plan was writte
 ## 3. Still open
 
 - **wl-xcon's simulated session folder**, vendored as a contract fixture by its own task when it arrives.
-- `plan` and `end_reason` on the listing, until wl.works asks.
+- `plan` and `end_reason` on the listing, until wl.works' plan 20b-1 asks: by wl.works' reading of its own
+  specs (2026-11-07), `end_reason` has a consumer and `plan` none, though the stop reason it names may already
+  be the listing's `stopped_because` and `stop_kind`.
 
 ## 4. The rulings
 
@@ -85,7 +87,8 @@ it was fixed (`record.py` at engine-c3 `7ea7913`; `ef23b25`; `8855083`; `7e56b51
 - What the reviewer set aside stands:
   - a fit with coded change rows that succeeds with a worse residual is kept, since §7 falls back only on failure;
   - the build reads the session folder, as before;
-  - wl.works' schema copy refuses the new keys until it takes its amendment, the usual process;
+  - wl.works' copy of our schemas refusing the new keys: it vendors none yet (wl.works, 2026-11-07), and the
+    amendments now say its copy must be pinned at or after this change (§7);
   - two `run` indices with one `run_in_session`, which wl-xcon's counters never write;
   - empty `shortfalls` and `unopened_blocks` tables are not written, as HDMF cannot type empty columns;
   - cross-checks the spec did not ask for;
@@ -110,3 +113,49 @@ it was fixed (`record.py` at engine-c3 `7ea7913`; `ef23b25`; `8855083`; `7e56b51
 **The suite after the fixes**, once, on both interpreters, as in §5:
   - 3.11: **2794 passed, 26 skipped, 1 deselected, 1 xfailed**;
   - 3.13: **2794 passed, 27 skipped, 1 xfailed**.
+
+## 7. The minors
+
+The requester chose on 2026-11-07 to fix the seven deferred minors at once, on `fix/rig-record-minors` from the
+merge (`295f9c9`), rebased onto its pointer (`98ccb1c`), as designed in chat that day (spec amendments 15-21). Each was fixed by a test that failed
+first:
+- M1 `be0bad6`: three descriptions say what an empty value is.
+- M2 `76b7e60`: a change kind it cannot read is none, and one no build writes is said.
+- M3 `e4ee0ac`: the change log's time and the rig record's module say what they hold.
+- M4 `6f2a176`: a per-eye stimulus counts both eyes' objects and has each eye's place checked.
+- M5 `388b94c`: a run's directions shape its own conditions alone.
+- M6 `85a26f1`: a block ended twice keeps its first end, and a note says so.
+- M8 `31f615d`: when neither clock fit holds, the reason given is the session's own.
+
+**Their review.** A fresh reviewer (Opus) read `295f9c9..bb16e77`, the branch before its rebase, and these records: no Critical finding, one
+Important, six Minor, "with fixes"; it ran each fix's tests on its commit's parent, where each failed. Fixed:
+- **Issue 1, the records:** the corrections of what they said of wl.works' copy of our schemas dropped what
+  wl.works' own documents still need. wl.works vendors no copy yet (wl.works, 2026-11-07), but its January
+  spec's §11 vendors our schemas at a pinned commit and refuses an unknown key, and names the listing's schema at
+  `6a67ae2`, which refuses every field added since. The four amendments now say the copy must be pinned at or
+  after their change.
+- **Issue 2, re-graded Important** since amendment 19's reason was false without it (`ccca26a`): a file's pooled
+  conditions summary takes the directions of the runs it holds, not every run of the session.
+- **Issue 4, folded into issue 1's correction:** the record of wl.works' answer on `end_reason` now says the
+  stop reason it names may already be the listing's `stopped_because` and `stop_kind`.
+
+**Rulings:** amendments 17 (the table comments after their first line) and 19 (the file's pooled summary).
+
+**Deferred minors**, for the requester:
+- Issue 3: a change row whose `kind` is null or empty is published as '' with no note, where the column's
+  description says each '' is said.
+- Issue 5: when neither clock fit holds, the reason given is the session's own, and the change rows' miss, which
+  can show a clock step, is said nowhere; naming both would.
+- Issue 6: a per-eye array's `target` indexes each eye's objects, while `n_objects` now counts both eyes'; the
+  description could say so.
+- Issue 7: a block ended three times gets two identical notes, each saying "twice".
+
+**Found by wl-xcon on 2026-11-07, for the older minors:** a rig clock fit over instants that are all one float
+can report a miss of some 1e15 s instead of "its instants do not advance": the mean of the equal instants rounds
+one ulp off them, the rate comes out about 1e-22, passes `scale <= 0.0` (`events/rigtiming.py:127`), and the
+miss divides by it. Reproduced in 1,584 of 5,000 random instants near 1.794e9 s with seven codes 0.046-0.177 s
+apart. The fit fails either way; only its sentence is wrong.
+
+**The suite after them**, once, on both interpreters, as in §5:
+  - 3.11: **2803 passed, 26 skipped, 1 deselected, 1 xfailed**;
+  - 3.13: **2803 passed, 27 skipped, 1 xfailed**.

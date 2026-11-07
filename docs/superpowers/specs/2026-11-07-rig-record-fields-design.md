@@ -326,3 +326,29 @@ pending wl.works amendments; the checkpoint's and `wl.yaml`'s status lines.
     act id and its kind's own fields are the recipe's (`RigChangeSpec.change` and `.detail`), so a revert of two
     settings is one act. **Ruling:** a run of several blocks is generator work beyond this piece; wl-xcon's
     simulated folder, the contract fixture, holds its own plans whole.
+
+## Amendments, 2026-11-07, from the final review's minors
+
+The requester chose on 2026-11-07 to fix the final review's seven minors in one branch, as designed in chat that day.
+
+15. **An empty value is not a missing one** (§3, §5, §6; M1): a trial's `drawn`, a condition's `drawn` and `live`,
+    and a run's `generated` are published as `{}` or `[]` where the rig's record says there was none, apart from
+    '' where it does not say, and their descriptions say so; the values are kept, since the two say different
+    things.
+16. **A change's kind** (§7; M2): a row with no `kind` is still a set, written before C3; a `kind` of the wrong type
+    is read as none, published as '', and counted nowhere, as its note says; a kind outside wl-xcon's seven
+    (`record.py::KINDS`) is published as written, not counted as a person's act, and said once per kind.
+17. **What the descriptions say of timing** (§7; M3): `parameter_changes.session_time` says a change that strobed
+    nothing is timed by the rig's clock fit; a `rig_record` module made for the stimulus and run tables alone
+    claims no kind or calibration; `core.ParameterChange`'s and `core.RigClock`'s comment lines after their first
+    say the change rows' timing. **Ruling:** DataJoint stores only a definition's first comment line, as the
+    table's comment, and ignores the rest, so the tables stay as the database holds them.
+18. **A per-eye stimulus** (§4; M4): `n_objects` counts both eyes' objects, as `stimulus_objects` lists them, and
+    each eye's own position is read by the cyclopean rule and checked against our geometry.
+19. **A run's directions shape its own conditions** (§6; M5): a setting one run names in `directions` is an arc in
+    that run's conditions alone. **Ruling:** the file's pooled summary takes the directions of the runs it holds,
+    since it pools their trials (corrected by the minors' review, its issue 2).
+20. **A block ended twice** (§5; M6): the first of a run's `block_ends` naming one measured block is kept, and a
+    note says so, as everywhere a number repeats in the rig's record.
+21. **When neither clock fit holds** (§7; M8): the reason given for a row left untimed is the fit the session
+    would have had without its coded change rows.
