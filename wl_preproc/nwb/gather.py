@@ -382,12 +382,16 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
 
 
 def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record,
-                directions: frozenset[str] = frozenset()) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
+                directions: frozenset[str] = frozenset(), run_directions: dict[int, frozenset[str]] | None = None,
+                ) -> tuple[list[dict], list[str], dict[str, list[dict]]]:
     """Each trial's condition and the settings that varied, and each run's
     conditions and trial counts, from the rig's own record joined by trial
     number (design spec `2026-09-29-nwb-publishing-design.md` sections 2.1
     and 2.2). `record` is the session's `events/rigtrials.py::RigRecord`, or
-    None; `directions` the settings its runs name as directions. Returns the
+    None; `directions` the settings its runs name as directions, each run's
+    own in `run_directions` by run number, which shape that run's conditions
+    alone (the rig record fields' final review, M5), the session's pooled
+    summary taking any run's. Returns the
     file's conditions, the notes on what did not join, and
     the stimulus tables' rows (design spec
     `2026-11-07-rig-record-fields-design.md` section 4)."""
@@ -413,7 +417,8 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
         inside = [trial for trial in trials if trial["run_number"] == run["run_number"]]
         outcomes = collections.Counter(trial["outcome"] or "unknown" for trial in inside)
         run["trials"] = {"total": len(inside), "by_outcome": dict(sorted(outcomes.items()))}
-        run["conditions"] = block_conditions(inside, matched, codes, directions)
+        own = directions if run_directions is None else run_directions.get(run["run_number"], frozenset())
+        run["conditions"] = block_conditions(inside, matched, codes, own)
     return (block_conditions(trials, matched, codes, directions), notes,
             {"stimuli": stimuli, "stimulus_objects": stimulus_objects})
 
@@ -746,8 +751,9 @@ def gather(activation_key: dict) -> Gathered:
 
     record = read_rig_trials(session_dir, key["subject"])
     rig_runs = read_rig_runs(session_dir, key["subject"])
-    directions = frozenset() if rig_runs is None else frozenset().union(*(rig.directions for rig in rig_runs.runs))
-    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record, directions)
+    run_directions = {} if rig_runs is None else {rig.number: frozenset(rig.directions) for rig in rig_runs.runs}
+    directions = frozenset().union(*run_directions.values())
+    conditions, condition_notes, rig_tables = _conditions(trials, events, run_out, record, directions, run_directions)
     run_tables, run_notes = run_record(run_out, blocks, rig_runs, places(record))
     rig_tables.update(run_tables)
     condition_notes += run_notes

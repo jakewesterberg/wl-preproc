@@ -208,3 +208,21 @@ def test_a_condition_name_too_long_for_the_main_sequence_is_noted():
         "2 trial(s) name a condition longer than 255 characters, so the main sequence groups none of them by "
         "condition"]
     assert long_names({2: _rig(2, "x" * 255)}, 255) == []
+
+
+def test_a_runs_directions_shape_its_own_conditions_only():
+    """A setting one run names in `directions` is an arc in that run's
+    conditions; in another run, which does not name it, it is summarised as
+    any number is (the rig record fields' final review, M5). The session's
+    own summary, which pools every run's trials, names it if any run does."""
+    from wl_preproc.events.rigtrials import RigRecord
+    from wl_preproc.nwb.gather import _conditions
+
+    trials = [{**_trial(number, float(number)), "run_number": 1 if number < 3 else 2} for number in (1, 2, 3, 4)]
+    record = RigRecord(trials=tuple(_rig(number, "c", dir=value)
+                                    for number, value in ((1, 330.0), (2, 40.0), (3, 330.0), (4, 40.0))), problems=())
+    runs = [{"run_number": 1}, {"run_number": 2}]
+    session, _notes, _tables = _conditions(trials, [], runs, record, frozenset({"dir"}), {1: frozenset({"dir"})})
+    assert runs[0]["conditions"][0]["varying"]["dir"] == {"from": 330.0, "to": 40.0}
+    assert "from" not in runs[1]["conditions"][0]["varying"]["dir"]
+    assert session[0]["varying"]["dir"] == {"from": 330.0, "to": 40.0}
