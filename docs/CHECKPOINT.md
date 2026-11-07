@@ -1,14 +1,22 @@
 # Where this build actually is
 
-**Last updated 2026-11-06**, describing `main` at `71771b3`: the merge of
-`feat/syncbox-header` (`915a825`), reading wl-sync's header change
-(`specs/2026-11-04-syncbox-header-design.md`, approved 2026-11-06;
-`handoffs/2026-11-04-syncbox-header.md`), and a test-only fix after it. CI read off `71771b3` is
-green on both interpreters, 2669 passed on each with 36 skipped, and the manifest check is green
-(`gh run view 42236157334`). The merge's own run (`42223741914`) failed on 3.13 alone: an XC-398
-test compared a stored direction exactly, and numpy's `arctan2` and `math.atan2` differed in the
-last bit on that runner; `71771b3` compares it to 1e-12.
-- **wl-sync's header change is read:** the pin moved to wl-sync's `fe1ea63`; a clock is a process,
+**Last updated 2026-11-07**, describing `main` at `01f2a57`: the merge of
+`feat/eye-lost-and-region` (`7ec509e`), lost data and the screen region, first of wl-xcon's asks
+(`specs/2026-11-06-eye-lost-data-and-region-design.md`, approved 2026-11-06;
+`handoffs/2026-11-06-eye-lost-data-and-region.md`), and a test-only fix after it. CI read off
+`01f2a57` is green on both interpreters, 2741 passed on each with 36 skipped, and the
+manifest check is green (`gh run view 42355463512`). The merge's own run (`42350642258`) failed on both:
+v3's rebuild was compared to its text, and CI's Linux runners round 1,107 of its numbers in the last
+places otherwise than the macOS that made it, at most a relative 5.6e-11; `01f2a57` holds them to
+the tolerance v3 states, its intervals, labels and flags exact.
+- **Lost data and the screen region:** a saccade is carried across a short loss of data, counted
+  and flagged, while a sample present but invalid still ends it; the mask's screen region is each
+  session's recorded visible field plus 2 degrees, the placeholder only where none was recorded
+  (`core.SessionSetup`). v3 of the saccade fixtures (`docs/fixtures/saccade/v3.json`, SHA-256
+  `9b3f16d2...`) states the rule for wl-xcon, whose detector agrees with it at its version 11
+  (`991191c`, under its review) on all but the blink trace, which its input cannot yet express;
+  wl-xcon was sent the digest on 2026-11-07.
+- **wl-sync's header change is read** (`915a825`, just before): the pin moved to wl-sync's `fe1ea63`; a clock is a process,
   a roll in place one clock; the barcode delay is added and each process's late first barcode
   dropped; the box's `L` records are stored and fail a session where they cost a run's codes; code
   words on a split clock are named in the report. wl-sync was told on 2026-11-06 that the box may
@@ -155,6 +163,10 @@ last bit on that runner; `71771b3` compares it to 1e-12.
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `71771b3` (the header follow-up's merge and its test-only fix, CI green, 2669
+passed on each interpreter, `42236157334`) until lost data and the screen region's merge; true when
+written.*
 
 *This header named `82380d2` (XC-398's merge, CI green, 2594 passed on each interpreter,
 `42184114399`) until the header follow-up's merge; true when written.*
@@ -471,23 +483,26 @@ requester chose to merge the same day; true when written.*
 > process, the barcode delay is added and each process's late first barcode dropped, the box's
 > lost events are stored and fail a session where they cost a run's codes, and a split clock is
 > named in the report; its final review's four findings are fixed (handoff §6); wl-sync was told
-> on 2026-11-06. **Lost data and the screen region, first of wl-xcon's asks, is built** on
-> `feat/eye-lost-and-region`, not merged (`specs/2026-11-06-eye-lost-data-and-region-design.md`,
+> on 2026-11-06. **Lost data and the screen region, first of wl-xcon's asks, is merged**
+> (`7ec509e`, CI green at `01f2a57`, `42355463512`; `specs/2026-11-06-eye-lost-data-and-region-design.md`,
 > approved 2026-11-06; `handoffs/2026-11-06-eye-lost-data-and-region.md`): a saccade is carried
 > across a short loss of data, counted and flagged, an invalid sample still ending it; the mask's
 > region is each session's recorded field plus 2 degrees; v3 of the saccade fixtures is made.
-> Its final review's one Critical and five Important are fixed (handoff §6). Next: its merge; then, in the
-> requester's order
-> of 2026-10-31, wl-xcon's asks (engine builds C2a, C2b and, since 2026-11-06, C3; XC-399; and a
-> setting's value that is an appearance), the pipeline's scaling to long sessions, part 3b, the NI
-> as the clock, part 2, the bridges, and the older minors in one branch.
+> Its final review's one Critical and five Important are fixed (handoff §6); wl-xcon was sent
+> v3's digest on 2026-11-07. Next, the rest of wl-xcon's asks (engine builds C2a, C2b and C3;
+> XC-399; and a setting's value that is an appearance), designed as one piece
+> (`specs/2026-11-07-rig-record-fields-design.md` on `spec/rig-record-fields`, approved
+> 2026-11-07; its plan being proved); then, in the requester's order of 2026-10-31, the
+> pipeline's scaling to long sessions, part 3b, the NI as the clock, part 2, the bridges, and the
+> older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
 > *Until XC-398 was built, this said its plan was being proved; until its review, that the review
 > was next; until its merge, that the merge was next; until the header follow-up was built, that
 > its plan was being proved; until its review, that the review was next; until its merge, that the
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
-> until its review, that the review was next; each true when written.*
+> until its review, that the review was next; until its merge, that the merge was next; each
+> true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

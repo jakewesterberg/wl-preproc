@@ -3,7 +3,8 @@
 **`specs/2026-11-06-eye-lost-data-and-region-design.md`**: the requester's answers of 2026-11-06 to a question
 asked jointly with wl-xcon. A saccade is carried across a short loss of data, counted and flagged; a sample present
 but invalid still ends it; the mask's screen region is each session's recorded visible field plus 2 degrees.
-- **Branch:** `feat/eye-lost-and-region`, from `plan/eye-lost-and-region`.
+- **Branch:** `feat/eye-lost-and-region`, from `plan/eye-lost-and-region`; merged as `7ec509e` on 2026-11-07
+  (CI green at `01f2a57`, `42355463512`, after a test-only fix: v3's rebuild held to its stated tolerance).
 - **Spec:** the design, its three parts approved one by one on 2026-11-06, its seven rulings, and its amendments
   1-10, made while proving the plan, with wl-xcon's check of that day.
 - **Plan:** `docs/superpowers/plans/2026-11-06-eye-lost-data-and-region.md`.
@@ -32,7 +33,7 @@ Every line of the plan was proven in a scratch branch before the plan was writte
 
 ## 2. What the other repositories must do
 
-- **wl-xcon:** told with the merge, with v3's SHA-256; it vendors v3, builds its invalid input and the region to
+- **wl-xcon:** told on 2026-11-07, with v3's SHA-256 (`9b3f16d2a573c1178d0f57e94ef3551994e10f32693d8332da7f216250f4c915`); it vendors v3, builds its invalid input and the region to
   these definitions; its rules match ours at its version 10 (`8bc667e`), the take-off rule in its version 11
   (`991191c`, under its review), all but v3's blink trace, which its input cannot yet express
   (`HANDOVER-wl-expcontroller.md`, 2026-11-06).

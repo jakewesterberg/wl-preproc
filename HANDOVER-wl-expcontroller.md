@@ -501,7 +501,7 @@ agree, and wl-preproc changes.** A saccade is carried across a short loss of dat
 present but invalid ends it; the mask's screen region is each session's recorded visible field (`setup.half_field_deg`)
 plus 2 degrees. Designed in `docs/superpowers/specs/2026-11-06-eye-lost-data-and-region-design.md` (its §12 answers
 wl-xcon's six questions; its amendments 2, 6, 7 and 10 record wl-xcon's check of 2026-11-06), built on
-`feat/eye-lost-and-region`, not merged.
+`feat/eye-lost-and-region` and merged as `7ec509e` on 2026-11-07.
 - *Agreed with wl-xcon, rule by rule:* the bound is the loss of data, from the last position to the next, at most 50
   ms inclusive (its `max_gap_s`); unknown velocities carry a run and never make one; a run ends at its last measured
   velocity, except that a short loss at its end is carried to the landing (both sessions' correction of 2026-11-06,
@@ -511,5 +511,5 @@ wl-xcon's six questions; its amendments 2, 6, 7 and 10 record wl-xcon's check of
   invalid input, and the region, it builds to these definitions.
 - *v3:* `docs/fixtures/saccade/v3.json`, made by `python -m wl_preproc.eye.detect.contract_fixtures v3` from v2's
   traces and six of its own (the sixth, a short loss at a saccade's take-off, added in the final review); its
-  `about` is the reading rule. Built, not merged; its SHA-256 goes to wl-xcon with
-  the merge.
+  `about` is the reading rule. Published with the merge, SHA-256
+  `9b3f16d2a573c1178d0f57e94ef3551994e10f32693d8332da7f216250f4c915`, sent to wl-xcon on 2026-11-07.
