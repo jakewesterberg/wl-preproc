@@ -114,7 +114,8 @@ class Stimulus:
     for at least one frame of the trial. `frame` and `off` are the trial's
     frames, from 1; `off` None while it stayed on to the trial's end. An
     array's `objects` and `target`; a per-eye stimulus's `left` and `right` as
-    written, and their objects, by eye, in `eye_objects`."""
+    written, their positions, by eye, in `eye_at`, and their objects, by eye,
+    in `eye_objects`."""
 
     name: str | None
     kind: str | None
@@ -129,6 +130,9 @@ class Stimulus:
     left: dict | None = None
     right: dict | None = None
     eye_objects: tuple[tuple[str, tuple[Place, ...]], ...] = ()
+    # Each eye's own position, by eye, read as a cyclopean one is (the rig
+    # record fields' final review, M4).
+    eye_at: tuple[tuple[str, Place], ...] = ()
 
 
 def _place(entry: dict, fields: Fields, field: str) -> Place:
@@ -152,8 +156,10 @@ def _stimuli(row: dict, fields: Fields) -> tuple[Stimulus, ...] | None:
     out = []
     for entry in entries:
         eyes = {eye: fields.read(entry, eye, MAPPING, field=f"stimuli[].{eye}") for eye in ("left", "right")}
-        eye_objects = []
+        eye_objects, eye_at = [], []
         for eye, value in eyes.items():
+            if value is not None:
+                eye_at.append((eye, _place(value, fields, f"stimuli[].{eye}")))
             objects = None if value is None else _places(value, fields, f"stimuli[].{eye}")
             if objects is not None:
                 eye_objects.append((eye, objects))
@@ -167,7 +173,7 @@ def _stimuli(row: dict, fields: Fields) -> tuple[Stimulus, ...] | None:
             unresolved=fields.read(entry, "unresolved", TEXT, field="stimuli[].unresolved"),
             at=_place(entry, fields, "stimuli[]"), target=fields.read(entry, "target", WHOLE, field="stimuli[].target"),
             objects=_places(entry, fields, "stimuli[]"), left=eyes["left"], right=eyes["right"],
-            eye_objects=tuple(eye_objects)))
+            eye_objects=tuple(eye_objects), eye_at=tuple(eye_at)))
     return tuple(out)
 
 # What a line may carry beyond its six, and how each is read.

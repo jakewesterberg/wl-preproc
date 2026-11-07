@@ -58,3 +58,20 @@ def test_a_position_whose_angles_are_not_its_x_and_ys_is_noted_never_corrected()
     assert entries[1]["eccentricity_deg"] == 28.28
     assert notes == ["3 stimulus entries give an eccentricity or polar angle that is not its x and y's, past 1e-09 "
                      "degrees; published as written (trial 1 entry 1, trial 2 entry 0, trial 2 entry 1)"]
+
+
+def test_a_per_eye_arrays_objects_are_counted_and_each_eyes_place_checked():
+    """A stimulus drawn by per-eye positions counts both eyes' objects, as
+    `stimulus_objects` lists them, and each eye's own position is checked
+    against our geometry as a cyclopean one is (the rig record fields' final
+    review, M4)."""
+    from wl_preproc.nwb.stimuli import stimulus_rows
+
+    dot = Place(2.0, 0.0, 2.0, 0.0)
+    per_eye = _stimulus("dot", at=Place(), left={"x": 1.0}, right={"x": -1.0},
+                        eye_at=(("left", Place(1.0, 0.0, 1.0, 0.0)), ("right", Place(-1.0, 0.0, 1.0, 90.0))),
+                        eye_objects=(("left", (dot, dot)), ("right", (dot,))))
+    entries, objects, notes = stimulus_rows([{"trial_id": 4}], {4: _rig(4, (per_eye,))})
+    assert entries[0]["n_objects"] == len(objects) == 3
+    assert notes == ["1 stimulus entry give an eccentricity or polar angle that is not its x and y's, past 1e-09 "
+                     "degrees; published as written (trial 4 entry 0)"]

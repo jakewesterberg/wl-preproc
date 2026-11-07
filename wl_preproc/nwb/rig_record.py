@@ -72,7 +72,8 @@ TABLES: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
          ("unresolved", "Why a field could not be given ('' when everything resolved)."),
          *_POSITION,
          ("target", "An array's target, its index among its objects (-1 if none)."),
-         ("n_objects", "An array's objects, in stimulus_objects (0 for one stimulus)."),
+         ("n_objects", "An array's objects, in stimulus_objects, both eyes' for a per-eye array (0 for one "
+                       "stimulus)."),
          ("left", "A per-eye stimulus's left-eye position, after the vergence offset, as JSON text ('' if none)."),
          ("right", "A per-eye stimulus's right-eye position, likewise ('' if none)."))),
     "stimulus_objects": (
