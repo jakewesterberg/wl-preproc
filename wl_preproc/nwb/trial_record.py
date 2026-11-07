@@ -38,7 +38,8 @@ COLUMNS: dict[str, str] = {
     "structure": "The trial structure it played: its condition's or the task's default ('' if not recorded).",
     "overridden": "The values its condition set that a person's live edit replaced, comma-joined ('' if none).",
     "drawn": ("Each setting drawn at random for it, and where the range came from: task, block, condition or "
-              "the id of the live change that put it in force, as JSON text ('' if none)."),
+              "the id of the live change that put it in force, as JSON text ('{}' if nothing was drawn for it, "
+              "'' if its line does not say)."),
     "live": "The settings a person held at a value for it, comma-joined ('' if none).",
     "eased": "The settings whose live change kept it out of moving up, comma-joined ('' if none).",
     "fluid_ml": "The fluid it commanded, ml (NaN if not recorded).",

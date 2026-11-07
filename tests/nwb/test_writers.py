@@ -202,6 +202,9 @@ def test_the_conditions_table_carries_drawn_and_person_held_values_where_recorde
         assert frame["drawn"].tolist() == ['{"hold": {"max": 0.8, "min": 0.2, "sources": ["task"]}}', ""]
         assert frame["live"].tolist() == ["{}", ""]
         assert frame["n_eased"].tolist() == [1, 0]
+        # Each says what an empty value and a missing one are (the review's M1).
+        table = nwb.processing["behavior"]["conditions"]
+        assert all("'{}'" in table[name].description and "''" in table[name].description for name in ("drawn", "live"))
 
 def test_the_timebase_tables(tmp_path):
     from wl_preproc.nwb.timebase import add_timebase

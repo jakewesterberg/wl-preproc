@@ -37,7 +37,8 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
     "seed": ("seed", "The seed its random draws came from, as text ('' if not recorded)."),
     "draws": ("draws", "The task's random draws as declared, each with every field, as JSON text; a direction "
                        "draw with equal ends is the whole turn ('' if none)."),
-    "generated": ("generated", "The conditions each block type's factorial generated, as JSON text ('' if none)."),
+    "generated": ("generated", "The conditions each block type's factorial generated, as JSON text ('[]' if no "
+                               "block type of the run makes any, '' if its row does not say)."),
 }
 BLOCK_COLUMNS: dict[str, str] = {
     "ended": "How the block ended: rule, time, fall_back, next, back, run_time or run ('' if not recorded).",

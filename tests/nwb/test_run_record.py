@@ -95,3 +95,15 @@ def test_a_disagreement_with_the_stream_is_a_note_never_a_refusal():
         "run 1: the rig's end row counts 5 presentation(s) and its record holds 2 trial line(s)",
         "1 trial index(es) in the rig's run rows name no trial line of their run, so they are -1",
     ]
+
+
+def test_a_plain_runs_empty_generated_is_published_as_its_description_says():
+    """A run whose block types make no factorial writes `generated: []`:
+    published as '[]', apart from '' for a run whose row does not say (the
+    final review's M1)."""
+    from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
+
+    runs, blocks = _file(1, 2)
+    run_record(runs, blocks, RigRuns(runs=(_run(generated=[]),), problems=()), {})
+    assert (runs[0]["record"]["generated"], runs[1]["record"]["generated"]) == ("[]", "")
+    assert "'[]'" in RUN_COLUMNS["generated"][1] and "''" in RUN_COLUMNS["generated"][1]
