@@ -187,7 +187,9 @@ def time_records(records: RigRecords, codes: Mapping[int, list[float]],
         if isinstance(without, RigClock):
             fit_problems.append(f"{CHANGES_NAME}: with its rows the rig's clock would not fit ({fitted}), so it is "
                                 "fitted without them")
-            fitted = without
+        # Where neither holds, the reason said is the session's own, the fit
+        # it would have had without the change rows (the final review's M8).
+        fitted = without
     clock = fitted if isinstance(fitted, RigClock) else None
     controls, unfitted = [], 0
     for control, time in zip(records.controls, coded_times, strict=True):
