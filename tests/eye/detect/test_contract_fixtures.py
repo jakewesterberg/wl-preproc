@@ -364,8 +364,31 @@ def test_v3s_own_traces_carry_a_short_loss_end_at_a_blink_and_at_a_long_loss():
     assert abs(landing["amplitude_deg"] - whole["amplitude_deg"]) < 0.1
 
 
+def _same(got, want, path="v3") -> None:
+    """`got` is `want` in shape and in every value but a number that is not
+    whole, which is within v3's tolerance (its `about` states v2's): the
+    intervals, labels, flags and counts exactly."""
+    if isinstance(want, dict):
+        assert isinstance(got, dict) and list(got) == list(want), path
+        for key in want:
+            _same(got[key], want[key], f"{path}.{key}")
+    elif isinstance(want, list):
+        assert isinstance(got, list) and len(got) == len(want), path
+        for index, (item, wanted) in enumerate(zip(got, want, strict=True)):
+            _same(item, wanted, f"{path}[{index}]")
+    elif isinstance(want, float) and isinstance(got, float):
+        assert _close(got, want), (path, got, want)
+    else:
+        assert got == want and type(got) is type(want), (path, got, want)
+
+
 def test_v3_is_what_this_code_makes_of_v2():
-    """The file is this code's output, the builder's every rule included."""
+    """The file is this code's output, the builder's every rule included:
+    the same intervals, labels and flags, and every other number within its
+    tolerance. CI's Linux runners round sin, cos and atan2 in the last
+    places otherwise than the macOS that made it: 1,107 of v3's numbers
+    differ there, by at most a relative 5.6e-11 (run 42350642258), as v2's
+    reader test allows."""
     from wl_preproc.eye.detect.contract_fixtures import build_v3, dumps
 
-    assert dumps(build_v3(_v2(), V2_SHA256)) == V3.read_text(encoding="utf-8")
+    _same(json.loads(dumps(build_v3(_v2(), V2_SHA256))), _v3())
