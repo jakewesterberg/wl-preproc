@@ -137,6 +137,9 @@ def test_the_stimulus_tables_join_the_rig_record_module_or_make_it(tmp_path):
         frame = module["stimuli"].to_dataframe()
         assert (frame["stimulus"].tolist(), frame["frame"].tolist(), frame["off"].tolist()) == (["fix"], [1], [-1])
         assert "Frames, not times" in module["stimuli"].description
+        # Made for these tables alone, it claims no kind or calibration (the
+        # rig record fields' final review, M3).
+        assert "where each trial's stimuli were" in module.description and "calibration" not in module.description
     (tmp_path / "none").mkdir()
     _path, io, nwb = _write(tmp_path / "none", lambda nwb: add_rig_tables(nwb, {}))
     with io:
@@ -564,6 +567,9 @@ def test_the_change_log_is_published_by_kind_and_act(tmp_path):
         changes = nwb.processing["rig_record"]["parameter_changes"].to_dataframe()
         assert changes["kind"].tolist() == ["set", "range", "revert", "revert", "clear"]
         assert changes["detail"].tolist() == ["{}"] * 4 + ['{"block": "easy", "condition": "c-50", "rest": true}']
+        # A change that strobed nothing is timed by the rig's clock, and its
+        # time's description says so (the final review's M3).
+        assert "rig's clock" in nwb.processing["rig_record"]["parameter_changes"]["session_time"].description
         assert changes["change"].tolist() == [3, 4, 5, 5, 6]
         assert (changes["trial_id"].tolist()[:2], changes["went"].tolist()[0], changes["step"].iloc[0]) == (
             [12, -1], "easier", -0.1)
