@@ -16,8 +16,11 @@ batches are closed; their records are kept below, because
 - **`GET /nwb`:** each description gains, within version 3 and each defaulted so a description written before
   reads unchanged: each run's `plan` and `end_reason`; each block's `ended`; each condition's `drawn` and
   `live` (its drawn and person-held values, which no longer read as its own `settings` or `varying`) and its
-  trial counts' `eased`. `docs/schemas/nwb_description.json` refuses fields it does not know, so wl.works' copy
-  must take these first.
+  trial counts' `eased`. `docs/schemas/nwb_description.json` refuses fields it does not know. **wl.works vendors
+  no copy yet**, and nothing there reads `GET /nwb` (wl.works, 2026-11-07; its `main` at `7461f4d5` holds
+  neither), but its January spec's §11 vendors our schemas at a pinned commit and refuses an unknown key, so
+  **the copy its plan 20b-1 vendors must be pinned at or after this change.** *(Corrected 2026-11-07: this said
+  a copy must take these first, as if one existed.)*
 - **The count of live parameter changes changes meaning**, in the listing's `training_records` and the
   description's: since wl-xcon's engine build C3 the change log also holds hand-backs, range edits, reverts,
   clears and switches; the count is a person's acts on a setting, one per act among a set, a hand-back, a range
@@ -30,7 +33,12 @@ batches are closed; their records are kept below, because
   session ("2 run rows: `seed` is not a whole number or null, so it is read as none"), beside the run rows' other
   problems; the run is kept.
 - **A question:** should the listing's runs carry `plan` and `end_reason`? `ListedRun` refuses unknown fields,
-  so nothing is added until wl.works says yes.
+  so nothing is added until wl.works says yes. *wl.works' answer, 2026-11-07, its reading of its own specs and
+  not its owner's ruling:* `end_reason` has a consumer (the January canonical-NWB spec's runs-by-probes grid,
+  where wl-xcon's stop reason is a hint beside each run), and `plan` has none; its plan 20b-1, which reads the
+  listing's runs, confirms or reverses this. Nothing is added until it does. That grid's "wl-xcon's stop reason"
+  may already be met by the listing's `stopped_because` and `stop_kind`, which its spec's listing section names
+  and the listing sends; its spec predates `end_reason` (2026-09-30 against wl-xcon's 2026-10-22).
 - **Every listed session whose change log holds C3 rows is listed once more** when this ships: its count, and so
   its digest, changes.
 
@@ -48,8 +56,10 @@ rig's clock fitted to the recording. **wl.works is sent their counts, never the 
 - **`GET /sessions`:** each session gains `training_records` (`parameter_changes`, `pauses`,
   `manual_rewards`; null for a session wl-xcon did not run, zeros for one read before this host carried
   them) and `clock` (`syncbox`, `nidq` or `lab`, null until chosen; `syncbox` is the only clock built
-  yet). `docs/schemas/session_listing.json` refuses fields it does not know, so wl.works' copy must take
-  these before it validates an entry from a host running this change.
+  yet). `docs/schemas/session_listing.json` refuses fields it does not know. **wl.works vendors no copy yet**
+  (wl.works, 2026-11-07), but its January spec still names `session_listing.json` **at `6a67ae2`** to vendor,
+  which refuses these fields: **the copy must be pinned at or after this change.** *(Corrected 2026-11-07: this
+  said a copy must take these first, as if one existed.)*
 - **`GET /nwb`:** each description gains `training_records` (`parameter_changes`, `controls`) within
   version 3, null for a session wl-xcon did not run; `docs/schemas/nwb_description.json` likewise.
 - **Who acted is not sent:** neither the listing nor the file names a person for a change or a
@@ -75,8 +85,10 @@ here:** whether a training or piloting session gets a canonical NWB is wl.works'
 - **`GET /sessions`:** each session gains `session_kind`, `calibration` (`id`, `standard`,
   `measured_on`) and `accepted_warnings` (each `code`, `detail`, `accepted_in`, `how`, `run_number`,
   `at_local` and `by`); each run gains `calibration`. `docs/schemas/session_listing.json` refuses
-  fields it does not know, so wl.works' copy must take these before it validates an entry from a
-  host running this change.
+  fields it does not know. **wl.works vendors no copy yet** (wl.works, 2026-11-07), but its January
+  spec still names `session_listing.json` **at `6a67ae2`** to vendor, which refuses these fields: **the
+  copy must be pinned at or after this change.** *(Corrected 2026-11-07: this said a copy must take
+  these first, as if one existed.)*
 - **Who accepted a warning** is listed by name and wl.works account (`by.kind` is `box` for a name
   typed at the rig, `member` for a wl.works member), never by the token's id or its issuer. The NWB
   file names no one.
@@ -87,8 +99,8 @@ here:** whether a training or piloting session gets a canonical NWB is wl.works'
 - **The NWB description** gains `session_kind`, `calibration`, `accepted_warnings` (each `code` and
   `run_number`) and each run's `calibration`, within `schema_version` 3. Its exported schema refuses
   fields it does not know, as the listing's does, so the copy of `docs/schemas/nwb_description.json`
-  you were asked to vendor (above, "measured runs") must take them before it validates a description
-  from a host running this change. Selecting a dataset by kind can use them.
+  you were asked to vendor (above, "measured runs"), none yet (wl.works, 2026-11-07), must be pinned at
+  or after this change. Selecting a dataset by kind can use them.
 - **The kinds differ from yours.** wl-xcon writes three: `training`, `piloting` and `recording`
   (its `wl_xcon/findings.py::SESSION_KINDS`, read at `b2c2850`). Your session record, as your plan
   `docs/superpowers/plans/2026-10-14-16b-1-the-visit.md` builds it (read on your `main` at

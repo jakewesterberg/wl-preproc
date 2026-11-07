@@ -186,7 +186,9 @@ class ParameterChange(dj.Manual):
     # One live change the rig applied, from `xcon/parameter_changes.jsonl`, as
     # wl-xcon wrote it, read by `schema/events.py::populate_session` (design
     # spec 2026-10-18-training-records-and-backup-clock-design.md section 3.1).
-    # Timed by the code its act strobed (section 3.3), and otherwise untimed.
+    # Timed by the code its act strobed (section 3.3), and one that strobed
+    # nothing by the rig's clock fit (design spec
+    # 2026-11-07-rig-record-fields-design.md section 7).
     # Its values and its line are JSON text as written: MySQL's json type
     # rounds a double's seventeenth digit and refuses NaN (amendment 9). Who
     # made it is kept here, never in the NWB file. Key: (subject,
@@ -249,6 +251,8 @@ class RigClock(dj.Manual):
     # The rig's anchored wall clock fitted to session time: its run rows' and
     # its coded controls' instants against their codes (design spec
     # 2026-10-18-training-records-and-backup-clock-design.md section 3.3),
+    # and its coded change rows' unless with them it would not fit (design spec
+    # 2026-11-07-rig-record-fields-design.md section 7),
     # rig_s = rig_at_zero + session_s * (1 + drift_ppm / 1e6). Written by the
     # event stage with the records it times. None when fewer than two instants
     # matched, or one missed its code by more than 50 ms

@@ -214,3 +214,23 @@ def test_a_change_field_it_cannot_read_is_none_and_said_once():
     assert (fields[0].change, fields[0].step, fields[0].kind) == (None, None, "set")
     assert problems == ["1 change row: `change` is not a whole number or null, so it is read as none",
                         "1 change row: `meaning.step` is not a finite number or null, so it is read as none"]
+
+
+def test_a_kind_it_cannot_read_or_does_not_know_is_published_as_read_and_counted_nowhere():
+    """A row with no `kind` was written before C3 and is a set; a `kind` of
+    the wrong type is read as none, published as '', and not counted, as its
+    note says; a kind no build of wl-xcon writes is published as written,
+    not counted, and said once (the rig record fields' final review, M2)."""
+    import json
+
+    from wl_preproc.events.rigrecords import acts, change_fields
+
+    rows = [{"name": "a"}, {"name": "b", "kind": 5, "change": 2}, {"name": "c", "kind": "ease", "change": 3},
+            {"name": "d", "kind": "ease", "change": 4}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert [field.kind for field in fields] == ["set", "", "ease", "ease"]
+    assert acts(fields) == 1
+    assert problems == [
+        "1 change row: `kind` is not text or null, so it is read as none",
+        "2 change rows: `kind` is 'ease', which no build of wl-xcon this reader knows writes, so it is published "
+        "as written and not counted as a person's act"]

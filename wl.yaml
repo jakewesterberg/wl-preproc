@@ -89,8 +89,10 @@ status:
     docs/handoffs/2026-11-06-eye-lost-data-and-region.md). The rest of
     wl-xcon's asks (C2a, C2b, C3, XC-399, a setting's value that is an
     appearance) are merged (295f9c9;
-    docs/handoffs/2026-11-07-rig-record-fields.md), their seven minors
-    next; then, in the requester's order of
+    docs/handoffs/2026-11-07-rig-record-fields.md); their seven minors
+    are built and reviewed on fix/rig-record-minors, not merged, their
+    merge next; then wl-xcon's pop-out search (the requester's choice of
+    2026-11-07); then, in the requester's order of
     2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
     the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.

@@ -75,3 +75,14 @@ def test_lists_are_sorted_and_comma_joined_and_draws_are_json_text():
     assert (columns["overridden"], columns["live"], columns["eased"]) == (["a,b"], ["contrast,hold"], [""])
     assert columns["drawn"] == ['{"hold": "task", "jitter": 7}']
     assert (columns["structure"], columns["previous"], columns["drumming"]) == (["default"], [""], [""])
+
+
+def test_an_empty_draw_is_published_as_its_description_says():
+    """A line since C3 that drew nothing carries `drawn: {}`: published as
+    '{}', apart from '' for a trial whose line does not say (the final
+    review's M1)."""
+    from wl_preproc.nwb.trial_record import COLUMNS, record_columns
+
+    columns, _notes = record_columns(_trials(1, 2), {1: _rig(1, 0, drawn={})}, {})
+    assert columns["drawn"] == ["{}", ""]
+    assert "'{}'" in COLUMNS["drawn"] and "''" in COLUMNS["drawn"]

@@ -41,6 +41,10 @@ DESCRIPTION = ("What wl-xcon's record says the session was: the kind it was run 
                "opened with, the warnings it accepted, its training records, the changes it applied and the controls "
                "it was sent, where each trial's stimuli were, and what each run owed. Carried as the rig wrote "
                "them.")
+# The module's description when only the trial lines' and run rows' tables
+# make it, for a session with no record of its own (the final review's M3).
+TABLES_DESCRIPTION = ("What wl-xcon's record says beyond the stream: where each trial's stimuli were, and what each "
+                      "run owed. Carried as the rig wrote them.")
 
 _POSITION = (
     ("x_deg", "Its cyclopean per-axis position across, degrees, atan(X/D) (NaN if none). Through the stereoscope "
@@ -68,7 +72,8 @@ TABLES: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
          ("unresolved", "Why a field could not be given ('' when everything resolved)."),
          *_POSITION,
          ("target", "An array's target, its index among its objects (-1 if none)."),
-         ("n_objects", "An array's objects, in stimulus_objects (0 for one stimulus)."),
+         ("n_objects", "An array's objects, in stimulus_objects, both eyes' for a per-eye array (0 for one "
+                       "stimulus)."),
          ("left", "A per-eye stimulus's left-eye position, after the vergence offset, as JSON text ('' if none)."),
          ("right", "A per-eye stimulus's right-eye position, likewise ('' if none)."))),
     "stimulus_objects": (
@@ -123,19 +128,21 @@ def _time(value: float | None) -> float:
     return math.nan if value is None else value
 
 
-def _module(nwb: NWBFile):
-    """The file's `rig_record` module, made if it is not there yet."""
+def _module(nwb: NWBFile, description: str = DESCRIPTION):
+    """The file's `rig_record` module, made with `description` if it is not
+    there yet."""
     if "rig_record" in nwb.processing:
         return nwb.processing["rig_record"]
-    return nwb.create_processing_module(name="rig_record", description=DESCRIPTION)
+    return nwb.create_processing_module(name="rig_record", description=description)
 
 
 def add_rig_tables(nwb: NWBFile, tables: dict[str, list[dict]]) -> None:
-    """Each table of `TABLES` that has a row."""
+    """Each table of `TABLES` that has a row, in the session's `rig_record`
+    module, added first (`build.py`), or in one made for them alone."""
     for name, (description, columns) in TABLES.items():
         rows = tables.get(name) or []
         if rows:
-            _module(nwb).add(DynamicTable(name=name, description=description, columns=[
+            _module(nwb, TABLES_DESCRIPTION).add(DynamicTable(name=name, description=description, columns=[
                 column(field, text, [row[field] for row in rows]) for field, text in columns]))
 
 
@@ -188,7 +195,9 @@ def _add_changes(module, changes: list[dict]) -> None:
         "kind and the act it belongs to, timed by the code it strobed or, for one that strobed nothing, by the rig's "
         "clock fitted to the recording."),
         columns=[
-            column("session_time", "When, in session seconds: its code's time (NaN if untimed).",
+            column("session_time", "When, in session seconds: its code's time, or, for one that strobed "
+                                   "nothing, the rig's clock fitted to the recording, as time_source says (NaN if "
+                                   "untimed).",
                    [_time(change["session_time"]) for change in changes]),
             column("run_number", "The run it was applied in (-1: none, or a run the recording did not measure).",
                    [-1 if change["run_number"] is None else change["run_number"] for change in changes]),
@@ -203,7 +212,8 @@ def _add_changes(module, changes: list[dict]) -> None:
                    [change["by_kind"] or "" for change in changes]),
             column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
                            "revert, clear, drum or training; a row written before wl-xcon's engine build C3 is a "
-                           "set.", [field.kind for field in fields]),
+                           "set, one whose kind could not be read is '', and a kind outside these is as written, "
+                           "each of the last two said in the notes.", [field.kind for field in fields]),
             column("change", "The act it belongs to, an id a revert's rows share (-1 if not recorded).",
                    [-1 if field.change is None else field.change for field in fields]),
             column("trial_id", "The first trial it applies to (-1 if not recorded).",

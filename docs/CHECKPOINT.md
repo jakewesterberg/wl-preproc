@@ -500,8 +500,10 @@ requester chose to merge the same day; true when written.*
 > XC-399; and a setting's value that is an appearance) are merged** (`295f9c9`, CI green,
 > `42374492163`; `specs/2026-11-07-rig-record-fields-design.md`, approved 2026-11-07;
 > `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three fixes): the rig's new
-> fields are read when the NWB file is built, with no database change. Next: its seven minors,
-> which the requester chose to fix at once (`fix/rig-record-minors`); then, in the
+> fields are read when the NWB file is built, with no database change. **Its seven minors are built
+> and reviewed** on `fix/rig-record-minors`, not merged (handoff §7; spec amendments 15-21). Next:
+> their merge; then wl-xcon's pop-out search, the lab's first real task (its fields agreed with
+> wl-xcon on 2026-11-07; the requester put it before scaling the same day); then, in the
 > requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
 > the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
@@ -512,7 +514,7 @@ requester chose to merge the same day; true when written.*
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
 > until its review, that the review was next; until its merge, that the merge was next; until
 > wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
-> next; each true when written.*
+> next; until their minors were built, that they were next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

@@ -155,9 +155,9 @@ def _apart_columns(rows: list[dict]) -> list:
     out = []
     for name, description in (
             ("drawn", "Each setting drawn at random on its trials: where its ranges came from and a summary of the "
-                      "values drawn, as JSON ('' where none, or not recorded)."),
+                      "values drawn, as JSON ('{}' where its trials say none was, '' where they do not say)."),
             ("live", "Each setting a person held on its trials: on how many, and a summary of the values, as JSON "
-                     "('' where none, or not recorded).")):
+                     "('{}' where its trials say none was, '' where they do not say).")):
         if any(name in row for row in rows):
             out.append(column(name, description, ["" if row.get(name) is None else json.dumps(row[name], sort_keys=True)
                                                   for row in rows]))

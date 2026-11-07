@@ -66,10 +66,10 @@ def stimulus_rows(trials: list[dict], matched: dict[int, RigTrial]) -> tuple[lis
                 "off": _whole(stimulus.off), "changed": ",".join(stimulus.changed),
                 "drawn": -1 if stimulus.drawn is None else int(stimulus.drawn), "unresolved": stimulus.unresolved or "",
                 **_numbers(stimulus.at), "target": _whole(stimulus.target),
-                "n_objects": len(stimulus.objects or ()),
+                "n_objects": len(stimulus.objects or ()) + sum(len(these) for _eye, these in stimulus.eye_objects),
                 "left": "" if stimulus.left is None else json.dumps(stimulus.left, sort_keys=True),
                 "right": "" if stimulus.right is None else json.dumps(stimulus.right, sort_keys=True)})
-            places = [stimulus.at]
+            places = [stimulus.at, *(place for _eye, place in stimulus.eye_at)]
             for eye, these in (("", stimulus.objects or ()), *stimulus.eye_objects):
                 for index, place in enumerate(these):
                     objects.append({**key, "eye": eye, "object": index, **_numbers(place)})

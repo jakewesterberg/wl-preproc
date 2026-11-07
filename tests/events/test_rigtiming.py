@@ -249,3 +249,18 @@ def test_a_coded_change_joins_the_clock_fit_unless_with_it_the_fit_would_fail():
     assert late.changes[0] == 50.0 and late.changes[1] == pytest.approx(60.0, abs=1e-6)
     assert late.problems == ("parameter_changes.jsonl: with its rows the rig's clock would not fit (its instants miss "
                              "their codes by up to 0.667 s, past the 0.05 s limit), so it is fitted without them",)
+
+
+def test_when_neither_fit_holds_the_reason_given_is_the_sessions_own():
+    """With its coded change rows the fit fails, and without them it fails
+    too: the reason a clear's row is left untimed is the fit the session
+    would have had alone, never the one the change rows broke (the rig
+    record fields' final review, M8)."""
+    from wl_preproc.events.rigtiming import time_records
+
+    changes = [_c3_change(1, at=_rig(50.0) + 1.0), _c3_change(2, at=_rig(60.0)), _c3_change(3, at=_rig(70.0)),
+               _c3_change(4, code=None, at=_rig(65.0))]
+    timing = time_records(_records(changes=changes), {4130: [50.0, 60.0, 70.0]}, [])
+    assert timing.clock is None and timing.changes[3] is None
+    assert timing.problems == ("parameter_changes.jsonl: 1 row strobed nothing, and the rig's clock could not be "
+                               "fitted to the recording (none of its instants matched a code), so it is not timed",)

@@ -204,3 +204,20 @@ def test_a_stimulus_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
         "1 trial line: `stimuli[].frame` is not a whole number or null, so it is read as none",
         "1 trial line: `stimuli[].x` is not a finite number or null, so it is read as none",
     )
+
+
+def test_each_eyes_own_position_is_read(tmp_path):
+    """A per-eye stimulus's `left` and `right` are each a position, read by
+    the same rule as a cyclopean one (the final review's M4)."""
+    from wl_preproc.events.rigtrials import Place, read_rig_trials
+
+    left = {"x": 1.0, "y": 0.0, "eccentricity": 1.0, "direction": 0.0, "objects": None}
+    right = {"x": -1.0, "y": 0.0, "eccentricity": 1.0, "direction": "west", "objects": None}
+    entry = {"name": "dot", "kind": "show", "frame": 1, "off": None, "changed": None, "drawn": True,
+             "unresolved": None, "eccentricity": None, "direction": None, "x": None, "y": None, "left": left,
+             "right": right}
+    record = read_rig_trials(_record(tmp_path, [_line_c3(1, 0, stimuli=[entry])]), "pico")
+    (stimulus,) = record.trials[0].stimuli
+    assert stimulus.eye_at == (("left", Place(1.0, 0.0, 1.0, 0.0)), ("right", Place(-1.0, 0.0, 1.0, None)))
+    assert record.problems == ("1 trial line: `stimuli[].right.direction` is not a finite number or null, so it is "
+                               "read as none",)
