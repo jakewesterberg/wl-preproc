@@ -34,6 +34,7 @@ column is added. `acts` counts a person's acts on a setting."""
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import json
 import math
@@ -196,6 +197,10 @@ def read_rig_records(session_dir: Path) -> RigRecords:
 # The kinds that change a setting, as a person's act; a clear and the two
 # switches are not (the requester's decision of 2026-11-07).
 SETTING_KINDS = ("set", "hand_back", "range", "revert")
+# Every kind wl-xcon's change log holds (`wl_xcon/record.py::KINDS`, read at
+# engine-c3 `7ea7913`); one outside them is published as written and counted
+# nowhere.
+KINDS = (*SETTING_KINDS, "clear", "drum", "training")
 # What every change row carries (`wl_xcon/record.py`'s change row, read at
 # engine-c3 `7ea7913`); the rest of a row is its kind's own fields, a clear's
 # and a switch's being its control row's.
@@ -228,13 +233,18 @@ class ChangeFields:
 
 def change_fields(rows: list[str]) -> tuple[list[ChangeFields], list[str]]:
     """Each stored line's `ChangeFields`, and what could not be read, once
-    per field (`events/rigfields.py`'s rule)."""
+    per field (`events/rigfields.py`'s rule), and each kind outside `KINDS`,
+    once: published as written and counted nowhere (`acts`)."""
     fields = Fields(("change row", "change rows"))
-    out = []
+    out, unknown = [], collections.Counter()
     for text in rows:
         row = json.loads(text)
         meaning = row.get("meaning") if isinstance(row.get("meaning"), dict) else {}
-        kind = fields.read(row, "kind", TEXT) or "set"
+        # No `kind`: written before C3, when every row was a set. One it
+        # cannot read is none, published as '' (the final review's M2).
+        kind = "set" if "kind" not in row else fields.read(row, "kind", TEXT) or ""
+        if kind and kind not in KINDS:
+            unknown[kind] += 1
         out.append(ChangeFields(
             kind=kind, change=fields.read(row, "change", WHOLE), trial_number=fields.read(row, "trial_number", WHOLE),
             went=fields.read(meaning, "went", TEXT, field="meaning.went"),
@@ -243,7 +253,9 @@ def change_fields(rows: list[str]) -> tuple[list[ChangeFields], list[str]]:
             moment=fields.read(row, "moment", WHOLE),
             strobed_nothing="event_code" in row and row["event_code"] is None,
             detail=_json({key: value for key, value in row.items() if key not in _CHANGE_FIELDS})))
-    return out, fields.problems()
+    return out, [*fields.problems(), *(
+        f"{n} change {'row' if n == 1 else 'rows'}: `kind` is {kind!r}, which no build of wl-xcon this reader knows "
+        "writes, so it is published as written and not counted as a person's act" for kind, n in sorted(unknown.items()))]
 
 
 def acts(changes: list[ChangeFields]) -> int:

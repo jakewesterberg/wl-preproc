@@ -203,7 +203,8 @@ def _add_changes(module, changes: list[dict]) -> None:
                    [change["by_kind"] or "" for change in changes]),
             column("kind", "set (a person's value), hand_back, range (a draw's numbers: was and now are draws), "
                            "revert, clear, drum or training; a row written before wl-xcon's engine build C3 is a "
-                           "set.", [field.kind for field in fields]),
+                           "set, one whose kind could not be read is '', and a kind outside these is as written, "
+                           "each of the last two said in the notes.", [field.kind for field in fields]),
             column("change", "The act it belongs to, an id a revert's rows share (-1 if not recorded).",
                    [-1 if field.change is None else field.change for field in fields]),
             column("trial_id", "The first trial it applies to (-1 if not recorded).",
