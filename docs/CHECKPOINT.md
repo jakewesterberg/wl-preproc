@@ -1,11 +1,16 @@
 # Where this build actually is
 
-**Last updated 2026-11-14**, describing `main` at `bc5df71`: the merge of
-`fix/rig-record-minors`, the seven minors of the rig's record's final review and one of their own review
-(`handoffs/2026-11-07-rig-record-fields.md` §7; spec amendments 15-21). CI read off `bc5df71` is green
-on both interpreters, 2794 passed on each with 36 skipped, and the manifest check is green
-(`gh run view 42392547952`).
-- **The rig record minors:** three descriptions say what an empty value is; a change kind it
+**Last updated 2026-11-14**, describing `main` at `d8fe06b`: the merge of
+`feat/popout-fields`, the reader of wl-xcon's pop-out search, the lab's first real task
+(`handoffs/2026-11-07-popout-fields.md`). CI read off `d8fe06b` is green on both interpreters,
+2806 passed on each with 36 skipped, and the manifest check is green (`gh run view 43612215033`).
+- **The pop-out search, read:** two change kinds, `suggested` and `declined`, counted in no act;
+  the `drawn` column names a pool and a staircase; each run's `start_block`, `stages_left` and
+  `color_sets`; each trial's `color_realized`; a confirming move keeps its `suggestion` in the
+  change's detail. The descriptions say a look's light is its colour's `xyz` at full times its
+  fraction, in the cone luminance `held` names. wl-xcon was told on 2026-11-14 and merged its
+  side the same day (its `1d77392`, which writes `color_realized`).
+- **The rig record minors** (`bc5df71`, just before): three descriptions say what an empty value is; a change kind it
   cannot read is none and one no build writes is said; the change log's time and the module's
   description say what they hold; a per-eye stimulus counts both eyes' objects and has each eye's
   place checked; a run's directions shape its own conditions, and a file's pooled summary its own
@@ -173,6 +178,9 @@ on both interpreters, 2794 passed on each with 36 skipped, and the manifest chec
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `bc5df71` (the rig record minors' merge, CI green, 2794 passed on each
+interpreter, `42392547952`) until the pop-out search's merge; true when written.*
 
 *This header named `295f9c9` (the rig's record's merge, CI green, 2785 passed on each interpreter,
 `42374492163`) until its minors' merge; true when written.*
@@ -510,11 +518,10 @@ requester chose to merge the same day; true when written.*
 > `42374492163`; `specs/2026-11-07-rig-record-fields-design.md`, approved 2026-11-07;
 > `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three fixes): the rig's new
 > fields are read when the NWB file is built, with no database change. **Its seven minors are
-> merged** (`bc5df71`, CI green, `42392547952`; handoff §7; spec amendments 15-21). Next: wl-xcon's
-> pop-out search, the lab's first real task (its fields agreed with
-> wl-xcon on 2026-11-07 and 2026-11-14; the requester put it before scaling), **built on
-> `feat/popout-fields`, not merged** (`handoffs/2026-11-07-popout-fields.md`); then, in the
-> requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
+> merged** (`bc5df71`, CI green, `42392547952`; handoff §7; spec amendments 15-21). **wl-xcon's
+> pop-out search, the lab's first real task, is read** (`d8fe06b`, CI green, `43612215033`; its fields
+> agreed with wl-xcon on 2026-11-07 and 2026-11-14; `handoffs/2026-11-07-popout-fields.md`). Next,
+> in the requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
 > the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
 >
@@ -525,7 +532,8 @@ requester chose to merge the same day; true when written.*
 > until its review, that the review was next; until its merge, that the merge was next; until
 > wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
 > next; until their minors were built, that they were next; until their minors' merge, that it was
-> next; until the pop-out search was built, that it was next; each true when written.*
+> next; until the pop-out search was built, that it was next; until its merge, that the merge was
+> next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
