@@ -247,8 +247,8 @@ def test_a_run_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
 
 
 def test_a_run_says_the_block_it_started_at(tmp_path):
-    """The pop-out search's start row names the block its trainer started the
-    run at, null for the first (agreed with wl-xcon on 2026-11-07); a row
+    """The pop-out search's start row names the block the run started at, null
+    where it names none (agreed with wl-xcon on 2026-11-07); a row
     without it does not carry it."""
     from wl_preproc.events.rigruns import read_rig_runs
 

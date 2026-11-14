@@ -27,13 +27,16 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
                                    "among them, or, for a run going on from one its process stopped in, the block "
                                    "that run stopped in ('' where its row names none: the plan's first block, or "
                                    "not recorded)."),
-    "left": ("left", "Each stage's staircase value as the run started, by stage name, in its setting's unit, as JSON "
-                     "text; a stage it returns to resumes there ('{}' for a run that started afresh, '' for a plan of "
-                     "any other order, or if not recorded)."),
+    "left": ("stages_left", "Each stage the run started having left, by name, with its staircase's value then, in "
+                            "its setting's unit, as JSON text: a stage it returns to resumes there; not the stage it "
+                            "starts in, whose level its first trials give ('{}' for a run that started afresh, '' "
+                            "for no plan or a plan of any other order, or if not recorded)."),
     "color_sets": ("color_sets", "Each color set its task declares, by name, as the rig defined it (its colors' "
-                                 "chromaticities, apex, luminance and source) and drew it on the run's calibration at "
-                                 "each luminance its starting values use (xy, desaturation, CIE 1931 XYZ in cd/m2 and "
-                                 "drive levels), as JSON text ('' if none)."),
+                                 "chromaticities, apex, source, and luminance in the cone luminance held names, not "
+                                 "CIE Y) and drew it on the run's calibration at each luminance its starting values "
+                                 "use (xy, desaturation, each color's light at full as CIE 1931 XYZ in cd/m2, and "
+                                 "drive levels); a look's light is its color's xyz times its fraction, from the "
+                                 "trial's params. As JSON text ('' if none)."),
     "end_reason": ("end_reason", "Why a completed run ended: plan_done, plan_time, stalled or cannot_draw ('' for "
                                  "a run that ended any other way, or if not recorded)."),
     "stop_kind": ("stop_kind", "How the run stopped, as the rig's record says: completed, operator, limit, fault "

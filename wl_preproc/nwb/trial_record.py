@@ -45,9 +45,10 @@ COLUMNS: dict[str, str] = {
     "eased": "The settings whose live change kept it out of moving up, comma-joined ('' if none).",
     "fluid_ml": "The fluid it commanded, ml (NaN if not recorded).",
     "color_realized": ("Each color set it drew at a luminance its run had not yet realized, by set name, as the rig "
-                       "drew it there on the run's calibration (xy, desaturation, CIE 1931 XYZ in cd/m2 and drive "
-                       "levels), as JSON text ('' where its run had realized every luminance it drew, as its run's "
-                       "start row's color_sets give them, or if not recorded)."),
+                       "drew it there on the run's calibration (xy, desaturation, each color's light at full as CIE "
+                       "1931 XYZ in cd/m2, and drive levels); a look's light is its color's xyz times its fraction, "
+                       "from its params. As JSON text ('' where its run had realized every luminance it drew, as its "
+                       "run's color_sets or an earlier trial's color_realized give them, or if not recorded)."),
 }
 PLANNED_COLUMNS: dict[str, str] = {
     "planned_cycle": f"A sequence-balanced block's planned cycle for it, from 0; {_NONE}.",

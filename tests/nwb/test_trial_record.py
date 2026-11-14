@@ -103,4 +103,4 @@ def test_a_new_luminances_color_realization_is_published_as_json():
     matched = {1: _rig(1, 0, color_realized=None), 2: _rig(2, 1, color_realized={"isohue": [{"luminance_cd_m2": 12.0}]})}
     columns, _notes = record_columns(_trials(1, 2, 3), matched, {})
     assert columns["color_realized"] == ["", '{"isohue": [{"luminance_cd_m2": 12.0}]}', ""]
-    assert "luminance" in COLUMNS["color_realized"]
+    assert "times its fraction" in COLUMNS["color_realized"] and "an earlier trial's" in COLUMNS["color_realized"]

@@ -124,7 +124,7 @@ def test_a_block_ended_twice_keeps_its_first_end_and_says_so():
 
 
 def test_the_runs_table_says_the_block_each_run_started_at():
-    """'' where a run started at its first block or its row does not say,
+    """'' where a run's row names no block,
     written only where some run carries it (agreed with wl-xcon on
     2026-11-07)."""
     from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
@@ -143,6 +143,10 @@ def test_the_runs_table_says_where_each_stage_was_left_and_the_runs_color_sets()
     runs, blocks = _file(1, 2, 3)
     rigs = (_run(1, 0, left={"Fade-in": 0.4}, color_sets={"isohue": {"name": "isohue"}}), _run(2, 1, left={}))
     run_record(runs, blocks, RigRuns(runs=rigs, problems=()), {})
-    assert [run["record"]["left"] for run in runs] == ['{"Fade-in": 0.4}', "{}", ""]
+    assert [run["record"]["stages_left"] for run in runs] == ['{"Fade-in": 0.4}', "{}", ""]
     assert [run["record"]["color_sets"] for run in runs] == ['{"isohue": {"name": "isohue"}}', "", ""]
-    assert "'{}'" in RUN_COLUMNS["left"][1] and "luminance" in RUN_COLUMNS["color_sets"][1]
+    # Named so it is no eye's column; each description says what a reader
+    # needs (the review of 2026-11-14, M1, M2 and M6).
+    column, text = RUN_COLUMNS["left"]
+    assert column == "stages_left" and "'{}'" in text and "not the stage it starts in" in text
+    assert "times its fraction" in RUN_COLUMNS["color_sets"][1] and "held" in RUN_COLUMNS["color_sets"][1]

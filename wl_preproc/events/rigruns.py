@@ -26,8 +26,11 @@ reason a completed run ended and how each block ended (`block_ends`); since
 C2a, the end row's trials and presentations, what each condition left unrun
 (`shortfalls`) and each condition's counts (`conditions`); since C3, the
 start row's declared draws, the conditions a factorial generated, and the
-settings that place a direction; and the task's content hash and the run's
-seed. Each is optional and read by `events/rigfields.py`'s rule: absent, it
+settings that place a direction; since the pop-out search (agreed with
+wl-xcon on 2026-11-07 and 2026-11-14), the block the run started at, each
+stage it started having left with its staircase's value, and each color set
+its task declares; and the task's content hash and the run's seed. Each is
+optional and read by `events/rigfields.py`'s rule: absent, it
 reads as before; unreadable, it is none, said once per field.
 
 **One record is one wl-xcon session, which is one animal** (wl-xcon's own
@@ -179,11 +182,13 @@ class RigRun:
     draws: object = None
     generated: object = None
     directions: tuple[str, ...] = ()
-    # The block its trainer started it at, by name; None for the first (the
-    # pop-out search's, agreed with wl-xcon on 2026-11-07).
+    # The block it started at, by name: one its trainer picked, or a stopped
+    # run's; None where its row names none, the plan's first (the pop-out
+    # search's, agreed with wl-xcon on 2026-11-07 and answered 2026-11-14).
     start_block: str | None = None
-    # Each stage's staircase value as the run starts, by stage name ({} for a
-    # run that starts afresh; None for a plan of any other order), and each
+    # Each stage the run starts having left, by name, with its staircase's
+    # value then ({} for a run that starts afresh; None for a plan of any
+    # other order), and each
     # color set its task declares, as the rig defined it and drew it (the
     # pop-out search's XC-491, accepted 2026-11-14).
     left: dict | None = None
