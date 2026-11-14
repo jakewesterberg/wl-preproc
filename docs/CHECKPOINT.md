@@ -1,12 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-11-07**, describing `main` at `295f9c9`: the merge of
-`feat/rig-record-fields`, the rest of wl-xcon's asks (engine builds C2a, C2b and C3; XC-399; and a
-setting's value that is an appearance; `specs/2026-11-07-rig-record-fields-design.md`, approved
-2026-11-07; `handoffs/2026-11-07-rig-record-fields.md`). CI read off `295f9c9` is green on both
-interpreters, 2785 passed on each with 36 skipped, and the manifest check is green
-(`gh run view 42374492163`).
-- **The rig's record, read whole:** each trial's count, repeats, aids, structure, draws and
+**Last updated 2026-11-14**, describing `main` at `bc5df71`: the merge of
+`fix/rig-record-minors`, the seven minors of the rig's record's final review and one of their own review
+(`handoffs/2026-11-07-rig-record-fields.md` §7; spec amendments 15-21). CI read off `bc5df71` is green
+on both interpreters, 2794 passed on each with 36 skipped, and the manifest check is green
+(`gh run view 42392547952`).
+- **The rig record minors:** three descriptions say what an empty value is; a change kind it
+  cannot read is none and one no build writes is said; the change log's time and the module's
+  description say what they hold; a per-eye stimulus counts both eyes' objects and has each eye's
+  place checked; a run's directions shape its own conditions, and a file's pooled summary its own
+  runs'; a block ended twice keeps its first end; when neither clock fit holds, the reason is the
+  session's own. The amendments to wl-works now say it vendors no copy of our schemas yet, and a
+  pinned copy must be at or after each change.
+- **The rig's record, read whole** (`295f9c9`, just before): each trial's count, repeats, aids, structure, draws and
   planned place; where each stimulus was; each run's plan and end, each block's end and what each
   run owed; a condition's own values apart from drawn and person-held ones; the change log by kind
   and act, each row's own fields as `detail`, a row that strobed nothing timed through the rig's
@@ -167,6 +173,9 @@ interpreters, 2785 passed on each with 36 skipped, and the manifest check is gre
   and with them everything wl.works asked of this repository for January.
 
 CI on later heads is recorded here only once read, not before.
+
+*This header named `295f9c9` (the rig's record's merge, CI green, 2785 passed on each interpreter,
+`42374492163`) until its minors' merge; true when written.*
 
 *This header named `01f2a57` (lost data and the screen region's merge and its test-only fix, CI green,
 2741 passed on each interpreter, `42355463512`) until the rig's record's merge; true when written.*
@@ -500,9 +509,9 @@ requester chose to merge the same day; true when written.*
 > XC-399; and a setting's value that is an appearance) are merged** (`295f9c9`, CI green,
 > `42374492163`; `specs/2026-11-07-rig-record-fields-design.md`, approved 2026-11-07;
 > `handoffs/2026-11-07-rig-record-fields.md`, its §6 the review's three fixes): the rig's new
-> fields are read when the NWB file is built, with no database change. **Its seven minors are built
-> and reviewed** on `fix/rig-record-minors`, not merged (handoff §7; spec amendments 15-21). Next:
-> their merge; then wl-xcon's pop-out search, the lab's first real task (its fields agreed with
+> fields are read when the NWB file is built, with no database change. **Its seven minors are
+> merged** (`bc5df71`, CI green, `42392547952`; handoff §7; spec amendments 15-21). Next: wl-xcon's
+> pop-out search, the lab's first real task (its fields agreed with
 > wl-xcon on 2026-11-07; the requester put it before scaling the same day); then, in the
 > requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
 > the clock, part 2, the bridges, and the older minors in one branch.
@@ -514,7 +523,8 @@ requester chose to merge the same day; true when written.*
 > merge was next; until lost data and the screen region was built, that its plan was being proved;
 > until its review, that the review was next; until its merge, that the merge was next; until
 > wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
-> next; until their minors were built, that they were next; each true when written.*
+> next; until their minors were built, that they were next; until their minors' merge, that it was
+> next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
