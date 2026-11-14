@@ -44,6 +44,10 @@ COLUMNS: dict[str, str] = {
     "live": "The settings a person held at a value for it, comma-joined ('' if none).",
     "eased": "The settings whose live change kept it out of moving up, comma-joined ('' if none).",
     "fluid_ml": "The fluid it commanded, ml (NaN if not recorded).",
+    "color_realized": ("Each color set it drew at a luminance its run had not yet realized, by set name, as the rig "
+                       "drew it there on the run's calibration (xy, desaturation, CIE 1931 XYZ in cd/m2 and drive "
+                       "levels), as JSON text ('' where its run had realized every luminance it drew, as its run's "
+                       "start row's color_sets give them, or if not recorded)."),
 }
 PLANNED_COLUMNS: dict[str, str] = {
     "planned_cycle": f"A sequence-balanced block's planned cycle for it, from 0; {_NONE}.",
@@ -93,8 +97,8 @@ def _value(name: str, rig: RigTrial | None, place: dict, unplaced: list[int]):
         return _flag(getattr(rig, name))
     if name in ("aids", "overridden", "live", "eased"):
         return _joined(getattr(rig, name))
-    if name == "drawn":
-        return _text(rig.drawn)
+    if name in ("drawn", "color_realized"):
+        return _text(getattr(rig, name))
     value = getattr(rig, name)
     return "" if value is None else value
 

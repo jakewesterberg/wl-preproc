@@ -183,6 +183,10 @@ OPTIONAL: dict[str, Kind] = {
     "structure": TEXT, "overridden": TEXTS,  # C2b
     "drawn": DRAWN, "live": TEXTS, "eased": TEXTS, "planned": PLANNED,  # C3
     "fluid_ml": NUMBER,  # XC-026
+    # Each color set the trial drew at a luminance its run had not yet
+    # realized, by set name; null on every other line (the pop-out search's
+    # XC-491, accepted 2026-11-14 and named `color_realized` at our ask).
+    "color_realized": MAPPING,
 }
 
 
@@ -210,6 +214,7 @@ class RigTrial:
     eased: tuple[str, ...] = ()
     planned: Planned | None = None
     fluid_ml: float | None = None
+    color_realized: dict | None = None
     stimuli: tuple[Stimulus, ...] | None = None
     carries: frozenset[str] = frozenset()
 

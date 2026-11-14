@@ -221,3 +221,19 @@ def test_each_eyes_own_position_is_read(tmp_path):
     assert stimulus.eye_at == (("left", Place(1.0, 0.0, 1.0, 0.0)), ("right", Place(-1.0, 0.0, 1.0, None)))
     assert record.problems == ("1 trial line: `stimuli[].right.direction` is not a finite number or null, so it is "
                                "read as none",)
+
+
+def test_a_line_says_each_color_set_it_drew_at_a_new_luminance(tmp_path):
+    """XC-491 (accepted 2026-11-14, renamed `color_realized` at our ask): null
+    except on a run's first line drawn at a luminance the run had not yet
+    realized, then each set's realization there, by set name."""
+    from wl_preproc.events.rigtrials import read_rig_trials
+
+    entry = {"luminance_cd_m2": 12.0, "desaturation": 0.0, "xy": {"blue": [0.19, 0.19]},
+             "xyz": {"blue": [2.4, 12.0, 7.2]}, "drive": {"blue": [0.1, 0.2, 0.8]}}
+    rows = [_line_c3(1, 0, color_realized=None), _line_c3(2, 1, color_realized={"isohue": [entry]}),
+            _line_c3(3, 2, color_realized=[entry])]
+    record = read_rig_trials(_record(tmp_path, rows), "pico")
+    assert [trial.color_realized for trial in record.trials] == [None, {"isohue": [entry]}, None]
+    assert all("color_realized" in trial.carries for trial in record.trials)
+    assert record.problems == ("1 trial line: `color_realized` is not an object or null, so it is read as none",)
