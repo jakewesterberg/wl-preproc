@@ -234,3 +234,68 @@ def test_a_kind_it_cannot_read_or_does_not_know_is_published_as_read_and_counted
         "1 change row: `kind` is not text or null, so it is read as none",
         "2 change rows: `kind` is 'ease', which no build of wl-xcon this reader knows writes, so it is published "
         "as written and not counted as a person's act"]
+
+
+def test_the_pop_out_searchs_suggestions_and_declines_are_known_and_counted_nowhere():
+    """wl-xcon's pop-out search (agreed 2026-11-07; its
+    `docs/pending-wl-preproc-amendments.md` at `35a3d18`): the rig's
+    suggestion of a move and a person's declining it are change rows of two
+    kinds after `training`, unstrobed. Neither is a person's act on a
+    setting, so neither is counted, and neither is an unknown kind; each
+    keeps its own fields as its detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import acts, change_fields
+
+    # As wl-xcon's `taskd.py` writes them (`_logged`, read at `389a0e7`): named
+    # "block", was and now the stages, the suggestion by nobody.
+    common = {"at": 1773478801.0, "at_local": "2026-03-14T10:00:01+01:00", "trial_number": 9, "run": 0,
+              "meaning": None, "offered": [], "odds": None, "event_code": None}
+    rows = [{"name": "contrast", "kind": "set", "change": 1, "event_code": 4130, "sequence": 1},
+            {**common, "change": 2, "kind": "suggested", "name": "block", "was": "Alone", "now": "Fade-in",
+             "by": None, "move": "up", "block": "Alone", "bar": {"correct": 8, "of": 10}, "at_hardest": False},
+            {**common, "change": 3, "kind": "declined", "name": "block", "was": "Alone", "now": "Alone",
+             "by": {"kind": "member", "name": "jw"}, "suggestion": 2}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert [field.kind for field in fields] == ["set", "suggested", "declined"]
+    assert problems == [] and acts(fields) == 1
+    assert json.loads(fields[1].detail) == {"at_hardest": False, "bar": {"correct": 8, "of": 10}, "block": "Alone",
+                                            "move": "up"}
+    assert json.loads(fields[2].detail) == {"suggestion": 2}
+
+
+def test_a_confirming_move_keeps_the_suggestion_it_answers(tmp_path):
+    """A person's confirmation of the rig's suggestion is the next_block or
+    back_block control it was before, its detail naming the suggestion it
+    answers (the pop-out search, agreed with wl-xcon on 2026-11-07): kept,
+    with the move's own fields, in the control's detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import read_rig_records
+
+    row = {"kind": "next_block", "by": {"kind": "member", "name": "jw"}, "at": 1773478801.0, "at_local": "x",
+           "trial_index": 4, "event_code": None, "run": 0, "block": "Alone", "to": "Fade-in", "dropped": None,
+           "suggestion": 7}
+    (tmp_path / "xcon").mkdir()
+    (tmp_path / "xcon" / "controls.jsonl").write_text(json.dumps(row) + "\n")
+    (control,) = read_rig_records(tmp_path).controls
+    assert json.loads(control.detail) == {"block": "Alone", "dropped": None, "suggestion": 7, "to": "Fade-in"}
+
+
+def test_a_change_that_widens_the_pool_keeps_the_suggestion_it_answers():
+    """wl-xcon's answer of 2026-11-14: the change that applies a pool adding a
+    pairing names the standing widening it confirms; a re-offered suggestion
+    names the one it remakes. Both stay in the row's detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import acts, change_fields
+
+    rows = [{"name": "pool", "kind": "set", "change": 9, "was": ["a"], "now": ["a", "b"], "event_code": 4130,
+             "sequence": 3, "suggestion": 4},
+            {"name": "block", "kind": "suggested", "change": 10, "was": "Fade-in", "now": "Fade-in", "by": None,
+             "event_code": None, "move": "widen", "block": "Fade-in", "bar": {"correct": 8, "of": 10},
+             "at_hardest": True, "remakes": 5}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert json.loads(fields[0].detail) == {"suggestion": 4}
+    assert json.loads(fields[1].detail)["remakes"] == 5
+    assert problems == [] and acts(fields) == 1

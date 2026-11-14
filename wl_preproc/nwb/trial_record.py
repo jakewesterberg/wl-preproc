@@ -37,12 +37,18 @@ COLUMNS: dict[str, str] = {
     "aids": "The training aids on as it was drawn, comma-joined: clear, drumming ('' if none).",
     "structure": "The trial structure it played: its condition's or the task's default ('' if not recorded).",
     "overridden": "The values its condition set that a person's live edit replaced, comma-joined ('' if none).",
-    "drawn": ("Each setting drawn at random for it, and where the range came from: task, block, condition or "
-              "the id of the live change that put it in force, as JSON text ('{}' if nothing was drawn for it, "
-              "'' if its line does not say)."),
+    "drawn": ("Each setting drawn for it rather than set by its condition, and where the value came from: a "
+              "range of the task, block or condition, the id of the live change that put it in force, pool (the "
+              "task's pool of pairings) or staircase (its block's staircase), as JSON text ('{}' if nothing was "
+              "drawn for it, '' if its line does not say)."),
     "live": "The settings a person held at a value for it, comma-joined ('' if none).",
     "eased": "The settings whose live change kept it out of moving up, comma-joined ('' if none).",
     "fluid_ml": "The fluid it commanded, ml (NaN if not recorded).",
+    "color_realized": ("Each color set it drew at a luminance its run had not yet realized, by set name, as the rig "
+                       "drew it there on the run's calibration (xy, desaturation, each color's light at full as CIE "
+                       "1931 XYZ in cd/m2, and drive levels); a look's light is its color's xyz times its fraction, "
+                       "from its params. As JSON text ('' where its run had realized every luminance it drew, as its "
+                       "run's color_sets or an earlier trial's color_realized give them, or if not recorded)."),
 }
 PLANNED_COLUMNS: dict[str, str] = {
     "planned_cycle": f"A sequence-balanced block's planned cycle for it, from 0; {_NONE}.",
@@ -92,8 +98,8 @@ def _value(name: str, rig: RigTrial | None, place: dict, unplaced: list[int]):
         return _flag(getattr(rig, name))
     if name in ("aids", "overridden", "live", "eased"):
         return _joined(getattr(rig, name))
-    if name == "drawn":
-        return _text(rig.drawn)
+    if name in ("drawn", "color_realized"):
+        return _text(getattr(rig, name))
     value = getattr(rig, name)
     return "" if value is None else value
 

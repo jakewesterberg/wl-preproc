@@ -244,3 +244,43 @@ def test_a_run_field_it_cannot_read_is_none_and_said_by_its_path(tmp_path):
         "1 run row: `presentations` is not a whole number or null, so it is read as none",
         "1 run row: `seed` is not a whole number or null, so it is read as none",
     )
+
+
+def test_a_run_says_the_block_it_started_at(tmp_path):
+    """The pop-out search's start row names the block the run started at, null
+    where it names none (agreed with wl-xcon on 2026-11-07); a row
+    without it does not carry it."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "popout", start_block="Fade-in"), _end(0, "done", "completed"),
+            _start(1, "popout", start_block=None), _end(1, "done", "completed"),
+            _start(2, "rf_map"), _end(2, "done", "completed")]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    assert [run.start_block for run in record.runs] == ["Fade-in", None, None]
+    assert ["start_block" in run.carries for run in record.runs] == [True, True, False]
+    assert record.problems == ()
+
+
+ISOHUE = {"name": "isohue", "colors": {"blue": [0.19104, 0.18939]}, "apex": [0.31272, 0.329], "luminance_cd_m2": 15.0,
+          "held": "macaque_2deg_LM1", "source": "a sentence",
+          "realized": [{"luminance_cd_m2": 15.0, "desaturation": 0.0, "xy": {"blue": [0.19, 0.19]},
+                        "xyz": {"blue": [3.0, 15.0, 9.0]}, "drive": {"blue": [0.1, 0.2, 0.9]}}]}
+
+
+def test_a_run_says_where_each_stage_was_left_and_its_color_sets(tmp_path):
+    """The pop-out search's start row (wl-xcon's XC-491, accepted 2026-11-14;
+    `taskd.py`'s start row on its main at `dc30c0f`): `left`, each stage's
+    staircase value as the run starts, `{}` afresh and null for any other
+    plan order, and `color_sets`, each color set its task declares and how
+    the rig drew it. Each is read by the optional fields' rule."""
+    from wl_preproc.events.rigruns import read_rig_runs
+
+    rows = [_start(0, "popout", left={"Fade-in": 0.4}, color_sets={"isohue": ISOHUE}), _end(0, "done", "completed"),
+            _start(1, "popout", left={}, color_sets=None), _end(1, "done", "completed"),
+            _start(2, "popout", left=[0.4], color_sets="isohue"), _end(2, "done", "completed")]
+    record = read_rig_runs(_record(tmp_path, rows), "pico")
+    assert [run.left for run in record.runs] == [{"Fade-in": 0.4}, {}, None]
+    assert [run.color_sets for run in record.runs] == [{"isohue": ISOHUE}, None, None]
+    assert all({"left", "color_sets"} <= run.carries for run in record.runs)
+    assert record.problems == ("1 run row: `color_sets` is not an object or null, so it is read as none",
+                               "1 run row: `left` is not an object or null, so it is read as none")

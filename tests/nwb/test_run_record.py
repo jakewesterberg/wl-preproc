@@ -121,3 +121,32 @@ def test_a_block_ended_twice_keeps_its_first_end_and_says_so():
     _tables, notes = run_record(runs, blocks, RigRuns(runs=(rig,), problems=()), {(0, 0): 101})
     assert (blocks[0]["ended"], blocks[0]["record"]["position"]) == ("rule", 0)
     assert notes == ["run 1: the rig's record ends block 11 twice; the first end is kept"]
+
+
+def test_the_runs_table_says_the_block_each_run_started_at():
+    """'' where a run's row names no block,
+    written only where some run carries it (agreed with wl-xcon on
+    2026-11-07)."""
+    from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
+
+    runs, blocks = _file(1, 2)
+    run_record(runs, blocks, RigRuns(runs=(_run(start_block="Fade-in"),), problems=()), {})
+    assert (runs[0]["record"]["start_block"], runs[1]["record"]["start_block"]) == ("Fade-in", "")
+    assert RUN_COLUMNS["start_block"][0] == "start_block"
+
+
+def test_the_runs_table_says_where_each_stage_was_left_and_the_runs_color_sets():
+    """As JSON text, '{}' for a run that started afresh and '' where a row
+    does not say (XC-491, accepted 2026-11-14)."""
+    from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
+
+    runs, blocks = _file(1, 2, 3)
+    rigs = (_run(1, 0, left={"Fade-in": 0.4}, color_sets={"isohue": {"name": "isohue"}}), _run(2, 1, left={}))
+    run_record(runs, blocks, RigRuns(runs=rigs, problems=()), {})
+    assert [run["record"]["stages_left"] for run in runs] == ['{"Fade-in": 0.4}', "{}", ""]
+    assert [run["record"]["color_sets"] for run in runs] == ['{"isohue": {"name": "isohue"}}', "", ""]
+    # Named so it is no eye's column; each description says what a reader
+    # needs (the review of 2026-11-14, M1, M2 and M6).
+    column, text = RUN_COLUMNS["left"]
+    assert column == "stages_left" and "'{}'" in text and "not the stage it starts in" in text
+    assert "times its fraction" in RUN_COLUMNS["color_sets"][1] and "held" in RUN_COLUMNS["color_sets"][1]

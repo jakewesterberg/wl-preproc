@@ -608,3 +608,24 @@ def test_each_event_carries_its_lost_samples_and_its_flag(tmp_path):
         table = nwb.processing["eye_events"]["t"].to_dataframe()
         assert table["n_lost"].tolist() == [4, 0] and table["flagged"].tolist() == [1, 0]
     assert MASK_LABELS == ("blink", "invalid", "lost")
+
+
+def test_the_change_logs_descriptions_say_what_a_suggestion_is(tmp_path):
+    """A pop-out search's suggestion or decline changes nothing: its setting is
+    `block`, its was and now stages, its block the stage it was judged in, and
+    a suggestion is by nobody; the table and its columns say so (the pop-out
+    review's items 1 and 2)."""
+    from wl_preproc.nwb.rig_record import add_rig_record
+
+    change = {"session_time": 1.0, "run_number": 1, "name": "block", "was": '"Alone"', "now": '"Fade-in"',
+              "sequence": None, "by_kind": None, "time_source": "rig_clock",
+              "fields": a_set(kind="suggested", change=2, block="Alone", strobed_nothing=True,
+                              detail='{"at_hardest": false, "bar": {"correct": 8, "of": 10}, "block": "Alone", '
+                                     '"move": "up"}')}
+    record = {**RIG_RECORD, "parameter_changes": [change], "controls": []}
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_rig_record(nwb, record))
+    with io:
+        table = nwb.processing["rig_record"]["parameter_changes"]
+        assert table["block"].data[:] == ["Alone"]
+        assert "suggest" in table.description and "control" in table.description
+        assert all("suggestion" in table[name].description for name in ("block", "setting", "by_kind"))

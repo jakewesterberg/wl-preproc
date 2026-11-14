@@ -86,3 +86,21 @@ def test_an_empty_draw_is_published_as_its_description_says():
     columns, _notes = record_columns(_trials(1, 2), {1: _rig(1, 0, drawn={})}, {})
     assert columns["drawn"] == ["{}", ""]
     assert "'{}'" in COLUMNS["drawn"] and "''" in COLUMNS["drawn"]
+
+
+def test_the_drawn_column_names_every_source_the_rig_writes():
+    """Beside task, block, condition and a live change's id, the pop-out
+    search's pool of pairings and a block's staircase (agreed with wl-xcon
+    on 2026-11-07)."""
+    from wl_preproc.nwb.trial_record import COLUMNS
+
+    assert all(source in COLUMNS["drawn"] for source in ("task", "block", "condition", "pool", "staircase"))
+
+
+def test_a_new_luminances_color_realization_is_published_as_json():
+    from wl_preproc.nwb.trial_record import COLUMNS, record_columns
+
+    matched = {1: _rig(1, 0, color_realized=None), 2: _rig(2, 1, color_realized={"isohue": [{"luminance_cd_m2": 12.0}]})}
+    columns, _notes = record_columns(_trials(1, 2, 3), matched, {})
+    assert columns["color_realized"] == ["", '{"isohue": [{"luminance_cd_m2": 12.0}]}', ""]
+    assert "times its fraction" in COLUMNS["color_realized"] and "an earlier trial's" in COLUMNS["color_realized"]

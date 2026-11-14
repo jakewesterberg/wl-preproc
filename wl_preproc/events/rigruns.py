@@ -26,8 +26,11 @@ reason a completed run ended and how each block ended (`block_ends`); since
 C2a, the end row's trials and presentations, what each condition left unrun
 (`shortfalls`) and each condition's counts (`conditions`); since C3, the
 start row's declared draws, the conditions a factorial generated, and the
-settings that place a direction; and the task's content hash and the run's
-seed. Each is optional and read by `events/rigfields.py`'s rule: absent, it
+settings that place a direction; since the pop-out search (agreed with
+wl-xcon on 2026-11-07 and 2026-11-14), the block the run started at, each
+stage it started having left with its staircase's value, and each color set
+its task declares; and the task's content hash and the run's seed. Each is
+optional and read by `events/rigfields.py`'s rule: absent, it
 reads as before; unreadable, it is none, said once per field.
 
 **One record is one wl-xcon session, which is one animal** (wl-xcon's own
@@ -179,6 +182,17 @@ class RigRun:
     draws: object = None
     generated: object = None
     directions: tuple[str, ...] = ()
+    # The block it started at, by name: one its trainer picked, or a stopped
+    # run's; None where its row names none, the plan's first (the pop-out
+    # search's, agreed with wl-xcon on 2026-11-07 and answered 2026-11-14).
+    start_block: str | None = None
+    # Each stage the run starts having left, by name, with its staircase's
+    # value then ({} for a run that starts afresh; None for a plan of any
+    # other order), and each
+    # color set its task declares, as the rig defined it and drew it (the
+    # pop-out search's XC-491, accepted 2026-11-14).
+    left: dict | None = None
+    color_sets: dict | None = None
     # The end row's, since C2a and C2b.
     rig_trials: int | None = None  # a trial and its drummed repeats one
     presentations: int | None = None  # its trial lines
@@ -275,9 +289,11 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
                        task_hash=task_hash,
                        seed=optional.read(row, "seed", WHOLE), draws=optional.read(row, "draws", ANY),
                        generated=optional.read(row, "generated", ANY),
-                       directions=optional.read(row, "directions", TEXTS))
-            run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions")
-                               if name in row} | ({"task_hash"} if task_hash is not None else set())
+                       directions=optional.read(row, "directions", TEXTS),
+                       start_block=optional.read(row, "start_block", TEXT),
+                       left=optional.read(row, "left", MAPPING), color_sets=optional.read(row, "color_sets", MAPPING))
+            run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions",
+                                                 "start_block", "left", "color_sets") if name in row} | ({"task_hash"} if task_hash is not None else set())
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))

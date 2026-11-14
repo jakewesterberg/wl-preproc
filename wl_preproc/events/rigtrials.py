@@ -34,7 +34,9 @@ since C2b, the trial structure it played and the values its condition set that
 a live edit overrode; since C3, where each drawn setting's range came from, the
 settings a person held, those whose live change kept it out of moving up, and
 a designed block's planned place; since XC-399, where each stimulus it showed
-was and when (`stimuli`); and the fluid it commanded. Each is optional
+was and when (`stimuli`); since the pop-out search, each color set it drew
+at a luminance its run had not yet realized (`color_realized`); and the fluid
+it commanded. Each is optional
 (`events/rigfields.py`): a line without it reads as before, and one it cannot
 read is read as none, said once per field, never left out for it. `carries`
 names the ones the line has, so a column is published only where some line
@@ -183,6 +185,10 @@ OPTIONAL: dict[str, Kind] = {
     "structure": TEXT, "overridden": TEXTS,  # C2b
     "drawn": DRAWN, "live": TEXTS, "eased": TEXTS, "planned": PLANNED,  # C3
     "fluid_ml": NUMBER,  # XC-026
+    # Each color set the trial drew at a luminance its run had not yet
+    # realized, by set name; null on every other line (the pop-out search's
+    # XC-491, accepted 2026-11-14 and named `color_realized` at our ask).
+    "color_realized": MAPPING,
 }
 
 
@@ -210,6 +216,7 @@ class RigTrial:
     eased: tuple[str, ...] = ()
     planned: Planned | None = None
     fluid_ml: float | None = None
+    color_realized: dict | None = None
     stimuli: tuple[Stimulus, ...] | None = None
     carries: frozenset[str] = frozenset()
 

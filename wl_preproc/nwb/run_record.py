@@ -23,6 +23,20 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
     "plan": ("plan", "The plan the run played, by its name in its task ('' for a plain run of N trials, or if not "
                      "recorded)."),
     "plan_form": ("plan_form", "That plan as declared, as JSON text ('' if none)."),
+    "start_block": ("start_block", "The block it started at, by name: one its trainer picked, the first block "
+                                   "among them, or, for a run going on from one its process stopped in, the block "
+                                   "that run stopped in ('' where its row names none: the plan's first block, or "
+                                   "not recorded)."),
+    "left": ("stages_left", "Each stage the run started having left, by name, with its staircase's value then, in "
+                            "its setting's unit, as JSON text: a stage it returns to resumes there; not the stage it "
+                            "starts in, whose level its first trials give ('{}' for a run that started afresh, '' "
+                            "for no plan or a plan of any other order, or if not recorded)."),
+    "color_sets": ("color_sets", "Each color set its task declares, by name, as the rig defined it (its colors' "
+                                 "chromaticities, apex, source, and luminance in the cone luminance held names, not "
+                                 "CIE Y) and drew it on the run's calibration at each luminance its starting values "
+                                 "use (xy, desaturation, each color's light at full as CIE 1931 XYZ in cd/m2, and "
+                                 "drive levels); a look's light is its color's xyz times its fraction, from the "
+                                 "trial's params. As JSON text ('' if none)."),
     "end_reason": ("end_reason", "Why a completed run ended: plan_done, plan_time, stalled or cannot_draw ('' for "
                                  "a run that ended any other way, or if not recorded)."),
     "stop_kind": ("stop_kind", "How the run stopped, as the rig's record says: completed, operator, limit, fault "
@@ -68,7 +82,7 @@ def _flag(value: bool | None) -> int:
 
 def _run_value(field: str, rig: RigRun | None):
     value = None if rig is None else getattr(rig, field)
-    if field in ("plan_form", "draws", "generated"):
+    if field in ("plan_form", "draws", "generated", "left", "color_sets"):
         return _text(value)
     if field in ("rig_trials", "presentations"):
         return _whole(value)

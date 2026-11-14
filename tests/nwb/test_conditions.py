@@ -241,3 +241,19 @@ def test_a_files_pooled_summary_takes_its_own_runs_directions_only():
     session, _notes, _tables = _conditions(trials, [], runs, record, frozenset({"dir"}), {1: frozenset({"dir"})})
     assert session[0]["varying"]["dir"] == runs[0]["conditions"][0]["varying"]["dir"]
     assert "from" not in session[0]["varying"]["dir"]
+
+
+def test_a_staircases_or_pools_value_is_drawn_never_the_conditions_own():
+    """The pop-out search (agreed with wl-xcon 2026-11-07): a block's
+    staircase sets `set_size` and the task's pool of pairings gives the
+    colours, each marked in `drawn` by its source, so neither reads as the
+    condition's own setting; the summary names each source."""
+    from wl_preproc.nwb.conditions import block_conditions
+
+    trials = [_trial(number, float(number)) for number in (1, 2)]
+    matched = {number: _c3(number, "odd", set_size=size, odd_color=color, contrast=0.5,
+                           drawn={"set_size": "staircase", "odd_color": "pool"})
+               for number, size, color in ((1, 4, "red"), (2, 8, "green"))}
+    (entry,) = block_conditions(trials, matched, {})
+    assert entry["settings"] == {"contrast": 0.5} and entry["varying"] == {}
+    assert (entry["drawn"]["set_size"]["sources"], entry["drawn"]["odd_color"]["sources"]) == (["staircase"], ["pool"])
