@@ -552,3 +552,35 @@ engine build C1, is published as no hash.**
   clears and switches to `controls.jsonl`** (your XC-442); we will say so with the merge.
 - *Asked of wl-xcon, 2026-11-07, and agreed:* one simulated session's `xcon/` folder from your C3 build, vendored
   here as a contract fixture.
+
+# 2026-11-07: the pop-out search's fields (wl-xcon's ask of 2026-11-07)
+
+Asked in your `docs/pending-wl-preproc-amendments.md` (its last section, on `popout-build-2026-11-07` at `35a3d18`),
+and agreed in two messages the same day, the requester answering "accept, with two questions". Built on
+`feat/popout-fields`, not merged; the requester chose to build it before the pipeline's scaling.
+- **No `stage`:** it is always the block's name, so we read each line's `block`.
+- **No top-level `staircase`, `pairing` or `set_size`:** `odd_color`, `distractor_color`, `set_size` and
+  `distractor_fraction` travel in `params` as settings, `drawn` naming a value's source where it is drawn, with
+  two new tokens: `"pool"` (the task's pool of pairings) and `"staircase"` (its block's staircase, in the stage
+  whose staircase steps it). Our reader took any text as a
+  source already; the trials table's `drawn` column now names both, and a value from either is kept apart from
+  its condition's own settings, as any drawn value is.
+- **Change kinds `suggested` and `declined`**, after `training`, unstrobed: known kinds, published as written with
+  their own fields as `parameter_changes.detail`, counted nowhere, since neither is a person's act on a setting.
+- **A confirming `next_block` or `back_block`** keeps the `suggestion` it answers in the controls table's
+  `detail`, as every control's own fields are.
+- **The start row's `start_block`** is the runs table's `start_block`, '' where the row names none: the plan's
+  first block, or not recorded. *Answered 2026-11-14:* it may also name the first block, when the trainer picked
+  it by name, and a run that goes on from a stopped one names the block that run stopped in. Both read the same,
+  and the column's description says so.
+- **XC-491, accepted 2026-11-14 with one rename:** `remakes` on a `suggested` row (in its detail); the start row's
+  `left` (the stages a run starts having left with their staircases' values, `{}` afresh, null for another plan order; published as `stages_left`, so it reads as no eye's column) and `color_sets` (each declared
+  color set as the rig defined and drew it), as runs-table JSON text; a `ColorSetLight` named by its set wherever
+  a value is written; and the trial line's colour realizations, renamed `color_realized` at our ask (wl-xcon's
+  `dc30c0f` wrote `realized`, on no rig yet), as trials-table JSON text. The change that applies a pool widening
+  will name the `suggestion` it confirms (wl-xcon's answer of 2026-11-14); it lands in that row's detail.
+- **XC-502, demo mode, accepted 2026-11-14:** `config.json`'s `demo` key. By the requester's ruling, a demo reaching
+  us is an end-to-end test: it is processed as asked, and what we publish from it will say it is a demo. That
+  comes with our older minors.
+- *Found in your diagnosis of our `295f9c9`, for our older minors:* a rig clock fit over instants that are all
+  one float can report a miss of some 1e15 s rather than that they do not advance; only the sentence is wrong.

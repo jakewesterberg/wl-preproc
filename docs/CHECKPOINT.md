@@ -512,7 +512,8 @@ requester chose to merge the same day; true when written.*
 > fields are read when the NWB file is built, with no database change. **Its seven minors are
 > merged** (`bc5df71`, CI green, `42392547952`; handoff §7; spec amendments 15-21). Next: wl-xcon's
 > pop-out search, the lab's first real task (its fields agreed with
-> wl-xcon on 2026-11-07; the requester put it before scaling the same day); then, in the
+> wl-xcon on 2026-11-07 and 2026-11-14; the requester put it before scaling), **built on
+> `feat/popout-fields`, not merged** (`handoffs/2026-11-07-popout-fields.md`); then, in the
 > requester's order of 2026-10-31, the pipeline's scaling to long sessions, part 3b, the NI as
 > the clock, part 2, the bridges, and the older minors in one branch.
 > Fine-tuning U'n'Eye to the DPI tracker waits for hand-labelled lab data.
@@ -524,7 +525,7 @@ requester chose to merge the same day; true when written.*
 > until its review, that the review was next; until its merge, that the merge was next; until
 > wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
 > next; until their minors were built, that they were next; until their minors' merge, that it was
-> next; each true when written.*
+> next; until the pop-out search was built, that it was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
