@@ -280,3 +280,22 @@ def test_a_confirming_move_keeps_the_suggestion_it_answers(tmp_path):
     (tmp_path / "xcon" / "controls.jsonl").write_text(json.dumps(row) + "\n")
     (control,) = read_rig_records(tmp_path).controls
     assert json.loads(control.detail) == {"block": "Alone", "dropped": None, "suggestion": 7, "to": "Fade-in"}
+
+
+def test_a_change_that_widens_the_pool_keeps_the_suggestion_it_answers():
+    """wl-xcon's answer of 2026-11-14: the change that applies a pool adding a
+    pairing names the standing widening it confirms; a re-offered suggestion
+    names the one it remakes. Both stay in the row's detail."""
+    import json
+
+    from wl_preproc.events.rigrecords import acts, change_fields
+
+    rows = [{"name": "pool", "kind": "set", "change": 9, "was": ["a"], "now": ["a", "b"], "event_code": 4130,
+             "sequence": 3, "suggestion": 4},
+            {"name": "block", "kind": "suggested", "change": 10, "was": "Fade-in", "now": "Fade-in", "by": None,
+             "event_code": None, "move": "widen", "block": "Fade-in", "bar": {"correct": 8, "of": 10},
+             "at_hardest": True, "remakes": 5}]
+    fields, problems = change_fields([json.dumps(row) for row in rows])
+    assert json.loads(fields[0].detail) == {"suggestion": 4}
+    assert json.loads(fields[1].detail)["remakes"] == 5
+    assert problems == [] and acts(fields) == 1

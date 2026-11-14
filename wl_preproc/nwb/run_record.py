@@ -23,8 +23,10 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
     "plan": ("plan", "The plan the run played, by its name in its task ('' for a plain run of N trials, or if not "
                      "recorded)."),
     "plan_form": ("plan_form", "That plan as declared, as JSON text ('' if none)."),
-    "start_block": ("start_block", "The block its trainer started it at, by name ('' where its row names none: the "
-                                   "first block, or not recorded)."),
+    "start_block": ("start_block", "The block it started at, by name: one its trainer picked, the first block "
+                                   "among them, or, for a run going on from one its process stopped in, the block "
+                                   "that run stopped in ('' where its row names none: the plan's first block, or "
+                                   "not recorded)."),
     "left": ("left", "Each stage's staircase value as the run started, by stage name, in its setting's unit, as JSON "
                      "text; a stage it returns to resumes there ('{}' for a run that started afresh, '' for a plan of "
                      "any other order, or if not recorded)."),

@@ -240,8 +240,9 @@ def _add_changes(module, changes: list[dict]) -> None:
                                   "untimed).", [change["time_source"] for change in changes]),
             column("detail", "The row's own fields beyond those every change row carries, as JSON text: a "
                              "hand-back's to, a range's from and block, a revert's moment, a clear's or a "
-                             "switch's control fields, a suggestion's move, block, bar and at_hardest, and a "
-                             "decline's suggestion ('{}' if none).", [field.detail for field in fields]),
+                             "switch's control fields, a suggestion's move, block, bar, at_hardest and the "
+                             "suggestion it remakes (remakes), a decline's suggestion, and the suggestion a change "
+                             "that widens the pool answers ('{}' if none).", [field.detail for field in fields]),
         ]))
 
 
