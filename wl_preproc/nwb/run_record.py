@@ -25,6 +25,13 @@ RUN_COLUMNS: dict[str, tuple[str, str]] = {
     "plan_form": ("plan_form", "That plan as declared, as JSON text ('' if none)."),
     "start_block": ("start_block", "The block its trainer started it at, by name ('' where its row names none: the "
                                    "first block, or not recorded)."),
+    "left": ("left", "Each stage's staircase value as the run started, by stage name, in its setting's unit, as JSON "
+                     "text; a stage it returns to resumes there ('{}' for a run that started afresh, '' for a plan of "
+                     "any other order, or if not recorded)."),
+    "color_sets": ("color_sets", "Each color set its task declares, by name, as the rig defined it (its colors' "
+                                 "chromaticities, apex, luminance and source) and drew it on the run's calibration at "
+                                 "each luminance its starting values use (xy, desaturation, CIE 1931 XYZ in cd/m2 and "
+                                 "drive levels), as JSON text ('' if none)."),
     "end_reason": ("end_reason", "Why a completed run ended: plan_done, plan_time, stalled or cannot_draw ('' for "
                                  "a run that ended any other way, or if not recorded)."),
     "stop_kind": ("stop_kind", "How the run stopped, as the rig's record says: completed, operator, limit, fault "
@@ -70,7 +77,7 @@ def _flag(value: bool | None) -> int:
 
 def _run_value(field: str, rig: RigRun | None):
     value = None if rig is None else getattr(rig, field)
-    if field in ("plan_form", "draws", "generated"):
+    if field in ("plan_form", "draws", "generated", "left", "color_sets"):
         return _text(value)
     if field in ("rig_trials", "presentations"):
         return _whole(value)

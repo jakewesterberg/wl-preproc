@@ -182,6 +182,12 @@ class RigRun:
     # The block its trainer started it at, by name; None for the first (the
     # pop-out search's, agreed with wl-xcon on 2026-11-07).
     start_block: str | None = None
+    # Each stage's staircase value as the run starts, by stage name ({} for a
+    # run that starts afresh; None for a plan of any other order), and each
+    # color set its task declares, as the rig defined it and drew it (the
+    # pop-out search's XC-491, accepted 2026-11-14).
+    left: dict | None = None
+    color_sets: dict | None = None
     # The end row's, since C2a and C2b.
     rig_trials: int | None = None  # a trial and its drummed repeats one
     presentations: int | None = None  # its trial lines
@@ -279,9 +285,10 @@ def read_rig_runs(session_dir: Path, subject: str) -> RigRuns | None:
                        seed=optional.read(row, "seed", WHOLE), draws=optional.read(row, "draws", ANY),
                        generated=optional.read(row, "generated", ANY),
                        directions=optional.read(row, "directions", TEXTS),
-                       start_block=optional.read(row, "start_block", TEXT))
+                       start_block=optional.read(row, "start_block", TEXT),
+                       left=optional.read(row, "left", MAPPING), color_sets=optional.read(row, "color_sets", MAPPING))
             run["carries"] |= {name for name in ("plan", "plan_form", "seed", "draws", "generated", "directions",
-                                                 "start_block") if name in row} | ({"task_hash"} if task_hash is not None else set())
+                                                 "start_block", "left", "color_sets") if name in row} | ({"task_hash"} if task_hash is not None else set())
         else:
             run["stopped_because"] = _text(row.get("stopped_because"))
             run["stop_kind"] = _text(row.get("stop_kind"))

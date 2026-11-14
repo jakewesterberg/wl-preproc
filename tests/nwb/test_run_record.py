@@ -133,3 +133,16 @@ def test_the_runs_table_says_the_block_each_run_started_at():
     run_record(runs, blocks, RigRuns(runs=(_run(start_block="Fade-in"),), problems=()), {})
     assert (runs[0]["record"]["start_block"], runs[1]["record"]["start_block"]) == ("Fade-in", "")
     assert RUN_COLUMNS["start_block"][0] == "start_block"
+
+
+def test_the_runs_table_says_where_each_stage_was_left_and_the_runs_color_sets():
+    """As JSON text, '{}' for a run that started afresh and '' where a row
+    does not say (XC-491, accepted 2026-11-14)."""
+    from wl_preproc.nwb.run_record import RUN_COLUMNS, run_record
+
+    runs, blocks = _file(1, 2, 3)
+    rigs = (_run(1, 0, left={"Fade-in": 0.4}, color_sets={"isohue": {"name": "isohue"}}), _run(2, 1, left={}))
+    run_record(runs, blocks, RigRuns(runs=rigs, problems=()), {})
+    assert [run["record"]["left"] for run in runs] == ['{"Fade-in": 0.4}', "{}", ""]
+    assert [run["record"]["color_sets"] for run in runs] == ['{"isohue": {"name": "isohue"}}', "", ""]
+    assert "'{}'" in RUN_COLUMNS["left"][1] and "luminance" in RUN_COLUMNS["color_sets"][1]
