@@ -115,12 +115,31 @@ def comparison_mask(
     stored row mean two different things depending on which detector happened
     to sort first.
     """
-    keep = np.ones(len(a_labels), dtype=bool)
-    for index, (left, right) in enumerate(zip(a_labels, b_labels, strict=True)):
-        keep[index] = comparable(Label(left), b_vocabulary, pso_as) and comparable(
-            Label(right), a_vocabulary, pso_as
-        )
-    return keep
+    if len(a_labels) != len(b_labels):
+        raise ValueError(f"the two traces have {len(a_labels)} and {len(b_labels)} samples")
+    # Each distinct label judged once, then gathered back by index (design
+    # spec `2026-11-14-scaling-long-sessions-design.md` section 4.8): one
+    # Python call per sample made this stage the largest after BMD.
+    return (_per_value(a_labels, lambda label: comparable(Label(label), b_vocabulary, pso_as))
+            & _per_value(b_labels, lambda label: comparable(Label(label), a_vocabulary, pso_as)))
+
+
+def _per_value(labels: np.ndarray, judge) -> np.ndarray:
+    """`judge(label)` for every sample of `labels`, called once per `Label`,
+    as `schema/consensus.py::_scored_in` maps a trace: one array comparison per
+    member. A sample that is no `Label` raises `Label`'s own `ValueError`, as
+    calling `Label` on it per sample did."""
+    labels = np.asarray(labels)
+    result = np.zeros(labels.shape, dtype=bool)
+    covered = np.zeros(labels.shape, dtype=bool)
+    for label in Label:
+        at = labels == label
+        covered |= at
+        if judge(label) and at.any():
+            result |= at
+    if not covered.all():
+        Label(labels[np.flatnonzero(~covered)[0]])
+    return result
 
 
 #: `event_f1`'s matching window, in samples. **The metric's own parameter, not
@@ -139,14 +158,10 @@ _EVENT_LABELS = frozenset(
 
 def _event_starts(labels: np.ndarray, mask: np.ndarray) -> list[int]:
     """Onset index of each event run, over masked-in samples only."""
-    starts: list[int] = []
-    previous_was_event = False
-    for index, label in enumerate(labels):
-        is_event = bool(mask[index]) and Label(label) in _EVENT_LABELS
-        if is_event and not previous_was_event:
-            starts.append(index)
-        previous_was_event = is_event
-    return starts
+    is_event = np.asarray(mask, dtype=bool) & _per_value(labels, lambda label: Label(label) in _EVENT_LABELS)
+    opens = is_event.copy()
+    opens[1:] &= ~is_event[:-1]
+    return np.flatnonzero(opens).tolist()
 
 
 def event_f1(
