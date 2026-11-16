@@ -7,6 +7,9 @@ frozen interface rather than an implementation detail.
 
 from __future__ import annotations
 
+import functools
+from pathlib import Path
+
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -107,4 +110,30 @@ class BehaviorCameraSidecar(BaseModel):
 
     @classmethod
     def from_yaml(cls, text: str) -> BehaviorCameraSidecar:
-        return cls.model_validate(yaml.safe_load(text))
+        """Parsed with libyaml's loader where PyYAML was built with it: the
+        pure-Python one took 40-57 s and up to 6.5 GB for a two-hour
+        sidecar's 14 MB (design spec
+        `2026-11-14-scaling-long-sessions-design.md` section 4.4). Both are
+        the safe loader; they read the same document the same way."""
+        return cls.model_validate(yaml.load(text, Loader=_SAFE_LOADER))
+
+
+#: libyaml's safe loader where PyYAML has it, the pure-Python one otherwise.
+_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def read_sidecar(path: Path) -> BehaviorCameraSidecar:
+    """The sidecar at `path`, parsed once per process for as long as the file
+    is unchanged (design spec section 4.7, amendment 2): keyed by its
+    modification time and size, as `timebase/_syncbox_log.py::read_syncbox_log`
+    is. The model is frozen, so callers share it safely."""
+    stat = Path(path).stat()
+    return _read_sidecar(Path(path), stat.st_mtime_ns, stat.st_size)
+
+
+@functools.lru_cache(maxsize=4)
+def _read_sidecar(path: Path, _mtime_ns: int, _size: int) -> BehaviorCameraSidecar:
+    return BehaviorCameraSidecar.from_yaml(path.read_text(encoding="utf-8"))
+
+
+read_sidecar.cache_clear = _read_sidecar.cache_clear

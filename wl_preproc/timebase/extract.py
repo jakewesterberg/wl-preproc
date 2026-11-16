@@ -335,9 +335,9 @@ def extract_bcam(sidecar_path: Path) -> BitStream:
     overlapping the gap, which surfaces downstream as a barcode this system did
     not recover -- not as a silent offset.
     """
-    from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
+    from wl_preproc.contracts.sidecar import read_sidecar
 
-    sidecar = BehaviorCameraSidecar.from_yaml(sidecar_path.read_text(encoding="utf-8"))
+    sidecar = read_sidecar(sidecar_path)
     if sidecar.frame_rate_hz is None:
         raise ValueError(
             f"{sidecar_path}: no frame_rate_hz. A per-frame digital line cannot "
