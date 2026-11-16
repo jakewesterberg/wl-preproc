@@ -272,3 +272,11 @@ The handoff `docs/handoffs/2026-11-14-scaling-long-sessions.md` (what was built,
    `registry.running_detectors()` instead. `EyeDetection.key_source` leaves out every `eye_detection` paramset whose
    `detector` is an opt-in detector not requested, so a database that registered BMD before keeps its rows and
    computes no more of them.
+7. **4.6's count is not always today's on a heavily damaged session** (found executing Task 5). `SequenceMatcher` is
+   greedy, not an optimal alignment, so split at trials and whole it can find a few codes more or fewer: on 300
+   synthetic streams of 3,000 words with up to 50 dropped and 5 inserted in each, 5 differed (3 higher, 2 lower), by at
+   most 0.0017. Every one is far below `AGREEMENT_THRESHOLD` (0.999), so its tier is D either way; with up to three
+   words dropped and one inserted in each stream, where a tier can turn on the threshold, all were equal. Ruled: keep
+   the anchored form (it is no less faithful: neither is an optimal alignment), and test exact equality near the
+   threshold and an unchanged tier far below it. A stored `event_code_agreement` of a badly damaged session can
+   differ from today's in its third decimal.
