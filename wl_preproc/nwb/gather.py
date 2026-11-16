@@ -548,13 +548,14 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
             master = (detect.EyeDetection & where).to_dicts()
             if not master or master[0]["status"] != "computed":
                 continue
-            runs = []
-            for row in (detect.EyeDetection.Run & where).to_dicts():
-                start_s = float(edges[row["run_start"]])
-                if row["label"] in MASK_LABELS or not blocks.contains([start_s])[0]:
-                    continue
-                runs.append({"start_s": start_s, "stop_s": float(edges[row["run_stop"]]), "label": row["label"],
-                             **{field: row.get(field) for field in MEASUREMENTS}})
+            rows = (detect.EyeDetection.Run & where).to_dicts()
+            # Every run's start tested against the blocks at once, not one call
+            # per row (design spec `2026-11-14-scaling-long-sessions-design.md`
+            # section 4.9).
+            inside = blocks.contains([float(edges[row["run_start"]]) for row in rows])
+            runs = [{"start_s": float(edges[row["run_start"]]), "stop_s": float(edges[row["run_stop"]]),
+                     "label": row["label"], **{field: row.get(field) for field in MEASUREMENTS}}
+                    for row, kept in zip(rows, inside, strict=True) if kept and row["label"] not in MASK_LABELS]
             detections.append({"name": f"{name}_{trace}",
                                "description": f"{name}, the {trace} trace; eye_detection paramset {idx}: {params}",
                                "runs": runs})
