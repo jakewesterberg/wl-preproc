@@ -172,3 +172,24 @@ def contains_instant(intervals, times):
     for start, end in intervals:
         inside |= (times >= start) & (times <= end)
     return inside
+
+
+# -- eye/detect/uneye.py::detect_uneye, at 7358a93 ---------------------------------------------------------------
+def detect_uneye(gaze_deg, velocity_deg_s, available, fs_hz, params):
+    from wl_preproc.eye.detect.labels import Label, Run, may_label, true_runs
+    from wl_preproc.eye.detect.uneye import MIN_PIECE_SAMPLES, _network
+
+    usable = may_label(available)
+    usable &= np.isfinite(np.asarray(gaze_deg, dtype=float)).all(axis=1)
+    pieces = [(int(a), int(b)) for a, b in true_runs(usable) if b - a >= MIN_PIECE_SAMPLES]
+    if not pieces:
+        return []
+    network = _network(params, fs_hz)
+    runs = []
+    for offset, stop in pieces:
+        piece = np.asarray(gaze_deg[offset:stop], dtype=float)
+        prediction, probability = network.predict(piece[:, 0], piece[:, 1])
+        for start, end in true_runs(prediction == 1):
+            runs.append(Run(offset + int(start), offset + int(end), Label.SACCADE,
+                            reliability=float(np.mean(probability[1, start:end]))))
+    return runs

@@ -44,8 +44,10 @@ def test_a_blink_splits_the_trace_and_no_saccade_crosses_it():
 
 
 class _Recording:
-    """Stands in for U'n'Eye's classifier, recording the pieces it is given
-    and calling every sample fixation."""
+    """Stands in for U'n'Eye's prediction, recording the pieces it is given
+    and calling every sample fixation. Since 2026-11-16 `detect_uneye` calls
+    `uneye._predict_windowed(network, x, y)` rather than `network.predict`
+    (scaling design spec section 4.2), so that is what `install` replaces."""
 
     def __init__(self):
         self.lengths = []
@@ -54,13 +56,19 @@ class _Recording:
         self.lengths.append(len(x))
         return np.zeros(len(x)), np.zeros((2, len(x)))
 
+    def install(self, monkeypatch):
+        from wl_preproc.eye.detect import uneye
+
+        monkeypatch.setattr(uneye, "_network", lambda params, fs_hz: self)
+        monkeypatch.setattr(uneye, "_predict_windowed", lambda network, x, y: network.predict(x, y))
+        return self
+
 
 def test_a_piece_under_25_samples_is_not_run_through_the_network(monkeypatch):
     """U'n'Eye refuses shorter input: its network pools by 5, twice."""
     from wl_preproc.eye.detect import uneye
 
-    network = _Recording()
-    monkeypatch.setattr(uneye, "_network", lambda params, fs_hz: network)
+    network = _Recording().install(monkeypatch)
     gaze = np.zeros((400, 2))
     available = np.full(400, Label.INVALID, dtype=object)
     available[100:124] = None
@@ -73,8 +81,7 @@ def test_non_finite_gaze_is_withheld_where_the_mask_offers_it(monkeypatch):
     """For NSLR's reason: the shared mask passes NaN as usable."""
     from wl_preproc.eye.detect import uneye
 
-    network = _Recording()
-    monkeypatch.setattr(uneye, "_network", lambda params, fs_hz: network)
+    network = _Recording().install(monkeypatch)
     gaze = np.zeros((600, 2))
     gaze[300:302, 1] = np.nan
     _detect(gaze)
