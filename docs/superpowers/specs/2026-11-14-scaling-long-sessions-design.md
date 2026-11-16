@@ -236,3 +236,39 @@ requester with the stage that missed, before the merge question.
 
 The handoff `docs/handoffs/2026-11-14-scaling-long-sessions.md` (what was built, both runs' numbers, the review),
 `docs/CHECKPOINT.md` and `wl.yaml`'s status and its BMD future task.
+
+## Amendments, 2026-11-16, made while proving the plan
+
+1. **4.6's anchors are each trial's number, not each run's start.** A run can last a whole session, so splitting at
+   run starts leaves a 12-hour run quadratic. The anchor is each `TRIAL_NUMBER` escape, keyed by its payload and the
+   payload of the `RUN_START` before it, found by walking the stream with `PAYLOAD_WORD_COUNTS` (a payload word can
+   hold any value, `0x8006` included, so a bare value search would cut inside a payload). Anchors whose key occurs
+   once in each stream are paired; the segments between pairs are aligned with the same
+   `SequenceMatcher(autojunk=False)` and the matched counts summed. A dropped anchor only merges two segments. The
+   whole stream is aligned as today only when the paired anchors are out of order in the second stream. Proved on the
+   spike's sessions: equal matched counts on 12 damaged streams at 20 minutes (drops of 0 to 50 words and random
+   insertions in either stream) and 6 at 2 hours, 0.01-0.02 s against 2-4 s.
+2. **4.7's clock is cached already.** `timebase/_syncbox_log.py::read_syncbox_log` keeps each segment per process,
+   keyed by modification time and size (since the header follow-up), and every clock function reads through it. The
+   eye file's columns and the sidecar follow that same rule, an `lru_cache` over `(path, mtime_ns, size)`, beside
+   their own readers; there is no `wl_preproc/cache.py`. **Cached arrays are made read-only**, so a caller that
+   writes into one fails loudly instead of changing what the next caller reads.
+3. **4.3 is 4.1 and 4.4.** `TimingProvenance.make` reads the whole NI file for its code words
+   (`events/extract.py::extract_nidq_words`, about 4.1 GB at 2 hours) and parses the camera sidecar with the pure
+   loader (up to 6.5 GB). Those two fixes bound it; the 2-hour run records its peak to confirm it.
+4. **4.2's windows.** U'n'Eye's network pools twice by 5, so its output depends on a sample's place on a 25-sample
+   grid, and it sees about ±89 samples (measured by perturbing one input). The piece's input (U'n'Eye's own
+   differences, with its leading zero and its NaN and inf rules) is built once for the whole stretch, the network runs
+   on windows that start on that grid with 500 samples of overlap each side, and U'n'Eye's tail rule (the last
+   25 samples evaluated alone where the length is not a multiple of 25) and its `binary_prediction` run on the whole
+   stretch as today. Measured: labels equal; probabilities within about 1e-6 (the convolution's float order depends
+   on its input's length). **A run's reliability is compared to 1e-5**, its labels and bounds `==`.
+5. **4.5's sweep runs when both eyes' runs are sorted and disjoint**, which every registered detector's are; otherwise
+   the nested loop runs as today. Equal by construction either way, linear for every detector there is.
+6. **Section 5's request is the daemon's.** `wlpp daemon --with-detector bmd` runs BMD, for every session that daemon
+   process handles; a request per session belongs to BMD's future task. Every consumer that today reads
+   `registry.DETECTORS` to mean "what runs" (`schema/detect.py::register_default_paramsets`,
+   `schema/consensus.py::_live_detectors`, `EyeDetection.key_source`, the NWB build's `_paramsets`) reads
+   `registry.running_detectors()` instead. `EyeDetection.key_source` leaves out every `eye_detection` paramset whose
+   `detector` is an opt-in detector not requested, so a database that registered BMD before keeps its rows and
+   computes no more of them.
