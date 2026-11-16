@@ -814,8 +814,11 @@ def test_a_real_wlpp_daemon_invocation_registers_the_detection_paramsets(dj_conn
     import subprocess
     import sys
 
-    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.registry import DETECTORS, OPT_IN
 
+    # A bare `wlpp daemon` subprocess runs the default set, BMD left out (scaling design spec section 5): the
+    # suite's own request for BMD (`tests/conftest.py`) does not reach it.
+    n_default = len(DETECTORS) - len(OPT_IN)
     result = subprocess.run(
         [sys.executable, "-c", _PARAMSET_PROBE],
         capture_output=True,
@@ -843,7 +846,7 @@ def test_a_real_wlpp_daemon_invocation_registers_the_detection_paramsets(dj_conn
     # registered detector -- `detect.register_default_paramsets`'s own
     # completeness claim, here observed through `wlpp daemon` instead of
     # through a direct call.
-    assert first_pass == {"eye_validity": 1, "eye_detection": len(DETECTORS)}, (
+    assert first_pass == {"eye_validity": 1, "eye_detection": n_default}, (
         "wlpp daemon left the detection paramsets unregistered, so "
         "EyeValidity.key_source and EyeDetection.key_source name zero "
         "candidates and the whole subsystem is inert in production"

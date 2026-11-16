@@ -1059,10 +1059,13 @@ def test_a_real_wlpp_daemon_pass_writes_agreement_rows_registering_nothing_itsel
     observed = json.loads(marker[len("PROBE ") :])
 
     from wl_preproc.eye.detect.consensus import CONSENSUS_METRICS
-    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.registry import DETECTORS, OPT_IN
     from wl_preproc.schema import consensus
 
-    n_pairs = len(DETECTORS) * (len(DETECTORS) - 1) // 2
+    # A bare `wlpp daemon` subprocess runs the default set, BMD left out (scaling design spec section 5): the
+    # suite's own request for BMD (`tests/conftest.py`) does not reach it.
+    n_default = len(DETECTORS) - len(OPT_IN)
+    n_pairs = n_default * (n_default - 1) // 2
     assert observed == {
         "agreement_rows": 3
         * n_pairs

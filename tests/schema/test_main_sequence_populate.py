@@ -599,7 +599,7 @@ def test_a_real_wlpp_daemon_pass_writes_main_sequence_rows_registering_nothing_i
 
     import datajoint as dj
 
-    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.registry import DETECTORS, OPT_IN
 
     result = subprocess.run(
         [sys.executable, "-c", _MAIN_SEQUENCE_PROBE], capture_output=True, text=True,
@@ -615,5 +615,7 @@ def test_a_real_wlpp_daemon_pass_writes_main_sequence_rows_registering_nothing_i
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     marker = next((line for line in result.stdout.splitlines() if line.startswith("PROBE ")), None)
     assert marker is not None, f"probe printed no result:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(marker[len("PROBE "):]) == {"rows": 3 * len(DETECTORS),
+    # A bare `wlpp daemon` subprocess runs the default set, BMD left out (scaling design spec section 5): the
+    # suite's own request for BMD (`tests/conftest.py`) does not reach it.
+    assert json.loads(marker[len("PROBE "):]) == {"rows": 3 * (len(DETECTORS) - len(OPT_IN)),
                                                   "traces": ["conjunction", "left", "right"]}
