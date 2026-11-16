@@ -1316,13 +1316,7 @@ def _overlapping(
     kind they are not, and `label_for` remains the only source of a label.
     """
     floor = max(int(min_duration_samples), 1)
-    intersections = []
-    for left_run in left:
-        for right_run in right:
-            start = max(left_run.start, right_run.start)
-            stop = min(left_run.stop, right_run.stop)
-            if stop - start >= floor:
-                intersections.append((start, stop))
+    intersections = _intersections(left, right, floor)
 
     spans: list[list[int]] = []
     for start, stop in sorted(intersections):
@@ -1336,6 +1330,41 @@ def _overlapping(
             spans.append([start, stop])
 
     return [Run(start=start, stop=stop, label=label_for(start, stop)) for start, stop in spans]
+
+
+def _sorted_and_disjoint(runs: list[Run]) -> bool:
+    """Each run starting at or after the previous one stops: what every
+    registered detector's own runs are (`labels.py::true_runs`)."""
+    return all(later.start >= earlier.stop for earlier, later in zip(runs, runs[1:]))
+
+
+def _intersections(left: list[Run], right: list[Run], floor: int) -> list[tuple[int, int]]:
+    """Every `(start, stop)` where a left run and a right run overlap by at
+    least `floor` samples: the list `_overlapping` coalesces (design spec
+    `2026-11-14-scaling-long-sessions-design.md` section 4.5, amendment 5).
+
+    **One pass where both lists are sorted and disjoint**, as every registered
+    detector's are: two pointers, the run that stops first advancing, so each
+    overlapping pair is met once. Comparing every left run with every right one
+    took 14 s at 8,000 events an eye, and about 30,000 an eye come in four
+    hours. **Any other input takes that nested loop**, as before: nothing in
+    `registry.py::DetectFn`'s contract makes runs disjoint, and the same pairs
+    must come out whatever a detector returns."""
+    if not (_sorted_and_disjoint(left) and _sorted_and_disjoint(right)):
+        return [(max(a.start, b.start), min(a.stop, b.stop)) for a in left for b in right
+                if min(a.stop, b.stop) - max(a.start, b.start) >= floor]
+    found: list[tuple[int, int]] = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        a, b = left[i], right[j]
+        start, stop = max(a.start, b.start), min(a.stop, b.stop)
+        if stop - start >= floor:
+            found.append((start, stop))
+        if a.stop <= b.stop:
+            i += 1
+        else:
+            j += 1
+    return found
 
 
 # The vocabularies whose labels ARE a split by amplitude, so a conjunction run
