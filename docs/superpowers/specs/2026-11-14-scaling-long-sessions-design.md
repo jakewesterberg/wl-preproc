@@ -272,11 +272,14 @@ The handoff `docs/handoffs/2026-11-14-scaling-long-sessions.md` (what was built,
    `registry.running_detectors()` instead. `EyeDetection.key_source` leaves out every `eye_detection` paramset whose
    `detector` is an opt-in detector not requested, so a database that registered BMD before keeps its rows and
    computes no more of them.
-7. **4.6's count is not always today's on a heavily damaged session** (found executing Task 5). `SequenceMatcher` is
-   greedy, not an optimal alignment, so split at trials and whole it can find a few codes more or fewer: on 300
-   synthetic streams of 3,000 words with up to 50 dropped and 5 inserted in each, 5 differed (3 higher, 2 lower), by at
-   most 0.0017. Every one is far below `AGREEMENT_THRESHOLD` (0.999), so its tier is D either way; with up to three
-   words dropped and one inserted in each stream, where a tier can turn on the threshold, all were equal. Ruled: keep
-   the anchored form (it is no less faithful: neither is an optimal alignment), and test exact equality near the
-   threshold and an unchanged tier far below it. A stored `event_code_agreement` of a badly damaged session can
-   differ from today's in its third decimal.
+7. **4.6's count is today's wherever a tier could turn on it, by construction** (found executing Task 5, corrected
+   by the final review). `SequenceMatcher` is greedy, not an optimal alignment, so split at trials and whole it can
+   count a few codes differently. On 300 synthetic streams of 3,000 words with up to 50 dropped and 5 inserted in
+   each, 5 differed, by at most 0.0017. Task 5 first ruled that this happens only far below `AGREEMENT_THRESHOLD`
+   (0.999); the final review disproved that with a burst of 13-14 consecutive dropped words in a 21,012-word stream,
+   just above the threshold (0.999096 split, 0.999191 whole). **Ruled:** an anchored value from `TIER_BAND` (0.002)
+   below the threshold up to, not including, 1.0 is replaced by the whole stream's, so in that band the value and
+   the tier are today's; 1.0 means equal streams, which both count the same. Below the band a badly damaged
+   session's stored `event_code_agreement` can differ from today's in its third decimal, its tier D either way. The
+   cost is today's slow alignment for a slightly damaged session only (about 2.5 s at 21,000 words; a few minutes at
+   twelve hours' worth).

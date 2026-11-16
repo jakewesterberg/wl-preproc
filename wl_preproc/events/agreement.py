@@ -138,23 +138,41 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
     the paired anchors are out of order in `other`, the whole session is
     aligned as before.
 
-    **The count is the whole-stream count wherever the tier could turn on
-    it.** `SequenceMatcher` is greedy, not an optimal alignment, so on a
-    heavily damaged session, split and whole can find a few codes more or
-    fewer (amendment 7: 5 of 300 streams with up to 50 words dropped and 5
-    inserted in each, at most 0.0017, in both directions), all far below
-    `AGREEMENT_THRESHOLD`. With up to three words dropped and one inserted
-    they were equal on every stream tried.
+    **The value is the whole stream's, today's, wherever a tier could turn
+    on it.** `SequenceMatcher` is greedy, not an optimal alignment, so split
+    and whole can count a few codes differently: on heavily damaged streams
+    (amendment 7: 5 of 300, at most 0.0017) and on a burst of dropped words
+    just above the threshold (the final review). So an anchored value from
+    `TIER_BAND` below `AGREEMENT_THRESHOLD` up to, not including, 1.0 is
+    replaced by the whole stream's. Below the band a badly damaged
+    session's value can differ from today's in its third decimal; its tier
+    is D either way.
     """
     if not reference and not other:
         return 1.0
+    longest = max(len(reference), len(other))
     pairs = _paired_anchors(reference, other)
     if pairs is None:
-        matched = _matched(reference, other)
-    else:
-        cuts = [(0, 0), *pairs, (len(reference), len(other))]
-        matched = sum(_matched(reference[a0:a1], other[b0:b1]) for (a0, b0), (a1, b1) in zip(cuts, cuts[1:]))
-    return matched / max(len(reference), len(other))
+        return _matched(reference, other) / longest
+    cuts = [(0, 0), *pairs, (len(reference), len(other))]
+    anchored = sum(_matched(reference[a0:a1], other[b0:b1]) for (a0, b0), (a1, b1) in zip(cuts, cuts[1:])) / longest
+    if AGREEMENT_THRESHOLD - TIER_BAND <= anchored < 1.0:
+        return _matched(reference, other) / longest
+    return anchored
+
+
+#: How far below `AGREEMENT_THRESHOLD` the anchored count is checked against
+#: the whole stream's (design spec `2026-11-14-scaling-long-sessions-design.md`,
+#: amendment 7 as corrected by the final review). Split at trials, the greedy
+#: matcher can count a few codes differently: up to 0.0017 on heavily damaged
+#: streams, and a code or two on a burst of dropped words just above the
+#: threshold (the review's 0.999096 against 0.999191). From this far below the
+#: threshold up to a perfect 1.0 -- equal streams, which both count the same --
+#: the value is the whole stream's, today's, so no tier can differ from
+#: today's unless split and whole differ by more than this band, which nothing
+#: measured has. The cost is today's slow alignment, for a slightly damaged
+#: session only.
+TIER_BAND = 0.002
 
 
 def _matched(reference: Sequence[int], other: Sequence[int]) -> int:
