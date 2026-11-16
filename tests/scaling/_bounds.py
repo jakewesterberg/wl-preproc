@@ -14,7 +14,7 @@ TIME_RATIO_BOUND = 6.0
 PEAK_RATIO_BOUND = 1.5
 
 
-def _best_time(fn: Callable[[int], object], n: int, repeats: int = 3) -> float:
+def _best_time(fn: Callable[[int], object], n: int, repeats: int = 5) -> float:
     best = float("inf")
     for _ in range(repeats):
         start = time.perf_counter()
@@ -24,7 +24,8 @@ def _best_time(fn: Callable[[int], object], n: int, repeats: int = 3) -> float:
 
 
 def time_ratio(fn: Callable[[int], object], n: int) -> float:
-    """The best of three timings of `fn(4n)` over the best of three of `fn(n)`. `fn` builds its own input, so
+    """The best of five timings of `fn(4n)` over the best of five of `fn(n)` (five, not the plan's three: a few-ms
+    timing on a loaded machine read 6.6 once where it reads 4.0-4.2). `fn` builds its own input, so
     building it is part of what is timed: keep it linear."""
     fn(n)  # warm imports and caches
     return _best_time(fn, 4 * n) / _best_time(fn, n)
