@@ -408,11 +408,54 @@ DETECTORS: dict[str, Detector] = {
 }
 
 
+#: Registered detectors that run only when asked for (scaling design spec
+#: `2026-11-14-scaling-long-sessions-design.md` section 5, amendment 6). BMD
+#: was the largest cost of a session by far (503 s at 20 minutes, past 45
+#: minutes at two hours) and the NWB file waits for every detector that runs;
+#: the requester's decision of 2026-11-14 is "off for now", with its speed a
+#: future task.
+OPT_IN: frozenset[str] = frozenset({"bmd"})
+
+_requested: set[str] = set()
+
+
+def request(names) -> None:
+    """Run the opt-in detectors `names` in this process, as `wlpp daemon
+    --with-detector` asks. A name that is not opt-in is refused: a detector on
+    by default needs no asking, and an unknown one is a typo."""
+    names = set(names)
+    if not names <= OPT_IN:
+        raise ValueError(f"only {sorted(OPT_IN)} can be asked for; not {sorted(names - OPT_IN)}")
+    _requested.update(names)
+
+
+def requested() -> frozenset[str]:
+    """The opt-in detectors asked for in this process."""
+    return frozenset(_requested)
+
+
+def clear_requests() -> None:
+    """Back to the default set (for tests)."""
+    _requested.clear()
+
+
+def running_detectors() -> dict[str, Detector]:
+    """The detectors that run: every registered one but the opt-in detectors
+    not asked for, in `DETECTORS`' order. What registers the default
+    paramsets, what `EyeDetection` computes, what `DetectionQuality` blends
+    and what the NWB file reads; `DETECTORS` stays the registry of what
+    exists."""
+    return {name: detector for name, detector in DETECTORS.items()
+            if name not in OPT_IN or name in _requested}
+
+
 def unavailable_detectors() -> dict[str, str]:
-    """Each registered detector that cannot run on this host, with why and
-    the install that fixes it. Loads U'n'Eye's libraries, torch among them:
-    a check, called by `wlpp daemon` and `wlpp doctor`, never at import."""
-    reasons = {name: detector.unavailable() for name, detector in DETECTORS.items() if detector.unavailable}
+    """Each detector that runs (`running_detectors`) but cannot run on this
+    host, with why and the install that fixes it. Loads U'n'Eye's libraries,
+    torch among them: a check, called by `wlpp daemon` and `wlpp doctor`,
+    never at import. An opt-in detector nobody asked for is not checked."""
+    reasons = {name: detector.unavailable() for name, detector in running_detectors().items()
+               if detector.unavailable}
     return {name: reason for name, reason in reasons.items() if reason}
 
 

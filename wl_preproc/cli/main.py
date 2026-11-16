@@ -208,6 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     daemon_p.add_argument("--nwb-fast-share", default=None)
     # Free space moves to the fast share leave; unset, a tenth of the share.
     daemon_p.add_argument("--nwb-fast-headroom-gb", type=float, default=None)
+    # An opt-in detector, run for every session this pass handles (scaling
+    # design spec section 5, amendment 6). BMD is off by default.
+    from wl_preproc.eye.detect.registry import OPT_IN
+
+    daemon_p.add_argument("--with-detector", action="append", default=[], choices=sorted(OPT_IN),
+                          help="also run this opt-in detector")
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -765,6 +771,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--nwb-fast-root needs --nwb-slow-root: the slow share is every file's long-term home")
         from wl_preproc.eye.detect import registry
 
+        registry.request(args.with_detector)
         # A registered detector without its libraries errors on every job,
         # quietly, and every NWB then waits on it for ever (the U'n'Eye
         # review's minor 3). A half-installed host is stopped before a pass,

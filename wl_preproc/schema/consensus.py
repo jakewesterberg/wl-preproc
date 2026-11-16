@@ -503,12 +503,15 @@ def _live_detectors() -> dict[int, str]:
     Empty while any detector's default is unregistered, so no partial set
     is blended. Looked up by content, never registered here: `make()` runs
     in a transaction, where `paramset.register` must never be called."""
-    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.registry import running_detectors
 
     by_hash = {row["param_hash"]: row["paramset_idx"]
                for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()}
+    # The detectors that run, not every registered one (scaling design spec
+    # section 5): an opt-in detector nobody asked for is neither waited for
+    # nor blended.
     digests = {name: paramset.content_hash(detect._eye_detection_params(detector))
-               for name, detector in DETECTORS.items()}
+               for name, detector in running_detectors().items()}
     if not all(digest in by_hash for digest in digests.values()):
         return {}
     return {by_hash[digest]: name for name, digest in digests.items()}
