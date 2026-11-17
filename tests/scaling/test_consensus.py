@@ -50,20 +50,34 @@ def test_empty_traces():
     assert _event_starts(empty, np.zeros(0, dtype=bool)) == []
 
 
-def test_agreement_is_array_fast():
-    """Linear already, but one Python call per sample: 0.66 s per million samples on the development machine, about
-    126 such passes per trace pair-set a session, 10-14 minutes at two hours (the spike). The array form takes a few
-    hundredths; the bound leaves a slow CI runner several times that. Best of three."""
+AGREEMENT_SPEEDUP_BOUND = 2.0
+
+
+def _best_of_three(fn) -> float:
     import time
 
-    a_vocabulary, b_vocabulary = DETECTORS["engbert_kliegl"].vocabulary, DETECTORS["nslr"].vocabulary
-    a, b = _trace(1_000_000, 1), _trace(1_000_000, 2)
     best = float("inf")
     for _ in range(3):
         start = time.perf_counter()
-        _event_starts(a, comparison_mask(a, b, a_vocabulary, b_vocabulary, PSO_AS_SACCADE))
+        fn()
         best = min(best, time.perf_counter() - start)
-    assert best <= 0.25, f"{best:.2f} s per million samples"
+    return best
+
+
+def test_agreement_is_array_fast():
+    """Linear already, but one Python call per sample: today's code takes 0.63 s per million samples on the
+    development machine, about 126 such passes per trace pair-set a session, 10-14 minutes at two hours (the spike).
+    The array form takes 0.16 s there, 3.9 times faster. A CI runner is about twice as slow at both, so the bound is
+    that ratio, measured in the same process (as `_bounds.py` bounds ratios, never seconds): at least 2, where a
+    return to a per-sample loop reads about 1. Best of three each."""
+    a_vocabulary, b_vocabulary = DETECTORS["engbert_kliegl"].vocabulary, DETECTORS["nslr"].vocabulary
+    a, b = _trace(1_000_000, 1), _trace(1_000_000, 2)
+    array_form = _best_of_three(
+        lambda: _event_starts(a, comparison_mask(a, b, a_vocabulary, b_vocabulary, PSO_AS_SACCADE)))
+    today = _best_of_three(
+        lambda: _oracles.event_starts(a, _oracles.comparison_mask(a, b, a_vocabulary, b_vocabulary, PSO_AS_SACCADE)))
+    assert today / array_form >= AGREEMENT_SPEEDUP_BOUND, (
+        f"{today / array_form:.1f}x today's code ({array_form:.2f} s against {today:.2f} s per million samples)")
 
 
 def test_a_sample_that_is_no_label_still_raises():
