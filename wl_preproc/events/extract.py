@@ -107,34 +107,36 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
             "needs two words"
         )
 
-    raw = np.fromfile(nidq_bin, dtype=np.int16)
+    from wl_preproc.timebase.channels import column_chunks, n_values, strobe_falls
+
+    n_int16 = n_values(nidq_bin, np.int16)
     # The same guard, and the same message, `timebase/extract.py`'s
     # `extract_spikeglx` puts in front of the identical reshape. Both call
-    # sites today reach this only after that sibling has already read the same
+    # sites today reach this only after that sibling has already sized the same
     # file with the same divisor, so this is not covering a live gap -- it is
     # for a direct caller, and so that one module family does not describe the
     # same corruption two different ways (a bare numpy reshape error here, a
     # sentence naming the file and the sidecar there).
-    if raw.size % meta.n_channels:
+    if n_int16 % meta.n_channels:
         raise ValueError(
-            f"{nidq_bin}: {raw.size} int16 samples do not divide into "
+            f"{nidq_bin}: {n_int16} int16 samples do not divide into "
             f"the {meta.n_channels} channels {meta_path.name} declares; the "
             "file is truncated mid-sample or the sidecar describes a different "
             "recording"
         )
-    samples = raw.reshape(-1, meta.n_channels)
     # NI writes every analog channel before every digital word, so word 0 sits
     # at n_analog_channels and word 1 immediately after it. `extract_spikeglx`
     # takes word 0 for the barcode and already anticipates this second word.
-    control = samples[:, meta.n_analog_channels].astype(np.uint16)
-    data = samples[:, meta.n_analog_channels + 1].astype(np.uint16)
-
-    strobe = (control >> _NIDQ_STROBE_BIT) & 1
+    # Each is read through a memory map in chunks, never the whole file
+    # (design spec `2026-11-14-scaling-long-sessions-design.md` section 4.1).
+    #
     # Falling edges: high at i, low at i+1. The word is read at i, the last
-    # sample the strobe was still asserted.
-    falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
-
-    words = tuple((int(index), int(data[index])) for index in falling)
+    # sample the strobe was still asserted (`timebase/channels.py::strobe_falls`).
+    words = strobe_falls(
+        column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels, np.int16),
+        column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels + 1, np.int16),
+        _NIDQ_STROBE_BIT,
+    )
     return WordStream(words=words, fs_hz=meta.sample_rate_hz)
 
 
@@ -158,8 +160,9 @@ def extract_rhs_witness(session_dir: Path) -> StrobeWitness:
 
     recording_dir = find_recording_dir(session_dir)
     fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
-    words = np.fromfile(recording_dir / RHS_DIGITAL_IN_FILENAME, dtype=np.uint16)
+    from wl_preproc.timebase.channels import column_chunks, strobe_rises
 
-    strobe = (words >> RHS_STROBE_DIGITAL_BIT) & 1
-    rising = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1
-    return StrobeWitness(edge_samples=tuple(int(i) for i in rising), fs_hz=fs_hz)
+    # Read in chunks (`timebase/channels.py`), never the whole file.
+    rising = strobe_rises(column_chunks(recording_dir / RHS_DIGITAL_IN_FILENAME, 1, 0, np.uint16),
+                          RHS_STROBE_DIGITAL_BIT)
+    return StrobeWitness(edge_samples=rising, fs_hz=fs_hz)

@@ -388,9 +388,10 @@ class EyeValidity(dj.Computed):
                 "reason": "",
             })
             self.Run.insert(
-                {**row, "run_index": index, "run_start": run.start,
-                 "run_stop": run.stop, "label": run.label.value}
-                for index, run in enumerate(runs)
+                ({**row, "run_index": index, "run_start": run.start,
+                  "run_stop": run.stop, "label": run.label.value}
+                 for index, run in enumerate(runs)),
+                chunk_size=INSERT_CHUNK_ROWS,
             )
 
 
@@ -579,7 +580,7 @@ class EyeDetection(dj.Computed):
         return (
             dj.U("subject", "session_datetime", "validity_paramset_type", "validity_paramset_idx")
             & EyeValidity.proj(validity_paramset_type="paramset_type")
-        ) * (paramset.ParamSet & {"paramset_type": "eye_detection"})
+        ) * (paramset.ParamSet & {"paramset_type": "eye_detection"} & _not_unrequested())
 
     def populate(self, *args, **kwargs):
         """`AutoPopulate.populate`, refused before any job is reserved while
@@ -826,9 +827,10 @@ class EyeDetection(dj.Computed):
                 eyes=per_eye, geometry=geometry,
             )
             self.Source.insert(
-                {**key, "trace": "conjunction", "source_index": index,
-                 "source_start": start, "source_stop": stop, "source": value}
-                for index, (start, stop, value) in enumerate(_value_runs(source))
+                ({**key, "trace": "conjunction", "source_index": index,
+                  "source_start": start, "source_stop": stop, "source": value}
+                 for index, (start, stop, value) in enumerate(_value_runs(source))),
+                chunk_size=INSERT_CHUNK_ROWS,
             )
 
     def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
@@ -1115,7 +1117,19 @@ class EyeDetection(dj.Computed):
                     "flagged": int(lost[max(run.start - 2, 0):run.stop].any())}),
             }
 
-        self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
+        self.Run.insert((_run_row(index, run) for index, run in enumerate(runs)), chunk_size=INSERT_CHUNK_ROWS)
+
+
+#: Rows per statement for a trace's runs and sources (`EyeValidity.Run`,
+#: `EyeDetection.Run`, `EyeDetection.Source`), which grow with the session:
+#: at 12 hours one statement passed MySQL 8's default `max_allowed_packet`
+#: (64 MB) and the server refused every detector's rows but NSLR's (design
+#: spec `2026-11-14-scaling-long-sessions-design.md`, amendment 8). Inside
+#: `make()` the batches share `populate`'s one transaction, so a trace's rows
+#: are still stored whole or not at all. Ten thousand of the widest row fit
+#: pymysql's 16 MB, the tighter of the two defaults
+#: (`tests/schema/test_long_session_rows.py`).
+INSERT_CHUNK_ROWS = 10_000
 
 
 #: The labels the validity mask, not a detector, writes into a trace: no
@@ -1316,13 +1330,7 @@ def _overlapping(
     kind they are not, and `label_for` remains the only source of a label.
     """
     floor = max(int(min_duration_samples), 1)
-    intersections = []
-    for left_run in left:
-        for right_run in right:
-            start = max(left_run.start, right_run.start)
-            stop = min(left_run.stop, right_run.stop)
-            if stop - start >= floor:
-                intersections.append((start, stop))
+    intersections = _intersections(left, right, floor)
 
     spans: list[list[int]] = []
     for start, stop in sorted(intersections):
@@ -1336,6 +1344,41 @@ def _overlapping(
             spans.append([start, stop])
 
     return [Run(start=start, stop=stop, label=label_for(start, stop)) for start, stop in spans]
+
+
+def _sorted_and_disjoint(runs: list[Run]) -> bool:
+    """Each run starting at or after the previous one stops: what every
+    registered detector's own runs are (`labels.py::true_runs`)."""
+    return all(later.start >= earlier.stop for earlier, later in zip(runs, runs[1:]))
+
+
+def _intersections(left: list[Run], right: list[Run], floor: int) -> list[tuple[int, int]]:
+    """Every `(start, stop)` where a left run and a right run overlap by at
+    least `floor` samples: the list `_overlapping` coalesces (design spec
+    `2026-11-14-scaling-long-sessions-design.md` section 4.5, amendment 5).
+
+    **One pass where both lists are sorted and disjoint**, as every registered
+    detector's are: two pointers, the run that stops first advancing, so each
+    overlapping pair is met once. Comparing every left run with every right one
+    took 14 s at 8,000 events an eye, and about 30,000 an eye come in four
+    hours. **Any other input takes that nested loop**, as before: nothing in
+    `registry.py::DetectFn`'s contract makes runs disjoint, and the same pairs
+    must come out whatever a detector returns."""
+    if not (_sorted_and_disjoint(left) and _sorted_and_disjoint(right)):
+        return [(max(a.start, b.start), min(a.stop, b.stop)) for a in left for b in right
+                if min(a.stop, b.stop) - max(a.start, b.start) >= floor]
+    found: list[tuple[int, int]] = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        a, b = left[i], right[j]
+        start, stop = max(a.start, b.start), min(a.stop, b.stop)
+        if stop - start >= floor:
+            found.append((start, stop))
+        if a.stop <= b.stop:
+            i += 1
+        else:
+            j += 1
+    return found
 
 
 # The vocabularies whose labels ARE a split by amplitude, so a conjunction run
@@ -1888,11 +1931,29 @@ def _params_for(detector, params: dict):
     return params_cls(**{k: v for k, v in params.items() if k in known})
 
 
+def _not_unrequested() -> str | dict:
+    """A restriction leaving out every `eye_detection` paramset whose detector
+    is opt-in and was not asked for (scaling design spec section 5, amendment
+    6), so a database that registered BMD before it was made opt-in keeps its
+    rows and computes no more of them. Read from each paramset's own
+    `detector`; `{}` (no restriction) when there is none to leave out."""
+    from wl_preproc.eye.detect.registry import OPT_IN, requested
+
+    held_back = OPT_IN - requested()
+    left_out = [row["paramset_idx"] for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts()
+                if row["params"].get("detector") in held_back]
+    if not left_out:
+        return {}
+    return f"paramset_idx NOT IN ({', '.join(str(int(idx)) for idx in left_out)})"
+
+
 def register_default_paramsets() -> dict[str, int]:
     """One `eye_validity` paramset and one `eye_detection` paramset per
     registered detector, returned by detector name.
 
-    Set equality against `DETECTORS` is this subsystem's completeness claim,
+    One per detector that runs (`registry.running_detectors()`, which leaves
+    out an opt-in detector nobody asked for: scaling design spec section 5).
+    Set equality against that is this subsystem's completeness claim,
     in the shape `EXTRACTORS` already uses: a detector with no paramset never
     runs, and a paramset naming no detector fails on the first session that
     reaches it.
@@ -1918,13 +1979,13 @@ def register_default_paramsets() -> dict[str, int]:
     """
     from dataclasses import asdict
 
-    from wl_preproc.eye.detect.registry import DETECTORS
+    from wl_preproc.eye.detect.registry import running_detectors
     from wl_preproc.eye.detect.validity import DEFAULT_VALIDITY_PARAMS
 
     paramset.register("eye_validity", asdict(DEFAULT_VALIDITY_PARAMS))
     return {
         name: paramset.register("eye_detection", _eye_detection_params(detector))
-        for name, detector in DETECTORS.items()
+        for name, detector in running_detectors().items()
     }
 
 

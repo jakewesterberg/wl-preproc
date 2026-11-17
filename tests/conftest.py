@@ -19,6 +19,19 @@ from wl_preproc.ingest import watcher
 from wl_preproc.schema._compat import apply_datajoint_compat
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _every_detector_runs():
+    """The suite runs BMD, as a daemon started with `--with-detector bmd` does
+    (scaling design spec section 5, amendment 6): the tests written before BMD
+    was made opt-in read `DETECTORS` as what runs, and they keep proving what
+    they proved. `tests/schema/test_opt_in_detectors.py` clears the request to
+    prove the default set."""
+    from wl_preproc.eye.detect import registry
+
+    registry.request(registry.OPT_IN)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _healthy_scratch_by_default(request, monkeypatch):
     """Insulate every test from this machine's REAL free disk space.

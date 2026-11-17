@@ -15,6 +15,8 @@ cycle.
 
 from __future__ import annotations
 
+import functools
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,7 +104,34 @@ def read_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
     them all: timebase needs 2 and gaze needs about 10. Measured on the
     reference recording, reading 10 columns takes 2.5 s and 94 MB against
     roughly a gigabyte for the whole file.
+
+    **Each column is parsed once per process for as long as the file is
+    unchanged** (design spec `2026-11-14-scaling-long-sessions-design.md`
+    section 4.7, amendment 2): a session's stages asked for the same file
+    about 59 times, each a full parse. Keyed by the file's modification time
+    and size, as `timebase/_syncbox_log.py::read_syncbox_log` is, holding one
+    file; a call parses only the columns not yet held. **The arrays are
+    read-only**, because every caller is handed the same one: a caller that
+    wrote into it would change what the next caller reads.
     """
+    stat = Path(path).stat()
+    held = _held_columns(Path(path), stat.st_mtime_ns, stat.st_size)
+    missing = [name for name in columns if name not in held]
+    if missing:
+        for name, values in _parse_columns(path, missing).items():
+            values.flags.writeable = False
+            held[name] = values
+    return {name: held[name] for name in columns}
+
+
+@functools.lru_cache(maxsize=1)
+def _held_columns(_path: Path, _mtime_ns: int, _size: int) -> dict[str, np.ndarray]:
+    """The columns of one file version parsed so far, filled by `read_columns`."""
+    return {}
+
+
+def _parse_columns(path: Path, columns: list[str]) -> dict[str, np.ndarray]:
+    """`columns` parsed from `path`, or a `ValueError` naming those missing."""
     try:
         frame = pd.read_csv(path, sep=r"\s+", usecols=columns, engine="c")
     except ValueError as exc:

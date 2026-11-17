@@ -1142,7 +1142,7 @@ _QUALITY_MIN_HISTORY = 3
 
 
 def _quality_lines(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[str]:
-    """`### Seven-way agreement per session per eye (24 h)`'s lines (design
+    """`### Agreement across the detectors that ran, per session per eye (24 h)`'s lines (design
     spec `2026-10-08-seven-way-agreement-design.md` section 5): for each
     session in `ingested_keys`, each eye and each validity paramset, the
     session's `DetectionQuality` score under each glissade convention beside
@@ -2134,7 +2134,7 @@ def build_report(
     # beside the pairwise rows above and never instead of them. Windowed to
     # the 24 h `ingested_keys` the per-session lists above use.
     quality_lines = _quality_lines(ingested_keys, prefix=prefix)
-    lines += ["", f"### Seven-way agreement per session per eye (24 h) — {len(quality_lines)}", ""]
+    lines += ["", f"### Agreement across the detectors that ran, per session per eye (24 h) — {len(quality_lines)}", ""]
     lines += quality_lines or ["- none"]
 
     # Main-sequence design spec section 5: each eye's vigor against the same

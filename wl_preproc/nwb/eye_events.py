@@ -43,8 +43,9 @@ def _module(nwb: NWBFile):
     if "eye_events" not in nwb.processing:
         nwb.create_processing_module(
             name="eye_events",
-            description=("Every registered detector's events, per eye and for both eyes together, and how much "
-                         "the detectors agree. Times are session seconds; each table names its detector."),
+            description=("Each detector's events that ran on this session, per eye and for both eyes together, "
+                         "and how much the detectors agree. Times are session seconds; each table names its "
+                         "detector. BMD runs only when asked for."),
         )
     return nwb.processing["eye_events"]
 

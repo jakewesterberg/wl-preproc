@@ -155,8 +155,104 @@ def detect_uneye(
     runs: list[Run] = []
     for offset, stop in pieces:
         piece = np.asarray(gaze_deg[offset:stop], dtype=float)
-        prediction, probability = network.predict(piece[:, 0], piece[:, 1])
+        prediction, probability = _predict_windowed(network, piece[:, 0], piece[:, 1])
         for start, end in true_runs(prediction == 1):
             runs.append(Run(offset + int(start), offset + int(end), Label.SACCADE,
                             reliability=float(np.mean(probability[1, start:end]))))
     return runs
+
+
+#: The network's windows, in samples (design spec
+#: `2026-11-14-scaling-long-sessions-design.md` section 4.2, amendment 4). A
+#: stretch predicted in one call held every layer's activations for all of it:
+#: 8.4 GB at two hours. Both are multiples of `mp ** 2` (25), so every window
+#: starts on the network's pooling grid, and the overlap is more than five
+#: times what the network sees (about +-89 samples, measured by perturbing one
+#: input: `tests/scaling/test_uneye_windows.py`).
+WINDOW_SAMPLES = 50_000
+OVERLAP_SAMPLES = 500
+
+
+def _unet(network):
+    """The vendored `UNet` with `network`'s weights, in evaluation mode, loaded
+    once per network: `DNN.predict` reloads them on every call."""
+    cached = getattr(network, "_wlpp_unet", None)
+    if cached is None:
+        import torch
+
+        from wl_preproc.eye.vendor.uneye.functions import UNet
+
+        weights = torch.load(network.weights_name)
+        cached = UNet(weights["c7.weight"].shape[0], network.ks, network.mp)
+        cached.load_state_dict(weights)
+        cached.eval()
+        network._wlpp_unet = cached
+    return cached
+
+
+def _predict_windowed(network, x: np.ndarray, y: np.ndarray, window: int = WINDOW_SAMPLES,
+                      overlap: int = OVERLAP_SAMPLES) -> tuple[np.ndarray, np.ndarray]:
+    """What `network.predict(x, y)` returns for one 1-D stretch, the network run
+    on windows of it (design spec section 4.2, amendment 4).
+
+    Everything that reads the whole stretch stays whole, exactly as
+    `vendor/uneye/classifier.py::DNN.predict` does it: the input is U'n'Eye's
+    own differences (a leading zero; NaN to 0, inf to its `inf_correction`),
+    its tail rule (where the length is not a multiple of 25, the last 25
+    samples evaluated alone for the remainder) and its `binary_prediction`
+    over the stitched output. Only the network's evaluation is windowed:
+    `[start - overlap, stop + overlap)`, on the pooling grid, keeping
+    `[start, stop)`. Labels equal the single call; probabilities agree to
+    about 1e-6, the convolution's float order depending on its input's
+    length."""
+    import torch
+
+    from wl_preproc.eye.vendor.uneye.functions import binary_prediction
+
+    unet = _unet(network)
+    grid = network.mp ** 2
+    if window % grid or overlap % grid:
+        raise ValueError(f"window {window} and overlap {overlap} must be multiples of the pooling grid, {grid}")
+    x = np.atleast_2d(np.asarray(x, dtype=float))
+    y = np.atleast_2d(np.asarray(y, dtype=float))
+    if x.shape[1] < grid:
+        raise ValueError("Input is to small along dimension 1. Expects input of the form (n_samples x n_bins) or "
+                         "(n_bins).")
+
+    def differences(trace):
+        diff = np.diff(trace, axis=-1)
+        if trace is x:
+            diff[np.isinf(diff)] = network.inf_correction
+            diff[np.isnan(diff)] = 0
+        else:
+            diff[np.isnan(diff)] = 0
+            diff[np.isinf(diff)] = network.inf_correction
+        return np.concatenate((np.zeros((1, 1)), diff), 1)
+
+    x_in, y_in = (differences(x), differences(y)) if network.doDiff else (x, y)
+    inputs = torch.FloatTensor(np.stack([x_in[0], y_in[0]], axis=-1)).unsqueeze(0).unsqueeze(0)
+    n = inputs.size()[2]
+    first = n // grid * grid
+    classes = None
+    out = None
+    with torch.no_grad():
+        for start in range(0, first, window):
+            stop = min(start + window, first)
+            low, high = max(0, start - overlap), min(first, stop + overlap)
+            piece = unet(inputs[:, :, low:high, :], ["out"])[0].data.cpu().numpy()
+            if out is None:
+                classes = piece.shape[1]
+                out = np.zeros((1, classes, n), dtype=piece.dtype)
+            out[:, :, start:stop] = piece[:, :, start - low:stop - low]
+        if n % grid:
+            tail = unet(inputs[:, :, -grid:, :], ["out"])[0].data.cpu().numpy()
+            if out is None:
+                classes = tail.shape[1]
+                out = np.zeros((1, classes, n), dtype=tail.dtype)
+            out[:, :, first:] = tail[:, :, -(n % grid):]
+    if classes == 2:
+        prediction = binary_prediction(out[:, 1, :], network.sampfreq, min_sacc_dist=network.min_sacc_dist,
+                                       min_sacc_dur=int(network.min_sacc_dur / (1000 / network.sampfreq)))
+    else:
+        prediction = np.argmax(out, 1)
+    return np.asarray(prediction, dtype=float)[0], out[0].astype(float)

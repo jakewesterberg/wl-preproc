@@ -485,7 +485,7 @@ class TimingProvenance(dj.Computed):
         is the case the gate was separated from `failed` to rescue.
         """
         from wl_preproc.contracts.events import DecodeError, decode_stream
-        from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
+        from wl_preproc.contracts.sidecar import read_sidecar
         from wl_preproc.events import agreement
         from wl_preproc.events.extract import extract_nidq_words, extract_rhs_witness
         from wl_preproc.events.taskfile import SyntheticTaskFileReader, UnsupportedTaskFile
@@ -702,9 +702,7 @@ class TimingProvenance(dj.Computed):
             bcam_dir = session_dir / "bcam"
             sidecar_paths = sorted(bcam_dir.glob("*.yaml")) if bcam_dir.is_dir() else []
             if sidecar_paths:
-                sidecar = BehaviorCameraSidecar.from_yaml(
-                    sidecar_paths[0].read_text(encoding="utf-8")
-                )
+                sidecar = read_sidecar(sidecar_paths[0])
                 camera_trigger_count = sidecar.frame_count - len(sidecar.dropped_frame_ids)
 
         inputs = agreement.TierInputs(

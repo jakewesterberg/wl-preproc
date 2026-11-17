@@ -126,12 +126,103 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
     values, over and over, for as long as the session runs), so left at its
     default, autojunk would silently discard most genuine matches on exactly
     the long sessions this metric exists for.
+
+    **Aligned between trial-number anchors, not over the whole session at
+    once** (design spec `2026-11-14-scaling-long-sessions-design.md` section
+    4.6, amendment 1). With few distinct code values `SequenceMatcher` is
+    close to quadratic: 2-4 s at two hours, minutes at twelve. Each
+    `TRIAL_NUMBER` escape that occurs once in each stream, keyed by its payload
+    and the `RUN_START` payload before it, pairs the two streams at that point;
+    the segments between pairs are aligned with the same matcher and their
+    matched counts summed. A dropped anchor only merges two segments. Where
+    the paired anchors are out of order in `other`, the whole session is
+    aligned as before.
+
+    **The value is the whole stream's, today's, wherever a tier could turn
+    on it.** `SequenceMatcher` is greedy, not an optimal alignment, so split
+    and whole can count a few codes differently: on heavily damaged streams
+    (amendment 7: 5 of 300, at most 0.0017) and on a burst of dropped words
+    just above the threshold (the final review). So an anchored value from
+    `TIER_BAND` below `AGREEMENT_THRESHOLD` up to, not including, 1.0 is
+    replaced by the whole stream's. Below the band a badly damaged
+    session's value can differ from today's in its third decimal; its tier
+    is D either way.
     """
     if not reference and not other:
         return 1.0
+    longest = max(len(reference), len(other))
+    pairs = _paired_anchors(reference, other)
+    if pairs is None:
+        return _matched(reference, other) / longest
+    cuts = [(0, 0), *pairs, (len(reference), len(other))]
+    anchored = sum(_matched(reference[a0:a1], other[b0:b1]) for (a0, b0), (a1, b1) in zip(cuts, cuts[1:])) / longest
+    if AGREEMENT_THRESHOLD - TIER_BAND <= anchored < 1.0:
+        return _matched(reference, other) / longest
+    return anchored
+
+
+#: How far below `AGREEMENT_THRESHOLD` the anchored count is checked against
+#: the whole stream's (design spec `2026-11-14-scaling-long-sessions-design.md`,
+#: amendment 7 as corrected by the final review). Split at trials, the greedy
+#: matcher can count a few codes differently: up to 0.0017 on heavily damaged
+#: streams, and a code or two on a burst of dropped words just above the
+#: threshold (the review's 0.999096 against 0.999191). From this far below the
+#: threshold up to a perfect 1.0 -- equal streams, which both count the same --
+#: the value is the whole stream's, today's, so no tier can differ from
+#: today's unless split and whole differ by more than this band, which nothing
+#: measured has. The cost is today's slow alignment, for a slightly damaged
+#: session only.
+TIER_BAND = 0.002
+
+
+def _matched(reference: Sequence[int], other: Sequence[int]) -> int:
+    """Codes `SequenceMatcher(autojunk=False)` matches between the two."""
     matcher = SequenceMatcher(None, reference, other, autojunk=False)
-    matched = sum(block.size for block in matcher.get_matching_blocks())
-    return matched / max(len(reference), len(other))
+    return sum(block.size for block in matcher.get_matching_blocks())
+
+
+def _anchors(codes: Sequence[int]) -> list[tuple[int, tuple]]:
+    """`(index, (run payload, trial payload))` for each `TRIAL_NUMBER` escape,
+    found by walking the stream escape by escape with `PAYLOAD_WORD_COUNTS`:
+    a payload word can hold any value, an escape's included, so searching for
+    the value alone would cut inside a payload. The run payload is that of the
+    last `RUN_START` before it, `None` before any."""
+    from wl_preproc.contracts.events import PAYLOAD_WORD_COUNTS, Escape
+
+    payload_words = {int(escape): PAYLOAD_WORD_COUNTS.get(escape, 0) for escape in Escape}
+    anchors: list[tuple[int, tuple]] = []
+    run: tuple | None = None
+    index = 0
+    while index < len(codes):
+        word = codes[index]
+        if word in payload_words:
+            count = payload_words[word]
+            payload = tuple(codes[index + 1:index + 1 + count])
+            if word == Escape.RUN_START:
+                run = payload
+            elif word == Escape.TRIAL_NUMBER:
+                anchors.append((index, (run, payload)))
+            index += 1 + count
+        else:
+            index += 1
+    return anchors
+
+
+def _paired_anchors(reference: Sequence[int], other: Sequence[int]) -> list[tuple[int, int]] | None:
+    """`(index in reference, index in other)` of each anchor whose key occurs
+    once in each stream, in `reference`'s order; `None` where their indices in
+    `other` do not increase, so cutting there would cross segments."""
+    def once(anchors):
+        seen: dict[tuple, list[int]] = {}
+        for index, key in anchors:
+            seen.setdefault(key, []).append(index)
+        return {key: indices[0] for key, indices in seen.items() if len(indices) == 1}
+
+    in_reference, in_other = once(_anchors(reference)), once(_anchors(other))
+    pairs = sorted((index, in_other[key]) for key, index in in_reference.items() if key in in_other)
+    if any(later[1] <= earlier[1] for earlier, later in zip(pairs, pairs[1:])):
+        return None
+    return pairs
 
 
 # The resolution of a boundary carried on the event codes: the shared strobe

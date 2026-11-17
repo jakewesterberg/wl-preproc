@@ -1,4 +1,4 @@
-"""The report's `### Seven-way agreement per session per eye (24 h)`
+"""The report's `### Agreement across the detectors that ran, per session per eye (24 h)`
 subsection (design spec `2026-10-08-seven-way-agreement-design.md` section 5).
 
 Rows are planted directly, as `test_vigor_report.py` plants its own;
@@ -20,7 +20,7 @@ from tests.identities import new_animal
 from wl_preproc.cli.report import build_report
 
 _LONG_AGO = datetime.datetime(2025, 1, 1)
-_HEADING = "Seven-way agreement per session per eye (24 h)"
+_HEADING = "Agreement across the detectors that ran, per session per eye (24 h)"
 _VOCABULARY = "saccade,fixation"
 
 

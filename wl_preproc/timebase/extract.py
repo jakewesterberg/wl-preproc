@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from wl_sync.barcode import BIT_SLOT_US, FRAME_US, edges_from_samples
 
+from wl_preproc.timebase.channels import bit_edges, column_chunks, n_values
+
 if TYPE_CHECKING:
     from wl_preproc.timebase._syncbox_log import SyncBoxLog
 
@@ -120,26 +122,6 @@ def syncbox_stream(log: SyncBoxLog) -> BitStream:
     return BitStream(edges=(), fs_hz=_SYNCBOX_NOMINAL_FS_HZ, n_samples=0 if last_us is None else last_us + FRAME_US)
 
 
-def _edges_from_bit(
-    words: np.ndarray, bit: int, fs_hz: float
-) -> tuple[tuple[int, int], ...]:
-    """One digital word stream, one bit, into edges.
-
-    `edges_from_samples` is wl-sync's and does the level-change detection; this
-    only isolates the line. Note `bit` is ZERO-BASED here. Intan's own
-    documentation numbers bits from 1, and reading it literally keys a mask to
-    the wrong signal silently -- parent spec section 6.3 records that trap.
-
-    The trace is emitted for every sample including the first, so
-    `edges_from_samples` -- whose `previous` state starts `None` -- always
-    yields an edge at native tick 0. That is what makes the idle preceding the
-    first barcode verifiable by a caller that decodes this stream without
-    passing `start_us` itself.
-    """
-    trace = ((words >> bit) & 1).astype(np.uint8)
-    return tuple(edges_from_samples(trace.tolist(), fs_hz=fs_hz))
-
-
 # Which digital-in line carries the barcode is this project's wiring
 # convention, not something the Intan header records: its digital channels are
 # named DIGITAL-IN-00.. and carry no semantics. So it is stated here rather than
@@ -190,11 +172,11 @@ def extract_rhs(session_dir: Path) -> BitStream:
             f"{digital_path}: the recording has an {INFO_FILENAME} but no "
             f"{RHS_DIGITAL_IN_FILENAME}, so it carries no barcode line"
         )
-    words = np.fromfile(digital_path, dtype=np.uint16)
+    # One channel of one word, read in chunks (`timebase/channels.py`).
     return BitStream(
-        edges=_edges_from_bit(words, RHS_BARCODE_DIGITAL_BIT, fs_hz),
+        edges=bit_edges(column_chunks(digital_path, 1, 0, np.uint16), RHS_BARCODE_DIGITAL_BIT, fs_hz),
         fs_hz=fs_hz,
-        n_samples=int(words.size),
+        n_samples=n_values(digital_path, np.uint16),
     )
 
 
@@ -235,24 +217,25 @@ def extract_spikeglx(nidq_bin: Path) -> BitStream:
         )
     meta = read_nidq_meta(meta_path)
 
-    interleaved = np.fromfile(nidq_bin, dtype=np.int16)
-    if interleaved.size % meta.n_channels:
+    n_int16 = n_values(nidq_bin, np.int16)
+    if n_int16 % meta.n_channels:
         raise ValueError(
-            f"{nidq_bin}: {interleaved.size} int16 samples do not divide into "
+            f"{nidq_bin}: {n_int16} int16 samples do not divide into "
             f"the {meta.n_channels} channels {meta_path.name} declares; the "
             "file is truncated mid-sample or the sidecar describes a different "
             "recording"
         )
-    samples = interleaved.reshape(-1, meta.n_channels)
     # The first digital word. `n_analog_channels` is its offset because NI
     # writes every analog channel ahead of every digital one, and a second
-    # word -- how a 32-line port is saved -- would follow this one.
-    words = samples[:, meta.n_analog_channels].astype(np.uint16)
+    # word -- how a 32-line port is saved -- would follow this one. Read
+    # through a memory map in chunks, never the whole file (design spec
+    # `2026-11-14-scaling-long-sessions-design.md` section 4.1).
+    words = column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels, np.int16)
 
     return BitStream(
-        edges=_edges_from_bit(words, NIDQ_BARCODE_XD_LINE, meta.sample_rate_hz),
+        edges=bit_edges(words, NIDQ_BARCODE_XD_LINE, meta.sample_rate_hz),
         fs_hz=meta.sample_rate_hz,
-        n_samples=int(samples.shape[0]),
+        n_samples=n_int16 // meta.n_channels,
     )
 
 
@@ -335,9 +318,9 @@ def extract_bcam(sidecar_path: Path) -> BitStream:
     overlapping the gap, which surfaces downstream as a barcode this system did
     not recover -- not as a silent offset.
     """
-    from wl_preproc.contracts.sidecar import BehaviorCameraSidecar
+    from wl_preproc.contracts.sidecar import read_sidecar
 
-    sidecar = BehaviorCameraSidecar.from_yaml(sidecar_path.read_text(encoding="utf-8"))
+    sidecar = read_sidecar(sidecar_path)
     if sidecar.frame_rate_hz is None:
         raise ValueError(
             f"{sidecar_path}: no frame_rate_hz. A per-frame digital line cannot "
