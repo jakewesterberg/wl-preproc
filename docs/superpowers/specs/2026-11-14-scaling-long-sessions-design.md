@@ -283,3 +283,14 @@ The handoff `docs/handoffs/2026-11-14-scaling-long-sessions.md` (what was built,
    session's stored `event_code_agreement` can differ from today's in its third decimal, its tier D either way. The
    cost is today's slow alignment for a slightly damaged session only (about 2.5 s at 21,000 words; a few minutes at
    twelve hours' worth).
+8. **A trace's runs are stored in batches** (found by Task 9's 12-hour run). Each detector's `EyeDetection.Run`
+   rows went to MySQL as one statement; at 12 hours that statement passed MySQL 8's default `max_allowed_packet`
+   (64 MB), and the server refused five detectors' rows of six (error 1153, every trace; NSLR's fit). Nothing was
+   stored, so every pass computed them again. **Ruled:** `EyeValidity.Run`, `EyeDetection.Run` and
+   `EyeDetection.Source` are inserted `INSERT_CHUNK_ROWS` (10,000) rows per statement through DataJoint's own
+   `chunk_size`. Inside `make()` the batches share `populate`'s one transaction -- DataJoint 2.3.3's `_insert_rows`
+   never commits -- so a trace is stored whole or not at all, as before. This is the code's fix, not the server's:
+   it holds whatever limit `serv`'s MySQL is configured with. The 12-hour run also measured two detectors slowing
+   faster than the session grows (U'n'Eye 99 s at 2 h, 53 min at 12 h; Nystrom-Holmqvist 31 s, 8.4 min) and
+   eye-detection steps peaking at 19-36 GB against 4.1.7's 16 GB per stage, the session under 48 GB. The requester
+   chose (2026-11-16) to accept both for now and record them as a future task beside BMD's.

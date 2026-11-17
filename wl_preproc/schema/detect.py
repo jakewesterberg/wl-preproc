@@ -388,9 +388,10 @@ class EyeValidity(dj.Computed):
                 "reason": "",
             })
             self.Run.insert(
-                {**row, "run_index": index, "run_start": run.start,
-                 "run_stop": run.stop, "label": run.label.value}
-                for index, run in enumerate(runs)
+                ({**row, "run_index": index, "run_start": run.start,
+                  "run_stop": run.stop, "label": run.label.value}
+                 for index, run in enumerate(runs)),
+                chunk_size=INSERT_CHUNK_ROWS,
             )
 
 
@@ -826,9 +827,10 @@ class EyeDetection(dj.Computed):
                 eyes=per_eye, geometry=geometry,
             )
             self.Source.insert(
-                {**key, "trace": "conjunction", "source_index": index,
-                 "source_start": start, "source_stop": stop, "source": value}
-                for index, (start, stop, value) in enumerate(_value_runs(source))
+                ({**key, "trace": "conjunction", "source_index": index,
+                  "source_start": start, "source_stop": stop, "source": value}
+                 for index, (start, stop, value) in enumerate(_value_runs(source))),
+                chunk_size=INSERT_CHUNK_ROWS,
             )
 
     def _insert_trace(self, key, trace, gaze, v, offered, intervals, fs_hz,
@@ -1115,7 +1117,19 @@ class EyeDetection(dj.Computed):
                     "flagged": int(lost[max(run.start - 2, 0):run.stop].any())}),
             }
 
-        self.Run.insert(_run_row(index, run) for index, run in enumerate(runs))
+        self.Run.insert((_run_row(index, run) for index, run in enumerate(runs)), chunk_size=INSERT_CHUNK_ROWS)
+
+
+#: Rows per statement for a trace's runs and sources (`EyeValidity.Run`,
+#: `EyeDetection.Run`, `EyeDetection.Source`), which grow with the session:
+#: at 12 hours one statement passed MySQL 8's default `max_allowed_packet`
+#: (64 MB) and the server refused every detector's rows but NSLR's (design
+#: spec `2026-11-14-scaling-long-sessions-design.md`, amendment 8). Inside
+#: `make()` the batches share `populate`'s one transaction, so a trace's rows
+#: are still stored whole or not at all. Ten thousand of the widest row fit
+#: pymysql's 16 MB, the tighter of the two defaults
+#: (`tests/schema/test_long_session_rows.py`).
+INSERT_CHUNK_ROWS = 10_000
 
 
 #: The labels the validity mask, not a detector, writes into a trace: no

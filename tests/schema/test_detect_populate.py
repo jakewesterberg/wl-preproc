@@ -2715,7 +2715,8 @@ class _CapturedInserts:
 
         class _Part:
             @staticmethod
-            def insert(rows):
+            def insert(rows, chunk_size=None):
+                # `chunk_size` batches the statement (spec amendment 8); the rows are the rows.
                 outer.rows.extend(rows)
 
         self.Run = _Part
