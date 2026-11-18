@@ -1,10 +1,21 @@
 # Where this build actually is
 
-**Last updated 2026-11-14**, describing `main` at `d8fe06b`: the merge of
-`feat/popout-fields`, the reader of wl-xcon's pop-out search, the lab's first real task
-(`handoffs/2026-11-07-popout-fields.md`). CI read off `d8fe06b` is green on both interpreters,
-2806 passed on each with 36 skipped, and the manifest check is green (`gh run view 43612215033`).
-- **The pop-out search, read:** two change kinds, `suggested` and `declined`, counted in no act;
+**Last updated 2026-11-17**, describing `main` at `9723a82`: the merge of
+`feat/scaling-long-sessions` (`d5efc2b`), the pipeline's scaling to long sessions
+(`handoffs/2026-11-14-scaling-long-sessions.md`), and a test fix after it. CI read off `9723a82`
+is green on both interpreters, 3044 passed on each with 37 skipped, and the manifest check is
+green (`gh run view 44085100923`).
+- **Scaling to long sessions:** a 12-hour session, the longest wl-xcon runs, processes in 2 h 46 min
+  with its peak at 18.5 GB, its results unchanged. NI and Intan channels are read memory-mapped in
+  chunks; the eye file and camera sidecar once per process; U'n'Eye in windows; the binocular
+  conjunction, the code agreement and detector agreement without per-sample loops; a trace's runs
+  stored 10,000 rows per statement. BMD runs only when a session asks for it
+  (`wlpp daemon --with-detector bmd`). The future tasks the requester accepted are in the handoff's
+  "Not built". CI on the merge itself (`44075110954`) failed one test, a speed bound in seconds that
+  CI's slower runners missed; `9723a82` bounds it as a ratio to today's code, as every other
+  scaling test is bounded. wl.works is still to be told that BMD's events are in an NWB file only
+  when the session asked for BMD (no wl.works session was running at the merge).
+- **The pop-out search, read** (`d8fe06b`, just before): two change kinds, `suggested` and `declined`, counted in no act;
   the `drawn` column names a pool and a staircase; each run's `start_block`, `stages_left` and
   `color_sets`; each trial's `color_realized`; a confirming move keeps its `suggestion` in the
   change's detail. The descriptions say a look's light is its colour's `xyz` at full times its
@@ -521,11 +532,12 @@ requester chose to merge the same day; true when written.*
 > merged** (`bc5df71`, CI green, `42392547952`; handoff §7; spec amendments 15-21). **wl-xcon's
 > pop-out search, the lab's first real task, is read** (`d8fe06b`, CI green, `43612215033`; its fields
 > agreed with wl-xcon on 2026-11-07 and 2026-11-14; `handoffs/2026-11-07-popout-fields.md`). **The
-> pipeline's scaling to long sessions is built on `feat/scaling-long-sessions`, reviewed, not
-> merged** (`specs/2026-11-14-scaling-long-sessions-design.md`, approved 2026-11-14, amendments 1-8;
+> pipeline's scaling to long sessions is merged** (`d5efc2b`, with `9723a82`, a speed test bounded
+> as a ratio once CI's slower runners failed its bound in seconds;
+> `specs/2026-11-14-scaling-long-sessions-design.md`, approved 2026-11-14, amendments 1-8;
 > `handoffs/2026-11-14-scaling-long-sessions.md`): a 12-hour session in 2 h 46 min, its peak 18.5 GB,
 > results unchanged; BMD off by default. Its future tasks, accepted by the requester, are in the
-> handoff's "Not built". Next, its merge; then full-precision trial and block times in a table of our
+> handoff's "Not built". Next, full-precision trial and block times in a table of our
 > own (element-event stores them as `float`, about 4 ms coarse at 12 hours; the requester's choice of
 > 2026-11-16); then, in the requester's order of 2026-10-31, part 3b, the NI as the clock, part 2, the
 > bridges, and the older minors in one branch.
@@ -539,7 +551,8 @@ requester chose to merge the same day; true when written.*
 > wl-xcon's other asks were built, that their plan was being proved; until their merge, that it was
 > next; until their minors were built, that they were next; until their minors' merge, that it was
 > next; until the pop-out search was built, that it was next; until its merge, that the merge was
-> next; until scaling was built, that it was next; each true when written.*
+> next; until scaling was built, that it was next; until its merge, that the merge was next; each
+> true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
