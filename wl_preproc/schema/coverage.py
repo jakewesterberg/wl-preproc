@@ -120,8 +120,9 @@ class TrialCoverage(dj.Computed):
         rows = (core.TrialTime & key).to_dicts()
         if not rows:
             raise core.MissingTimeRows(
-                f"no measured time for {key['subject']} {key['session_datetime']}: trial {key['trial_id']}; "
-                "a re-run of the event stage fills it")
+                f"no measured time for {key['subject']} {key['session_datetime']}: trial {key['trial_id']}; the "
+                "daemon does not re-run a session's event stage, so call schema.events.populate_session(key, "
+                "session_dir) for it, then clear this table's errored jobs for the session")
         (row,) = rows
         trial = (row["start_s"], row["stop_s"])
         extents = [

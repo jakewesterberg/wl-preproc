@@ -629,3 +629,22 @@ def test_the_change_logs_descriptions_say_what_a_suggestion_is(tmp_path):
         assert table["block"].data[:] == ["Alone"]
         assert "suggest" in table.description and "control" in table.description
         assert all("suggestion" in table[name].description for name in ("block", "setting", "by_kind"))
+
+
+def test_a_stop_says_when_it_is_the_tightest_bound_and_not_a_measured_end(tmp_path):
+    """A trial's stop is its TRIAL_END, or when that was lost the tightest bound the recording gives
+    (`schema/events.py::_trial_stop_time`), and a block's its BLOCK_END or its last event; neither description may
+    claim the accuracy of a measured start (the final review's Important 1; design spec
+    `2026-11-17-full-precision-trial-times-design.md` item 7)."""
+    from wl_preproc.nwb.intervals import add_blocks, add_trials
+
+    def build(nwb):
+        add_blocks(nwb, BLOCKS)
+        add_trials(nwb, TRIALS, ["ohdpi"])
+
+    _path, io, nwb = _write(tmp_path, build)
+    with io:
+        for table, marker in (("trials", "TRIAL_END"), ("blocks", "BLOCK_END")):
+            stop = nwb.intervals[table]["stop_time"].description
+            assert marker in stop and "lost" in stop and "tightest bound" in stop, stop
+            assert "accurate as its start" not in stop, stop

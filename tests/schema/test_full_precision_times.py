@@ -60,8 +60,10 @@ def test_a_trial_with_no_time_row_raises_naming_its_session(two_sessions):
 
     pipeline.trial.Trial.insert1({**_B, "trial_id": 7, "trial_start_time": 1.0, "trial_stop_time": 2.0},
                                  allow_direct_insert=True, skip_duplicates=True)
-    with pytest.raises(core.MissingTimeRows, match=r"fptimes 2025-09-02 09:00:00: 1 of 1 trial"):
+    with pytest.raises(core.MissingTimeRows, match=r"fptimes 2025-09-02 09:00:00: 1 of 1 trial") as raised:
         core.measured_trials([_A, _B])
+    # the remedy that works: the daemon never re-runs a session's event stage (the final review's Important 2)
+    assert "populate_session" in str(raised.value) and "re-run of the event stage" not in str(raised.value)
     assert [row["trial_id"] for row in core.measured_trials(_A)] == [1]
 
 
@@ -122,5 +124,6 @@ def test_a_trial_with_no_time_row_fails_its_coverage(run_c):
 
     pipeline.trial.Trial.insert1({**_C, "trial_id": 9, "trial_start_time": 43_100.0, "trial_stop_time": 43_101.0},
                                  allow_direct_insert=True, skip_duplicates=True)
-    with pytest.raises(core.MissingTimeRows, match=r"fptimes 2025-09-03 09:00:00.*trial 9"):
+    with pytest.raises(core.MissingTimeRows, match=r"fptimes 2025-09-03 09:00:00.*trial 9") as raised:
         coverage.TrialCoverage().make({**_C, "trial_id": 9, "system": "syncbox"})
+    assert "populate_session" in str(raised.value) and "errored" in str(raised.value)

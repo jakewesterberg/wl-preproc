@@ -74,7 +74,8 @@ def add_blocks(nwb: NWBFile, blocks: list[dict]) -> None:
         columns=[
             column("start_time", f"Measured block start, session seconds, stored as measured. {_ACCURACY}",
                    [r["start_s"] for r in rows]),
-            column("stop_time", "Measured block stop, session seconds, stored as measured; accurate as its start is.",
+            column("stop_time", "Block stop, session seconds, stored as measured: its BLOCK_END, or when that was lost "
+                   "the tightest bound the recording gives, its last event.",
                    [r["stop_s"] for r in rows]),
             column("block_number", "The block's number in the session, as BLOCK_START strobed it.",
                    [r["block_number"] for r in rows]),
@@ -140,7 +141,9 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
         columns=[
             column("start_time", f"Measured trial start, session seconds, stored as measured. {_ACCURACY}",
                    [r["start_s"] for r in rows]),
-            column("stop_time", "Measured trial stop, session seconds, stored as measured; accurate as its start is.",
+            column("stop_time", "Trial stop, session seconds, stored as measured: its TRIAL_END, or when that was lost "
+                   "the tightest bound the recording gives (its block's end, the next trial's start or the "
+                   "stream's last event).",
                    [r["stop_s"] for r in rows]),
             column("trial_id", "Trial number.", [r["trial_id"] for r in rows]),
             column("outcome", "correct, error, abort, fixation_break or no_response.", [r["outcome"] or "" for r in rows]),

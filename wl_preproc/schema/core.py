@@ -59,35 +59,37 @@ class Run(dj.Manual):
 @schema
 class TrialTime(dj.Manual):
     definition = """
-    # A trial's start and stop as measured, the times every reader uses (design
+    # A trial's start and stop as written, the times every reader uses (design
     # spec 2026-11-17-full-precision-trial-times-design.md). element-event's
     # trial.Trial keeps a float32 copy, 3.9 ms a step from 9.1 hours on, which
     # nothing reads. Written with it by `insert_trials`.
     # Key: (subject, session_datetime, trial_id).
     -> pipeline.trial.Trial
     ---
-    start_s : double  # (s) session time, as measured
-    stop_s  : double  # (s) session time, as measured
+    start_s : double  # (s) session time: its TRIAL_START, as measured
+    stop_s  : double  # (s) session time: its TRIAL_END, or when lost the tightest bound
     """
 
 
 @schema
 class BlockTime(dj.Manual):
     definition = """
-    # A block's start and stop as measured, the times every reader uses (design
+    # A block's start and stop as written, the times every reader uses (design
     # spec 2026-11-17-full-precision-trial-times-design.md). element-event's
     # trial.Block keeps a float32 copy, which nothing reads. Written with it by
     # `insert_blocks`. Key: (subject, session_datetime, block_id).
     -> pipeline.trial.Block
     ---
-    start_s : double  # (s) session time, as measured
-    stop_s  : double  # (s) session time, as measured
+    start_s : double  # (s) session time: its BLOCK_START, as measured
+    stop_s  : double  # (s) session time: its BLOCK_END, or when lost its last event
     """
 
 
 class MissingTimeRows(RuntimeError):
     """A trial or block in element-event's tables has no row in `TrialTime` or `BlockTime`: its writer stopped
-    between the two inserts. A re-run of the event stage fills it."""
+    between the two inserts, outside the daemon's transaction. The daemon does not re-run a session's event stage
+    (`daemon._event_stage_keys`), so `schema.events.populate_session(key, session_dir)`, idempotent, is called for
+    it by hand."""
 
 
 def insert_trials(rows: list[dict]) -> None:
@@ -130,7 +132,8 @@ def _measured(parent, times, restriction, kept: tuple[str, ...], noun: str) -> l
             totals[tuple(row[k] for k in session)] = totals.get(tuple(row[k] for k in session), 0) + 1
         named = "; ".join(f"{' '.join(str(part) for part in key)}: {count} of {totals[key]} {noun}(s)"
                           for key, count in sorted(missing.items()))
-        raise MissingTimeRows(f"no measured time for {named}; a re-run of the event stage fills them")
+        raise MissingTimeRows(f"no measured time for {named}; the daemon does not re-run a session's event stage, "
+                              "so call schema.events.populate_session(key, session_dir) for it, which fills them")
     order = [*parent.primary_key]
     return (present.proj(*kept) * (times & restriction)).to_dicts(order_by=order)
 
