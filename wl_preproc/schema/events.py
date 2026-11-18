@@ -271,7 +271,7 @@ def _trial_stop_time(
 def _block_stop_time(block: AssembledBlock) -> float:
     """`block.end_s`, or the block's own last event when `BLOCK_END` never
     arrived: the tightest bound the recording gives (design spec
-    `2026-10-01-runs-and-trials-design.md` section 2.3). `block_stop_time` is
+    `2026-10-01-runs-and-trials-design.md` section 2.3). A block's stop is
     not nullable, so something concrete must be written however the run
     ended.
 
@@ -586,8 +586,8 @@ def populate_session(key: dict, session_dir: Path) -> None:
     ]
     core.insert_blocks(block_rows)
 
-    # Block has no task_type column of its own (only block_start_time /
-    # block_stop_time) -- BLOCK_START's own payload already carries it into
+    # Block has no task_type column of its own (only its start and stop
+    # times) -- BLOCK_START's own payload already carries it into
     # Event/Event.Attribute above, but the measured Block row is where a
     # consumer of trial.Block alone would look for it, so it is written here
     # too, as a scalar attribute rather than a schema change to an adopted

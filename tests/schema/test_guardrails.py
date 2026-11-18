@@ -823,6 +823,28 @@ def test_no_bare_delete_call_anywhere_in_the_source():
     )
 
 
+# Whole names: `events.py`'s `_trial_stop_time` and `_block_stop_time` compute a
+# measured stop and are not the columns.
+_ELEMENT_EVENT_TIMES = re.compile(r"\b(trial|block)_(start|stop)_time\b")
+
+
+def test_only_core_names_element_events_float32_time_columns():
+    """element-event stores a trial's and a block's times as float32, 3.9 ms a
+    step from 9.1 hours on (design spec
+    `2026-11-17-full-precision-trial-times-design.md`). `core.TrialTime` and
+    `core.BlockTime` hold the measured times every reader uses; only
+    `schema/core.py`'s writers touch the copy, so no reader can drift back to
+    it."""
+    core_py = SOURCE_ROOT / "schema" / "core.py"
+    offenders = [f"{path.relative_to(SOURCE_ROOT.parent)}:{lineno}: {line.strip()[:70]}"
+                 for path in sorted(SOURCE_ROOT.rglob("*.py")) if path != core_py
+                 for lineno, line in enumerate(path.read_text().splitlines(), 1)
+                 if _ELEMENT_EVENT_TIMES.search(line)]
+    assert not offenders, (
+        "element-event's float32 time columns named outside schema/core.py; read core.measured_trials/"
+        "measured_blocks instead:\n  " + "\n  ".join(offenders))
+
+
 def test_no_code_path_writes_activation_supersedes():
     """`Activation.supersedes` is asserted, in prose only, to be written
     nowhere in this codebase: `submit()` never sets it (regenerating a

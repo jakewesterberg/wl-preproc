@@ -192,7 +192,7 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
     condition within a block (spec section 4.3): `[(block_id, mask)]` and
     `[((block_id, condition), mask)]`.
 
-    A block holds what starts in `[block_start_time, block_stop_time)`; a
+    A block holds what starts in `[start_s, stop_s)` of its measured times (`core.BlockTime`); a
     condition, what starts in a trial of that block (`BlockTrial`) run under
     it, and inside the block itself (spec amendment 5). A trial whose
     `TRIAL_END` comes after its `BLOCK_END` (`schema/events.py::

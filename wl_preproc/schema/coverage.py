@@ -106,7 +106,7 @@ class TrialCoverage(dj.Computed):
         own docstring names this table as a caller, "so the rule has one
         definition rather than one per table." Nothing here reimplements it.
 
-        `trial.Trial.trial_stop_time` is not nullable (1c-5 Task 8: the
+        A trial's measured stop (`core.TrialTime.stop_s`) is not nullable (1c-5 Task 8: the
         synthetic generator now emits `Marker.TRIAL_END` for every trial, so no
         trial comes back with `end_s=None`), so a zero-or-negative-duration
         trial is not papered over here either -- `classify_coverage` raises,

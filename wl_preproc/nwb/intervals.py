@@ -12,6 +12,11 @@ from pynwb.epoch import TimeIntervals
 
 from wl_preproc.nwb.columns import column
 
+# What a block's or a trial's time claims (design spec 2026-11-17-full-precision-trial-times-design.md item 7):
+# stored as measured, accurate to the clock fit and the code word, never more.
+_ACCURACY = ("Its accuracy is the session's clock fit, as the timing report states, and a code word marks it "
+             "to its 1 ms slot.")
+
 
 def _coverage_columns(rows: list[dict], systems: list[str]) -> list:
     """Per-system coverage, two columns a system: its verdict (`full`,
@@ -67,8 +72,10 @@ def add_blocks(nwb: NWBFile, blocks: list[dict]) -> None:
         description=("The measured blocks inside the file's runs: consecutive trials under one block type, "
                      "from BLOCK_START to BLOCK_END, or to the block's last event when its run faulted."),
         columns=[
-            column("start_time", "Measured block start, session seconds.", [r["start_s"] for r in rows]),
-            column("stop_time", "Measured block stop, session seconds.", [r["stop_s"] for r in rows]),
+            column("start_time", f"Measured block start, session seconds, stored as measured. {_ACCURACY}",
+                   [r["start_s"] for r in rows]),
+            column("stop_time", "Measured block stop, session seconds, stored as measured; accurate as its start is.",
+                   [r["stop_s"] for r in rows]),
             column("block_number", "The block's number in the session, as BLOCK_START strobed it.",
                    [r["block_number"] for r in rows]),
             column("run_number", "The run the block is inside.", [r["run_number"] for r in rows]),
@@ -131,8 +138,10 @@ def add_trials(nwb: NWBFile, trials: list[dict], systems: list[str]) -> None:
         description=("Trials decoded from the event codes, with their outcome, the condition they ran under, "
                      "the stimulus settings that varied across the session, and per-system coverage."),
         columns=[
-            column("start_time", "Trial start, session seconds.", [r["start_s"] for r in rows]),
-            column("stop_time", "Trial stop, session seconds.", [r["stop_s"] for r in rows]),
+            column("start_time", f"Measured trial start, session seconds, stored as measured. {_ACCURACY}",
+                   [r["start_s"] for r in rows]),
+            column("stop_time", "Measured trial stop, session seconds, stored as measured; accurate as its start is.",
+                   [r["stop_s"] for r in rows]),
             column("trial_id", "Trial number.", [r["trial_id"] for r in rows]),
             column("outcome", "correct, error, abort, fixation_break or no_response.", [r["outcome"] or "" for r in rows]),
             column("block_id", "The measured block the trial belongs to (-1 if none).",
