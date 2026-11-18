@@ -81,3 +81,46 @@ def test_a_rerun_fills_the_missing_time_rows(two_sessions):
     core.insert_blocks([{**_B, "block_id": 3, "start_s": 1.0, "stop_s": 2.0}])
     assert [(row["trial_id"], row["start_s"]) for row in core.measured_trials(_B)] == [(7, 1.0)]
     assert [(row["block_id"], row["stop_s"]) for row in core.measured_blocks(_B)] == [(3, 2.0)]
+
+
+_C = {"subject": "fptimes", "session_datetime": datetime.datetime(2025, 9, 3, 9, 0)}
+_RUN_START = 43_000.1234  # float32 stores it, and a block 0.1 ms after it, alike as 43000.125
+
+
+@pytest.fixture(scope="module")
+def run_c(two_sessions):
+    from wl_preproc.schema import core
+
+    _session(_C)
+    core.Run.insert1({**_C, "run_number": 1, "task_type": 0, "run_start_time": _RUN_START, "run_stop_time": 43_190.0,
+                      "closed": 1}, skip_duplicates=True)
+    return [{"run_number": 1, "start_s": _RUN_START, "end_s": 43_190.0}]
+
+
+def test_a_trial_on_its_run_start_and_a_block_just_after_are_in_the_run_in_the_file_and_the_listing(run_c):
+    """Against the stored float32 copy both read 43000.125; with the measured value but a run start still rounded
+    to float32, the block, 1.5 ms before 43000.125, would fall out of its run. Either half alone fails here."""
+    from wl_preproc.listing.entry import session_entry
+    from wl_preproc.nwb import gather
+    from wl_preproc.schema import core, pipeline
+
+    core.insert_blocks([{**_C, "block_id": 1, "start_s": _RUN_START + 0.0001, "stop_s": 43_150.0}])
+    core.insert_trials([{**_C, "trial_id": 1, "trial_type": None, "start_s": _RUN_START,
+                         "stop_s": _RUN_START + 0.02}])
+    pipeline.trial.BlockTrial.insert1({**_C, "block_id": 1, "trial_id": 1}, allow_direct_insert=True,
+                                      skip_duplicates=True)
+    (block,) = gather._blocks(run_c, _C)
+    (trial,) = gather._trials(run_c, _C)
+    assert (block["run_number"], block["start_s"]) == (1, _RUN_START + 0.0001)
+    assert (trial["run_number"], trial["start_s"], trial["stop_s"]) == (1, _RUN_START, _RUN_START + 0.02)
+    (run,) = session_entry(_C)["runs"]
+    assert [(b["block_number"], b["start_s"]) for b in run["blocks"]] == [(1, _RUN_START + 0.0001)]
+
+
+def test_a_trial_with_no_time_row_fails_its_coverage(run_c):
+    from wl_preproc.schema import core, coverage, pipeline
+
+    pipeline.trial.Trial.insert1({**_C, "trial_id": 9, "trial_start_time": 43_100.0, "trial_stop_time": 43_101.0},
+                                 allow_direct_insert=True, skip_duplicates=True)
+    with pytest.raises(core.MissingTimeRows, match=r"fptimes 2025-09-03 09:00:00.*trial 9"):
+        coverage.TrialCoverage().make({**_C, "trial_id": 9, "system": "syncbox"})

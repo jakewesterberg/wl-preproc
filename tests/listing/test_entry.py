@@ -26,8 +26,8 @@ def _facts(**changes):
               {"run_number": 2, "task_type": 0, "run_start_time": 12.0, "run_stop_time": 20.0, "closed": 1}],
         records={1: {"task": "rf_map", "stopped_because": "every block is finished", "stop_kind": "completed"},
                  2: {"task": "fixation", "stopped_because": "stopped by jw", "stop_kind": "operator"}},
-        blocks=[{"block_id": 1, "block_start_time": 1.004, "block_stop_time": 9.9},
-                {"block_id": 2, "block_start_time": 12.004, "block_stop_time": 19.9}],
+        blocks=[{"block_id": 1, "start_s": 1.004, "stop_s": 9.9},
+                {"block_id": 2, "start_s": 12.004, "stop_s": 19.9}],
         block_attributes={1: {"closed": "1", "block_type": "Bt1"}, 2: {"closed": "1", "block_type": "Bt2"}},
         trial_counts={1: 3, 2: 1},
         segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 21.0}],
@@ -81,7 +81,7 @@ def test_a_repeated_run_or_block_number_is_named_once():
 def test_a_run_that_stopped_before_its_first_trial_has_no_block():
     from wl_preproc.listing.entry import build_entry
 
-    entry = build_entry(_facts(blocks=[{"block_id": 1, "block_start_time": 1.004, "block_stop_time": 9.9}],
+    entry = build_entry(_facts(blocks=[{"block_id": 1, "start_s": 1.004, "stop_s": 9.9}],
                                strobed_blocks=[1]))
     assert entry["runs"][1]["blocks"] == []
     assert [(flag["code"], flag["run_number"]) for flag in entry["flags"]] == [("run_without_block", 2)]
@@ -121,7 +121,7 @@ def test_a_block_in_no_run_is_flagged_when_the_session_has_runs():
     waiting for its run markers instead."""
     from wl_preproc.listing.entry import build_entry
 
-    stray = {"block_id": 3, "block_start_time": 25.0, "block_stop_time": 26.0}
+    stray = {"block_id": 3, "start_s": 25.0, "stop_s": 26.0}
     entry = build_entry(_facts(blocks=[*_facts().blocks, stray], strobed_blocks=[1, 2, 3]))
     assert [(flag["code"], flag["block_number"]) for flag in entry["flags"]] == [("block_outside_runs", 3)]
     waiting = build_entry(_facts(runs=[], records={}, strobed_runs=[], blocks=[stray], strobed_blocks=[3]))
@@ -154,20 +154,17 @@ def test_a_session_listed_before_its_timing_and_census_has_neither():
     assert [run["segments"] for run in entry["runs"]] == [[], []]
 
 
-def test_a_block_starting_just_after_its_run_is_in_it_despite_float32_storage():
-    """`trial.Block` stores a block's start as a MySQL FLOAT, `core.Run` its
-    run's as a double. Hours in, float32 rounds a start 0.6 ms after
-    RUN_START to before it (final review I2)."""
-    import numpy as np
-
+def test_a_block_starting_just_after_its_run_is_in_it():
+    """A block's start and its run's are both measured doubles
+    (`core.BlockTime`, `core.Run`), compared exactly: 0.1 ms after a run
+    start 12 hours in, where float32 would store both as 43000.125 (design
+    spec `2026-11-17-full-precision-trial-times-design.md`)."""
     from wl_preproc.listing.entry import build_entry
 
-    stored = float(np.float32(18000.124))
-    assert stored < 18000.1234  # the stored block start falls before its run's
     entry = build_entry(_facts(
-        runs=[{"run_number": 1, "task_type": 0, "run_start_time": 18000.1234, "run_stop_time": 18100.0, "closed": 1}],
+        runs=[{"run_number": 1, "task_type": 0, "run_start_time": 43000.1234, "run_stop_time": 43100.0, "closed": 1}],
         records={1: {"task": "rf_map", "stopped_because": "every block is finished", "stop_kind": "completed"}},
-        blocks=[{"block_id": 1, "block_start_time": stored, "block_stop_time": float(np.float32(18099.9))}],
+        blocks=[{"block_id": 1, "start_s": 43000.1235, "stop_s": 43099.9}],
         trial_counts={1: 3}, segments=[], census=[], electrodes={}, strobed_runs=[1], strobed_blocks=[1]))
     assert [block["block_number"] for block in entry["runs"][0]["blocks"]] == [1]
     assert entry["flags"] == []

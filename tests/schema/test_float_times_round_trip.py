@@ -1,17 +1,16 @@
 """Block and trial times hours into a session, written to the database and
-read back (Plan B's final review, C1). element-event stores them as MySQL
-FLOAT, and MySQL's text protocol, the one DataJoint reads through, returns a
-FLOAT to six significant digits: 18000.124 comes back as 18000.1, before a
-`RUN_START` at 18000.1234. `tests/nwb/test_helpers.py`'s containment test
-models the stored value as float32 and so cannot see this; these tests go
-through the database. Subject and date checked unclaimed across `tests/` on
-2026-10-02."""
+read back (Plan B's final review, C1). element-event keeps a float32 copy,
+which MySQL's text protocol returns to six significant digits (18000.124 as
+18000.1, before a `RUN_START` at 18000.1234); every reader reads the measured
+double from `core.BlockTime` and `core.TrialTime` instead (design spec
+`2026-11-17-full-precision-trial-times-design.md`). These tests go through the
+database, since a pure-Python model of the stored value cannot see the read.
+Subject and date checked unclaimed across `tests/` on 2026-10-02."""
 
 from __future__ import annotations
 
 import datetime
 
-import numpy as np
 import pytest
 
 _SESSION = {"subject": "flt32", "session_datetime": datetime.datetime(2025, 8, 9, 9, 0)}
@@ -42,27 +41,25 @@ def hours_in(dj_conn, prefix):
                                              skip_duplicates=True)
     core.Run.insert1({**_SESSION, "run_number": 1, "task_type": 0, "run_start_time": _RUN_START,
                       "run_stop_time": _RUN_STOP, "closed": 1}, skip_duplicates=True)
-    pipeline.trial.Block.insert1({**_SESSION, "block_id": 1, "block_start_time": _BLOCK_START,
-                                  "block_stop_time": _BLOCK_STOP}, allow_direct_insert=True, skip_duplicates=True)
-    pipeline.trial.Trial.insert1({**_SESSION, "trial_id": 1, "trial_start_time": _SHORT_TRIAL[0],
-                                  "trial_stop_time": _SHORT_TRIAL[1]}, allow_direct_insert=True,
-                                 skip_duplicates=True)
+    core.insert_blocks([{**_SESSION, "block_id": 1, "start_s": _BLOCK_START, "stop_s": _BLOCK_STOP}])
+    core.insert_trials([{**_SESSION, "trial_id": 1, "trial_type": None, "start_s": _SHORT_TRIAL[0],
+                         "stop_s": _SHORT_TRIAL[1]}])
     pipeline.trial.BlockTrial.insert1({**_SESSION, "block_id": 1, "trial_id": 1}, allow_direct_insert=True,
                                       skip_duplicates=True)
     return [{"run_number": 1, "start_s": _RUN_START, "end_s": _RUN_STOP}]
 
 
 def test_a_block_and_trial_just_after_an_hours_in_run_start_are_in_its_file(hours_in):
-    """Neither is dropped from the NWB file, and each keeps the time stored,
-    not one rounded to 0.1 s."""
+    """Neither is dropped from the NWB file, and each keeps the time measured,
+    not one rounded to 0.1 s or to float32."""
     from wl_preproc.nwb.gather import _blocks, _trials
 
     (block,) = _blocks(hours_in, _SESSION)
     assert (block["block_number"], block["run_number"], block["block_in_run"]) == (1, 1, 1)
-    assert block["start_s"] == float(np.float32(_BLOCK_START))
+    assert block["start_s"] == _BLOCK_START
     (trial,) = _trials(hours_in, _SESSION)
     assert (trial["trial_id"], trial["run_number"], trial["block_id"]) == (1, 1, 1)
-    assert (trial["start_s"], trial["stop_s"]) == tuple(float(np.float32(t)) for t in _SHORT_TRIAL)
+    assert (trial["start_s"], trial["stop_s"]) == _SHORT_TRIAL
 
 
 def test_the_listing_finds_the_block_in_its_run(hours_in):
@@ -87,4 +84,4 @@ def test_a_short_trial_hours_in_has_its_coverage_computed(hours_in):
     coverage.TrialCoverage.populate(_SESSION)
     row = (coverage.TrialCoverage & _SESSION & {"trial_id": 1, "system": "syncbox"}).fetch1()
     assert row["coverage"] == "full"
-    assert row["covered_s"] == pytest.approx(float(np.float32(_SHORT_TRIAL[1])) - float(np.float32(_SHORT_TRIAL[0])))
+    assert row["covered_s"] == pytest.approx(_SHORT_TRIAL[1] - _SHORT_TRIAL[0])

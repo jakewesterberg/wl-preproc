@@ -154,12 +154,12 @@ def test_a_block_with_no_stored_trial_lists_none(listed):
     run = (core.Run & key & {"run_number": 2}).fetch1()
     start = (run["run_start_time"] + run["run_stop_time"]) / 2
     block = {**key, "block_id": 77}
-    pipeline.trial.Block.insert1({**block, "block_start_time": start, "block_stop_time": start + 0.01},
-                                 allow_direct_insert=True)
+    core.insert_blocks([{**block, "start_s": start, "stop_s": start + 0.01}])
     try:
         (second,) = [run for run in session_entry(key)["runs"] if run["run_number"] == 2]
         assert [(block["block_number"], block["n_trials"]) for block in second["blocks"]] == [(2, 1), (77, 0)]
     finally:
+        (core.BlockTime & block).delete_quick()
         (pipeline.trial.Block & block).delete_quick()
 
 

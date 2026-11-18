@@ -34,12 +34,10 @@ def session(dj_conn, prefix):
     core.Run.insert1({**_SESSION, "run_number": 1, "task_type": 0, "run_start_time": 10.0, "run_stop_time": 50.0,
                       "closed": 1}, skip_duplicates=True)
     for block_id, start in ((1, 10.5), (2, 60.0)):
-        pipeline.trial.Block.insert1({**_SESSION, "block_id": block_id, "block_start_time": start,
-                                      "block_stop_time": start + 5.0}, allow_direct_insert=True, skip_duplicates=True)
+        core.insert_blocks([{**_SESSION, "block_id": block_id, "start_s": start, "stop_s": start + 5.0}])
     for trial_id, start in ((1, 11.0), (2, 61.0), (3, 2000.0)):
-        pipeline.trial.Trial.insert1({**_SESSION, "trial_id": trial_id, "trial_start_time": start,
-                                      "trial_stop_time": start + 1.0}, allow_direct_insert=True,
-                                     skip_duplicates=True)
+        core.insert_trials([{**_SESSION, "trial_id": trial_id, "trial_type": None, "start_s": start,
+                             "stop_s": start + 1.0}])
     return {**_SESSION, "montage_id": 0, "activation_id": 0}
 
 
@@ -77,12 +75,10 @@ def hours_in(session):
     core.Montage.insert1({**_HOURS_IN, "montage_id": 0, "start_s": 17000.0, "end_s": 20000.0}, skip_duplicates=True)
     core.Run.insert1({**_HOURS_IN, "run_number": 1, "task_type": 0, "run_start_time": 18000.1234,
                       "run_stop_time": 18100.0, "closed": 1}, skip_duplicates=True)
-    pipeline.trial.Block.insert1({**_HOURS_IN, "block_id": 1, "block_start_time": 18000.124,
-                                  "block_stop_time": 18050.0}, allow_direct_insert=True, skip_duplicates=True)
+    core.insert_blocks([{**_HOURS_IN, "block_id": 1, "start_s": 18000.124, "stop_s": 18050.0}])
     for trial_id, start in ((1, 18000.124), (2, 16000.0)):
-        pipeline.trial.Trial.insert1({**_HOURS_IN, "trial_id": trial_id, "trial_start_time": start,
-                                      "trial_stop_time": start + 1.0}, allow_direct_insert=True,
-                                     skip_duplicates=True)
+        core.insert_trials([{**_HOURS_IN, "trial_id": trial_id, "trial_type": None, "start_s": start,
+                             "stop_s": start + 1.0}])
     return {**_HOURS_IN, "montage_id": 0, "activation_id": 0}
 
 

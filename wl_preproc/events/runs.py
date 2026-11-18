@@ -1,27 +1,25 @@
 """Which run a block or a trial belongs to (design spec
 `2026-10-01-session-listing-and-run-requests-design.md` amendment 11).
 
-element-event stores a block's and a trial's start as a MySQL FLOAT
-(`trial.Block`, `trial.Trial`), and an event's time as `decimal(10, 4)`
-(`event.Event`); `core.Run` stores a run's bounds as doubles. Either rounding
-can put a start that lies just after its run's `RUN_START` -- or the
-`RUN_START` event itself, which lies exactly on it -- before the run. The
-run's bounds are rounded the same way first: rounding is monotonic, so
-anything that starts inside its run is found inside it, at any magnitude.
-The listing and the NWB builder both ask here, so they cannot disagree.
+A trial's and a block's start are read as measured, doubles
+(`core.TrialTime`, `core.BlockTime`; design spec
+`2026-11-17-full-precision-trial-times-design.md`), as `core.Run` stores a
+run's bounds, so `starts_inside` compares them exactly. An event's time is
+stored as `decimal(10, 4)` (`event.Event`), and `event_bounds` rounds a run's
+bounds the same way first: rounding is monotonic, so an event that lies inside
+its run is found inside it, at any magnitude. The listing and the NWB builder
+both ask here, so they cannot disagree.
 
-**A FLOAT is read back as the double it stores** (`stored_doubles`). MySQL's
-text protocol, the one DataJoint reads through, returns a FLOAT to six
-significant digits: 18000.124, stored as 18000.123046875, comes back as
-18000.1, before a `RUN_START` at 18000.1234, and a 20 ms trial hours in comes
-back with no length. Measured against MySQL 8.0 (Plan B's final review, C1).
+**A FLOAT is read back as the double it stores** (`stored_doubles`), for any
+reader of one that remains. MySQL's text protocol, the one DataJoint reads
+through, returns a FLOAT to six significant digits: 18000.124, stored as
+18000.123046875, comes back as 18000.1. Measured against MySQL 8.0 (Plan B's
+final review, C1).
 """
 
 from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
-
-import numpy as np
 
 
 def stored_doubles(query, *names: str) -> list[dict]:
@@ -37,8 +35,9 @@ def stored_doubles(query, *names: str) -> list[dict]:
 
 
 def starts_inside(start_s: float, run_start_s: float, run_stop_s: float) -> bool:
-    """Whether a float32-stored start lies in a run's double bounds."""
-    return float(np.float32(run_start_s)) <= start_s <= float(np.float32(run_stop_s))
+    """Whether a measured trial or block start lies in a run's bounds, both
+    doubles, compared exactly."""
+    return run_start_s <= start_s <= run_stop_s
 
 
 def run_of(start_s: float, runs: list[dict]) -> int | None:
