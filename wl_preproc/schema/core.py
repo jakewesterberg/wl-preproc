@@ -57,6 +57,97 @@ class Run(dj.Manual):
 
 
 @schema
+class TrialTime(dj.Manual):
+    definition = """
+    # A trial's start and stop as measured, the times every reader uses (design
+    # spec 2026-11-17-full-precision-trial-times-design.md). element-event's
+    # trial.Trial keeps a float32 copy, 3.9 ms a step from 9.1 hours on, which
+    # nothing reads. Written with it by `insert_trials`.
+    # Key: (subject, session_datetime, trial_id).
+    -> pipeline.trial.Trial
+    ---
+    start_s : double  # (s) session time, as measured
+    stop_s  : double  # (s) session time, as measured
+    """
+
+
+@schema
+class BlockTime(dj.Manual):
+    definition = """
+    # A block's start and stop as measured, the times every reader uses (design
+    # spec 2026-11-17-full-precision-trial-times-design.md). element-event's
+    # trial.Block keeps a float32 copy, which nothing reads. Written with it by
+    # `insert_blocks`. Key: (subject, session_datetime, block_id).
+    -> pipeline.trial.Block
+    ---
+    start_s : double  # (s) session time, as measured
+    stop_s  : double  # (s) session time, as measured
+    """
+
+
+class MissingTimeRows(RuntimeError):
+    """A trial or block in element-event's tables has no row in `TrialTime` or `BlockTime`: its writer stopped
+    between the two inserts. A re-run of the event stage fills it."""
+
+
+def insert_trials(rows: list[dict]) -> None:
+    """Each trial (the session key, `trial_id`, `trial_type` or None, `start_s`, `stop_s`) into `trial.Trial`, with
+    its float32 copy of the times, and into `TrialTime` as measured. Idempotent, as every event-stage insert is."""
+    if not rows:
+        return
+    pipeline.trial.Trial.insert(
+        [{**{k: v for k, v in row.items() if k not in ("start_s", "stop_s")},
+          "trial_start_time": row["start_s"], "trial_stop_time": row["stop_s"]} for row in rows],
+        allow_direct_insert=True, skip_duplicates=True)
+    TrialTime.insert([{k: row[k] for k in (*TrialTime.primary_key, "start_s", "stop_s")} for row in rows],
+                     skip_duplicates=True)
+
+
+def insert_blocks(rows: list[dict]) -> None:
+    """Each block (the session key, `block_id`, `start_s`, `stop_s`) into `trial.Block`, with its float32 copy of
+    the times, and into `BlockTime` as measured. Idempotent."""
+    if not rows:
+        return
+    pipeline.trial.Block.insert(
+        [{**{k: v for k, v in row.items() if k not in ("start_s", "stop_s")},
+          "block_start_time": row["start_s"], "block_stop_time": row["stop_s"]} for row in rows],
+        allow_direct_insert=True, skip_duplicates=True)
+    BlockTime.insert([{k: row[k] for k in (*BlockTime.primary_key, "start_s", "stop_s")} for row in rows],
+                     skip_duplicates=True)
+
+
+def _measured(parent, times, restriction, kept: tuple[str, ...], noun: str) -> list[dict]:
+    """`parent`'s rows under `restriction`, each with its measured `start_s` and `stop_s` from `times`; raises
+    `MissingTimeRows` naming each session where a row has none, rather than joining and dropping it."""
+    session = tuple(pipeline.Session.primary_key)
+    present = parent & restriction
+    missing: dict[tuple, int] = {}
+    for row in (present - times).proj().to_dicts():
+        missing[tuple(row[k] for k in session)] = missing.get(tuple(row[k] for k in session), 0) + 1
+    if missing:
+        totals: dict[tuple, int] = {}
+        for row in (present & [dict(zip(session, key)) for key in missing]).proj().to_dicts():
+            totals[tuple(row[k] for k in session)] = totals.get(tuple(row[k] for k in session), 0) + 1
+        named = "; ".join(f"{' '.join(str(part) for part in key)}: {count} of {totals[key]} {noun}(s)"
+                          for key, count in sorted(missing.items()))
+        raise MissingTimeRows(f"no measured time for {named}; a re-run of the event stage fills them")
+    order = [*parent.primary_key]
+    return (present.proj(*kept) * (times & restriction)).to_dicts(order_by=order)
+
+
+def measured_trials(restriction) -> list[dict]:
+    """Each trial under `restriction` (a key or a list of keys): its key, `trial_type`, and `start_s` and `stop_s`
+    as measured, ordered by session and `trial_id`."""
+    return _measured(pipeline.trial.Trial, TrialTime, restriction, ("trial_type",), "trial")
+
+
+def measured_blocks(restriction) -> list[dict]:
+    """Each block under `restriction`: its key and `start_s` and `stop_s` as measured, ordered by session and
+    `block_id`."""
+    return _measured(pipeline.trial.Block, BlockTime, restriction, (), "block")
+
+
+@schema
 class RunRecord(dj.Manual):
     definition = """
     # wl-xcon's own record of one run, from `xcon/runs.jsonl`, read by

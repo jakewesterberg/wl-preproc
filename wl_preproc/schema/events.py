@@ -560,8 +560,8 @@ def populate_session(key: dict, session_dir: Path) -> None:
                 **session_key,
                 "trial_id": trial.trial_id,
                 "trial_type": trial.outcome,
-                "trial_start_time": trial.start_s,
-                "trial_stop_time": _trial_stop_time(
+                "start_s": trial.start_s,
+                "stop_s": _trial_stop_time(
                     trial, index, assembly.trials, containing_block, stream_end_s
                 ),
             }
@@ -571,21 +571,20 @@ def populate_session(key: dict, session_dir: Path) -> None:
                 {**session_key, "block_id": containing_block.block_id, "trial_id": trial.trial_id}
             )
 
-    if trial_rows:
-        pipeline.trial.Trial.insert(trial_rows, allow_direct_insert=True, skip_duplicates=True)
+    # As measured into `core.TrialTime`, and element-event's float32 copy.
+    core.insert_trials(trial_rows)
 
     # -- Block: the MEASURED boundary (design spec section 5).
     block_rows = [
         {
             **session_key,
             "block_id": block.block_id,
-            "block_start_time": block.start_s,
-            "block_stop_time": _block_stop_time(block),
+            "start_s": block.start_s,
+            "stop_s": _block_stop_time(block),
         }
         for block in assembly.blocks
     ]
-    if block_rows:
-        pipeline.trial.Block.insert(block_rows, allow_direct_insert=True, skip_duplicates=True)
+    core.insert_blocks(block_rows)
 
     # Block has no task_type column of its own (only block_start_time /
     # block_stop_time) -- BLOCK_START's own payload already carries it into

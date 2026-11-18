@@ -166,6 +166,35 @@ def test_populate_session_is_idempotent(ci_session):
     assert len(pipeline.event.BehaviorRecording & session_key) == 1
 
 
+def test_populate_session_writes_the_measured_times(ci_session):
+    """Each trial's and block's time is stored as measured (`core.TrialTime`, `core.BlockTime`), and element-event's
+    copy is the same value rounded to float32 (design spec `2026-11-17-full-precision-trial-times-design.md`)."""
+    import numpy as np
+
+    from wl_preproc.events.assemble import assemble
+    from wl_preproc.events.runs import stored_doubles
+    from wl_preproc.schema import core, pipeline
+    from wl_preproc.schema.events import decode_stream
+    from wl_preproc.timebase.clock import clock_for
+
+    session_key, session_dir, _recipe = ci_session
+    events.populate_session(session_key, session_dir)
+    assembly = assemble(decode_stream(clock_for(session_key, session_dir).codes()))
+
+    for measured, planted, table, prefix in (
+            (core.measured_trials(session_key), {t.trial_id: t.start_s for t in assembly.trials},
+             pipeline.trial.Trial, "trial"),
+            (core.measured_blocks(session_key), {b.block_id: b.start_s for b in assembly.blocks},
+             pipeline.trial.Block, "block")):
+        key = f"{prefix}_id"
+        assert {row[key]: row["start_s"] for row in measured} == planted
+        start, stop = f"{prefix}_start_time", f"{prefix}_stop_time"
+        copy = {row[key]: row for row in stored_doubles(table & session_key, start, stop)}
+        for row in measured:
+            assert float(np.float32(row["start_s"])) == copy[row[key]][start]
+            assert float(np.float32(row["stop_s"])) == copy[row[key]][stop]
+
+
 def test_no_array_is_ever_written_to_event_attribute_blob(ci_session):
     """Constraint: scalars only into Event. attribute_blob is never touched by
     this module -- every attribute row it builds carries a stringified scalar
