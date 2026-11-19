@@ -80,7 +80,8 @@ from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
 from wl_preproc.eye.detect.geometry import (
     DEFAULT_GEOMETRY, PER_AXIS, TRUE_ANGLE, directions, local_coordinates_deg, true_angle_deg, wrap_360_deg,
 )
-from wl_preproc.eye.detect.measure import amplitude
+from wl_preproc.eye.detect.labels import Label, Run
+from wl_preproc.eye.detect.measure import amplitude, classify
 
 TRIAL_DURATION_S = 3.0
 
@@ -3030,6 +3031,124 @@ def test_the_conjunction_label_matches_the_amplitude_that_gets_stored():
     assert {row["label"] for row in events} == {"saccade", "microsaccade"}
     for row in events:
         assert row["label"] == classify(row["amplitude_deg"], 1.0).value
+
+
+def _two_eye_rows(detector_name, runs, gaze, offered, geometry=PER_AXIS):
+    """The conjunction trace's stored `Run` rows for hand-made per-eye `runs`,
+    `gaze` (degrees, x only) and `offered` masks at 500 Hz, through the
+    stage's own `_conjunction_trace` and `_insert_trace` given both eyes,
+    exactly as `EyeDetection.make()` stores them (design spec
+    `2026-11-19-two-eye-label-design.md`)."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.eye.detect.velocity import local_velocity, velocity
+    from wl_preproc.schema import detect as detect_schema
+
+    fs_hz = 500.0
+    detector = get_detector(detector_name)
+    params = {**detect_schema._eye_detection_params(detector), "geometry": geometry}
+    detector_params = detect_schema._params_for(detector, params)
+    per_eye = {eye: (gaze[eye], local_velocity(gaze[eye], fs_hz) if geometry == TRUE_ANGLE
+                     else velocity(gaze[eye], fs_hz), offered[eye]) for eye in ("left", "right")}
+    intervals, kept, _source, fill = detect_schema._conjunction_trace(
+        runs, per_eye, detector, params, detector_params, fs_hz)
+    sink = _CapturedInserts()
+    left_gaze, left_v, _ = per_eye["left"]
+    detect_schema.EyeDetection._insert_trace(
+        sink, {"subject": "s"}, "conjunction", left_gaze, left_v, fill, intervals, fs_hz, detector,
+        detector_params, kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept},
+        eyes=per_eye, geometry=geometry)
+    events = [row for row in sink.rows if row["label"] in ("saccade", "microsaccade")]
+    for row in events:
+        if row["amplitude_deg"] is not None and detector.vocabulary >= {Label.SACCADE, Label.MICROSACCADE}:
+            assert row["label"] == classify(row["amplitude_deg"], 1.0).value, row
+    return events
+
+
+def _x_gaze(n_samples, x):
+    """A gaze trace in degrees moving along x alone, `x` giving each sample's
+    position, so a span's per-axis amplitude is its x difference."""
+    gaze = np.zeros((n_samples, 2))
+    gaze[:, 0] = x
+    return gaze
+
+
+def _eye_choice_inputs():
+    """Five of the reference recording's seven offenders, in miniature: the
+    left eye lost samples 104-113 inside its own run, the right eye withheld
+    107-112 after its own, so both runs clash and neither is kept whole
+    (`_conjunction_fallback`); the span [100, 107) stands, and only the right
+    eye measured all of it. Left x climbs 0.3 deg a sample over 100-106 (its
+    lost samples filled along the climb), right 0.15."""
+    n = 300
+    i = np.arange(n)
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[104:114] = Label.LOST
+    right_offered = np.full(n, None, dtype=object)
+    right_offered[107:113] = Label.INVALID
+    return ({"left": [Run(100, 136, Label.SACCADE)], "right": [Run(100, 107, Label.MICROSACCADE)]},
+            {"left": _x_gaze(n, 0.3 * np.clip(i - 100, 0, 6)), "right": _x_gaze(n, 0.15 * np.clip(i - 100, 0, 6))},
+            {"left": left_offered, "right": right_offered})
+
+
+def test_a_two_eye_span_is_labelled_from_its_size_on_the_eye_that_measures_it():
+    """The stored row is the right eye's 0.9 deg (`_run_row` measures on the
+    eye usable throughout), so its label is `microsaccade`; until 2026-11-19
+    it was `saccade`, from the left eye's filled 1.8 deg."""
+    (row,) = _two_eye_rows("engbert_kliegl", *_eye_choice_inputs())
+    assert (row["run_start"], row["run_stop"], row["label"]) == (100, 107, "microsaccade")
+    assert row["amplitude_deg"] == pytest.approx(0.9, abs=1e-9)
+
+
+@pytest.mark.parametrize("geometry", [PER_AXIS, TRUE_ANGLE])
+def test_a_two_eye_span_whose_take_off_a_loss_hides_is_labelled_from_its_size_widened_across_a_loss(geometry):
+    """The other two offenders: the left eye lost 94-99, just before the span
+    [100, 110), and measured all of the span itself, so it measures it from
+    93, the last sample before the loss (the eye piece's I2). Left x is 0
+    through 93, reaches 1.2 at 100 and 1.65 at 109: 0.45 deg over the bare
+    span, 1.65 widened. Nothing is kept: neither eye withheld a sample of the
+    other's run."""
+    n = 300
+    i = np.arange(n).astype(float)
+    x = np.where(i <= 93, 0.0, np.where(i <= 100, 1.2 * (i - 93) / 7, 1.2 + 0.05 * (np.minimum(i, 109) - 100)))
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[94:100] = Label.LOST
+    (row,) = _two_eye_rows(
+        "engbert_kliegl",
+        {"left": [Run(90, 110, Label.SACCADE)], "right": [Run(100, 112, Label.SACCADE)]},
+        {"left": _x_gaze(n, x), "right": _x_gaze(n, x)},
+        {"left": left_offered, "right": np.full(n, None, dtype=object)},
+        geometry,
+    )
+    assert (row["run_start"], row["run_stop"], row["label"]) == (100, 110, "saccade")
+    assert row["amplitude_deg"] == pytest.approx(1.65, rel=1e-6)
+
+
+def test_a_span_no_eye_measures_is_stored_unmeasured_and_labelled_as_before():
+    """Each eye withheld samples inside the span, so neither measured it and
+    the row is stored unmeasured; with no stored size to contradict, its
+    label is still `classify` over the bare intersection on the left eye,
+    1.8 deg (design spec `2026-11-19-two-eye-label-design.md`, Decided)."""
+    n = 300
+    x = 0.2 * np.clip(np.arange(n) - 100, 0, 9)
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[104:106] = Label.INVALID
+    right_offered = np.full(n, None, dtype=object)
+    right_offered[105:107] = Label.INVALID
+    (row,) = _two_eye_rows(
+        "engbert_kliegl",
+        {"left": [Run(100, 110, Label.SACCADE)], "right": [Run(100, 110, Label.SACCADE)]},
+        {"left": _x_gaze(n, x), "right": _x_gaze(n, x)},
+        {"left": left_offered, "right": right_offered},
+    )
+    assert (row["label"], row["amplitude_deg"]) == ("saccade", None)
+
+
+def test_a_half_cut_detector_keeps_its_constant_two_eye_label():
+    """U'n'Eye declares `{saccade}` alone, so its two-eye label is that,
+    whatever the size, given both eyes or not."""
+    runs, gaze, offered = _eye_choice_inputs()
+    runs = {eye: [Run(run.start, run.stop, Label.SACCADE) for run in eye_runs] for eye, eye_runs in runs.items()}
+    assert [row["label"] for row in _two_eye_rows("uneye", runs, gaze, offered)] == ["saccade"]
 
 
 def test_two_touching_intersections_become_one_conjunction_event():
