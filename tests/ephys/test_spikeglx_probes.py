@@ -61,7 +61,7 @@ def test_spikeglx_s_own_folder_layout_is_found(tmp_path):
     # probeinterface asserts on a missing imroTbl and fails to parse a broken
     # one; neither is the part number's fault.
     (("~imroTbl=", "~imroTblGone="), "imroTbl"),
-    (("~imroTbl=(4,4)", "~imroTbl=(4,4)(zz"), "imroTbl"),
+    (("~imroTbl=(0,4)", "~imroTbl=(0,4)(zz"), "imroTbl"),
 ])
 def test_a_probe_whose_sites_cannot_be_mapped_says_why(tmp_path, change, expect):
     """Design spec section 5: an unknown part number, or none, or a site map
@@ -92,7 +92,7 @@ def test_a_short_imro_table_is_a_problem_not_a_partial_map(tmp_path, entries, ex
     _recipe, nidq = _run(tmp_path)
     (meta,) = nidq.parent.glob("*_imec0.ap.meta")
     text = meta.read_text()
-    table = re.search(r"^~imroTbl=(\(\d+,\d+\))(.*)$", text, re.M)
+    table = re.search(r"^~imroTbl=(\([^,()]+,\d+\))(.*)$", text, re.M)
     kept = "".join(re.findall(r"\([^)]*\)", table.group(2))[:entries])
     meta.write_text(text.replace(table.group(0), f"~imroTbl={table.group(1)}{kept}"))
     (probe,) = read_run(nidq)

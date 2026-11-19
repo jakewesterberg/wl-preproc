@@ -6,7 +6,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from wl_sync.log import LOSS_SHAPES, Loss
@@ -336,6 +336,14 @@ class SessionRecipe(BaseModel):
     # report of an insertion names the probe by it (design spec
     # `2026-09-30-nwb-probes-design.md` section 2). Eleven digits, as IMEC's are.
     probe_serial: str = "19011110001"
+    # What the first field of every imec `.meta`'s `~imroTbl` header names:
+    # the probe's type, as SpikeGLX wrote it before 20260115, or its part
+    # number, as SpikeGLX 20260115 and later write it (SpikeGLX commit 8635f61;
+    # design spec `2026-11-19-spikeglx-pn-header-design.md`). One SpikeGLX
+    # writes every stream of a run, so it is the session's, not a probe's. The
+    # old form is the default, so every profile written before it keeps its
+    # meaning.
+    imro_header: Literal["type", "part_number"] = "type"
     # Which bank of 384 the recorded channels sit in (NP 1.0's imroTbl:
     # electrode = bank * 384 + channel). Nonzero is a partial bank selection,
     # the case where reading the imroTbl rather than assuming the first sites

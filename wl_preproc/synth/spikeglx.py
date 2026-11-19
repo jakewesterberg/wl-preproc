@@ -109,6 +109,23 @@ NIDQ_CODE_STROBE_XD_LINE = 1
 NIDQ_N_DIGITAL_WORDS = 2
 
 
+# SpikeGLX's own type for each part number the generator writes (`pnToType`,
+# SpikeGLX's Src-imro/IMROTbl.cpp): what `imDatPrb_type` holds, and what the
+# `~imroTbl` header named before SpikeGLX 20260115. A type is shared across
+# part numbers -- NP1030 and NP1032 are both 1030 -- so it is a table, not
+# something derivable from the part number's digits. Only the part numbers
+# the generator writes are held; another is refused, never written as 0.
+SPIKEGLX_PROBE_TYPE: dict[str, int] = {"NP1000": 0, "NP1032": 1030}
+
+
+def _spikeglx_type(part_number: str) -> int:
+    try:
+        return SPIKEGLX_PROBE_TYPE[part_number]
+    except KeyError:
+        raise ValueError(f"part number {part_number} has no SpikeGLX type in the generator's table "
+                         f"({', '.join(SPIKEGLX_PROBE_TYPE)}), so its .meta cannot be written") from None
+
+
 def _meta_text(
     recipe: SessionRecipe,
     n_samples: int,
@@ -128,7 +145,12 @@ def _meta_text(
     # reader opens as the wrong band rather than one it refuses.
     ap_lf_sy = f"{n_ap},0,1" if band == "ap" else f"0,{n_ap},1"
 
-    imro = f"({n_ap},{n_ap})" + "".join(
+    # The header names the probe's type, or from SpikeGLX 20260115 its part
+    # number, then the channel count. (It once wrote the channel count first,
+    # which probeinterface before 0.4 never read.)
+    probe_type = _spikeglx_type(probe.part_number)
+    first = probe.part_number if recipe.imro_header == "part_number" else probe_type
+    imro = f"({first},{n_ap})" + "".join(
         f"({c} {probe.bank} 0 {int(AP_GAIN)} 250 1)" for c in range(n_ap)
     )
     chan_map = (
@@ -157,7 +179,7 @@ def _meta_text(
         "imAiRangeMax=0.6",
         "imAiRangeMin=-0.6",
         "imMaxInt=512",
-        "imDatPrb_type=0",
+        f"imDatPrb_type={probe_type}",
         # The reader looks up probe geometry by part number in ProbeInterface's
         # table and raises if it is absent. Read from the recipe rather than
         # hardcoded NP1000 (Neuropixels 1.0) -- SessionRecipe.probe_part_number
