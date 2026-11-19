@@ -796,30 +796,8 @@ class EyeDetection(dj.Computed):
             # it is recorded here rather than resolved -- section 5.1 states
             # the same asymmetry without resolving it either.
             gaze, v, offered = per_eye["left"]
-            # The floor is the DETECTOR's own, inherited from the params it
-            # just ran with -- the binocular criterion filters what both eyes
-            # already found, and must never manufacture an event shorter than
-            # either eye's detector would have accepted. See `_overlapping`.
-            # `_conjunction_runs`, not `_overlapping`: the binocular criterion
-            # applies WITHIN a kind, so the conjunction trace carries the same
-            # vocabulary as the two eyes it is built from. `_overlapping` is
-            # the single-kind primitive underneath it.
-            floor = _min_duration_samples(detector_params, fs_hz)
-            conjunction_spans = _conjunction_runs(
-                spans["left"],
-                spans["right"],
-                floor,
-                _conjunction_label(detector, params, gaze),
-            )
-            # Where only one eye is usable, the trace falls back to it, and an
-            # event the other eye could not see whole is kept whole as the
-            # eye that did (design spec `2026-09-28-both-eyes-fallback-design.md`,
-            # the requester's decisions of 2026-09-28). A gap is filled from the
-            # left eye's mask only where NEITHER eye is usable; one usable
-            # eye makes the gap that eye's `fixation`.
-            intervals, kept, source, fill = _conjunction_parts(
-                conjunction_spans, spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2],
-            )
+            intervals, kept, source, fill = _conjunction_trace(spans, per_eye, detector, params, detector_params,
+                                                               fs_hz)
             self._insert_trace(
                 key, "conjunction", gaze, v, fill, intervals,
                 fs_hz, detector, detector_params,
@@ -1424,6 +1402,37 @@ def _always(label: Label) -> Callable[[int, int], Label]:
     FLOOR is what is under test and which label a surviving span carries is
     not."""
     return lambda _start, _stop: label
+
+
+def _conjunction_trace(spans: dict, per_eye: dict, detector, params: dict, detector_params, fs_hz: float):
+    """The conjunction trace's intervals, kept one-eye runs, sources and fill
+    (`_conjunction_parts`' return), from both eyes' detected `spans` and their
+    `per_eye` `(gaze, measured_v, offered)`: what `EyeDetection.make()`
+    stores, and what the tests build the trace with, so the two cannot drift
+    (design spec `2026-11-19-two-eye-label-design.md`)."""
+    # The floor is the DETECTOR's own, inherited from the params it just ran
+    # with -- the binocular criterion filters what both eyes already found,
+    # and must never manufacture an event shorter than either eye's detector
+    # would have accepted. See `_overlapping`. `_conjunction_runs`, not
+    # `_overlapping`: the binocular criterion applies WITHIN a kind, so the
+    # conjunction trace carries the same vocabulary as the two eyes it is
+    # built from. `_overlapping` is the single-kind primitive underneath it.
+    floor = _min_duration_samples(detector_params, fs_hz)
+    conjunction_spans = _conjunction_runs(
+        spans["left"],
+        spans["right"],
+        floor,
+        _conjunction_label(detector, params, per_eye["left"][0]),
+    )
+    # Where only one eye is usable, the trace falls back to it, and an event
+    # the other eye could not see whole is kept whole as the eye that did
+    # (design spec `2026-09-28-both-eyes-fallback-design.md`, the requester's
+    # decisions of 2026-09-28). A gap is filled from the left eye's mask only
+    # where NEITHER eye is usable; one usable eye makes the gap that eye's
+    # `fixation`.
+    return _conjunction_parts(
+        conjunction_spans, spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2],
+    )
 
 
 def _conjunction_parts(two_eye, left, right, left_offered, right_offered):
