@@ -106,14 +106,14 @@ status:
     rows whose label contradicts their stored size is merged (a390c58;
     docs/handoffs/2026-11-19-two-eye-label.md). v4 of the saccade
     contract fixtures, pinning Engbert-Kliegl's join for wl-xcon, is
-    built and reviewed on feat/saccade-fixtures-v4, joining touching
-    runs before the minimum duration, its merge next
-    (docs/handoffs/2026-11-19-saccade-fixtures-v4.md); then reading
+    merged (0f3edf8; docs/handoffs/2026-11-19-saccade-fixtures-v4.md),
+    joining touching runs before the minimum duration. Next, reading
     SpikeGLX 20260115's imroTbl header; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: the two-eye label fix (a390c58). Before it, full-precision
+    Done: v4 of the saccade fixtures (0f3edf8). Before it, the two-eye
+    label fix (a390c58). Before it, full-precision
     trial and block times (a01b736). Before it,
     scaling to long sessions (d5efc2b). Before it, the pop-out
     search's reader (d8fe06b). Before it, the rig's
