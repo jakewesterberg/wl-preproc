@@ -106,7 +106,9 @@ status:
     rows whose label contradicts their stored size is merged (a390c58;
     docs/handoffs/2026-11-19-two-eye-label.md). v4 of the saccade
     contract fixtures, pinning Engbert-Kliegl's join for wl-xcon, is
-    built on feat/saccade-fixtures-v4, its merge next; then reading
+    built and reviewed on feat/saccade-fixtures-v4, joining touching
+    runs before the minimum duration, its merge next
+    (docs/handoffs/2026-11-19-saccade-fixtures-v4.md); then reading
     SpikeGLX 20260115's imroTbl header; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
