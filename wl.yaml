@@ -516,9 +516,12 @@ third_party:
       never declared. At least 0.5 because a SpikeGLX 20260115 or later
       recording names the part number in its imroTbl header, which 0.3
       could not read; the site mapping (NP1000 banks 0 and 1, NP1032 bank
-      2) was re-verified on 0.5.0 in both header forms. No ceiling: the
+      2) was re-verified on 0.5.0 in both header forms, and every part
+      number 0.3.2 holds builds identically on 0.5.0. No ceiling: the
       requester's rule of 2026-11-19 is to keep dependencies current while
-      the pipeline is being built.
+      the pipeline is being built. What the old ceiling guarded, a release
+      renumbering or moving contacts under probe types already registered,
+      is a test instead (tests/ephys/test_geometry.py, pinned sites).
   - name: pynwb
     constraint: ">=4.1,<5"
     why: >-

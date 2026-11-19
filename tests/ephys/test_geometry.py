@@ -113,3 +113,24 @@ def test_geometry_makes_no_network_call(monkeypatch):
         monkeypatch.setattr(requests, "get", explode)
 
     assert len(geometry.electrode_rows("NP1000")) == 960
+
+
+# (electrode, x um, y um), from probeinterface's offline table: identical under
+# 0.3.2 and 0.5.0 for every part number both hold (measured 2026-11-19, the
+# SpikeGLX header piece's review). probeinterface has no ceiling (wl.yaml), and
+# `register_probe_type` keeps the rows a probe type was first registered with,
+# so a release that renumbers or moves contacts must fail here before it can
+# store a site under one numbering and place it under another.
+_PINNED_SITES = {
+    "NP1000": [(0, 16.0, 0.0), (1, 48.0, 0.0), (2, 0.0, 20.0), (3, 32.0, 20.0), (383, 32.0, 3820.0),
+               (384, 16.0, 3840.0), (959, 32.0, 9580.0)],
+    "NP1032": [(0, 0.0, 0.0), (1, 103.0, 0.0), (2, 0.0, 20.0), (3, 103.0, 20.0), (767, 103.0, 7660.0),
+               (768, 0.0, 7680.0), (4415, 103.0, 44140.0)],
+}
+
+
+@pytest.mark.parametrize("part_number", sorted(_PINNED_SITES))
+def test_an_electrode_keeps_its_number_and_place_across_probeinterface_releases(part_number):
+    rows = geometry.electrode_rows(part_number)
+    assert [(e, rows[e]["electrode"], rows[e]["x_coord"], rows[e]["y_coord"]) for e, _x, _y in _PINNED_SITES[part_number]] \
+        == [(e, e, x, y) for e, x, y in _PINNED_SITES[part_number]]
