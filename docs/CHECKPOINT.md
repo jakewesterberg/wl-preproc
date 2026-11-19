@@ -1,10 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-11-19**, describing `main` at `a01b736`: the merge of
-`feat/full-precision-times`, full-precision trial and block times
-(`handoffs/2026-11-17-full-precision-trial-times.md`). CI read off `a01b736` is green on both
-interpreters, 3053 passed on each with 37 skipped, and the manifest check is green
-(`gh run view 44472590309`).
+**Last updated 2026-11-19**, describing `main` at `a390c58`: the merge of
+`feat/two-eye-label`, a two-eye row's label from the measurement it stores
+(`handoffs/2026-11-19-two-eye-label.md`). CI read off `a390c58` is green on both
+interpreters, 3059 passed on each with 37 skipped, and the manifest check is green
+(`gh run view 44560855335`).
+- **A two-eye row's label from the measurement it stores:** a two-eye span is labelled by
+  `classify` over the size `_run_row` stores, on the same eye and the same widening across a
+  carried loss; Engbert-Kliegl joins a run opening on the sample right after the landing a carried
+  loss gave the run before it. On the reference recording 0 rows of any trace contradict their
+  size; the reference-gated files, the OpenIris recording among them, passed 271 on each
+  interpreter, where the recording's eye test had failed on `main` since `fe0e2f3`. wl-xcon asked
+  for a contract fixture trace pinning the join: v4 of the saccade fixtures, built on
+  `feat/saccade-fixtures-v4`, its merge next. wl.works is told at that merge.
 - **Full-precision trial and block times:** `core.TrialTime` and `core.BlockTime` hold each trial's
   and block's measured start and stop as doubles, and the NWB file, the listing, `TrialCoverage` and
   the main sequence read them; element-event's float32 copy was 3.9 ms a step from 9.1 hours on. Run
@@ -551,11 +559,13 @@ requester chose to merge the same day; true when written.*
 > `core.BlockTime` hold the measured doubles every reader uses, where element-event's float32 copy was about
 > 4 ms coarse at 12 hours; serv is purged before it deploys. It merged by the requester's choice of
 > 2026-11-19, with the reference recording's eye test failing as it does on `main` since 2026-11-07. **The fix
-> for two-eye rows whose label contradicts their stored size is built on `feat/two-eye-label`, reviewed, not
-> merged** (`specs/2026-11-19-two-eye-label-design.md`, approved 2026-11-19; `handoffs/2026-11-19-two-eye-label.md`):
-> a two-eye span is labelled from the measurement it stores, and Engbert-Kliegl joins a run opening on the
-> landing sample a carried loss gave the run before it; on the reference recording 0 rows of any trace now
-> contradict their size, and the reference-gated files pass, 271 on each interpreter. Next, its merge; then
+> for two-eye rows whose label contradicts their stored size is merged** (`a390c58`, CI green, 3059 passed on
+> each interpreter) (`specs/2026-11-19-two-eye-label-design.md`, approved 2026-11-19;
+> `handoffs/2026-11-19-two-eye-label.md`): a two-eye span is labelled from the measurement it stores, and
+> Engbert-Kliegl joins a run opening on the sample right after the landing a carried loss gave the run before
+> it; on the reference recording 0 rows of any trace now contradict their size, and the reference-gated files
+> pass, 271 on each interpreter. **v4 of the saccade contract fixtures**, the join pinned for wl-xcon, is built
+> on `feat/saccade-fixtures-v4`. Next, its merge; then
 > reading SpikeGLX 20260115's `~imroTbl` header, which names the part number (wl.works' finding of 2026-11-18);
 > then part 3b; then our reader of
 > wl-xcon's console settings (XC-513, accepted 2026-11-18: `form` and `shaping` rows, sizes in degrees,
@@ -573,7 +583,8 @@ requester chose to merge the same day; true when written.*
 > next; until the pop-out search was built, that it was next; until its merge, that the merge was
 > next; until scaling was built, that it was next; until its merge, that the merge was next; until
 > full-precision times were built, that they were next; until their merge, that it was next; until the
-> two-eye fix was built, that it was next; each true when written.*
+> two-eye fix was built, that it was next; until its merge, that the merge was next; each true when
+> written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

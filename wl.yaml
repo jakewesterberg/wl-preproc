@@ -103,14 +103,16 @@ status:
     (a01b736; docs/handoffs/2026-11-17-full-precision-trial-times.md): core.TrialTime
     and core.BlockTime hold the measured doubles, where element-event's
     float32 copy was about 4 ms coarse at 12 hours. The fix for two-eye
-    rows whose label contradicts their stored size is built on
-    feat/two-eye-label, reviewed, not merged, its merge next
-    (docs/handoffs/2026-11-19-two-eye-label.md); then reading
+    rows whose label contradicts their stored size is merged (a390c58;
+    docs/handoffs/2026-11-19-two-eye-label.md). v4 of the saccade
+    contract fixtures, pinning Engbert-Kliegl's join for wl-xcon, is
+    built on feat/saccade-fixtures-v4, its merge next; then reading
     SpikeGLX 20260115's imroTbl header; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: full-precision trial and block times (a01b736). Before it,
+    Done: the two-eye label fix (a390c58). Before it, full-precision
+    trial and block times (a01b736). Before it,
     scaling to long sessions (d5efc2b). Before it, the pop-out
     search's reader (d8fe06b). Before it, the rig's
     record's minors (bc5df71). Before them, the rest of
