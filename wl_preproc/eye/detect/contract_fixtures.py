@@ -33,7 +33,14 @@ read from v2, and six of its own, each v1's `centre-horizontal` step with a
 loss or a blink inside it, at its take-off or at its landing. A sample may have no position; `detector_input` is
 the rule that reads such a trace.
 
-`python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds,v2,v3}
+v4 joins a run that opens right after the landing a carried loss gave the run
+before it to that run, one movement sized and labelled whole, and applies the
+minimum duration to the joined run (the two-eye label fix's final review, I1,
+and v4's review, the requester's choices of 2026-11-19): v3's traces, read
+from v3, and six of its own that pin the join, at wl-xcon's request. Every v3
+trace's outputs are unchanged.
+
+`python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds,v2,v3,v4}
 [--out DIR]` wrote each, and refuses to write over a published file;
 `tests/eye/detect/test_contract_fixtures.py` pins each by its digest and holds
 this code to every output in it. v1's inputs are seeded numpy draws, which
@@ -318,6 +325,41 @@ _V3_TRACES = (
 MAX_LOST_MS = 50.0
 
 
+#: v3's rules, as its `about` states them; v4 states them too, with its join.
+_CARRIED_RULES = (
+    "Gaze is in degrees per axis, null where the sample has no position; a position (x, y) is the "
+    "direction normalize(tan x, tan y, 1). available: null where a detector may label, \"lost\" where "
+    "the sample has no position, a loss of data a run is carried across, else the label the mask gave, "
+    "which withholds the sample. A velocity is unknown where its window, samples n-2..n+2, holds a "
+    "sample with no position; velocity_deg_s is null there, and otherwise as in v2. Each maximal "
+    "stretch of unknown velocities is judged whole: it is carried when the samples either side of it "
+    "have known velocities, neither withheld nor among the two at each end of the trace, whose "
+    "velocities (0 in velocity_deg_s) are not measured, and no two samples with positions, taken in "
+    "turn from the one before it to "
+    "the one after it, are more than max_lost_ms apart, inclusive, in whole samples, "
+    "floor(max_lost_ms * fs / 1000 + 1e-9); otherwise, beside a withheld sample or the trace's edge, "
+    "or holding a longer loss, it is withheld as a mask label is. So two losses within two samples of "
+    "each other are one stretch, and a loss within two samples of the trace's edge is withheld. "
+    "eta_deg_s is as in v2, over complete windows of known velocities. A sample with a "
+    "known velocity is in an event when (vx/eta_x)^2 + (vy/eta_y)^2 > 1, and with either eta 0 none "
+    "is; a sample whose velocity is unknown continues a run open before it and never opens one; a "
+    "withheld sample never is in an event. A run is a maximal stretch of such samples from a known "
+    "velocity over the threshold; where it reaches a carried stretch it goes on through it, and where "
+    "the first known velocity after that stretch is not over the threshold the run ends there, that "
+    "sample its last, the eye having landed in the loss; at a withheld stretch or the trace's end it "
+    "ends at its last known velocity over the threshold. A run is dropped when its known velocities "
+    "over the threshold number fewer than min_duration_samples. flagged: a sample of a carried stretch, its "
+    "velocity unknown, lies inside the run or in the two samples before its start; n_lost: the samples "
+    "of a carried stretch inside it. Size, direction, "
+    "positions and polar angles are as in v2, from the run's first sample, or, where a carried "
+    "stretch adjoins its start, the last sample with a known velocity before it, where the eye took "
+    "off, to its last; a run's label is by that size. Peak speed is "
+    "the largest |velocity| over its known velocities. Intervals, labels, flags and counts are exact; "
+    "every other number is held to |got - want| <= 1e-9 + 1e-12 * |want|, in its own unit. "
+    "inputs_from names the file a trace's inputs were read from. A run is [start, stop) in samples. "
+)
+
+
 def detector_input(gaze_deg: list, available: list, fs_hz: float, max_lost_ms: float) -> tuple[np.ndarray, np.ndarray]:
     """A v3 trace as Engbert-Kliegl is handed it: `(gaze, offered)`.
 
@@ -348,11 +390,33 @@ def detector_input(gaze_deg: list, available: list, fs_hz: float, max_lost_ms: f
     return gaze, offered
 
 
+def _carried_trace(name: str, note: str, source: str, gaze_deg: list, mask: list, fs_hz: float) -> dict:
+    """One trace of v3 or v4: its inputs, and what this code makes of them
+    under the true-angle setting, read as `detector_input` reads them."""
+    params = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
+    gaze, offered = detector_input(gaze_deg, mask, fs_hz, MAX_LOST_MS)
+    speed = local_velocity(gaze, fs_hz)
+    known = np.array([entry is None for entry in offered])
+    lost = np.array([entry is Label.LOST for entry in offered])
+    runs = detect_engbert_kliegl(gaze, speed, offered, fs_hz, params)
+    return {
+        "name": name, "note": note, "inputs_from": source, "gaze_deg": gaze_deg, "available": mask,
+        "velocity_deg_s": [speed[n].tolist() if known[n] else None for n in range(len(gaze_deg))],
+        "eta_deg_s": list(thresholds(speed, known, params)),
+        "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
+                  "flagged": bool(lost[max(run.start - 2, 0):run.stop].any()),
+                  "n_lost": int(lost[run.start:run.stop].sum()),
+                  **{field: getattr(measure_event_run(gaze, speed, offered, run.start, run.stop, fs_hz,
+                                                      geometry=TRUE_ANGLE, runs_end_before_landing=False,
+                                                      min_measured_ms=None), field)
+                     for field in _V2_MEASUREMENTS}} for run in runs],
+    }
+
+
 def build_v3(v2: dict, v2_sha256: str) -> dict:
     """v3, a run carried across a short loss of data: v2's traces, read from
     v2, and `_V3_TRACES`, each with what this code makes of it."""
     fs_hz = v2["fs_hz"]
-    params = dataclasses.replace(DEFAULT_EK_PARAMS, geometry=TRUE_ANGLE)
     cases = [(case["name"], case["note"], "v2.json", case["gaze_deg"], case["available"]) for case in v2["traces"]]
     (centre,) = [case for case in v2["traces"] if case["name"] == "centre-horizontal"]
     for name, note, missing, masked in _V3_TRACES:
@@ -364,25 +428,7 @@ def build_v3(v2: dict, v2_sha256: str) -> dict:
             first, stop, label = masked
             mask[first:stop] = [label.value] * (stop - first)
         cases.append((name, note, "v3", gaze_deg, mask))
-    traces = []
-    for name, note, source, gaze_deg, mask in cases:
-        gaze, offered = detector_input(gaze_deg, mask, fs_hz, MAX_LOST_MS)
-        speed = local_velocity(gaze, fs_hz)
-        known = np.array([entry is None for entry in offered])
-        lost = np.array([entry is Label.LOST for entry in offered])
-        runs = detect_engbert_kliegl(gaze, speed, offered, fs_hz, params)
-        traces.append({
-            "name": name, "note": note, "inputs_from": source, "gaze_deg": gaze_deg, "available": mask,
-            "velocity_deg_s": [speed[n].tolist() if known[n] else None for n in range(len(gaze_deg))],
-            "eta_deg_s": list(thresholds(speed, known, params)),
-            "runs": [{"start": int(run.start), "stop": int(run.stop), "label": run.label.value,
-                      "flagged": bool(lost[max(run.start - 2, 0):run.stop].any()),
-                      "n_lost": int(lost[run.start:run.stop].sum()),
-                      **{field: getattr(measure_event_run(gaze, speed, offered, run.start, run.stop, fs_hz,
-                                                          geometry=TRUE_ANGLE, runs_end_before_landing=False,
-                                                          min_measured_ms=None), field)
-                         for field in _V2_MEASUREMENTS}} for run in runs],
-        })
+    traces = [_carried_trace(*case, fs_hz) for case in cases]
     return {
         "version": 3,
         "geometry": TRUE_ANGLE,
@@ -391,40 +437,93 @@ def build_v3(v2: dict, v2_sha256: str) -> dict:
                  "loss of data (design spec 2026-11-06-eye-lost-data-and-region-design.md): v2's traces, read from "
                  "v2.json, and six of its own, each v1's centre-horizontal step with a loss or a blink inside it, "
                  "at its take-off or at its landing. "
-                 "Gaze is in degrees per axis, null where the sample has no position; a position (x, y) is the "
-                 "direction normalize(tan x, tan y, 1). available: null where a detector may label, \"lost\" where "
-                 "the sample has no position, a loss of data a run is carried across, else the label the mask gave, "
-                 "which withholds the sample. A velocity is unknown where its window, samples n-2..n+2, holds a "
-                 "sample with no position; velocity_deg_s is null there, and otherwise as in v2. Each maximal "
-                 "stretch of unknown velocities is judged whole: it is carried when the samples either side of it "
-                 "have known velocities, neither withheld nor among the two at each end of the trace, whose "
-                 "velocities (0 in velocity_deg_s) are not measured, and no two samples with positions, taken in "
-                 "turn from the one before it to "
-                 "the one after it, are more than max_lost_ms apart, inclusive, in whole samples, "
-                 "floor(max_lost_ms * fs / 1000 + 1e-9); otherwise, beside a withheld sample or the trace's edge, "
-                 "or holding a longer loss, it is withheld as a mask label is. So two losses within two samples of "
-                 "each other are one stretch, and a loss within two samples of the trace's edge is withheld. "
-                 "eta_deg_s is as in v2, over complete windows of known velocities. A sample with a "
-                 "known velocity is in an event when (vx/eta_x)^2 + (vy/eta_y)^2 > 1, and with either eta 0 none "
-                 "is; a sample whose velocity is unknown continues a run open before it and never opens one; a "
-                 "withheld sample never is in an event. A run is a maximal stretch of such samples from a known "
-                 "velocity over the threshold; where it reaches a carried stretch it goes on through it, and where "
-                 "the first known velocity after that stretch is not over the threshold the run ends there, that "
-                 "sample its last, the eye having landed in the loss; at a withheld stretch or the trace's end it "
-                 "ends at its last known velocity over the threshold. A run is dropped when its known velocities "
-                 "over the threshold number fewer than min_duration_samples. flagged: a sample of a carried stretch, its "
-                 "velocity unknown, lies inside the run or in the two samples before its start; n_lost: the samples "
-                 "of a carried stretch inside it. Size, direction, "
-                 "positions and polar angles are as in v2, from the run's first sample, or, where a carried "
-                 "stretch adjoins its start, the last sample with a known velocity before it, where the eye took "
-                 "off, to its last; a run's label is by that size. Peak speed is "
-                 "the largest |velocity| over its known velocities. Intervals, labels, flags and counts are exact; "
-                 "every other number is held to |got - want| <= 1e-9 + 1e-12 * |want|, in its own unit. "
-                 "inputs_from names the file a trace's inputs were read from. A run is [start, stop) in samples. "
-                 "Never edited.",
+                 + _CARRIED_RULES + "Never edited.",
         "fs_hz": fs_hz,
         "defaults": {**v2["defaults"], "max_lost_ms": MAX_LOST_MS},
         "traces": traces,
+    }
+
+
+#: v4's own traces, each v1's `centre-horizontal` 8-degree step, from sample
+#: 200 over 12, with `(first, stop)` samples having no position, where it
+#: lands in the loss at sample 216, and a further step right `(onset,
+#: samples, dx)` after it.
+_V4_TRACES = (
+    ("a-saccade-moving-on-from-a-landing-in-a-loss",
+     "v3's a-short-loss-at-a-saccades-landing (samples 209-213 having no position) with a 0.6-degree step right "
+     "from sample 217 over 12 samples: the run lands in the loss at sample 216 and the eye moves on at once, so "
+     "the run opening at 217 continues it, one 8.6-degree saccade, where alone it would be a 0.6-degree "
+     "microsaccade",
+     (209, 214), (217, 12, 0.6)),
+    ("a-saccade-mostly-lost-before-its-landing-moving-on",
+     "v1's centre-horizontal step with samples 204-213 having no position, leaving 3 known velocities over the "
+     "threshold before the loss, and a 0.6-degree step right from sample 217 over 12 samples: joined before the "
+     "minimum duration is applied, one 8.6-degree saccade, where the run before the loss, too short alone, would "
+     "be dropped and the 0.6-degree step stand alone as a microsaccade",
+     (204, 214), (217, 12, 0.6)),
+    ("a-short-move-on-from-a-landing-in-a-loss",
+     "v3's a-short-loss-at-a-saccades-landing with a 0.3-degree step right from sample 217 over 4 samples, 5 "
+     "known velocities over the threshold, too short alone: joined, one saccade to sample 221",
+     (209, 214), (217, 4, 0.3)),
+    ("two-parts-short-alone-long-enough-together",
+     "v1's centre-horizontal step with samples 203-213 having no position, 2 known velocities over the threshold "
+     "before the loss, and a 0.2-degree step right from sample 217 over 3 samples, 4 after the landing: 6 "
+     "together, one saccade",
+     (203, 214), (217, 3, 0.2)),
+    ("two-parts-too-short-together",
+     "v1's centre-horizontal step with samples 202-213 having no position, 1 known velocity over the threshold "
+     "before the loss, and a 0.2-degree step right from sample 217 over 3 samples, 4 after the landing: 5 "
+     "together, dropped",
+     (202, 214), (217, 3, 0.2)),
+    ("a-move-on-one-sample-after-a-landing",
+     "v3's a-short-loss-at-a-saccades-landing with a 0.6-degree step right from sample 218 over 12 samples: "
+     "sample 217, between the landing and the step, is not over the threshold, so the runs do not touch and are "
+     "not joined, a saccade landing at sample 216 and a 0.6-degree microsaccade from 218",
+     (209, 214), (218, 12, 0.6)),
+)
+#: Where v4 states its join among v3's rules: after the minimum duration,
+#: which applies to a run once every join is made.
+_JOIN_AFTER = "number fewer than min_duration_samples. "
+_JOIN = ("Runs are joined before any is dropped. A run whose first known velocity over the threshold is the "
+         "sample right after the landing that ended the run before it (that run's last sample, the first known "
+         "velocity after a carried stretch) continues that run: one run, from the earlier's start to the later's "
+         "end, its size and label from the earlier's take-off, and a run so continued may be continued again the "
+         "same way. A joined run's known velocities over the threshold are counted over all its parts for "
+         "min_duration_samples, so a part too short alone is kept within it, and parts too short together are "
+         "dropped together. A run opening later than that sample is not joined. ")
+
+
+def build_v4(v3: dict, v3_sha256: str) -> dict:
+    """v4, a run that moves on from a landing in a loss joined to the run
+    that landed, before the minimum duration is applied: v3's traces, read
+    from v3, and `_V4_TRACES`, each with what this code makes of it (the
+    two-eye label fix's final review, I1, and v4's review, the requester's
+    choices of 2026-11-19; wl-xcon asked for a trace)."""
+    fs_hz = v3["fs_hz"]
+    cases = [(case["name"], case["note"], "v3.json", case["gaze_deg"], case["available"]) for case in v3["traces"]]
+    (centre,) = [case for case in v3["traces"] if case["name"] == "centre-horizontal"]
+    for name, note, missing, (onset, samples, dx) in _V4_TRACES:
+        gaze_deg, mask = [list(position) for position in centre["gaze_deg"]], list(centre["available"])
+        for index in range(onset, len(gaze_deg)):
+            gaze_deg[index][0] = round(gaze_deg[index][0] + dx * min((index - onset) / (samples - 1), 1.0), _DECIMALS)
+        for index in range(*missing):
+            gaze_deg[index], mask[index] = None, "lost"
+        cases.append((name, note, "v4", gaze_deg, mask))
+    assert _CARRIED_RULES.count(_JOIN_AFTER) == 1
+    rules = _CARRIED_RULES.replace(_JOIN_AFTER, _JOIN_AFTER + _JOIN)
+    return {
+        "version": 4,
+        "geometry": TRUE_ANGLE,
+        "derived_from": {"v3.json": v3_sha256},
+        "about": "wl-preproc's Engbert-Kliegl saccade detector in true visual angle, carrying a run across a short "
+                 "loss of data and joining to it a run that moves on from its landing (handoff "
+                 "2026-11-19-two-eye-label.md): v3's traces, read from v3.json, and six of its own, each v1's "
+                 "centre-horizontal step landing in a short loss and the eye moving on after it, at once or a "
+                 "sample later, with the parts long or short. "
+                 + rules + "Never edited.",
+        "fs_hz": fs_hz,
+        "defaults": v3["defaults"],
+        "traces": [_carried_trace(*case, fs_hz) for case in cases],
     }
 
 
@@ -443,7 +542,7 @@ def dumps(fixture: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="write one of the saccade detector's contract fixtures")
-    parser.add_argument("which", choices=("v1", "v1-thresholds", "v2", "v3"))
+    parser.add_argument("which", choices=("v1", "v1-thresholds", "v2", "v3", "v4"))
     parser.add_argument("--out", type=Path, default=Path("docs/fixtures/saccade"))
     args = parser.parse_args(argv)
     path = args.out / f"{args.which}.json"
@@ -457,6 +556,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.which == "v3":
         raw = (args.out / "v2.json").read_bytes()
         text = dumps(build_v3(json.loads(raw), hashlib.sha256(raw).hexdigest()))
+    elif args.which == "v4":
+        raw = (args.out / "v3.json").read_bytes()
+        text = dumps(build_v4(json.loads(raw), hashlib.sha256(raw).hexdigest()))
     else:
         raw, companion = (args.out / "v1.json").read_bytes(), (args.out / "v1-thresholds.json").read_bytes()
         text = dumps(build_v2(json.loads(raw), hashlib.sha256(raw).hexdigest(), json.loads(companion),

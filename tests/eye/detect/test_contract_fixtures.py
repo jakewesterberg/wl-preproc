@@ -318,11 +318,16 @@ def test_v3s_traces_from_v2_keep_v2s_runs_measured_throughout():
 
 def test_a_reader_of_v3_gets_its_outputs_back_from_its_inputs():
     """What wl-xcon's test will do, from the file alone."""
+    _a_reader_gets_its_outputs_back(_v3())
+
+
+def _a_reader_gets_its_outputs_back(fixture: dict) -> None:
+    """v3's reader and v4's: each trace's velocities, thresholds, runs and
+    measurements, from its inputs alone."""
     from wl_preproc.eye.detect.contract_fixtures import detector_input
     from wl_preproc.eye.detect.measure import measure_event_run
     from wl_preproc.eye.detect.velocity import local_velocity
 
-    fixture = _v3()
     fs_hz = fixture["fs_hz"]
     for case in fixture["traces"]:
         gaze, offered = detector_input(case["gaze_deg"], case["available"], fs_hz, fixture["defaults"]["max_lost_ms"])
@@ -392,3 +397,84 @@ def test_v3_is_what_this_code_makes_of_v2():
     from wl_preproc.eye.detect.contract_fixtures import build_v3, dumps
 
     _same(json.loads(dumps(build_v3(_v2(), V2_SHA256))), _v3())
+
+
+# v4 (design spec `2026-11-19-two-eye-label-design.md`, the final review's I1,
+# the requester's choice of 2026-11-19, "join them in the detector"): a run
+# opening right after the landing a carried loss gave the run before it is
+# joined to that run. wl-xcon asked for a trace pinning it (its saccade
+# detection version 11).
+V4 = V1.with_name("v4.json")
+V4_SHA256 = "6e61259ffc5dcf38e87d67b0c220823e0b198f4c767e95d9199f3dcb06595665"
+
+
+def _v4() -> dict:
+    return json.loads(V4.read_text(encoding="utf-8"))
+
+
+def test_the_published_v4_is_never_edited():
+    assert hashlib.sha256(V4.read_bytes()).hexdigest() == V4_SHA256
+
+
+def test_v4_states_v3s_rules_and_the_join():
+    about = _v4()["about"]
+    assert "Each maximal stretch of unknown velocities is judged whole" in about
+    assert "the last sample with a known velocity before it, where the eye took off" in about
+    assert "Runs are joined before any is dropped." in about
+    assert ("the sample right after the landing that ended the run before it (that run's last sample, the first "
+            "known velocity after a carried stretch) continues that run") in about
+    assert "a run so continued may be continued again the same way" in about
+    assert "counted over all its parts for min_duration_samples" in about
+    assert "A run opening later than that sample is not joined." in about
+    assert _V2_TOLERANCE in about
+
+
+def test_v4_names_its_source_and_its_bound():
+    fixture = _v4()
+    assert (fixture["version"], fixture["geometry"]) == (4, TRUE_ANGLE)
+    assert fixture["derived_from"] == {"v3.json": V3_SHA256}
+    assert fixture["defaults"] == _v3()["defaults"]
+
+
+def test_v4s_traces_from_v3_keep_v3s_every_output():
+    v3 = {case["name"]: case for case in _v3()["traces"]}
+    from_v3 = [case for case in _v4()["traces"] if case["inputs_from"] == "v3.json"]
+    assert [case["name"] for case in from_v3] == list(v3)
+    for case in from_v3:
+        _same({**case, "inputs_from": None, "note": None}, {**v3[case["name"]], "inputs_from": None, "note": None},
+              f"v4.{case['name']}")
+
+
+def test_a_reader_of_v4_gets_its_outputs_back_from_its_inputs():
+    _a_reader_gets_its_outputs_back(_v4())
+
+
+def test_v4s_own_traces_join_touching_runs_before_the_minimum_duration():
+    """Each v1's centre-horizontal step landing in a loss at sample 216 and
+    the eye moving on. Joined after the minimum duration was applied, the
+    second would have stored a lone 0.6-degree microsaccade, the third ended
+    at 217, the fourth stored nothing; unjoined, the first would have been two
+    runs touching at 217, the second a microsaccade."""
+    centre = {case["name"]: case for case in _v3()["traces"]}["centre-horizontal"]
+    own = [case for case in _v4()["traces"] if case["inputs_from"] == "v4"]
+    assert all(case["gaze_deg"][:200] == centre["gaze_deg"][:200] for case in own)
+
+    def runs(case):
+        return [(run["start"], run["stop"], run["label"]) for run in case["runs"]]
+
+    assert {case["name"]: runs(case) for case in own} == {
+        "a-saccade-moving-on-from-a-landing-in-a-loss": [(199, 229, "saccade")],
+        "a-saccade-mostly-lost-before-its-landing-moving-on": [(199, 229, "saccade")],
+        "a-short-move-on-from-a-landing-in-a-loss": [(199, 222, "saccade")],
+        "two-parts-short-alone-long-enough-together": [(199, 221, "saccade")],
+        "two-parts-too-short-together": [],
+        "a-move-on-one-sample-after-a-landing": [(199, 217, "saccade"), (218, 230, "microsaccade")],
+    }
+    joined = [case["runs"][0] for case in own[:2]]
+    assert all(run["flagged"] and abs(run["amplitude_deg"] - 8.6) < 0.1 for run in joined)
+
+
+def test_v4_is_what_this_code_makes_of_v3():
+    from wl_preproc.eye.detect.contract_fixtures import build_v4, dumps
+
+    _same(json.loads(dumps(build_v4(_v3(), V3_SHA256))), _v4(), "v4")

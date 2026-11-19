@@ -11,8 +11,9 @@ interpreters, 3059 passed on each with 37 skipped, and the manifest check is gre
   loss gave the run before it. On the reference recording 0 rows of any trace contradict their
   size; the reference-gated files, the OpenIris recording among them, passed 271 on each
   interpreter, where the recording's eye test had failed on `main` since `fe0e2f3`. wl-xcon asked
-  for a contract fixture trace pinning the join: v4 of the saccade fixtures, built on
-  `feat/saccade-fixtures-v4`, its merge next. wl.works is told at that merge.
+  for a contract fixture trace pinning the join: v4 of the saccade fixtures, built and reviewed on
+  `feat/saccade-fixtures-v4`, its merge next (`handoffs/2026-11-19-saccade-fixtures-v4.md`); there
+  Engbert-Kliegl joins touching runs before it applies the minimum duration (the requester's choice). wl.works is told at that merge.
 - **Full-precision trial and block times:** `core.TrialTime` and `core.BlockTime` hold each trial's
   and block's measured start and stop as doubles, and the NWB file, the listing, `TrialCoverage` and
   the main sequence read them; element-event's float32 copy was 3.9 ms a step from 9.1 hours on. Run
@@ -565,7 +566,8 @@ requester chose to merge the same day; true when written.*
 > Engbert-Kliegl joins a run opening on the sample right after the landing a carried loss gave the run before
 > it; on the reference recording 0 rows of any trace now contradict their size, and the reference-gated files
 > pass, 271 on each interpreter. **v4 of the saccade contract fixtures**, the join pinned for wl-xcon, is built
-> on `feat/saccade-fixtures-v4`. Next, its merge; then
+> and reviewed on `feat/saccade-fixtures-v4` (`handoffs/2026-11-19-saccade-fixtures-v4.md`), with
+> Engbert-Kliegl joining touching runs before it applies the minimum duration. Next, its merge; then
 > reading SpikeGLX 20260115's `~imroTbl` header, which names the part number (wl.works' finding of 2026-11-18);
 > then part 3b; then our reader of
 > wl-xcon's console settings (XC-513, accepted 2026-11-18: `form` and `shaping` rows, sizes in degrees,
