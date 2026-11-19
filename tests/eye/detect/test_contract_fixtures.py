@@ -405,7 +405,7 @@ def test_v3_is_what_this_code_makes_of_v2():
 # joined to that run. wl-xcon asked for a trace pinning it (its saccade
 # detection version 11).
 V4 = V1.with_name("v4.json")
-V4_SHA256 = "b646fa85ffb9323b36a61a6ceae2848d97d3e927d982567363dd1bff966aec8c"
+V4_SHA256 = "6e61259ffc5dcf38e87d67b0c220823e0b198f4c767e95d9199f3dcb06595665"
 
 
 def _v4() -> dict:
@@ -420,9 +420,12 @@ def test_v4_states_v3s_rules_and_the_join():
     about = _v4()["about"]
     assert "Each maximal stretch of unknown velocities is judged whole" in about
     assert "the last sample with a known velocity before it, where the eye took off" in about
-    assert ("A run whose first known velocity over the threshold is the sample right after the one a carried "
-            "stretch's landing ended the run before it continues that run") in about
-    assert "each long enough on its own" in about
+    assert "Runs are joined before any is dropped." in about
+    assert ("the sample right after the landing that ended the run before it (that run's last sample, the first "
+            "known velocity after a carried stretch) continues that run") in about
+    assert "a run so continued may be continued again the same way" in about
+    assert "counted over all its parts for min_duration_samples" in about
+    assert "A run opening later than that sample is not joined." in about
     assert _V2_TOLERANCE in about
 
 
@@ -446,19 +449,29 @@ def test_a_reader_of_v4_gets_its_outputs_back_from_its_inputs():
     _a_reader_gets_its_outputs_back(_v4())
 
 
-def test_v4s_own_trace_is_one_saccade_where_two_runs_touched():
-    """v3's landing-in-a-loss trace with a 0.6-degree step on from sample 217.
-    Unjoined, the detector made two runs touching at sample 217, the second
-    a 0.6-degree microsaccade; joined, one 8.6-degree saccade."""
-    v3 = {case["name"]: case for case in _v3()["traces"]}
-    landing = v3["a-short-loss-at-a-saccades-landing"]
-    (case,) = [case for case in _v4()["traces"] if case["inputs_from"] == "v4"]
-    assert case["name"] == "a-saccade-moving-on-from-a-landing-in-a-loss"
-    assert case["available"] == landing["available"]
-    assert case["gaze_deg"][:217] == landing["gaze_deg"][:217]
-    assert [(run["start"], run["stop"], run["label"], run["flagged"]) for run in case["runs"]] == [
-        (199, 229, "saccade", True)]
-    assert abs(case["runs"][0]["amplitude_deg"] - 8.6) < 0.1
+def test_v4s_own_traces_join_touching_runs_before_the_minimum_duration():
+    """Each v1's centre-horizontal step landing in a loss at sample 216 and
+    the eye moving on. Joined after the minimum duration was applied, the
+    second would have stored a lone 0.6-degree microsaccade, the third ended
+    at 217, the fourth stored nothing; unjoined, the first would have been two
+    runs touching at 217, the second a microsaccade."""
+    centre = {case["name"]: case for case in _v3()["traces"]}["centre-horizontal"]
+    own = [case for case in _v4()["traces"] if case["inputs_from"] == "v4"]
+    assert all(case["gaze_deg"][:200] == centre["gaze_deg"][:200] for case in own)
+
+    def runs(case):
+        return [(run["start"], run["stop"], run["label"]) for run in case["runs"]]
+
+    assert {case["name"]: runs(case) for case in own} == {
+        "a-saccade-moving-on-from-a-landing-in-a-loss": [(199, 229, "saccade")],
+        "a-saccade-mostly-lost-before-its-landing-moving-on": [(199, 229, "saccade")],
+        "a-short-move-on-from-a-landing-in-a-loss": [(199, 222, "saccade")],
+        "two-parts-short-alone-long-enough-together": [(199, 221, "saccade")],
+        "two-parts-too-short-together": [],
+        "a-move-on-one-sample-after-a-landing": [(199, 217, "saccade"), (218, 230, "microsaccade")],
+    }
+    joined = [case["runs"][0] for case in own[:2]]
+    assert all(run["flagged"] and abs(run["amplitude_deg"] - 8.6) < 0.1 for run in joined)
 
 
 def test_v4_is_what_this_code_makes_of_v3():

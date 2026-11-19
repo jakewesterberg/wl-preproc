@@ -150,7 +150,10 @@ def detect_engbert_kliegl(
     velocity after it is not over the threshold the run ends there, that
     sample its last: the eye landed in the loss, and the run's size reaches
     the landing (the correction both sessions agreed on 2026-11-06, wl-xcon's
-    version 8). A run's ends are measured samples.
+    version 8). A run's ends are measured samples. A run opening on the sample
+    right after such a landing is joined to the run that landed, and
+    `min_duration_samples` is applied to the joined run, after every join
+    (2026-11-19; contract fixtures v4).
     """
     usable = np.array([entry is None for entry in available], dtype=bool)
     lost = np.array([entry is Label.LOST for entry in available], dtype=bool)
@@ -171,22 +174,29 @@ def detect_engbert_kliegl(
     spans = []
     for start, stop in true_runs(outside | lost):
         events = start + np.flatnonzero(outside[start:stop])
-        if events.size == 0 or events.size < params.min_duration_samples:
+        if events.size == 0:
             continue
         first, last = int(events[0]), int(events[-1]) + 1
         if last < stop < usable.size and usable[stop]:
             last = stop + 1
-        # A run opening on the landing sample a carried loss gave the run
-        # before it continues that movement: consecutive samples over the
-        # threshold are one event, and the landing is the earlier run's own.
-        # Joined, so no two runs touch (design spec
-        # `2026-11-19-two-eye-label-design.md`, the final review's I1).
+        # A run opening on the sample right after the landing a carried loss
+        # gave the run before it (that run's last sample) continues that
+        # movement: consecutive samples over the threshold are one event, and
+        # the landing is the earlier run's own. Joined, so no two runs touch
+        # (the two-eye label fix's final review, I1), and a joined run may be
+        # continued again the same way.
         if spans and spans[-1][1] == first:
             spans[-1][1] = last
+            spans[-1][2] += events.size
         else:
-            spans.append([first, last])
+            spans.append([first, last, events.size])
     runs = []
-    for first, last in spans:
+    for first, last, n_events in spans:
+        # The minimum duration is the joined movement's, after every join: a
+        # part too short on its own is neither dropped nor left to stand as
+        # its own size (v4's review, the requester's choice of 2026-11-19).
+        if n_events < params.min_duration_samples:
+            continue
         # Its size, which labels it, is from the last measured sample before a
         # carried loss that hides its take-off, as `measure.measure_event_run`
         # measures it (the final review of 2026-11-07).

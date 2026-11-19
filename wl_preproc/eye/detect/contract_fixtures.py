@@ -34,10 +34,11 @@ loss or a blink inside it, at its take-off or at its landing. A sample may have 
 the rule that reads such a trace.
 
 v4 joins a run that opens right after the landing a carried loss gave the run
-before it to that run, one movement sized and labelled whole (the two-eye
-label fix's final review, I1, the requester's choice of 2026-11-19): v3's
-traces, read from v3, and one of its own that pins the join, at wl-xcon's
-request. Every v3 trace's outputs are unchanged.
+before it to that run, one movement sized and labelled whole, and applies the
+minimum duration to the joined run (the two-eye label fix's final review, I1,
+and v4's review, the requester's choices of 2026-11-19): v3's traces, read
+from v3, and six of its own that pin the join, at wl-xcon's request. Every v3
+trace's outputs are unchanged.
 
 `python -m wl_preproc.eye.detect.contract_fixtures {v1,v1-thresholds,v2,v3,v4}
 [--out DIR]` wrote each, and refuses to write over a published file;
@@ -443,39 +444,71 @@ def build_v3(v2: dict, v2_sha256: str) -> dict:
     }
 
 
-#: v4's own trace: v3's `a-short-loss-at-a-saccades-landing` with a further
-#: step right from `onset` over `samples`, which opens a second run right
-#: after the landing the loss gave the first.
+#: v4's own traces, each v1's `centre-horizontal` 8-degree step, from sample
+#: 200 over 12, with `(first, stop)` samples having no position, where it
+#: lands in the loss at sample 216, and a further step right `(onset,
+#: samples, dx)` after it.
 _V4_TRACES = (
     ("a-saccade-moving-on-from-a-landing-in-a-loss",
-     "v3's a-short-loss-at-a-saccades-landing with a 0.6-degree step right from sample 217 over 12 samples: "
-     "the run lands in the loss at sample 216 and the eye moves on at once, so the run opening at 217 continues "
-     "it, one 8.6-degree saccade, where alone it would be a 0.6-degree microsaccade",
-     "a-short-loss-at-a-saccades-landing", (217, 12, 0.6)),
+     "v3's a-short-loss-at-a-saccades-landing (samples 209-213 having no position) with a 0.6-degree step right "
+     "from sample 217 over 12 samples: the run lands in the loss at sample 216 and the eye moves on at once, so "
+     "the run opening at 217 continues it, one 8.6-degree saccade, where alone it would be a 0.6-degree "
+     "microsaccade",
+     (209, 214), (217, 12, 0.6)),
+    ("a-saccade-mostly-lost-before-its-landing-moving-on",
+     "v1's centre-horizontal step with samples 204-213 having no position, leaving 3 known velocities over the "
+     "threshold before the loss, and a 0.6-degree step right from sample 217 over 12 samples: joined before the "
+     "minimum duration is applied, one 8.6-degree saccade, where the run before the loss, too short alone, would "
+     "be dropped and the 0.6-degree step stand alone as a microsaccade",
+     (204, 214), (217, 12, 0.6)),
+    ("a-short-move-on-from-a-landing-in-a-loss",
+     "v3's a-short-loss-at-a-saccades-landing with a 0.3-degree step right from sample 217 over 4 samples, 5 "
+     "known velocities over the threshold, too short alone: joined, one saccade to sample 221",
+     (209, 214), (217, 4, 0.3)),
+    ("two-parts-short-alone-long-enough-together",
+     "v1's centre-horizontal step with samples 203-213 having no position, 2 known velocities over the threshold "
+     "before the loss, and a 0.2-degree step right from sample 217 over 3 samples, 4 after the landing: 6 "
+     "together, one saccade",
+     (203, 214), (217, 3, 0.2)),
+    ("two-parts-too-short-together",
+     "v1's centre-horizontal step with samples 202-213 having no position, 1 known velocity over the threshold "
+     "before the loss, and a 0.2-degree step right from sample 217 over 3 samples, 4 after the landing: 5 "
+     "together, dropped",
+     (202, 214), (217, 3, 0.2)),
+    ("a-move-on-one-sample-after-a-landing",
+     "v3's a-short-loss-at-a-saccades-landing with a 0.6-degree step right from sample 218 over 12 samples: "
+     "sample 217, between the landing and the step, is not over the threshold, so the runs do not touch and are "
+     "not joined, a saccade landing at sample 216 and a 0.6-degree microsaccade from 218",
+     (209, 214), (218, 12, 0.6)),
 )
 #: Where v4 states its join among v3's rules: after the minimum duration,
-#: which each run meets on its own before it is joined.
+#: which applies to a run once every join is made.
 _JOIN_AFTER = "number fewer than min_duration_samples. "
-_JOIN = ("A run whose first known velocity over the threshold is the sample right after the one a carried "
-         "stretch's landing ended the run before it continues that run: the two, each long enough on its own, "
-         "are one run, from the earlier's start to the later's end, its size and label from the earlier's "
-         "take-off. ")
+_JOIN = ("Runs are joined before any is dropped. A run whose first known velocity over the threshold is the "
+         "sample right after the landing that ended the run before it (that run's last sample, the first known "
+         "velocity after a carried stretch) continues that run: one run, from the earlier's start to the later's "
+         "end, its size and label from the earlier's take-off, and a run so continued may be continued again the "
+         "same way. A joined run's known velocities over the threshold are counted over all its parts for "
+         "min_duration_samples, so a part too short alone is kept within it, and parts too short together are "
+         "dropped together. A run opening later than that sample is not joined. ")
 
 
 def build_v4(v3: dict, v3_sha256: str) -> dict:
     """v4, a run that moves on from a landing in a loss joined to the run
-    that landed: v3's traces, read from v3, and `_V4_TRACES`, each with what
-    this code makes of it (the two-eye label fix's final review, I1, the
-    requester's choice of 2026-11-19; wl-xcon asked for the trace)."""
+    that landed, before the minimum duration is applied: v3's traces, read
+    from v3, and `_V4_TRACES`, each with what this code makes of it (the
+    two-eye label fix's final review, I1, and v4's review, the requester's
+    choices of 2026-11-19; wl-xcon asked for a trace)."""
     fs_hz = v3["fs_hz"]
     cases = [(case["name"], case["note"], "v3.json", case["gaze_deg"], case["available"]) for case in v3["traces"]]
-    by_name = {case["name"]: case for case in v3["traces"]}
-    for name, note, base, (onset, samples, dx) in _V4_TRACES:
-        source = by_name[base]
-        gaze_deg = [None if position is None else list(position) for position in source["gaze_deg"]]
+    (centre,) = [case for case in v3["traces"] if case["name"] == "centre-horizontal"]
+    for name, note, missing, (onset, samples, dx) in _V4_TRACES:
+        gaze_deg, mask = [list(position) for position in centre["gaze_deg"]], list(centre["available"])
         for index in range(onset, len(gaze_deg)):
             gaze_deg[index][0] = round(gaze_deg[index][0] + dx * min((index - onset) / (samples - 1), 1.0), _DECIMALS)
-        cases.append((name, note, "v4", gaze_deg, list(source["available"])))
+        for index in range(*missing):
+            gaze_deg[index], mask[index] = None, "lost"
+        cases.append((name, note, "v4", gaze_deg, mask))
     assert _CARRIED_RULES.count(_JOIN_AFTER) == 1
     rules = _CARRIED_RULES.replace(_JOIN_AFTER, _JOIN_AFTER + _JOIN)
     return {
@@ -484,8 +517,9 @@ def build_v4(v3: dict, v3_sha256: str) -> dict:
         "derived_from": {"v3.json": v3_sha256},
         "about": "wl-preproc's Engbert-Kliegl saccade detector in true visual angle, carrying a run across a short "
                  "loss of data and joining to it a run that moves on from its landing (handoff "
-                 "2026-11-19-two-eye-label.md): v3's traces, read from v3.json, and one of its own, v3's "
-                 "a-short-loss-at-a-saccades-landing with the eye moving on right after it lands. "
+                 "2026-11-19-two-eye-label.md): v3's traces, read from v3.json, and six of its own, each v1's "
+                 "centre-horizontal step landing in a short loss and the eye moving on after it, at once or a "
+                 "sample later, with the parts long or short. "
                  + rules + "Never edited.",
         "fs_hz": fs_hz,
         "defaults": v3["defaults"],

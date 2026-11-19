@@ -521,3 +521,40 @@ def test_a_run_that_lands_after_a_loss_and_moves_on_at_once_is_one_run_labelled_
     runs = detect_engbert_kliegl(gaze, velocity_deg_s, available, FS_HZ, DEFAULT_EK_PARAMS)
 
     assert [(run.start, run.stop, run.label) for run in runs] == [(500, 525, Label.SACCADE)]
+
+
+def _touching(before: tuple[int, int], after: tuple[int, int]):
+    """Velocity over the threshold over `before`, lost 510-513, a quiet
+    measured landing at 514, over again over `after`; gaze climbs 0.6 deg to
+    514 and 0.6 more over `after`."""
+    n = 1000
+    rng = np.random.default_rng(7)
+    velocity_deg_s = rng.normal(0.0, 1.0, (n, 2))
+    velocity_deg_s[slice(*before), 0] = 300.0
+    velocity_deg_s[slice(*after), 0] = 300.0
+    velocity_deg_s[514] = 0.0
+    x = np.zeros(n)
+    x[before[0]:515] = 0.6 * np.arange(515 - before[0]) / (514 - before[0])
+    x[after[0]:after[1]] = 0.6 + 0.6 * np.arange(1, after[1] - after[0] + 1) / (after[1] - after[0])
+    x[after[1]:] = 1.2
+    gaze = np.column_stack([x, np.zeros(n)])
+    return gaze, velocity_deg_s, _lost(n, (510, 514))
+
+
+@pytest.mark.parametrize(("before", "after", "want"), [
+    ((507, 510), (515, 525), [(507, 525, Label.SACCADE)]),
+    ((500, 510), (515, 518), [(500, 518, Label.SACCADE)]),
+    ((507, 510), (515, 517), []),
+], ids=["short-before-the-loss", "short-after-the-landing", "both-short-together"])
+def test_touching_runs_are_joined_before_the_minimum_duration_is_applied(before, after, want):
+    """The minimum duration is the joined movement's: a part of it too short
+    on its own is neither dropped nor left to stand as its own size, and two
+    parts too short together are dropped (the requester's choice of
+    2026-11-19, "join first", from v4's review: an 8-degree saccade mostly
+    lost before its landing had been dropped, and the eye's 0.6-degree move
+    on stored alone as a microsaccade)."""
+    gaze, velocity_deg_s, available = _touching(before, after)
+
+    runs = detect_engbert_kliegl(gaze, velocity_deg_s, available, FS_HZ, DEFAULT_EK_PARAMS)
+
+    assert [(run.start, run.stop, run.label) for run in runs] == want
