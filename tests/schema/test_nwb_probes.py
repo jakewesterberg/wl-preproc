@@ -135,6 +135,40 @@ def test_every_active_site_is_one_row_carrying_its_probes_areas(built):
     assert all("not depth-resolved" in text for text in described.values())
 
 
+def test_a_new_form_header_places_the_same_sites_in_the_file(daemon_module, prefix, tmp_path_factory):
+    """SpikeGLX 20260115 on names the part number in the `~imroTbl` header
+    (design spec `2026-11-19-spikeglx-pn-header-design.md`): the file's
+    electrodes are the sites the old form places, NP1032's bank 2 among
+    them, with nothing noted."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.ephys.geometry import electrode_rows
+    from wl_preproc.nwb.build import build
+
+    _recipe, key = _session(tmp_path_factory, subject="pnwb8", session_id="2025-06-30_01", probe_serial="19011110031",
+                            probe_part_number="NP1032", probe_bank=2, imro_header="part_number",
+                            extra_probes=[{"serial": "19011110032", "bank": 1}])
+    daemon_module.run_once(prefix=prefix)
+    activation = _canonical(daemon_module, prefix, key, "pnwb8-k1", [])
+
+    result = build(activation, tmp_path_factory.mktemp("nwb-new-form"))
+    assert result.status == "written", (result.reason, result.findings)
+    with NWBHDF5IO(str(result.path), "r") as handle:
+        nwb = handle.read()
+        table = nwb.electrodes.to_dataframe()
+        described = nwb.session_description + " " + (nwb.experiment_description or "")
+    by_serial = {}
+    for device_name, frame in table.groupby(table["group"].map(lambda group: group.device.name)):
+        by_serial[device_name] = frame
+    assert sorted(by_serial) == ["probe-19011110031", "probe-19011110032"]
+    nhp = by_serial["probe-19011110031"]
+    assert nhp["electrode"].tolist() == [768, 769, 770, 771]
+    sites = {row["electrode"]: row for row in electrode_rows("NP1032")}
+    assert nhp["rel_x"].tolist() == [sites[e]["x_coord"] for e in range(768, 772)]
+    assert by_serial["probe-19011110032"]["electrode"].tolist() == [384, 385, 386, 387]
+    assert "could not be mapped" not in described and "header names" not in described
+
+
 def test_an_intan_probe_is_listed_from_its_report_alone(daemon_module, prefix, tmp_path_factory):
     """Section 5: an RHS header does not name its probe, so wl.works' report
     is the only record of it. It is listed with no type and no electrodes,

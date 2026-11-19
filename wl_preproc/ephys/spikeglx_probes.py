@@ -5,6 +5,12 @@
 (`imDatPrb_sn`), its part number (`imDatPrb_pn`), and the sites its channels
 recorded (`~imroTbl`). wl.works' report of an insertion joins onto the serial.
 
+**The table's header comes in two forms.** SpikeGLX before 20260115 named
+the probe's type first, `(1030,384)`; from 20260115 it names the part
+number, `(NP1032,384)`. probeinterface reads both from 0.4 on
+(`pyproject.toml`). A part number in the header that is not `imDatPrb_pn`
+is a recorded problem, and the sites are still placed.
+
 **One run is one segment.** SpikeGLX stops every imec stream and the NI stream
 together (parent spec section 4.1), and the segment is the NI stream's
 `.nidq.bin`. A run's probes are the `.ap.meta` files beside it named for the
@@ -26,6 +32,9 @@ import re
 from pathlib import Path
 
 _STREAM = re.compile(r"imec(\d+)\.ap\.meta$")
+# The first field of a `~imroTbl` header: the probe's type before SpikeGLX
+# 20260115, its part number from it (SpikeGLX commit 8635f61).
+_IMRO_HEADER_FIRST = re.compile(r"^\(([^,()]+),")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,6 +97,14 @@ def read_probe(meta: Path) -> RecordedProbe:
     part_number = fields.get("imDatPrb_pn") or None
     problems = [] if serial else ["the .meta names no serial (imDatPrb_sn)"]
     electrodes = None
+    # A header naming a part number names the probe a second time. Where the
+    # two disagree it is said; the sites are placed from imDatPrb_pn, as for
+    # a header naming only the type (design spec
+    # `2026-11-19-spikeglx-pn-header-design.md`).
+    header = _IMRO_HEADER_FIRST.match(fields.get("~imroTbl", ""))
+    named = header.group(1) if header else None
+    if part_number is not None and named is not None and not named.isdigit() and named != part_number:
+        problems.append(f"the imroTbl's header names part number {named}, the .meta {part_number} (imDatPrb_pn)")
     if part_number is None:
         problems.append("the .meta names no part number (imDatPrb_pn)")
     else:
@@ -101,7 +118,7 @@ def read_probe(meta: Path) -> RecordedProbe:
             # Anything probeinterface raises on a damaged table is a problem to
             # record, never a failed segment: it asserts on a missing imroTbl,
             # raises ValueError on a malformed one and TypeError on one holding
-            # only its header (measured, 0.3.2; the final review's M1).
+            # only its header (measured on 0.3.2, and again on 0.5.0; the final review's M1).
             try:
                 placed = tuple(sorted(index[contact] for contact in read_spikeglx(meta).contact_ids))
             except Exception as exc:  # noqa: BLE001

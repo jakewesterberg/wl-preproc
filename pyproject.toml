@@ -112,7 +112,14 @@ dependencies = [
     # the bundled neuropixels_probes JSON. probeinterface.get_probe() is an
     # ONLINE lookup against the probeinterface library repository and must
     # never enter this path; it 404s without network access.
-    "probeinterface>=0.3,<0.4",
+    #
+    # 0.5 is the floor, with no ceiling (the requester, 2026-11-19: "keep
+    # standards up to date. no need to freeze versions yet"). Before 0.4 it
+    # read a `~imroTbl` header as (type, channels) and raised on SpikeGLX
+    # 20260115's (part number, channels); 0.4 onward reads both, and the site
+    # mapping (NP1000 banks 0 and 1, NP1032 bank 2) was re-verified on 0.5.0
+    # (design spec 2026-11-19-spikeglx-pn-header-design.md).
+    "probeinterface>=0.5",
     # The archive is a Zarr store (2026-08-27-archival-and-compression-design
     # section 1). Upper-bounded below 3 because `archive/store.py` calls the
     # 2.x `create_dataset(..., compressor=...)` API directly (store.py:99 and

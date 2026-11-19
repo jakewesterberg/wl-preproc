@@ -506,16 +506,19 @@ third_party:
       oddly-specific point exclusions, which this repository has no
       independent reason to assert.
   - name: probeinterface
-    constraint: ">=0.3,<0.4"
+    constraint: ">=0.5"
     why: >-
       Electrode geometry by part number, from its bundled OFFLINE table
       (build_neuropixels_probe; get_probe is an online lookup and never
       used), since Phase 2a; and since the probes design (2026-09-30) the
       probes stage maps each SpikeGLX run's imroTbl onto sites with its
       read_spikeglx. A runtime dependency in pyproject.toml that this file
-      never declared. Below 0.4 because the site mapping was verified on
-      0.3.2 (NP1000 banks 0 and 1, NP1032 bank 2) and its errors on a bad
-      .meta measured there; a new minor may renumber contacts.
+      never declared. At least 0.5 because a SpikeGLX 20260115 or later
+      recording names the part number in its imroTbl header, which 0.3
+      could not read; the site mapping (NP1000 banks 0 and 1, NP1032 bank
+      2) was re-verified on 0.5.0 in both header forms. No ceiling: the
+      requester's rule of 2026-11-19 is to keep dependencies current while
+      the pipeline is being built.
   - name: pynwb
     constraint: ">=4.1,<5"
     why: >-

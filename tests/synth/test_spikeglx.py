@@ -36,10 +36,15 @@ def test_bin_size_matches_the_declared_shape(tmp_path):
     assert bin_path.stat().st_size == expected_bytes
 
 
-def test_spikeinterface_can_open_it(tmp_path):
+@pytest.mark.parametrize("imro_header", ["type", "part_number"])
+def test_spikeinterface_can_open_it(tmp_path, imro_header):
     """The real acceptance criterion: the file is format-correct if the reader
-    the pipeline will use can read it."""
-    _, _, directory = emit(tmp_path)
+    the pipeline will use can read it -- in either header form SpikeGLX
+    writes."""
+    recipe = CI_RECIPE.model_copy(update={"imro_header": imro_header})
+    directory = tmp_path / "spikeglx"
+    directory.mkdir()
+    write_spikeglx(directory, recipe, build_timeline(recipe))
     recording = spikeinterface.read_spikeglx(directory, stream_id="imec0.ap")
     assert recording.get_num_channels() == CI_RECIPE.n_ap_channels
     assert recording.get_sampling_frequency() == pytest.approx(CI_RECIPE.ap_sample_rate_hz)
