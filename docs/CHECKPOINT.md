@@ -1,10 +1,18 @@
 # Where this build actually is
 
-**Last updated 2026-11-17**, describing `main` at `9723a82`: the merge of
-`feat/scaling-long-sessions` (`d5efc2b`), the pipeline's scaling to long sessions
-(`handoffs/2026-11-14-scaling-long-sessions.md`), and a test fix after it. CI read off `9723a82`
-is green on both interpreters, 3044 passed on each with 37 skipped, and the manifest check is
-green (`gh run view 44085100923`).
+**Last updated 2026-11-19**, describing `main` at `a01b736`: the merge of
+`feat/full-precision-times`, full-precision trial and block times
+(`handoffs/2026-11-17-full-precision-trial-times.md`). CI read off `a01b736` is green on both
+interpreters, 3053 passed on each with 37 skipped, and the manifest check is green
+(`gh run view 44472590309`).
+- **Full-precision trial and block times:** `core.TrialTime` and `core.BlockTime` hold each trial's
+  and block's measured start and stop as doubles, and the NWB file, the listing, `TrialCoverage` and
+  the main sequence read them; element-event's float32 copy was 3.9 ms a step from 9.1 hours on. Run
+  membership is exact. serv is purged before this deploys. Reference-gated tests with every reference
+  set: 265 passed, 1 failed, the OpenIris recording's eye test, failing as on `main` since `fe0e2f3`
+  (2026-11-07): two-eye rows whose label contradicts their stored size, the next piece. wl.works was
+  told on 2026-11-19, with the scaling piece's BMD note, and was told how our census meets its
+  SpikeGLX 20260115 header finding.
 - **Scaling to long sessions:** a 12-hour session, the longest wl-xcon runs, processes in 2 h 46 min
   with its peak at 18.5 GB, its results unchanged. NI and Intan channels are read memory-mapped in
   chunks; the eye file and camera sidecar once per process; U'n'Eye in windows; the binocular
@@ -13,7 +21,7 @@ green (`gh run view 44085100923`).
   (`wlpp daemon --with-detector bmd`). The future tasks the requester accepted are in the handoff's
   "Not built". CI on the merge itself (`44075110954`) failed one test, a speed bound in seconds that
   CI's slower runners missed; `9723a82` bounds it as a ratio to today's code, as every other
-  scaling test is bounded. wl.works is still to be told that BMD's events are in an NWB file only
+  scaling test is bounded. wl.works was told on 2026-11-19 that BMD's events are in an NWB file only
   when the session asked for BMD (no wl.works session was running at the merge).
 - **The pop-out search, read** (`d8fe06b`, just before): two change kinds, `suggested` and `declined`, counted in no act;
   the `drawn` column names a pool and a staircase; each run's `start_block`, `stages_left` and
@@ -537,12 +545,12 @@ requester chose to merge the same day; true when written.*
 > `specs/2026-11-14-scaling-long-sessions-design.md`, approved 2026-11-14, amendments 1-8;
 > `handoffs/2026-11-14-scaling-long-sessions.md`): a 12-hour session in 2 h 46 min, its peak 18.5 GB,
 > results unchanged; BMD off by default. Its future tasks, accepted by the requester, are in the
-> handoff's "Not built". **Full-precision trial and block times are built on
-> `feat/full-precision-times`, reviewed, not merged** (`specs/2026-11-17-full-precision-trial-times-design.md`,
+> handoff's "Not built". **Full-precision trial and block times are merged**
+> (`a01b736`, CI green, 3053 passed on each interpreter) (`specs/2026-11-17-full-precision-trial-times-design.md`,
 > approved 2026-11-17; `handoffs/2026-11-17-full-precision-trial-times.md`): `core.TrialTime` and
 > `core.BlockTime` hold the measured doubles every reader uses, where element-event's float32 copy was about
-> 4 ms coarse at 12 hours; serv is purged before it deploys. Next, its merge (the requester's choice of
-> 2026-11-19, with the reference recording's eye test failing as it does on `main` since 2026-11-07); then the
+> 4 ms coarse at 12 hours; serv is purged before it deploys. It merged by the requester's choice of
+> 2026-11-19, with the reference recording's eye test failing as it does on `main` since 2026-11-07. Next, the
 > fix for two-eye rows whose label contradicts their stored size (the handoff's "Found on the way"); then
 > reading SpikeGLX 20260115's `~imroTbl` header, which names the part number (wl.works' finding of 2026-11-18);
 > then part 3b; then our reader of
@@ -560,7 +568,8 @@ requester chose to merge the same day; true when written.*
 > next; until their minors were built, that they were next; until their minors' merge, that it was
 > next; until the pop-out search was built, that it was next; until its merge, that the merge was
 > next; until scaling was built, that it was next; until its merge, that the merge was next; until
-> full-precision times were built, that they were next; each true when written.*
+> full-precision times were built, that they were next; until their merge, that it was next; each true
+> when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

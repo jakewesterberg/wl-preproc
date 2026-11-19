@@ -99,17 +99,17 @@ status:
     off by default. Future tasks: BMD's speed; U'n'Eye's,
     Nystrom-Holmqvist's and detector agreement's time at 12 hours; the
     per-trial coverage writes; each stage's memory (the handoff's "Not
-    built"). Full-precision trial and block times are built on
-    feat/full-precision-times, reviewed, not merged, its merge next
-    (docs/handoffs/2026-11-17-full-precision-trial-times.md): core.TrialTime
+    built"). Full-precision trial and block times are merged
+    (a01b736; docs/handoffs/2026-11-17-full-precision-trial-times.md): core.TrialTime
     and core.BlockTime hold the measured doubles, where element-event's
-    float32 copy was about 4 ms coarse at 12 hours. Then the fix for
+    float32 copy was about 4 ms coarse at 12 hours. Next, the fix for
     two-eye rows whose label contradicts their stored size; then reading
     SpikeGLX 20260115's imroTbl header; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: scaling to long sessions (d5efc2b). Before it, the pop-out
+    Done: full-precision trial and block times (a01b736). Before it,
+    scaling to long sessions (d5efc2b). Before it, the pop-out
     search's reader (d8fe06b). Before it, the rig's
     record's minors (bc5df71). Before them, the rest of
     wl-xcon's asks, the rig's record read whole (295f9c9). Before it, lost data and the screen region (7ec509e).
