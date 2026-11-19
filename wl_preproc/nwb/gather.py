@@ -250,25 +250,24 @@ def _runs(run_rows: list[dict], session_key: dict) -> list[dict]:
 
 
 def _blocks(run_rows: list[dict], session_key: dict) -> list[dict]:
-    """The measured blocks inside the file's runs (`trial.Block`), each with
+    """The measured blocks inside the file's runs (`core.BlockTime`), each with
     its run, its order there, its block type and whether it closed."""
-    from wl_preproc.events.runs import run_of, stored_doubles
-    from wl_preproc.schema import pipeline
+    from wl_preproc.events.runs import run_of
+    from wl_preproc.schema import core, pipeline
 
     attributes: dict = {}
     for row in (pipeline.trial.Block.Attribute & session_key).to_dicts():
         attributes.setdefault(row["block_id"], {})[row["attribute_name"]] = row["attribute_value"]
     out, order = [], {}
-    stored = stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time")
-    for row in sorted(stored, key=lambda row: row["block_start_time"]):
-        run_number = run_of(row["block_start_time"], run_rows)
+    for row in sorted(core.measured_blocks(session_key), key=lambda row: row["start_s"]):
+        run_number = run_of(row["start_s"], run_rows)
         if run_number is None:
             continue
         order[run_number] = order.get(run_number, 0) + 1
         found = attributes.get(row["block_id"], {})
         out.append({"block_number": row["block_id"], "run_number": run_number, "block_in_run": order[run_number],
-                    "block_type": found.get("block_type"), "start_s": float(row["block_start_time"]),
-                    "stop_s": float(row["block_stop_time"]),
+                    "block_type": found.get("block_type"), "start_s": float(row["start_s"]),
+                    "stop_s": float(row["stop_s"]),
                     "closed": None if "closed" not in found else found["closed"] == "1"})
     return out
 
@@ -276,19 +275,19 @@ def _blocks(run_rows: list[dict], session_key: dict) -> list[dict]:
 def _trials(run_rows: list[dict], session_key: dict) -> list[dict]:
     """The trials whose start lies in one of the file's runs, each with its
     run and its measured block."""
-    from wl_preproc.events.runs import run_of, stored_doubles
-    from wl_preproc.schema import coverage, pipeline
+    from wl_preproc.events.runs import run_of
+    from wl_preproc.schema import core, coverage, pipeline
 
     block_of = {row["trial_id"]: row["block_id"] for row in (pipeline.trial.BlockTrial & session_key).to_dicts()}
     cover = _coverage(coverage.TrialCoverage, "trial_id", session_key)
     trials = []
-    for row in stored_doubles(pipeline.trial.Trial & session_key, "trial_start_time", "trial_stop_time"):
-        run_number = run_of(row["trial_start_time"], run_rows)
+    for row in core.measured_trials(session_key):
+        run_number = run_of(row["start_s"], run_rows)
         if run_number is None:
             continue
         trials.append({
-            "trial_id": row["trial_id"], "start_s": float(row["trial_start_time"]),
-            "stop_s": float(row["trial_stop_time"]), "outcome": row["trial_type"], "run_number": run_number,
+            "trial_id": row["trial_id"], "start_s": float(row["start_s"]),
+            "stop_s": float(row["stop_s"]), "outcome": row["trial_type"], "run_number": run_number,
             "block_id": block_of.get(row["trial_id"]), "coverage": cover.get(row["trial_id"], {}),
         })
     return trials
@@ -361,19 +360,19 @@ def _outside_runs_notes(key: dict, session_key: dict, role: str) -> list[str]:
     nothing else, so it carries no such note."""
     if role != "canonical":
         return []
-    from wl_preproc.events.runs import run_of, stored_doubles
-    from wl_preproc.schema import core, pipeline
+    from wl_preproc.events.runs import run_of
+    from wl_preproc.schema import core
 
     montage = (core.Montage & {name: key[name] for name in ("subject", "session_datetime", "montage_id")}).fetch1()
     runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"]}
             for row in (core.Run & session_key).to_dicts()]
 
-    def outside(table, name: str) -> int:
-        return sum(1 for row in stored_doubles(table & session_key, name)
-                   if montage["start_s"] <= row[name] < montage["end_s"] and run_of(row[name], runs) is None)
+    def outside(rows: list[dict]) -> int:
+        return sum(1 for row in rows
+                   if montage["start_s"] <= row["start_s"] < montage["end_s"] and run_of(row["start_s"], runs) is None)
 
-    trials = outside(pipeline.trial.Trial, "trial_start_time")
-    blocks = outside(pipeline.trial.Block, "block_start_time")
+    trials = outside(core.measured_trials(session_key))
+    blocks = outside(core.measured_blocks(session_key))
     if not trials and not blocks:
         return []
     return [f"{trials} trial(s) and {blocks} block(s) start in montage {key['montage_id']}'s window but in no "

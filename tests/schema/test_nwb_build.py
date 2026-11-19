@@ -1641,18 +1641,18 @@ def test_a_trial_in_no_run_is_named_in_the_canonicals_description(activation, tm
     it lies in no measured run. For one build a trial is planted between the
     two runs, inside the montage's window, and removed after."""
     from wl_preproc.nwb.build import build
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core, pipeline
 
     session_key, key, runs = activation
     first, second = sorted(runs, key=lambda r: r["start_s"])
     gap = (first["end_s"] + second["start_s"]) / 2
     assert first["end_s"] < gap < second["start_s"]
     planted = {**session_key, "trial_id": 999}
-    pipeline.trial.Trial.insert1({**planted, "trial_start_time": gap, "trial_stop_time": gap + 0.001},
-                                 allow_direct_insert=True)
+    core.insert_trials([{**planted, "trial_type": None, "start_s": gap, "stop_s": gap + 0.001}])
     try:
         result = build(key, tmp_path_factory.mktemp("nwb-outside-runs"))
     finally:
+        (core.TrialTime & planted).delete_quick()
         (pipeline.trial.Trial & planted).delete_quick()
     assert result.status == "written", (result.reason, result.findings)
     assert [note for note in result.description["notes"] if "in no measured run" in note] == [

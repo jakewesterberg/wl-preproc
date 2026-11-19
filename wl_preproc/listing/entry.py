@@ -10,9 +10,9 @@ disagree.
 
 **A block belongs to the run its start lies in**, and a segment to every run
 it overlaps: runs and segments do not align, since a bank change needs a
-SpikeGLX restart and a run need not stop for one. A block's start is stored
-as a MySQL FLOAT and a run's as a double, so they are compared by
-`events/runs.py::starts_inside`, as the NWB builder compares them.
+SpikeGLX restart and a run need not stop for one. A block's start and a
+run's are both doubles, as measured (`core.BlockTime`, `core.Run`), compared
+by `events/runs.py::starts_inside`, as the NWB builder compares them.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import datetime
 from pathlib import Path
 
 from wl_preproc.events.rigrecords import acts, change_fields
-from wl_preproc.events.runs import starts_inside, stored_doubles
+from wl_preproc.events.runs import starts_inside
 
 from wl_preproc.contracts.protocol import SessionEntry
 
@@ -39,7 +39,7 @@ class SessionFacts:
     rejected: list[dict]  # {system, file_path, reason}
     runs: list[dict]  # core.Run rows
     records: dict[int, dict]  # run_number -> core.RunRecord row
-    blocks: list[dict]  # trial.Block rows: block_id, block_start_time, block_stop_time
+    blocks: list[dict]  # core.measured_blocks rows: block_id, start_s, stop_s
     block_attributes: dict[int, dict[str, str]]  # block_id -> {attribute_name: attribute_value}
     trial_counts: dict[int, int]  # block_id -> trials stored in it
     segments: list[dict]  # SpikeGLX core.Segment rows
@@ -109,8 +109,8 @@ def build_entry(facts: SessionFacts) -> dict:
         start, stop = run["run_start_time"], run["run_stop_time"]
         record = facts.records.get(run["run_number"], {})
         spanned = [segment for segment in segments if segment["start_s"] < stop and segment["end_s"] > start]
-        blocks = sorted((block for block in facts.blocks if starts_inside(block["block_start_time"], start, stop)),
-                        key=lambda block: block["block_start_time"])
+        blocks = sorted((block for block in facts.blocks if starts_inside(block["start_s"], start, stop)),
+                        key=lambda block: block["start_s"])
         listed_blocks = []
         in_a_run.update(block["block_id"] for block in blocks)
         for order, block in enumerate(blocks, start=1):
@@ -118,7 +118,7 @@ def build_entry(facts: SessionFacts) -> dict:
             listed_blocks.append({
                 "block_number": block["block_id"], "block_in_run": order,
                 "block_type": attributes.get("block_type"),
-                "start_s": float(block["block_start_time"]), "end_s": float(block["block_stop_time"]),
+                "start_s": float(block["start_s"]), "end_s": float(block["stop_s"]),
                 "closed": None if "closed" not in attributes else attributes["closed"] == "1",
                 "n_trials": facts.trial_counts.get(block["block_id"], 0),
             })
@@ -154,7 +154,7 @@ def build_entry(facts: SessionFacts) -> dict:
     # lost, or it was strobed outside a run. With no runs at all the session
     # is already waiting for its run markers, and every block is outside one.
     if facts.runs:
-        for block in sorted(facts.blocks, key=lambda block: block["block_start_time"]):
+        for block in sorted(facts.blocks, key=lambda block: block["start_s"]):
             if block["block_id"] not in in_a_run:
                 flags.append(_flag("block_outside_runs",
                                    f"block {block['block_id']} lies in no measured run: its run's RUN_START was "
@@ -261,7 +261,7 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
     rejected = _by_session((core.RejectedSegment & keys).to_dicts())
     runs = _by_session((core.Run & keys).to_dicts())
     records = _by_session((core.RunRecord & keys).to_dicts())
-    blocks = _by_session(stored_doubles(pipeline.trial.Block & keys, "block_start_time", "block_stop_time"))
+    blocks = _by_session(core.measured_blocks(keys))
     segments = _by_session((core.Segment & keys & {"system": "spikeglx"}).to_dicts())
     strobed_runs, strobed_blocks = strobed("RUN_START", "run_number"), strobed("BLOCK_START", "block_id")
     censused = _by_session((ephys.ProbeCensus & keys).proj().to_dicts())

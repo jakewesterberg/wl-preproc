@@ -106,20 +106,25 @@ class TrialCoverage(dj.Computed):
         own docstring names this table as a caller, "so the rule has one
         definition rather than one per table." Nothing here reimplements it.
 
-        `trial.Trial.trial_stop_time` is not nullable (1c-5 Task 8: the
+        A trial's measured stop (`core.TrialTime.stop_s`) is not nullable (1c-5 Task 8: the
         synthetic generator now emits `Marker.TRIAL_END` for every trial, so no
         trial comes back with `end_s=None`), so a zero-or-negative-duration
         trial is not papered over here either -- `classify_coverage` raises,
         and that is surfaced rather than caught. (`RunCoverage.make()` answers
         a zero-length run itself, because a faulted run can have one.)
         """
-        from wl_preproc.events.runs import stored_doubles
         from wl_preproc.timebase.coverage import classify_coverage
 
-        # Read as stored: six significant digits make a short trial hours in
-        # no length at all (`events/runs.py::stored_doubles`).
-        (row,) = stored_doubles(pipeline.trial.Trial & key, "trial_start_time", "trial_stop_time")
-        trial = (row["trial_start_time"], row["trial_stop_time"])
+        # The measured times, one query, as the per-trial key needs no more
+        # (design spec 2026-11-17-full-precision-trial-times-design.md item 2).
+        rows = (core.TrialTime & key).to_dicts()
+        if not rows:
+            raise core.MissingTimeRows(
+                f"no measured time for {key['subject']} {key['session_datetime']}: trial {key['trial_id']}; the "
+                "daemon does not re-run a session's event stage, so call schema.events.populate_session(key, "
+                "session_dir) for it, then clear this table's errored jobs for the session")
+        (row,) = rows
+        trial = (row["start_s"], row["stop_s"])
         extents = [
             (row["start_s"], row["end_s"])
             for row in (core.Segment & key).to_dicts()

@@ -192,7 +192,7 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
     condition within a block (spec section 4.3): `[(block_id, mask)]` and
     `[((block_id, condition), mask)]`.
 
-    A block holds what starts in `[block_start_time, block_stop_time)`; a
+    A block holds what starts in `[start_s, stop_s)` of its measured times (`core.BlockTime`); a
     condition, what starts in a trial of that block (`BlockTrial`) run under
     it, and inside the block itself (spec amendment 5). A trial whose
     `TRIAL_END` comes after its `BLOCK_END` (`schema/events.py::
@@ -206,17 +206,16 @@ def _groups(session_key: dict, session_dir: Path, start_s: np.ndarray):
     from wl_preproc.events.rigtrials import read_rig_trials
     from wl_preproc.events.runs import stored_doubles
     from wl_preproc.nwb.conditions import join, stream_codes, trial_columns
+    from wl_preproc.schema import core
 
     blocks = [
-        (row["block_id"], (start_s >= row["block_start_time"]) & (start_s < row["block_stop_time"]))
-        for row in sorted(stored_doubles(pipeline.trial.Block & session_key, "block_start_time", "block_stop_time"),
-                          key=lambda row: row["block_id"])
+        (row["block_id"], (start_s >= row["start_s"]) & (start_s < row["stop_s"]))
+        for row in core.measured_blocks(session_key)
     ]
     block_of = {row["trial_id"]: row["block_id"] for row in (pipeline.trial.BlockTrial & session_key).to_dicts()}
     trials = [
-        {"trial_id": row["trial_id"], "start_s": row["trial_start_time"], "stop_s": row["trial_stop_time"]}
-        for row in sorted(stored_doubles(pipeline.trial.Trial & session_key, "trial_start_time", "trial_stop_time"),
-                          key=lambda row: row["trial_start_time"])
+        {"trial_id": row["trial_id"], "start_s": row["start_s"], "stop_s": row["stop_s"]}
+        for row in sorted(core.measured_trials(session_key), key=lambda row: row["start_s"])
     ]
     events = [
         {"time_s": row["event_start_time"], "event_type": "CONDITION", "condition": row["attribute_value"]}

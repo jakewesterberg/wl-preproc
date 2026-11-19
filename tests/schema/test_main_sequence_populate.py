@@ -459,7 +459,7 @@ def _planted_events(tmp_path, *, blocks, trials, block_trials, rig, codes=()) ->
     `(time_s, code)`. Returns the session's key."""
     import json
 
-    from wl_preproc.schema import pipeline
+    from wl_preproc.schema import core, pipeline
 
     session = new_animal().session()
     key = session.key
@@ -469,10 +469,10 @@ def _planted_events(tmp_path, *, blocks, trials, block_trials, rig, codes=()) ->
                                       "subject_birth_date": datetime.date(2020, 1, 1)})
     pipeline.Session.insert1(key)
     pipeline.event.BehaviorRecording.insert1(key)
-    pipeline.trial.Block.insert([{**key, "block_id": block_id, "block_start_time": start, "block_stop_time": stop}
-                                 for block_id, start, stop in blocks], allow_direct_insert=True)
-    pipeline.trial.Trial.insert([{**key, "trial_id": trial_id, "trial_start_time": start, "trial_stop_time": stop}
-                                 for trial_id, start, stop in trials], allow_direct_insert=True)
+    core.insert_blocks([{**key, "block_id": block_id, "start_s": start, "stop_s": stop}
+                        for block_id, start, stop in blocks])
+    core.insert_trials([{**key, "trial_id": trial_id, "trial_type": None, "start_s": start, "stop_s": stop}
+                        for trial_id, start, stop in trials])
     pipeline.trial.BlockTrial.insert([{**key, "block_id": block_id, "trial_id": trial_id}
                                       for block_id, trial_id in block_trials], allow_direct_insert=True)
     pipeline.event.EventType.insert1({"event_type": "CONDITION", "event_type_description": ""}, skip_duplicates=True)
