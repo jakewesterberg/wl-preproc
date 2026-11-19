@@ -881,11 +881,15 @@ class EyeDetection(dj.Computed):
         when written.*
 
         Six of the seven registered detectors make that second measurement
-        redundant on their own: `labels.py::true_runs` only ever
-        returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
-        so two of `intervals` are always separated by at least one sample
-        neither claims, and `runs_from_labels` can therefore never merge two
-        of THEIR call's own intervals into one run. REMoDNaV's saccade and
+        redundant on their own: Engbert-Kliegl joins a run opening on the
+        landing sample a carried loss gave the run before it, so its runs
+        never touch (since 2026-11-19; before, the two touched, and a stored
+        trace merged them into one row labelled as its parts, the final
+        review's I1 of `2026-11-19-two-eye-label-design.md`), and
+        `otero_millan.py::_merge` guarantees a gap, so two of `intervals` are
+        always separated by at least one sample neither claims, and
+        `runs_from_labels` can therefore never merge two of THEIR call's own
+        intervals into one run. REMoDNaV's saccade and
         the `pso` after it are adjacent, as Nystrom-Holmqvist's are, but its
         proximity rule means it never emits two adjacent runs with the same
         label, so `runs_from_labels` never merges two of its intervals
@@ -1496,9 +1500,14 @@ def _conjunction_parts(two_eye, left, right, left_offered, right_offered):
     a piece keeping its span's label never puts a label beside a size it was
     not chosen from (design spec `2026-11-19-two-eye-label-design.md`): a
     span reaches past a kept run only across two touching saccadic runs of
-    one eye, and Engbert-Kliegl's runs are maximal (`true_runs`),
-    Otero-Millan's `_merge` leaves a gap, and BMD's own events are bordered
-    by `drift`, so none of them ever emits two.
+    one eye, and none of them emits two: Engbert-Kliegl joins a run opening
+    on the landing sample a carried loss gave the run before it (since
+    2026-11-19; before, the two touched), Otero-Millan's `_merge` leaves a
+    gap, and BMD's own events are bordered by `drift`, its copied saccades
+    being Engbert-Kliegl's. Were two to touch, the clash rule would still
+    keep no split piece: the other eye's run would cover the loss between
+    them, so it would be a kept candidate, and kept whole or dropped (the
+    final review's I1 of 2026-11-19).
 
     **Where one eye alone is usable, the kept runs ARE that eye's events**:
     every run of a carried kind there has the other eye withheld during it.

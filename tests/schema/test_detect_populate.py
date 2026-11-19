@@ -3680,11 +3680,15 @@ def _encode(mask, intervals):
 
 def _stored_rows(detector_name, raw, loss, recording, scale, geometry):
     """Each trace's `EyeDetection.Run` rows as the stage's own code stores them
-    (`_CapturedInserts`, no database): gaze through `apply_map`, the mask from
-    `validity_labels`, the lost samples filled as `make()` fills them
-    (`fill_lost`), the detector at its default paramset in `geometry`, each
-    eye through `_insert_trace`, and the conjunction through
-    `_conjunction_trace` and `_insert_trace` given both eyes.
+    (`_CapturedInserts`, no database), and each eye's detected runs: gaze
+    through `apply_map` and `repair_glitches`, the mask from
+    `validity_labels` told which samples were repaired, as `EyeValidity.make()`
+    builds it (`_repaired_gaze`), the lost samples filled as `make()` fills
+    them (`fill_lost`), the detector at its default paramset in `geometry`,
+    each eye through `_insert_trace`, and the conjunction through
+    `_conjunction_trace` and `_insert_trace` given both eyes. The one input
+    the stage has and this has not is a screen region (`field_deg`): a
+    reference recording comes with no rig record.
 
     **Why the stage's code and not a re-derivation.** Until 2026-11-19 Part 3
     measured stored amplitudes with a helper of its own, and it drifted twice
@@ -3694,6 +3698,7 @@ def _stored_rows(detector_name, raw, loss, recording, scale, geometry):
     stored 0, 0 and 6 (design spec `2026-11-19-two-eye-label-design.md`)."""
     from wl_preproc.eye.calibration import apply_map
     from wl_preproc.eye.detect.geometry import TRUE_ANGLE
+    from wl_preproc.eye.detect.glitch import repair_glitches
     from wl_preproc.eye.detect.registry import get_detector
     from wl_preproc.eye.detect.validity import (
         DEFAULT_VALIDITY_PARAMS, fill_lost, frame_numbers, rows_across_gaps, validity_labels,
@@ -3707,9 +3712,11 @@ def _stored_rows(detector_name, raw, loss, recording, scale, geometry):
     fs_hz = recording.fs_hz
     per_eye, spans = {}, {}
     for eye in ("left", "right"):
-        gaze = apply_map(_scaled_affine_map(scale), raw[eye])
+        gaze, repaired = repair_glitches(apply_map(_scaled_affine_map(scale), raw[eye]), fs_hz,
+                                         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s,
+                                         DEFAULT_VALIDITY_PARAMS.max_glitch_ms)
         offered = validity_labels(gaze, velocity(gaze, fs_hz), loss[eye], recording.frame_gaps,
-                                  DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz).labels
+                                  DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz, repaired=repaired).labels
         gaze = fill_lost(gaze, offered, frame_numbers(len(gaze), recording.frame_gaps),
                          rows_across_gaps(len(gaze), recording.frame_gaps))
         v = velocity(gaze, fs_hz)
@@ -3734,7 +3741,7 @@ def _stored_rows(detector_name, raw, loss, recording, scale, geometry):
         kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept}, eyes=per_eye,
         geometry=geometry)
     rows["conjunction"] = sink.rows
-    return rows
+    return rows, spans
 
 
 def test_the_run_count_measured_against_the_reference_recording(capsys):
@@ -3917,7 +3924,15 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # the stage's own code at the default paramset (`_stored_rows`), against
     # the label stored beside it.
     threshold = DEFAULT_EK_PARAMS.microsaccade_max_deg
-    stored = _stored_rows("engbert_kliegl", raw, loss, recording, scale_ref, DEFAULT_GEOMETRY)
+    stored, stored_spans = _stored_rows("engbert_kliegl", raw, loss, recording, scale_ref, DEFAULT_GEOMETRY)
+    # No two of the detector's runs touch: a run opening on the landing sample
+    # a carried loss gave the run before it is the same movement, and a stored
+    # trace merging two touching runs labelled the whole by its parts (the
+    # final review's I1, 2026-11-19: three such pairs on the left eye and two
+    # on the right of this recording, with its glitches repaired as the stage
+    # repairs them).
+    touching = {eye: [(a.stop, b.start) for a, b in zip(runs, runs[1:]) if a.stop >= b.start]
+                for eye, runs in stored_spans.items()}
     measured = {
         trace_name: [row for row in rows
                      if row["label"] in ("saccade", "microsaccade") and row["amplitude_deg"] is not None]
@@ -4047,6 +4062,7 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # `amplitude_deg`/`peak_velocity_deg_s` pair while selecting rows by the
     # stored `label`, so a row saying `saccade` and storing 0.8 deg is what
     # actually poisons the fit, whatever any intermediate value said.
+    assert touching == {"left": [], "right": []}, touching
     for trace_name in ("left", "right", "conjunction"):
         offenders = contradictions[trace_name]
         assert not offenders, (
