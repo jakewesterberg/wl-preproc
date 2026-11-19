@@ -102,8 +102,10 @@ status:
     built"). Full-precision trial and block times are merged
     (a01b736; docs/handoffs/2026-11-17-full-precision-trial-times.md): core.TrialTime
     and core.BlockTime hold the measured doubles, where element-event's
-    float32 copy was about 4 ms coarse at 12 hours. Next, the fix for
-    two-eye rows whose label contradicts their stored size; then reading
+    float32 copy was about 4 ms coarse at 12 hours. The fix for two-eye
+    rows whose label contradicts their stored size is built on
+    feat/two-eye-label, reviewed, not merged, its merge next
+    (docs/handoffs/2026-11-19-two-eye-label.md); then reading
     SpikeGLX 20260115's imroTbl header; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
