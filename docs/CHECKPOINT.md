@@ -550,8 +550,12 @@ requester chose to merge the same day; true when written.*
 > approved 2026-11-17; `handoffs/2026-11-17-full-precision-trial-times.md`): `core.TrialTime` and
 > `core.BlockTime` hold the measured doubles every reader uses, where element-event's float32 copy was about
 > 4 ms coarse at 12 hours; serv is purged before it deploys. It merged by the requester's choice of
-> 2026-11-19, with the reference recording's eye test failing as it does on `main` since 2026-11-07. Next, the
-> fix for two-eye rows whose label contradicts their stored size (the handoff's "Found on the way"); then
+> 2026-11-19, with the reference recording's eye test failing as it does on `main` since 2026-11-07. **The fix
+> for two-eye rows whose label contradicts their stored size is built on `feat/two-eye-label`, reviewed, not
+> merged** (`specs/2026-11-19-two-eye-label-design.md`, approved 2026-11-19; `handoffs/2026-11-19-two-eye-label.md`):
+> a two-eye span is labelled from the measurement it stores, and Engbert-Kliegl joins a run opening on the
+> landing sample a carried loss gave the run before it; on the reference recording 0 rows of any trace now
+> contradict their size, and the reference-gated files pass, 271 on each interpreter. Next, its merge; then
 > reading SpikeGLX 20260115's `~imroTbl` header, which names the part number (wl.works' finding of 2026-11-18);
 > then part 3b; then our reader of
 > wl-xcon's console settings (XC-513, accepted 2026-11-18: `form` and `shaping` rows, sizes in degrees,
@@ -568,8 +572,8 @@ requester chose to merge the same day; true when written.*
 > next; until their minors were built, that they were next; until their minors' merge, that it was
 > next; until the pop-out search was built, that it was next; until its merge, that the merge was
 > next; until scaling was built, that it was next; until its merge, that the merge was next; until
-> full-precision times were built, that they were next; until their merge, that it was next; each true
-> when written.*
+> full-precision times were built, that they were next; until their merge, that it was next; until the
+> two-eye fix was built, that it was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*

@@ -487,3 +487,37 @@ def _ek_input(gaze, available):
     from wl_preproc.eye.detect.velocity import velocity
 
     return gaze, velocity(gaze, FS_HZ), available, FS_HZ, DEFAULT_EK_PARAMS
+
+
+def _landing_then_moving_on():
+    """Velocity over the threshold at 500-509, lost 510-513, one quiet measured
+    sample at 514 (the landing), over again at 515-524: the run carried across
+    the loss ends on 514, and the next opens on 515, touching it. Gaze climbs
+    0.6 deg to 514 and 0.6 more over 515-524, so each piece is under the
+    1-degree cut and the movement is over it."""
+    n = 1000
+    rng = np.random.default_rng(7)
+    velocity_deg_s = rng.normal(0.0, 1.0, (n, 2))
+    velocity_deg_s[500:510, 0] = 300.0
+    velocity_deg_s[515:525, 0] = 300.0
+    velocity_deg_s[514] = 0.0
+    x = np.zeros(n)
+    x[500:515] = 0.6 * np.arange(15) / 14
+    x[515:525] = 0.6 + 0.6 * np.arange(1, 11) / 10
+    x[525:] = 1.2
+    gaze = np.column_stack([x, np.zeros(n)])
+    return gaze, velocity_deg_s, _lost(n, (510, 514))
+
+
+def test_a_run_that_lands_after_a_loss_and_moves_on_at_once_is_one_run_labelled_by_its_whole_size():
+    """Consecutive samples over the threshold are one event, and the landing
+    sample a carried loss adds is the run's own, so a run opening on it
+    continues the movement rather than starting another: one run, 1.2 deg, a
+    saccade. Until 2026-11-19 these were two touching microsaccades, which a
+    stored trace merged into one row labelled `microsaccade` beside 1.2 deg
+    (design spec `2026-11-19-two-eye-label-design.md`, the final review's I1)."""
+    gaze, velocity_deg_s, available = _landing_then_moving_on()
+
+    runs = detect_engbert_kliegl(gaze, velocity_deg_s, available, FS_HZ, DEFAULT_EK_PARAMS)
+
+    assert [(run.start, run.stop, run.label) for run in runs] == [(500, 525, Label.SACCADE)]

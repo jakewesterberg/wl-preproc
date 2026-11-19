@@ -168,7 +168,7 @@ def detect_engbert_kliegl(
     ) ** 2 > 1.0
     outside &= usable
 
-    runs = []
+    spans = []
     for start, stop in true_runs(outside | lost):
         events = start + np.flatnonzero(outside[start:stop])
         if events.size == 0 or events.size < params.min_duration_samples:
@@ -176,6 +176,17 @@ def detect_engbert_kliegl(
         first, last = int(events[0]), int(events[-1]) + 1
         if last < stop < usable.size and usable[stop]:
             last = stop + 1
+        # A run opening on the landing sample a carried loss gave the run
+        # before it continues that movement: consecutive samples over the
+        # threshold are one event, and the landing is the earlier run's own.
+        # Joined, so no two runs touch (design spec
+        # `2026-11-19-two-eye-label-design.md`, the final review's I1).
+        if spans and spans[-1][1] == first:
+            spans[-1][1] = last
+        else:
+            spans.append([first, last])
+    runs = []
+    for first, last in spans:
         # Its size, which labels it, is from the last measured sample before a
         # carried loss that hides its take-off, as `measure.measure_event_run`
         # measures it (the final review of 2026-11-07).

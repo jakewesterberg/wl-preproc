@@ -796,30 +796,8 @@ class EyeDetection(dj.Computed):
             # it is recorded here rather than resolved -- section 5.1 states
             # the same asymmetry without resolving it either.
             gaze, v, offered = per_eye["left"]
-            # The floor is the DETECTOR's own, inherited from the params it
-            # just ran with -- the binocular criterion filters what both eyes
-            # already found, and must never manufacture an event shorter than
-            # either eye's detector would have accepted. See `_overlapping`.
-            # `_conjunction_runs`, not `_overlapping`: the binocular criterion
-            # applies WITHIN a kind, so the conjunction trace carries the same
-            # vocabulary as the two eyes it is built from. `_overlapping` is
-            # the single-kind primitive underneath it.
-            floor = _min_duration_samples(detector_params, fs_hz)
-            conjunction_spans = _conjunction_runs(
-                spans["left"],
-                spans["right"],
-                floor,
-                _conjunction_label(detector, params, gaze),
-            )
-            # Where only one eye is usable, the trace falls back to it, and an
-            # event the other eye could not see whole is kept whole as the
-            # eye that did (design spec `2026-09-28-both-eyes-fallback-design.md`,
-            # the requester's decisions of 2026-09-28). A gap is filled from the
-            # left eye's mask only where NEITHER eye is usable; one usable
-            # eye makes the gap that eye's `fixation`.
-            intervals, kept, source, fill = _conjunction_parts(
-                conjunction_spans, spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2],
-            )
+            intervals, kept, source, fill = _conjunction_trace(spans, per_eye, detector, params, detector_params,
+                                                               fs_hz)
             self._insert_trace(
                 key, "conjunction", gaze, v, fill, intervals,
                 fs_hz, detector, detector_params,
@@ -903,11 +881,15 @@ class EyeDetection(dj.Computed):
         when written.*
 
         Six of the seven registered detectors make that second measurement
-        redundant on their own: `labels.py::true_runs` only ever
-        returns MAXIMAL runs and `otero_millan.py::_merge` guarantees a gap,
-        so two of `intervals` are always separated by at least one sample
-        neither claims, and `runs_from_labels` can therefore never merge two
-        of THEIR call's own intervals into one run. REMoDNaV's saccade and
+        redundant on their own: Engbert-Kliegl joins a run opening on the
+        landing sample a carried loss gave the run before it, so its runs
+        never touch (since 2026-11-19; before, the two touched, and a stored
+        trace merged them into one row labelled as its parts, the final
+        review's I1 of `2026-11-19-two-eye-label-design.md`), and
+        `otero_millan.py::_merge` guarantees a gap, so two of `intervals` are
+        always separated by at least one sample neither claims, and
+        `runs_from_labels` can therefore never merge two of THEIR call's own
+        intervals into one run. REMoDNaV's saccade and
         the `pso` after it are adjacent, as Nystrom-Holmqvist's are, but its
         proximity rule means it never emits two adjacent runs with the same
         label, so `runs_from_labels` never merges two of its intervals
@@ -983,8 +965,10 @@ class EyeDetection(dj.Computed):
         kind the guarantee is `_overlapping`'s own: it coalesces touching
         intersections before labelling them, so no two of its returned spans
         ever touch. Either way it has to hold: the conjunction's label is
-        `classify` over the amplitude of the interval it was assigned to
-        (or, for a non-saccadic kind, that kind's own label), so a merge that
+        `classify` over the stored amplitude of the interval it was assigned
+        to, `_two_eye_measurement`'s (since 2026-11-19; before, over that
+        interval's bare amplitude on the left eye), or, for a non-saccadic
+        kind, that kind's own label, so a merge that
         moved the boundaries would store a label and an amplitude that
         disagree -- the exact defect this round exists to close. The run
         measured here is always the span labelled there.
@@ -1068,17 +1052,8 @@ class EyeDetection(dj.Computed):
                 return kept[span]
             if eyes is None:
                 return (trace, gaze, v, offered)
-            # The eye measured throughout it, the left first; failing that, an
-            # eye that lost data in it but withheld none. Measured on that
-            # eye's own mask, so a lost sample's speed is never its peak (the
-            # final review of 2026-11-07, I1).
-            for may in (lambda labels: all(label is None for label in labels),
-                        lambda labels: may_label(labels).all()):
-                for eye in ("left", "right"):
-                    eye_gaze, eye_v, eye_offered = eyes[eye]
-                    if may(eye_offered[run.start:run.stop]):
-                        return (trace, eye_gaze, eye_v, eye_offered)
-            return None
+            eye = _two_eye_eye(run.start, run.stop, eyes)
+            return None if eye is None else (trace, *eyes[eye])
 
         def _run_row(index: int, run: Run) -> dict:
             measurement = None
@@ -1096,8 +1071,13 @@ class EyeDetection(dj.Computed):
                 # The landing rule is per-eye only: a two-eye span is an
                 # intersection and does not end on a detector's knot. The
                 # floor applies to every trace (see this docstring's
-                # conjunction paragraph).
-                measurement = measure_event_run(
+                # conjunction paragraph). A two-eye span is measured by the
+                # one function its label is chosen by (`_conjunction_label`),
+                # so the two cannot disagree (design spec
+                # `2026-11-19-two-eye-label-design.md`).
+                measurement = _two_eye_measurement(
+                    run.start, run.stop, eyes, fs_hz, geometry=geometry, min_measured_ms=min_measured_ms,
+                ) if measured_as == "conjunction" and eyes is not None else measure_event_run(
                     run_gaze, run_v, run_offered, run.start, run.stop, fs_hz, geometry=geometry,
                     runs_end_before_landing=(detector.runs_end_before_landing
                                              and measured_as != "conjunction"),
@@ -1227,6 +1207,42 @@ def _lost_statements() -> list[str]:
     flag after `end_polar_deg`, and its label `lost`."""
     return [_added(EyeDetection.Run.full_table_name, _LOST_COLUMNS, _LOST_TYPES, "end_polar_deg"),
             _label_statement(EyeDetection)]
+
+
+def _two_eye_eye(start: int, stop: int, eyes: dict) -> str | None:
+    """The eye a two-eye span `[start, stop)` is measured on (design spec
+    `2026-09-28-both-eyes-fallback-design.md` section 3): the eye measured
+    throughout it, the left first; failing that, an eye that lost data in it
+    but withheld none; else `None`, and the span is stored unmeasured.
+    Measured on that eye's own mask, so a lost sample's speed is never its
+    peak (the final review of 2026-11-07, I1). `eyes[eye]` is
+    `(gaze, measured_v, offered)`."""
+    for may in (lambda labels: all(label is None for label in labels),
+                lambda labels: may_label(labels).all()):
+        for eye in ("left", "right"):
+            if may(eyes[eye][2][start:stop]):
+                return eye
+    return None
+
+
+def _two_eye_measurement(start: int, stop: int, eyes: dict, fs_hz: float, *, geometry: str,
+                         min_measured_ms: float | None):
+    """A two-eye span's stored measurement, or `None` where no eye measures it
+    (`_two_eye_eye`) or it is under the detector's floor: `measure_event_run`
+    on the eye that measures it, carried across a loss at its ends as that
+    eye's mask says, with neither NSLR's landing rule nor BMD's take-off rule
+    (both are per eye). `_run_row` stores it and `_conjunction_label` labels
+    from it, so a two-eye row's label is `classify` over its own stored size
+    (design spec `2026-11-19-two-eye-label-design.md`)."""
+    from wl_preproc.eye.detect.measure import measure_event_run
+
+    eye = _two_eye_eye(start, stop, eyes)
+    if eye is None:
+        return None
+    gaze, v, offered = eyes[eye]
+    return measure_event_run(gaze, v, offered, start, stop, fs_hz, geometry=geometry,
+                             runs_end_before_landing=False, min_measured_ms=min_measured_ms,
+                             runs_start_after_takeoff=False)
 
 
 def _measured_from_takeoff(detector, trace: str, label: Label, reliability: float | None) -> bool:
@@ -1426,6 +1442,38 @@ def _always(label: Label) -> Callable[[int, int], Label]:
     return lambda _start, _stop: label
 
 
+def _conjunction_trace(spans: dict, per_eye: dict, detector, params: dict, detector_params, fs_hz: float):
+    """The conjunction trace's intervals, kept one-eye runs, sources and fill
+    (`_conjunction_parts`' return), from both eyes' detected `spans` and their
+    `per_eye` `(gaze, measured_v, offered)`: what `EyeDetection.make()`
+    stores, and what the tests build the trace with, so the two cannot drift
+    (design spec `2026-11-19-two-eye-label-design.md`)."""
+    # The floor is the DETECTOR's own, inherited from the params it just ran
+    # with -- the binocular criterion filters what both eyes already found,
+    # and must never manufacture an event shorter than either eye's detector
+    # would have accepted. See `_overlapping`. `_conjunction_runs`, not
+    # `_overlapping`: the binocular criterion applies WITHIN a kind, so the
+    # conjunction trace carries the same vocabulary as the two eyes it is
+    # built from. `_overlapping` is the single-kind primitive underneath it.
+    floor = _min_duration_samples(detector_params, fs_hz)
+    conjunction_spans = _conjunction_runs(
+        spans["left"],
+        spans["right"],
+        floor,
+        _conjunction_label(detector, params, per_eye["left"][0], eyes=per_eye, fs_hz=fs_hz,
+                           min_measured_ms=getattr(detector_params, "min_measured_saccade_ms", None)),
+    )
+    # Where only one eye is usable, the trace falls back to it, and an event
+    # the other eye could not see whole is kept whole as the eye that did
+    # (design spec `2026-09-28-both-eyes-fallback-design.md`, the requester's
+    # decisions of 2026-09-28). A gap is filled from the left eye's mask only
+    # where NEITHER eye is usable; one usable eye makes the gap that eye's
+    # `fixation`.
+    return _conjunction_parts(
+        conjunction_spans, spans["left"], spans["right"], per_eye["left"][2], per_eye["right"][2],
+    )
+
+
 def _conjunction_parts(two_eye, left, right, left_offered, right_offered):
     """Everything the conjunction trace is built from besides its
     measurements: its intervals, the one-eye runs kept whole, which eye each
@@ -1447,6 +1495,19 @@ def _conjunction_parts(two_eye, left, right, left_offered, right_offered):
     run when the two share a label, as that eye's own trace stores its two
     runs. Six such spans on the reference recording, all
     Nystrom-Holmqvist's, whose label does not depend on amplitude.
+
+    **No such piece exists for a detector that makes the amplitude cut**, so
+    a piece keeping its span's label never puts a label beside a size it was
+    not chosen from (design spec `2026-11-19-two-eye-label-design.md`): a
+    span reaches past a kept run only across two touching saccadic runs of
+    one eye, and none of them emits two: Engbert-Kliegl joins a run opening
+    on the landing sample a carried loss gave the run before it (since
+    2026-11-19; before, the two touched), Otero-Millan's `_merge` leaves a
+    gap, and BMD's own events are bordered by `drift`, its copied saccades
+    being Engbert-Kliegl's. Were two to touch, the clash rule would still
+    keep no split piece: the other eye's run would cover the loss between
+    them, so it would be a kept candidate, and kept whole or dropped (the
+    final review's I1 of 2026-11-19).
 
     **Where one eye alone is usable, the kept runs ARE that eye's events**:
     every run of a carried kind there has the other eye withheld during it.
@@ -1608,7 +1669,9 @@ def _conjunction_runs(
     return sorted(out, key=lambda run: run.start)
 
 
-def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[int, int], Label]:
+def _conjunction_label(detector, params: dict, gaze: np.ndarray, *, eyes: dict | None = None,
+                       fs_hz: float | None = None, min_measured_ms: float | None = None,
+                       ) -> Callable[[int, int], Label]:
     """How a conjunction run gets its label: the DETECTOR's own labelling
     rule, applied to that run's own interval on the gaze the conjunction is
     measured from. Returned as a callable for `_overlapping` to apply to each
@@ -1652,6 +1715,20 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     Deriving it twice -- once from the eyes, once from the measurement -- is
     what let them diverge in the first place, so the eyes' own labels are
     not consulted here at all.
+
+    **Given both eyes (`eyes`), the measurement is the one `_run_row`
+    stores: `_two_eye_measurement`, on the eye that measures the span and
+    carried across a loss at its ends** (design spec
+    `2026-11-19-two-eye-label-design.md`). The paragraph above stopped being
+    true on 2026-11-07, when the eye piece's final review had `_run_row`
+    measure a two-eye span on the eye usable throughout it (I1) and from the
+    last measured sample before a loss hiding its take-off (I2), while this
+    function still measured the bare intersection on the left eye's gaze: 6
+    of 4,710 Engbert-Kliegl and 1 of 4,654 Otero-Millan two-eye rows on the
+    reference recording stored a label their own size contradicted, every
+    one beside a loss. Without `eyes`, or where no eye measures the span (it
+    is stored unmeasured, so there is no size to contradict), the label is
+    still over the bare intersection on `gaze`.
 
     That paragraph is about the detectors whose vocabulary IS the amplitude
     split; below it is scoped, because a detector that declares half the
@@ -1848,6 +1925,14 @@ def _conjunction_label(detector, params: dict, gaze: np.ndarray) -> Callable[[in
     geometry = _geometry_of(params)
 
     def label_for(start: int, stop: int) -> Label:
+        # Given both eyes, from the measurement `_run_row` will store for the
+        # span; where none is stored (no eye measures it), over the bare
+        # intersection on `gaze`, as before 2026-11-19.
+        if eyes is not None:
+            measurement = _two_eye_measurement(start, stop, eyes, fs_hz, geometry=geometry,
+                                               min_measured_ms=min_measured_ms)
+            if measurement is not None:
+                return classify(measurement.amplitude_deg, microsaccade_max_deg)
         return classify(amplitude(gaze, start, stop, geometry=geometry), microsaccade_max_deg)
 
     return label_for

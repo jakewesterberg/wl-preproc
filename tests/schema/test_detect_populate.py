@@ -78,9 +78,10 @@ import pytest
 # enclosing function's own locals.
 from wl_preproc.eye.detect.engbert_kliegl import EngbertKlieglParams
 from wl_preproc.eye.detect.geometry import (
-    PER_AXIS, TRUE_ANGLE, directions, local_coordinates_deg, true_angle_deg, wrap_360_deg,
+    DEFAULT_GEOMETRY, PER_AXIS, TRUE_ANGLE, directions, local_coordinates_deg, true_angle_deg, wrap_360_deg,
 )
-from wl_preproc.eye.detect.measure import amplitude
+from wl_preproc.eye.detect.labels import Label, Run
+from wl_preproc.eye.detect.measure import amplitude, classify
 
 TRIAL_DURATION_S = 3.0
 
@@ -3032,6 +3033,124 @@ def test_the_conjunction_label_matches_the_amplitude_that_gets_stored():
         assert row["label"] == classify(row["amplitude_deg"], 1.0).value
 
 
+def _two_eye_rows(detector_name, runs, gaze, offered, geometry=PER_AXIS):
+    """The conjunction trace's stored `Run` rows for hand-made per-eye `runs`,
+    `gaze` (degrees, x only) and `offered` masks at 500 Hz, through the
+    stage's own `_conjunction_trace` and `_insert_trace` given both eyes,
+    exactly as `EyeDetection.make()` stores them (design spec
+    `2026-11-19-two-eye-label-design.md`)."""
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.eye.detect.velocity import local_velocity, velocity
+    from wl_preproc.schema import detect as detect_schema
+
+    fs_hz = 500.0
+    detector = get_detector(detector_name)
+    params = {**detect_schema._eye_detection_params(detector), "geometry": geometry}
+    detector_params = detect_schema._params_for(detector, params)
+    per_eye = {eye: (gaze[eye], local_velocity(gaze[eye], fs_hz) if geometry == TRUE_ANGLE
+                     else velocity(gaze[eye], fs_hz), offered[eye]) for eye in ("left", "right")}
+    intervals, kept, _source, fill = detect_schema._conjunction_trace(
+        runs, per_eye, detector, params, detector_params, fs_hz)
+    sink = _CapturedInserts()
+    left_gaze, left_v, _ = per_eye["left"]
+    detect_schema.EyeDetection._insert_trace(
+        sink, {"subject": "s"}, "conjunction", left_gaze, left_v, fill, intervals, fs_hz, detector,
+        detector_params, kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept},
+        eyes=per_eye, geometry=geometry)
+    events = [row for row in sink.rows if row["label"] in ("saccade", "microsaccade")]
+    for row in events:
+        if row["amplitude_deg"] is not None and detector.vocabulary >= {Label.SACCADE, Label.MICROSACCADE}:
+            assert row["label"] == classify(row["amplitude_deg"], 1.0).value, row
+    return events
+
+
+def _x_gaze(n_samples, x):
+    """A gaze trace in degrees moving along x alone, `x` giving each sample's
+    position, so a span's per-axis amplitude is its x difference."""
+    gaze = np.zeros((n_samples, 2))
+    gaze[:, 0] = x
+    return gaze
+
+
+def _eye_choice_inputs():
+    """Five of the reference recording's seven offenders, in miniature: the
+    left eye lost samples 104-113 inside its own run, the right eye withheld
+    107-112 after its own, so both runs clash and neither is kept whole
+    (`_conjunction_fallback`); the span [100, 107) stands, and only the right
+    eye measured all of it. Left x climbs 0.3 deg a sample over 100-106 (its
+    lost samples filled along the climb), right 0.15."""
+    n = 300
+    i = np.arange(n)
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[104:114] = Label.LOST
+    right_offered = np.full(n, None, dtype=object)
+    right_offered[107:113] = Label.INVALID
+    return ({"left": [Run(100, 136, Label.SACCADE)], "right": [Run(100, 107, Label.MICROSACCADE)]},
+            {"left": _x_gaze(n, 0.3 * np.clip(i - 100, 0, 6)), "right": _x_gaze(n, 0.15 * np.clip(i - 100, 0, 6))},
+            {"left": left_offered, "right": right_offered})
+
+
+def test_a_two_eye_span_is_labelled_from_its_size_on_the_eye_that_measures_it():
+    """The stored row is the right eye's 0.9 deg (`_run_row` measures on the
+    eye usable throughout), so its label is `microsaccade`; until 2026-11-19
+    it was `saccade`, from the left eye's filled 1.8 deg."""
+    (row,) = _two_eye_rows("engbert_kliegl", *_eye_choice_inputs())
+    assert (row["run_start"], row["run_stop"], row["label"]) == (100, 107, "microsaccade")
+    assert row["amplitude_deg"] == pytest.approx(0.9, abs=1e-9)
+
+
+@pytest.mark.parametrize("geometry", [PER_AXIS, TRUE_ANGLE])
+def test_a_two_eye_span_whose_take_off_a_loss_hides_is_labelled_from_its_size_widened_across_a_loss(geometry):
+    """The other two offenders: the left eye lost 94-99, just before the span
+    [100, 110), and measured all of the span itself, so it measures it from
+    93, the last sample before the loss (the eye piece's I2). Left x is 0
+    through 93, reaches 1.2 at 100 and 1.65 at 109: 0.45 deg over the bare
+    span, 1.65 widened. Nothing is kept: neither eye withheld a sample of the
+    other's run."""
+    n = 300
+    i = np.arange(n).astype(float)
+    x = np.where(i <= 93, 0.0, np.where(i <= 100, 1.2 * (i - 93) / 7, 1.2 + 0.05 * (np.minimum(i, 109) - 100)))
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[94:100] = Label.LOST
+    (row,) = _two_eye_rows(
+        "engbert_kliegl",
+        {"left": [Run(90, 110, Label.SACCADE)], "right": [Run(100, 112, Label.SACCADE)]},
+        {"left": _x_gaze(n, x), "right": _x_gaze(n, x)},
+        {"left": left_offered, "right": np.full(n, None, dtype=object)},
+        geometry,
+    )
+    assert (row["run_start"], row["run_stop"], row["label"]) == (100, 110, "saccade")
+    assert row["amplitude_deg"] == pytest.approx(1.65, rel=1e-6)
+
+
+def test_a_span_no_eye_measures_is_stored_unmeasured_and_labelled_as_before():
+    """Each eye withheld samples inside the span, so neither measured it and
+    the row is stored unmeasured; with no stored size to contradict, its
+    label is still `classify` over the bare intersection on the left eye,
+    1.8 deg (design spec `2026-11-19-two-eye-label-design.md`, Decided)."""
+    n = 300
+    x = 0.2 * np.clip(np.arange(n) - 100, 0, 9)
+    left_offered = np.full(n, None, dtype=object)
+    left_offered[104:106] = Label.INVALID
+    right_offered = np.full(n, None, dtype=object)
+    right_offered[105:107] = Label.INVALID
+    (row,) = _two_eye_rows(
+        "engbert_kliegl",
+        {"left": [Run(100, 110, Label.SACCADE)], "right": [Run(100, 110, Label.SACCADE)]},
+        {"left": _x_gaze(n, x), "right": _x_gaze(n, x)},
+        {"left": left_offered, "right": right_offered},
+    )
+    assert (row["label"], row["amplitude_deg"]) == ("saccade", None)
+
+
+def test_a_half_cut_detector_keeps_its_constant_two_eye_label():
+    """U'n'Eye declares `{saccade}` alone, so its two-eye label is that,
+    whatever the size, given both eyes or not."""
+    runs, gaze, offered = _eye_choice_inputs()
+    runs = {eye: [Run(run.start, run.stop, Label.SACCADE) for run in eye_runs] for eye, eye_runs in runs.items()}
+    assert [row["label"] for row in _two_eye_rows("uneye", runs, gaze, offered)] == ["saccade"]
+
+
 def test_two_touching_intersections_become_one_conjunction_event():
     """`_overlapping` coalesces touching intersections BEFORE labelling them,
     and this is why. `_insert_trace` writes each interval's label onto the
@@ -3559,20 +3678,70 @@ def _encode(mask, intervals):
     return runs_from_labels(labels), n_saccade, n_microsaccade
 
 
-def _event_amplitudes(runs, gaze, v, fs_hz):
-    """`(run, amplitude_deg)` for every event run, measured exactly as
-    `EyeDetection._insert_trace::_run_row` measures it -- `measure` over the
-    FINAL run, on the trace's own gaze. The STORED amplitude, in other words,
-    which is the only one that can contradict a stored label and the one
-    design spec section 6.5 fits a main sequence from."""
-    from wl_preproc.eye.detect.labels import Label
-    from wl_preproc.eye.detect.measure import measure
+def _stored_rows(detector_name, raw, loss, recording, scale, geometry):
+    """Each trace's `EyeDetection.Run` rows as the stage's own code stores them
+    (`_CapturedInserts`, no database), and each eye's detected runs: gaze
+    through `apply_map` and `repair_glitches`, the mask from
+    `validity_labels` told which samples were repaired, as `EyeValidity.make()`
+    builds it (`_repaired_gaze`), the lost samples filled as `make()` fills
+    them (`fill_lost`), the detector at its default paramset in `geometry`,
+    each eye through `_insert_trace`, and the conjunction through
+    `_conjunction_trace` and `_insert_trace` given both eyes. The one input
+    the stage has and this has not is a screen region (`field_deg`): a
+    reference recording comes with no rig record.
 
-    return [
-        (run, measure(gaze, v, run.start, run.stop, fs_hz, geometry=PER_AXIS).amplitude_deg)
-        for run in runs
-        if run.label in (Label.SACCADE, Label.MICROSACCADE)
-    ]
+    **Why the stage's code and not a re-derivation.** Until 2026-11-19 Part 3
+    measured stored amplitudes with a helper of its own, and it drifted twice
+    from the stage: plain `measure` where the stage has called
+    `measure_event_run` since the eye piece, and gaze whose lost samples were
+    never filled. It reported 22, 105 and 31 contradictions where the stage
+    stored 0, 0 and 6 (design spec `2026-11-19-two-eye-label-design.md`)."""
+    from wl_preproc.eye.calibration import apply_map
+    from wl_preproc.eye.detect.geometry import TRUE_ANGLE
+    from wl_preproc.eye.detect.glitch import repair_glitches
+    from wl_preproc.eye.detect.registry import get_detector
+    from wl_preproc.eye.detect.validity import (
+        DEFAULT_VALIDITY_PARAMS, fill_lost, frame_numbers, rows_across_gaps, validity_labels,
+    )
+    from wl_preproc.eye.detect.velocity import local_velocity, velocity
+    from wl_preproc.schema import detect as detect_schema
+
+    detector = get_detector(detector_name)
+    params = {**detect_schema._eye_detection_params(detector), "geometry": geometry}
+    detector_params = detect_schema._params_for(detector, params)
+    fs_hz = recording.fs_hz
+    per_eye, spans = {}, {}
+    for eye in ("left", "right"):
+        gaze, repaired = repair_glitches(apply_map(_scaled_affine_map(scale), raw[eye]), fs_hz,
+                                         DEFAULT_VALIDITY_PARAMS.max_speed_deg_s,
+                                         DEFAULT_VALIDITY_PARAMS.max_glitch_ms)
+        offered = validity_labels(gaze, velocity(gaze, fs_hz), loss[eye], recording.frame_gaps,
+                                  DEFAULT_VALIDITY_PARAMS, fs_hz=fs_hz, repaired=repaired).labels
+        gaze = fill_lost(gaze, offered, frame_numbers(len(gaze), recording.frame_gaps),
+                         rows_across_gaps(len(gaze), recording.frame_gaps))
+        v = velocity(gaze, fs_hz)
+        measured_v = local_velocity(gaze, fs_hz) if geometry == TRUE_ANGLE else v
+        spans[eye] = detector.detect(gaze, measured_v if detector.detects_in_geometry else v, offered,
+                                     fs_hz, detector_params)
+        per_eye[eye] = (gaze, measured_v, offered)
+
+    rows = {}
+    for eye in ("left", "right"):
+        sink = _CapturedInserts()
+        gaze, v, offered = per_eye[eye]
+        detect_schema.EyeDetection._insert_trace(sink, {}, eye, gaze, v, offered, spans[eye], fs_hz,
+                                                 detector, detector_params, geometry=geometry)
+        rows[eye] = sink.rows
+    intervals, kept, _source, fill = detect_schema._conjunction_trace(
+        spans, per_eye, detector, params, detector_params, fs_hz)
+    sink = _CapturedInserts()
+    gaze, v, _offered = per_eye["left"]
+    detect_schema.EyeDetection._insert_trace(
+        sink, {}, "conjunction", gaze, v, fill, intervals, fs_hz, detector, detector_params,
+        kept={(run.start, run.stop): (eye, *per_eye[eye]) for eye, run in kept}, eyes=per_eye,
+        geometry=geometry)
+    rows["conjunction"] = sink.rows
+    return rows, spans
 
 
 def test_the_run_count_measured_against_the_reference_recording(capsys):
@@ -3628,6 +3797,14 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     systematically SMALLER amplitudes (its interval is the intersection, and
     so shorter than either eye's own event) stop being an argument and
     become a measurement.
+
+    **Since 2026-11-19 Part 3 counts the rows the stage's own code stores**
+    (`_stored_rows`), at the default paramset, on gaze whose lost samples are
+    filled as `make()` fills them. Its own measuring helper had drifted twice:
+    plain `measure` where the stage calls `measure_event_run`, and unfilled
+    gaze. So, from 2026-11-07, it reported 22, 105 and 31 contradictions while
+    the stage stored 0, 0 and 6, and no merge ran it to see either (design
+    spec `2026-11-19-two-eye-label-design.md`).
 
     **What is not measured here.** One detector of seven (Engbert-Kliegl,
     this subsystem's zero-dependency baseline); the other six may disagree
@@ -3743,20 +3920,29 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     _, n_sacc_b, n_micro_b = _encode(left_mask, spans_b_fixed_mask)
 
     # --- Part 3: the label/amplitude agreement this round exists to close,
-    # and the amplitude shift it makes visible. Every event run's STORED
-    # amplitude, measured the way `_run_row` measures it, against the label
-    # stored beside it.
+    # and the amplitude shift it makes visible. Every STORED event row, from
+    # the stage's own code at the default paramset (`_stored_rows`), against
+    # the label stored beside it.
     threshold = DEFAULT_EK_PARAMS.microsaccade_max_deg
+    stored, stored_spans = _stored_rows("engbert_kliegl", raw, loss, recording, scale_ref, DEFAULT_GEOMETRY)
+    # No two of the detector's runs touch: a run opening on the landing sample
+    # a carried loss gave the run before it is the same movement, and a stored
+    # trace merging two touching runs labelled the whole by its parts (the
+    # final review's I1, 2026-11-19: three such pairs on the left eye and two
+    # on the right of this recording, with its glitches repaired as the stage
+    # repairs them).
+    touching = {eye: [(a.stop, b.start) for a, b in zip(runs, runs[1:]) if a.stop >= b.start]
+                for eye, runs in stored_spans.items()}
     measured = {
-        "left": _event_amplitudes(left_runs, left_gaze, left_v, recording.fs_hz),
-        "right": _event_amplitudes(right_runs, right_gaze, right_v, recording.fs_hz),
-        "conjunction": _event_amplitudes(conj_runs, left_gaze, left_v, recording.fs_hz),
+        trace_name: [row for row in rows
+                     if row["label"] in ("saccade", "microsaccade") and row["amplitude_deg"] is not None]
+        for trace_name, rows in stored.items()
     }
     contradictions = {
         trace_name: [
-            (run, amplitude_deg)
-            for run, amplitude_deg in events
-            if classify(amplitude_deg, threshold) is not run.label
+            (row, row["amplitude_deg"])
+            for row in events
+            if classify(row["amplitude_deg"], threshold).value != row["label"]
         ]
         for trace_name, events in measured.items()
     }
@@ -3809,8 +3995,8 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
         )
         for trace_name in ("left", "right", "conjunction"):
             events = measured[trace_name]
-            amplitudes = np.array([amplitude_deg for _run, amplitude_deg in events])
-            durations = np.array([run.stop - run.start for run, _a in events])
+            amplitudes = np.array([row["amplitude_deg"] for row in events])
+            durations = np.array([row["run_stop"] - row["run_start"] for row in events])
             print(
                 f"    {trace_name:11s} {len(contradictions[trace_name])}/{len(events)} event "
                 f"rows whose label contradicts their own amplitude; "
@@ -3876,11 +4062,12 @@ def test_the_run_count_measured_against_the_reference_recording(capsys):
     # `amplitude_deg`/`peak_velocity_deg_s` pair while selecting rows by the
     # stored `label`, so a row saying `saccade` and storing 0.8 deg is what
     # actually poisons the fit, whatever any intermediate value said.
+    assert touching == {"left": [], "right": []}, touching
     for trace_name in ("left", "right", "conjunction"):
         offenders = contradictions[trace_name]
         assert not offenders, (
             f"{len(offenders)} of {len(measured[trace_name])} {trace_name} event rows store a "
-            f"label their own amplitude contradicts, e.g. {offenders[0][0].label.value} at "
+            f"label their own amplitude contradicts, e.g. {offenders[0][0]['label']} at "
             f"{offenders[0][1]:.3f} deg against a {threshold} deg cut"
         )
     # Not vacuous: both labels really are produced on every trace, so the
