@@ -227,7 +227,7 @@ class SegmentConfig(dj.Manual):
     definition = """
     # Which electrode set one probe was recording through, for one segment.
     # Key: (subject, session_datetime, insertion_number, system,
-    # segment_barcode).
+    # segment_id).
     #
     # Keyed on the SEGMENT, not the insertion and not the block. Bank
     # selection changes between blocks, but a SpikeGLX .meta carries exactly
@@ -273,7 +273,7 @@ class ProbeCensus(dj.Computed):
     definition = """
     # Which probes one SpikeGLX segment's run recorded, read from the run's own
     # .meta files (design spec 2026-09-30-nwb-probes-design.md section 2.1).
-    # Key: (subject, session_datetime, system, segment_barcode).
+    # Key: (subject, session_datetime, system, segment_id).
     #
     # The row marks the segment READ -- with no probe as readily as with two.
     # The NWB builder waits on it (section 3.3), so a run that recorded no
@@ -287,7 +287,7 @@ class ProbeCensus(dj.Computed):
     class Probe(dj.Part):
         definition = """
         # One imec stream of the run, in the recording's own words. Key:
-        # (..., segment_barcode, stream).
+        # (..., segment_id, stream).
         #
         # `part_number` is what the .meta says, kept whether or not
         # probeinterface knows it; the config -- and with it `probe_type` --
@@ -323,7 +323,7 @@ class ProbeCensus(dj.Computed):
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
-        run = session_dir / key["system"] / (core.Segment & key).fetch1("file_path")
+        run = session_dir / key["system"] / key["segment_id"]
         parts = []
         for probe in read_run(run):
             problems = [probe.problem] if probe.problem else []
@@ -678,7 +678,7 @@ def link_insertions(session_key: dict) -> int:
     recorded: dict[str, dict] = {}
     for part in (ProbeCensus.Probe & session_key & "electrode_config_hash IS NOT NULL").to_dicts():
         if part["probe_serial"]:
-            segment = (part["system"], part["segment_barcode"])
+            segment = (part["system"], part["segment_id"])
             recorded.setdefault(part["probe_serial"], {})[segment] = (part["electrode_config_hash"], part["probe_type"])
     want = {
         report["insertion_number"]: report
@@ -726,10 +726,10 @@ def _link(where: dict, report: dict, segments: dict) -> int:
         **where, "area": report["target_area"], "atlas": report["target_atlas"],
         "atlas_level": report["target_atlas_level"]}
     settle(InsertionLocation, aim, (InsertionLocation & where).to_dicts())
-    have = {(row["system"], row["segment_barcode"]): row for row in (SegmentConfig & where).to_dicts()}
+    have = {(row["system"], row["segment_id"]): row for row in (SegmentConfig & where).to_dicts()}
     for segment in have.keys() | segments.keys():
         want = None if segment not in segments else {
-            **where, "system": segment[0], "segment_barcode": segment[1],
+            **where, "system": segment[0], "segment_id": segment[1],
             "electrode_config_hash": segments[segment][0], "probe_type": segments[segment][1]}
         settle(SegmentConfig, want, [have[segment]] if segment in have else [])
     return int(changed)

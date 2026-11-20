@@ -11,7 +11,7 @@ WHEN = datetime.datetime(2027, 7, 22, 9, 0)
 
 
 def _probe(barcode, config, serial="19011110001"):
-    return {"segment_barcode": barcode, "stream": "imec0", "probe_serial": serial, "part_number": "NP1000",
+    return {"segment_id": barcode, "stream": "imec0", "probe_serial": serial, "part_number": "NP1000",
             "electrode_config_hash": config, "probe_type": "NP1000", "problem": "",
             "imro_table": f"(0,384)({config})"}
 
@@ -30,10 +30,10 @@ def _facts(**changes):
                 {"block_id": 2, "start_s": 12.004, "stop_s": 19.9}],
         block_attributes={1: {"closed": "1", "block_type": "Bt1"}, 2: {"closed": "1", "block_type": "Bt2"}},
         trial_counts={1: 3, 2: 1},
-        segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 21.0}],
-        census=[_probe(100, "a" * 32)],
+        segments=[{"segment_id": "100.nidq.bin", "start_s": 0.5, "end_s": 21.0}],
+        census=[_probe("100.nidq.bin", "a" * 32)],
         electrodes={("a" * 32, "NP1000"): [0, 1, 2]},
-        strobed_runs=[1, 2], strobed_blocks=[1, 2], censused=frozenset({100}), rig_problems=[],
+        strobed_runs=[1, 2], strobed_blocks=[1, 2], censused=frozenset({"100.nidq.bin"}), rig_problems=[],
         rig_session=None, run_calibrations={}, warnings=[], parameter_changes=0, control_kinds={}, clock="syncbox",
     )
     return dataclasses.replace(facts, **changes)
@@ -49,7 +49,7 @@ def test_a_run_lists_its_task_its_stop_its_segments_and_its_blocks():
     assert {name: first[name] for name in ("run_number", "task", "start_s", "end_s", "closed", "stopped_because",
                                            "stop_kind", "segments")} == {
         "run_number": 1, "task": "rf_map", "start_s": 1.0, "end_s": 10.0, "closed": True,
-        "stopped_because": "every block is finished", "stop_kind": "completed", "segments": [100]}
+        "stopped_because": "every block is finished", "stop_kind": "completed", "segments": ["100.nidq.bin"]}
     assert first["blocks"] == [{"block_number": 1, "block_in_run": 1, "block_type": "Bt1", "start_s": 1.004,
                                 "end_s": 9.9, "closed": True, "n_trials": 3}]
     (segment,) = entry["segments"]
@@ -93,16 +93,16 @@ def test_a_bank_change_inside_a_run_is_flagged_and_one_between_runs_is_not():
     gap between runs is not."""
     from wl_preproc.listing.entry import build_entry
 
-    inside = _facts(segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 15.0},
-                              {"segment_barcode": 200, "start_s": 15.5, "end_s": 21.0}],
-                    census=[_probe(100, "a" * 32), _probe(200, "b" * 32)], censused=frozenset({100, 200}),
+    inside = _facts(segments=[{"segment_id": "100.nidq.bin", "start_s": 0.5, "end_s": 15.0},
+                              {"segment_id": "200.nidq.bin", "start_s": 15.5, "end_s": 21.0}],
+                    census=[_probe("100.nidq.bin", "a" * 32), _probe("200.nidq.bin", "b" * 32)], censused=frozenset({"100.nidq.bin", "200.nidq.bin"}),
                     electrodes={("a" * 32, "NP1000"): [0, 1, 2], ("b" * 32, "NP1000"): [384, 385, 386]})
     entry = build_entry(inside)
-    assert [run["segments"] for run in entry["runs"]] == [[100], [100, 200]]
+    assert [run["segments"] for run in entry["runs"]] == [["100.nidq.bin"], ["100.nidq.bin", "200.nidq.bin"]]
     assert [(flag["code"], flag["run_number"]) for flag in entry["flags"]] == [("bank_change_in_run", 2)]
 
-    between = dataclasses.replace(inside, segments=[{"segment_barcode": 100, "start_s": 0.5, "end_s": 11.0},
-                                                    {"segment_barcode": 200, "start_s": 11.5, "end_s": 21.0}])
+    between = dataclasses.replace(inside, segments=[{"segment_id": "100.nidq.bin", "start_s": 0.5, "end_s": 11.0},
+                                                    {"segment_id": "200.nidq.bin", "start_s": 11.5, "end_s": 21.0}])
     assert build_entry(between)["flags"] == []
 
 
@@ -133,10 +133,10 @@ def test_a_probe_the_census_could_not_name_is_listed_with_its_problem():
     cannot make a bank change."""
     from wl_preproc.listing.entry import build_entry
 
-    unnamed = {"segment_barcode": 100, "stream": "imec1", "probe_serial": None, "part_number": None,
+    unnamed = {"segment_id": "100.nidq.bin", "stream": "imec1", "probe_serial": None, "part_number": None,
                "electrode_config_hash": None, "probe_type": None, "problem": "the .meta names no serial (imDatPrb_sn)",
                "imro_table": None}
-    entry = build_entry(_facts(census=[_probe(100, "a" * 32), unnamed]))
+    entry = build_entry(_facts(census=[_probe("100.nidq.bin", "a" * 32), unnamed]))
     assert entry["segments"][0]["probes"][1] == {
         "stream": "imec1", "serial": None, "part_number": None, "probe_type": None, "electrode_config_hash": None,
         "n_electrodes": None, "electrodes": None, "imro_table": None,

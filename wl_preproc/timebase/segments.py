@@ -83,16 +83,25 @@ GAP_CORRUPTED = "gap_corrupted"
 # caught it, so the whole stage failed instead of saying why.
 NO_SHARED_BARCODE = "no_shared_barcode"
 
+# Not a verdict `classify_segment` can reach either: under the NI's clock,
+# session t = 0 is the first NI file's first sample (`timebase/clock.py::
+# nidq_files` orders them), and a later NI file is SpikeGLX started again, on
+# a timeline nothing yet joins to the first; part 3c joins it (design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendment 40).
+NI_RESTARTED = "ni_restarted"
+
 #: Every reason `RejectedSegment.reason` can hold, and where each is
 #: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
 #: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
-#: exists for it to inherit. `NO_SHARED_BARCODE` is decided per FILE, in
-#: `Segment.make`, against session time's reference. `GAP_CORRUPTED` is
-#: decided per FILE, in `Segment.make`, overriding the verdict
-#: `classify_segment` returned for that file rather than adding a fact
-#: `classify_segment` itself lacked the inputs to see.
+#: exists for it to inherit, or, under the NI's clock, when the system has no
+#: way onto it. `NO_SHARED_BARCODE` is decided per FILE, in `Segment.make`,
+#: against session time's reference. `GAP_CORRUPTED` is decided per FILE, in
+#: `Segment.make`, overriding the verdict `classify_segment` returned for that
+#: file rather than adding a fact `classify_segment` itself lacked the inputs
+#: to see. `NI_RESTARTED` is decided per FILE, in `Segment.make`, under the
+#: NI's clock.
 REJECTION_REASONS: frozenset[str] = frozenset(
-    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE}
+    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED}
 )
 
 

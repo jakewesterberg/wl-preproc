@@ -99,7 +99,8 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
     time_s = 0.0
     value = 1_000_000
     restart, roll = recipe.syncbox_restart, recipe.syncbox_roll
-    while time_s < recipe.duration_s:
+    # Without the sync box no device carries a barcode: the NI keeps time.
+    while "syncbox" in recipe.systems and time_s < recipe.duration_s:
         # A box that is down emits nothing; its count of seconds runs on. A
         # roll in place places the frame grid again, and the first frame due
         # after it is never emitted (wl-sync's "+1 or +2").

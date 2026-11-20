@@ -632,8 +632,11 @@ def test_a_faulted_trial_stops_inside_its_own_run_when_runs_are_marked():
 # `2026-10-01-session-listing-and-run-requests-design.md` section 2.3).
 
 
-def _populate_generated(tmp_path, subject, when, mutate=None, **update):
-    from wl_preproc.schema import pipeline
+def _populate_generated(tmp_path, subject, when, mutate=None, clock=None, **update):
+    """Generate a session, `mutate` its folder, land it by hand and stage its
+    events. `clock`, where given, is recorded as its clock first, as one
+    chosen before the folder changed stands (amendment 3)."""
+    from wl_preproc.schema import pipeline, timebase
     from wl_preproc.synth.recipe import CI_RECIPE, SessionRecipe
     from wl_preproc.synth.session import generate_session
 
@@ -647,6 +650,9 @@ def _populate_generated(tmp_path, subject, when, mutate=None, **update):
                                       "subject_description": ""}, skip_duplicates=True)
     key = {"subject": subject, "session_datetime": when}
     pipeline.Session.insert1(key, skip_duplicates=True)
+    if clock is not None:
+        timebase.SessionClock.insert1({**key, "source": clock, "reason": "recorded by the test"},
+                                      allow_direct_insert=True)
     events.populate_session(key, tmp_path / recipe.session_id)
     return recipe, key
 
@@ -779,7 +785,9 @@ def test_populate_session_keeps_the_rigs_kind_calibration_and_accepted_warnings(
 def test_a_warning_for_a_run_the_recording_did_not_measure_has_no_run_number(events_activated, dj_conn, tmp_path):
     """wl-xcon's run 2, from 0, has a start row, so a number, 3; the
     recording measured runs 1 and 2 only, so the warning names no measured
-    run."""
+    run. No stream holds run 3, so no clock would be chosen for it now
+    (amendments 41 and 44): its clock is the sync box's, recorded before the
+    rig's line for run 3 is read."""
     import json
 
     from wl_preproc.schema import core
@@ -791,7 +799,7 @@ def test_a_warning_for_a_run_the_recording_did_not_measure_has_no_run_number(eve
                         + "\n")
 
     _recipe, key = _populate_generated(tmp_path, "slkind2", datetime.datetime(2027, 7, 27, 9, 0), mutate=a_third_run,
-                                       runs=True, rig_record=_rig_record(warnings=(
+                                       clock="syncbox", runs=True, rig_record=_rig_record(warnings=(
                                            RigWarningSpec(code="head-free", run=2, how="start"),)))
     row = (core.AcceptedWarning & key).fetch1()
     assert (row["run_index"], row["run_number"]) == (2, None)

@@ -131,7 +131,7 @@ _REQUIRED_SELECTION_KEYS = ("session_datetime", "montage_id")
 
 # Column bounds, read directly from wl_preproc/schema/core.py's declared
 # types -- `montage_id` does not declare "unsigned" (unlike
-# core.Segment.segment_barcode's "int unsigned"), so its range is SIGNED.
+# core.Segment's former "int unsigned" barcode key), so its range is SIGNED.
 # Checked before any insert, matching ingest/params.py's own stated
 # convention for paramset_type/PARAMSET_TYPE_MAX_LEN: a value that is a
 # syntactically fine Python int/str can still be too big/long for the column

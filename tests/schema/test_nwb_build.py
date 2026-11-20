@@ -1626,7 +1626,7 @@ def test_a_session_with_two_ohdpi_segments_is_refused(activation, tmp_path_facto
 
     session_key, key, _runs = activation
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-    extra = {**segment, "segment_barcode": segment["segment_barcode"] + 1_000}
+    extra = {**segment, "segment_id": segment["segment_id"] + "-extra"}
     core.Segment.insert1(extra, allow_direct_insert=True)
     try:
         result = build(key, tmp_path_factory.mktemp("nwb-two"))

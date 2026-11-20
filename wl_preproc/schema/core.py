@@ -394,17 +394,18 @@ class AcquisitionSystem(dj.Manual):
 @schema
 class Segment(dj.Computed):
     definition = """
-    # One recording file's extent, in session time. Keyed on the first barcode
-    # value in the segment, which is globally unique by construction (32-bit
-    # counter at 1 Hz) -- so discovering a previously-missed file shifts no
-    # existing key. Key: (subject, session_datetime, system, segment_barcode).
+    # One recording file's extent, in session time. Keyed on the file's path
+    # within its system's folder: unique within a system by construction, the
+    # same under every clock (a session without the sync box has no barcode on
+    # any device), never changed once landed -- so discovering a previously-
+    # missed file shifts no existing key. The path is the one copy of the
+    # file's name. Key: (subject, session_datetime, system, segment_id).
     #
     # Computed, not Manual: it was declared Manual in 1c-1 when nothing computed
     # it. Every attribute below is derived from the file and the sync box's log.
     -> AcquisitionSystem
-    segment_barcode : int unsigned  # spec 4.1: 32-bit counter, full 0..2**32-1 range
+    segment_id   : varchar(255)  # the file's path relative to the system directory
     ---
-    file_path    : varchar(255)  # relative to the system directory
     start_s      : double
     end_s        : double
     n_samples    : bigint
@@ -462,13 +463,14 @@ class Segment(dj.Computed):
         two disagree about which files exist.
 
         A rejected file structurally CANNOT become a Segment: this table is
-        keyed on `segment_barcode`, "the first barcode value in the segment",
-        and a file yielding zero barcodes has no such value. An implementation
-        that wants to invent a placeholder has found the rule, not a limitation.
+        refused for its own reasons (`RejectedSegment`, keyed on the same path):
+        a file the clock cannot place has no extent in session time to record.
+        An implementation that wants to invent a placeholder has found the rule,
+        not a limitation.
         """
         from wl_preproc.schema import ingest, timebase
         from wl_preproc.timebase import segments
-        from wl_preproc.timebase.clock import clock_for
+        from wl_preproc.timebase.clock import clock_for, nidq_files
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -488,13 +490,38 @@ class Segment(dj.Computed):
         rate = (
             segments.rate_fit_from_row(fit) if fit["fit_status"] == "fitted" else None
         )
-        reference = clock_for(session_key, session_dir).barcode_reference()
+        clock = clock_for(session_key, session_dir)
+        # Under the NI's clock nothing is placed by a barcode (design spec
+        # `2026-10-18-training-records-and-backup-clock-design.md`, amendments
+        # 40, 50 and 51): SpikeGLX's first NI file, by gate and trigger and
+        # never by path, is session time itself, and every other system is
+        # unfitted, with no way onto it yet.
+        on_the_ni = clock.source == "nidq"
+        reference = {} if on_the_ni else clock.barcode_reference()
+        first_ni = nidq_files(session_dir)[0] if on_the_ni else None
 
         accepted, rejected = [], []
         for scan in scans:
             # Relative to the system directory, matching DoneMarker's own
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
+            if on_the_ni:
+                if rate is None:
+                    rejected.append({**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM})
+                elif scan.path != first_ni:
+                    rejected.append({**key, "file_path": file_path, "reason": segments.NI_RESTARTED})
+                else:
+                    # The identity map: t = 0 at its first sample, at its
+                    # `.meta`'s rate, and every SpikeGLX stream of the run on
+                    # it. No barcode places it, so none is counted.
+                    accepted.append({
+                        **key, "segment_id": file_path, "start_s": 0.0,
+                        "end_s": scan.duration_s / rate.scale, "n_samples": scan.stream.n_samples,
+                        "first_sample": 0, "offset_s": 0.0, "residual_us": 0.0, "n_barcodes": 0,
+                        "n_frame_gaps": scan.n_frame_gaps, "n_frames_missing": scan.n_frames_missing,
+                        "n_barcodes_dropped": scan.n_barcodes_dropped,
+                    })
+                continue
             if scan.verdict != segments.ALIGNABLE:
                 # Not two competing causes -- the only one available here.
                 # `classify_segment` (timebase/segments.py) returns ALIGNABLE
@@ -532,8 +559,7 @@ class Segment(dj.Computed):
             accepted.append(
                 {
                     **key,
-                    "segment_barcode": scan.barcodes[0].value,
-                    "file_path": file_path,
+                    "segment_id": file_path,
                     # Native extent, converted with this segment's own offset.
                     "start_s": offset.offset_s,
                     "end_s": scan.duration_s / rate.scale + offset.offset_s,

@@ -24,13 +24,15 @@ actually use.
 
 from __future__ import annotations
 
+import datetime
+import zoneinfo
 from pathlib import Path
 
 import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.ephys.geometry import electrode_rows
-from wl_preproc.synth.recipe import ProbeSpec, SessionRecipe
+from wl_preproc.synth.recipe import SYNTH_EPOCH, ProbeSpec, SessionRecipe
 from wl_preproc.synth.rhs import STROBE_WIDTH_S
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
@@ -366,6 +368,14 @@ def _restart(dir_path: Path, recipe: SessionRecipe) -> None:
             target.with_suffix(".meta").write_text(text, encoding="utf-8")
 
 
+def _nidq_file_create_time(recipe: SessionRecipe) -> str:
+    """SpikeGLX's `fileCreateTime`: the recording machine's local time of the
+    NI's first sample, to the second, with no zone."""
+    first_sample = SYNTH_EPOCH - datetime.timedelta(seconds=SPIKEGLX_PRE_ROLL_S)
+    local = first_sample.astimezone(zoneinfo.ZoneInfo(recipe.nidq_timezone))
+    return local.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str:
     """The `.nidq.meta` fields SpikeInterface's reader actually consumes.
 
@@ -398,6 +408,7 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
             "niAiRangeMax=5",
             "niAiRangeMin=-5",
             "firstSample=0",
+            f"fileCreateTime={_nidq_file_create_time(recipe)}",
             "niXDChans1=0:1",
             f"~snsChanMap=(0,0,0,{NIDQ_N_DIGITAL_WORDS},0)(XD0;0:1)(XD1;0:15)",
         ]

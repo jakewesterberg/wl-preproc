@@ -263,7 +263,7 @@ def test_a_bank_change_inside_a_montage_refuses_the_file(daemon_module, prefix, 
 
     assert result.status == "refused"
     assert "19011110014" in result.reason and "two active-site maps" in result.reason
-    for path in (core.Segment & key & {"system": "spikeglx"}).to_arrays("file_path"):
+    for path in (core.Segment & key & {"system": "spikeglx"}).to_arrays("segment_id"):
         assert path in result.reason
 
 
@@ -299,7 +299,7 @@ def test_a_file_waits_for_the_census_of_its_session(three_probes):
 
     key, activation = three_probes
     assert readiness(activation) is None
-    last = (ephys.ProbeCensus & key).keys(order_by="segment_barcode")[-1]
+    last = (ephys.ProbeCensus & key).keys(order_by="segment_id")[-1]
     (ephys.ProbeCensus & last).delete(prompt=False)
     try:
         assert readiness(activation).startswith("waiting on ProbeCensus")

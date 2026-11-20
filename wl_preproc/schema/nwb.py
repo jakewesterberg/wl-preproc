@@ -41,9 +41,12 @@ class NwbFile(dj.Manual):
     nwb_identifier = '' : varchar(255)
     # The wall-clock time of session t = 0 (section 4.2), naive UTC, and
     # where it came from: the first barcode's own value, or the manifest's
-    # started_at when the two disagree by more than 60 s.
+    # started_at when the two disagree by more than 60 s; under the NI, the
+    # rig's clock fit, else the first NI file's fileCreateTime, else the
+    # manifest's (design spec 2026-10-18-training-records-and-backup-clock-design.md,
+    # amendment 46).
     reference_time = null : datetime(6)
-    reference_source = null : enum('barcode','manifest')
+    reference_source = null : enum('barcode','manifest','rig_clock','nidq_meta')
     started_at_difference_s = null : double
     n_critical = null : int unsigned
     inspector_findings = null : <blob>

@@ -313,7 +313,7 @@ class EyeValidity(dj.Computed):
         }).fetch1("params"))
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-        path = session_dir / "ohdpi" / segment["file_path"]
+        path = session_dir / "ohdpi" / segment["segment_id"]
         # `fs_hz`/`frame_gaps` describe the FILE's own sync line, not either
         # eye's gaze -- read once per session rather than once per eye.
         recording = read_ohdpi(path)
@@ -663,7 +663,7 @@ class EyeDetection(dj.Computed):
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-        path = session_dir / "ohdpi" / segment["file_path"]
+        path = session_dir / "ohdpi" / segment["segment_id"]
         recording = read_ohdpi(path)
         fs_hz = recording.fs_hz
 

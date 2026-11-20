@@ -41,7 +41,7 @@ def test_the_new_timebase_tables_are_computed_too(schemas):
 
 def test_rejected_segment_stays_manual_because_its_key_cannot_be_computed(schemas):
     """RejectedSegment is keyed on file_path precisely because a file yielding
-    zero barcodes has no segment_barcode to key on. It records a fact about a
+    zero barcodes has no barcode to place it on. It records a fact about a
     file, not a computation over one."""
     core, _coverage, _timebase = schemas
 
@@ -56,7 +56,7 @@ def test_segment_carries_what_makes_the_transform_reversible(schemas):
     core, _coverage, _timebase = schemas
 
     attrs = set(core.Segment.heading.attributes)
-    assert {"offset_s", "residual_us", "n_barcodes", "first_sample", "file_path"} <= attrs
+    assert {"offset_s", "residual_us", "n_barcodes", "first_sample", "segment_id"} <= attrs
 
 
 def test_the_timebase_records_which_clock_it_believed(schemas):
@@ -85,11 +85,12 @@ def test_the_tier_enum_no_longer_holds_pending(schemas, enum_values):
     than kept as a value nothing can reach -- a stored value with no writer
     left is worse than no value at all, per `_TIER_ENUM`'s own comment in
     `schema/timebase.py`. So this test now asserts the opposite of what it
-    used to: the enum is EXACTLY {A, B, C, D}, and 'pending' is gone."""
+    used to: the enum is EXACTLY {A, B, C, D, N} (N is 3b-1's: the NI kept time),
+    and 'pending' is gone."""
     _core, _coverage, timebase = schemas
 
     tier = timebase.TimingProvenance.heading.attributes["tier"]
-    assert enum_values(tier.type) == {"A", "B", "C", "D"}
+    assert enum_values(tier.type) == {"A", "B", "C", "D", "N"}
 
 
 def test_no_bare_longblob_in_the_new_schema_module(schemas):

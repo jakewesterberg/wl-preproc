@@ -77,7 +77,7 @@ def test_a_short_trial_hours_in_has_its_coverage_computed(hours_in):
     from wl_preproc.schema import core, coverage
 
     core.AcquisitionSystem.insert1({**_SESSION, "system": "syncbox"}, skip_duplicates=True)
-    core.Segment.insert1({**_SESSION, "system": "syncbox", "segment_barcode": 1, "file_path": "syncbox/a.bin",
+    core.Segment.insert1({**_SESSION, "system": "syncbox", "segment_id": "syncbox/a.bin",
                           "start_s": 0.0, "end_s": 30000.0, "n_samples": 1, "first_sample": 0, "offset_s": 0.0,
                           "residual_us": 0.0, "n_barcodes": 1, "n_frame_gaps": 0, "n_frames_missing": 0,
                           "n_barcodes_dropped": 0}, allow_direct_insert=True, skip_duplicates=True)

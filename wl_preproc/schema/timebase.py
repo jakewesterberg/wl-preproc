@@ -30,9 +30,21 @@ schema = dj.Schema()
 # itself and the barcode's job shrinks to identifying which trigger a frame is.
 # A downstream analysis that cares about 2 ms has to be able to tell which it
 # got, and cannot infer it from the rate.
-_TIME_SOURCE_ENUM = "enum('barcode','trigger')"
+#
+# 'clock' and 'none' are the NI's (part 3b-1; design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendments 50 and
+# 51). 'clock': the system whose own samples are session time, SpikeGLX under
+# the NI, on the identity map. 'none': a system with no way onto the session's
+# clock yet, every one but SpikeGLX under the NI, its row `unfittable`.
+_TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none')"
 
-# 'A', 'B', 'C' or 'D' -- 'pending' retired. Design spec section 8: tier D was
+# The system whose own timeline is session time, under each clock that keeps
+# it: its fit is identity, the truth rather than a placeholder (amendment 50's
+# first minor: the identity row stops assuming the sync box).
+_KEEPS_TIME = {"syncbox": "syncbox", "nidq": "spikeglx"}
+
+# 'A', 'B', 'C' or 'D' -- 'pending' retired -- or 'N', where the NI kept time
+# and its codes hold every run (part 3b-1). Design spec section 8: tier D was
 # always fully derivable from timing alone -- any timing check failed -- but
 # tiers A/B/C each carry a code-agreement or trial-count term, and event
 # decoding was 1c-5's job. 1c-4 stored 'pending' rather than defaulting to a
@@ -50,7 +62,7 @@ _TIME_SOURCE_ENUM = "enum('barcode','trigger')"
 # fill it: an unread constant whose name asserts "pending" is the same false
 # claim in a second place. What it held, and which phase ended the wait, is
 # recorded on the column itself.
-_TIER_ENUM = "enum('A','B','C','D')"
+_TIER_ENUM = "enum('A','B','C','D','N')"
 
 # Whether this system's clock was actually fitted, and if not, why not. Every
 # (system, session) gets exactly one row, including the ones that could not be
@@ -103,22 +115,74 @@ class SessionClock(dj.Imported):
 
         return pipeline.Session & ingest.Ingestion
 
-    def make(self, key: dict) -> None:
-        """Imported, not Computed: the choice reads the session folder. It is
-        made by `clock_for` when a stage first asks; `populate()` makes the
-        same row, by the same `choose_for` (amendment 28)."""
-        from wl_preproc.schema import ingest
-        from wl_preproc.timebase.clock import NoClock, choose_for
+    # Three-part make (DataJoint 2.3's `make_fetch`/`make_compute`/
+    # `make_insert`): the choice may decode the NI, which never happens
+    # inside the clock's transaction (amendment 43). `populate` runs
+    # `make_fetch` and `make_compute` outside any transaction, then opens one,
+    # runs `make_fetch` again and refuses the insert if what it read changed
+    # (`datajoint/autopopulate.py::_populate1`). `make` itself is DataJoint's,
+    # never overridden here: a `make` of our own would run inside the
+    # transaction.
 
+    def make_fetch(self, key: dict) -> tuple:
+        """What the choice reads: the session's folder, what it was landed
+        without, whether it was already timed (`timebase/clock.py::
+        landed_facts`), the digest of its inputs (`choice_inputs`), and the
+        refusal recorded for it, `(reason, inputs)`, or None."""
+        from wl_preproc.schema import ingest
+        from wl_preproc.timebase.clock import choice_inputs, landed_facts
+
+        session_dir = (ingest.Ingestion & key).fetch1("session_dir")
+        landed_without, already_timed = landed_facts(key)
+        inputs = choice_inputs(Path(session_dir), key["subject"], landed_without, already_timed=already_timed)
+        refused = [(row["reason"], row["inputs"]) for row in (ClockRefusal & key).to_dicts()]
+        return session_dir, landed_without, already_timed, inputs, (refused[0] if refused else None)
+
+    def make_compute(self, key: dict, session_dir: str, landed_without: dict[str, str], already_timed: bool,
+                     inputs: str, refused: tuple[str, str] | None) -> tuple:
+        """`(choice, reason, inputs)`: the choice, made as `clock_for` makes it
+        outside a transaction (the sync box's log first, the NI's codes only
+        when it does not reach the session's last run), or None and why no
+        clock built so far can time the session. A refusal recorded for these
+        same inputs is given again without decoding."""
+        from wl_preproc.timebase.clock import NoClock, choose_landed, refusal_reason
+
+        if refused is not None and refused[1] == inputs:
+            return None, refused[0], inputs
         try:
-            choice = choose_for(key, Path((ingest.Ingestion & key).fetch1("session_dir")))
-        except NoClock:
-            # Nothing recorded and no error parked: a session no clock built
-            # so far can time is asked again on the next pass, so one part 3b
-            # or part 4 can time is timed once it exists. Its events stage
-            # says why on each pass (part 3a's final review, I3).
+            return choose_landed(Path(session_dir), key["subject"], landed_without, already_timed), None, inputs
+        except NoClock as error:
+            return None, refusal_reason(error, Path(session_dir)), inputs
+
+    def make_insert(self, key: dict, choice, reason: str | None, inputs: str) -> None:
+        """The clock, its refusal cleared; or, where none can time it, its
+        refusal recorded in place of any earlier one, and nothing here: the
+        session is asked again on the next pass, so one part 4 can time is
+        timed once it exists, and its events stage says why on each pass
+        (part 3a's final review, I3, amendment 37)."""
+        if choice is None:
+            ClockRefusal.insert1({**key, "reason": reason, "inputs": inputs}, replace=True)
             return
-        self.insert1({**key, "source": choice.source, "reason": choice.reason})
+        # A stage's `clock_for` may have recorded the same choice since this
+        # pass looked.
+        self.insert1({**key, "source": choice.source, "reason": choice.reason}, skip_duplicates=True)
+        (ClockRefusal & key).delete_quick()
+
+
+@schema
+class ClockRefusal(dj.Manual):
+    definition = """
+    # Why no clock built so far can time the session, as the daemon's
+    # `SessionClock` pass found it, and a digest of what that choice read,
+    # so it is decided again only when one of those changes, never by
+    # decoding the NI on every pass (`timebase/clock.py::choice_inputs`).
+    # Its events stage reports it on each pass. Cleared once a clock is
+    # recorded. Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    reason : varchar(255)  # one sentence, as `NoClock` gave it
+    inputs : char(64)      # sha256 hex of the choice's inputs
+    """
 
 
 @schema
@@ -303,11 +367,19 @@ class SystemTimebase(dj.Computed):
     def make(self, key: dict) -> None:
         """Fit this system's clock against session time, pooling the session.
 
-        The sync box is inserted with an identity fit rather than skipped.
-        Session time IS its timeline, so a fit of it against itself is exactly
-        zero drift with zero residual -- that is the truth, not a placeholder,
-        and an absent row would read as "this system was never aligned", which
-        is the one thing it certainly was.
+        The system that keeps time -- the sync box under its clock, SpikeGLX
+        under the NI's (`_KEEPS_TIME`) -- is inserted with an identity fit
+        rather than skipped. Session time IS its timeline, so a fit of it
+        against itself is exactly zero drift with zero residual -- that is the
+        truth, not a placeholder, and an absent row would read as "this system
+        was never aligned", which is the one thing it certainly was.
+
+        Under the NI's clock every other system is `unfittable`, by no
+        mechanism (`time_source` 'none'): 3b-1 places only SpikeGLX on it. The
+        eye tracker and the cameras wait for lab time's host stamps, Intan for
+        3b-2, and a sync box that recorded part of the session for 3b-3
+        (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
+        amendments 40 and 51).
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
@@ -320,11 +392,6 @@ class SystemTimebase(dj.Computed):
             )
         )
         scans = segments.scan_system(key["system"], session_dir / key["system"])
-        # 'barcode' unconditionally, because nothing in this pipeline is
-        # trigger-timed yet. Whether the sync box can also trigger ohdpi's
-        # frames is design spec section 12's open hardware question; until it
-        # is answered, claiming 'trigger' would assert a precision that was
-        # never measured.
         row = {**key, "time_source": "barcode", "n_barcodes_decoded": 0,
                "n_barcodes_matched": 0}
 
@@ -332,9 +399,22 @@ class SystemTimebase(dj.Computed):
             # Device absence never blocks ingest (1c-2's rule) -- but an
             # AcquisitionSystem row says this system WAS present, so finding no
             # recording under it is a real disagreement, and it is recorded as
-            # one for the daily report to surface.
+            # one for the daily report to surface. Recorded before the clock
+            # is asked, as it always was: nothing is placed, so no clock is
+            # needed, and `fit_status` is read before `time_source`.
             self.insert1({**row, "fit_status": "no_recording"})
             return
+
+        clock = clock_for(key, session_dir)
+        keeps_time = key["system"] == _KEEPS_TIME[clock.source]
+        # 'barcode' under the sync box, because nothing in this pipeline is
+        # trigger-timed yet. Whether the sync box can also trigger ohdpi's
+        # frames is design spec section 12's open hardware question; until it
+        # is answered, claiming 'trigger' would assert a precision that was
+        # never measured. Under the NI, 'clock' for SpikeGLX and 'none' for
+        # every other system.
+        if clock.source == "nidq":
+            row["time_source"] = "clock" if keeps_time else "none"
 
         # `scan.barcodes` is the gap-CLEAR set, not the raw decode:
         # `segments.scan_system` drops any word a dropped-frame gap fell
@@ -348,14 +428,15 @@ class SystemTimebase(dj.Computed):
         nominal_rate_hz = scans[0].stream.fs_hz
         row["n_barcodes_decoded"] = len(decoded)
 
-        if key["system"] == "syncbox":
+        if keeps_time:
             # Session time IS this system's timeline, so its fit against itself
-            # is exactly identity -- the truth, not a placeholder. Matched are
-            # the barcodes session time holds: a later process's are the box's
-            # too, but nothing places them until a bridge does (part 1's
-            # deferred finding; design spec `2026-11-04-syncbox-header-design.md`
-            # section 9).
-            reference = clock_for(key, session_dir).barcode_reference() if decoded else {}
+            # is exactly identity -- the truth, not a placeholder. Under the
+            # sync box, matched are the barcodes session time holds: a later
+            # process's are the box's too, but nothing places them until a
+            # bridge does (part 1's deferred finding; design spec
+            # `2026-11-04-syncbox-header-design.md` section 9). The NI's clock
+            # places no barcode, so under it none is matched.
+            reference = clock.barcode_reference() if decoded and clock.source == "syncbox" else {}
             self.insert1(
                 {
                     **row,
@@ -370,7 +451,13 @@ class SystemTimebase(dj.Computed):
             )
             return
 
-        reference = clock_for(key, session_dir).barcode_reference()
+        if clock.source == "nidq":
+            # No way onto the NI's clock yet (amendment 51): the fit columns
+            # stay NULL, as for any system that could not be fitted.
+            self.insert1({**row, "fit_status": "unfittable", "nominal_rate_hz": nominal_rate_hz})
+            return
+
+        reference = clock.barcode_reference()
         try:
             fit = fit_rate_across([scan.barcodes for scan in scans], reference, nominal_rate_hz)
         except ValueError:
@@ -406,7 +493,7 @@ class TimingProvenance(dj.Computed):
     -> pipeline.Session
     ---
     tier                  : {_TIER_ENUM}
-    n_barcodes_emitted    : int unsigned  # the sync box's own log is the source
+    n_barcodes_emitted=null : int unsigned  # the sync box's own log is the source; null under the NI's clock
     n_systems_aligned     : int unsigned
     n_segments            : int unsigned
     n_rejected_segments   : int unsigned
@@ -491,7 +578,7 @@ class TimingProvenance(dj.Computed):
         from wl_preproc.events.taskfile import SyntheticTaskFileReader, UnsupportedTaskFile
         from wl_preproc.schema import core, ingest
         from wl_preproc.timebase import segments
-        from wl_preproc.timebase.clock import clock_for
+        from wl_preproc.timebase.clock import _rig_record, clock_for
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -516,6 +603,8 @@ class TimingProvenance(dj.Computed):
         failed = len(aligned) < len(systems) or bool(rejected)
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+        clocks = (SessionClock & session_key).to_dicts()
+        under_the_ni = bool(clocks) and clocks[0]["source"] == "nidq"
 
         # And if the box lost code words of session time where they mattered:
         # in a measured run, or by a desync, after which nothing is measured
@@ -576,6 +665,11 @@ class TimingProvenance(dj.Computed):
         # remaining failure modes. `failed` still forces the FINAL tier to D
         # on its own, unconditionally, below; only the evidence-gathering
         # gate changed.
+        #
+        # Under the NI's clock the sync box is never fitted (`SystemTimebase.
+        # make`: it has no way onto that clock until 3b-3), so nothing below
+        # reads the NI's codes as the Pi's or asks the NI's clock for a
+        # barcode reference.
         syncbox_fitted = any(
             fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits
         )
@@ -596,6 +690,27 @@ class TimingProvenance(dj.Computed):
                 syncbox_available = True
             except (FileNotFoundError, ValueError):
                 syncbox_available = False
+
+        # Tier N's evidence: the NI is the clock, so its first file's codes
+        # are the one full-code record (amendment 50), decoded as rule 2
+        # decodes them and held against the rig's record again, since the
+        # choice that made the NI the clock was made before the session was
+        # processed. Never `clock.barcode_reference()`, which the NI's clock
+        # does not have, and nothing here reads these codes as the sync box's.
+        ni_holds_every_run = False
+        if under_the_ni:
+            from wl_preproc.timebase.clock import NoClock, nidq_codes, nidq_files
+            from wl_preproc.timebase.holding import unheld
+
+            try:
+                decoded = decode_stream(nidq_codes(nidq_files(session_dir)[0]))
+                rig_runs, rig_trials = _rig_record(session_dir, key["subject"])
+            except (FileNotFoundError, ValueError, IndexError, NoClock):
+                pass  # the codes cannot be read: not held, so not tier N
+            else:
+                decode_errors = sum(1 for event in decoded if isinstance(event, DecodeError))
+                n_full_code_records = 1
+                ni_holds_every_run = unheld(decoded, rig_runs, rig_trials) is None
 
         if syncbox_available:
             syncbox_events = decode_stream(syncbox_pairs)
@@ -685,7 +800,7 @@ class TimingProvenance(dj.Computed):
         # both are "nothing corroborated this session", never a pass.
         trial_count_agreement = None
         task_file = session_dir / "syncbox" / "task.json"
-        if task_file.is_file():
+        if task_file.is_file() and not under_the_ni:
             try:
                 task_trials = SyntheticTaskFileReader().trials(task_file)
             except UnsupportedTaskFile:
@@ -713,13 +828,16 @@ class TimingProvenance(dj.Computed):
             n_strobe_witnesses=n_strobe_witnesses,
             decode_errors=decode_errors,
         )
-        tier = "D" if failed else agreement.resolve_tier(inputs)
+        if under_the_ni:
+            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 else "D"
+        else:
+            tier = "D" if failed else agreement.resolve_tier(inputs)
 
         self.insert1(
             {
                 **key,
                 "tier": tier,
-                "n_barcodes_emitted": emitted,
+                "n_barcodes_emitted": None if under_the_ni else emitted,
                 "n_systems_aligned": len(aligned),
                 "n_segments": len(segment_rows),
                 "n_rejected_segments": len(rejected),
@@ -749,6 +867,25 @@ class TimingProvenance(dj.Computed):
                 "decode_errors": decode_errors,
             }
         )
+
+
+# Why a session timed before its clock was recorded is given the sync box's
+# (amendment 48): until 3b-1 no other clock was built, so the sync box timed
+# every session timed before it.
+BACKFILL_REASON = "it was timed by the sync box before its clock was recorded (back-filled at part 3b-1's deploy)"
+
+
+def backfill_session_clocks() -> int:
+    """Amendment 48's one-time back-fill, run at 3b-1's deploy (`wlpp clocks
+    backfill`): every session with a timing record and no clock is given the
+    sync box's, which timed it. Returns how many were given it. From then on
+    such a session is refused (`timebase/clock.py::choose_landed`). Once
+    only: run after sessions are timed by the NI, it would give the sync box
+    to one whose clock row was since deleted, the case the refusal catches."""
+    sessions = (TimingProvenance.proj() - SessionClock.proj()).keys()
+    SessionClock.insert([{**key, "source": "syncbox", "reason": BACKFILL_REASON} for key in sessions],
+                        allow_direct_insert=True, skip_duplicates=True)
+    return len(sessions)
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:

@@ -1528,7 +1528,7 @@ def _stored_inputs(session_key, eye_value):
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-    path = session_dir / "ohdpi" / segment["file_path"]
+    path = session_dir / "ohdpi" / segment["segment_id"]
     fs_hz = read_ohdpi(path).fs_hz
     map_ = eye_schema._map_from_row(
         (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()

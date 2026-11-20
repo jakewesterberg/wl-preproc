@@ -147,6 +147,30 @@ def _staged_entries(
     ]
 
 
+def _add_nidq_timezone(subparser: argparse.ArgumentParser) -> None:
+    """`--nidq-timezone`: the lab's NI machine's time zone, which SpikeGLX's
+    `fileCreateTime` is local time in (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 46).
+    Unset, an NI-timed file's t = 0 never comes from it. Taken by every
+    command that builds an NWB file -- the daemon's pass and `wlpp nwb
+    build` -- so a file rebuilt by hand places t = 0 as the daemon's did."""
+    subparser.add_argument("--nidq-timezone", default=None, metavar="IANA_NAME",
+                           help="the NI machine's time zone, such as America/New_York")
+
+
+def _set_nidq_timezone(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """`--nidq-timezone` given, set as the session clock's zone before
+    anything else runs; an unknown zone exits 2, naming it."""
+    if args.nidq_timezone is None:
+        return
+    from wl_preproc.timebase.clock import set_nidq_timezone
+
+    try:
+        set_nidq_timezone(args.nidq_timezone)
+    except ValueError as error:
+        parser.error(f"--nidq-timezone: {error}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wlpp")
     subparsers = parser.add_subparsers(dest="group", required=True)
@@ -214,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
 
     daemon_p.add_argument("--with-detector", action="append", default=[], choices=sorted(OPT_IN),
                           help="also run this opt-in detector")
+    _add_nidq_timezone(daemon_p)
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -224,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     nwb_build.add_argument("--activation-id", required=True, type=int)
     nwb_build.add_argument("--nwb-root", required=True, type=Path)
     nwb_build.add_argument("--prefix", default=DEFAULT_PREFIX)
+    _add_nidq_timezone(nwb_build)
 
     ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
     ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
@@ -340,6 +366,13 @@ def main(argv: list[str] | None = None) -> int:
         "--session-datetime", default=None, type=datetime.datetime.fromisoformat,
         help="with --subject, when one subject has two sessions at the path",
     )
+
+    clocks_p = subparsers.add_parser("clocks", help="each session's clock")
+    clocks_sub = clocks_p.add_subparsers(dest="action", required=True)
+    # Amendment 48: once, at part 3b-1's deploy.
+    backfill_p = clocks_sub.add_parser(
+        "backfill", help="give the sync box's clock to every session timed before its clock was recorded (once)")
+    backfill_p.add_argument("--prefix", default=DEFAULT_PREFIX)
 
     tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
     # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
@@ -694,6 +727,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.group == "clocks" and args.action == "backfill":
+        from wl_preproc.daemon import activate_all
+        from wl_preproc.schema import timebase
+
+        activate_all(prefix=args.prefix)
+        count = timebase.backfill_session_clocks()
+        print(f"{count} session{'' if count == 1 else 's'} given the sync box's clock (amendment 48's back-fill)")
+        return 0
+
     if args.group == "tape-manifest":
         from wl_preproc.archive.tape import staging_manifest
 
@@ -718,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.nwb.lock import Busy, exclusive
         from wl_preproc.schema import request as request_schema
 
+        _set_nidq_timezone(parser, args)
         activate_all(prefix=args.prefix)
         # Under the daemon's NWB lock (`nwb/lock.py`): a build beside a pass
         # would record the same activation twice.
@@ -756,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.daemon import run_once
         from wl_preproc.nwb.publish import Share
 
+        _set_nidq_timezone(parser, args)
         shares = {}
         if args.nwb_fast_headroom_gb is not None and args.nwb_fast_headroom_gb < 0:
             parser.error("--nwb-fast-headroom-gb cannot be negative")

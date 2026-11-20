@@ -47,7 +47,7 @@ class SessionFacts:
     electrodes: dict[tuple[str, str], list[int]]  # (electrode_config_hash, probe_type) -> sorted electrodes
     strobed_runs: list[int]  # every RUN_START's run number, one per occurrence
     strobed_blocks: list[int]  # every BLOCK_START's block number, one per occurrence
-    censused: frozenset[int]  # the segments the probe census has read
+    censused: frozenset[str]  # the segments the probe census has read
     rig_problems: list[str]  # what reading the rig's record could not use (core.RunRecordProblem)
     # What wl-xcon's record says the session was (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` section 4).
@@ -88,18 +88,18 @@ def build_entry(facts: SessionFacts) -> dict:
         flags.append(_flag("rig_record_problem", f"the rig's record: {problem}"))
 
     probes_of = collections.defaultdict(list)
-    for part in sorted(facts.census, key=lambda part: (part["segment_barcode"], part["stream"])):
+    for part in sorted(facts.census, key=lambda part: (part["segment_id"], part["stream"])):
         config = (part["electrode_config_hash"], part["probe_type"])
         electrodes = facts.electrodes.get(config) if part["electrode_config_hash"] else None
-        probes_of[part["segment_barcode"]].append({
+        probes_of[part["segment_id"]].append({
             "stream": part["stream"], "serial": part["probe_serial"], "part_number": part["part_number"],
             "probe_type": part["probe_type"], "electrode_config_hash": part["electrode_config_hash"],
             "n_electrodes": None if electrodes is None else len(electrodes), "electrodes": electrodes,
             "imro_table": part["imro_table"], "problem": part["problem"],
         })
     segments = [
-        {"segment_barcode": segment["segment_barcode"], "start_s": segment["start_s"], "end_s": segment["end_s"],
-         "probes": probes_of[segment["segment_barcode"]] if segment["segment_barcode"] in facts.censused else None}
+        {"segment_id": segment["segment_id"], "start_s": segment["start_s"], "end_s": segment["end_s"],
+         "probes": probes_of[segment["segment_id"]] if segment["segment_id"] in facts.censused else None}
         for segment in sorted(facts.segments, key=lambda segment: segment["start_s"])
     ]
 
@@ -127,7 +127,7 @@ def build_entry(facts: SessionFacts) -> dict:
             "start_s": start, "end_s": stop, "closed": bool(run["closed"]),
             "stopped_because": record.get("stopped_because"), "stop_kind": record.get("stop_kind"),
             "calibration": facts.run_calibrations.get(run["run_number"]),
-            "segments": [segment["segment_barcode"] for segment in spanned], "blocks": listed_blocks,
+            "segments": [segment["segment_id"] for segment in spanned], "blocks": listed_blocks,
         })
         if not listed_blocks:
             flags.append(_flag("run_without_block",
@@ -304,7 +304,7 @@ def gather_all(keys: list[dict]) -> dict[tuple[str, datetime.datetime], SessionF
                          if part["electrode_config_hash"]}},
             strobed_runs=strobed_runs.get(session, []),
             strobed_blocks=strobed_blocks.get(session, []),
-            censused=frozenset(int(row["segment_barcode"]) for row in censused.get(session, [])),
+            censused=frozenset(str(row["segment_id"]) for row in censused.get(session, [])),
             rig_problems=[row["problem"] for row in rig_problems.get(session, [])],
             rig_session=rig_sessions.get(session),
             run_calibrations={row["run_number"]: row["calibration_id"] for row in run_calibrations.get(session, [])},

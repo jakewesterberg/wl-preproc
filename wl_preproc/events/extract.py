@@ -87,13 +87,20 @@ _NIDQ_STROBE_BIT = 1  # in digital word 0, beside the barcode at bit 0
 
 
 def extract_nidq_words(nidq_bin: Path) -> WordStream:
-    """Words from the NI digital line.
+    """Words from the NI digital line, each `(sample, word)`.
 
     **Latched at the strobe's FAR edge, not its rising one.** Spec section
     4.2.1: data and strobe assert together at the start of T1, and the latching
     edge is T1's far end -- so T1 IS the setup time rather than adding to it.
     Sampling the rising edge would read data that has been valid for zero
     microseconds; sampling the falling edge reads data valid for a full T1.
+
+    **Timed at its RISING edge.** The sample a word carries is its pulse's
+    first high sample, where the rig asserted it, as the sync box stamps its
+    code words and as the NI's strobe is read against Intan's (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 49).
+    Under the NI's clock these times are the session's events, and at the far
+    edge each would be T1 late.
     """
     from wl_preproc.timebase._nidq_meta import read_nidq_meta
 
@@ -107,7 +114,7 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
             "needs two words"
         )
 
-    from wl_preproc.timebase.channels import column_chunks, n_values, strobe_falls
+    from wl_preproc.timebase.channels import column_chunks, n_values, strobe_words
 
     n_int16 = n_values(nidq_bin, np.int16)
     # The same guard, and the same message, `timebase/extract.py`'s
@@ -131,8 +138,9 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
     # (design spec `2026-11-14-scaling-long-sessions-design.md` section 4.1).
     #
     # Falling edges: high at i, low at i+1. The word is read at i, the last
-    # sample the strobe was still asserted (`timebase/channels.py::strobe_falls`).
-    words = strobe_falls(
+    # sample the strobe was still asserted, and timed at its pulse's first
+    # (`timebase/channels.py::strobe_words`).
+    words = strobe_words(
         column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels, np.int16),
         column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels + 1, np.int16),
         _NIDQ_STROBE_BIT,

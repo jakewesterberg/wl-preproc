@@ -71,7 +71,9 @@ _DEFAULT_STALE_THRESHOLD_S = 24 * 60 * 60  # 24h
 
 def _first_tables() -> list:
     """The tables `run_once` populates before the events stage: the
-    session's clock, recorded in its own short transaction, so no stage that
+    session's clock, chosen outside any transaction (the NI's codes are
+    decoded there when the sync box's do not hold every run, amendment 43)
+    and recorded in its own short transaction, so no stage that
     reads it holds the new row's lock for the length of its own work while an
     overlapping pass waits on it (design spec
     `2026-10-18-training-records-and-backup-clock-design.md` section 4.1; the
@@ -182,7 +184,7 @@ def _computed_tables() -> list:
         timebase.SyncBoxSegment,
         timebase.SystemTimebase,
         core.Segment,
-        # After `Segment`, whose rows are its key_source and whose `file_path`
+        # After `Segment`, whose rows are its key_source and whose `segment_id`
         # names the run it reads (design spec `2026-09-30-nwb-probes-design.md`
         # section 2.1).
         ephys.ProbeCensus,
@@ -760,8 +762,8 @@ def _clocked(table) -> tuple:
     """The restriction to sessions whose clock is recorded, as a tuple to
     splat into `table.populate(*...)`, for a stage keyed by session: every
     such stage reads the session's time through its clock, and a session
-    with none (landed without its sync box, or never recording one, until
-    part 3b or part 4 can time it) would otherwise be given a tier-D timing
+    with none (neither the sync box nor the NI holds every run, until lab
+    time, part 4, can time it) would otherwise be given a tier-D timing
     record from checks that never ran, or park its jobs in `error`, where
     nothing retries them once its clock exists (part 3a's final review, I3).
     Empty, as `_not_freed` is, for a stage whose `key_source` does not carry
@@ -1051,10 +1053,19 @@ def run_once(
 
     for table in _first_tables():
         try:
-            result = table.populate(
-                *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
-            )
-            populated += int(result["success_count"])
+            restrictions = _not_freed(table, freed)
+            # Counted by the rows this pass inserted, not by `success_count`:
+            # `SessionClock`'s make records a refusal in `ClockRefusal` and
+            # inserts no clock row, so a refused session stays in `key_source`
+            # (its inputs are re-checked each pass) and `populate` reports it
+            # computed on EVERY pass. A key counts only if it had no row
+            # before this pass and has one after.
+            pending = table.key_source
+            for restriction in restrictions:
+                pending = pending & restriction
+            before = (pending - table).proj().keys()
+            result = table.populate(*restrictions, reserve_jobs=True, suppress_errors=True)
+            populated += len(table & before) if before else 0
             errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")

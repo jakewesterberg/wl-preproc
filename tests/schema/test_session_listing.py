@@ -52,9 +52,11 @@ def test_an_entry_reads_what_the_daemon_measured(listed):
              for block in run["blocks"]] for run in entry["runs"]] == [[(1, "block-1", False, 3)],
                                                                       [(2, "block-2", True, 1)]]
     first, second = entry["segments"]
-    assert [run["segments"] for run in entry["runs"]] == [[first["segment_barcode"]],
-                                                          [first["segment_barcode"], second["segment_barcode"]]]
-    census = (ephys.ProbeCensus.Probe & key).to_dicts(order_by="segment_barcode")
+    assert [run["segments"] for run in entry["runs"]] == [[first["segment_id"]],
+                                                          [first["segment_id"], second["segment_id"]]]
+    census = sorted((ephys.ProbeCensus.Probe & key).to_dicts(),
+                    key=lambda part: [segment["start_s"] for segment in entry["segments"]
+                                      if segment["segment_id"] == part["segment_id"]])
     assert [segment["probes"][0]["imro_table"] for segment in entry["segments"]] == [
         part["imro_table"] for part in census]
     assert [segment["probes"][0]["electrodes"][0] for segment in entry["segments"]] == [0, 384]

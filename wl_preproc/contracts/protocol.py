@@ -437,7 +437,7 @@ class ListedSegment(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    segment_barcode: int
+    segment_id: str  # the file's path within its system's folder
     start_s: float
     end_s: float
     probes: list[ListedProbe] | None
@@ -463,7 +463,7 @@ class ListedBlock(BaseModel):
 
 class ListedRun(BaseModel):
     """A measured run (`core.Run`) with the rig's record of it
-    (`core.RunRecord`). `segments` names, by barcode, the SpikeGLX segments
+    (`core.RunRecord`). `segments` names, by `segment_id`, the SpikeGLX segments
     it spans; each is listed once, in the session's `segments`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -480,7 +480,7 @@ class ListedRun(BaseModel):
     # where the rig's record names none (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` section 4).
     calibration: str | None
-    segments: list[int]
+    segments: list[str]
     blocks: list[ListedBlock]
 
 
@@ -562,7 +562,7 @@ class SessionEntry(BaseModel):
     subject: str
     session_datetime: datetime.datetime
     session_name: str
-    tier: Literal["A", "B", "C", "D"] | None
+    tier: Literal["A", "B", "C", "D", "N"] | None
     rejected_segments: list[RejectedFile]
     runs: list[ListedRun]
     segments: list[ListedSegment]

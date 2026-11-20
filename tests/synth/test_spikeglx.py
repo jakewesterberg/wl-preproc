@@ -418,3 +418,34 @@ def test_a_part_number_without_a_spikeglx_type_is_refused(tmp_path):
     recipe = CI_RECIPE.model_copy(update={"probe_part_number": "NP2014"})
     with pytest.raises(ValueError, match="NP2014"):
         write_spikeglx(tmp_path, recipe, build_timeline(recipe))
+
+
+def test_without_the_sync_box_no_device_carries_a_barcode(tmp_path):
+    from wl_preproc.events.extract import extract_nidq_words
+    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE
+    from wl_preproc.timebase.segments import scan_system
+
+    truth = build_timeline(NI_CLOCK_RECIPE)
+    assert truth.barcodes == ()
+    directory = tmp_path / "spikeglx"
+    directory.mkdir()
+    write_spikeglx(directory, NI_CLOCK_RECIPE, truth)
+
+    scans = scan_system("spikeglx", directory)
+    assert scans, "the NI file must be found"
+    assert all(len(scan.barcodes) == 0 for scan in scans)
+    assert truth.code_words
+    words = extract_nidq_words(directory / f"{NI_CLOCK_RECIPE.session_id}.nidq.bin")
+    assert len(words.words) == len(truth.code_words)
+
+
+def test_the_ni_meta_names_its_creation_time(tmp_path):
+    """SpikeGLX writes `fileCreateTime` as the recording machine's local time,
+    to the second, with no zone. EDT is UTC-4 on 2027-03-14 (DST began the
+    same day at 02:00); the NI's first sample is SPIKEGLX_PRE_ROLL_S before
+    session time 0, so 09:00 UTC minus 0.7 s is 08:59:59.3 UTC, truncated.
+    """
+    truth, bin_path, _ = emit(tmp_path)
+    text = (bin_path.parent / f"{CI_RECIPE.session_id}.nidq.meta").read_text()
+    fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    assert fields["fileCreateTime"] == "2027-03-14T04:59:59"

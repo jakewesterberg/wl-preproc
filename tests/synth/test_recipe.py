@@ -23,16 +23,10 @@ def test_duration_is_derived_from_blocks():
     assert recipe.duration_s == pytest.approx(10.0)
 
 
-def test_syncbox_must_be_present():
-    """The sync box is at every session — a recipe without it is not a session."""
-    with pytest.raises(ValidationError):
-        SessionRecipe(
-            session_id="2027-03-14_01", subject="pico", rig="rig-a",
-            systems=("spikeglx",),
-            blocks=(BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=1, trial_duration_s=3.0),),
-            montages=(MontageSpec(start_s=0.0, end_s=3.0),),
-            n_ap_channels=4, ap_sample_rate_hz=30_000.0, seed=1,
-        )
+def test_a_session_without_the_sync_box_is_a_recipe():
+    """Part 3b-1: the NI can keep time when the sync box did not record."""
+    recipe = SessionRecipe(**{**CI_RECIPE.model_dump(), "systems": ("spikeglx",)})
+    assert recipe.systems == ("spikeglx",)
 
 
 def test_montages_must_cover_the_session():

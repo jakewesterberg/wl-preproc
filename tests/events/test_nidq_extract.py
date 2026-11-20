@@ -1,4 +1,5 @@
-"""NI word extraction: latched at the strobe's FAR edge (spec section 4.2.1)."""
+"""NI word extraction: each word timed at its strobe's rising edge, its value latched at the FAR edge (spec
+section 4.2.1)."""
 
 from __future__ import annotations
 
@@ -40,7 +41,10 @@ def test_nidq_latches_the_word_at_the_strobes_FAR_edge(tmp_path):
 
     stream = extract.extract_nidq_words(path)
     assert len(stream.words) == 1
-    _sample, word = stream.words[0]
+    sample, word = stream.words[0]
+    # Timed where the rig asserted it, the pulse's first high sample: at the
+    # far edge every event on the NI's clock would be T1 late.
+    assert sample == 100
     assert word == 0x00BB, (
         f"got 0x{word:04X}; 0x00AA means the near edge was sampled, and spec "
         "section 4.2.1 puts the latch at the far end of T1"
