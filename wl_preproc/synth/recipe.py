@@ -8,6 +8,7 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any, Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from wl_sync.log import LOSS_SHAPES, Loss
 
@@ -382,6 +383,12 @@ class SessionRecipe(BaseModel):
     # 3, ... A fixture uses it to repeat a number, as a crash and restart
     # without wl-xcon's XC-026 would, or to exceed element-event's smallint.
     trial_numbers: tuple[int, ...] = ()
+    # The wait before each trial, by position across the session, in seconds;
+    # empty by default, so trials run back to back and every existing profile
+    # is byte-identical. The rig's trials start on the animal, so their strobes
+    # are irregular; back-to-back fixed lengths are a strictly periodic stream,
+    # which cannot anchor one clock on another (part 3b-2, decision 7).
+    trial_waits_s: tuple[float, ...] = ()
     # Wrap each block in its own run, as wl-xcon sends them: the run's start
     # (escape 0x8006, its number and task) before the block, and its end
     # (marker 4) after the block's end. Off by default, so every existing
@@ -465,7 +472,7 @@ class SessionRecipe(BaseModel):
 
     @property
     def duration_s(self) -> float:
-        return sum(block.duration_s for block in self.blocks)
+        return sum(block.duration_s for block in self.blocks) + sum(self.trial_waits_s)
 
     def probes(self) -> tuple[ProbeSpec, ...]:
         """Every probe in the run, `imec0` first."""
@@ -516,6 +523,12 @@ class SessionRecipe(BaseModel):
                           if act.trial > n_trials)
             if late:
                 raise ValueError(f"rig_record acts in trials {late}, past the session's {n_trials}")
+        # Before the montage check, which reads duration_s and so the waits.
+        n_waited = sum(block.n_trials for block in self.blocks)
+        if self.trial_waits_s and len(self.trial_waits_s) != n_waited:
+            raise ValueError(f"trial_waits_s names {len(self.trial_waits_s)} trials, and the session has {n_waited}")
+        if any(wait < 0 for wait in self.trial_waits_s):
+            raise ValueError("trial_waits_s holds a negative wait")
         covered = sum(m.end_s - m.start_s for m in self.montages)
         if abs(covered - self.duration_s) > 1e-6:
             raise ValueError(
@@ -752,6 +765,13 @@ SPATIAL_RECIPE = SessionRecipe(
     seed=20270317,
 )
 
+def animal_paced_waits(n_trials: int, mean_s: float, seed: int) -> tuple[float, ...]:
+    """A wait before each of `n_trials` trials, as an animal starts them: 0.2 s
+    and an exponential tail, to the millisecond, repeatable from `seed`."""
+    draws = np.random.default_rng(seed).exponential(mean_s, n_trials)
+    return tuple(round(0.2 + float(draw), 3) for draw in draws)
+
+
 # The NI keeps time: no sync box, so no barcode on any device (part 3b-1).
 NI_CLOCK_RECIPE = SessionRecipe(
     **{
@@ -760,6 +780,21 @@ NI_CLOCK_RECIPE = SessionRecipe(
         "runs": True,
         "session_id": "2027-03-14_07",
         "seed": 20270319,
+    }
+)
+
+# The NI keeps time and Intan is placed on it by its strobes (part 3b-2). The
+# trials wait on the animal, since back-to-back strobes cannot anchor a clock.
+_NI_INTAN_WAITS = animal_paced_waits(4, 1.0, 20270320)
+NI_INTAN_RECIPE = SessionRecipe(
+    **{
+        **NI_CLOCK_RECIPE.model_dump(),
+        "systems": ("spikeglx", "rhs"),
+        "session_id": "2027-03-14_08",
+        "seed": 20270320,
+        "trial_waits_s": _NI_INTAN_WAITS,
+        "system_drift_ppm": (("spikeglx", 18.0), ("rhs", -40.0)),
+        "montages": (MontageSpec(start_s=0.0, end_s=15.0 + sum(_NI_INTAN_WAITS)),),
     }
 )
 
@@ -775,4 +810,5 @@ RECIPES: dict[str, SessionRecipe] = {
     "drift": DRIFT_RECIPE,
     "spatial": SPATIAL_RECIPE,
     "ni-clock": NI_CLOCK_RECIPE,
+    "ni-intan": NI_INTAN_RECIPE,
 }
