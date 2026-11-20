@@ -1,9 +1,40 @@
 # Amendments to wl-works
 
-**Eleven are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14, one 2026-10-18, one 2026-11-07.** The earlier two
+**Twelve are outstanding: two opened 2026-08-22, one 2026-09-28, one 2026-09-29, two 2026-09-30, one 2026-10-01, one 2026-10-05, one 2026-10-14, one 2026-10-18, one 2026-11-07, one 2026-11-20.** The earlier two
 batches are closed; their records are kept below, because
 [`specs/2026-08-12-wl-preproc-design.md`](superpowers/specs/2026-08-12-wl-preproc-design.md)
 §14 items 10–11 point at it and a reference that dead-ends teaches nothing.
+
+---
+
+# OPEN — the NI keeps time: a segment's key is its path, tier N, clock `nidq`, and two more reference sources
+
+**Opened 2026-11-20** with part 3b-1 of
+[`specs/2026-10-18-training-records-and-backup-clock-design.md`](superpowers/specs/2026-10-18-training-records-and-backup-clock-design.md)
+(amendments 39-51; the requester's rulings of 2026-10-18, 2026-10-30 and 2026-11-19). The sync box always runs,
+with a backup, and a session without it must still get in. When the sync box's log does not reach the session's
+last run, SpikeGLX's NI keeps the time. **Shipped at 3b-1's merge**, not before.
+
+- **`GET /sessions`: a segment's key is now `segment_id`, in place of `segment_barcode`.** It is a string, the
+  file's path within its system's folder, and it is the same under every clock. A `ListedSegment` carries
+  `segment_id`, `start_s`, `end_s` and `probes`; a `ListedRun`'s `segments` are the `segment_id`s of the segments it
+  spans, each listed once in the session's `segments`. The key's order is no longer time order: order segments by
+  `start_s`. `docs/schemas/session_listing.json` refuses a field it does not know, so **a copy vendored before
+  this change refuses every listed segment; pin it at or after this change.**
+- **`GET /sessions`: `tier` may be `N`** (`A`, `B`, `C`, `D` and `N`): the NI kept the session's time, its codes
+  hold every run, and nothing failed. Under the NI every other device has no way onto the NI's clock, so a session
+  with one is `D` (amendment 51).
+- **`GET /sessions`: `clock` may be `nidq`.** It was `syncbox`, `nidq` or `lab`, null until chosen, with
+  `syncbox` the only one built; `nidq` is built now. `lab` is part 4.
+- **`GET /nwb`: the description's `quality.reference_source` gains `rig_clock` and `nidq_meta`**, within version 3
+  (`barcode`, `manifest`, `rig_clock`, `nidq_meta`). They name where t = 0's wall-clock time came from under the
+  NI: the rig's clock fitted to the recording, or the first NI file's `fileCreateTime`.
+- **`GET /nwb`: the description's `quality` gains `clock`** (`syncbox` or `nidq`), within version 3, defaulting
+  to `syncbox`, so a description written before reads unchanged. `docs/schemas/nwb_description.json` refuses a
+  value it does not know: **a strict version 3 reader refuses an NI session's description until it has these two
+  values.** The listing's `clock` and the description's `quality.clock` say the same thing.
+- **Every listed session is listed once more** when this ships: each segment's key changes, so each digest does.
+- **Every NWB file built before this stays as it is.** Nothing here asks for one to be rebuilt.
 
 ---
 
@@ -205,7 +236,8 @@ approved by the requester), and wl.works told the same day. **Ask 1 is BUILT** (
 `GET /sessions?since=<cursor>`, documented in `ops/lab-host-protocol.md` and exported as
 `docs/schemas/session_listing.json`. Vendor that schema once this is on `main`.
 - **Each session:** its key and rig session name; `tier` and `rejected_segments`; its runs, each
-  with wl-xcon's task and stop reason, the barcodes of the SpikeGLX segments it spans, and its
+  with wl-xcon's task and stop reason, the barcodes of the SpikeGLX segments it spans *(Corrected 2026-11-20: a
+  segment's key is its path, `segment_id`, since part 3b-1; see the first entry above)*, and its
   blocks (number in the session and in the run, block type, times, `closed`, trial count); the
   segments once each, with every probe's serial, site map, `electrodes` (SpikeGLX electrode
   numbers) and `imro_table` (the segment's `~imroTbl`, verbatim, for its montage-plan

@@ -586,7 +586,7 @@ Authorization: Bearer <token>
     (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and
     `end_s` on the recording's clock, `closed`, wl-xcon's `stopped_because` and `stop_kind`,
     `calibration` (the display calibration the run ran against, from its start row in wl-xcon's
-    record, or null), `segments` (the barcodes of the SpikeGLX segments it spans), and `blocks`;
+    record, or null), `segments` (the `segment_id`s of the SpikeGLX segments it spans), and `blocks`;
   - each block: `block_number` (in the session), `block_in_run`, `block_type`, `start_s`,
     `end_s`, `closed` (null when never recorded, for a session read before 2026-10-01),
     `n_trials`;

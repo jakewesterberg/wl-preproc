@@ -315,7 +315,7 @@
     },
     "ListedRun": {
       "additionalProperties": false,
-      "description": "A measured run (`core.Run`) with the rig's record of it\n(`core.RunRecord`). `segments` names, by barcode, the SpikeGLX segments\nit spans; each is listed once, in the session's `segments`.",
+      "description": "A measured run (`core.Run`) with the rig's record of it\n(`core.RunRecord`). `segments` names, by `segment_id`, the SpikeGLX segments\nit spans; each is listed once, in the session's `segments`.",
       "properties": {
         "blocks": {
           "items": {

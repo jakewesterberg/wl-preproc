@@ -463,7 +463,7 @@ class ListedBlock(BaseModel):
 
 class ListedRun(BaseModel):
     """A measured run (`core.Run`) with the rig's record of it
-    (`core.RunRecord`). `segments` names, by barcode, the SpikeGLX segments
+    (`core.RunRecord`). `segments` names, by `segment_id`, the SpikeGLX segments
     it spans; each is listed once, in the session's `segments`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
