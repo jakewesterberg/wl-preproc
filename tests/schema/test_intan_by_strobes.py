@@ -102,6 +102,25 @@ def test_intans_segment_maps_every_code_onto_the_nis_time(landed):
             t * (1 + 18e-6) + SPIKEGLX_PRE_ROLL_S, abs=50e-6)
 
 
+def test_intans_segment_spans_its_samples_from_its_offset(landed):
+    # The segment's extent in session time, and the native sample its offset is
+    # anchored to: the first strobe edge matched to the NI's, here the first
+    # code word's, since every word was matched.
+    from wl_preproc.schema import core, timebase
+    from wl_preproc.synth.rhs import RHS_PRE_ROLL_S
+
+    key = {**landed.key("ni_intan"), "system": "rhs"}
+    seg = (core.Segment & key).fetch1()
+    fit = (timebase.SystemTimebase & key).fetch1()
+    assert seg["start_s"] == seg["offset_s"]
+    # `scan.duration_s / rate.scale` is n_samples / nominal over fitted / nominal.
+    assert seg["end_s"] == pytest.approx(seg["n_samples"] / fit["fitted_rate_hz"] + seg["offset_s"], abs=1e-9)
+    first_word_s = landed.truth("ni_intan").code_words[0][0]
+    true_sample = (first_word_s * (1 - 40e-6) + RHS_PRE_ROLL_S) * fit["nominal_rate_hz"]
+    assert seg["first_sample"] > 0
+    assert abs(seg["first_sample"] - true_sample) <= 1
+
+
 def test_an_ni_and_intan_session_is_tier_n(landed):
     from wl_preproc.schema import timebase
 
