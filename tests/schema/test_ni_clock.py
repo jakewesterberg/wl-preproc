@@ -48,11 +48,13 @@ class _Landed(dict):
     report: dict
 
 
-def _errors_of(report: dict, key: dict) -> list[str]:
-    """A pass's errors naming the session's animal: one module's database
-    holds every module's sessions, and the tier-D sessions here may err, so
-    only the session's own are read."""
-    return [error for error in report["errors"] if key["subject"] in error]
+def _errors_of(report: dict, key: dict, animals: dict) -> list[str]:
+    """A pass's errors but those naming another of this module's animals
+    (`animals`): the tier-D sessions here may err, so their errors are
+    dropped, but an error naming no session, a stage-wide one, is kept (the
+    final review's M2), as is one naming the session's own animal."""
+    others = {animal.subject for animal in animals.values()} - {key["subject"]}
+    return [error for error in report["errors"] if not any(subject in error for subject in others)]
 
 
 @pytest.fixture(scope="module")
@@ -348,11 +350,12 @@ def ni_nwb(landed, prefix, tmp_path_factory):
 
 def test_the_ni_sessions_passes_report_no_error(landed, ni_nwb):
     """Every stage, the NWB builder's included, runs on the NI's session
-    without an error: the daemon's report names none of its animal's keys."""
+    without an error: the daemon's report holds no error but those of this
+    module's other sessions, a stage-wide one included."""
     _recipe, _truth, key, _session_dir = landed["ni"]
     _activation, _row, report = ni_nwb
-    assert _errors_of(landed.report, key) == []
-    assert _errors_of(report, key) == []
+    assert _errors_of(landed.report, key, landed.animals) == []
+    assert _errors_of(report, key, landed.animals) == []
 
 
 def test_an_ni_session_builds_an_nwb_file_saying_the_ni_kept_time(landed, ni_nwb):
