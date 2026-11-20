@@ -162,6 +162,13 @@ FOLLOWS_CONTRADICTION = "contradiction"
 #: frame grid was placed again after NTP's first sync stepped the clock
 #: (wl-sync's `process_uuid` docstring).
 ADJACENT_VALUE_STEPS = (1, 2)
+#: The `timebase` values that put every path on one count (wl-sync's note 7,
+#: its one-clock build): there a frame whose lead edge was not stamped has no
+#: `B` record, every device recorded it and its value was spent, so one `B`
+#: dropped just after a re-gridded roll steps the value by 3. Under these, 3 is
+#: adjacent too; two drops (4 or more) are not told from a gap, and are one.
+ONE_COUNT_TIMEBASES = frozenset({"rp1-pio-si", "rp1-pio"})
+ONE_COUNT_VALUE_STEPS = (*ADJACENT_VALUE_STEPS, 3)
 #: The most a boundary's tick step may differ from its barcode value step
 #: before one clock is contradicted: a roll in place's second frame comes
 #: about 1.6 s after the first for a value step of 2, and NTP slews both.
@@ -276,11 +283,27 @@ class SyncBoxSession:
                 out.append(SegmentLoss(index=index, cause=GAP, path="W", gpio=None, lost=None, bound=None,
                                        tick_us=stop_us, before_us=start_us, after_us=stop_us,
                                        start_s=placed(start_us), stop_s=placed(stop_us)))
+            ends = log.desync_ends or (None,) * len(log.losses)
             out += [SegmentLoss(index=index, cause=loss.cause, path=loss.path, gpio=loss.gpio, lost=loss.count,
                                 bound=loss.bound, tick_us=loss.tick_us, before_us=loss.before_us,
-                                after_us=loss.after_us, start_s=placed(loss.before_us), stop_s=placed(loss.after_us))
-                    for loss in log.losses]
+                                after_us=loss.after_us, start_s=placed(loss.before_us),
+                                stop_s=placed(loss.after_us if loss.after_us is not None
+                                              else self._desync_end(index, end) if loss.cause == "desync" else None))
+                    for loss, end in zip(log.losses, ends, strict=True)]
         return out
+
+    def _desync_end(self, index: int, end_us: int | None) -> int | None:
+        """Where a desync of segment `index` the box left open ends: at the
+        first code word after it in its own segment (`end_us`), or else at
+        the first of the next segment on the same clock (wl-sync's note 8);
+        None where no code word follows it, as on a box before `fc18551`,
+        whose word pump stopped."""
+        if end_us is not None:
+            return end_us
+        for later in range(index + 1, len(self.logs)):
+            if self.clocks[later] == self.clocks[index] and self.logs[later].codes:
+                return self.logs[later].codes[0][0]
+        return None
 
     def fails_the_timing_check(self, runs: list[tuple[float, float | None]]) -> bool:
         """Whether a loss of session time's code words fails the session's
@@ -330,8 +353,9 @@ def timing_check_fails(path: str, cause: str, start_s: float | None, stop_s: flo
     """Whether one loss of session time's records fails the session's timing
     check (design spec `2026-11-04-syncbox-header-design.md` section 6,
     decision 3.5): a loss of code words, or a gap, whose window overlaps a
-    measured run, and any `desync`, whose window has no end and after which no
-    run can be measured to show what it lost. A lost edge is reported only:
+    measured run, and a `desync` whose window has no end, after which no run
+    can be measured to show what it lost. A `desync` a later code word closes
+    (wl-sync's note 8, `SyncBoxSession.losses`) is a loss like any other. A lost edge is reported only:
     no stage here reads the box's edges.
 
     A window's ends are records the box captured (wl-sync's `Loss`), so one
@@ -342,7 +366,7 @@ def timing_check_fails(path: str, cause: str, start_s: float | None, stop_s: flo
     run, without end."""
     if path != "W":
         return False
-    if cause == "desync":
+    if cause == "desync" and stop_s is None:
         return True
     low = -math.inf if start_s is None else start_s
     high = math.inf if stop_s is None else stop_s
@@ -393,7 +417,8 @@ def _follows(members: list[SyncBoxLog], log: SyncBoxLog) -> str:
     if abs(tick_step_s - value_step) > MAX_STEP_DISAGREEMENT_S:
         return (f"{FOLLOWS_CONTRADICTION}: its ticks step {tick_step_s:.1f} s and its barcode values "
                 f"{value_step} s")
-    return FOLLOWS_ADJACENT if value_step in ADJACENT_VALUE_STEPS else FOLLOWS_GAP
+    steps = ONE_COUNT_VALUE_STEPS if log.timebase in ONE_COUNT_TIMEBASES else ADJACENT_VALUE_STEPS
+    return FOLLOWS_ADJACENT if value_step in steps else FOLLOWS_GAP
 
 
 def read_syncbox_session(session_dir: Path) -> SyncBoxSession:

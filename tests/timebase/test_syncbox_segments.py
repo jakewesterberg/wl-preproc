@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
-from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, CodeWord, SyncBoxLogHeader, write_log
+from wl_sync.log import SCHEMA_VERSION, BarcodeEmitted, CodeWord, Loss, SyncBoxLogHeader, write_log
 from wl_sync.pins import GPIO_MAP
 
 from wl_preproc.synth.recipe import CI_RECIPE, SyncBoxRestartSpec
@@ -121,13 +121,13 @@ def _codes(*pairs):
     return [CodeWord(tick_us=round(tick_s * 1e6), word=word) for tick_s, word in pairs]
 
 
-def _rolled(tmp_path, *later, process=PROCESS):
+def _rolled(tmp_path, *later, process=PROCESS, timebase=None):
     """`seg-000.log` of `PROCESS`, its first frame the late one, then
-    `seg-001.log` of `process` holding `later`."""
+    `seg-001.log` of `process` holding `later`, both naming `timebase`."""
     syncbox_dir = tmp_path / "s" / "syncbox"
     _segment(syncbox_dir, "seg-000.log", 0, _barcodes((1.0, 100), (2.0, 101), (3.0, 102)) + _codes((2.5, 0x8001)),
-             process_uuid=PROCESS)
-    _segment(syncbox_dir, "seg-001.log", 1, list(later), process_uuid=process)
+             process_uuid=PROCESS, timebase=timebase)
+    _segment(syncbox_dir, "seg-001.log", 1, list(later), process_uuid=process, timebase=timebase)
     return segments.read_syncbox_session(tmp_path / "s")
 
 
@@ -146,6 +146,28 @@ def test_a_roll_in_place_may_skip_one_value(tmp_path):
     skips one value about 1.6 s on: adjacent, not a gap."""
     session = _rolled(tmp_path, *_barcodes((4.6, 104), (5.6, 105)))
     assert session.follows[1] == "adjacent" and session.gaps() == []
+
+
+def test_a_roll_in_place_may_step_three_on_one_count(tmp_path):
+    """wl-sync's note 7: on one count a frame whose lead edge was not stamped
+    has no `B`, so one dropped just after a re-gridded roll steps the value by
+    3, the ticks agreeing: adjacent under the two one-clock timebases."""
+    session = _rolled(tmp_path, *_barcodes((5.6, 105), (6.6, 106)), timebase="rp1-pio-si")
+    assert session.follows[1] == "adjacent" and session.gaps() == []
+
+
+def test_a_step_of_three_is_a_gap_on_a_split_clock(tmp_path):
+    """Only one count can drop a `B` unrecorded (note 7); a split clock's
+    frames come from software, so its step of 3 is the box recording elsewhere."""
+    session = _rolled(tmp_path, *_barcodes((5.6, 105), (6.6, 106)), timebase="split")
+    assert session.follows[1] == "gap"
+
+
+def test_a_step_of_four_is_a_gap_on_one_count(tmp_path):
+    """Two dropped `B`s are not told apart from a gap: 4 or more is a gap on
+    every timebase."""
+    session = _rolled(tmp_path, *_barcodes((6.6, 106), (7.6, 107)), timebase="rp1-pio")
+    assert session.follows[1] == "gap"
 
 
 def test_a_gap_within_one_process_keeps_one_clock_and_is_named(tmp_path):
@@ -352,3 +374,54 @@ def test_a_loss_on_another_clock_is_not_placed_and_does_not_fail_session_time(tm
                            before_us=1_000_000, after_us=None), process=LATER_PROCESS)
     assert [(loss.cause, loss.start_s) for loss in session.losses()] == [("desync", None)]
     assert not session.fails_the_timing_check([(0.0, 10.0)])
+
+
+# wl-sync's note 8: the box no longer stops capturing code words at a desync;
+# it pairs its FIFO's stream again and goes on, so `W` records follow the
+# record, and the first one is the first code word known to follow the loss.
+
+def _desync(tick_s):
+    return Loss(tick_us=round(tick_s * 1e6), path="W", gpio=None, count=2, bound="at_least", cause="desync",
+                before_us=round(tick_s * 1e6), after_us=None)
+
+
+def test_a_desync_is_closed_by_the_next_code_word(tmp_path):
+    """Its window ends at the first `W` after it in the stream; `after_us`
+    stays as the box wrote it, empty."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
+                                             _desync(2.5), *_codes((2.8, 0x8002))], process_uuid=PROCESS)
+    (loss,) = segments.read_syncbox_session(tmp_path / "s").losses()
+    assert (loss.cause, loss.after_us) == ("desync", None)
+    assert (loss.start_s, loss.stop_s) == pytest.approx((0.5, 0.8))
+
+
+def test_a_desync_with_no_code_word_after_it_stays_open(tmp_path):
+    """The box before wl-sync `fc18551`, whose word pump stopped: nothing
+    follows, and the window has no end."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
+                                             _desync(2.5)], process_uuid=PROCESS)
+    (loss,) = segments.read_syncbox_session(tmp_path / "s").losses()
+    assert loss.stop_s is None
+
+
+def test_a_desync_is_closed_by_the_next_segments_first_code_word(tmp_path):
+    """A desync that is its segment's last record: the first code word of the
+    next segment on the same clock follows it."""
+    session = _rolled(tmp_path, *_barcodes((4.0, 103)), *_codes((4.4, 0x8002)))
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
+                                             _desync(2.5)], process_uuid=PROCESS)
+    session = segments.read_syncbox_session(tmp_path / "s")
+    (loss,) = session.losses()
+    assert loss.stop_s == pytest.approx(2.4)
+
+
+def test_a_closed_desync_between_runs_does_not_fail_the_timing_check():
+    """Closed, a desync is a loss of code words like any other: it fails only
+    where its window overlaps a measured run."""
+    runs = [(0.0, 5.0), (10.0, 15.0)]
+    assert not segments.timing_check_fails("W", "desync", 6.0, 8.0, runs)
+    assert segments.timing_check_fails("W", "desync", 4.0, 8.0, runs)
+    assert segments.timing_check_fails("W", "desync", 6.0, None, runs)

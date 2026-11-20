@@ -232,7 +232,7 @@ class SyncBoxSegment(dj.Computed):
         before_us=null : bigint unsigned  # the last record of its path known to precede it
         after_us=null  : bigint unsigned  # the first known to follow it
         start_s=null   : double  # before_us in session time, where the segment keeps it
-        stop_s=null    : double  # after_us in session time, likewise
+        stop_s=null    : double  # after_us in session time, likewise; for a desync, the first code word after it
         """
 
     @property
@@ -656,8 +656,9 @@ class TimingProvenance(dj.Computed):
         under_the_ni = bool(clocks) and clocks[0]["source"] == "nidq"
 
         # And if the box lost code words of session time where they mattered:
-        # in a measured run, or by a desync, after which nothing is measured
-        # (design spec `2026-11-04-syncbox-header-design.md` section 6).
+        # in a measured run, or by a desync no code word follows, after which
+        # nothing is measured (design spec `2026-11-04-syncbox-header-design.md`
+        # section 6; wl-sync's note 8 closes one that a code word follows).
         if "syncbox" in system_names:
             runs = measured_runs(session_key)
             try:
