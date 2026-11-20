@@ -56,18 +56,24 @@ def unreached_end(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_tri
     """None when `decoded` reaches the end of the session's last run, else
     one sentence saying what of it is missing. Rule 1's test, the sync
     box's (amendment 42: the NI keeps time only when its log "ends before the
-    session's last run does"). With the rig's record, the last run is the
-    one of the highest number it names: its last trial line must be an
+    session's last run does"). A log that decodes `SESSION_END` did not end
+    before it, nor, with the rig's record, one that decodes the last run's
+    `RUN_END`, whatever was lost or failed its checksum before them (the
+    final review's I1). Otherwise, with the rig's record, the last run is
+    the one of the highest number it names: its last trial line must be an
     assembled trial that closes (a missing `RUN_END` allowed), or, with no
     trial lines, the run must be present. With none, `SESSION_END` must be
     decoded. A gap before the last run, a log that starts late, or a gap
     inside the last run that resumes before its last trial reach its end."""
     named = rig_runs.runs if rig_runs is not None else ()
-    if not named:
-        return _markers_unheld(decoded, (Marker.SESSION_END,))
+    unended = _markers_unheld(decoded, (Marker.SESSION_END,))
+    if not named or unended is None:
+        return unended
     last = max(named, key=lambda run: run.number)
-    lines = _trial_lines(named, rig_trials).get(last.number, [])
     assembly = assemble(decoded)
+    if any(run.run_number == last.number and run.end_s is not None for run in assembly.runs):
+        return None
+    lines = _trial_lines(named, rig_trials).get(last.number, [])
     if lines:
         return _trial_unheld(last.number, lines[-1], _closed(assembly))
     if last.number not in {run.run_number for run in assembly.runs}:

@@ -88,7 +88,10 @@ class Choice:
 # Why each clock keeps a session's time (the plan's Global Constraints), as
 # `timebase.SessionClock.reason` stores it.
 SYNC_BOX_HOLDS = "the sync box's codes hold every run the rig recorded"
-SYNC_BOX_REACHES_LAST = "the sync box's codes reach the rig's last run; a run before it is not in its codes"
+# Rule 1 by reaching the end (amendment 42), each followed by `unheld`'s
+# sentence for what its codes lack (`reaching_reason`).
+SYNC_BOX_REACHES_LAST = "the sync box's codes reach the end of the rig's last run; {unheld}"
+SYNC_BOX_REACHES_END = "the sync box's codes decode SESSION_END, and there is no rig record; {unheld}"
 SYNC_BOX_RESTARTED = ("the sync box restarted within the session; it stays the clock, its restart bridged by wl-sync "
                       "part 2")
 NI_HOLDS = "the NI's codes hold every run the rig recorded; the sync box {why}"
@@ -98,12 +101,26 @@ NI_HOLDS = "the NI's codes hold every run the rig recorded; the sync box {why}"
 NOT_RECORDED_YET = "the session's clock is not recorded yet: a daemon pass records it first"
 # `timebase.SessionClock.reason`'s width.
 REASON_WIDTH = 255
+# The version of `choose`'s rules, in `choice_inputs`' digest, so a refusal
+# recorded under older rules (`timebase.ClockRefusal`) is decided again
+# rather than reused (the final review's I2). Bump it whenever `choose`, or
+# anything it reads a session through (`timebase/holding.py`, the NI's
+# reader, the sync box's), changes which clock it chooses or why.
+CHOICE_RULES = "3b-1"
 
 
 def clipped(reason: str, width: int = REASON_WIDTH) -> str:
     """`reason` cut to its column, ending "…" where it was cut: a long name
     would otherwise fail the clock's insert on every pass."""
     return reason if len(reason) <= width else reason[:width - 1] + "…"
+
+
+def reaching_reason(unheld_sentence: str, *, has_rig_record: bool) -> str:
+    """Why the sync box keeps time when its codes do not hold every run but
+    reach the end of the session's last run (with no rig record, decode
+    `SESSION_END`): what they reach, then `unheld`'s own sentence, clipped."""
+    reason = SYNC_BOX_REACHES_LAST if has_rig_record else SYNC_BOX_REACHES_END
+    return clipped(reason.format(unheld=unheld_sentence))
 
 
 # SpikeGLX names each file of a run `<run>_g<gate>_t<trigger>`; the synthetic
@@ -155,11 +172,13 @@ def _sync_box_choice(session_dir: Path, landed_without: Mapping[str, str], rig_r
     if session.timed is None:
         return None, "does not: its log holds no barcode, so it places nothing in session time"
     decoded = decode_stream(session.codes())
-    if unheld(decoded, rig_runs, rig_trials) is None:
+    lacking = unheld(decoded, rig_runs, rig_trials)
+    if lacking is None:
         return Choice(source="syncbox", reason=SYNC_BOX_HOLDS), ""
     sentence = unreached_end(decoded, rig_runs, rig_trials)
     if sentence is None:
-        return Choice(source="syncbox", reason=SYNC_BOX_REACHES_LAST), ""
+        has_rig_record = rig_runs is not None and bool(rig_runs.runs)
+        return Choice(source="syncbox", reason=reaching_reason(lacking, has_rig_record=has_rig_record)), ""
     if segments.SEGMENT_AFTER_RESTART in session.roles():
         # A restart is bridged by a device that recorded through it (wl-sync
         # part 2).
@@ -204,6 +223,7 @@ def _ni_choice(session_dir: Path, landed_without: Mapping[str, str], rig_runs: R
     return Choice(source="nidq", reason=clipped(NI_HOLDS.format(why=why)))
 
 
+# A change here, or in what it reads a session through, bumps `CHOICE_RULES`.
 def choose(session_dir: Path, subject: str, landed_without: Mapping[str, str] = MappingProxyType({})) -> Choice:
     """Section 4.2's rule, as part 3b-1 builds it (the plan's Global
     Constraints). `landed_without` maps each system a person landed the
@@ -229,9 +249,10 @@ def choice_inputs(session_dir: Path, subject: str, landed_without: Mapping[str, 
     each NI file and its `.meta`, and the rig's record files `read_rig_runs`
     and `read_rig_trials` read, by path within the session, size and
     `mtime_ns` (stat only, never their contents), with what the session was
-    landed without and whether it was already timed. A recorded refusal
-    (`timebase.ClockRefusal`) stands while this is unchanged, so a session no
-    clock can time is not decoded again on every pass."""
+    landed without, whether it was already timed, and the rules' version
+    (`CHOICE_RULES`). A recorded refusal (`timebase.ClockRefusal`) stands
+    while this is unchanged, so a session no clock can time is not decoded
+    again on every pass, and is decided again once the rules change."""
     xcon = session_dir / XCON_DIRNAME
     paths = [*find_recordings("syncbox", session_dir / "syncbox"),
              *(path for nidq in nidq_files(session_dir) for path in (nidq, nidq.with_suffix(".meta"))),
@@ -245,7 +266,8 @@ def choice_inputs(session_dir: Path, subject: str, landed_without: Mapping[str, 
         return [str(path.relative_to(session_dir)), status.st_size, status.st_mtime_ns]
 
     read = {"subject": subject, "files": [stat(path) for path in paths],
-            "landed_without": sorted(landed_without.items()), "already_timed": already_timed}
+            "landed_without": sorted(landed_without.items()), "already_timed": already_timed,
+            "rules": CHOICE_RULES}
     return hashlib.sha256(json.dumps(read, sort_keys=True).encode()).hexdigest()
 
 

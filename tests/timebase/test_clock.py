@@ -82,20 +82,22 @@ def test_a_sync_box_with_a_gap_before_the_last_run_stays_the_clock(tmp_path):
     """Amendment 42: the NI keeps time only when the box's log ends before
     the session's last run does, with no later segment. A gap within the
     session (the box recording elsewhere from 5.5 s to 8.5 s, inside run 1)
-    keeps the box, and its reason says a run before the last is not held."""
+    keeps the box, and its reason names the first thing its codes lack."""
     from wl_preproc.synth.recipe import SyncBoxRollSpec
     from wl_preproc.timebase.clock import Choice, choose
 
     session_dir = _session(tmp_path, runs=True, syncbox_roll=SyncBoxRollSpec(at_s=5.5, gap_s=3.0))
     assert choose(session_dir, "pico") == Choice(
-        source="syncbox", reason="the sync box's codes reach the rig's last run; a run before it is not in its codes")
+        source="syncbox", reason="the sync box's codes reach the end of the rig's last run; run 1's trial 3 is not in "
+                                 "its codes")
 
 
 def test_a_sync_box_with_a_gap_inside_the_last_run_stays_the_clock(tmp_path):
     """Amendment 42's "its log ends before the session's last run does": a
     gap inside the last run (8.5 s to 10 s, losing its second trial) that
     resumes before its last trial reaches the run's end, so the box stays
-    the clock."""
+    the clock. Its reason names the trial lost inside that run, not "a run
+    before it" (the final review's M3)."""
     from wl_preproc.contracts.events import TaskTypeCode
     from wl_preproc.synth.recipe import BlockSpec, SyncBoxRollSpec
     from wl_preproc.timebase.clock import Choice, choose
@@ -104,7 +106,66 @@ def test_a_sync_box_with_a_gap_inside_the_last_run_stays_the_clock(tmp_path):
         BlockSpec(task_type=TaskTypeCode.RESTING_DARK, n_trials=1, trial_duration_s=6.0),
         BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=3, trial_duration_s=3.0)))
     assert choose(session_dir, "pico") == Choice(
-        source="syncbox", reason="the sync box's codes reach the rig's last run; a run before it is not in its codes")
+        source="syncbox", reason="the sync box's codes reach the end of the rig's last run; run 2's trial 3 is not in "
+                                 "its codes")
+
+
+def test_with_no_rig_record_a_sync_box_reaching_session_end_says_so(tmp_path):
+    """With no rig record, rule 1 needs only SESSION_END; a log missing
+    SESSION_START keeps the box, and its reason names neither the rig's
+    last run nor a run (the final review's M3, Task 3's two deferred
+    minors)."""
+    from wl_preproc.events.rigruns import read_rig_runs
+    from wl_preproc.timebase.clock import Choice, choose
+    from wl_preproc.timebase.extract import find_recordings
+
+    session_dir = _session(tmp_path)
+    rig_runs = read_rig_runs(session_dir, "pico")
+    assert rig_runs is None or not rig_runs.runs
+    (log,) = find_recordings("syncbox", session_dir / "syncbox")
+    text = log.read_text()
+    # SESSION_START, the log's first code, ticked at session t = 0.
+    assert text.count("W,1000000,1\n") == 1
+    log.write_text(text.replace("W,1000000,1\n", ""))
+    assert choose(session_dir, "pico") == Choice(
+        source="syncbox", reason="the sync box's codes decode SESSION_END, and there is no rig record; its codes "
+                                 "hold no SESSION_START")
+
+
+def test_a_reaching_reason_is_clipped_to_its_column():
+    """The reaching reason carries `unheld`'s sentence, so it is clipped as
+    every reason is."""
+    from wl_preproc.timebase import clock
+
+    assert len(clock.reaching_reason("x" * 300, has_rig_record=True)) == 255
+    assert clock.reaching_reason("x" * 300, has_rig_record=True).endswith("…")
+    assert clock.reaching_reason("run 1 is not in its codes", has_rig_record=True) == (
+        "the sync box's codes reach the end of the rig's last run; run 1 is not in its codes")
+
+
+def test_a_corrupt_word_in_the_last_trial_keeps_the_sync_box(tmp_path):
+    """The final review's I1: one word of the last trial's TRIAL_NUMBER
+    flipped (run 2's trial 4), its checksum failing, with the run's RUN_END
+    and SESSION_END decoded after it. The log did not end before the last
+    run did (amendment 42), so the box keeps time, with or without an NI: a
+    training session with only the box is still timed, as on main."""
+    import shutil
+
+    from wl_preproc.timebase.clock import choose
+    from wl_preproc.timebase.extract import find_recordings
+
+    session_dir = _session(tmp_path, runs=True)
+    (log,) = find_recordings("syncbox", session_dir / "syncbox")
+    text = log.read_text()
+    # Trial 4's TRIAL_NUMBER payload: escape, high word 0, low word 4, checksum.
+    assert text.count("W,10013000,4\n") == 1
+    log.write_text(text.replace("W,10013000,4\n", "W,10013000,5\n"))
+    choice = choose(session_dir, "pico")
+    assert choice.source == "syncbox"
+    assert choice.reason == ("the sync box's codes reach the end of the rig's last run; run 2's trial 4 is not in its "
+                             "codes")
+    shutil.rmtree(session_dir / "spikeglx")
+    assert choose(session_dir, "pico") == choice
 
 
 def test_a_sync_box_that_restarted_stays_the_clock(tmp_path):

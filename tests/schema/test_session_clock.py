@@ -408,6 +408,36 @@ def test_a_refusal_is_decided_again_when_what_it_read_changes(landed):
     assert not len(timebase.ClockRefusal & key)
 
 
+def test_a_refusal_is_decided_again_when_the_rules_change(landed, monkeypatch):
+    """The final review's I2: a refusal recorded under one version of
+    `choose`'s rules (`timebase/clock.py::CHOICE_RULES`) is not reused once
+    the rules change, though no file did: the choice is made again, the NI
+    decoded. Under the same rules it is reused, nothing decoded."""
+    from wl_preproc.events import extract
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase import clock
+
+    key, session_dir = _ni_that_does_not_hold(landed)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    reason, inputs = (timebase.ClockRefusal & key).fetch1("reason", "inputs")
+    assert reason == _NI_REASON
+
+    decoded = []
+    real = extract.extract_nidq_words
+
+    def spy(path):
+        decoded.append(path)
+        return real(path)
+
+    monkeypatch.setattr(extract, "extract_nidq_words", spy)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert [path for path in decoded if session_dir in path.parents] == []
+    monkeypatch.setattr(clock, "CHOICE_RULES", f"{clock.CHOICE_RULES}+next")
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert [path for path in decoded if session_dir in path.parents] != []
+    assert (timebase.ClockRefusal & key).fetch1("inputs") != inputs
+
+
 def test_an_unreadable_ni_is_a_recorded_reason(landed):
     """A file cut mid-sample is refused by `extract_nidq_words`; the
     refusal says so, and is kept, never lost silently."""
