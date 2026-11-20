@@ -82,9 +82,16 @@ NEIGHBOUR_ALIGNMENTS = 8
 #: the right one; every later edge would then lock on one word off, with
 #: residuals as small as a right match's (ruling R11).
 REANCHOR_GAP_S = 10.0
+#: A re-anchor's candidate offsets lie within this of the current map's: the
+#: map may have run blind, but not by more (ruling R14).
+REANCHOR_SEARCH_S = 0.05
+#: The walk refits over the pairs within this much device time of its latest,
+#: so that a few sparse pairs through a break steer the line instead of the many
+#: from before it (ruling R14).
+REFIT_SPAN_S = 120.0
 
 # The extension refits as soon as it holds _MIN_REFIT_PAIRS pairs, over at most
-# the last _REFIT_PAIRS of them. An early refit is what makes verification fair:
+# the last _REFIT_PAIRS of them within REFIT_SPAN_S. An early refit is what makes verification fair:
 # a walk held at a rate of 1.0 until 20 pairs exist drifts past the tolerance on
 # a sparse stream, so whether a rival verifies becomes luck, and a lucky wrong
 # candidate beside seven unlucky rivals passes the margin (ruling R1).
@@ -132,6 +139,7 @@ class _Walk:
     reference_index: np.ndarray
     rate: float
     offset_s: float
+    resumes: tuple[int, ...] = ()  # the device edges each re-anchor resumed from
 
 
 def match_strobes(
@@ -175,12 +183,17 @@ def match_strobes(
         seed_device=seed_device,
         seed_reference=seed_reference,
         reanchor=True,
-        previous=anchor.first,
+        direction=-1,
     )
 
     device_index = np.concatenate([backward.device_index[::-1], forward.device_index])
     reference_index = np.concatenate([backward.reference_index[::-1], forward.reference_index])
-    residual = _block_residuals(device_s[device_index], reference_s[reference_index])
+    # Residual blocks never straddle a re-anchor: either side is its own map. A
+    # forward resume at edge e starts a stretch at e, a backward one ends one at e.
+    boundaries = np.unique([e for e in forward.resumes] + [e + 1 for e in backward.resumes])
+    residual = _block_residuals(
+        device_s[device_index], reference_s[reference_index], np.searchsorted(device_index, boundaries)
+    )
     keep = _one_to_one(reference_index, residual) & (np.abs(residual) <= RESIDUAL_LIMIT_S)
     device_index, reference_index = device_index[keep], reference_index[keep]
 
@@ -200,15 +213,25 @@ def match_strobes(
     )
 
 
-def _block_residuals(device: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Each pair's residual against its own block's line. The blocks are
-    consecutive, `RESIDUAL_BLOCK_PAIRS` long, the last absorbing the remainder
-    so that no block is fitted from a handful of pairs."""
+def _block_residuals(device: np.ndarray, reference: np.ndarray, cuts: np.ndarray) -> np.ndarray:
+    """Each pair's residual against its own block's line. The pairs are first cut
+    at `cuts` (positions where a re-anchor resumed), then each piece into
+    consecutive blocks `RESIDUAL_BLOCK_PAIRS` long, the last absorbing the
+    remainder so that no block is fitted from a handful of pairs. A piece of
+    fewer than `MIN_MATCHED_EDGES` pairs joins the piece before it."""
+    edges = [0] + [int(c) for c in cuts if 0 < c < device.size] + [device.size]
+    pieces: list[tuple[int, int]] = []
+    for start, stop in zip(edges[:-1], edges[1:], strict=True):
+        if pieces and stop - start < MIN_MATCHED_EDGES:
+            pieces[-1] = (pieces[-1][0], stop)
+        elif stop > start:
+            pieces.append((start, stop))
     residual = np.empty(device.size)
-    n_blocks = max(1, device.size // RESIDUAL_BLOCK_PAIRS)
-    for block in np.array_split(np.arange(device.size), n_blocks):
-        rate, offset_s = np.polyfit(device[block], reference[block], 1)
-        residual[block] = reference[block] - (device[block] * rate + offset_s)
+    for start, stop in pieces:
+        span = np.arange(start, stop)
+        for block in np.array_split(span, max(1, span.size // RESIDUAL_BLOCK_PAIRS)):
+            rate, offset_s = np.polyfit(device[block], reference[block], 1)
+            residual[block] = reference[block] - (device[block] * rate + offset_s)
     return residual
 
 
@@ -304,21 +327,38 @@ def _refusal(best: float, runner: float) -> str:
 def _reanchor(
     reference_s: np.ndarray, device_s: np.ndarray, stretch: np.ndarray, rate: float, offset_s: float, gap_s: float
 ) -> float:
-    """The offset to go on with after a break, from the stretch's first edge, or
-    `Unanchored` (ruling R11).
+    """The offset to go on with after the map has run blind, from the stretch's
+    first edge, or `Unanchored` (rulings R11 and R14).
 
-    The candidates are the current map's prediction for that edge and the edge
-    laid on each NI edge within `NEIGHBOUR_ALIGNMENTS` of the prediction's image,
-    each verified over `VERIFY_S` of the stretch at the current rate. The rule is
-    the first anchor's: 95% of eligible edges, and 10 points over the runner-up."""
+    The candidates are scored as the first anchor's are, from the
+    `ANCHOR_WINDOW_S` window of the stretch: every window edge laid on every NI
+    edge within `REANCHOR_SEARCH_S` of its predicted image proposes an offset,
+    scored by how many of the window's edges it lines up. Proposals come from
+    every window edge, not the first alone, so a spurious first edge cannot hide
+    the right alignment. The top `N_CANDIDATES` distinct offsets and the current
+    map's own are each verified over `VERIFY_S` of the stretch at the current
+    rate, under the first anchor's rule."""
     first = stretch[0]
-    span = stretch[np.abs(device_s[stretch] - device_s[first]) < VERIFY_S]
-    image = int(_nearest(reference_s, np.array([device_s[first] * rate + offset_s]))[0][0])
-    offsets = [offset_s] + [
-        reference_s[neighbour] - device_s[first] * rate
-        for neighbour in range(max(0, image - NEIGHBOUR_ALIGNMENTS), min(reference_s.size, image + NEIGHBOUR_ALIGNMENTS + 1))
-    ]
-    verified = [(_verify(reference_s, device_s, span, rate, offset), offset) for offset in offsets]
+    distance = np.abs(device_s[stretch] - device_s[first])
+    span = stretch[distance < VERIFY_S]
+    window = stretch[distance < ANCHOR_WINDOW_S]
+    scaled = device_s[window] * rate
+    lo = np.searchsorted(reference_s, scaled + offset_s - REANCHOR_SEARCH_S, side="left")
+    hi = np.searchsorted(reference_s, scaled + offset_s + REANCHOR_SEARCH_S, side="right")
+    proposals = np.concatenate([reference_s[a:b] - x for a, b, x in zip(lo, hi, scaled, strict=True)])
+    chosen: list[float] = []
+    if proposals.size:
+        images = scaled[None, :] + proposals[:, None]
+        _, d = _nearest(reference_s, images.ravel())
+        score = (d.reshape(images.shape) <= MATCH_TOLERANCE_S).sum(axis=1)
+        for i in np.lexsort((np.abs(proposals - offset_s), -score)):
+            if all(abs(proposals[i] - c) > MATCH_TOLERANCE_S for c in chosen):
+                chosen.append(float(proposals[i]))
+                if len(chosen) == N_CANDIDATES:
+                    break
+    if all(abs(offset_s - c) > MATCH_TOLERANCE_S for c in chosen):
+        chosen.append(float(offset_s))
+    verified = [(_verify(reference_s, device_s, span, rate, offset), offset) for offset in chosen]
     best, best_offset = max(verified, key=lambda v: v[0])
     runner = _runner_up(verified, best_offset)
     if _passes(best, runner):
@@ -370,27 +410,30 @@ def _walk(
     seed_device: np.ndarray | None = None,
     seed_reference: np.ndarray | None = None,
     reanchor: bool = False,
-    previous: int | None = None,
+    direction: int = 1,
 ) -> _Walk:
-    """Match Intan's edges in `order` (forward or backward) to the NI's nearest,
-    refitting rate and offset after each step.
+    """Match Intan's edges in `order` to the NI's nearest, refitting rate and
+    offset after each step. `direction` is +1 for a forward `order`, -1 for a
+    backward one.
 
     Small steps while the rate is unknown, larger as the matches grow: the
     prediction's error grows with the distance from the pairs it was fitted on,
-    and must stay well under a burst's 1 ms spacing. A seed (the backward pass's
+    and must stay well under a burst's 1 ms spacing. Each refit uses the pairs
+    within `REFIT_SPAN_S` of the latest, so the line follows the clock where the
+    walk is, even when the pairs there are sparse. A seed (the backward pass's
     forward pairs nearest it) counts toward the refit and the step size, and is
     not returned.
 
-    With `reanchor`, a gap over `REANCHOR_GAP_S` between consecutive edges (and,
-    with `previous`, between that edge and the first in `order`) anchors the walk
-    again before it goes on, at the stretch's first edge that has enough edges
-    after it (`_first_anchorable`); a stretch with none is left unmatched. The refits and steps then start afresh from the
-    stretch's own pairs, as from the first anchor: the pairs before the break may
-    sit on a rate that has since changed. Verification walks do not re-anchor."""
+    With `reanchor`, the walk never runs blind for long: when the next edge is
+    more than `REANCHOR_GAP_S` past the latest matched pair, it anchors again
+    (`_reanchor`), at the first edge of that stretch with enough edges after it
+    (`_first_anchorable`); a stretch with none is left unmatched. A stretch ends
+    at the next gap over `REANCHOR_GAP_S` between Intan edges. After a re-anchor
+    the refits and steps start afresh from the stretch's own pairs, as from the
+    first anchor. Verification walks do not re-anchor."""
     times = device_s[order]
-    gaps = np.flatnonzero(np.abs(np.diff(times)) > REANCHOR_GAP_S) + 1 if reanchor else np.array([], dtype=np.int64)
-    if reanchor and previous is not None and order.size and abs(times[0] - device_s[previous]) > REANCHOR_GAP_S:
-        gaps = np.concatenate([[0], gaps])
+    along = times * direction  # non-decreasing in walk order
+    breaks = np.flatnonzero(np.diff(along) > REANCHOR_GAP_S) + 1
     n_seed = 0 if seed_device is None else seed_device.size
     pairs_device = np.empty(n_seed + order.size, dtype=np.int64)
     pairs_reference = np.empty_like(pairs_device)
@@ -398,23 +441,35 @@ def _walk(
         pairs_device[:n_seed], pairs_reference[:n_seed] = seed_device, seed_reference
     held = n_seed
     since = 0  # where in the pairs the refit window may begin
+    resumes: list[int] = []
+    # The latest matched pair's place along the walk (or a re-anchor's resume
+    # edge): how long the map has run blind is measured from it.
+    last = device_s[pairs_device[held - 1]] * direction if held else None
     position = 0
-    next_gap = 0
     while position < order.size:
-        if next_gap < gaps.size and gaps[next_gap] == position:
-            before_s = times[position - 1] if position else device_s[previous]
-            gap_s = abs(times[position] - before_s)
-            next_gap += 1
-            stop = gaps[next_gap] if next_gap < gaps.size else order.size
+        if reanchor and last is not None and along[position] - last > REANCHOR_GAP_S:
+            # An edge predicted outside the NI's recording cannot match and is no
+            # evidence (Decision 2): there is nothing to anchor it to, so the walk
+            # goes on to the first edge that could match.
+            inside = np.flatnonzero(_eligible(reference_s, device_s[order[position:]] * rate + offset_s))
+            if not inside.size:
+                break
+            if inside[0]:
+                position += int(inside[0])
+                continue
+            gap_s = float(along[position] - last)
+            later = breaks[breaks > position]
+            stop = int(later[0]) if later.size else order.size
             resume = _first_anchorable(times, position, stop)
             if resume is None:
                 position = stop  # too sparse to anchor: left unmatched (ruling R12)
                 continue
             offset_s = _reanchor(reference_s, device_s, order[resume:stop], rate, offset_s, gap_s)
-            position = resume
-            since = held
-        stop = gaps[next_gap] if next_gap < gaps.size else order.size
-        step = min(MAX_STEP_EDGES, max(FIRST_STEP_EDGES, (held - since) // 2), stop - position)
+            position, since = resume, held
+            resumes.append(int(order[resume]))
+            last = along[resume]
+        limit = int(np.searchsorted(along, last + REANCHOR_GAP_S, side="right")) if reanchor and last is not None else order.size
+        step = min(MAX_STEP_EDGES, max(FIRST_STEP_EDGES, (held - since) // 2), max(1, limit - position))
         device_index = order[position : position + step]
         reference_index, distance = _nearest(reference_s, device_s[device_index] * rate + offset_s)
         matched = distance <= MATCH_TOLERANCE_S
@@ -422,15 +477,24 @@ def _walk(
         pairs_device[held : held + n_new] = device_index[matched]
         pairs_reference[held : held + n_new] = reference_index[matched]
         held += n_new
+        if n_new:
+            last = device_s[pairs_device[held - 1]] * direction
         if held - since >= _MIN_REFIT_PAIRS:
-            recent = slice(max(since, held - _REFIT_PAIRS), held)
-            rate, offset_s = np.polyfit(device_s[pairs_device[recent]], reference_s[pairs_reference[recent]], 1)
+            recent = pairs_device[max(since, held - _REFIT_PAIRS) : held]
+            recent_along = device_s[recent] * direction
+            keep = slice(int(np.searchsorted(recent_along, recent_along[-1] - REFIT_SPAN_S, side="left")), None)
+            if recent[keep].size >= _MIN_REFIT_PAIRS:
+                lo = held - recent.size
+                rate, offset_s = np.polyfit(
+                    device_s[recent[keep]], reference_s[pairs_reference[lo:held][keep]], 1
+                )
         position += step
     return _Walk(
         device_index=pairs_device[n_seed:held].copy(),
         reference_index=pairs_reference[n_seed:held].copy(),
         rate=float(rate),
         offset_s=float(offset_s),
+        resumes=tuple(resumes),
     )
 
 

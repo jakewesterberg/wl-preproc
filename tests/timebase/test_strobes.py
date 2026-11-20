@@ -182,15 +182,52 @@ def test_a_rate_change_across_a_long_break_does_not_slip():
 
 
 def test_an_ambiguous_stretch_after_a_break_refuses():
-    # After a 100 s break the rig strobes single words every 0.5 s, exactly: every
-    # period-shifted map matches that stretch as well as the right one.
-    sc = StrobeScenario(hours=0.5, silent_s=(1200.0, 1300.0), periodic_after_s=1300.0, jitter_s=0.0)
+    # After a 100 s break the rig strobes single words every 20 ms, exactly: every
+    # period-shifted map within the re-anchor's 50 ms search matches that stretch
+    # as well as the right one. (A longer period is not ambiguous after a break:
+    # the map cannot have run 0.5 s off, so its shifts are never candidates.)
+    sc = StrobeScenario(
+        hours=0.5, silent_s=(1200.0, 1300.0), periodic_after_s=1300.0, periodic_after_period_s=0.02, jitter_s=0.0
+    )
     ni_s, intan_s, _, _, _ = simulate_with_reference_id(sc)
     with pytest.raises(
         Unanchored,
         match=r"the strobes after a \d+ s gap at \d+ s cannot be anchored again: the strobes' pattern is ambiguous",
     ):
         match_strobes(ni_s, intan_s)
+
+
+@pytest.mark.parametrize("seed", [1, 2])
+def test_sparse_strobes_through_a_break_do_not_slip(seed):
+    # The break holds single real strobes every 8 s, so no two Intan edges are
+    # 10 s apart, while Intan's rate steps 0.7 ppm as the break begins. A line
+    # held by the pairs before the break would be 0.63 ms off when the dense
+    # strobes resume, nearer the neighbouring word than the right one.
+    sc = StrobeScenario(
+        silent_s=(2400.0, 3300.0),
+        lone_edges_s=tuple(np.arange(2408.0, 3300.0, 8.0)),
+        rate_step_ppm=0.7,
+        rate_step_at_s=2401.0,
+        seed=seed,
+    )
+    ni_s, intan_s, true_id, reference_id, _ = simulate_with_reference_id(sc)
+    assert np.max(np.diff(intan_s)) < 10.0
+    match = match_strobes(ni_s, intan_s)
+    wrong = _wrong(match, true_id, reference_id)
+    assert not wrong.any(), f"{int(wrong.sum())} of {wrong.size} pairs wrong"
+
+
+def test_a_stray_edge_just_before_the_strobes_resume_does_not_hide_the_truth():
+    # The first Intan edge after a silent break is spurious, 1 s before the
+    # strobes resume: the re-anchor is made there, and the right alignment must
+    # come from the real edges behind it.
+    sc = StrobeScenario(
+        silent_s=(2400.0, 3300.0), rate_step_ppm=0.7, rate_step_at_s=2401.0, intan_spurious_s=(3299.0,)
+    )
+    ni_s, intan_s, true_id, reference_id, _ = simulate_with_reference_id(sc)
+    match = match_strobes(ni_s, intan_s)
+    wrong = _wrong(match, true_id, reference_id)
+    assert not wrong.any(), f"{int(wrong.sum())} of {wrong.size} pairs wrong"
 
 
 def _real_after_the_break(intan_s: np.ndarray, true_id: np.ndarray, reference_id: np.ndarray) -> np.ndarray:

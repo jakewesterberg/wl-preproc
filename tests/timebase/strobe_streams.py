@@ -65,6 +65,8 @@ class StrobeScenario:
     #: Single real edges at these true seconds, recorded by both devices: a
     #: strobe alone in a break.
     lone_edges_s: tuple[float, ...] = ()
+    #: Spurious Intan edges at these true seconds, which the NI never sees.
+    intan_spurious_s: tuple[float, ...] = ()
     #: From this true second on, single words every `periodic_after_period_s`,
     #: off by `jitter_s`: a stretch strobed on a timer.
     periodic_after_s: float | None = None
@@ -129,6 +131,9 @@ def simulate_with_reference_id(
     if n_extra:
         t_in = np.concatenate([t_in, rng.uniform(t_in[0], t_in[-1], n_extra)])
         id_in = np.concatenate([id_in, -np.ones(n_extra, dtype=int)])
+    if sc.intan_spurious_s:
+        t_in = np.concatenate([t_in, sc.intan_spurious_s])
+        id_in = np.concatenate([id_in, -np.ones(len(sc.intan_spurious_s), dtype=int)])
     order = np.argsort(t_in, kind="stable")
     t_in, id_in = t_in[order], id_in[order]
     intan_origin = sc.intan_late_s - _INTAN_LEAD_S
