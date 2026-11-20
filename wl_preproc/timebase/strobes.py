@@ -40,6 +40,7 @@ Pure numeric: no DataJoint, no file I/O, no `wl_preproc.synth`, as `fit.py`.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -202,8 +203,8 @@ def match_strobes(
     fraction = _fraction_matched(reference_s, device_s, device_index, reference_index)
     if fraction < MIN_ANCHOR_FRACTION:
         raise Unanchored(
-            f"the anchored map matched {fraction:.0%} of Intan's edges over the whole recording, "
-            f"below {MIN_ANCHOR_FRACTION:.0%}"
+            f"the anchored map matched {_percent(fraction)} of Intan's edges over the whole recording, "
+            f"below {_percent(MIN_ANCHOR_FRACTION)}"
         )
     return StrobeMatch(
         reference_index=reference_index,
@@ -318,10 +319,19 @@ def _refusal(best: float, runner: float) -> str:
     """The anchor rule's sentence for a stretch whose best scored `best`."""
     if best >= MIN_ANCHOR_FRACTION:
         return (
-            f"the strobes' pattern is ambiguous: the best anchor matched {best:.0%} and the runner-up "
-            f"{runner:.0%}, within {MIN_ANCHOR_MARGIN:.0%}; a strictly periodic code stream cannot anchor"
+            f"the strobes' pattern is ambiguous: the best anchor matched {_percent(best)} and the runner-up "
+            f"{_percent(runner)}, within {_percent(MIN_ANCHOR_MARGIN)}; a strictly periodic code stream cannot anchor"
         )
-    return f"no anchor matched {MIN_ANCHOR_FRACTION:.0%} of Intan's edges: the best matched {best:.0%}"
+    return f"no anchor matched {_percent(MIN_ANCHOR_FRACTION)} of Intan's edges: the best matched {_percent(best)}"
+
+
+def _percent(fraction: float) -> str:
+    """A fraction as whole percent, floored, so that a value under a limit never
+    prints as the limit (94.96% is "94%", not "95%"). The 1e-9 keeps an exact
+    ratio its own: 57 of 100 is "57%", though 0.57 * 100 is 56.99999999999999.
+    A ratio of edge counts lies further than that from any whole percent it is
+    not, for any recording under ten million edges."""
+    return f"{math.floor(fraction * 100 + 1e-9)}%"
 
 
 def _reanchor(

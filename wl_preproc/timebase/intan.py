@@ -75,8 +75,9 @@ def place_intan(session_dir: Path, recording_dir: Path) -> IntanPlacement:
     """Place one Intan recording on the session's NI clock.
 
     The NI file is the session's first (`clock.nidq_files`), the one on session
-    time. Raises `Unanchored`, after logging its sentence at INFO and naming the
-    recording.
+    time. Raises `Unanchored`, after logging its sentence as a WARNING naming the
+    recording: nothing in `wl_preproc` configures logging, so an INFO line would
+    never be seen, and a recording left out of the session should be.
     """
     from wl_preproc.timebase.clock import nidq_files
     from wl_preproc.timebase.extract import RHS_DIGITAL_IN_FILENAME
@@ -88,7 +89,7 @@ def place_intan(session_dir: Path, recording_dir: Path) -> IntanPlacement:
     try:
         match = match_strobes(ni_samples / ni_fs, intan_samples / intan_fs)
     except Unanchored as refusal:
-        logger.info("%s: %s", recording_dir, refusal)
+        logger.warning("%s: %s", recording_dir, refusal)
         raise
     ni_matched = ni_samples[match.reference_index]
     intan_matched = intan_samples[match.device_index]

@@ -275,6 +275,28 @@ def test_fewer_than_ten_edges_refuses():
         match_strobes(ni_s, intan_s[:9])
 
 
+def test_a_refusal_never_rounds_a_fraction_up_to_the_limit():
+    # 94.96% is below 95%, so no sentence may print it as 95%.
+    from wl_preproc.timebase.strobes import _refusal
+
+    assert _refusal(0.9496, 0.0) == "no anchor matched 95% of Intan's edges: the best matched 94%"
+    assert _refusal(0.97, 0.8796).startswith("the strobes' pattern is ambiguous: the best anchor matched 97% and "
+                                             "the runner-up 87%, within 10%")
+    # An exact ratio is printed as itself: 57 of 100 is 57%, though 0.57 * 100 floors to 56.
+    assert _refusal(0.57, 0.0).endswith("the best matched 57%")
+
+
+def test_the_whole_recording_sentence_never_rounds_up_to_the_limit(monkeypatch):
+    from wl_preproc.timebase import strobes
+
+    ni_s, intan_s, _, _, _ = simulate_with_reference_id(StrobeScenario(hours=0.1))
+    monkeypatch.setattr(strobes, "_fraction_matched", lambda *_: 0.9496)
+    with pytest.raises(
+        Unanchored, match=r"^the anchored map matched 94% of Intan's edges over the whole recording, below 95%$"
+    ):
+        match_strobes(ni_s, intan_s)
+
+
 def test_no_ni_edge_refuses():
     _, intan_s, _, _, _ = simulate_with_reference_id(StrobeScenario(hours=0.1))
     with pytest.raises(Unanchored, match="the NI recorded no strobe edge"):

@@ -4,6 +4,8 @@ truth."""
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from tests.timebase.intan_helpers import _clear_intan_strobes
@@ -48,6 +50,18 @@ def test_an_intan_with_no_strobe_refuses(ni_intan):
     _clear_intan_strobes(recording_dir)
     with pytest.raises(Unanchored, match="Intan recorded 0 strobe edges"):
         place_intan(session_dir, recording_dir)
+
+
+def test_a_refusal_is_logged_as_a_warning_naming_the_recording(ni_intan, caplog):
+    # Nothing in wl_preproc configures logging, so an INFO line is never seen;
+    # a recording left out of the session must be.
+    recipe, truth, session_dir, recording_dir = ni_intan
+    _clear_intan_strobes(recording_dir)
+    with caplog.at_level(logging.WARNING, logger="wl_preproc.timebase.intan"), pytest.raises(Unanchored):
+        place_intan(session_dir, recording_dir)
+    (record,) = [r for r in caplog.records if r.name == "wl_preproc.timebase.intan"]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == f"{recording_dir}: Intan recorded 0 strobe edges, and anchoring needs at least 10"
 
 
 def test_a_changed_header_rate_is_read_again(ni_intan):
