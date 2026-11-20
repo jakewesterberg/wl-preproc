@@ -508,17 +508,21 @@ class Segment(dj.Computed):
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
             if on_the_ni and key["system"] == "rhs":
-                # Intan's own strobes place it (part 3b-2). Asked before
-                # `rate is None`: when no recording anchored the system has
-                # no rate, and each file's own reason, no anchor, is truer
-                # than the system's.
+                # Intan's own strobes place it (part 3b-2). Under strobes the
+                # system is unfittable only when no recording anchored
+                # (`SystemTimebase._make_by_strobes`: one anchored recording
+                # holds far more than the two pairs a rate needs), so every
+                # file's reason is already known, no anchor, and is truer
+                # than the system's. It is not searched again: the key stays
+                # outstanding, and a 12 h recording that cannot anchor would
+                # cost minutes on every daemon pass.
+                if rate is None:
+                    rejected.append({**key, "file_path": file_path, "reason": segments.NO_STROBE_ANCHOR})
+                    continue
                 try:
                     placement = place_intan(session_dir, scan.path)
                 except Unanchored:
                     rejected.append({**key, "file_path": file_path, "reason": segments.NO_STROBE_ANCHOR})
-                    continue
-                if rate is None:
-                    rejected.append({**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM})
                     continue
                 offset = fit_offset_to_pairs(placement.pairs, rate)
                 accepted.append({

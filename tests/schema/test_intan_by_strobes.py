@@ -119,6 +119,27 @@ def test_an_intan_with_no_strobe_is_left_out_and_named(landed):
     assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
 
 
+def test_an_intan_no_recording_anchored_is_not_searched_again(landed, monkeypatch):
+    # The system is unfittable because no recording anchored, so each file's
+    # reason is already known; searching a 12 h recording again costs minutes on
+    # every daemon pass. Its key stays outstanding (no Segment row), so the next
+    # pass makes it again.
+    from wl_preproc.schema import core
+    from wl_preproc.timebase import intan
+
+    def searched(*_args, **_kwargs):
+        raise AssertionError("place_intan was called though no Intan recording anchored")
+
+    made = []
+    make = core.Segment.make
+    monkeypatch.setattr(intan, "place_intan", searched)
+    monkeypatch.setattr(core.Segment, "make", lambda self, key: (made.append(key), make(self, key)))
+    key = {**landed.key("no_strobe"), "system": "rhs"}
+    core.Segment.populate(key)
+    assert len(made) == 1
+    assert (core.RejectedSegment & key).fetch1("reason") == "no_strobe_anchor"
+
+
 def test_of_two_intan_recordings_the_unanchored_one_is_named(landed):
     from wl_preproc.schema import core
 
