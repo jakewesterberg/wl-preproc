@@ -397,7 +397,7 @@ def test_canonical_nwb_present_follows_the_published_canonical_file(session, pre
                                         "built_at": now})
         if state in ("published", "superseded"):
             record_change(current, "published",
-                          {"tier": "slow", "host": "wl-nas", "share": "hdd", "path": "nwb/x.nwb", "n_bytes": 1})
+                          {"tier": "slow", "host": "wl-serv-nas0", "share": "hdd", "path": "nwb/x.nwb", "n_bytes": 1})
 
         nwb = _condition(reclaim_conditions(key, expected_file_count=0, prefix=prefix), "canonical_nwb_present")
         assert (nwb.passed, nwb.detail, nwb.overridable) == (state in ("published", "superseded"), detail, True)

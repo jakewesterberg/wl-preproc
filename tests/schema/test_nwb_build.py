@@ -489,7 +489,7 @@ def slow_share(tmp_path_factory):
 
     mount = tmp_path_factory.mktemp("nwb-slow")
     (mount / NWB_DIR).mkdir()
-    return Share(tier="slow", mount=mount, host="wl-nas", name="hdd")
+    return Share(tier="slow", mount=mount, host="wl-serv-nas0", name="hdd")
 
 
 @pytest.fixture(scope="module")
@@ -498,7 +498,7 @@ def fast_share(tmp_path_factory):
 
     mount = tmp_path_factory.mktemp("nwb-fast")
     (mount / NWB_DIR).mkdir()
-    return Share(tier="fast", mount=mount, host="wl-nas", name="nvme")
+    return Share(tier="fast", mount=mount, host="wl-serv-nas0", name="nvme")
 
 
 def _set_active(*keys):
@@ -548,7 +548,7 @@ def test_the_daemon_publishes_every_written_file_to_the_slow_share(activation, d
     assert report["nwb_published"] >= 1
     row = (nwb_schema.NwbFile & key).fetch1()
     placement = current_placement(key)
-    assert (placement["tier"], placement["host"], placement["share"]) == ("slow", "wl-nas", "hdd")
+    assert (placement["tier"], placement["host"], placement["share"]) == ("slow", "wl-serv-nas0", "hdd")
     assert placement["path"] == f"nwb/nwbstep1/2025-07-20_01/{row['nwb_identifier']}.nwb"
     published = slow.local(placement["path"])
     assert mismatches(published, (nwb_schema.NwbFile.Dataset & key).to_dicts()) == []
@@ -1009,7 +1009,7 @@ def test_a_share_that_is_not_mounted_is_not_published_to(activation, prefix, slo
     mount = tmp_path_factory.mktemp("nwb-unmounted")
     if state == "no mount point":
         mount = mount / "gone"
-    unmounted = Share(tier="slow", mount=mount, host="wl-nas", name="hdd")
+    unmounted = Share(tier="slow", mount=mount, host="wl-serv-nas0", name="hdd")
     published, errors = publish_module.run_publish(unmounted)
     assert published == 0 and [e for e in errors if "not reachable" in e and str(mount) in e], errors
     assert not (mount / NWB_DIR).exists()
@@ -1024,7 +1024,7 @@ def test_an_unreachable_fast_share_fails_its_moves_not_the_pass(activation, daem
     from wl_preproc.nwb.publish import Share, current_placement
 
     _session_key, key, _runs = activation
-    gone = Share(tier="fast", mount=tmp_path_factory.mktemp("nwb-fast-down") / "gone", host="wl-nas", name="nvme")
+    gone = Share(tier="fast", mount=tmp_path_factory.mktemp("nwb-fast-down") / "gone", host="wl-serv-nas0", name="nvme")
     _set_active(key)
     try:
         report = daemon_module.run_once(prefix=prefix, nwb_slow=slow_share, nwb_fast=gone)
