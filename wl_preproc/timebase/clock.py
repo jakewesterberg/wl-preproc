@@ -10,8 +10,8 @@ once by `choose` when a stage first asks (`clock_for`), or by the daemon's
 first stage (`timebase.SessionClock.populate`).
 
 **Part 3b-1: the sync box, else the NI** (amendments 41-48 and 50). The sync
-box keeps time where its codes hold every run the rig recorded, or it
-restarted within the session; otherwise SpikeGLX's NI does, where its codes
+box keeps time unless its log ends before the session's last run does with no
+later segment (amendment 42); otherwise SpikeGLX's NI does, where its codes
 hold every run (`timebase/holding.py`); otherwise nothing built yet can, and
 lab time is part 4."""
 
@@ -33,7 +33,7 @@ from wl_preproc.events.rigruns import RigRuns, read_rig_runs
 from wl_preproc.events.rigtrials import RigRecord, read_rig_trials
 from wl_preproc.timebase import segments
 from wl_preproc.timebase.extract import find_recordings
-from wl_preproc.timebase.holding import unheld
+from wl_preproc.timebase.holding import unheld, unheld_last
 
 # What may keep a session's time (section 4.1), as `timebase.SessionClock`
 # declares it.
@@ -62,6 +62,7 @@ class Choice:
 # Why each clock keeps a session's time (the plan's Global Constraints), as
 # `timebase.SessionClock.reason` stores it.
 SYNC_BOX_HOLDS = "the sync box's codes hold every run the rig recorded"
+SYNC_BOX_REACHES_LAST = "the sync box's codes reach the rig's last run; a run before it is not in its codes"
 SYNC_BOX_RESTARTED = ("the sync box restarted within the session; it stays the clock, its restart bridged by wl-sync "
                       "part 2")
 NI_HOLDS = "the NI's codes hold every run the rig recorded; the sync box {why}"
@@ -115,7 +116,9 @@ def _sync_box_choice(session_dir: Path, landed_without: Mapping[str, str], rig_r
                      rig_trials: RigRecord | None) -> tuple[Choice | None, str]:
     """Rule 1, decided from the sync box's log and the rig's record, both
     small (amendment 43): the sync box's choice, or None and why it is not,
-    as the NI's reason ends."""
+    as the NI's reason ends. Amendment 42: the NI keeps time only when the
+    log ends before the session's last run does, with no later segment, so
+    a gap within the session, or a log that starts late, keeps the box."""
     if "syncbox" in landed_without:
         # Decision 8 and amendment 47: never the clock, whatever its partial
         # log holds.
@@ -125,13 +128,15 @@ def _sync_box_choice(session_dir: Path, landed_without: Mapping[str, str], rig_r
     session = segments.read_syncbox_session(session_dir)
     if session.timed is None:
         return None, "does not: its log holds no barcode, so it places nothing in session time"
-    sentence = unheld(decode_stream(session.codes()), rig_runs, rig_trials)
-    if sentence is None:
+    decoded = decode_stream(session.codes())
+    if unheld(decoded, rig_runs, rig_trials) is None:
         return Choice(source="syncbox", reason=SYNC_BOX_HOLDS), ""
+    sentence = unheld_last(decoded, rig_runs, rig_trials)
+    if sentence is None:
+        return Choice(source="syncbox", reason=SYNC_BOX_REACHES_LAST), ""
     if segments.SEGMENT_AFTER_RESTART in session.roles():
-        # Amendment 42: a restart is bridged by a device that recorded
-        # through it; the NI keeps time only when the log ends early with no
-        # later segment.
+        # A restart is bridged by a device that recorded through it (wl-sync
+        # part 2).
         return Choice(source="syncbox", reason=SYNC_BOX_RESTARTED), ""
     return None, f"does not: {sentence}"
 
@@ -176,8 +181,8 @@ def choose(session_dir: Path, subject: str, landed_without: Mapping[str, str] = 
     session without (`ingest.LandedWithout`) to who did, named in the reason.
 
     **Rule 1:** the sync box keeps time if it has a log, was not landed
-    without, and either its codes hold every run, or it restarted within the
-    session. **Rule 2:** otherwise the NI keeps time, if SpikeGLX was not
+    without, and either its codes hold the session's last run (amendment 42:
+    every run, or at least the last), or it restarted within the session. **Rule 2:** otherwise the NI keeps time, if SpikeGLX was not
     landed without and its codes hold every run; its codes are decoded only
     here, when rule 1 fails. **Otherwise** `NoClock`, naming both reasons:
     lab time is part 4."""

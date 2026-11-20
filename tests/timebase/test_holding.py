@@ -91,3 +91,23 @@ def test_codes_before_the_ni_started_are_not_required():
     and its end after it stops; with the rig's record, only the runs count."""
     decoded = _session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3]), start=False, end=False)
     assert unheld(decoded, *_rig({1: [1, 2], 2: [3]})) is None
+
+
+def test_the_sync_box_needs_only_the_last_run():
+    """Amendment 42: the sync box keeps time unless its log ends before the
+    session's last run does, so a gap before that run, or a log that starts
+    late, still holds the last; one that stops inside it does not."""
+    from wl_preproc.timebase.holding import unheld_last
+
+    rig = _rig({1: [1, 2], 2: [3], 3: [4, 5]})
+    gap = _session(_run(1.0, 1, [1]), _run(20.0, 3, [4, 5]))
+    assert unheld(gap, *rig) == "run 1's trial 2 is not in its codes"
+    assert unheld_last(gap, *rig) is None
+    assert unheld_last(_session(_run(20.0, 3, [4, 5]), start=False), *rig) is None
+    stopped = _session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3]), _run(20.0, 3, [4, 5], ended=False, open_last=True),
+                       end=False)
+    assert unheld_last(stopped, *rig) == "run 3's trial 5 does not end in its codes"
+    assert unheld_last(_session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3])), *rig) == "run 3 is not in its codes"
+    # With no rig record, the session's end decides.
+    assert unheld_last(_session(_run(1.0, 1, [1]), start=False), None, None) is None
+    assert unheld_last(_session(_run(1.0, 1, [1]), end=False), None, None) == "its codes hold no SESSION_END"

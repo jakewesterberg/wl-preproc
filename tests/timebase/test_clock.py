@@ -62,9 +62,10 @@ def test_a_full_sync_box_keeps_time(tmp_path):
 
 
 def test_a_sync_box_that_stops_inside_a_run_hands_the_session_to_the_ni(tmp_path):
-    """The plan's Review Focus 1: a log that ends inside the last run, with no
-    later segment, did not record throughout, and the NI's codes hold every
-    run, so the NI keeps time and its reason names the run."""
+    """The plan's Review Focus 1: a log that ends inside the last run (run 2,
+    9 s to 15 s), with no later segment, ends before the session's last run
+    does (amendment 42), and the NI's codes hold every run, so the NI keeps
+    time and its reason names what of that run is missing."""
     from wl_preproc.timebase.clock import choose
 
     session_dir = _session(tmp_path, runs=True)
@@ -74,6 +75,19 @@ def test_a_sync_box_that_stops_inside_a_run_hands_the_session_to_the_ni(tmp_path
     assert choice.reason.startswith("the NI's codes hold every run the rig recorded; the sync box does not: run ")
     assert choice.reason == ("the NI's codes hold every run the rig recorded; the sync box does not: run 2's "
                              "trial 4 does not end in its codes")
+
+
+def test_a_sync_box_with_a_gap_before_the_last_run_stays_the_clock(tmp_path):
+    """Amendment 42: the NI keeps time only when the box's log ends before
+    the session's last run does, with no later segment. A gap within the
+    session (the box recording elsewhere from 5.5 s to 8.5 s, inside run 1)
+    keeps the box, and its reason says a run before the last is not held."""
+    from wl_preproc.synth.recipe import SyncBoxRollSpec
+    from wl_preproc.timebase.clock import Choice, choose
+
+    session_dir = _session(tmp_path, runs=True, syncbox_roll=SyncBoxRollSpec(at_s=5.5, gap_s=3.0))
+    assert choose(session_dir, "pico") == Choice(
+        source="syncbox", reason="the sync box's codes reach the rig's last run; a run before it is not in its codes")
 
 
 def test_a_sync_box_that_restarted_stays_the_clock(tmp_path):

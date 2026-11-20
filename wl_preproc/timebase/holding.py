@@ -16,6 +16,10 @@ against any run.
 **With no rig record** (none, or one naming no run), the stream holds the
 session when it decodes both `SESSION_START` and `SESSION_END`.
 
+**The sync box needs only the session's last run** (`unheld_last`,
+amendment 42): the NI keeps time only when the box's log ends before that run
+does, with no later segment; a gap within the session keeps the box.
+
 Pure: no DataJoint, no I/O, as `timebase/coverage.py` is."""
 
 from __future__ import annotations
@@ -29,11 +33,26 @@ from wl_preproc.events.rigtrials import RigRecord
 def unheld(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None) -> str | None:
     """None when `decoded` holds every run the rig recorded, else one
     sentence saying the first thing it does not hold, e.g. "run 3's trial 41
-    is not in its codes"."""
+    is not in its codes". Rule 2's test, the NI's (amendment 44)."""
+    return _unheld(decoded, rig_runs, rig_trials, last_only=False)
+
+
+def unheld_last(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None) -> str | None:
+    """`unheld` for the session's last run only: with the rig's record, the
+    run of the highest number it names, held as every run is; with none,
+    `SESSION_END` decoded. Rule 1's test, the sync box's (amendment 42): it
+    keeps time unless its log ends before the session's last run does, so a
+    gap within the session, or a log that starts late, keeps it."""
+    return _unheld(decoded, rig_runs, rig_trials, last_only=True)
+
+
+def _unheld(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None, *,
+            last_only: bool) -> str | None:
     named = rig_runs.runs if rig_runs is not None else ()
     if not named:
         markers = {event.code for event in decoded if isinstance(event, SimpleEvent)}
-        for marker in (Marker.SESSION_START, Marker.SESSION_END):
+        needed = (Marker.SESSION_END,) if last_only else (Marker.SESSION_START, Marker.SESSION_END)
+        for marker in needed:
             if marker not in markers:
                 return f"its codes hold no {marker.name}"
         return None
@@ -50,7 +69,8 @@ def unheld(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: Ri
     for trial in rig_trials.trials if rig_trials is not None else ():
         if trial.run in numbers:
             given.setdefault(numbers[trial.run], []).append(trial.number)
-    for run in sorted(named, key=lambda run: run.number):
+    ordered = sorted(named, key=lambda run: run.number)
+    for run in ordered[-1:] if last_only else ordered:
         if run.number not in runs:
             return f"run {run.number} is not in its codes"
         for number in given.get(run.number, ()):
