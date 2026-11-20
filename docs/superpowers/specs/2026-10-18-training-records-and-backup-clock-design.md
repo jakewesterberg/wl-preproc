@@ -881,7 +881,8 @@ rulings of the build changed it (53). Where 53 differs from 49, 53 binds. The le
     1. **Windows.** The anchor's 2 s windows are tried one after another, from Intan's first edge through its
        first 600 s (`ANCHOR_SEARCH_S`). The first window whose best candidate passes the ambiguity rule anchors
        the map. Amendment 44 lets the rig strobe before SpikeGLX starts, so Intan's first window may hold no
-       edge the NI saw. The extension runs forward from the anchoring window, then backward from it.
+       edge the NI saw. The extension runs forward from the anchoring window, then backward from it. (see
+       amendment 53)
     2. **What the 95% is a fraction of.** Intan's edges in the verification span whose predicted NI time lies
        within the NI's recording, give or take 0.5 ms. An edge strobed before the NI started is no evidence
        against the anchor.
@@ -893,7 +894,7 @@ rulings of the build changed it (53). Where 53 differs from 49, 53 binds. The le
        `no_strobe_anchor`, and the others are kept.
     5. **What is recorded.** `RejectedSegment.reason` is a fixed vocabulary, so it holds `no_strobe_anchor`.
        The full sentence goes to the module's logger at INFO. `SystemTimebase` gains `n_strobes_matched`
-       (null except under strobes).
+       (null except under strobes). (see amendment 53)
     6. **The NWB file.** Under the NI, `processing/timebase/system_clocks` gains a `time_source` column
        (`clock`, `strobes`, `none`), and the NI texts no longer say every residual is 0. Sync-box files are
        untouched.
@@ -964,3 +965,11 @@ rulings of the build changed it (53). Where 53 differs from 49, 53 binds. The le
       today").
     - **Left to later parts:** a partial sync box as the cross-check (3b-3), an NI restart (3c), and the eye
       tracker and cameras (part 4, amendment 51).
+    - From the final review (I2): the 600 s anchor search is counted from Intan's first anchorable edge, the
+      first with at least 10 edges within 120 s after it, not its first edge. This supersedes amendment 52's
+      decision 1 on this point.
+    - From the final review (I1): a refusal's sentence is logged at WARNING, with its percentages floored. This
+      supersedes decision 5's INFO.
+    - From the final review (I4): under the NI, when no Intan recording anchored, every file is rejected as
+      `no_strobe_anchor` without searching again.
+    - From the final review (I3): no residual gate is placed on the stored map. This is put to the requester.
