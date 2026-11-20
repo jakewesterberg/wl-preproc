@@ -33,6 +33,10 @@ _TEXTS = {
         "drift": "Clock drift against the sync box, parts per million.",
         "source": "barcode: the first barcode's own value (seconds since 2020-01-01 UTC); manifest: started_at.",
         "difference": "started_at minus the barcode's time of t = 0, seconds.",
+        "worst_residual": "Largest barcode residual, microseconds.",
+        "fitted_rate": "The rate fitted against the barcodes.",
+        "residual_rms": "RMS barcode residual, microseconds.",
+        "first_sample": "Native index of the segment's first barcode.",
     },
     "nidq": {
         "module": ("How every time in this file was placed on session time: t = 0 is the NI's first sample, the "
@@ -47,6 +51,16 @@ _TEXTS = {
                    "nidq_meta, else manifest, each within 60 s of started_at."),
         "difference": ("started_at minus the source's time of t = 0, seconds; for manifest, minus the first of "
                        "rig_clock and nidq_meta that disagreed, NaN where neither gave a time."),
+        # No barcode places anything under the NI: SpikeGLX is on the identity
+        # map, every other system not placed yet (amendments 50 and 51).
+        "worst_residual": ("Largest residual, microseconds: under the NI, 0, SpikeGLX being on the identity map and "
+                           "no barcode fitted."),
+        "fitted_rate": ("The rate on the session's clock: under the NI, SpikeGLX's nominal rate, on the identity map "
+                        "with no barcode fitted; NaN for a system not placed on the NI's clock."),
+        "residual_rms": ("RMS residual, microseconds: under the NI, 0 for SpikeGLX, on the identity map with no "
+                         "barcode fitted; NaN for a system not placed on the NI's clock."),
+        "first_sample": ("Native index the segment's offset is anchored to: under the NI, 0, its first sample, the "
+                         "NI's first file being session time on the identity map; no barcode anchors it."),
     },
 }
 
@@ -65,21 +79,21 @@ def add_timebase(nwb: NWBFile, provenance: dict, clocks: list[dict], segments: l
         "n_systems_aligned": "Systems placed on session time.",
         "n_segments": "Segments aligned.",
         "n_rejected_segments": "Segments that could not be aligned.",
-        "worst_residual_us": "Largest barcode residual, microseconds.",
+        "worst_residual_us": texts["worst_residual"],
         "worst_drift_ppm": "Largest clock drift, parts per million.",
     }))
     module.add(_table("system_clocks", "SystemTimebase: each system's fitted clock.", clocks, {
         "system": "Acquisition system.",
         "fit_status": "fitted, no_recording or unfittable.",
         "nominal_rate_hz": "The system's nominal sampling rate.",
-        "fitted_rate_hz": "The rate fitted against the barcodes.",
+        "fitted_rate_hz": texts["fitted_rate"],
         "drift_ppm": texts["drift"],
-        "residual_us_rms": "RMS barcode residual, microseconds.",
+        "residual_us_rms": texts["residual_rms"],
     }))
     module.add(_table("segments", "core.Segment: each recording file's placement on session time.", segments, {
         "system": "Acquisition system.",
-        "file_path": "The recording file, relative to the session directory.",
-        "first_sample": "Native index of the segment's first barcode.",
+        "file_path": "The recording file, relative to its system's folder.",
+        "first_sample": texts["first_sample"],
         "offset_s": "session_s = native_s / scale + offset_s.",
         "start_s": "Session time of the file's first sample.",
         "end_s": "Session time one sample past the file's last.",
