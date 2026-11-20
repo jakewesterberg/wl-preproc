@@ -439,6 +439,10 @@ class SessionRecipe(BaseModel):
     ohdpi_dropped_frames: tuple[int, ...] = ()
     ap_sample_rate_hz: float
     seed: int
+    # The zone the synthetic NI machine's clock is set to: SpikeGLX writes
+    # `fileCreateTime` as "the local date and time on the recording machine",
+    # with no zone.
+    nidq_timezone: str = "America/New_York"
     faults: tuple[Fault, ...] = ()
 
     # How fast each device's clock runs RELATIVE TO SESSION TIME. The sync box
@@ -504,8 +508,6 @@ class SessionRecipe(BaseModel):
                 "timeline (spec section 4.5), so its drift against itself is "
                 "zero by construction rather than by choice"
             )
-        if "syncbox" not in self.systems:
-            raise ValueError("syncbox is present at every session")
         if self.rig_record is not None and not self.runs:
             raise ValueError("rig_record needs runs: it is written with the run record")
         if self.rig_record is not None:
@@ -750,6 +752,17 @@ SPATIAL_RECIPE = SessionRecipe(
     seed=20270317,
 )
 
+# The NI keeps time: no sync box, so no barcode on any device (part 3b-1).
+NI_CLOCK_RECIPE = SessionRecipe(
+    **{
+        **CI_RECIPE.model_dump(),
+        "systems": ("spikeglx",),
+        "runs": True,
+        "session_id": "2027-03-14_07",
+        "seed": 20270319,
+    }
+)
+
 # Recipes keyed by the CLI's own --profile name (wl_preproc/cli/main.py), so
 # a caller that wants "the ci recipe" or "the stim recipe" has one place to
 # look it up by name rather than importing three constants and building the
@@ -761,4 +774,5 @@ RECIPES: dict[str, SessionRecipe] = {
     "eye": EYE_RECIPE,
     "drift": DRIFT_RECIPE,
     "spatial": SPATIAL_RECIPE,
+    "ni-clock": NI_CLOCK_RECIPE,
 }
