@@ -103,22 +103,45 @@ class SessionClock(dj.Imported):
 
         return pipeline.Session & ingest.Ingestion
 
-    def make(self, key: dict) -> None:
-        """Imported, not Computed: the choice reads the session folder. It is
-        made by `clock_for` when a stage first asks; `populate()` makes the
-        same row, by the same `choose_for` (amendment 28)."""
+    # Three-part make (DataJoint 2.3's `make_fetch`/`make_compute`/
+    # `make_insert`): the choice may decode the NI, which never happens
+    # inside the clock's transaction (amendment 43). `populate` runs
+    # `make_fetch` and `make_compute` outside any transaction, then opens one,
+    # runs `make_fetch` again and refuses the insert if what it read changed
+    # (`datajoint/autopopulate.py::_populate1`). `make` itself is DataJoint's,
+    # never overridden here: a `make` of our own would run inside the
+    # transaction.
+
+    def make_fetch(self, key: dict) -> tuple[str, dict[str, str], bool]:
+        """What the choice reads from the database: the session's folder,
+        what it was landed without, and whether it was already timed
+        (`timebase/clock.py::landed_facts`)."""
         from wl_preproc.schema import ingest
-        from wl_preproc.timebase.clock import NoClock, choose_for
+        from wl_preproc.timebase.clock import landed_facts
+
+        return ((ingest.Ingestion & key).fetch1("session_dir"), *landed_facts(key))
+
+    def make_compute(self, key: dict, session_dir: str, landed_without: dict[str, str],
+                     already_timed: bool) -> tuple:
+        """The choice, made as `clock_for` makes it outside a transaction:
+        the sync box's log first, the NI's codes only when it does not hold
+        every run. None where no clock built so far can time the session."""
+        from wl_preproc.timebase.clock import NoClock, choose_landed
 
         try:
-            choice = choose_for(key, Path((ingest.Ingestion & key).fetch1("session_dir")))
+            return (choose_landed(Path(session_dir), key["subject"], landed_without, already_timed),)
         except NoClock:
             # Nothing recorded and no error parked: a session no clock built
-            # so far can time is asked again on the next pass, so one part 3b
-            # or part 4 can time is timed once it exists. Its events stage
-            # says why on each pass (part 3a's final review, I3).
-            return
-        self.insert1({**key, "source": choice.source, "reason": choice.reason})
+            # so far can time is asked again on the next pass, so one part 4
+            # can time is timed once it exists. Its events stage says why on
+            # each pass (part 3a's final review, I3).
+            return (None,)
+
+    def make_insert(self, key: dict, choice) -> None:
+        if choice is not None:
+            # A stage's `clock_for` may have recorded the same choice since
+            # this pass looked.
+            self.insert1({**key, "source": choice.source, "reason": choice.reason}, skip_duplicates=True)
 
 
 @schema
@@ -749,6 +772,25 @@ class TimingProvenance(dj.Computed):
                 "decode_errors": decode_errors,
             }
         )
+
+
+# Why a session timed before its clock was recorded is given the sync box's
+# (amendment 48): until 3b-1 no other clock was built, so the sync box timed
+# every session timed before it.
+BACKFILL_REASON = "it was timed by the sync box before its clock was recorded (back-filled at part 3b-1's deploy)"
+
+
+def backfill_session_clocks() -> int:
+    """Amendment 48's one-time back-fill, run at 3b-1's deploy (`wlpp clocks
+    backfill`): every session with a timing record and no clock is given the
+    sync box's, which timed it. Returns how many were given it. From then on
+    such a session is refused (`timebase/clock.py::choose_landed`). Once
+    only: run after sessions are timed by the NI, it would give the sync box
+    to one whose clock row was since deleted, the case the refusal catches."""
+    sessions = (TimingProvenance.proj() - SessionClock.proj()).keys()
+    SessionClock.insert([{**key, "source": "syncbox", "reason": BACKFILL_REASON} for key in sessions],
+                        allow_direct_insert=True, skip_duplicates=True)
+    return len(sessions)
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:

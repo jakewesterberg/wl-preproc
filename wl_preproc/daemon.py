@@ -71,7 +71,9 @@ _DEFAULT_STALE_THRESHOLD_S = 24 * 60 * 60  # 24h
 
 def _first_tables() -> list:
     """The tables `run_once` populates before the events stage: the
-    session's clock, recorded in its own short transaction, so no stage that
+    session's clock, chosen outside any transaction (the NI's codes are
+    decoded there when the sync box's do not hold every run, amendment 43)
+    and recorded in its own short transaction, so no stage that
     reads it holds the new row's lock for the length of its own work while an
     overlapping pass waits on it (design spec
     `2026-10-18-training-records-and-backup-clock-design.md` section 4.1; the
@@ -760,8 +762,8 @@ def _clocked(table) -> tuple:
     """The restriction to sessions whose clock is recorded, as a tuple to
     splat into `table.populate(*...)`, for a stage keyed by session: every
     such stage reads the session's time through its clock, and a session
-    with none (landed without its sync box, or never recording one, until
-    part 3b or part 4 can time it) would otherwise be given a tier-D timing
+    with none (neither the sync box nor the NI holds every run, until lab
+    time, part 4, can time it) would otherwise be given a tier-D timing
     record from checks that never ran, or park its jobs in `error`, where
     nothing retries them once its clock exists (part 3a's final review, I3).
     Empty, as `_not_freed` is, for a stage whose `key_source` does not carry

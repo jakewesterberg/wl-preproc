@@ -341,6 +341,13 @@ def main(argv: list[str] | None = None) -> int:
         help="with --subject, when one subject has two sessions at the path",
     )
 
+    clocks_p = subparsers.add_parser("clocks", help="each session's clock")
+    clocks_sub = clocks_p.add_subparsers(dest="action", required=True)
+    # Amendment 48: once, at part 3b-1's deploy.
+    backfill_p = clocks_sub.add_parser(
+        "backfill", help="give the sync box's clock to every session timed before its clock was recorded (once)")
+    backfill_p.add_argument("--prefix", default=DEFAULT_PREFIX)
+
     tape_p = subparsers.add_parser("tape-manifest", help="list sessions staged for tape")
     # Absent from the brief's own Step 3 snippet, which reads `args.prefix`
     # in the `tape-manifest` dispatch branch with no `add_argument` for it
@@ -692,6 +699,15 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.verdict}: {key['subject']} @ {key['session_datetime']} "
             f"recorded by {args.actor} at {held_at:%Y-%m-%d %H:%M:%S} -- {args.reason}"
         )
+        return 0
+
+    if args.group == "clocks" and args.action == "backfill":
+        from wl_preproc.daemon import activate_all
+        from wl_preproc.schema import timebase
+
+        activate_all(prefix=args.prefix)
+        count = timebase.backfill_session_clocks()
+        print(f"{count} session{'' if count == 1 else 's'} given the sync box's clock (amendment 48's back-fill)")
         return 0
 
     if args.group == "tape-manifest":
