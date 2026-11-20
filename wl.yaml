@@ -107,8 +107,11 @@ status:
     docs/handoffs/2026-11-19-two-eye-label.md). v4 of the saccade
     contract fixtures, pinning Engbert-Kliegl's join for wl-xcon, is
     merged (0f3edf8; docs/handoffs/2026-11-19-saccade-fixtures-v4.md),
-    joining touching runs before the minimum duration. Next, reading
-    SpikeGLX 20260115's imroTbl header; then part 3b; then our
+    joining touching runs before the minimum duration. Reading SpikeGLX
+    20260115's imroTbl header, which names the part number, is built and
+    reviewed on feat/spikeglx-pn-header
+    (docs/handoffs/2026-11-19-spikeglx-pn-header.md), with probeinterface
+    >=0.5 reading both forms; its merge next; then part 3b; then our
     reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
     then the NI as the clock, and part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.

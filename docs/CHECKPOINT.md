@@ -572,9 +572,13 @@ requester chose to merge the same day; true when written.*
 > it; on the reference recording 0 rows of any trace now contradict their size, and the reference-gated files
 > pass, 271 on each interpreter. **v4 of the saccade contract fixtures**, the join pinned for wl-xcon, is merged
 > (`0f3edf8`, CI green, 3069 passed on each interpreter) (`handoffs/2026-11-19-saccade-fixtures-v4.md`), with
-> Engbert-Kliegl joining touching runs before it applies the minimum duration. Next,
-> reading SpikeGLX 20260115's `~imroTbl` header, which names the part number (wl.works' finding of 2026-11-18);
-> then part 3b; then our reader of
+> Engbert-Kliegl joining touching runs before it applies the minimum duration. **Reading SpikeGLX
+> 20260115's `~imroTbl` header**, which names the part number (wl.works' finding of 2026-11-18), is built and
+> reviewed on `feat/spikeglx-pn-header` (`specs/2026-11-19-spikeglx-pn-header-design.md`, approved 2026-11-19;
+> `handoffs/2026-11-19-spikeglx-pn-header.md`): probeinterface `>=0.5`, no ceiling (the requester: keep
+> standards up to date), reads both header forms, which place the same sites; the synthetic header is
+> corrected; seven sites each of NP1000 and NP1032 are pinned against a release that renumbers contacts. The
+> reference-gated files passed 271 and the full suite 3044 on each interpreter. Next, its merge; then part 3b; then our reader of
 > wl-xcon's console settings (XC-513, accepted 2026-11-18: `form` and `shaping` rows, sizes in degrees,
 > `light_xy`); then, in the requester's order of 2026-10-31, the NI as the clock, part 2, the bridges, and the
 > older minors in one branch.
@@ -590,8 +594,8 @@ requester chose to merge the same day; true when written.*
 > next; until the pop-out search was built, that it was next; until its merge, that the merge was
 > next; until scaling was built, that it was next; until its merge, that the merge was next; until
 > full-precision times were built, that they were next; until their merge, that it was next; until the
-> two-eye fix was built, that it was next; until its merge, that the merge was next; until v4's merge, that it was next; each
-> true when written.*
+> two-eye fix was built, that it was next; until its merge, that the merge was next; until v4's merge, that it was next; until the SpikeGLX header was built,
+> that it was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
