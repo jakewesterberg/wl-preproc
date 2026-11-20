@@ -2092,6 +2092,9 @@ leaves something behind that does:
   can ask what became of an activation; and the **privileged-port errno in the protocol document
   is unmeasured** — this development machine bound port 81 without complaint, so Linux's errno 98
   is stated as a claim about Linux and wants confirming once on the lab host.
+- **`runs_on: [serv]` reaches every server (2026-11-20).** wl-stack's machine classes now give `serv`
+  the roles `preproc`, `gpu`, `mem` and `nas`; the manifest ("deployed to the preprocessing server")
+  should narrow to `serv/preproc`. Not done here: the manifest is the PI's to edit.
 
 ---
 
