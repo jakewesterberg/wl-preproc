@@ -562,7 +562,7 @@ class SessionEntry(BaseModel):
     subject: str
     session_datetime: datetime.datetime
     session_name: str
-    tier: Literal["A", "B", "C", "D"] | None
+    tier: Literal["A", "B", "C", "D", "N"] | None
     rejected_segments: list[RejectedFile]
     runs: list[ListedRun]
     segments: list[ListedSegment]

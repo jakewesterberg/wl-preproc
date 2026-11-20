@@ -43,7 +43,8 @@ _TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none')"
 # first minor: the identity row stops assuming the sync box).
 _KEEPS_TIME = {"syncbox": "syncbox", "nidq": "spikeglx"}
 
-# 'A', 'B', 'C' or 'D' -- 'pending' retired. Design spec section 8: tier D was
+# 'A', 'B', 'C' or 'D' -- 'pending' retired -- or 'N', where the NI kept time
+# and its codes hold every run (part 3b-1). Design spec section 8: tier D was
 # always fully derivable from timing alone -- any timing check failed -- but
 # tiers A/B/C each carry a code-agreement or trial-count term, and event
 # decoding was 1c-5's job. 1c-4 stored 'pending' rather than defaulting to a
@@ -61,7 +62,7 @@ _KEEPS_TIME = {"syncbox": "syncbox", "nidq": "spikeglx"}
 # fill it: an unread constant whose name asserts "pending" is the same false
 # claim in a second place. What it held, and which phase ended the wait, is
 # recorded on the column itself.
-_TIER_ENUM = "enum('A','B','C','D')"
+_TIER_ENUM = "enum('A','B','C','D','N')"
 
 # Whether this system's clock was actually fitted, and if not, why not. Every
 # (system, session) gets exactly one row, including the ones that could not be
@@ -492,7 +493,7 @@ class TimingProvenance(dj.Computed):
     -> pipeline.Session
     ---
     tier                  : {_TIER_ENUM}
-    n_barcodes_emitted    : int unsigned  # the sync box's own log is the source
+    n_barcodes_emitted=null : int unsigned  # the sync box's own log is the source; null under the NI's clock
     n_systems_aligned     : int unsigned
     n_segments            : int unsigned
     n_rejected_segments   : int unsigned
@@ -577,7 +578,7 @@ class TimingProvenance(dj.Computed):
         from wl_preproc.events.taskfile import SyntheticTaskFileReader, UnsupportedTaskFile
         from wl_preproc.schema import core, ingest
         from wl_preproc.timebase import segments
-        from wl_preproc.timebase.clock import clock_for
+        from wl_preproc.timebase.clock import _rig_record, clock_for
         from wl_preproc.timebase.fit import fit_offset
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
@@ -602,6 +603,8 @@ class TimingProvenance(dj.Computed):
         failed = len(aligned) < len(systems) or bool(rejected)
 
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
+        clocks = (SessionClock & session_key).to_dicts()
+        under_the_ni = bool(clocks) and clocks[0]["source"] == "nidq"
 
         # And if the box lost code words of session time where they mattered:
         # in a measured run, or by a desync, after which nothing is measured
@@ -687,6 +690,27 @@ class TimingProvenance(dj.Computed):
                 syncbox_available = True
             except (FileNotFoundError, ValueError):
                 syncbox_available = False
+
+        # Tier N's evidence: the NI is the clock, so its first file's codes
+        # are the one full-code record (amendment 50), decoded as rule 2
+        # decodes them and held against the rig's record again, since the
+        # choice that made the NI the clock was made before the session was
+        # processed. Never `clock.barcode_reference()`, which the NI's clock
+        # does not have, and nothing here reads these codes as the sync box's.
+        ni_holds_every_run = False
+        if under_the_ni:
+            from wl_preproc.timebase.clock import NoClock, nidq_codes, nidq_files
+            from wl_preproc.timebase.holding import unheld
+
+            try:
+                decoded = decode_stream(nidq_codes(nidq_files(session_dir)[0]))
+                rig_runs, rig_trials = _rig_record(session_dir, key["subject"])
+            except (FileNotFoundError, ValueError, IndexError, NoClock):
+                pass  # the codes cannot be read: not held, so not tier N
+            else:
+                decode_errors = sum(1 for event in decoded if isinstance(event, DecodeError))
+                n_full_code_records = 1
+                ni_holds_every_run = unheld(decoded, rig_runs, rig_trials) is None
 
         if syncbox_available:
             syncbox_events = decode_stream(syncbox_pairs)
@@ -776,7 +800,7 @@ class TimingProvenance(dj.Computed):
         # both are "nothing corroborated this session", never a pass.
         trial_count_agreement = None
         task_file = session_dir / "syncbox" / "task.json"
-        if task_file.is_file():
+        if task_file.is_file() and not under_the_ni:
             try:
                 task_trials = SyntheticTaskFileReader().trials(task_file)
             except UnsupportedTaskFile:
@@ -804,13 +828,16 @@ class TimingProvenance(dj.Computed):
             n_strobe_witnesses=n_strobe_witnesses,
             decode_errors=decode_errors,
         )
-        tier = "D" if failed else agreement.resolve_tier(inputs)
+        if under_the_ni:
+            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 else "D"
+        else:
+            tier = "D" if failed else agreement.resolve_tier(inputs)
 
         self.insert1(
             {
                 **key,
                 "tier": tier,
-                "n_barcodes_emitted": emitted,
+                "n_barcodes_emitted": None if under_the_ni else emitted,
                 "n_systems_aligned": len(aligned),
                 "n_segments": len(segment_rows),
                 "n_rejected_segments": len(rejected),

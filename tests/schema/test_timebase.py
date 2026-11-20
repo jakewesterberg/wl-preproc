@@ -85,11 +85,12 @@ def test_the_tier_enum_no_longer_holds_pending(schemas, enum_values):
     than kept as a value nothing can reach -- a stored value with no writer
     left is worse than no value at all, per `_TIER_ENUM`'s own comment in
     `schema/timebase.py`. So this test now asserts the opposite of what it
-    used to: the enum is EXACTLY {A, B, C, D}, and 'pending' is gone."""
+    used to: the enum is EXACTLY {A, B, C, D, N} (N is 3b-1's: the NI kept time),
+    and 'pending' is gone."""
     _core, _coverage, timebase = schemas
 
     tier = timebase.TimingProvenance.heading.attributes["tier"]
-    assert enum_values(tier.type) == {"A", "B", "C", "D"}
+    assert enum_values(tier.type) == {"A", "B", "C", "D", "N"}
 
 
 def test_no_bare_longblob_in_the_new_schema_module(schemas):

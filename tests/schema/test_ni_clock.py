@@ -16,6 +16,28 @@ from tests.identities import new_animal, new_serial
 RESTART = {"at_s": 11.0, "gap_s": 0.5}
 
 
+def _flip_a_payload_word(session_dir, word_index: int) -> None:
+    """The NI's code word number `word_index` read as another: its data lines'
+    value at the last sample its strobe is high, where the word is read
+    (`timebase/channels.py::strobe_words`), has its lowest bit flipped."""
+    import numpy as np
+
+    from wl_preproc.events.extract import _NIDQ_STROBE_BIT, extract_nidq_words
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+    from wl_preproc.timebase.clock import nidq_files
+
+    (path,) = nidq_files(session_dir)
+    meta = read_nidq_meta(path.with_suffix(".meta"))
+    rise, _word = extract_nidq_words(path).words[word_index]
+    samples = np.memmap(path, dtype=np.int16, mode="r+").reshape(-1, meta.n_channels)
+    strobe = (samples[:, meta.n_analog_channels] >> _NIDQ_STROBE_BIT) & 1
+    last = rise
+    while strobe[last + 1] == 1:
+        last += 1
+    samples[last, meta.n_analog_channels + 1] ^= 1
+    samples.flush()
+
+
 @pytest.fixture(scope="module")
 def landed(dj_conn, prefix, tmp_path_factory):
     """Each session by name, `(recipe, truth, key, session_dir)`, after one
@@ -44,6 +66,10 @@ def landed(dj_conn, prefix, tmp_path_factory):
         session_dir = root / recipe.session_id
         if name == "partial":
             _cut_the_sync_box_log(session_dir, 12.0)
+        if name == "corrupt":
+            # Word 6 is a payload word of the first block's start, so its
+            # checksum fails; the run, and every trial, are still there.
+            _flip_a_payload_word(session_dir, 6)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
@@ -54,6 +80,7 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("ohdpi", systems=("spikeglx", "ohdpi"))
     land("restart", spikeglx_restart=RestartSpec(**RESTART))
     land("partial", systems=("syncbox", "spikeglx"))
+    land("corrupt")
     daemon.run_once(prefix=prefix)
     yield sessions
     for _recipe, _truth, key, _session_dir in sessions.values():
@@ -64,6 +91,18 @@ def _clock(key) -> str:
     from wl_preproc.schema import timebase
 
     return (timebase.SessionClock & key).fetch1("source")
+
+
+def _assert_failed_tier_d(key, *, rejected: int) -> None:
+    """Tier D because something failed, not merely because it is the NI's
+    default: the row counts the systems aligned and files rejected, which
+    `failed` is made of (`len(aligned) < len(systems) or bool(rejected)`)."""
+    from wl_preproc.schema import timebase
+
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "D"
+    assert rejected > 0 and row["n_rejected_segments"] == rejected
+    assert row["n_systems_aligned"] == 1  # SpikeGLX, the only system on the NI's clock
 
 
 def test_the_ni_files_first_sample_is_session_time_zero(landed):
@@ -168,7 +207,7 @@ def test_a_device_with_no_way_onto_the_ni_clock_is_unfittable(landed):
     assert rejected and {row["reason"] for row in rejected} == {"unfitted_system"}
     assert (timebase.SystemTimebase & key & {"system": "spikeglx"}).fetch1("fit_status") == "fitted"
     assert len(core.Segment & key & {"system": "spikeglx"}) == 1
-    assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
+    _assert_failed_tier_d(key, rejected=len(rejected))
 
 
 def test_a_second_ni_file_is_a_restart_and_the_session_is_tier_d(landed):
@@ -186,7 +225,7 @@ def test_a_second_ni_file_is_a_restart_and_the_session_is_tier_d(landed):
     assert (core.Segment & key & {"system": "spikeglx"}).fetch1("start_s") == 0.0
     assert [(row["file_path"], row["reason"]) for row in (core.RejectedSegment & key).to_dicts()] == [
         (second, "ni_restarted")]
-    assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
+    _assert_failed_tier_d(key, rejected=1)
 
 
 def test_a_partial_sync_box_log_under_the_ni_is_unfittable_until_3b_3(landed):
@@ -205,4 +244,59 @@ def test_a_partial_sync_box_log_under_the_ni_is_unfittable_until_3b_3(landed):
     spikeglx = (timebase.SystemTimebase & key & {"system": "spikeglx"}).fetch1()
     assert (spikeglx["fit_status"], spikeglx["time_source"]) == ("fitted", "clock")
     assert (core.Segment & key & {"system": "spikeglx"}).fetch1("offset_s") == 0.0
-    assert (timebase.TimingProvenance & key).fetch1("tier") == "D"
+    _assert_failed_tier_d(key, rejected=len(core.RejectedSegment & key))
+
+
+def test_an_ni_session_whose_codes_hold_every_run_is_tier_n(landed):
+    """Tier N: the NI is the clock, nothing failed, its codes decode clean and
+    hold every run (amendment 50). It has the one full-code record, no strobe
+    witness, and none of what only the sync box measures."""
+    from wl_preproc.schema import timebase
+
+    _recipe, _truth, key, _session_dir = landed["ni"]
+    assert _clock(key) == "nidq"
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "N"
+    assert (row["n_full_code_records"], row["n_strobe_witnesses"], row["decode_errors"]) == (1, 0, 0)
+    assert (row["n_rejected_segments"], row["n_systems_aligned"]) == (0, 1)
+    assert row["n_barcodes_emitted"] is None
+    assert row["event_code_agreement"] is None
+    assert row["trial_count_agreement"] is None
+
+
+def test_an_ni_session_with_a_decode_error_is_tier_d(landed):
+    """One flipped payload word is a decode error in the NI's codes, which
+    the session carries on the row; nothing failed, so the error alone keeps
+    it from N."""
+    from wl_preproc.schema import timebase
+
+    _recipe, _truth, key, _session_dir = landed["corrupt"]
+    assert _clock(key) == "nidq"
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["decode_errors"] > 0
+    assert (row["n_rejected_segments"], row["n_systems_aligned"]) == (0, 1)
+    assert row["tier"] == "D"
+    assert row["n_barcodes_emitted"] is None
+
+
+def test_the_listing_gives_an_ni_session_tier_n_and_clock_nidq(landed):
+    from wl_preproc.listing.entry import session_entry
+
+    _recipe, _truth, key, _session_dir = landed["ni"]
+    entry = session_entry(key)
+    assert (entry["tier"], entry["clock"]) == ("N", "nidq")
+
+
+def test_sync_box_tiers_are_unchanged(landed):
+    """A session the sync box times keeps the tier it had before N existed: A
+    for the same run beside an NI that carries its own full-code record, its
+    agreements measured, its barcode count the box's own."""
+    from wl_preproc.schema import timebase
+
+    _recipe, _truth, key, _session_dir = landed["synced"]
+    assert _clock(key) == "syncbox"
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "A", row
+    assert row["n_barcodes_emitted"] > 0
+    assert row["event_code_agreement"] is not None
+    assert row["n_full_code_records"] == 2
