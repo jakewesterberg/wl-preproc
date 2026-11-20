@@ -39,6 +39,10 @@ last run, SpikeGLX's NI keeps the time. **Shipped at 3b-1's merge**, not before.
 - **Added by 3b-2: the NWB file's `processing/timebase/system_clocks` gains a `time_source` column under the NI
   only** (`clock`, `strobes`, `none`). It is in the file, not in the description, so nothing here needs
   vendoring.
+- **Added by 3b-2: `GET /sessions`: a listed rejected segment's `reason` may now be `no_strobe_anchor`**: an
+  Intan recording whose strobes could not be matched to the NI's. `docs/schemas/session_listing.json` types a
+  `RejectedFile`'s `reason` as a plain string, not a fixed set, so no vendored copy refuses it; a reader that
+  names each reason needs the new one.
 - **Every listed session is listed once more** when this ships: each segment's key changes, so each digest does.
 - **Every NWB file built before this stays as it is.** Nothing here asks for one to be rebuilt.
 
