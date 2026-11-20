@@ -383,8 +383,10 @@ def no_ohdpi_acquisition_system_session(daemon_module, prefix, tmp_path_factory)
 @pytest.fixture(scope="module")
 def events_not_assembled_session(daemon_module, prefix, tmp_path_factory):
     """`Ingestion.session_dir` points at a bare, empty directory -- no
-    `syncbox/` under it at all, so `events.decode_syncbox_in_session_time`
-    raises `FileNotFoundError` and `_populate_event_stage` catches it into
+    `syncbox/` and no `spikeglx/` under it at all, so no clock built so far
+    can time it: the daemon's `SessionClock` pass records why
+    (`timebase.ClockRefusal`), the events stage's `clock_for` raises that
+    `NoClock`, and `_populate_event_stage` catches it into
     `report["errors"]` without ever writing `pipeline.event.
     BehaviorRecording`. No `generate_session` call at all: this fixture
     exists to prove the "assembled events" restriction alone, and a real

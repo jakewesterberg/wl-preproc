@@ -30,7 +30,18 @@ schema = dj.Schema()
 # itself and the barcode's job shrinks to identifying which trigger a frame is.
 # A downstream analysis that cares about 2 ms has to be able to tell which it
 # got, and cannot infer it from the rate.
-_TIME_SOURCE_ENUM = "enum('barcode','trigger')"
+#
+# 'clock' and 'none' are the NI's (part 3b-1; design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendments 50 and
+# 51). 'clock': the system whose own samples are session time, SpikeGLX under
+# the NI, on the identity map. 'none': a system with no way onto the session's
+# clock yet, every one but SpikeGLX under the NI, its row `unfittable`.
+_TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none')"
+
+# The system whose own timeline is session time, under each clock that keeps
+# it: its fit is identity, the truth rather than a placeholder (amendment 50's
+# first minor: the identity row stops assuming the sync box).
+_KEEPS_TIME = {"syncbox": "syncbox", "nidq": "spikeglx"}
 
 # 'A', 'B', 'C' or 'D' -- 'pending' retired. Design spec section 8: tier D was
 # always fully derivable from timing alone -- any timing check failed -- but
@@ -355,11 +366,19 @@ class SystemTimebase(dj.Computed):
     def make(self, key: dict) -> None:
         """Fit this system's clock against session time, pooling the session.
 
-        The sync box is inserted with an identity fit rather than skipped.
-        Session time IS its timeline, so a fit of it against itself is exactly
-        zero drift with zero residual -- that is the truth, not a placeholder,
-        and an absent row would read as "this system was never aligned", which
-        is the one thing it certainly was.
+        The system that keeps time -- the sync box under its clock, SpikeGLX
+        under the NI's (`_KEEPS_TIME`) -- is inserted with an identity fit
+        rather than skipped. Session time IS its timeline, so a fit of it
+        against itself is exactly zero drift with zero residual -- that is the
+        truth, not a placeholder, and an absent row would read as "this system
+        was never aligned", which is the one thing it certainly was.
+
+        Under the NI's clock every other system is `unfittable`, by no
+        mechanism (`time_source` 'none'): 3b-1 places only SpikeGLX on it. The
+        eye tracker and the cameras wait for lab time's host stamps, Intan for
+        3b-2, and a sync box that recorded part of the session for 3b-3
+        (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
+        amendments 40 and 51).
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
@@ -372,11 +391,6 @@ class SystemTimebase(dj.Computed):
             )
         )
         scans = segments.scan_system(key["system"], session_dir / key["system"])
-        # 'barcode' unconditionally, because nothing in this pipeline is
-        # trigger-timed yet. Whether the sync box can also trigger ohdpi's
-        # frames is design spec section 12's open hardware question; until it
-        # is answered, claiming 'trigger' would assert a precision that was
-        # never measured.
         row = {**key, "time_source": "barcode", "n_barcodes_decoded": 0,
                "n_barcodes_matched": 0}
 
@@ -384,9 +398,22 @@ class SystemTimebase(dj.Computed):
             # Device absence never blocks ingest (1c-2's rule) -- but an
             # AcquisitionSystem row says this system WAS present, so finding no
             # recording under it is a real disagreement, and it is recorded as
-            # one for the daily report to surface.
+            # one for the daily report to surface. Recorded before the clock
+            # is asked, as it always was: nothing is placed, so no clock is
+            # needed, and `fit_status` is read before `time_source`.
             self.insert1({**row, "fit_status": "no_recording"})
             return
+
+        clock = clock_for(key, session_dir)
+        keeps_time = key["system"] == _KEEPS_TIME[clock.source]
+        # 'barcode' under the sync box, because nothing in this pipeline is
+        # trigger-timed yet. Whether the sync box can also trigger ohdpi's
+        # frames is design spec section 12's open hardware question; until it
+        # is answered, claiming 'trigger' would assert a precision that was
+        # never measured. Under the NI, 'clock' for SpikeGLX and 'none' for
+        # every other system.
+        if clock.source == "nidq":
+            row["time_source"] = "clock" if keeps_time else "none"
 
         # `scan.barcodes` is the gap-CLEAR set, not the raw decode:
         # `segments.scan_system` drops any word a dropped-frame gap fell
@@ -400,14 +427,15 @@ class SystemTimebase(dj.Computed):
         nominal_rate_hz = scans[0].stream.fs_hz
         row["n_barcodes_decoded"] = len(decoded)
 
-        if key["system"] == "syncbox":
+        if keeps_time:
             # Session time IS this system's timeline, so its fit against itself
-            # is exactly identity -- the truth, not a placeholder. Matched are
-            # the barcodes session time holds: a later process's are the box's
-            # too, but nothing places them until a bridge does (part 1's
-            # deferred finding; design spec `2026-11-04-syncbox-header-design.md`
-            # section 9).
-            reference = clock_for(key, session_dir).barcode_reference() if decoded else {}
+            # is exactly identity -- the truth, not a placeholder. Under the
+            # sync box, matched are the barcodes session time holds: a later
+            # process's are the box's too, but nothing places them until a
+            # bridge does (part 1's deferred finding; design spec
+            # `2026-11-04-syncbox-header-design.md` section 9). The NI's clock
+            # places no barcode, so under it none is matched.
+            reference = clock.barcode_reference() if decoded and clock.source == "syncbox" else {}
             self.insert1(
                 {
                     **row,
@@ -422,7 +450,13 @@ class SystemTimebase(dj.Computed):
             )
             return
 
-        reference = clock_for(key, session_dir).barcode_reference()
+        if clock.source == "nidq":
+            # No way onto the NI's clock yet (amendment 51): the fit columns
+            # stay NULL, as for any system that could not be fitted.
+            self.insert1({**row, "fit_status": "unfittable", "nominal_rate_hz": nominal_rate_hz})
+            return
+
+        reference = clock.barcode_reference()
         try:
             fit = fit_rate_across([scan.barcodes for scan in scans], reference, nominal_rate_hz)
         except ValueError:
@@ -628,6 +662,11 @@ class TimingProvenance(dj.Computed):
         # remaining failure modes. `failed` still forces the FINAL tier to D
         # on its own, unconditionally, below; only the evidence-gathering
         # gate changed.
+        #
+        # Under the NI's clock the sync box is never fitted (`SystemTimebase.
+        # make`: it has no way onto that clock until 3b-3), so nothing below
+        # reads the NI's codes as the Pi's or asks the NI's clock for a
+        # barcode reference.
         syncbox_fitted = any(
             fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits
         )
