@@ -525,8 +525,14 @@ Authorization: Bearer <token>
     `training_records`, how many of wl-xcon's training records the file holds, its
     `parameter_changes` and its `controls` (the rows themselves are in the file's `rig_record`
     module, which names no one who acted); null for a session wl-xcon did not run, and in a file
-    built before. The exported schema refuses fields it does not know, so a copy validated against
-    must take these. Read `schema_version`, and ignore fields you do not know.
+    built before. **Within version 3, since part 3b-1** (the same design spec, amendments 46 and
+    50): `quality.clock`, which clock kept the file's time (`syncbox` or `nidq`, defaulting to
+    `syncbox`, so a description written before reads unchanged), and two more values of
+    `quality.reference_source`, where the wall-clock time of t = 0 came from under the NI:
+    `rig_clock` (the rig's clock fitted to the recording) and `nidq_meta` (the first NI file's
+    `fileCreateTime`), beside `barcode` and `manifest`. The exported schema refuses fields and
+    values it does not know, so a copy validated against must take these. Read `schema_version`,
+    and ignore fields you do not know.
 
 A file changes when it is built, published, moved between shares, or **its subject's details are
 corrected** (design spec `2026-10-05-subject-corrections-design.md`): a request that carries an
@@ -580,7 +586,8 @@ Authorization: Bearer <token>
   session as it stands now.**
 - **Each session:**
   - `subject`, `session_datetime` (naive, UTC), and `session_name`, the rig's `YYYY-MM-DD_NN`;
-  - `tier`, the timing tier (`A` to `D`, `D` quarantined), or `null` until computed; and
+  - `tier`, the timing tier (`A` to `D`, or `N` where the NI kept the session's time, its codes hold
+    every run and nothing failed; `D` quarantined), or `null` until computed; and
     `rejected_segments`, each file this host could not use, with its reason;
   - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
     (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and
@@ -615,8 +622,8 @@ Authorization: Bearer <token>
     its console controls its `pauses` and `manual_rewards`; the rows are in the database and the
     NWB file, never listed. Null for a session wl-xcon did not run; a session read before this host
     carried them (2026-10-18) lists zeros;
-  - `clock`, which clock kept the session's time: `syncbox` (the only one built yet), `nidq` or
-    `lab`, or null until the daemon has chosen it;
+  - `clock`, which clock kept the session's time: `syncbox`, `nidq` (built since part
+    3b-1) or `lab` (part 4, not built yet), or null until the daemon has chosen it;
   - `flags`, each a `code`, a `message`, and the `run_number` or `block_number` it is about:
     `waiting_for_run_markers` (no measured run yet), `repeated_run_number` and
     `repeated_block_number` (a crash restart before wl-xcon's XC-026; only the first is
