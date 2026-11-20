@@ -35,7 +35,7 @@ def shares(tmp_path_factory):
     for tier, name in (("slow", "hdd"), ("fast", "nvme")):
         mount = tmp_path_factory.mktemp(f"nwbfix-{tier}")
         (mount / NWB_DIR).mkdir()
-        made[tier] = Share(tier=tier, mount=mount, host="wl-nas", name=name)
+        made[tier] = Share(tier=tier, mount=mount, host="wl-serv-nas0", name=name)
     return made
 
 
@@ -361,7 +361,7 @@ def test_an_unreachable_share_fails_the_file(published, tmp_path_factory):
     from wl_preproc.nwb.publish import Share
 
     _session_key, key, _runs, _root = published
-    gone = Share(tier="slow", mount=tmp_path_factory.mktemp("nwbfix-gone") / "gone", host="wl-nas", name="hdd")
+    gone = Share(tier="slow", mount=tmp_path_factory.mktemp("nwbfix-gone") / "gone", host="wl-serv-nas0", name="hdd")
     _set_birth(datetime.date(2016, 3, 1))
     try:
         with pytest.raises(CorrectionRefused, match="not reachable"):
@@ -484,7 +484,7 @@ def test_a_leftover_written_after_its_move_is_kept_though_the_file_was_corrected
         written_at = moved["changed_at"].replace(tzinfo=datetime.timezone.utc).timestamp() + 0.001
         os.utime(old, (written_at, written_at))  # someone wrote to the old copy after the move
         _set_birth(datetime.date(2016, 3, 1))
-        full = Share(tier="fast", mount=shares["fast"].mount, host="wl-nas", name="nvme", headroom_bytes=10**18)
+        full = Share(tier="fast", mount=shares["fast"].mount, host="wl-serv-nas0", name="nvme", headroom_bytes=10**18)
         with pytest.raises(CorrectionRefused, match="headroom"):
             correct(key, {"slow": shares["slow"], "fast": full}, _DAY)
         correct(key, shares, _DAY)
@@ -744,7 +744,7 @@ def test_an_unreachable_share_is_reported_once_not_per_file(published, shares, t
     from wl_preproc.nwb.correct import run_corrections
     from wl_preproc.nwb.publish import Share
 
-    gone = Share(tier="slow", mount=tmp_path_factory.mktemp("nwbfix-gone-slow") / "gone", host="wl-nas", name="hdd")
+    gone = Share(tier="slow", mount=tmp_path_factory.mktemp("nwbfix-gone-slow") / "gone", host="wl-serv-nas0", name="hdd")
     _set_birth(datetime.date(2016, 3, 1))
     try:
         _corrected, errors = run_corrections(gone, shares["fast"])
@@ -845,7 +845,7 @@ def test_a_full_fast_share_does_not_hold_back_records_only_catch_up(published, s
     assert publish_module.current_placement(key)["tier"] == "fast"
     new = {"species": "Macaca mulatta", "sex": "F", "date_of_birth": datetime.date(2016, 3, 1)}
     _set_birth(new["date_of_birth"])
-    full = Share(tier="fast", mount=shares["fast"].mount, host="wl-nas", name="nvme", headroom_bytes=10**18)
+    full = Share(tier="fast", mount=shares["fast"].mount, host="wl-serv-nas0", name="nvme", headroom_bytes=10**18)
     try:
         patch_subject(live, new, _DAY)
         assert correct(key, {"slow": shares["slow"], "fast": full}, _DAY) is None
@@ -1023,7 +1023,7 @@ def test_a_marked_file_on_an_unreachable_share_keeps_its_marker(published, share
 
     _session_key, key, _runs, _root = published
     tier = current_placement(key)["tier"]
-    gone = Share(tier=tier, mount=tmp_path_factory.mktemp("nwbfix-gone-marked") / "gone", host="wl-nas",
+    gone = Share(tier=tier, mount=tmp_path_factory.mktemp("nwbfix-gone-marked") / "gone", host="wl-serv-nas0",
                  name=shares[tier].name)
     nwb_schema.NwbCorrecting.insert1({**key_of(key), "started_at": _now()})
     try:

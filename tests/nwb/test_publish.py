@@ -75,7 +75,7 @@ def test_a_share_names_the_path_relative_to_itself_and_keeps_its_headroom(tmp_pa
 
     usage = collections.namedtuple("usage", "total used free")
 
-    share = Share(tier="fast", mount=tmp_path, host="wl-nas", name="nvme", headroom_bytes=100)
+    share = Share(tier="fast", mount=tmp_path, host="wl-serv-nas0", name="nvme", headroom_bytes=100)
     relative = share.relative("monk01", "2027-01-12_01", "monk01.2027-01-12_01.montage-0.activation-0")
     assert relative == "nwb/monk01/2027-01-12_01/monk01.2027-01-12_01.montage-0.activation-0.nwb"
     assert share.local(relative) == tmp_path / relative
@@ -101,7 +101,7 @@ def test_the_fast_share_keeps_a_tenth_of_itself_free_by_default(tmp_path, monkey
     from wl_preproc.nwb.publish import Share
 
     usage = collections.namedtuple("usage", "total used free")
-    share = Share(tier="fast", mount=tmp_path, host="wl-nas", name="nvme")
+    share = Share(tier="fast", mount=tmp_path, host="wl-serv-nas0", name="nvme")
     monkeypatch.setattr(shutil, "disk_usage", lambda path: usage(1000, 850, 150))
     assert share.has_room(50) and not share.has_room(51)
 
