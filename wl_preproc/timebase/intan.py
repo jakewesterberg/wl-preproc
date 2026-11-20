@@ -34,32 +34,41 @@ class IntanPlacement:
 
 
 @lru_cache(maxsize=8)
-def _read_edges(path: str, size: int, mtime_ns: int, kind: str) -> tuple[np.ndarray, float]:
-    """A file's strobe rising edges, `(sample indices, sample rate)`. `size` and
-    `mtime_ns` are in the key only so that a changed file is read again."""
+def _read_edges(path: str, size: int, mtime_ns: int, kind: str) -> np.ndarray:
+    """A file's strobe rising edges as sample indices. `size` and `mtime_ns` are
+    in the key only so that a changed file is read again. The sample rate is not
+    cached: it lives in the sidecar, which the key does not cover, so each call
+    reads it afresh (`_rate`)."""
     if kind == "ni":
         from wl_preproc.events.extract import extract_nidq_strobe_rises
 
-        witness = extract_nidq_strobe_rises(Path(path))
-        samples, fs_hz = witness.edge_samples, witness.fs_hz
+        samples = extract_nidq_strobe_rises(Path(path)).edge_samples
     elif kind == "intan":
         from wl_preproc.events.extract import RHS_STROBE_DIGITAL_BIT
-        from wl_preproc.timebase._rhs_header import INFO_FILENAME, read_sample_rate_hz
         from wl_preproc.timebase.channels import column_chunks, strobe_rises
 
-        recording_dir = Path(path).parent
-        fs_hz = read_sample_rate_hz(recording_dir / INFO_FILENAME)
         samples = strobe_rises(column_chunks(Path(path), 1, 0, np.uint16), RHS_STROBE_DIGITAL_BIT)
     else:
         raise ValueError(f"unknown strobe file kind {kind!r}")
     edges = np.asarray(samples, dtype=np.int64)
     edges.flags.writeable = False
-    return edges, float(fs_hz)
+    return edges
 
 
-def _edges(path: Path, kind: str) -> tuple[np.ndarray, float]:
+def _edges(path: Path, kind: str) -> np.ndarray:
     stat = path.stat()
     return _read_edges(str(path), stat.st_size, stat.st_mtime_ns, kind)
+
+
+def _rate(path: Path, kind: str) -> float:
+    """The sample rate from the file's sidecar, read on every call."""
+    if kind == "ni":
+        from wl_preproc.timebase._nidq_meta import read_nidq_meta
+
+        return float(read_nidq_meta(path.with_suffix(".meta")).sample_rate_hz)
+    from wl_preproc.timebase._rhs_header import INFO_FILENAME, read_sample_rate_hz
+
+    return read_sample_rate_hz(path.parent / INFO_FILENAME)
 
 
 def place_intan(session_dir: Path, recording_dir: Path) -> IntanPlacement:
@@ -72,8 +81,10 @@ def place_intan(session_dir: Path, recording_dir: Path) -> IntanPlacement:
     from wl_preproc.timebase.clock import nidq_files
     from wl_preproc.timebase.extract import RHS_DIGITAL_IN_FILENAME
 
-    ni_samples, ni_fs = _edges(nidq_files(session_dir)[0], "ni")
-    intan_samples, intan_fs = _edges(recording_dir / RHS_DIGITAL_IN_FILENAME, "intan")
+    ni_path = nidq_files(session_dir)[0]
+    intan_path = recording_dir / RHS_DIGITAL_IN_FILENAME
+    ni_samples, ni_fs = _edges(ni_path, "ni"), _rate(ni_path, "ni")
+    intan_samples, intan_fs = _edges(intan_path, "intan"), _rate(intan_path, "intan")
     try:
         match = match_strobes(ni_samples / ni_fs, intan_samples / intan_fs)
     except Unanchored as refusal:

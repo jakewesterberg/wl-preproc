@@ -48,3 +48,24 @@ def test_an_intan_with_no_strobe_refuses(ni_intan):
     _clear_intan_strobes(recording_dir)
     with pytest.raises(Unanchored, match="Intan recorded 0 strobe edges"):
         place_intan(session_dir, recording_dir)
+
+
+def test_a_changed_header_rate_is_read_again(ni_intan):
+    import struct
+
+    recipe, truth, session_dir, recording_dir = ni_intan
+    info = recording_dir / INFO_FILENAME
+    old_fs = read_sample_rate_hz(info)
+    first = place_intan(session_dir, recording_dir)
+
+    new_fs = old_fs * (1 + 20e-6)  # a different rate the strobes still anchor under
+    data = bytearray(info.read_bytes())
+    data[8:12] = struct.pack("<f", new_fs)
+    info.write_bytes(bytes(data))
+    new_fs = read_sample_rate_hz(info)
+    assert new_fs != old_fs
+
+    second = place_intan(session_dir, recording_dir)
+    # Same samples, a new rate: each device time scales by old/new.
+    for (_, before), (_, after) in zip(first.pairs, second.pairs, strict=True):
+        assert after == pytest.approx(before * old_fs / new_fs, rel=1e-9)
