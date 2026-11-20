@@ -139,10 +139,33 @@ def fit_rate_across(
     rejection path, which needs to know.
     """
     groups = [_matched_pairs(barcodes, reference_s) for barcodes in segments]
+    return _fit_rate_from_pairs(groups, nominal_rate_hz, "barcode")
+
+
+def fit_pairs_across(
+    groups: Sequence[Sequence[tuple[float, float]]], nominal_rate_hz: float
+) -> RateFit:
+    """`fit_rate_across`, from matched `(session_s, device_s)` pairs.
+
+    Each group is one recording's pairs and keeps its own intercept, for the
+    reason `fit_rate_across` gives. The pairs need not be barcodes: a strobe's
+    edges, matched across two devices, are pairs too, and the arithmetic does
+    not care what the points were read from. Raises `ValueError` as
+    `fit_rate_across` does, naming "pair" where it names "barcode".
+    """
+    return _fit_rate_from_pairs(groups, nominal_rate_hz, "pair")
+
+
+def _fit_rate_from_pairs(
+    groups: Sequence[Sequence[tuple[float, float]]], nominal_rate_hz: float, noun: str
+) -> RateFit:
+    """The centred least squares behind both public rate fits. `noun` is what
+    one point is called in the refusals ("barcode" or "pair"), so each caller's
+    errors speak its own vocabulary."""
     n = sum(len(pairs) for pairs in groups)
     if n < _MIN_BARCODES_FOR_RATE:
         raise ValueError(
-            f"{n} barcode{'' if n == 1 else 's'} matched the "
+            f"{n} {noun}{'' if n == 1 else 's'} matched the "
             f"reference, and a rate needs at least {_MIN_BARCODES_FOR_RATE}: "
             "one point establishes a position, not a slope"
         )
@@ -169,7 +192,7 @@ def fit_rate_across(
     )
     if variance <= 0.0:
         raise ValueError(
-            f"all {n} matched barcodes share one session time within their segment, so no segment "
+            f"all {n} matched {noun}s share one session time within their segment, so no segment "
             "spans an interval and no rate can be fitted from them"
         )
     scale = covariance / variance
@@ -209,10 +232,29 @@ def fit_offset(
     `RejectedSegment` with a reason rather than letting it become a segment
     positioned at the origin.
     """
-    pairs = _matched_pairs(device_barcodes, reference_s)
+    return _fit_offset_from_pairs(_matched_pairs(device_barcodes, reference_s), rate_fit, "barcode")
+
+
+def fit_offset_to_pairs(
+    pairs: Sequence[tuple[float, float]], rate_fit: RateFit
+) -> OffsetFit:
+    """`fit_offset`, from matched `(session_s, device_s)` pairs.
+
+    Raises `ValueError` on no pairs, for the reason `fit_offset` gives.
+    `OffsetFit.n_barcodes` counts the pairs: the field's name is older than
+    the pairs that do not come from barcodes.
+    """
+    return _fit_offset_from_pairs(pairs, rate_fit, "pair")
+
+
+def _fit_offset_from_pairs(
+    pairs: Sequence[tuple[float, float]], rate_fit: RateFit, noun: str
+) -> OffsetFit:
+    """The mean-error offset behind both public offset fits; see `_fit_rate_from_pairs`
+    for `noun`."""
     if not pairs:
         raise ValueError(
-            "no barcodes in this segment matched the reference, so it cannot be "
+            f"no {noun}s in this segment matched the reference, so it cannot be "
             "positioned in session time at all -- which is a rejection with a "
             "reason, not an offset of zero"
         )

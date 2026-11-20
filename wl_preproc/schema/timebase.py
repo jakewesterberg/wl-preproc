@@ -36,7 +36,10 @@ schema = dj.Schema()
 # 51). 'clock': the system whose own samples are session time, SpikeGLX under
 # the NI, on the identity map. 'none': a system with no way onto the session's
 # clock yet, every one but SpikeGLX under the NI, its row `unfittable`.
-_TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none')"
+# 'strobes' is Intan's under the NI (part 3b-2; amendments 44 to 50): its own
+# strobe edges, matched to the NI's, are the pairs the fit stands on, where a
+# barcode's decoded value would be under the sync box.
+_TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none','strobes')"
 
 # The system whose own timeline is session time, under each clock that keeps
 # it: its fit is identity, the truth rather than a placeholder (amendment 50's
@@ -333,6 +336,7 @@ class SystemTimebase(dj.Computed):
     time_source        : {_TIME_SOURCE_ENUM}  # the mechanism attempted
     n_barcodes_decoded : int unsigned  # decoded AND trusted -- see make()
     n_barcodes_matched : int unsigned  # of those, present in the sync box's log
+    n_strobes_matched=null : int unsigned  # Intan's edges matched to the NI's; null unless time_source is strobes
     nominal_rate_hz=null : double  # what the device believes it samples at
     fitted_rate_hz=null  : double  # nominal * (1 + drift_ppm/1e6)
     drift_ppm=null       : double  # against session time, which the sync box defines
@@ -374,12 +378,16 @@ class SystemTimebase(dj.Computed):
         truth, not a placeholder, and an absent row would read as "this system
         was never aligned", which is the one thing it certainly was.
 
-        Under the NI's clock every other system is `unfittable`, by no
-        mechanism (`time_source` 'none'): 3b-1 places only SpikeGLX on it. The
-        eye tracker and the cameras wait for lab time's host stamps, Intan for
-        3b-2, and a sync box that recorded part of the session for 3b-3
-        (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
-        amendments 40 and 51).
+        Under the NI's clock Intan is fitted by its strobes (`time_source`
+        'strobes', part 3b-2): each recording is anchored on its own against
+        the NI's (`timebase/intan.py::place_intan`), and the ones that anchor
+        are pooled into one rate, each with its own intercept, as barcodes
+        are. Every other system is `unfittable`, by no mechanism
+        (`time_source` 'none'): the eye tracker and the cameras wait for lab
+        time's host stamps, and a sync box that recorded part of the session
+        for 3b-3 (design spec
+        `2026-10-18-training-records-and-backup-clock-design.md`, amendments
+        40 and 44 to 51).
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
@@ -413,8 +421,9 @@ class SystemTimebase(dj.Computed):
         # is answered, claiming 'trigger' would assert a precision that was
         # never measured. Under the NI, 'clock' for SpikeGLX and 'none' for
         # every other system.
+        by_strobes = clock.source == "nidq" and key["system"] == "rhs"
         if clock.source == "nidq":
-            row["time_source"] = "clock" if keeps_time else "none"
+            row["time_source"] = "clock" if keeps_time else "strobes" if by_strobes else "none"
 
         # `scan.barcodes` is the gap-CLEAR set, not the raw decode:
         # `segments.scan_system` drops any word a dropped-frame gap fell
@@ -451,6 +460,10 @@ class SystemTimebase(dj.Computed):
             )
             return
 
+        if by_strobes:
+            self._make_by_strobes(row, scans, session_dir, nominal_rate_hz)
+            return
+
         if clock.source == "nidq":
             # No way onto the NI's clock yet (amendment 51): the fit columns
             # stay NULL, as for any system that could not be fitted.
@@ -475,6 +488,42 @@ class SystemTimebase(dj.Computed):
                 **row,
                 "fit_status": "fitted",
                 "n_barcodes_matched": fit.n_matched,
+                "nominal_rate_hz": nominal_rate_hz,
+                "fitted_rate_hz": fit.fitted_rate_hz,
+                "drift_ppm": fit.drift_ppm,
+                "residual_us_rms": fit.residual_us_rms,
+                "residual_us_max": fit.residual_us_max,
+            }
+        )
+
+    def _make_by_strobes(self, row: dict, scans: list, session_dir: Path, nominal_rate_hz: float) -> None:
+        """Intan under the NI: the recordings that anchor, fitted as one.
+
+        A recording that cannot be anchored is left out of the fit, and
+        `Segment.make` names it; the others still fit. With none anchored the
+        row is `unfittable` and its fit columns stay NULL, for the reason the
+        class gives, and `n_strobes_matched` with them: no strobe was matched.
+        """
+        from wl_preproc.timebase.fit import fit_pairs_across
+        from wl_preproc.timebase.intan import place_intan
+        from wl_preproc.timebase.strobes import Unanchored
+
+        groups = []
+        for scan in scans:
+            try:
+                groups.append(place_intan(session_dir, scan.path).pairs)
+            except Unanchored:
+                continue
+        try:
+            fit = fit_pairs_across(groups, nominal_rate_hz)
+        except ValueError:
+            self.insert1({**row, "fit_status": "unfittable", "nominal_rate_hz": nominal_rate_hz})
+            return
+        self.insert1(
+            {
+                **row,
+                "fit_status": "fitted",
+                "n_strobes_matched": sum(len(pairs) for pairs in groups),
                 "nominal_rate_hz": nominal_rate_hz,
                 "fitted_rate_hz": fit.fitted_rate_hz,
                 "drift_ppm": fit.drift_ppm,

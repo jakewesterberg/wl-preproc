@@ -136,6 +136,10 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
         for _ in range(block.n_trials):
             if recipe.trial_numbers:
                 trial_id = recipe.trial_numbers[len(trials)]
+            # The animal starts the trial when it is ready, so the wait comes
+            # first and sits inside the block.
+            if recipe.trial_waits_s:
+                cursor += recipe.trial_waits_s[len(trials)]
             trial_start = cursor
             trial_end = cursor + block.trial_duration_s
             trials.append(

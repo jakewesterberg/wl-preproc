@@ -33,6 +33,16 @@ last run, SpikeGLX's NI keeps the time. **Shipped at 3b-1's merge**, not before.
   to `syncbox`, so a description written before reads unchanged. `docs/schemas/nwb_description.json` refuses a
   value it does not know: **a strict version 3 reader refuses an NI session's description until it has these two
   values.** The listing's `clock` and the description's `quality.clock` say the same thing.
+- **Added by 3b-2 (2026-11-20): under the NI, a session with Intan can now be tier N.** Intan is placed on the
+  NI's clock by its strobes. Nothing in the listing's or the description's shape changes. A session with an
+  Intan recording that cannot be anchored, the eye tracker or the cameras stays `D`.
+- **Added by 3b-2: the NWB file's `processing/timebase/system_clocks` gains a `time_source` column under the NI
+  only** (`clock`, `strobes`, `none`). It is in the file, not in the description, so nothing here needs
+  vendoring.
+- **Added by 3b-2: `GET /sessions`: a listed rejected segment's `reason` may now be `no_strobe_anchor`**: an
+  Intan recording whose strobes could not be matched to the NI's. `docs/schemas/session_listing.json` types a
+  `RejectedFile`'s `reason` as a plain string, not a fixed set, so no vendored copy refuses it; a reader that
+  names each reason needs the new one.
 - **Every listed session is listed once more** when this ships: each segment's key changes, so each digest does.
 - **Every NWB file built before this stays as it is.** Nothing here asks for one to be rebuilt.
 

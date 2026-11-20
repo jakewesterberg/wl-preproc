@@ -148,6 +148,43 @@ def extract_nidq_words(nidq_bin: Path) -> WordStream:
     return WordStream(words=words, fs_hz=meta.sample_rate_hz)
 
 
+def extract_nidq_strobe_rises(nidq_bin: Path) -> StrobeWitness:
+    """The NI's strobe rising edges, each a sample index, in chunks.
+
+    The strobe bit of digital word 0 (`_NIDQ_STROBE_BIT`), read at the `.meta`'s
+    rate and timed at its rising edge as `extract_nidq_words` times its words and
+    as Intan's strobe is read (`extract_rhs_witness`): the two lines share their
+    edges, and amendment 49 pairs them. Raises as `extract_nidq_words` does on a
+    sidecar with fewer than two digital words, and on a file that does not divide
+    into the sidecar's channels.
+    """
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+    from wl_preproc.timebase.channels import column_chunks, n_values, strobe_rises
+
+    meta_path = nidq_bin.with_suffix(".meta")
+    meta = read_nidq_meta(meta_path)
+    if meta.n_digital_words < 2:
+        raise ValueError(
+            f"{nidq_bin}: the sidecar declares {meta.n_digital_words} digital "
+            "word(s), so this recording carries the barcode but no code lines. "
+            "Spec section 4.2 routes 16 data lines plus strobe to the NI, which "
+            "needs two words"
+        )
+    n_int16 = n_values(nidq_bin, np.int16)
+    if n_int16 % meta.n_channels:
+        raise ValueError(
+            f"{nidq_bin}: {n_int16} int16 samples do not divide into "
+            f"the {meta.n_channels} channels {meta_path.name} declares; the "
+            "file is truncated mid-sample or the sidecar describes a different "
+            "recording"
+        )
+    rising = strobe_rises(
+        column_chunks(nidq_bin, meta.n_channels, meta.n_analog_channels, np.int16),
+        _NIDQ_STROBE_BIT,
+    )
+    return StrobeWitness(edge_samples=rising, fs_hz=meta.sample_rate_hz)
+
+
 def extract_rhs_witness(session_dir: Path) -> StrobeWitness:
     """Strobe edges from the Intan RHS. A witness, never words.
 

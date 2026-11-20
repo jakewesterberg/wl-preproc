@@ -471,7 +471,9 @@ class Segment(dj.Computed):
         from wl_preproc.schema import ingest, timebase
         from wl_preproc.timebase import segments
         from wl_preproc.timebase.clock import clock_for, nidq_files
-        from wl_preproc.timebase.fit import fit_offset
+        from wl_preproc.timebase.fit import fit_offset, fit_offset_to_pairs
+        from wl_preproc.timebase.intan import place_intan
+        from wl_preproc.timebase.strobes import Unanchored
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         key = {k: key[k] for k in AcquisitionSystem.primary_key}
@@ -505,6 +507,33 @@ class Segment(dj.Computed):
             # Relative to the system directory, matching DoneMarker's own
             # convention, so the two name the same file the same way.
             file_path = str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."
+            if on_the_ni and key["system"] == "rhs":
+                # Intan's own strobes place it (part 3b-2). Under strobes the
+                # system is unfittable only when no recording anchored
+                # (`SystemTimebase._make_by_strobes`: one anchored recording
+                # holds far more than the two pairs a rate needs), so every
+                # file's reason is already known, no anchor, and is truer
+                # than the system's. It is not searched again: the key stays
+                # outstanding, and a 12 h recording that cannot anchor would
+                # cost minutes on every daemon pass.
+                if rate is None:
+                    rejected.append({**key, "file_path": file_path, "reason": segments.NO_STROBE_ANCHOR})
+                    continue
+                try:
+                    placement = place_intan(session_dir, scan.path)
+                except Unanchored:
+                    rejected.append({**key, "file_path": file_path, "reason": segments.NO_STROBE_ANCHOR})
+                    continue
+                offset = fit_offset_to_pairs(placement.pairs, rate)
+                accepted.append({
+                    **key, "segment_id": file_path, "start_s": offset.offset_s,
+                    "end_s": scan.duration_s / rate.scale + offset.offset_s,
+                    "n_samples": scan.stream.n_samples, "first_sample": placement.first_sample,
+                    "offset_s": offset.offset_s, "residual_us": offset.residual_us, "n_barcodes": 0,
+                    "n_frame_gaps": scan.n_frame_gaps, "n_frames_missing": scan.n_frames_missing,
+                    "n_barcodes_dropped": scan.n_barcodes_dropped,
+                })
+                continue
             if on_the_ni:
                 if rate is None:
                     rejected.append({**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM})

@@ -238,7 +238,7 @@ def _timebase_texts(tmp_path, clock: str, reference: dict) -> dict:
     provenance = {"tier": "N", "n_systems_aligned": 1, "n_segments": 1, "n_rejected_segments": 0,
                   "worst_residual_us": 0.0, "worst_drift_ppm": 0.0}
     clocks = [{"system": "spikeglx", "fit_status": "fitted", "nominal_rate_hz": 30000.0, "fitted_rate_hz": 30000.0,
-               "drift_ppm": 0.0, "residual_us_rms": 0.0}]
+               "drift_ppm": 0.0, "residual_us_rms": 0.0, "time_source": "clock"}]
     segments = [{"system": "spikeglx", "file_path": "x.nidq.bin", "first_sample": 0, "offset_s": 0.0,
                  "start_s": 0.0, "end_s": 60.0, "n_samples": 1800000}]
     _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference,
@@ -298,18 +298,18 @@ def test_an_ni_timed_file_says_the_ni_kept_time(tmp_path):
     # No barcode places anything under the NI (the final review's M1):
     # SpikeGLX is on the identity map, every other system unplaced.
     assert texts["timing_provenance.worst_residual_us"] == (
-        "Largest residual, microseconds: under the NI, 0, SpikeGLX being on the identity map and no barcode "
-        "fitted.")
+        "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, and Intan's largest "
+        "strobe residual where it was fitted.")
     assert texts["system_clocks.fitted_rate_hz"] == (
-        "The rate on the session's clock: under the NI, SpikeGLX's nominal rate, on the identity map with no "
-        "barcode fitted; NaN for a system not placed on the NI's clock.")
+        "The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate fitted "
+        "against the NI's strobes; NaN for a system not placed on the NI's clock.")
     assert texts["system_clocks.residual_us_rms"] == (
-        "RMS residual, microseconds: under the NI, 0 for SpikeGLX, on the identity map with no barcode fitted; "
-        "NaN for a system not placed on the NI's clock.")
+        "RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe residual; NaN for a "
+        "system not placed on the NI's clock.")
     assert texts["segments.file_path"] == "The recording file, relative to its system's folder."
     assert texts["segments.first_sample"] == (
-        "Native index the segment's offset is anchored to: under the NI, 0, its first sample, the NI's first "
-        "file being session time on the identity map; no barcode anchors it.")
+        "Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file being session "
+        "time; for Intan, the first strobe edge matched to the NI's.")
     assert not any("barcode residual" in texts[name] or "against the barcodes" in texts[name]
                    or "first barcode" in texts[name]
                    for name in ("timing_provenance.worst_residual_us", "system_clocks.fitted_rate_hz",
