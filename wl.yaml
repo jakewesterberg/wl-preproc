@@ -603,7 +603,7 @@ third_party:
 # something here.
 requires:
   - name: wl-sync
-    pinned_at: fe1ea633972df9590dbe1974aeb66dc3a1eb20ad
+    pinned_at: fc18551880de0eb8656d1de38fe77ca0b601e410
     for: session identity, the barcode codec, and the log format
     why: >-
       The sync box owns everything it produces, and vendoring copies here would
