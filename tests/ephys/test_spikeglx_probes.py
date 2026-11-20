@@ -61,7 +61,10 @@ def test_spikeglx_s_own_folder_layout_is_found(tmp_path):
     # probeinterface asserts on a missing imroTbl and fails to parse a broken
     # one; neither is the part number's fault.
     (("~imroTbl=", "~imroTblGone="), "imroTbl"),
-    (("~imroTbl=(4,4)", "~imroTbl=(4,4)(zz"), "imroTbl"),
+    (("~imroTbl=(0,4)", "~imroTbl=(0,4)(zz"), "imroTbl"),
+    # SpikeGLX 20260115's form, naming a part number probeinterface does not
+    # hold, in the header and the file alike.
+    (("imDatPrb_pn=NP1000", "imDatPrb_pn=NP9999", "~imroTbl=(0,", "~imroTbl=(NP9999,"), "NP9999"),
 ])
 def test_a_probe_whose_sites_cannot_be_mapped_says_why(tmp_path, change, expect):
     """Design spec section 5: an unknown part number, or none, or a site map
@@ -71,7 +74,10 @@ def test_a_probe_whose_sites_cannot_be_mapped_says_why(tmp_path, change, expect)
 
     recipe, nidq = _run(tmp_path)
     (meta,) = nidq.parent.glob("*_imec0.ap.meta")
-    meta.write_text(meta.read_text().replace(*change))
+    text = meta.read_text()
+    for find, replace in zip(change[::2], change[1::2], strict=True):
+        text = text.replace(find, replace)
+    meta.write_text(text)
     (probe,) = read_run(nidq)
     assert probe.electrodes is None and expect in probe.problem
     assert probe.serial == recipe.probe_serial
@@ -92,7 +98,7 @@ def test_a_short_imro_table_is_a_problem_not_a_partial_map(tmp_path, entries, ex
     _recipe, nidq = _run(tmp_path)
     (meta,) = nidq.parent.glob("*_imec0.ap.meta")
     text = meta.read_text()
-    table = re.search(r"^~imroTbl=(\(\d+,\d+\))(.*)$", text, re.M)
+    table = re.search(r"^~imroTbl=(\([^,()]+,\d+\))(.*)$", text, re.M)
     kept = "".join(re.findall(r"\([^)]*\)", table.group(2))[:entries])
     meta.write_text(text.replace(table.group(0), f"~imroTbl={table.group(1)}{kept}"))
     (probe,) = read_run(nidq)
@@ -142,3 +148,60 @@ def test_a_probe_keeps_its_imro_table_verbatim(tmp_path):
     (line,) = [line for line in meta.read_text().splitlines() if line.startswith("~imroTbl=")]
     (probe,) = read_run(nidq)
     assert probe.imro_table == line.removeprefix("~imroTbl=")
+
+
+@pytest.mark.parametrize("part_number, bank", [("NP1000", 0), ("NP1000", 1), ("NP1032", 2)])
+def test_both_header_forms_place_the_same_sites(tmp_path, part_number, bank):
+    """SpikeGLX 20260115 and later name the part number first in the
+    `~imroTbl` header, where earlier versions named the type (design spec
+    `2026-11-19-spikeglx-pn-header-design.md`). The same table places the
+    same sites in either form, and the table wl.works compares is kept as
+    written."""
+    from wl_preproc.ephys.spikeglx_probes import read_run
+
+    placed = {}
+    for imro_header in ("type", "part_number"):
+        recipe, nidq = _run(tmp_path / imro_header, probe_part_number=part_number, probe_bank=bank,
+                            imro_header=imro_header)
+        (probe,) = read_run(nidq)
+        assert probe.problem is None, probe.problem
+        assert probe.electrodes == tuple(site["electrode"] for site in recipe.recorded_sites())
+        placed[imro_header] = probe
+    assert placed["type"].electrodes == placed["part_number"].electrodes
+    assert placed["part_number"].electrodes[0] == bank * 384
+    assert placed["part_number"].imro_table.startswith(f"({part_number},")
+
+
+def test_both_header_forms_place_every_probe_of_a_run(tmp_path):
+    """Every imec stream of a run, and of the run after a restart, carries
+    the form its SpikeGLX writes."""
+    from wl_preproc.ephys.spikeglx_probes import read_run
+    from wl_preproc.synth.recipe import CI_RECIPE, ProbeSpec, RestartSpec, SessionRecipe
+    from wl_preproc.synth.session import generate_session
+
+    recipe = SessionRecipe.model_validate({
+        **CI_RECIPE.model_dump(), "imro_header": "part_number",
+        "extra_probes": [ProbeSpec(serial="19011110041", part_number="NP1032", bank=1).model_dump()],
+        "spikeglx_restart": RestartSpec(at_s=CI_RECIPE.duration_s / 2).model_dump()})
+    generate_session(tmp_path, recipe)
+    runs = sorted(tmp_path.rglob("*.nidq.bin"))
+    assert len(runs) == 2
+    for nidq in runs:
+        probes = read_run(nidq)
+        assert [(p.stream, p.part_number, p.problem) for p in probes] == [
+            ("imec0", "NP1000", None), ("imec1", "NP1032", None)]
+        assert probes[1].electrodes[0] == 384 and all(p.imro_table.startswith(f"({p.part_number},") for p in probes)
+
+
+def test_a_header_naming_another_part_number_is_noted_and_placed(tmp_path):
+    """A header whose part number is not the file's own `imDatPrb_pn` is a
+    note; the sites are still placed from `imDatPrb_pn`."""
+    from wl_preproc.ephys.spikeglx_probes import read_run
+
+    _recipe, nidq = _run(tmp_path, probe_part_number="NP1032", probe_bank=2, imro_header="part_number")
+    (unedited,) = read_run(nidq)
+    (meta,) = nidq.parent.glob("*_imec0.ap.meta")
+    meta.write_text(meta.read_text().replace("~imroTbl=(NP1032,", "~imroTbl=(NP1030,"))
+    (probe,) = read_run(nidq)
+    assert probe.electrodes == unedited.electrodes
+    assert probe.problem == "the imroTbl's header names part number NP1030, the .meta NP1032 (imDatPrb_pn)"
