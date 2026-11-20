@@ -1,10 +1,20 @@
 # Where this build actually is
 
-**Last updated 2026-11-19**, describing `main` at `6638fcb`: the merge of
-`feat/spikeglx-pn-header`, reading SpikeGLX 20260115's part-number `~imroTbl` header
-(`handoffs/2026-11-19-spikeglx-pn-header.md`). CI read off `6638fcb` is green on both
-interpreters, 3084 passed on each with 37 skipped, on probeinterface 0.5.0 and spikeinterface
-0.105.4, and the manifest check is green (`gh run view 44643138223`).
+**Last updated 2026-11-20**, describing `main` at `36aac64`: the merge of `feat/part-3b-1`, the
+NI keeping time where the sync box's codes do not hold every run
+(`handoffs/2026-11-19-part-3b-1.md`). CI read off `36aac64` is green on both interpreters, 3162
+passed on each with 37 skipped and 1 xfailed, and the manifest check is green
+(`gh run view 44753017144`).
+- **Part 3b-1, the NI keeps time:** the sync box keeps a session's time when it has a log, was not
+  landed without, decodes a barcode, and its codes hold every run, reach the end of the rig's last
+  run (SESSION_END or the last run's RUN_END decoded, or else the last trial line), or it
+  restarted. Otherwise the NI keeps time if its codes hold every run, as tier `N` with clock
+  `nidq`; a session neither can time is refused (a `ClockRefusal` row, no `SessionClock`) and is
+  decided again each pass, and again under new rules (`CHOICE_RULES`), until lab time, part 4. The
+  segment key is the file's path (`segment_id`). The daemon counts the clocks a pass recorded, so
+  a refused session is not counted every pass. The full suite with every reference set passed
+  3196 on each interpreter at `817f02c`. wl.works is told what changed in what it reads; a session with only the sync box
+  whose box stops inside the last run is refused, the requester's choice of 2026-11-20.
 - **SpikeGLX 20260115's `~imroTbl` header:** probeinterface `>=0.5`, no ceiling (the requester's
   rule of 2026-11-19: keep standards up to date), reads the header naming the type, `(1030,384)`,
   and the one naming the part number, `(NP1032,384)`, and both place the same sites through the

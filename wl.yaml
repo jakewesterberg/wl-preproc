@@ -110,11 +110,16 @@ status:
     joining touching runs before the minimum duration. Reading SpikeGLX
     20260115's imroTbl header, which names the part number, is merged
     (6638fcb; docs/handoffs/2026-11-19-spikeglx-pn-header.md), with
-    probeinterface >=0.5 reading both forms. Next, part 3b; then our
-    reader of wl-xcon's console settings (XC-513, accepted 2026-11-18);
-    then the NI as the clock, and part 2, the bridges.
+    probeinterface >=0.5 reading both forms. Part 3b-1 is merged
+    (36aac64; docs/handoffs/2026-11-19-part-3b-1.md): where the sync box's
+    codes do not hold every run, the NI keeps the session's time (tier N),
+    and a session neither can time is refused until lab time, part 4. Next,
+    parts 3b-2 and 3b-3; then our reader of wl-xcon's console settings
+    (XC-513, accepted 2026-11-18); then its pop-out revision (XC-543); then
+    part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: the SpikeGLX imroTbl header (6638fcb). Before it, v4 of the
+    Done: part 3b-1, the NI keeping time (36aac64). Before it, the
+    SpikeGLX imroTbl header (6638fcb). Before it, v4 of the
     saccade fixtures (0f3edf8). Before it, the two-eye
     label fix (a390c58). Before it, full-precision
     trial and block times (a01b736). Before it,
@@ -280,8 +285,10 @@ status:
   # green on `a8e1642`, run 36557961229); true when written.
   # Was `0aa4928` until the NWB builder merge `a8e1642` on 2026-09-29 (CI
   # green on `0aa4928`, run 36463681187); true when written.
+  # Was `920048a` (wl-sync's part 1, 2026-10-30) until part 3b-1's merge
+  # `36aac64` on 2026-11-20; the phase text above had moved on past it.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "920048a"
+  describes: "36aac64"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and
