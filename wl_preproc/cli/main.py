@@ -147,6 +147,30 @@ def _staged_entries(
     ]
 
 
+def _add_nidq_timezone(subparser: argparse.ArgumentParser) -> None:
+    """`--nidq-timezone`: the lab's NI machine's time zone, which SpikeGLX's
+    `fileCreateTime` is local time in (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendment 46).
+    Unset, an NI-timed file's t = 0 never comes from it. Taken by every
+    command that builds an NWB file -- the daemon's pass and `wlpp nwb
+    build` -- so a file rebuilt by hand places t = 0 as the daemon's did."""
+    subparser.add_argument("--nidq-timezone", default=None, metavar="IANA_NAME",
+                           help="the NI machine's time zone, such as America/New_York")
+
+
+def _set_nidq_timezone(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """`--nidq-timezone` given, set as the session clock's zone before
+    anything else runs; an unknown zone exits 2, naming it."""
+    if args.nidq_timezone is None:
+        return
+    from wl_preproc.timebase.clock import set_nidq_timezone
+
+    try:
+        set_nidq_timezone(args.nidq_timezone)
+    except ValueError as error:
+        parser.error(f"--nidq-timezone: {error}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wlpp")
     subparsers = parser.add_subparsers(dest="group", required=True)
@@ -214,11 +238,7 @@ def main(argv: list[str] | None = None) -> int:
 
     daemon_p.add_argument("--with-detector", action="append", default=[], choices=sorted(OPT_IN),
                           help="also run this opt-in detector")
-    # The lab's NI machine's time zone, which SpikeGLX's `fileCreateTime` is
-    # local time in (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
-    # amendment 46). Unset, an NI-timed file's t = 0 never comes from it.
-    daemon_p.add_argument("--nidq-timezone", default=None, metavar="IANA_NAME",
-                          help="the NI machine's time zone, such as America/New_York")
+    _add_nidq_timezone(daemon_p)
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -229,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     nwb_build.add_argument("--activation-id", required=True, type=int)
     nwb_build.add_argument("--nwb-root", required=True, type=Path)
     nwb_build.add_argument("--prefix", default=DEFAULT_PREFIX)
+    _add_nidq_timezone(nwb_build)
 
     ingest_parser = subparsers.add_parser("ingest", help="scan a storage root once")
     ingest_parser.add_argument("--root", required=True, help="directory holding session dirs")
@@ -739,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.nwb.lock import Busy, exclusive
         from wl_preproc.schema import request as request_schema
 
+        _set_nidq_timezone(parser, args)
         activate_all(prefix=args.prefix)
         # Under the daemon's NWB lock (`nwb/lock.py`): a build beside a pass
         # would record the same activation twice.
@@ -777,13 +799,7 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.daemon import run_once
         from wl_preproc.nwb.publish import Share
 
-        if args.nidq_timezone is not None:
-            from wl_preproc.timebase.clock import set_nidq_timezone
-
-            try:
-                set_nidq_timezone(args.nidq_timezone)
-            except ValueError as error:
-                parser.error(f"--nidq-timezone: {error}")
+        _set_nidq_timezone(parser, args)
         shares = {}
         if args.nwb_fast_headroom_gb is not None and args.nwb_fast_headroom_gb < 0:
             parser.error("--nwb-fast-headroom-gb cannot be negative")
