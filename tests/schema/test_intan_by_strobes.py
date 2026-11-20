@@ -41,9 +41,12 @@ def landed(dj_conn, prefix, tmp_path_factory):
     daemon.activate_all(prefix=prefix)
     serial = new_serial()
     sessions = _Landed()
+    sessions.animals = {}
 
     def land(name: str, **update):
-        session = new_animal().session()
+        animal = new_animal()
+        sessions.animals[name] = animal
+        session = animal.session()
         recipe = NI_INTAN_RECIPE.model_copy(update={"subject": session.subject, "session_id": session.session_id,
                                                     "probe_serial": serial, **update})
         root = tmp_path_factory.mktemp(name)
@@ -135,3 +138,56 @@ def test_under_the_sync_box_intan_is_still_fitted_by_barcodes(landed):
 def test_the_passes_report_no_error(landed):
     for name in ("ni_intan", "no_strobe", "two", "synced"):
         assert _errors_of(landed.report, landed.key(name)) == []
+
+
+@pytest.fixture(scope="module")
+def ni_intan_nwb(landed, prefix, tmp_path_factory):
+    """The NI-and-Intan session's canonical NWB file, built as
+    `test_ni_clock.py`'s `ni_nwb` is. Returns the `NwbFile` row."""
+    from wl_preproc import daemon
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import nwb as nwb_schema
+
+    from tests.schema.test_nwb_build import _montage, _request
+
+    session_key = landed.key("ni_intan")
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+             "works_run_id": f"wr-{row['run_number']}"}
+            for row in (core.Run & session_key).to_dicts(order_by="run_number")]
+    key = accept(_request(session_key, landed.animals["ni_intan"].key("canonical"), _montage(runs), runs),
+                 prefix=prefix)
+    report = daemon.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("ni-intan-nwb"))
+    rows = (nwb_schema.NwbFile & key).to_dicts()
+    assert rows, report["errors"]
+    return rows[0]
+
+
+def test_the_nwb_file_says_intan_was_placed_by_strobes(ni_intan_nwb):
+    from pynwb import NWBHDF5IO
+
+    assert ni_intan_nwb["status"] == "written", ni_intan_nwb["reason"] or ni_intan_nwb["inspector_findings"]
+    with NWBHDF5IO(ni_intan_nwb["path"], "r") as handle:
+        table = handle.read().processing["timebase"]["system_clocks"]
+        frame = table.to_dataframe()
+        assert dict(zip(frame["system"], frame["time_source"])) == {"spikeglx": "clock", "rhs": "strobes"}
+        text = {name: table[name].description for name in table.colnames}
+        provenance = handle.read().processing["timebase"]["timing_provenance"]
+        worst = provenance["worst_residual_us"].description
+        segments = handle.read().processing["timebase"]["segments"]
+        first_sample = segments["first_sample"].description
+    assert text["time_source"] == (
+        "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan fitted "
+        "by its strobe edges matched to the NI's; none, not placed.")
+    assert worst == (
+        "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, and Intan's largest "
+        "strobe residual where it was fitted.")
+    assert text["fitted_rate_hz"] == (
+        "The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate fitted "
+        "against the NI's strobes; NaN for a system not placed on the NI's clock.")
+    assert text["residual_us_rms"] == (
+        "RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe residual; NaN for a "
+        "system not placed on the NI's clock.")
+    assert first_sample == (
+        "Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file being session "
+        "time; for Intan, the first strobe edge matched to the NI's.")

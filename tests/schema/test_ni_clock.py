@@ -397,3 +397,12 @@ def test_an_ni_session_builds_an_nwb_file_saying_the_ni_kept_time(landed, ni_nwb
         reference = module["clock_reference"].to_dataframe()
         assert reference["source"].tolist() == [row["reference_source"]]
         assert nwb.session_start_time == row["reference_time"].replace(tzinfo=datetime.timezone.utc)
+
+
+def test_an_ni_only_nwb_file_names_spikeglx_on_the_clock(ni_nwb):
+    from pynwb import NWBHDF5IO
+
+    _activation, row, _report = ni_nwb
+    with NWBHDF5IO(row["path"], "r") as handle:
+        frame = handle.read().processing["timebase"]["system_clocks"].to_dataframe()
+    assert frame["time_source"].tolist() == ["clock"]

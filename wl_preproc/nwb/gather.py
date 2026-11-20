@@ -429,7 +429,7 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
 def _timebase(session_key: dict, provenance: dict, clock: dict, session_clock: str) -> dict:
     from wl_preproc.schema import core, timebase
 
-    clocks = [{field: row[field] for field in ("system", "fit_status", "nominal_rate_hz", "fitted_rate_hz", "drift_ppm", "residual_us_rms")}
+    clocks = [{field: row[field] for field in ("system", "fit_status", "nominal_rate_hz", "fitted_rate_hz", "drift_ppm", "residual_us_rms", "time_source")}
               for row in (timebase.SystemTimebase & session_key).to_dicts()]
     for row in clocks:
         for field in ("nominal_rate_hz", "fitted_rate_hz", "drift_ppm", "residual_us_rms"):

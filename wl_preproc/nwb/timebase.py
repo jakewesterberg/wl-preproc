@@ -51,16 +51,18 @@ _TEXTS = {
                    "nidq_meta, else manifest, each within 60 s of started_at."),
         "difference": ("started_at minus the source's time of t = 0, seconds; for manifest, minus the first of "
                        "rig_clock and nidq_meta that disagreed, NaN where neither gave a time."),
-        # No barcode places anything under the NI: SpikeGLX is on the identity
-        # map, every other system not placed yet (amendments 50 and 51).
-        "worst_residual": ("Largest residual, microseconds: under the NI, 0, SpikeGLX being on the identity map and "
-                           "no barcode fitted."),
-        "fitted_rate": ("The rate on the session's clock: under the NI, SpikeGLX's nominal rate, on the identity map "
-                        "with no barcode fitted; NaN for a system not placed on the NI's clock."),
-        "residual_rms": ("RMS residual, microseconds: under the NI, 0 for SpikeGLX, on the identity map with no "
-                         "barcode fitted; NaN for a system not placed on the NI's clock."),
-        "first_sample": ("Native index the segment's offset is anchored to: under the NI, 0, its first sample, the "
-                         "NI's first file being session time on the identity map; no barcode anchors it."),
+        # Under the NI, SpikeGLX is on the identity map and Intan is fitted by
+        # its strobe edges (part 3b-2).
+        "worst_residual": ("Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, and "
+                           "Intan's largest strobe residual where it was fitted."),
+        "fitted_rate": ("The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate "
+                        "fitted against the NI's strobes; NaN for a system not placed on the NI's clock."),
+        "residual_rms": ("RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe "
+                         "residual; NaN for a system not placed on the NI's clock."),
+        "first_sample": ("Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file "
+                         "being session time; for Intan, the first strobe edge matched to the NI's."),
+        "time_source": ("How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; "
+                        "strobes, Intan fitted by its strobe edges matched to the NI's; none, not placed."),
     },
 }
 
@@ -89,6 +91,9 @@ def add_timebase(nwb: NWBFile, provenance: dict, clocks: list[dict], segments: l
         "fitted_rate_hz": texts["fitted_rate"],
         "drift_ppm": texts["drift"],
         "residual_us_rms": texts["residual_rms"],
+        # Only the NI's clock places systems differently; the sync box's file
+        # is as it was.
+        **({"time_source": texts["time_source"]} if clock == "nidq" else {}),
     }))
     module.add(_table("segments", "core.Segment: each recording file's placement on session time.", segments, {
         "system": "Acquisition system.",
