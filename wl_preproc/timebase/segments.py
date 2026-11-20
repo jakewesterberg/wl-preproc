@@ -90,6 +90,14 @@ NO_SHARED_BARCODE = "no_shared_barcode"
 # `2026-10-18-training-records-and-backup-clock-design.md`, amendment 40).
 NI_RESTARTED = "ni_restarted"
 
+# Not a verdict `classify_segment` can reach either: under the NI's clock an
+# Intan recording is placed by matching its strobe edges to the NI's
+# (`timebase/intan.py::place_intan`), and one whose edges match no single map
+# well enough, or that has too few to tell from chance, is not placed at all.
+# The reason is a fixed word; the best and runner-up fractions, or the edge
+# count, go to that module's log (part 3b-2; amendment 49).
+NO_STROBE_ANCHOR = "no_strobe_anchor"
+
 #: Every reason `RejectedSegment.reason` can hold, and where each is
 #: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
 #: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
@@ -99,9 +107,11 @@ NI_RESTARTED = "ni_restarted"
 #: `Segment.make`, overriding the verdict `classify_segment` returned for that
 #: file rather than adding a fact `classify_segment` itself lacked the inputs
 #: to see. `NI_RESTARTED` is decided per FILE, in `Segment.make`, under the
-#: NI's clock.
+#: NI's clock. `NO_STROBE_ANCHOR` is decided per FILE, in `Segment.make`,
+#: under the NI's clock, for an Intan recording whose strobes cannot anchor.
 REJECTION_REASONS: frozenset[str] = frozenset(
-    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED}
+    {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED,
+     NO_STROBE_ANCHOR}
 )
 
 
