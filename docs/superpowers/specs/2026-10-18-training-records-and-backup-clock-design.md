@@ -771,3 +771,87 @@ its mutation checks; the full suite runs once per branch on both interpreters.
     cannot be reclaimed and keeps its scratch.
 38. **`wlpp land-without` records the session's absolute path** (the final review's I4): every later
     stage resolves the recorded path from the daemon's directory, not from the shell's it was typed in.
+
+## Amendments, 2026-11-19: part 3b, the NI as the clock, designed
+
+Reading the code against §4.2, §4.4, §6.2 and §7 (at `4bd10f1`, 2026-10-30) found eleven questions this design did
+not answer. The requester answered them on 2026-10-30: the segment key renamed everywhere (39), and the other ten
+and the split as recommended (40-50). The key's value was chosen on 2026-11-19 (39). The groundwork, with the
+spike behind amendment 49, is in `~/.cache/wl-preproc-scratch/2026-10-30-part3b/`.
+
+39. **The segment key is `segment_id`, the file's path within its system's folder** (the requester, 2026-10-30
+    and 2026-11-19). Today's `segment_barcode`, a segment's first barcode, exists only where the sync box ran; a
+    session without it has no barcode on any device. The new key is the path `core.Segment.make` already
+    computes (`scan.path` relative to the system directory, as `DoneMarker` and `core.RejectedSegment` name
+    the same file), text, e.g. `run1_g0/run1_g0_t0.nidq.bin`. It is the same under every clock, never changes
+    once the session lands, is unique within a system by construction, and, like the barcode, shifts no key
+    when a missed file turns up later. `core.Segment`'s `file_path` attribute becomes the key, so there is one
+    copy. It is renamed in every table that carries it (`core.Segment`, `ephys.ProbeCensus` and its part,
+    `ephys.SegmentConfig`), in the listing (`segments[].segment_id`, `runs[].segments` a list of those paths)
+    and its exported schema, and wl.works' contract is amended. Development databases are rebuilt, not
+    migrated: there is no production database before January, and serv is purged before it deploys.
+40. **Part 3b is built in three branches.** **3b-1, the NI keeps time:** amendments 39, 41-45, 47, 48 and 50.
+    **3b-2, Intan by strobes:** amendment 49. **3b-3, a sync box that recorded part of the session as the
+    cross-check** (§6.2, §7's tier N). **An NI that restarted within the session is part 3c;** until it, such a
+    session is tier D, its reason saying the NI restarted. It is rare, and joining the files needs storage this
+    design does not give.
+41. **Rule 1 reads "each run from its first code to its last"** (§4.2). A faulted run sends no end code
+    (`events.py:625`); "the sync box recorded throughout" is what the rule means, and a missing end code alone
+    does not hand a healthy session to the NI.
+42. **A sync box that restarted stays the clock.** The 2026-10-22 design bridges a restart through a device that
+    recorded through it (wl-sync part 2). The NI keeps time only when the sync box has no log, or when its log
+    ends before the session's last run does with no later segment.
+43. **The choice is cheap first.** Rule 1 is decided from the sync box's log and the rig's runs, both small. The
+    NI's codes are decoded only when rule 1 fails, and outside `SessionClock`'s transaction: the choice is
+    computed, then inserted. The NI's word channel is read in chunks (`timebase/channels.py::column_chunks`,
+    since the scaling piece).
+44. **Rule 2 needs every run within the NI's recording.** The rig may strobe `SESSION_START` before SpikeGLX
+    starts; the session's start and end codes outside the NI's recording are not required.
+45. **Tier N's evidence** (§7). `TimingProvenance` keeps one row. Under the NI its sync-box-only fields
+    (`n_barcodes_emitted`, the task file's check) are null. N needs every run of the rig's record held by the
+    NI's codes, each from its first code to its last, and the codes' content agreeing with the rig's record.
+    The partial sync box's agreement is added by 3b-3.
+46. **The wall-clock time of t = 0 under the NI** (§4.4). The rig's clock fit (`core.RigClock.rig_at_zero`)
+    where it fitted, checked against the manifest's start within 60 s as a barcode's is (`'rig_clock'`).
+    Failing that, SpikeGLX's `fileCreateTime` (`'nidq_meta'`): "the local date and time on the recording
+    machine", to the second, with no zone (SpikeGLX's `Metadata_Help.md`). So the NI machine's time zone is a
+    lab setting. The time is good to about a second plus the file's opening latency, and marks the file's
+    `firstSample`, which is the NI's first sample. The synthetic `.meta` gains `fileCreateTime`. Part of 3b-1.
+47. **What a person landed a session without is never used** (decision 8). A sync box landed without is not a
+    cross-check; 3b-3's is a sync box that landed but whose log ends early.
+48. **A session timed before its clock was recorded.** 3b-1's deploy records `syncbox` for every session that
+    has a `TimingProvenance` row and no `SessionClock` row: a one-time back-fill, in the populate guard's
+    pattern. From then on, a session with timed results but no clock row is refused, naming it; this replaces
+    amendment 30's rule, as that amendment foresaw. It guards development databases and a restore from an old
+    dump; no production database exists before January.
+49. **Intan by strobes (3b-2), as the spike of 2026-10-30 found.** Edges carry no values, and matching by order
+    is what `timebase/fit.py` forbids for barcodes. Both sides read the strobe's rising edge, the NI's from its
+    strobe bit, not the word's latch.
+    - **Anchor:** candidate anchors from a 2 s window of Intan's first edges, each verified by extending the
+      map over the first 120 s.
+    - **Extension:** the whole recording in time order. Each edge is matched to the NI's nearest within 0.5 ms,
+      and rate and offset are refitted as it goes. The extension starts with small steps, about 10 edges, and
+      grows.
+    - **Fit:** a residual limit of 100 µs, then a final fit, with residuals kept as for barcodes;
+      `time_source = 'strobes'`.
+    - **Ambiguity refuses:** the best anchor must match at least 95% of edges, and at least 10 points more
+      than the runner-up. A strictly periodic code stream cannot anchor. An Intan that cannot be anchored is
+      left out of the file and named (§6.4).
+    - **The spike's result:** on the rig's irregular timing there was no wrong match with 1% or 10% of edges
+      dropped, 0.5% glitches, 60 or 200 ppm between the clocks, or 20/25 kHz sampling.
+50. **3b-1 carries the clock choice's four deferred minors** (`docs/handoffs/2026-10-18-clock-choice.md` §6),
+    and the rest of what the NI as the clock widens:
+    - **The four minors:**
+      - `SystemTimebase.make`'s identity row stops assuming the sync box;
+      - the guard test catches every way of reaching the sync box directly;
+      - the stale docstring naming `decode_syncbox_in_session_time` is fixed;
+      - `timebase/clock.py::SOURCES` is given a use or removed.
+    - **`Clock('nidq')`:** t = 0 at the NI's first sample, codes from `extract_nidq_words`. SpikeGLX's probes
+      are on the identity map.
+    - **The enums and contracts that widen:** `TimingProvenance.tier`, `SystemTimebase.time_source`,
+      `NwbFile.reference_source`, the listing, the NWB description and `processing/timebase`'s texts.
+    - **Synthetic sessions without the sync box,** their NI carrying no barcode. This is a recipe the
+      synthesizer refuses today, and 3a's tests faked it by deleting `syncbox/`.
+    - **wl.works** is sent the key's name and shape when this spec is approved, before anything changes (its
+      `lab-host-protocol-wl-preproc.md` asks for it with 3b's spec). It also hears of tier N, the
+      `reference_source` values `rig_clock` and `nidq_meta`, and the listing's `clock` at 3b-1's merge.
