@@ -1,10 +1,17 @@
 # Where this build actually is
 
-**Last updated 2026-11-19**, describing `main` at `0f3edf8`: the merge of
-`feat/saccade-fixtures-v4`, v4 of the saccade contract fixtures and Engbert-Kliegl joining before
-it drops (`handoffs/2026-11-19-saccade-fixtures-v4.md`). CI read off `0f3edf8` is green on both
-interpreters, 3069 passed on each with 37 skipped, and the manifest check is green
-(`gh run view 44587574006`).
+**Last updated 2026-11-19**, describing `main` at `6638fcb`: the merge of
+`feat/spikeglx-pn-header`, reading SpikeGLX 20260115's part-number `~imroTbl` header
+(`handoffs/2026-11-19-spikeglx-pn-header.md`). CI read off `6638fcb` is green on both
+interpreters, 3084 passed on each with 37 skipped, on probeinterface 0.5.0 and spikeinterface
+0.105.4, and the manifest check is green (`gh run view 44643138223`).
+- **SpikeGLX 20260115's `~imroTbl` header:** probeinterface `>=0.5`, no ceiling (the requester's
+  rule of 2026-11-19: keep standards up to date), reads the header naming the type, `(1030,384)`,
+  and the one naming the part number, `(NP1032,384)`, and both place the same sites through the
+  census and the NWB file. The synthetic generator writes either, as SpikeGLX would. A header naming
+  another part number than `imDatPrb_pn` is a recorded problem. Seven sites each of NP1000 and
+  NP1032 are pinned, in place of the old ceiling, against a release that renumbers contacts. The
+  reference-gated files passed 271 on each interpreter. wl.works is told its known issue can close.
 - **v4 of the saccade fixtures, and joining first:** `docs/fixtures/saccade/v4.json` (SHA-256
   `6e61259f...`) holds v3's traces unchanged and six of its own pinning the join. Engbert-Kliegl
   joins touching runs before it applies `min_duration_samples`, counted over the joined run's
@@ -573,12 +580,12 @@ requester chose to merge the same day; true when written.*
 > pass, 271 on each interpreter. **v4 of the saccade contract fixtures**, the join pinned for wl-xcon, is merged
 > (`0f3edf8`, CI green, 3069 passed on each interpreter) (`handoffs/2026-11-19-saccade-fixtures-v4.md`), with
 > Engbert-Kliegl joining touching runs before it applies the minimum duration. **Reading SpikeGLX
-> 20260115's `~imroTbl` header**, which names the part number (wl.works' finding of 2026-11-18), is built and
-> reviewed on `feat/spikeglx-pn-header` (`specs/2026-11-19-spikeglx-pn-header-design.md`, approved 2026-11-19;
+> 20260115's `~imroTbl` header**, which names the part number (wl.works' finding of 2026-11-18), is merged
+> (`6638fcb`, CI green, 3084 passed on each interpreter) (`specs/2026-11-19-spikeglx-pn-header-design.md`, approved 2026-11-19;
 > `handoffs/2026-11-19-spikeglx-pn-header.md`): probeinterface `>=0.5`, no ceiling (the requester: keep
 > standards up to date), reads both header forms, which place the same sites; the synthetic header is
 > corrected; seven sites each of NP1000 and NP1032 are pinned against a release that renumbers contacts. The
-> reference-gated files passed 271 and the full suite 3044 on each interpreter. Next, its merge; then part 3b; then our reader of
+> reference-gated files passed 271 and the full suite 3044 on each interpreter. Next, part 3b; then our reader of
 > wl-xcon's console settings (XC-513, accepted 2026-11-18: `form` and `shaping` rows, sizes in degrees,
 > `light_xy`); then, in the requester's order of 2026-10-31, the NI as the clock, part 2, the bridges, and the
 > older minors in one branch.
@@ -595,7 +602,7 @@ requester chose to merge the same day; true when written.*
 > next; until scaling was built, that it was next; until its merge, that the merge was next; until
 > full-precision times were built, that they were next; until their merge, that it was next; until the
 > two-eye fix was built, that it was next; until its merge, that the merge was next; until v4's merge, that it was next; until the SpikeGLX header was built,
-> that it was next; each true when written.*
+> that it was next; until its merge, that the merge was next; each true when written.*
 >
 > *Until part 1's merge, this said it was built and reviewed, and next was the merge; true when
 > written.*
