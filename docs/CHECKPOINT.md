@@ -1,11 +1,25 @@
 # Where this build actually is
 
-**Last updated 2026-11-20**, describing `main` at `36aac64`: the merge of `feat/part-3b-1`, the
-NI keeping time where the sync box's codes do not hold every run
-(`handoffs/2026-11-19-part-3b-1.md`). CI read off `36aac64` is green on both interpreters, 3162
-passed on each with 37 skipped and 1 xfailed, and the manifest check is green
-(`gh run view 44753017144`).
-- **Part 3b-1, the NI keeps time:** the sync box keeps a session's time when it has a log, was not
+**Last updated 2026-11-20**, describing `main` at `2c35577`: the merge of `feat/part-3b-2`, Intan
+placed on the NI's clock by its strobe edges (`handoffs/2026-11-20-part-3b-2.md`). CI read off
+`2c35577` is green on both interpreters, 3253 passed on each with 37 skipped and 1 xfailed, and the
+manifest check is green (`gh run view 44810622901`).
+- **Part 3b-2, Intan by strobes:**
+  - Under the NI's clock, each Intan recording is placed by matching its strobe rising edges to the
+    NI's. Edges carry no values, so the match is by pattern alone.
+  - The matcher (`timebase/strobes.py`) refuses rather than matches wrongly. It took three review
+    rounds, each closing a wrong-match path: periodic streams, a rate change across a silent break,
+    and sparse strobes through a break.
+  - Its rate and offset come from the barcode least squares, which now takes pairs.
+  - `SystemTimebase.time_source` is `strobes`. A recording that cannot anchor is rejected as
+    `no_strobe_anchor`, named in a warning, and not searched again.
+  - An NI-and-Intan session can be tier N. Under the NI, the NWB file's `system_clocks` says how
+    each system was placed.
+  - The full suite with every reference set passed 3287 on each interpreter at `bf6efde`.
+  - No residual limit gates a published fit (the requester's choice of 2026-11-20). One limit for
+    every device's fit, barcodes included, waits for real rig data.
+  - wl.works is told.
+- **Part 3b-1, the NI keeps time (`36aac64`, CI green, run 44753017144, 3162 on each):** the sync box keeps a session's time when it has a log, was not
   landed without, decodes a barcode, and its codes hold every run, reach the end of the rig's last
   run (SESSION_END or the last run's RUN_END decoded, or else the last trial line), or it
   restarted. Otherwise the NI keeps time if its codes hold every run, as tier `N` with clock
