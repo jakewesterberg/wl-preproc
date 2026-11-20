@@ -117,12 +117,10 @@ def test_the_runs_and_trials_are_on_the_ni_clock(landed):
     clock drifting and its first sample the pre-roll before the session's
     start. Truth's times are its code words' (`synth/timeline.py::_emit`
     queues a word behind the one before it), decoded as the events stage
-    decodes them. The NI reads a word where its strobe falls, the strobe's
-    last high sample (`timebase/channels.py::strobe_falls`), so each is that
-    far after the rig asserted it."""
+    decodes them. The NI times a word at its strobe's rising edge, where the
+    rig asserted it (`timebase/channels.py::strobe_words`)."""
     from wl_preproc.contracts.events import Escape, Marker, PayloadEvent, SimpleEvent, decode_stream
     from wl_preproc.schema import core
-    from wl_preproc.synth.rhs import STROBE_WIDTH_S
     from wl_preproc.synth.spikeglx import NIDQ_SAMPLE_RATE_HZ, SPIKEGLX_PRE_ROLL_S
     from wl_preproc.synth.timeline import apply_drift
 
@@ -135,10 +133,9 @@ def test_the_runs_and_trials_are_on_the_ni_clock(landed):
                     if isinstance(event, SimpleEvent) and event.code == Marker.TRIAL_START]
 
     sample = 1.0 / NIDQ_SAMPLE_RATE_HZ
-    latched_s = (round(STROBE_WIDTH_S * NIDQ_SAMPLE_RATE_HZ) - 1) * sample
 
     def on_the_ni(time_s: float) -> float:
-        return apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S + latched_s
+        return apply_drift(time_s, drift_ppm) + SPIKEGLX_PRE_ROLL_S
 
     runs = (core.Run & key).to_dicts(order_by="run_number")
     assert len(runs) == len(run_starts) == len(truth.blocks)
@@ -151,7 +148,7 @@ def test_the_runs_and_trials_are_on_the_ni_clock(landed):
         assert trial["start_s"] == pytest.approx(on_the_ni(start_s), abs=sample)
     # Drift the NI's clock and the session's differ by more than a sample at
     # the last trial, so a clock read without it would fail here.
-    assert on_the_ni(trial_starts[-1]) - (trial_starts[-1] + SPIKEGLX_PRE_ROLL_S + latched_s) > 2 * sample
+    assert on_the_ni(trial_starts[-1]) - (trial_starts[-1] + SPIKEGLX_PRE_ROLL_S) > 2 * sample
 
 
 def test_a_device_with_no_way_onto_the_ni_clock_is_unfittable(landed):

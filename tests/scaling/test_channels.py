@@ -50,8 +50,10 @@ def test_an_edge_on_a_chunk_boundary_is_found_once(tmp_path):
     assert [level for _, level in got] == [0, 1, 0]
 
 
-def test_strobes_equal_today_across_chunks(tmp_path):
-    from wl_preproc.timebase.channels import column_chunks, strobe_falls, strobe_rises
+def test_strobe_words_and_rises_across_chunks(tmp_path):
+    """Each word at its pulse's rising edge, its value read at the pulse's
+    last high sample, on any chunking."""
+    from wl_preproc.timebase.channels import column_chunks, strobe_rises, strobe_words
 
     rng = np.random.default_rng(3)
     strobe = _trace(3_000, 5) << 1
@@ -60,11 +62,34 @@ def test_strobes_equal_today_across_chunks(tmp_path):
     s = strobe >> 1
     falls = np.flatnonzero((s[:-1] == 1) & (s[1:] == 0))
     rises = np.flatnonzero((s[1:] == 1) & (s[:-1] == 0)) + 1
+    starts = np.concatenate(([0], rises)) if s[0] else rises
     for rows in (1, 13, 3_000):
-        got = strobe_falls(column_chunks(path, 3, 1, np.int16, chunk_rows=rows),
+        got = strobe_words(column_chunks(path, 3, 1, np.int16, chunk_rows=rows),
                            column_chunks(path, 3, 2, np.int16, chunk_rows=rows), bit=1)
-        assert got == tuple((int(i), int(data[i])) for i in falls)
+        assert got == tuple((int(starts[starts <= i][-1]), int(data[i])) for i in falls)
         assert strobe_rises(column_chunks(path, 3, 1, np.int16, chunk_rows=rows), bit=1) == tuple(int(i) for i in rises)
+
+
+@pytest.mark.parametrize("chunk_rows", [1, 4, 7, 12, 16, 64])
+def test_a_word_is_timed_at_its_rise_and_read_at_its_last_high_sample(tmp_path, chunk_rows):
+    """A pulse from sample 10 to 21, its data changing mid-pulse, gives
+    (10, the value at 21), whichever chunk its rise and fall land in; one
+    already high at the file's first sample is timed at sample 0; one still
+    high at the file's end is never latched."""
+    from wl_preproc.timebase.channels import column_chunks, strobe_words
+
+    strobe = np.zeros(40, dtype=np.uint16)
+    data = np.zeros(40, dtype=np.uint16)
+    strobe[0:3] = 1
+    data[0:3] = [7, 7, 9]
+    strobe[10:22] = 1
+    data[10:16], data[16:22] = 0xAA, 0xBB
+    strobe[35:] = 1
+    data[35:] = 0xCC
+    path = _write(tmp_path / "x.bin", [strobe, data])
+    got = strobe_words(column_chunks(path, 2, 0, np.int16, chunk_rows=chunk_rows),
+                       column_chunks(path, 2, 1, np.int16, chunk_rows=chunk_rows), bit=0)
+    assert got == ((0, 9), (10, 0xBB))
 
 
 @pytest.fixture(scope="module")
@@ -88,7 +113,11 @@ def test_extractors_equal_today(synthetic):
 
     nidq, rhs = synthetic
     assert timebase.extract_spikeglx(nidq) == _oracles.extract_spikeglx(nidq)
-    assert events.extract_nidq_words(nidq) == _oracles.extract_nidq_words(nidq)
+    # The words' values and rate are today's; each is now timed at its
+    # strobe's rising edge, not where its value is read.
+    words, oracle = events.extract_nidq_words(nidq), _oracles.extract_nidq_words(nidq)
+    assert (words.fs_hz, [word for _, word in words.words]) == (oracle.fs_hz, [word for _, word in oracle.words])
+    assert all(rise <= fall for (rise, _), (fall, _) in zip(words.words, oracle.words, strict=True))
     assert timebase.extract_rhs(rhs) == _oracles.extract_rhs(rhs)
     assert events.extract_rhs_witness(rhs) == _oracles.extract_rhs_witness(rhs)
 

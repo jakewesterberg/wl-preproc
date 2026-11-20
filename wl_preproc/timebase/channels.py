@@ -107,17 +107,35 @@ def _with_previous(chunks: Iterable[np.ndarray]) -> Iterator[tuple[int, np.ndarr
         offset += chunk.size
 
 
-def strobe_falls(
+def strobe_words(
     control_chunks: Iterable[np.ndarray], data_chunks: Iterable[np.ndarray], bit: int
 ) -> tuple[tuple[int, int], ...]:
-    """`(index, data word)` at each sample where bit `bit` of the control word
-    is 1 and the next sample's is 0: the strobe's far edge, data read at that
-    sample (`events/extract.py::extract_nidq_words`)."""
+    """`(index, data word)` for each strobe pulse on bit `bit` of the control
+    word that falls (`events/extract.py::extract_nidq_words`): `index` its
+    rising edge, the first sample it is 1, where the rig asserted data and
+    strobe together (spec section 4.2.1); the word read at its far edge, the
+    last sample it is 1 before the next is 0, where the data has been stable
+    for the whole pulse. A pulse still high at the last sample never falls and
+    is never read. A pulse already high at sample 0 rose before the recording
+    did, and is timed at sample 0, the earliest it is seen."""
     words: list[tuple[int, int]] = []
+    # The rise of a pulse high at the end of the chunk before, which a fall
+    # in this one closes.
+    pending: int | None = None
+    first = True
     for (start, control), (_, data) in zip(_with_previous(control_chunks), _with_previous(data_chunks), strict=True):
         strobe = (control >> bit) & 1
+        rises = np.flatnonzero((strobe[1:] == 1) & (strobe[:-1] == 0)) + 1 + start
+        if first and strobe[0] == 1:
+            rises = np.concatenate(([start], rises))
+        first = False
+        if pending is not None:
+            rises = np.concatenate(([pending], rises))
         falling = np.flatnonzero((strobe[:-1] == 1) & (strobe[1:] == 0))
-        words.extend(zip((falling + start).tolist(), data[falling].astype(int).tolist(), strict=True))
+        # Each fall's pulse began at the latest rise at or before it.
+        began = rises[np.searchsorted(rises, falling + start, side="right") - 1]
+        words.extend(zip(began.tolist(), data[falling].astype(int).tolist(), strict=True))
+        pending = int(rises[-1]) if strobe[-1] == 1 else None
     return tuple(words)
 
 

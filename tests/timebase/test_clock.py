@@ -196,10 +196,9 @@ def test_the_ni_files_are_in_spikeglxs_gate_and_trigger_order(tmp_path):
 
 def test_the_ni_clock_gives_the_ni_codes(tmp_path):
     """Section 4.5 under the NI (amendment 50): t = 0 is the NI's first
-    sample, so each code sits at its emission plus SpikeGLX's pre-roll, read
-    at the strobe's far edge (`events/extract.py::extract_nidq_words`)."""
+    sample, so each code sits at its emission plus SpikeGLX's pre-roll, timed
+    at its strobe's rising edge (`events/extract.py::extract_nidq_words`)."""
     from wl_preproc.synth.recipe import RECIPES
-    from wl_preproc.synth.rhs import STROBE_WIDTH_S
     from wl_preproc.synth.spikeglx import NIDQ_SAMPLE_RATE_HZ, SPIKEGLX_PRE_ROLL_S
     from wl_preproc.synth.timeline import apply_drift
     from wl_preproc.timebase.clock import Clock
@@ -209,9 +208,8 @@ def test_the_ni_clock_gives_the_ni_codes(tmp_path):
     drift = dict(recipe.system_drift_ppm).get("spikeglx", recipe.drift_ppm)
     codes = Clock(source="nidq", session_dir=session_dir).codes()
     assert [code for _time, code in codes] == [word for _time, word in truth.code_words]
-    latch_s = (round(STROBE_WIDTH_S * NIDQ_SAMPLE_RATE_HZ) - 1) / NIDQ_SAMPLE_RATE_HZ
     for (time_s, _code), (emitted_s, _word) in zip(codes, truth.code_words, strict=True):
-        assert time_s == pytest.approx(apply_drift(emitted_s, drift) + SPIKEGLX_PRE_ROLL_S + latch_s,
+        assert time_s == pytest.approx(apply_drift(emitted_s, drift) + SPIKEGLX_PRE_ROLL_S,
                                        abs=1 / NIDQ_SAMPLE_RATE_HZ)
 
 
