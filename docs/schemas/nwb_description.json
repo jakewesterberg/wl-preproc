@@ -671,6 +671,15 @@
     "Quality": {
       "additionalProperties": false,
       "properties": {
+        "clock": {
+          "default": "syncbox",
+          "enum": [
+            "syncbox",
+            "nidq"
+          ],
+          "title": "Clock",
+          "type": "string"
+        },
         "eye_usable_fraction": {
           "additionalProperties": {
             "anyOf": [
@@ -694,7 +703,9 @@
         "reference_source": {
           "enum": [
             "barcode",
-            "manifest"
+            "manifest",
+            "rig_clock",
+            "nidq_meta"
           ],
           "title": "Reference Source",
           "type": "string"

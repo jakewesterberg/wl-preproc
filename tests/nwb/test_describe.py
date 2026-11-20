@@ -19,6 +19,7 @@ SESSION = {
     "rig": "rig-a",
     "timing_tier": "B",
     "clock": {"source": "manifest"},
+    "session_clock": "syncbox",
     "subject": {"subject_id": "monk01", "species": "Macaca mulatta", "sex": "F",
                 "date_of_birth": datetime.date(2016, 3, 2)},
 }
@@ -69,9 +70,28 @@ def test_the_description_of_a_file_without_eye_data():
                               "measured": {"start_s": 0.6, "stop_s": 29.4}, "closed": None, "trials": 1,
                               "ended": None}]
     assert out["quality"] == {"timing_tier": "B", "reference_source": "manifest",
-                              "eye_usable_fraction": {"left": None, "right": None}}
+                              "eye_usable_fraction": {"left": None, "right": None}, "clock": "syncbox"}
     assert out["notes"] == ["no rig trial record (xcon/trials.jsonl)"]
     assert out["checksums"] == {"algorithm": "sha256", "datasets": [CHECKSUM]}
+
+
+def test_an_ni_timed_file_names_its_clock_and_where_t_zero_came_from(monkeypatch):
+    """Part 3b-1: the clock that kept the file's time, and the NI's two
+    sources of the wall-clock time of t = 0 (amendment 46), added within
+    version 3; a description recorded before `clock` existed reads as the
+    sync box's, the only clock there was."""
+    from wl_preproc.contracts.nwb_description import NwbDescription
+    from wl_preproc.nwb import describe as describe_module
+
+    monkeypatch.setitem(SESSION, "session_clock", "nidq")
+    for source in ("rig_clock", "nidq_meta"):
+        monkeypatch.setitem(SESSION, "clock", {"source": source})
+        out = describe_module.describe(_gathered(), status="written", n_critical=0, checksums=[CHECKSUM],
+                                       built_at=BUILT_AT)
+        assert (out["quality"]["clock"], out["quality"]["reference_source"], out["quality"]["timing_tier"]) == (
+            "nidq", source, "B")
+    older = {**out, "quality": {key: value for key, value in out["quality"].items() if key != "clock"}}
+    assert NwbDescription.model_validate(older).quality.clock == "syncbox"
 
 
 def test_the_eye_is_described_by_the_series_and_detectors_it_has():

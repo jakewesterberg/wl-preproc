@@ -22,6 +22,7 @@ import datetime
 import hashlib
 import json
 import re
+import zoneinfo
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -36,6 +37,7 @@ from wl_preproc.events import rigruns, rigtrials
 from wl_preproc.events.rigruns import RigRuns, read_rig_runs
 from wl_preproc.events.rigtrials import RigRecord, read_rig_trials
 from wl_preproc.timebase import segments
+from wl_preproc.timebase._nidq_meta import read_nidq_meta
 from wl_preproc.timebase.extract import find_recordings
 from wl_preproc.timebase.holding import unheld, unreached_end
 
@@ -46,6 +48,26 @@ SOURCES = ("syncbox", "nidq", "lab")
 # (the NWB builder spec section 4.2). Borrowed from wl-sync's
 # CLOCK_TRUST_TOLERANCE_S.
 CLOCK_DISAGREEMENT_S = 60.0
+# The IANA time zone of the lab's NI machine, whose local time SpikeGLX's
+# `fileCreateTime` is written in, with no zone (amendment 46): a lab setting,
+# given by `wlpp daemon --nidq-timezone` through `set_nidq_timezone`. Unset,
+# an NI file's creation time places nothing.
+NIDQ_TIMEZONE: str | None = None
+
+
+def set_nidq_timezone(name: str) -> None:
+    """Set `NIDQ_TIMEZONE`, once `zoneinfo` knows the zone. An unknown or
+    malformed name is one `ValueError` naming it, whatever `zoneinfo`
+    raised, and leaves the zone as it was."""
+    global NIDQ_TIMEZONE
+    try:
+        zoneinfo.ZoneInfo(name)
+    # IsADirectoryError: a zone folder's name ("America") on a Python whose
+    # `zoneinfo` opens it from the `tzdata` package (CPython gh-85702).
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, IsADirectoryError) as error:
+        raise ValueError(f"{name!r} is not a time zone: the NI machine's zone is an IANA name, such as "
+                         "America/New_York") from error
+    NIDQ_TIMEZONE = name
 
 
 class NoClock(Exception):
@@ -301,6 +323,33 @@ def reference_from(first_barcode_value: int, started_at: datetime.datetime) -> d
     }
 
 
+def ni_reference_from(started_at: datetime.datetime, rig_at_zero: float | None,
+                      file_created: datetime.datetime | None) -> dict:
+    """Amendment 46: the wall-clock time of t = 0 under the NI, in
+    `reference_from`'s shape. The rig's clock fit (`rig_at_zero`, POSIX
+    seconds), else the NI file's creation time (aware), each only within
+    `CLOCK_DISAGREEMENT_S` of the manifest's `started_at`; else `started_at`
+    itself, its difference from the first of them that disagreed, or None
+    where neither gave a time."""
+    started_at = aware_utc(started_at)
+    offered = []
+    if rig_at_zero is not None:
+        offered.append(("rig_clock", datetime.datetime.fromtimestamp(rig_at_zero, tz=datetime.timezone.utc)))
+    if file_created is not None:
+        offered.append(("nidq_meta", file_created.astimezone(datetime.timezone.utc)))
+    for source, time in offered:
+        difference = (started_at - time).total_seconds()
+        if abs(difference) <= CLOCK_DISAGREEMENT_S:
+            return {"reference_time": time, "source": source, "manifest_started_at": started_at,
+                    "started_at_difference_s": difference}
+    return {
+        "reference_time": started_at,
+        "source": "manifest",
+        "manifest_started_at": started_at,
+        "started_at_difference_s": (started_at - offered[0][1]).total_seconds() if offered else None,
+    }
+
+
 def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
     """Every code word of session time's clock, in session seconds and in
     emission order (`timebase/segments.py::SyncBoxSession.codes`): every
@@ -358,11 +407,30 @@ class Clock:
             return nidq_codes(files[0])
         return syncbox_codes(self.session_dir)
 
-    def wall_reference(self, started_at: datetime.datetime) -> dict:
-        """The wall-clock time of session t = 0, and where it came from
-        (`reference_from`)."""
+    def wall_reference(self, started_at: datetime.datetime, rig_at_zero: float | None = None) -> dict:
+        """The wall-clock time of session t = 0, and where it came from.
+        Under the sync box, its first barcode's own value, or `started_at`
+        (`reference_from`), whatever `rig_at_zero` is. Under the NI
+        (`ni_reference_from`), the rig's clock fit, `core.RigClock`'s
+        `rig_at_zero` where it fitted; else the first NI file's
+        `fileCreateTime`, read in `NIDQ_TIMEZONE`, where that is set; else
+        `started_at`."""
+        if self.source == "nidq":
+            return ni_reference_from(started_at, rig_at_zero, self._ni_file_created())
         reference = self.barcode_reference()
         return reference_from(min(reference, key=reference.get), started_at)
+
+    def _ni_file_created(self) -> datetime.datetime | None:
+        """The first NI file's `fileCreateTime` in the lab's NI zone, aware;
+        None with the zone unset, or no time in the file. The first file's
+        first sample is t = 0 under the NI, and its creation time marks it."""
+        if NIDQ_TIMEZONE is None:
+            return None
+        files = nidq_files(self.session_dir)
+        if not files:
+            return None
+        created = read_nidq_meta(files[0].with_suffix(".meta")).file_created
+        return None if created is None else created.replace(tzinfo=zoneinfo.ZoneInfo(NIDQ_TIMEZONE))
 
 
 def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:

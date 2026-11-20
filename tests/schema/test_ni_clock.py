@@ -6,6 +6,8 @@ daemon pass."""
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from tests.identities import new_animal, new_serial
@@ -38,6 +40,21 @@ def _flip_a_payload_word(session_dir, word_index: int) -> None:
     samples.flush()
 
 
+class _Landed(dict):
+    """Each session by name, with its animal (`animals`) and the daemon
+    pass's report (`report`)."""
+
+    animals: dict
+    report: dict
+
+
+def _errors_of(report: dict, key: dict) -> list[str]:
+    """A pass's errors naming the session's animal: one module's database
+    holds every module's sessions, and the tier-D sessions here may err, so
+    only the session's own are read."""
+    return [error for error in report["errors"] if key["subject"] in error]
+
+
 @pytest.fixture(scope="module")
 def landed(dj_conn, prefix, tmp_path_factory):
     """Each session by name, `(recipe, truth, key, session_dir)`, after one
@@ -55,10 +72,13 @@ def landed(dj_conn, prefix, tmp_path_factory):
 
     daemon.activate_all(prefix=prefix)
     serial = new_serial()
-    sessions = {}
+    sessions = _Landed()
+    sessions.animals = {}
 
     def land(name: str, **update):
-        session = new_animal().session()
+        animal = new_animal()
+        sessions.animals[name] = animal
+        session = animal.session()
         recipe = NI_CLOCK_RECIPE.model_copy(update={"subject": session.subject, "session_id": session.session_id,
                                                     "probe_serial": serial, **update})
         root = tmp_path_factory.mktemp(name)
@@ -81,7 +101,7 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("restart", spikeglx_restart=RestartSpec(**RESTART))
     land("partial", systems=("syncbox", "spikeglx"))
     land("corrupt")
-    daemon.run_once(prefix=prefix)
+    sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
     for _recipe, _truth, key, _session_dir in sessions.values():
         (pipeline.Session & key).delete(prompt=False)
@@ -300,3 +320,70 @@ def test_sync_box_tiers_are_unchanged(landed):
     assert row["n_barcodes_emitted"] > 0
     assert row["event_code_agreement"] is not None
     assert row["n_full_code_records"] == 2
+
+
+@pytest.fixture(scope="module")
+def ni_nwb(landed, prefix, tmp_path_factory):
+    """The NI session's canonical NWB file, built by the daemon: wl.works'
+    request over its measured runs, as `test_nwb_build.py` makes one, and a
+    pass with the builder configured. Returns `(activation key, NwbFile row,
+    the pass's report)`."""
+    from wl_preproc import daemon
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import nwb as nwb_schema
+
+    from tests.schema.test_nwb_build import _montage, _request
+
+    _recipe, _truth, session_key, _session_dir = landed["ni"]
+    runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+             "works_run_id": f"wr-{row['run_number']}"}
+            for row in (core.Run & session_key).to_dicts(order_by="run_number")]
+    key = accept(_request(session_key, landed.animals["ni"].key("canonical"), _montage(runs), runs), prefix=prefix)
+    report = daemon.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("ni-nwb"))
+    rows = (nwb_schema.NwbFile & key).to_dicts()
+    assert rows, report["errors"]
+    return key, rows[0], report
+
+
+def test_the_ni_sessions_passes_report_no_error(landed, ni_nwb):
+    """Every stage, the NWB builder's included, runs on the NI's session
+    without an error: the daemon's report names none of its animal's keys."""
+    _recipe, _truth, key, _session_dir = landed["ni"]
+    _activation, _row, report = ni_nwb
+    assert _errors_of(landed.report, key) == []
+    assert _errors_of(report, key) == []
+
+
+def test_an_ni_session_builds_an_nwb_file_saying_the_ni_kept_time(landed, ni_nwb):
+    """Part 3b-1 end to end: the NI-timed session's file is written, its
+    timebase module says the NI kept time, its timing tier is N, and where
+    its t = 0 came from is one of the four sources."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.schema import core
+
+    _recipe, _truth, session_key, _session_dir = landed["ni"]
+    _activation, row, _report = ni_nwb
+    assert row["status"] == "written", row["reason"] or row["inspector_findings"]
+    assert row["reference_source"] in ("barcode", "manifest", "rig_clock", "nidq_meta")
+    # The rig's clock was read: the synthetic rig's clock runs in 2027 and the
+    # session is dated years before, so the manifest places t = 0, its
+    # difference the rig's clock's.
+    rig_at_zero = (core.RigClock & session_key).fetch1("rig_at_zero")
+    started_at = session_key["session_datetime"].replace(tzinfo=datetime.timezone.utc)
+    assert row["reference_source"] == "manifest"
+    assert row["started_at_difference_s"] == pytest.approx(started_at.timestamp() - rig_at_zero, abs=1e-6)
+    description = row["description"]
+    assert description["quality"]["clock"] == "nidq"
+    assert description["quality"]["timing_tier"] == "N"
+    assert description["quality"]["reference_source"] == row["reference_source"]
+    with NWBHDF5IO(row["path"], "r") as handle:
+        nwb = handle.read()
+        module = nwb.processing["timebase"]
+        assert module.description.startswith(
+            "How every time in this file was placed on session time: t = 0 is the NI's first sample")
+        assert module["timing_provenance"].to_dataframe()["tier"].tolist() == ["N"]
+        reference = module["clock_reference"].to_dataframe()
+        assert reference["source"].tolist() == [row["reference_source"]]
+        assert nwb.session_start_time == row["reference_time"].replace(tzinfo=datetime.timezone.utc)

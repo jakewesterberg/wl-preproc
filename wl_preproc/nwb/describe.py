@@ -145,6 +145,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
         "quality": {
             "timing_tier": session["timing_tier"],
             "reference_source": session["clock"]["source"],
+            "clock": session["session_clock"],
             "eye_usable_fraction": (eye or {}).get("usable_fraction") or {"left": None, "right": None},
         },
         "notes": [*data.condition_notes, *data.trial_notes, *data.probe_notes],

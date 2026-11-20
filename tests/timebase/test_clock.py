@@ -7,6 +7,7 @@ else no clock until lab time (part 4)."""
 from __future__ import annotations
 
 import datetime
+import re
 
 import pytest
 
@@ -259,6 +260,175 @@ def test_the_sync_box_clock_places_t0_by_its_first_barcode(tmp_path):
     clock = Clock(source="syncbox", session_dir=session_dir).wall_reference(started_at)
     assert clock["source"] == "barcode"
     assert clock["reference_time"] == BARCODE_EPOCH + datetime.timedelta(seconds=first)
+
+
+def test_the_sync_box_ignores_the_rig_clock_and_the_ni_file(tmp_path, monkeypatch):
+    """Under the sync box t = 0 is placed as it always was, the barcode's or
+    the manifest's, whatever the rig's clock says and whether or not the NI's
+    zone is set: the two other sources are the NI's (amendment 46). The
+    synthetic session's NI file was created 0.7 s before t = 0, and its
+    barcodes are counters that disagree with any wall clock, so `started_at`
+    places t = 0 even with both of those agreeing."""
+    from wl_preproc.synth.recipe import SYNTH_EPOCH
+    from wl_preproc.timebase import clock
+    from wl_preproc.timebase.segments import session_reference
+
+    monkeypatch.setattr(clock, "NIDQ_TIMEZONE", None)
+    clock.set_nidq_timezone("America/New_York")
+    session_dir = _session(tmp_path)
+    started_at = SYNTH_EPOCH.replace(tzinfo=None)
+    reference = session_reference(session_dir)
+    expected = clock.reference_from(min(reference, key=reference.get), started_at)
+    assert expected["source"] == "manifest"
+    sync_box = clock.Clock(source="syncbox", session_dir=session_dir)
+    assert sync_box.wall_reference(started_at, rig_at_zero=SYNTH_EPOCH.timestamp() + 5.0) == expected
+    assert sync_box.wall_reference(started_at) == expected
+
+
+@pytest.fixture(scope="module")
+def ni_session(tmp_path_factory):
+    """An NI-only session's SpikeGLX folder, as the synthetic NI writes it:
+    its `fileCreateTime` is 2027-03-14T04:59:59, New York's time 0.7 s before
+    `SYNTH_EPOCH` (`tests/synth/test_spikeglx.py::test_the_ni_meta_names_its_creation_time`)."""
+    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE
+
+    return _ni_folder(tmp_path_factory.mktemp("ni"), NI_CLOCK_RECIPE)
+
+
+def _ni_folder(root, recipe):
+    from wl_preproc.synth.spikeglx import write_spikeglx
+    from wl_preproc.synth.timeline import build_timeline
+
+    session_dir = root / recipe.session_id
+    (session_dir / "spikeglx").mkdir(parents=True)
+    write_spikeglx(session_dir / "spikeglx", recipe, build_timeline(recipe))
+    return session_dir
+
+
+# The manifest's started_at, naive as the database holds it: the synthetic
+# session's start, 09:00 UTC on 2027-03-14.
+_STARTED_AT = datetime.datetime(2027, 3, 14, 9, 0, 0)
+_UTC = datetime.timezone.utc
+
+
+@pytest.fixture
+def zone(monkeypatch):
+    """The NI's zone unset for the test, and unset again after it."""
+    from wl_preproc.timebase import clock
+
+    monkeypatch.setattr(clock, "NIDQ_TIMEZONE", None)
+    return clock
+
+
+def test_the_ni_meta_gives_its_creation_time(ni_session, tmp_path):
+    """SpikeGLX's `fileCreateTime`, naive, as the recording machine's local
+    time; a `.meta` without one gives None."""
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+    from wl_preproc.timebase.clock import nidq_files
+
+    meta_path = nidq_files(ni_session)[0].with_suffix(".meta")
+    assert read_nidq_meta(meta_path).file_created == datetime.datetime(2027, 3, 14, 4, 59, 59)
+    without = tmp_path / meta_path.name
+    without.write_text("".join(line + "\n" for line in meta_path.read_text().splitlines()
+                               if not line.startswith("fileCreateTime=")))
+    assert read_nidq_meta(without).file_created is None
+
+
+def test_t_zero_comes_from_the_rig_clock_when_it_agrees(ni_session, zone):
+    """Amendment 46, first: the rig's clock fit, 20 s from the manifest's
+    start, places t = 0, ahead of the NI file's creation time though that
+    agrees too."""
+    zone.set_nidq_timezone("America/New_York")
+    rig_at_zero = _STARTED_AT.replace(tzinfo=_UTC).timestamp() + 20.0
+    reference = zone.Clock(source="nidq", session_dir=ni_session).wall_reference(_STARTED_AT, rig_at_zero=rig_at_zero)
+    assert reference == {
+        "reference_time": datetime.datetime(2027, 3, 14, 9, 0, 20, tzinfo=_UTC),
+        "source": "rig_clock",
+        "manifest_started_at": _STARTED_AT.replace(tzinfo=_UTC),
+        "started_at_difference_s": -20.0,
+    }
+
+
+def test_a_rig_clock_past_a_minute_falls_back_to_the_ni_file(ni_session, zone):
+    """Amendment 46, second: the rig's clock 61 s off is not trusted, so the
+    first NI file's `fileCreateTime`, read in the lab's NI zone, places t = 0:
+    the NI's first sample, which is t = 0 under the NI."""
+    from zoneinfo import ZoneInfo
+
+    from wl_preproc.timebase.clock import nidq_files
+
+    zone.set_nidq_timezone("America/New_York")
+    fields = dict(line.split("=", 1) for line in nidq_files(ni_session)[0].with_suffix(".meta").read_text().splitlines())
+    created = datetime.datetime.fromisoformat(fields["fileCreateTime"]).replace(tzinfo=ZoneInfo("America/New_York"))
+    rig_at_zero = _STARTED_AT.replace(tzinfo=_UTC).timestamp() + 61.0
+    reference = zone.Clock(source="nidq", session_dir=ni_session).wall_reference(_STARTED_AT, rig_at_zero=rig_at_zero)
+    assert reference["source"] == "nidq_meta"
+    assert reference["reference_time"] == created.astimezone(_UTC) == datetime.datetime(2027, 3, 14, 8, 59, 59,
+                                                                                       tzinfo=_UTC)
+    assert reference["reference_time"].tzinfo == _UTC
+    assert reference["started_at_difference_s"] == 1.0
+    # With no rig clock fitted, the same.
+    assert zone.Clock(source="nidq", session_dir=ni_session).wall_reference(_STARTED_AT) == reference
+
+
+def test_without_a_zone_the_manifest_places_t_zero(ni_session, zone):
+    """Amendment 46, last: with the NI's zone unset its file's time places
+    nothing, so the manifest's `started_at` does. Its difference is from the
+    first clock that disagreed, or null where none gave a time."""
+    ni = zone.Clock(source="nidq", session_dir=ni_session)
+    reference = ni.wall_reference(_STARTED_AT)
+    assert reference == {"reference_time": _STARTED_AT.replace(tzinfo=_UTC), "source": "manifest",
+                         "manifest_started_at": _STARTED_AT.replace(tzinfo=_UTC), "started_at_difference_s": None}
+    far = ni.wall_reference(_STARTED_AT, rig_at_zero=_STARTED_AT.replace(tzinfo=_UTC).timestamp() + 90.0)
+    assert (far["source"], far["reference_time"], far["started_at_difference_s"]) == (
+        "manifest", _STARTED_AT.replace(tzinfo=_UTC), -90.0)
+
+
+def test_both_clocks_past_a_minute_leave_the_manifest(ni_session, zone):
+    """The NI file's time too is checked against the manifest's start: a
+    session started an hour after its NI file was created is placed by the
+    manifest, its difference the rig's clock's, the first that disagreed."""
+    zone.set_nidq_timezone("America/New_York")
+    started_at = _STARTED_AT + datetime.timedelta(hours=1)
+    rig_at_zero = started_at.replace(tzinfo=_UTC).timestamp() - 120.0
+    reference = zone.Clock(source="nidq", session_dir=ni_session).wall_reference(started_at, rig_at_zero=rig_at_zero)
+    assert (reference["source"], reference["reference_time"], reference["started_at_difference_s"]) == (
+        "manifest", started_at.replace(tzinfo=_UTC), 120.0)
+    alone = zone.Clock(source="nidq", session_dir=ni_session).wall_reference(started_at)
+    assert (alone["source"], alone["started_at_difference_s"]) == ("manifest", 3601.0)
+
+
+def test_the_ni_file_is_read_in_the_labs_zone(tmp_path, zone):
+    """A Berlin NI machine writes 09:59:59 for the same instant (CET, UTC+1,
+    before Europe's summer time on 2027-03-28); in Berlin's zone it is
+    08:59:59 UTC, and read as New York's it is five hours off and places
+    nothing."""
+    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE
+
+    session_dir = _ni_folder(tmp_path, NI_CLOCK_RECIPE.model_copy(update={"nidq_timezone": "Europe/Berlin"}))
+    zone.set_nidq_timezone("Europe/Berlin")
+    reference = zone.Clock(source="nidq", session_dir=session_dir).wall_reference(_STARTED_AT)
+    assert (reference["source"], reference["reference_time"]) == (
+        "nidq_meta", datetime.datetime(2027, 3, 14, 8, 59, 59, tzinfo=_UTC))
+    zone.set_nidq_timezone("America/New_York")
+    assert zone.Clock(source="nidq", session_dir=session_dir).wall_reference(_STARTED_AT)["source"] == "manifest"
+
+
+@pytest.mark.parametrize("name", ["Mars/Base", "../etc/passwd", "", "/etc/localtime"])
+def test_an_unknown_zone_is_refused_at_the_daemon(name, zone, capsys):
+    """An unknown or malformed zone is refused by name, one `ValueError`
+    whatever `zoneinfo` raised, and leaves the zone unset; `wlpp daemon`
+    refuses it before a pass."""
+    from wl_preproc.cli.main import main
+
+    with pytest.raises(ValueError, match=f"^{re.escape(repr(name))} is not a time zone"):
+        zone.set_nidq_timezone(name)
+    assert zone.NIDQ_TIMEZONE is None
+    with pytest.raises(SystemExit) as raised:
+        main(["daemon", "--nidq-timezone", name])
+    assert raised.value.code == 2
+    assert f"{name!r} is not a time zone" in capsys.readouterr().err
+    assert zone.NIDQ_TIMEZONE is None
 
 
 def test_a_clock_is_one_of_the_sources_and_lab_time_is_not_built_yet(tmp_path):

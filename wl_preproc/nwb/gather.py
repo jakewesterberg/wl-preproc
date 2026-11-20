@@ -426,7 +426,7 @@ def _conditions(trials: list[dict], events: list[dict], runs: list[dict], record
             {"stimuli": stimuli, "stimulus_objects": stimulus_objects})
 
 
-def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
+def _timebase(session_key: dict, provenance: dict, clock: dict, session_clock: str) -> dict:
     from wl_preproc.schema import core, timebase
 
     clocks = [{field: row[field] for field in ("system", "fit_status", "nominal_rate_hz", "fitted_rate_hz", "drift_ppm", "residual_us_rms")}
@@ -447,8 +447,11 @@ def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
             "source": clock["source"],
             "reference_datetime": clock["reference_time"].isoformat(),
             "manifest_started_at": clock["manifest_started_at"].isoformat(),
-            "started_at_difference_s": clock["started_at_difference_s"],
+            # None under the NI where no clock gave a time to differ from.
+            "started_at_difference_s": (np.nan if clock["started_at_difference_s"] is None
+                                        else clock["started_at_difference_s"]),
         },
+        "clock": session_clock,
     }
 
 
@@ -703,7 +706,7 @@ def _probes(key: dict, session_key: dict, run_rows: list[dict]) -> tuple[list[di
 
 def gather(activation_key: dict) -> Gathered:
     """One activation's data, or `Refused` with the reason (section 10)."""
-    from wl_preproc.schema import ingest, request, timebase
+    from wl_preproc.schema import core, ingest, request, timebase
 
     key = {k: activation_key[k] for k in ("subject", "session_datetime", "montage_id", "activation_id")}
     session_key = {k: key[k] for k in ("subject", "session_datetime")}
@@ -726,7 +729,12 @@ def gather(activation_key: dict) -> Gathered:
         probe["sorted_runs"] = sorted_runs.get(probe["serial"], [])
 
     session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
-    clock = clock_for(session_key, session_dir).wall_reference(key["session_datetime"])
+    # The rig's clock fit places t = 0 under the NI (amendment 46); the sync
+    # box's clock ignores it.
+    session_clock = clock_for(session_key, session_dir)
+    rig_clock = (core.RigClock & session_key).to_dicts()
+    clock = session_clock.wall_reference(key["session_datetime"],
+                                         rig_at_zero=rig_clock[0]["rig_at_zero"] if rig_clock else None)
     validity_idx, detection_idx = _paramsets()
     eye = _eye(session_key, session_dir, extent, validity_idx, detection_idx)
     no_eye_samples = eye is not None and eye.get("no_samples", False)
@@ -781,13 +789,14 @@ def gather(activation_key: dict) -> Gathered:
             "experimenter": requested_by or None,
             "subject": _subject(key["subject"]),
             "clock": clock,
+            "session_clock": session_clock.source,
         },
         systems=systems,
         runs=run_out,
         blocks=blocks,
         trials=trials,
         events=events,
-        timebase=_timebase(session_key, provenance[0], clock),
+        timebase=_timebase(session_key, provenance[0], clock, session_clock.source),
         eye=eye,
         conditions=conditions,
         condition_notes=condition_notes,

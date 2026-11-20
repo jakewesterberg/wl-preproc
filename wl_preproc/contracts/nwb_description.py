@@ -16,7 +16,10 @@ many of wl-xcon's training records the file holds (design spec
 spec `2026-10-30-true-angle-saccades-design.md` section 8), and 2026-11-07
 each run's plan and end reason, each block's end, and each condition's drawn
 and person-held values and eased trials (design spec
-`2026-11-07-rig-record-fields-design.md` section 8).
+`2026-11-07-rig-record-fields-design.md` section 8), and 2026-11-20 the clock
+that kept the file's time and the NI's two sources of the wall-clock time of
+t = 0 (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
+amendments 46 and 50).
 Version 2 gave `probes` their shape, each with both of its areas (design spec
 `2026-09-30-nwb-probes-design.md` section 3.2). Later pieces add groups and
 fields -- a processing summary with unit counts, the photodiode, video and
@@ -228,8 +231,16 @@ class TrainingRecords(_Frozen):
 
 class Quality(_Frozen):
     timing_tier: str
-    reference_source: Literal["barcode", "manifest"]
+    # Where the wall-clock time of t = 0 came from: the sync box's first
+    # barcode or the manifest's start, and under the NI the rig's clock fit
+    # or the first NI file's `fileCreateTime` (amendment 46, added within
+    # version 3).
+    reference_source: Literal["barcode", "manifest", "rig_clock", "nidq_meta"]
     eye_usable_fraction: dict[Literal["left", "right"], float | None]
+    # The clock that kept the file's time (`timebase.SessionClock.source`),
+    # added within version 3: a description recorded before it was timed by
+    # the sync box, the only clock there was.
+    clock: Literal["syncbox", "nidq"] = "syncbox"
 
 
 class DatasetChecksum(_Frozen):

@@ -214,6 +214,11 @@ def main(argv: list[str] | None = None) -> int:
 
     daemon_p.add_argument("--with-detector", action="append", default=[], choices=sorted(OPT_IN),
                           help="also run this opt-in detector")
+    # The lab's NI machine's time zone, which SpikeGLX's `fileCreateTime` is
+    # local time in (design spec `2026-10-18-training-records-and-backup-clock-design.md`,
+    # amendment 46). Unset, an NI-timed file's t = 0 never comes from it.
+    daemon_p.add_argument("--nidq-timezone", default=None, metavar="IANA_NAME",
+                          help="the NI machine's time zone, such as America/New_York")
 
     nwb_p = subparsers.add_parser("nwb", help="NWB export")
     nwb_sub = nwb_p.add_subparsers(dest="action", required=True)
@@ -772,6 +777,13 @@ def main(argv: list[str] | None = None) -> int:
         from wl_preproc.daemon import run_once
         from wl_preproc.nwb.publish import Share
 
+        if args.nidq_timezone is not None:
+            from wl_preproc.timebase.clock import set_nidq_timezone
+
+            try:
+                set_nidq_timezone(args.nidq_timezone)
+            except ValueError as error:
+                parser.error(f"--nidq-timezone: {error}")
         shares = {}
         if args.nwb_fast_headroom_gb is not None and args.nwb_fast_headroom_gb < 0:
             parser.error("--nwb-fast-headroom-gb cannot be negative")

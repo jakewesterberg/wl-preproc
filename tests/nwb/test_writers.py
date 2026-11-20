@@ -220,13 +220,76 @@ def test_the_timebase_tables(tmp_path):
                  "start_s": 0.1, "end_s": 60.1, "n_samples": 30000}]
     reference = {"source": "barcode", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
                  "started_at_difference_s": 0.4}
-    _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference))
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference,
+                                                               clock="syncbox"))
     with io:
         module = nwb.processing["timebase"]
         assert module["timing_provenance"].to_dataframe()["tier"].tolist() == ["A"]
         assert module["system_clocks"].to_dataframe()["fitted_rate_hz"].tolist() == [498.55]
         assert module["segments"].to_dataframe()["n_samples"].tolist() == [30000]
         assert module["clock_reference"].to_dataframe()["source"].tolist() == ["barcode"]
+
+
+def _timebase_texts(tmp_path, clock: str, reference: dict) -> dict:
+    """The texts `add_timebase` writes under `clock`: the module's
+    description, and each column's of the tables whose texts depend on it."""
+    from wl_preproc.nwb.timebase import add_timebase
+
+    provenance = {"tier": "N", "n_systems_aligned": 1, "n_segments": 1, "n_rejected_segments": 0,
+                  "worst_residual_us": 0.0, "worst_drift_ppm": 0.0}
+    clocks = [{"system": "spikeglx", "fit_status": "fitted", "nominal_rate_hz": 30000.0, "fitted_rate_hz": 30000.0,
+               "drift_ppm": 0.0, "residual_us_rms": 0.0}]
+    segments = [{"system": "spikeglx", "file_path": "x.nidq.bin", "first_sample": 0, "offset_s": 0.0,
+                 "start_s": 0.0, "end_s": 60.0, "n_samples": 1800000}]
+    _path, io, nwb = _write(tmp_path, lambda nwb: add_timebase(nwb, provenance, clocks, segments, reference,
+                                                               clock=clock))
+    with io:
+        module = nwb.processing["timebase"]
+        return {"module": module.description,
+                **{f"{table}.{name}": module[table][name].description
+                   for table, name in (("timing_provenance", "tier"), ("system_clocks", "drift_ppm"),
+                                       ("clock_reference", "source"),
+                                       ("clock_reference", "started_at_difference_s"))},
+                "difference": module["clock_reference"].to_dataframe()["started_at_difference_s"].tolist()}
+
+
+def test_a_sync_box_nwb_file_is_unchanged(tmp_path):
+    """Under the sync box every text is as it was before the NI could keep
+    time (part 3b-1's Task 6)."""
+    reference = {"source": "barcode", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
+                 "started_at_difference_s": 0.4}
+    assert _timebase_texts(tmp_path, "syncbox", reference) == {
+        "module": ("How every time in this file was placed on session time: t = 0 is the sync box's first "
+                   "barcode, the authoritative clock. PTP, where present, is a cross-check only."),
+        "timing_provenance.tier": "A to D (parent spec section 4.7).",
+        "system_clocks.drift_ppm": "Clock drift against the sync box, parts per million.",
+        "clock_reference.source": ("barcode: the first barcode's own value (seconds since 2020-01-01 UTC); "
+                                   "manifest: started_at."),
+        "clock_reference.started_at_difference_s": "started_at minus the barcode's time of t = 0, seconds.",
+        "difference": [0.4],
+    }
+
+
+def test_an_ni_timed_file_says_the_ni_kept_time(tmp_path):
+    """Under the NI (amendments 46 and 50): t = 0 is the NI's first sample,
+    tier N is named, drift is against the session's clock, and the wall
+    clock's sources are all four. A manifest's start with no clock to differ
+    from has no difference: NaN."""
+    reference = {"source": "manifest", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
+                 "started_at_difference_s": float("nan")}
+    texts = _timebase_texts(tmp_path, "nidq", reference)
+    assert texts["module"] == (
+        "How every time in this file was placed on session time: t = 0 is the NI's first sample, the NI keeping "
+        "time because the sync box did not record the session throughout. PTP, where present, is a cross-check "
+        "only.")
+    assert texts["timing_provenance.tier"] == (
+        "A to D, or N: the NI kept time and its codes hold every run (parent spec section 4.7; design spec "
+        "2026-10-18 section 7).")
+    assert texts["system_clocks.drift_ppm"] == "Clock drift against the session's clock, parts per million."
+    source = texts["clock_reference.source"]
+    assert all(f"{name}:" in source for name in ("barcode", "manifest", "rig_clock", "nidq_meta")), source
+    assert "barcode's" not in texts["clock_reference.started_at_difference_s"]
+    assert np.isnan(texts["difference"]).all()
 
 
 def _eye_data(n=2000, eyes=("left", "right")):
