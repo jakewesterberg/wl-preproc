@@ -60,6 +60,12 @@ class StrobeScenario:
     #: The fraction of true edges the NI misses after `ni_drop_after_s`.
     ni_drop: float = 0.0
     ni_drop_after_s: float = 0.0
+    #: No strobe at all, on either device, between these true seconds: a break.
+    silent_s: tuple[float, float] | None = None
+    #: From this true second on, single words every `periodic_after_period_s`,
+    #: off by `jitter_s`: a stretch strobed on a timer.
+    periodic_after_s: float | None = None
+    periodic_after_period_s: float = 0.5
     fs_ni: float = 30_000.0
     fs_intan: float = 30_000.0
     seed: int = 1
@@ -70,7 +76,9 @@ def _true_edges(sc: StrobeScenario, rng: np.random.Generator) -> np.ndarray:
     starts, t = [], 1.0
     while t < span:
         starts.append(t)
-        if sc.trial_offsets:
+        if sc.periodic_after_s is not None and t >= sc.periodic_after_s:
+            t += sc.periodic_after_period_s + rng.normal(0, sc.jitter_s)
+        elif sc.trial_offsets:
             for offset in sc.trial_offsets[1:]:
                 starts.append(t + offset + rng.normal(0, sc.jitter_s))
             t += sc.trial_offsets[-1] + 1.0 + rng.exponential(1.0)
@@ -78,8 +86,13 @@ def _true_edges(sc: StrobeScenario, rng: np.random.Generator) -> np.ndarray:
             t += sc.periodic_s + rng.normal(0, sc.jitter_s)
         else:
             t += rng.exponential(sc.mean_gap_s) + 0.01
-    edges = [s + 0.001 * np.arange(rng.integers(1, sc.burst_max + 1)) for s in starts]
-    return np.sort(np.concatenate(edges))
+    sizes = [int(rng.integers(1, sc.burst_max + 1)) for _ in starts]
+    if sc.periodic_after_s is not None:
+        sizes = [1 if s >= sc.periodic_after_s else n for s, n in zip(starts, sizes, strict=True)]
+    edges = np.sort(np.concatenate([s + 0.001 * np.arange(n) for s, n in zip(starts, sizes, strict=True)]))
+    if sc.silent_s is not None:
+        edges = edges[(edges < sc.silent_s[0]) | (edges > sc.silent_s[1])]
+    return edges
 
 
 def simulate_with_reference_id(

@@ -164,6 +164,35 @@ def test_a_rate_step_keeps_the_real_pairs():
         assert np.max(np.abs(reference - (device * rate + offset))) <= 100e-6
 
 
+def test_a_rate_change_across_a_long_break_does_not_slip():
+    # No strobe for 900 s, and Intan's rate steps 0.7 ppm as the break begins: the
+    # fit from before the break is 0.63 ms off when the strobes resume, nearer
+    # the neighbouring word than the right one.
+    sc = StrobeScenario(silent_s=(2400.0, 3300.0), rate_step_ppm=0.7, rate_step_at_s=2401.0)
+    ni_s, intan_s, true_id, reference_id, _ = simulate_with_reference_id(sc)
+    match = match_strobes(ni_s, intan_s)
+    wrong = _wrong(match, true_id, reference_id)
+    assert not wrong.any(), f"{int(wrong.sum())} of {wrong.size} pairs wrong"
+
+    after = np.arange(intan_s.size) > np.argmax(np.diff(intan_s))
+    real_after = after & (true_id >= 0) & np.isin(true_id, reference_id)
+    matched = np.zeros(intan_s.size, dtype=bool)
+    matched[match.device_index] = True
+    assert (matched & real_after).sum() >= 0.98 * real_after.sum()
+
+
+def test_an_ambiguous_stretch_after_a_break_refuses():
+    # After a 100 s break the rig strobes single words every 0.5 s, exactly: every
+    # period-shifted map matches that stretch as well as the right one.
+    sc = StrobeScenario(hours=0.5, silent_s=(1200.0, 1300.0), periodic_after_s=1300.0, jitter_s=0.0)
+    ni_s, intan_s, _, _, _ = simulate_with_reference_id(sc)
+    with pytest.raises(
+        Unanchored,
+        match=r"the strobes after a \d+ s gap at \d+ s cannot be anchored again: the strobes' pattern is ambiguous",
+    ):
+        match_strobes(ni_s, intan_s)
+
+
 def test_pairs_are_one_to_one():
     # 5% spurious edges: some land beside a real edge the NI recorded, and match it too.
     ni_s, intan_s, _, _, _ = simulate_with_reference_id(StrobeScenario(drop=0.10, extra=0.05))

@@ -76,6 +76,12 @@ SCORING_CELLS = 1 << 20
 RESIDUAL_BLOCK_PAIRS = 2_000
 #: Rival alignments verified beside the best candidate's image, on each side.
 NEIGHBOUR_ALIGNMENTS = 8
+#: After a gap longer than this between consecutive Intan edges, the walk anchors
+#: again. Across a break the map is extrapolated blind, and a rate change of under
+#: a ppm over 15 minutes puts the prediction nearer the neighbouring word than
+#: the right one; every later edge would then lock on one word off, with
+#: residuals as small as a right match's (ruling R11).
+REANCHOR_GAP_S = 10.0
 
 # The extension refits as soon as it holds _MIN_REFIT_PAIRS pairs, over at most
 # the last _REFIT_PAIRS of them. An early refit is what makes verification fair:
@@ -88,9 +94,10 @@ _REFIT_PAIRS = 20_000
 
 class Unanchored(ValueError):
     """Intan's edges could not be placed on the NI's clock. The message says why,
-    in one of five sentences: no NI edge, too few Intan edges, no anchor matched
-    enough, the pattern is ambiguous, or the anchored map lost the pattern over
-    the whole recording."""
+    in one of six sentences: no NI edge, too few Intan edges, no anchor matched
+    enough, the pattern is ambiguous, the strobes after a break cannot be
+    anchored again (naming the anchor's own sentence for that stretch), or the
+    anchored map lost the pattern over the whole recording."""
 
 
 @dataclass(frozen=True)
@@ -150,10 +157,11 @@ def match_strobes(
 
     anchor = _anchor(reference_s, device_s, scoring_cells)
 
-    forward = _walk(reference_s, device_s, np.arange(anchor.first, n), 1.0, anchor.offset_s)
-    # Backward from the anchor, seeded with the forward pass's fit and pairs
-    # nearest it: the end of the recording may be hours away, on a clock whose
-    # rate has wandered since.
+    forward = _walk(reference_s, device_s, np.arange(anchor.first, n), 1.0, anchor.offset_s, reanchor=True)
+    # Backward from the anchor, seeded with the fit over the forward pass's first
+    # 20,000 pairs, the ones nearest the anchor, not with the forward pass's final
+    # fit: that is fitted at the end of the recording, which may be hours away on
+    # a clock whose rate has wandered since (ruling R10).
     seed = slice(0, min(_REFIT_PAIRS, forward.device_index.size))
     seed_device = forward.device_index[seed][::-1]
     seed_reference = forward.reference_index[seed][::-1]
@@ -166,6 +174,8 @@ def match_strobes(
         offset_s,
         seed_device=seed_device,
         seed_reference=seed_reference,
+        reanchor=True,
+        previous=anchor.first,
     )
 
     device_index = np.concatenate([backward.device_index[::-1], forward.device_index])
@@ -247,9 +257,9 @@ def _anchor(reference_s: np.ndarray, device_s: np.ndarray, scoring_cells: int) -
         relative = device_s[first:stop] - device_s[first]
         score = _score(reference_s, relative, scoring_cells)
         candidates = np.argsort(-score, kind="stable")[:N_CANDIDATES]
-        verify_stop = int(np.searchsorted(device_s, window_s + VERIFY_S))
+        span = np.arange(first, int(np.searchsorted(device_s, window_s + VERIFY_S)))
         verified = [
-            (_verify(reference_s, device_s, first, verify_stop, offset), offset)
+            (_verify(reference_s, device_s, span, 1.0, offset), offset)
             for offset in reference_s[candidates] - device_s[first]
         ]
         best, best_offset = max(verified, key=lambda v: v[0])
@@ -260,23 +270,62 @@ def _anchor(reference_s: np.ndarray, device_s: np.ndarray, scoring_cells: int) -
         for neighbour in range(max(0, image - NEIGHBOUR_ALIGNMENTS), min(reference_s.size, image + NEIGHBOUR_ALIGNMENTS + 1)):
             offset = reference_s[neighbour] - device_s[first]
             if abs(offset - best_offset) > MATCH_TOLERANCE_S:
-                verified.append((_verify(reference_s, device_s, first, verify_stop, offset), offset))
-        runner = max(
-            (fraction for fraction, offset in verified if abs(offset - best_offset) > MATCH_TOLERANCE_S),
-            default=0.0,
-        )
-        if best >= MIN_ANCHOR_FRACTION and best - runner >= MIN_ANCHOR_MARGIN:
+                verified.append((_verify(reference_s, device_s, span, 1.0, offset), offset))
+        runner = _runner_up(verified, best_offset)
+        if _passes(best, runner):
             return _Anchor(first=int(first), offset_s=float(best_offset), fraction=best, runner_up=runner)
         if best > best_seen:
             best_seen, runner_seen = best, runner
+    raise Unanchored(_refusal(best_seen, runner_seen))
 
-    if best_seen >= MIN_ANCHOR_FRACTION:
-        raise Unanchored(
-            f"the strobes' pattern is ambiguous: the best anchor matched {best_seen:.0%} and the runner-up "
-            f"{runner_seen:.0%}, within {MIN_ANCHOR_MARGIN:.0%}; a strictly periodic code stream cannot anchor"
+
+def _runner_up(verified: list[tuple[float, float]], best_offset: float) -> float:
+    """The best fraction among the candidates at a different offset from the best's."""
+    return max(
+        (fraction for fraction, offset in verified if abs(offset - best_offset) > MATCH_TOLERANCE_S),
+        default=0.0,
+    )
+
+
+def _passes(best: float, runner: float) -> bool:
+    return best >= MIN_ANCHOR_FRACTION and best - runner >= MIN_ANCHOR_MARGIN
+
+
+def _refusal(best: float, runner: float) -> str:
+    """The anchor rule's sentence for a stretch whose best scored `best`."""
+    if best >= MIN_ANCHOR_FRACTION:
+        return (
+            f"the strobes' pattern is ambiguous: the best anchor matched {best:.0%} and the runner-up "
+            f"{runner:.0%}, within {MIN_ANCHOR_MARGIN:.0%}; a strictly periodic code stream cannot anchor"
         )
+    return f"no anchor matched {MIN_ANCHOR_FRACTION:.0%} of Intan's edges: the best matched {best:.0%}"
+
+
+def _reanchor(
+    reference_s: np.ndarray, device_s: np.ndarray, stretch: np.ndarray, rate: float, offset_s: float, gap_s: float
+) -> float:
+    """The offset to go on with after a break, from the stretch's first edge, or
+    `Unanchored` (ruling R11).
+
+    The candidates are the current map's prediction for that edge and the edge
+    laid on each NI edge within `NEIGHBOUR_ALIGNMENTS` of the prediction's image,
+    each verified over `VERIFY_S` of the stretch at the current rate. The rule is
+    the first anchor's: 95% of eligible edges, and 10 points over the runner-up."""
+    first = stretch[0]
+    span = stretch[np.abs(device_s[stretch] - device_s[first]) < VERIFY_S]
+    image = int(_nearest(reference_s, np.array([device_s[first] * rate + offset_s]))[0][0])
+    offsets = [offset_s] + [
+        reference_s[neighbour] - device_s[first] * rate
+        for neighbour in range(max(0, image - NEIGHBOUR_ALIGNMENTS), min(reference_s.size, image + NEIGHBOUR_ALIGNMENTS + 1))
+    ]
+    verified = [(_verify(reference_s, device_s, span, rate, offset), offset) for offset in offsets]
+    best, best_offset = max(verified, key=lambda v: v[0])
+    runner = _runner_up(verified, best_offset)
+    if _passes(best, runner):
+        return float(best_offset)
     raise Unanchored(
-        f"no anchor matched {MIN_ANCHOR_FRACTION:.0%} of Intan's edges: the best matched {best_seen:.0%}"
+        f"the strobes after a {gap_s:.0f} s gap at {device_s[first]:.0f} s cannot be anchored again: "
+        f"{_refusal(best, runner)}"
     )
 
 
@@ -294,19 +343,20 @@ def _score(reference_s: np.ndarray, relative: np.ndarray, scoring_cells: int) ->
     return score
 
 
-def _verify(reference_s: np.ndarray, device_s: np.ndarray, first: int, stop: int, offset_s: float) -> float:
-    """The fraction of the verification span's edges that one candidate matches.
+def _verify(reference_s: np.ndarray, device_s: np.ndarray, span: np.ndarray, rate: float, offset_s: float) -> float:
+    """The fraction of the verification span's edges (`span`, in walk order) that
+    one candidate matches, walked from `rate` and `offset_s`.
 
     Its denominator is the edges whose predicted NI time lies within the NI's
     recording, give or take the tolerance: an edge strobed before the NI started
     is no evidence against the anchor. Fewer than `MIN_MATCHED_EDGES` matched
     scores 0, since so few cannot be told from chance."""
-    walk = _walk(reference_s, device_s, np.arange(first, stop), 1.0, offset_s)
+    walk = _walk(reference_s, device_s, span, rate, offset_s)
     matched = walk.device_index.size
     if matched < MIN_MATCHED_EDGES:
         return 0.0
-    eligible = _eligible(reference_s, device_s[first:stop] * walk.rate + walk.offset_s)
-    eligible[walk.device_index - first] = True  # a matched edge is eligible by being matched
+    eligible = _eligible(reference_s, device_s[span] * walk.rate + walk.offset_s)
+    eligible[np.isin(span, walk.device_index)] = True  # a matched edge is eligible by being matched
     return matched / int(eligible.sum())
 
 
@@ -319,6 +369,8 @@ def _walk(
     *,
     seed_device: np.ndarray | None = None,
     seed_reference: np.ndarray | None = None,
+    reanchor: bool = False,
+    previous: int | None = None,
 ) -> _Walk:
     """Match Intan's edges in `order` (forward or backward) to the NI's nearest,
     refitting rate and offset after each step.
@@ -327,16 +379,35 @@ def _walk(
     prediction's error grows with the distance from the pairs it was fitted on,
     and must stay well under a burst's 1 ms spacing. A seed (the backward pass's
     forward pairs nearest it) counts toward the refit and the step size, and is
-    not returned."""
+    not returned.
+
+    With `reanchor`, a gap over `REANCHOR_GAP_S` between consecutive edges (and,
+    with `previous`, between that edge and the first in `order`) anchors the walk
+    again before it goes on. The refits and steps then start afresh from the
+    stretch's own pairs, as from the first anchor: the pairs before the break may
+    sit on a rate that has since changed. Verification walks do not re-anchor."""
+    times = device_s[order]
+    gaps = np.flatnonzero(np.abs(np.diff(times)) > REANCHOR_GAP_S) + 1 if reanchor else np.array([], dtype=np.int64)
+    if reanchor and previous is not None and order.size and abs(times[0] - device_s[previous]) > REANCHOR_GAP_S:
+        gaps = np.concatenate([[0], gaps])
     n_seed = 0 if seed_device is None else seed_device.size
     pairs_device = np.empty(n_seed + order.size, dtype=np.int64)
     pairs_reference = np.empty_like(pairs_device)
     if n_seed:
         pairs_device[:n_seed], pairs_reference[:n_seed] = seed_device, seed_reference
     held = n_seed
+    since = 0  # where in the pairs the refit window may begin
     position = 0
+    next_gap = 0
     while position < order.size:
-        step = min(MAX_STEP_EDGES, max(FIRST_STEP_EDGES, held // 2))
+        if next_gap < gaps.size and gaps[next_gap] == position:
+            before_s = times[position - 1] if position else device_s[previous]
+            gap_s = abs(times[position] - before_s)
+            offset_s = _reanchor(reference_s, device_s, order[position:], rate, offset_s, gap_s)
+            since = held
+            next_gap += 1
+        stop = gaps[next_gap] if next_gap < gaps.size else order.size
+        step = min(MAX_STEP_EDGES, max(FIRST_STEP_EDGES, (held - since) // 2), stop - position)
         device_index = order[position : position + step]
         reference_index, distance = _nearest(reference_s, device_s[device_index] * rate + offset_s)
         matched = distance <= MATCH_TOLERANCE_S
@@ -344,8 +415,8 @@ def _walk(
         pairs_device[held : held + n_new] = device_index[matched]
         pairs_reference[held : held + n_new] = reference_index[matched]
         held += n_new
-        if held >= _MIN_REFIT_PAIRS:
-            recent = slice(max(0, held - _REFIT_PAIRS), held)
+        if held - since >= _MIN_REFIT_PAIRS:
+            recent = slice(max(since, held - _REFIT_PAIRS), held)
             rate, offset_s = np.polyfit(device_s[pairs_device[recent]], reference_s[pairs_reference[recent]], 1)
         position += step
     return _Walk(
