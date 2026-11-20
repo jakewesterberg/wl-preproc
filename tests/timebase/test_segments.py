@@ -258,10 +258,11 @@ def test_a_segment_records_the_native_indices_that_reverse_its_transform(populat
     being anchored to the wrong instant.
     """
     from wl_preproc.schema import core, timebase
-    from wl_preproc.timebase.segments import session_reference
+    from wl_preproc.timebase.segments import scan_system, session_reference
 
     session_key, _recipe, session_dir = populated
     reference = session_reference(session_dir)
+    first_barcodes: dict[str, dict[str, int]] = {}
 
     rows = (core.Segment & session_key).to_dicts()
     assert rows, "no segments were populated at all"
@@ -272,24 +273,29 @@ def test_a_segment_records_the_native_indices_that_reverse_its_transform(populat
         native_s = row["first_sample"] / fit["nominal_rate_hz"]
         recovered_s = native_s / scale + row["offset_s"]
 
-        expected_s = reference[row["segment_barcode"]]
+        system_dir = session_dir / row["system"]
+        if row["system"] not in first_barcodes:
+            first_barcodes[row["system"]] = {
+                (str(scan.path.relative_to(system_dir)) if scan.path != system_dir else "."): scan.barcodes[0].value
+                for scan in scan_system(row["system"], system_dir) if scan.barcodes}
+        expected_s = reference[first_barcodes[row["system"]][row["segment_id"]]]
         # One camera sample period at 500 Hz, the coarsest system here.
         assert recovered_s == pytest.approx(expected_s, abs=2.5e-3), (
-            f"{row['system']}: barcode {row['segment_barcode']} recovered at "
+            f"{row['system']}: {row['segment_id']} recovered at "
             f"{recovered_s:.4f} s, sync box says {expected_s:.4f} s"
         )
 
 
 def test_a_file_with_no_barcodes_cannot_be_inserted_into_segment(populated):
-    """Segment is keyed on segment_barcode, "the first barcode value in the
-    segment", so a file yielding zero barcodes has NO KEY and structurally
-    cannot go there. An implementation that wants to invent a placeholder
-    barcode has found the rule, not a limitation."""
+    """A file yielding zero barcodes is refused (`RejectedSegment`), never
+    placed: a Segment's extent is in session time, and a file the sync box
+    cannot place has none. An implementation that wants to invent a
+    placeholder has found the rule, not a limitation."""
     from wl_preproc.schema import core
 
     session_key, _recipe, _dir = populated
 
-    assert "segment_barcode" in core.Segment.primary_key
+    assert "segment_id" in core.Segment.primary_key
     for row in (core.Segment & session_key).to_dicts():
         assert row["n_barcodes"] >= 1
 

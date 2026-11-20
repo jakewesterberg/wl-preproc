@@ -51,7 +51,7 @@ def test_a_restarted_run_aligns_both_its_segments(dj_conn, prefix, tmp_path_fact
     fit = (timebase.SystemTimebase & key & {"system": "spikeglx"}).fetch1()
     assert fit["fit_status"] == "fitted"
     assert fit["drift_ppm"] == pytest.approx(18.0, abs=6.0)
-    first, second = (core.Segment & key & {"system": "spikeglx"}).to_dicts(order_by="segment_barcode")
+    first, second = (core.Segment & key & {"system": "spikeglx"}).to_dicts(order_by="start_s")
     # The second run starts where SpikeGLX started again, gap_s after the stop.
     assert first["end_s"] == pytest.approx(RESTART["at_s"], abs=1e-3)
     assert second["start_s"] == pytest.approx(RESTART["at_s"] + RESTART["gap_s"], abs=1e-3)

@@ -434,7 +434,8 @@ def _timebase(session_key: dict, provenance: dict, clock: dict) -> dict:
     for row in clocks:
         for field in ("nominal_rate_hz", "fitted_rate_hz", "drift_ppm", "residual_us_rms"):
             row[field] = np.nan if row[field] is None else float(row[field])
-    segments = [{field: row[field] for field in ("system", "file_path", "first_sample", "offset_s", "start_s", "end_s", "n_samples")}
+    segments = [{**{field: row[field] for field in ("system", "first_sample", "offset_s", "start_s", "end_s", "n_samples")},
+                 "file_path": row["segment_id"]}
                 for row in (core.Segment & session_key).to_dicts()]
     return {
         "provenance": {field: (np.nan if provenance[field] is None else provenance[field])
@@ -503,7 +504,7 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
     if len(segments) > 1:
         raise Refused(f"{len(segments)} ohDPI segments: the eye tables assume one (section 4.3)")
     (segment,) = segments
-    path = session_dir / "ohdpi" / segment["file_path"]
+    path = session_dir / "ohdpi" / segment["segment_id"]
     recording = read_ohdpi(path)
     offsets = recording.frame_numbers - recording.frame_numbers[0]
     times = eye_schema.row_session_times(segment, offsets)
@@ -639,13 +640,13 @@ def _probes(key: dict, session_key: dict, run_rows: list[dict]) -> tuple[list[di
     from wl_preproc.schema import core, ephys
 
     segments = {
-        row["segment_barcode"]: row
+        row["segment_id"]: row
         for row in (core.Segment & session_key & {"system": "spikeglx"}).to_dicts()
         if any(row["start_s"] < run["end_s"] and row["end_s"] > run["start_s"] for run in run_rows)
     }
     parts = [{**part, "problem": ephys.probe_problem(part["problem"])}
-             for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_barcode", "stream"))
-             if part["segment_barcode"] in segments]
+             for part in (ephys.ProbeCensus.Probe & session_key).to_dicts(order_by=("segment_id", "stream"))
+             if part["segment_id"] in segments]
     reports = (ephys.InsertionReport & session_key).to_dicts(order_by="insertion_number")
     recorded_anywhere = {serial for serial in (ephys.ProbeCensus.Probe & session_key).to_arrays("probe_serial") if serial}
     probes, notes, by_serial = [], [], {}
@@ -653,14 +654,14 @@ def _probes(key: dict, session_key: dict, run_rows: list[dict]) -> tuple[list[di
         if part["probe_serial"]:
             by_serial.setdefault(part["probe_serial"], []).append(part)
         else:
-            notes.append(f"{segments[part['segment_barcode']]['file_path']} {part['stream']}: {part['problem']}; the "
+            notes.append(f"{segments[part['segment_id']]['segment_id']} {part['stream']}: {part['problem']}; the "
                          "probe it recorded is unknown")
     for serial, recorded in by_serial.items():
         maps: dict[tuple, list[str]] = {}
         for part in recorded:
             if part["electrode_config_hash"] is not None:
                 maps.setdefault((part["electrode_config_hash"], part["probe_type"]), []).append(
-                    segments[part["segment_barcode"]]["file_path"])
+                    segments[part["segment_id"]]["segment_id"])
         if len(maps) > 1:
             raise Refused(
                 f"probe {serial} recorded two active-site maps under this file's runs of montage "

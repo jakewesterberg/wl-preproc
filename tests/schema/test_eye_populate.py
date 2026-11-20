@@ -211,7 +211,7 @@ def _rows_for_times(session_key: dict, segment: dict, session_times) -> list[int
     from wl_preproc.schema import ingest
 
     session_dir = pathlib.Path((ingest.Ingestion & session_key).fetch1("session_dir"))
-    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["file_path"])
+    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["segment_id"])
     return [_row_for_time(segment, session_s, offsets) for session_s in session_times]
 
 
@@ -225,7 +225,7 @@ def _expected_raw_points(
     resolves each bound to."""
     from wl_preproc.eye.gaze import purkinje_vector
 
-    path = session_dir / "ohdpi" / segment["file_path"]
+    path = session_dir / "ohdpi" / segment["segment_id"]
     trace = purkinje_vector(path, file_eye)
     offsets = _frame_offsets_of(path)
     points = []
@@ -1147,7 +1147,7 @@ def gapped_round_trip_session(daemon_module, prefix, tmp_path_factory):
     core.Segment.populate()
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
 
-    ohdpi_txt = session_dir / "ohdpi" / segment["file_path"]
+    ohdpi_txt = session_dir / "ohdpi" / segment["segment_id"]
     offsets = _frame_offsets_of(ohdpi_txt)
 
     assert segment["n_frame_gaps"] == 1 and segment["n_frames_missing"] == n_dropped, (
@@ -1275,7 +1275,7 @@ def test_the_windows_after_a_gap_sample_the_rows_the_frame_numbers_name(
     session_key, _caught, _true_a = gapped_round_trip_session
     session_dir = pathlib.Path((ingest.Ingestion & session_key).fetch1("session_dir"))
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["file_path"])
+    offsets = _frame_offsets_of(session_dir / "ohdpi" / segment["segment_id"])
     n_missing = segment["n_frames_missing"]
     assert n_missing > 0
 

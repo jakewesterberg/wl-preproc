@@ -349,7 +349,7 @@
         },
         "segments": {
           "items": {
-            "type": "integer"
+            "type": "string"
           },
           "title": "Segments",
           "type": "array"
@@ -434,9 +434,9 @@
           ],
           "title": "Probes"
         },
-        "segment_barcode": {
-          "title": "Segment Barcode",
-          "type": "integer"
+        "segment_id": {
+          "title": "Segment Id",
+          "type": "string"
         },
         "start_s": {
           "title": "Start S",
@@ -444,7 +444,7 @@
         }
       },
       "required": [
-        "segment_barcode",
+        "segment_id",
         "start_s",
         "end_s",
         "probes"

@@ -71,7 +71,7 @@ def _links(key):
         where = {**key, "insertion_number": row["insertion_number"]}
         location = (ephys.InsertionLocation & where).to_dicts()
         aim = (location[0]["area"], location[0]["atlas"], location[0]["atlas_level"]) if location else None
-        configs = {c["segment_barcode"]: c["electrode_config_hash"] for c in (ephys.SegmentConfig & where).to_dicts()}
+        configs = {c["segment_id"]: c["electrode_config_hash"] for c in (ephys.SegmentConfig & where).to_dicts()}
         links[row["insertion_number"]] = (row["probe_serial"], row["trajectory_id"], aim, configs)
     return links
 
@@ -81,7 +81,7 @@ def _recorded(key, serial):
     from wl_preproc.schema import ephys
 
     parts = ephys.ProbeCensus.Probe & key & {"probe_serial": serial}
-    return {p["segment_barcode"]: p["electrode_config_hash"] for p in parts.to_dicts()}
+    return {p["segment_id"]: p["electrode_config_hash"] for p in parts.to_dicts()}
 
 
 @pytest.mark.parametrize("report_first", [True, False], ids=["report-first", "recording-first"])

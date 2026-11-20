@@ -437,7 +437,7 @@ class ListedSegment(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    segment_barcode: int
+    segment_id: str  # the file's path within its system's folder
     start_s: float
     end_s: float
     probes: list[ListedProbe] | None
@@ -480,7 +480,7 @@ class ListedRun(BaseModel):
     # where the rig's record names none (design spec
     # `2026-10-14-session-kind-and-warnings-design.md` section 4).
     calibration: str | None
-    segments: list[int]
+    segments: list[str]
     blocks: list[ListedBlock]
 
 

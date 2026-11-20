@@ -51,7 +51,7 @@ def test_the_stage_completes_and_every_device_is_timed(restarted):
 
     key, _, _ = restarted
     assert not len(core.Segment.jobs & key & "status = 'error'")
-    assert {(row["system"], row["file_path"]) for row in (core.Segment & key).to_dicts()} >= {
+    assert {(row["system"], row["segment_id"]) for row in (core.Segment & key).to_dicts()} >= {
         ("syncbox", "seg-000.log"), ("bcam", "frames.yaml")}
     assert "spikeglx" in {row["system"] for row in (core.Segment & key).to_dicts()}
 

@@ -578,7 +578,7 @@ class EyeCalibration(dj.Computed):
             if segment is None:
                 continue
             offsets = _frame_offsets(
-                session_dir / "ohdpi" / segment["file_path"], frame_offsets
+                session_dir / "ohdpi" / segment["segment_id"], frame_offsets
             )
             row_start = _session_time_to_row(segment, t_start, offsets)
             row_end = _session_time_to_row(segment, t_end, offsets)
@@ -649,7 +649,7 @@ class EyeCalibration(dj.Computed):
             cache: dict[Path, np.ndarray] = {}
 
             for lo, hi, target_xy, _block_id, is_calibration, segment in row_ranges:
-                path = session_dir / "ohdpi" / segment["file_path"]
+                path = session_dir / "ohdpi" / segment["segment_id"]
                 trace = cache.get(path)
                 if trace is None:
                     trace = purkinje_vector(path, file_eye)
@@ -1176,7 +1176,7 @@ class EyeQuality(dj.Computed):
             blink_runs = 0
             total_duration_s = 0.0
             for segment in segments:
-                path = session_dir / "ohdpi" / segment["file_path"]
+                path = session_dir / "ohdpi" / segment["segment_id"]
                 # Read once and derive both metrics from the same arrays,
                 # rather than calling `gaze.tracking_loss_fraction` and then
                 # re-reading the identical columns separately: `eye/gaze.py`'s

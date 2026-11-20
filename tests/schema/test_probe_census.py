@@ -64,9 +64,13 @@ def landed(dj_conn, prefix, tmp_path_factory):
 
 
 def _parts(key):
-    from wl_preproc.schema import ephys
+    """The parts in the order the segments ran: the path's own order is not
+    the time's, once a restart names the second file before the first."""
+    from wl_preproc.schema import core, ephys
 
-    return (ephys.ProbeCensus.Probe & key).to_dicts(order_by=("segment_barcode", "stream"))
+    started = {row["segment_id"]: row["start_s"] for row in (core.Segment & key).to_dicts()}
+    return sorted((ephys.ProbeCensus.Probe & key).to_dicts(),
+                  key=lambda part: (started[part["segment_id"]], part["stream"]))
 
 
 def _electrodes(part):
@@ -80,16 +84,16 @@ def test_each_segment_records_every_probe_its_run_recorded(landed):
     from wl_preproc.schema import core, ephys
 
     _recipe, key = landed["two"]
-    segments = (core.Segment & key & {"system": "spikeglx"}).to_dicts(order_by="segment_barcode")
+    segments = (core.Segment & key & {"system": "spikeglx"}).to_dicts(order_by="start_s")
     assert len(segments) == 2  # the restart
-    assert [row["n_probes"] for row in (ephys.ProbeCensus & key).to_dicts(order_by="segment_barcode")] == [2, 2]
+    assert [row["n_probes"] for row in (ephys.ProbeCensus & key).to_dicts()] == [2, 2]
 
     parts = _parts(key)
-    assert [(p["segment_barcode"], p["stream"], p["probe_serial"], p["part_number"], p["problem"]) for p in parts] == [
-        (segments[0]["segment_barcode"], "imec0", "19011110001", "NP1000", ""),
-        (segments[0]["segment_barcode"], "imec1", "19011110002", "NP1032", ""),
-        (segments[1]["segment_barcode"], "imec0", "19011110001", "NP1000", ""),
-        (segments[1]["segment_barcode"], "imec1", "19011110002", "NP1032", ""),
+    assert [(p["segment_id"], p["stream"], p["probe_serial"], p["part_number"], p["problem"]) for p in parts] == [
+        (segments[0]["segment_id"], "imec0", "19011110001", "NP1000", ""),
+        (segments[0]["segment_id"], "imec1", "19011110002", "NP1032", ""),
+        (segments[1]["segment_id"], "imec0", "19011110001", "NP1000", ""),
+        (segments[1]["segment_id"], "imec1", "19011110002", "NP1032", ""),
     ]
     # imec0 changed bank at the restart; imec1 did not.
     assert [_electrodes(p) for p in parts] == [[0, 1, 2, 3], [384, 385, 386, 387], [384, 385, 386, 387],

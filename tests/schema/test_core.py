@@ -56,12 +56,12 @@ def test_montage_is_keyed_under_session(core):
     assert set(core.Montage.primary_key) == {"subject", "session_datetime", "montage_id"}
 
 
-def test_segment_is_keyed_on_system_and_barcode(core):
+def test_segment_is_keyed_on_system_and_path(core):
     assert set(core.Segment.primary_key) == {
         "subject",
         "session_datetime",
         "system",
-        "segment_barcode",
+        "segment_id",
     }
 
 
@@ -84,8 +84,7 @@ def _segment_row(a_session, **overrides):
     row = {
         **a_session,
         "system": "spikeglx",
-        "segment_barcode": 1_000_000,
-        "file_path": "2027-03-14_01.nidq.bin",
+        "segment_id": "2027-03-14_01.nidq.bin",
         "start_s": 0.0,
         "end_s": 12.0,
         "n_samples": 360_000,
@@ -117,7 +116,7 @@ def test_a_segment_round_trips(core, a_session):
     row = _segment_row(a_session)
     _insert_segment(core, row)
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
-    assert got["segment_barcode"] == 1_000_000
+    assert got["segment_id"] == "2027-03-14_01.nidq.bin"
     assert got["start_s"] == pytest.approx(0.0)
     assert got["end_s"] == pytest.approx(12.0)
     assert got["n_samples"] == 360_000
@@ -132,7 +131,7 @@ def test_a_segment_retains_what_makes_its_transform_reversible(core, a_session):
     core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
     row = _segment_row(
         a_session,
-        segment_barcode=1_000_777,
+        segment_id="2027-03-14_02.nidq.bin",
         first_sample=21_000,
         offset_s=-0.700_123_456,
         residual_us=4.25,
@@ -142,40 +141,25 @@ def test_a_segment_retains_what_makes_its_transform_reversible(core, a_session):
 
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
 
-    assert got["file_path"] == row["file_path"]
+    assert got["segment_id"] == row["segment_id"]
     assert got["first_sample"] == 21_000
     assert got["offset_s"] == pytest.approx(-0.700_123_456, abs=1e-12)
     assert got["residual_us"] == pytest.approx(4.25)
     assert got["n_barcodes"] == 12
 
 
-def test_segment_barcode_holds_the_full_unsigned_32_bit_range(core, a_session):
-    """segment_barcode : int unsigned. A signed `int` caps at 2,147,483,647 --
-    half the ~136-year window spec section 4.1 claims for a 32-bit counter at
-    1 Hz (2**32 seconds), and DataJoint 2.3.2 has no `uint32` core type, so the
-    native MySQL passthrough spelling is the only way to get the full range.
-
-    Pins the true maximum, 4_294_967_295 (2**32 - 1), rather than merely "some
-    value above the signed boundary", and checks both that it round-trips
-    intact and that the declared column type is actually unsigned -- a column
-    that silently clipped to signed range would still round-trip small values
-    fine, so the boundary value is the assertion that actually proves the
-    fix.
-    """
+def test_segment_id_holds_a_path_of_the_full_column_width(core, a_session):
+    """segment_id : varchar(255), the file's path within its system's folder.
+    A path at the column's full width round-trips intact, and the key is text,
+    not the 32-bit counter it replaced."""
     core.AcquisitionSystem.insert1({**a_session, "system": "spikeglx"}, skip_duplicates=True)
-    barcode = 4_294_967_295
-    row = _segment_row(
-        a_session, segment_barcode=barcode, end_s=1.0, n_samples=30_000
-    )
+    path = "deep/" * 40 + "x" * 46 + ".nidq.bin"
+    assert len(path) == 255
+    row = _segment_row(a_session, segment_id=path, end_s=1.0, n_samples=30_000)
     _insert_segment(core, row)
     got = (core.Segment & {k: row[k] for k in core.Segment.primary_key}).fetch1()
-    assert got["segment_barcode"] == barcode
-
-    declared = core.Segment.heading["segment_barcode"].type
-    assert "unsigned" in declared.lower(), (
-        f"segment_barcode declared as {declared!r}; expected an unsigned "
-        "integer type covering the full 32-bit range"
-    )
+    assert got["segment_id"] == path
+    assert core.Segment.heading["segment_id"].type == "varchar(255)"
 
 
 def test_only_known_systems_are_accepted(core, a_session):

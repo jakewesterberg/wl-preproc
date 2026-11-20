@@ -230,7 +230,7 @@ def test_each_stored_fit_is_the_fit_of_its_traces_selected_runs(planted_session)
     session_key, _saccades = planted_session
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
     session_dir = (ingest.Ingestion & session_key).fetch1("session_dir")
-    fs_hz = read_ohdpi(f"{session_dir}/ohdpi/{segment['file_path']}").fs_hz
+    fs_hz = read_ohdpi(f"{session_dir}/ohdpi/{segment['segment_id']}").fs_hz
     rows = (main_sequence.SaccadeMainSequence & session_key & _default_fit()).to_dicts()
     for row in rows:
         assert row["fs_hz"] == fs_hz
@@ -345,7 +345,7 @@ def _selected_with_starts(session_key, master: dict):
 
     segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
     session_dir = (ingest.Ingestion & session_key).fetch1("session_dir")
-    recording = read_ohdpi(f"{session_dir}/ohdpi/{segment['file_path']}")
+    recording = read_ohdpi(f"{session_dir}/ohdpi/{segment['segment_id']}")
     times = eye_schema.row_session_times(segment, recording.frame_numbers - recording.frame_numbers[0])
     runs = main_sequence.selected_runs(_stored_runs(master), master["fs_hz"], DEFAULT_MAIN_SEQUENCE_PARAMS)
     return (times[[run["run_start"] for run in runs]], np.array([run["amplitude_deg"] for run in runs]),

@@ -149,7 +149,7 @@ class SaccadeMainSequence(dj.Computed):
         session_key = {name: key[name] for name in pipeline.Session.primary_key}
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segment = (core.Segment & {**session_key, "system": "ohdpi"}).fetch1()
-        recording = read_ohdpi(session_dir / "ohdpi" / segment["file_path"])
+        recording = read_ohdpi(session_dir / "ohdpi" / segment["segment_id"])
         fs_hz = recording.fs_hz
         runs = selected_runs((detect.EyeDetection.Run & detection_key & 'label in ("saccade", "microsaccade")')
                              .to_dicts(order_by="run_index"), fs_hz, params)

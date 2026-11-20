@@ -182,7 +182,7 @@ def _computed_tables() -> list:
         timebase.SyncBoxSegment,
         timebase.SystemTimebase,
         core.Segment,
-        # After `Segment`, whose rows are its key_source and whose `file_path`
+        # After `Segment`, whose rows are its key_source and whose `segment_id`
         # names the run it reads (design spec `2026-09-30-nwb-probes-design.md`
         # section 2.1).
         ephys.ProbeCensus,

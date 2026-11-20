@@ -67,7 +67,7 @@ def test_electrode_config_is_keyed_on_the_segment_not_the_insertion(ephys_activa
     surfaces as a new segment. The configuration is a fact about a recording
     file, so it hangs off Segment."""
     pk = ephys.SegmentConfig.primary_key
-    assert "segment_barcode" in pk
+    assert "segment_id" in pk
     assert "insertion_number" in pk
 
 
