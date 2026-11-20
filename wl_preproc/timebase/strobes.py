@@ -16,9 +16,11 @@ the pattern of intervals instead, in two stages:
   turn, and the NI edges that line up most of it are candidates. Each is
   verified by extending the map over 120 s: the right one matches nearly every
   edge, and the next best, the same bursts shifted by one word, about 79% (the
-  spike of 2026-10-30). Windows are tried in turn through Intan's first 600 s,
-  because the rig may strobe before the NI starts (amendment 44), and a window
-  whose edges the NI never saw cannot anchor.
+  spike of 2026-10-30). Windows are tried in turn through 600 s, because the rig
+  may strobe before the NI starts (amendment 44), and a window whose edges the
+  NI never saw cannot anchor. The 600 s are counted from Intan's first edge that
+  could anchor, one with enough edges after it: a stray edge at start-up, or a
+  lone test burst, then a long quiet, would otherwise spend them on nothing.
 * **The extension.** From the anchor, the whole recording in time order, each
   edge matched to the NI's nearest within 0.5 ms, with rate and offset refitted
   as it goes. The steps start at about 10 edges and grow with the evidence: at
@@ -47,7 +49,9 @@ import numpy as np
 
 #: Each candidate window of Intan's edges, in Intan seconds.
 ANCHOR_WINDOW_S = 2.0
-#: Windows are tried until a window's start passes Intan's first edge plus this.
+#: Windows are tried until a window's start passes this far beyond Intan's first
+#: anchorable edge (`_first_anchorable`): its first edge with at least
+#: `MIN_MATCHED_EDGES` edges after it within `VERIFY_S`.
 ANCHOR_SEARCH_S = 600.0
 #: Each candidate is verified by extending its map this far from its window's start.
 VERIFY_S = 120.0
@@ -269,8 +273,13 @@ def _eligible(reference_s: np.ndarray, predicted_s: np.ndarray) -> np.ndarray:
 
 def _anchor(reference_s: np.ndarray, device_s: np.ndarray, scoring_cells: int) -> _Anchor:
     """The first window whose verified best candidate passes the ambiguity rule,
-    or `Unanchored` naming the window whose best scored highest."""
-    first_s = device_s[0]
+    or `Unanchored` naming the window whose best scored highest.
+
+    The windows start at Intan's first anchorable edge: the sparse edges before
+    it are too few to verify, and would spend the search on a quiet stretch.
+    With no anchorable edge at all, they start at Intan's first edge."""
+    start = _first_anchorable(device_s, 0, device_s.size)
+    first_s = device_s[0 if start is None else start]
     best_seen, runner_seen = 0.0, 0.0
     k = 0
     while (window_s := first_s + k * ANCHOR_WINDOW_S) <= first_s + ANCHOR_SEARCH_S:
@@ -513,7 +522,8 @@ def _first_anchorable(times: np.ndarray, start: int, stop: int) -> int | None:
     order) with at least `MIN_MATCHED_EDGES` of the stretch's edges after it
     within `VERIFY_S`, or None.
 
-    A re-anchor is made there (ruling R12). The sparse edges before it, a stray
+    A re-anchor is made there (ruling R12), and the first anchor's search starts
+    there, over the whole recording. The sparse edges before it, a stray
     edge in a break among them, stay unmatched: an edge with too few neighbours
     cannot be anchored, and is no reason to refuse the recording. Edges past the
     stretch's end are not counted, since the next break is anchored on its own."""

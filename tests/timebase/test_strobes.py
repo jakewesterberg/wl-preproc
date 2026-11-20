@@ -92,6 +92,24 @@ def test_an_ni_started_late_still_anchors():
     _matched_against_truth(StrobeScenario(ni_late_s=30))
 
 
+def test_a_stray_edge_before_a_late_start_still_anchors():
+    # One spurious Intan edge as its recording starts (a power-up glitch), then
+    # the task's strobes 610 s later: the anchor search's 600 s are counted from
+    # the first edge that could anchor, not from the glitch.
+    _matched_against_truth(StrobeScenario(
+        silent_s=(0.0, 620.0), intan_spurious_s=(10.0,), trial_offsets=(0.0, 0.3, 0.8), burst_max=3
+    ))
+
+
+def test_a_lone_burst_before_a_long_quiet_still_anchors():
+    # A 3-word burst (a session start, a test strobe), then 620 s of quiet
+    # before the task strobes: the burst is too sparse to anchor, and the search
+    # starts after it.
+    _matched_against_truth(StrobeScenario(
+        silent_s=(10.0, 630.0), lone_edges_s=(10.01, 10.011, 10.012), trial_offsets=(0.0, 0.3, 0.8), burst_max=3
+    ))
+
+
 def test_a_periodic_stream_refuses():
     # Single words every 2 s: no burst sizes to tell one period from the next.
     with pytest.raises(Unanchored, match="ambiguous|no anchor matched"):
