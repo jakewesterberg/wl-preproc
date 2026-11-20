@@ -1053,10 +1053,19 @@ def run_once(
 
     for table in _first_tables():
         try:
-            result = table.populate(
-                *_not_freed(table, freed), reserve_jobs=True, suppress_errors=True
-            )
-            populated += int(result["success_count"])
+            restrictions = _not_freed(table, freed)
+            # Counted by the rows this pass inserted, not by `success_count`:
+            # `SessionClock`'s make records a refusal in `ClockRefusal` and
+            # inserts no clock row, so a refused session stays in `key_source`
+            # (its inputs are re-checked each pass) and `populate` reports it
+            # computed on EVERY pass. A key counts only if it had no row
+            # before this pass and has one after.
+            pending = table.key_source
+            for restriction in restrictions:
+                pending = pending & restriction
+            before = (pending - table).proj().keys()
+            result = table.populate(*restrictions, reserve_jobs=True, suppress_errors=True)
+            populated += len(table & before) if before else 0
             errors.extend(f"{table.__name__} {key}: {err}" for key, err in result["error_list"])
         except Exception as exc:  # a failing stage must not stop the others
             errors.append(f"{table.__name__}: {exc}")

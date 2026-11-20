@@ -416,6 +416,10 @@ def test_run_once_counts_keys_computed_not_tables_attempted(
 
     try:
         RunOnceOkSource.insert(({"n": 1, "v": 1}, {"n": 2, "v": 2}, {"n": 3, "v": 3}))
+        # Only this table is under test: other stages' pending keys (sessions other
+        # modules left landed and unclocked) are outside what these count or report.
+        monkeypatch.setattr(daemon_env, "_first_tables", lambda: [])
+        monkeypatch.setattr(daemon_env, "_populate_event_stage", lambda freed: (0, []))
         monkeypatch.setattr(daemon_env, "_computed_tables", lambda: [RunOnceOkDerived])
 
         report = daemon_env.run_once(prefix=prefix)
@@ -465,6 +469,10 @@ def test_run_once_reports_the_per_key_failures_populate_swallows(
 
     try:
         RunOnceBoomSource.insert(({"n": 1, "v": 1}, {"n": 2, "v": 2}))
+        # Only this table is under test: other stages' pending keys (sessions other
+        # modules left landed and unclocked) are outside what these count or report.
+        monkeypatch.setattr(daemon_env, "_first_tables", lambda: [])
+        monkeypatch.setattr(daemon_env, "_populate_event_stage", lambda freed: (0, []))
         monkeypatch.setattr(daemon_env, "_computed_tables", lambda: [RunOnceBoomDerived])
 
         report = daemon_env.run_once(prefix=prefix)

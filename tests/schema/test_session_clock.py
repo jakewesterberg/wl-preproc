@@ -229,7 +229,11 @@ def test_the_backfill_records_the_sync_box_for_timed_sessions(daemon_module, pre
     assert len(timebase.TimingProvenance & timed)
     (timebase.SessionClock & timed).delete(prompt=False)
     untimed, _ = landed()
-    assert timebase.backfill_session_clocks() == 1
+    # The back-fill is database-wide: other modules' sessions may be waiting
+    # for it too, so the count is what the function itself would decide.
+    waiting = len(timebase.TimingProvenance.proj() - timebase.SessionClock.proj())
+    assert waiting >= 1
+    assert timebase.backfill_session_clocks() == waiting
     assert (timebase.SessionClock & timed).fetch1("source", "reason") == ("syncbox", timebase.BACKFILL_REASON)
     assert not len(timebase.SessionClock & untimed)
     assert timebase.backfill_session_clocks() == 0
@@ -465,3 +469,22 @@ def test_a_stage_inside_a_transaction_is_given_the_recorded_reason(landed):
         with pytest.raises(NoClock, match=r"the NI's codes do not: run 1's trial 2 does not end") as raised:
             clock_for(key)
     assert "not recorded yet" not in str(raised.value)
+
+
+def test_a_refused_session_is_not_counted_as_populated_on_a_later_pass(daemon_module, prefix, landed, monkeypatch):
+    """`run_once`'s `populated` counts keys computed. A refused session writes
+    a `ClockRefusal` and no `SessionClock` row, so it stays in the clock's
+    `key_source` and `populate` calls it a success on every pass; counting
+    that reports work the daemon did not do."""
+    from wl_preproc.schema import timebase
+
+    key, _session_dir = _ni_that_does_not_hold(landed)
+    daemon_module.run_once(prefix=prefix)
+    assert len(timebase.ClockRefusal & key) and not len(timebase.SessionClock & key)
+
+    # Only the clock stage: the later stages' own counts are not under test.
+    monkeypatch.setattr(daemon_module, "_populate_event_stage", lambda freed: (0, []))
+    monkeypatch.setattr(daemon_module, "_computed_tables", lambda: [])
+    report = daemon_module.run_once(prefix=prefix)
+    assert report["populated"] == 0
+    assert len(timebase.ClockRefusal & key) and not len(timebase.SessionClock & key)
