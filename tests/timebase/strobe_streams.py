@@ -62,6 +62,9 @@ class StrobeScenario:
     ni_drop_after_s: float = 0.0
     #: No strobe at all, on either device, between these true seconds: a break.
     silent_s: tuple[float, float] | None = None
+    #: Single real edges at these true seconds, recorded by both devices: a
+    #: strobe alone in a break.
+    lone_edges_s: tuple[float, ...] = ()
     #: From this true second on, single words every `periodic_after_period_s`,
     #: off by `jitter_s`: a stretch strobed on a timer.
     periodic_after_s: float | None = None
@@ -92,6 +95,8 @@ def _true_edges(sc: StrobeScenario, rng: np.random.Generator) -> np.ndarray:
     edges = np.sort(np.concatenate([s + 0.001 * np.arange(n) for s, n in zip(starts, sizes, strict=True)]))
     if sc.silent_s is not None:
         edges = edges[(edges < sc.silent_s[0]) | (edges > sc.silent_s[1])]
+    if sc.lone_edges_s:
+        edges = np.sort(np.concatenate([edges, sc.lone_edges_s]))
     return edges
 
 

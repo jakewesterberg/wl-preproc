@@ -383,7 +383,8 @@ def _walk(
 
     With `reanchor`, a gap over `REANCHOR_GAP_S` between consecutive edges (and,
     with `previous`, between that edge and the first in `order`) anchors the walk
-    again before it goes on. The refits and steps then start afresh from the
+    again before it goes on, at the stretch's first edge that has enough edges
+    after it (`_first_anchorable`); a stretch with none is left unmatched. The refits and steps then start afresh from the
     stretch's own pairs, as from the first anchor: the pairs before the break may
     sit on a rate that has since changed. Verification walks do not re-anchor."""
     times = device_s[order]
@@ -403,9 +404,15 @@ def _walk(
         if next_gap < gaps.size and gaps[next_gap] == position:
             before_s = times[position - 1] if position else device_s[previous]
             gap_s = abs(times[position] - before_s)
-            offset_s = _reanchor(reference_s, device_s, order[position:], rate, offset_s, gap_s)
-            since = held
             next_gap += 1
+            stop = gaps[next_gap] if next_gap < gaps.size else order.size
+            resume = _first_anchorable(times, position, stop)
+            if resume is None:
+                position = stop  # too sparse to anchor: left unmatched (ruling R12)
+                continue
+            offset_s = _reanchor(reference_s, device_s, order[resume:stop], rate, offset_s, gap_s)
+            position = resume
+            since = held
         stop = gaps[next_gap] if next_gap < gaps.size else order.size
         step = min(MAX_STEP_EDGES, max(FIRST_STEP_EDGES, (held - since) // 2), stop - position)
         device_index = order[position : position + step]
@@ -425,6 +432,21 @@ def _walk(
         rate=float(rate),
         offset_s=float(offset_s),
     )
+
+
+def _first_anchorable(times: np.ndarray, start: int, stop: int) -> int | None:
+    """The first position in `start:stop` (one stretch between breaks, in walk
+    order) with at least `MIN_MATCHED_EDGES` of the stretch's edges after it
+    within `VERIFY_S`, or None.
+
+    A re-anchor is made there (ruling R12). The sparse edges before it, a stray
+    edge in a break among them, stay unmatched: an edge with too few neighbours
+    cannot be anchored, and is no reason to refuse the recording. Edges past the
+    stretch's end are not counted, since the next break is anchored on its own."""
+    distance = np.abs(times[start:stop] - times[start])  # non-decreasing in walk order
+    after = np.searchsorted(distance, distance + VERIFY_S, side="left") - np.arange(distance.size) - 1
+    enough = np.flatnonzero(after >= MIN_MATCHED_EDGES)
+    return start + int(enough[0]) if enough.size else None
 
 
 def _nearest(reference_s: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

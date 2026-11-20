@@ -193,6 +193,38 @@ def test_an_ambiguous_stretch_after_a_break_refuses():
         match_strobes(ni_s, intan_s)
 
 
+def _real_after_the_break(intan_s: np.ndarray, true_id: np.ndarray, reference_id: np.ndarray) -> np.ndarray:
+    """Intan's real edges, recorded by the NI too, after the longest gap between
+    real edges: spurious edges in a break do not move it."""
+    real = (true_id >= 0) & np.isin(true_id, reference_id)
+    real_s = intan_s[true_id >= 0]
+    return real & (intan_s > real_s[np.argmax(np.diff(real_s))])
+
+
+def test_a_stray_edge_in_a_break_does_not_refuse():
+    # 0.5% spurious edges fall through a 900 s break too: each is a stretch of
+    # its own, with no NI edge to match and no edges after it.
+    sc = StrobeScenario(silent_s=(2400.0, 3300.0), extra=0.005)
+    ni_s, intan_s, true_id, reference_id, _ = simulate_with_reference_id(sc)
+    match = match_strobes(ni_s, intan_s)
+    assert not _wrong(match, true_id, reference_id).any()
+    after = _real_after_the_break(intan_s, true_id, reference_id)
+    assert np.isin(np.flatnonzero(after), match.device_index).sum() >= 0.98 * after.sum()
+
+
+def test_a_lone_edge_in_a_break_is_left_unmatched():
+    # One real strobe, recorded by both devices, 450 s from anything else.
+    sc = StrobeScenario(silent_s=(2400.0, 3300.0), lone_edges_s=(2850.0,))
+    ni_s, intan_s, true_id, reference_id, _ = simulate_with_reference_id(sc)
+    alone = (np.diff(intan_s, prepend=-np.inf) > 100) & (np.diff(intan_s, append=np.inf) > 100)
+    assert alone.sum() == 1
+    match = match_strobes(ni_s, intan_s)
+    assert np.flatnonzero(alone)[0] not in match.device_index
+    assert not _wrong(match, true_id, reference_id).any()
+    after = _real_after_the_break(intan_s, true_id, reference_id)
+    assert np.isin(np.flatnonzero(after), match.device_index).sum() >= 0.98 * after.sum()
+
+
 def test_pairs_are_one_to_one():
     # 5% spurious edges: some land beside a real edge the NI recorded, and match it too.
     ni_s, intan_s, _, _, _ = simulate_with_reference_id(StrobeScenario(drop=0.10, extra=0.05))
