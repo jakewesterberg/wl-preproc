@@ -93,21 +93,35 @@ def test_codes_before_the_ni_started_are_not_required():
     assert unheld(decoded, *_rig({1: [1, 2], 2: [3]})) is None
 
 
-def test_the_sync_box_needs_only_the_last_run():
+def test_the_sync_box_needs_only_to_reach_the_end_of_the_last_run():
     """Amendment 42: the sync box keeps time unless its log ends before the
-    session's last run does, so a gap before that run, or a log that starts
-    late, still holds the last; one that stops inside it does not."""
-    from wl_preproc.timebase.holding import unheld_last
+    session's last run does. A gap before that run, a log that starts late,
+    or a gap inside the last run that resumes before its last trial all
+    reach its end; one that stops inside the last trial does not."""
+    from wl_preproc.timebase.holding import unreached_end
 
-    rig = _rig({1: [1, 2], 2: [3], 3: [4, 5]})
-    gap = _session(_run(1.0, 1, [1]), _run(20.0, 3, [4, 5]))
+    rig = _rig({1: [1, 2], 2: [3], 3: [4, 5, 6]})
+    gap = _session(_run(1.0, 1, [1]), _run(20.0, 3, [4, 5, 6]))
     assert unheld(gap, *rig) == "run 1's trial 2 is not in its codes"
-    assert unheld_last(gap, *rig) is None
-    assert unheld_last(_session(_run(20.0, 3, [4, 5]), start=False), *rig) is None
-    stopped = _session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3]), _run(20.0, 3, [4, 5], ended=False, open_last=True),
+    assert unreached_end(gap, *rig) is None
+    assert unreached_end(_session(_run(20.0, 3, [4, 5, 6]), start=False), *rig) is None
+    inside = [code for code in _run(20.0, 3, [4, 5, 6]) if not 21.5 <= code[0] < 22.7]
+    assert unheld(_session(inside), *rig) == "run 1 is not in its codes"
+    assert unreached_end(_session(inside), *rig) is None
+    stopped = _session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3]), _run(20.0, 3, [4, 5, 6], ended=False, open_last=True),
                        end=False)
-    assert unheld_last(stopped, *rig) == "run 3's trial 5 does not end in its codes"
-    assert unheld_last(_session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3])), *rig) == "run 3 is not in its codes"
+    assert unreached_end(stopped, *rig) == "run 3's trial 6 does not end in its codes"
+    assert unreached_end(_session(_run(20.0, 3, [4, 5])), *rig) == "run 3's trial 6 is not in its codes"
+    assert unreached_end(_session(_run(1.0, 1, [1, 2]), _run(10.0, 2, [3])), *rig) == (
+        "run 3's trial 6 is not in its codes")
+
+
+def test_a_last_run_with_no_trial_lines_is_reached_when_it_is_present():
+    from wl_preproc.timebase.holding import unreached_end
+
+    rig_runs, _ = _rig({1: [1], 2: []})
+    assert unreached_end(_session(_run(10.0, 2, [])), rig_runs, None) is None
+    assert unreached_end(_session(_run(1.0, 1, [1])), rig_runs, None) == "run 2 is not in its codes"
     # With no rig record, the session's end decides.
-    assert unheld_last(_session(_run(1.0, 1, [1]), start=False), None, None) is None
-    assert unheld_last(_session(_run(1.0, 1, [1]), end=False), None, None) == "its codes hold no SESSION_END"
+    assert unreached_end(_session(_run(1.0, 1, [1]), start=False), None, None) is None
+    assert unreached_end(_session(_run(1.0, 1, [1]), end=False), None, None) == "its codes hold no SESSION_END"

@@ -338,3 +338,100 @@ def test_a_daemon_pass_leaves_a_session_without_a_clock_untouched_until_it_has_o
                for error in report["errors"])
     assert any("the sync box recorded no log, and there is no NI recording" in str(error)
                for error in report["errors"])
+
+
+# -- A session no clock can time keeps its reason (part 3a's I3, amendment
+# 37): recorded in `timebase.ClockRefusal`, reported by its events stage on
+# each pass, and decided again only when what the choice reads changes.
+
+def _ni_that_does_not_hold(landed):
+    """An `ni-clock` session, no sync box, its NI cut at 5 s, inside run 1's
+    second trial: neither clock holds every run."""
+    from tests.timebase.test_clock import _cut_the_ni
+
+    key, session_dir = landed("ni-clock")
+    _cut_the_ni(session_dir, 5.0)
+    return key, session_dir
+
+
+_NI_REASON = ("the sync box recorded no log, and the NI's codes do not: run 1's trial 2 does not end in its codes; "
+              "lab time is part 4, so no clock built yet can time this session")
+
+
+def test_a_session_no_clock_can_time_reports_its_reason_and_is_not_decoded_again(daemon_module, prefix, landed,
+                                                                                  monkeypatch):
+    from wl_preproc.events import extract
+    from wl_preproc.schema import timebase
+
+    key, session_dir = _ni_that_does_not_hold(landed)
+    report = daemon_module.run_once(prefix=prefix)
+    errors = [str(error) for error in report["errors"] if repr(key["subject"]) in str(error)]
+    assert errors and all(_NI_REASON in error for error in errors), errors
+    assert not any("not recorded yet" in error for error in errors)
+    assert (timebase.ClockRefusal & key).fetch1("reason") == _NI_REASON
+    assert not len(timebase.SessionClock & key)
+
+    decoded = []
+    real = extract.extract_nidq_words
+
+    def spy(path):
+        decoded.append(path)
+        return real(path)
+
+    monkeypatch.setattr(extract, "extract_nidq_words", spy)
+    report = daemon_module.run_once(prefix=prefix)
+    assert [path for path in decoded if session_dir in path.parents] == []
+    assert any(_NI_REASON in str(error) for error in report["errors"] if repr(key["subject"]) in str(error))
+
+
+def test_a_refusal_is_decided_again_when_what_it_read_changes(landed):
+    """The NI's file restored: its size and time differ from the refused
+    one's, so the choice is made again, the NI keeps time, and the refusal
+    is cleared."""
+    import shutil
+
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import nidq_files
+
+    key, session_dir = landed("ni-clock")
+    (path,) = nidq_files(session_dir)
+    whole = session_dir.parent / "whole.nidq.bin"
+    shutil.copyfile(path, whole)
+    from tests.timebase.test_clock import _cut_the_ni
+
+    _cut_the_ni(session_dir, 5.0)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert (timebase.ClockRefusal & key).fetch1("reason") == _NI_REASON
+    shutil.copyfile(whole, path)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    assert (timebase.SessionClock & key).fetch1("source") == "nidq"
+    assert not len(timebase.ClockRefusal & key)
+
+
+def test_an_unreadable_ni_is_a_recorded_reason(landed):
+    """A file cut mid-sample is refused by `extract_nidq_words`; the
+    refusal says so, and is kept, never lost silently."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import nidq_files
+
+    key, session_dir = landed("ni-clock")
+    (path,) = nidq_files(session_dir)
+    with path.open("ab") as handle:
+        handle.write(b"\0\0")  # one int16 more: a sample split across channels
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    reason = (timebase.ClockRefusal & key).fetch1("reason")
+    assert reason.startswith("the NI's codes cannot be read: "), reason
+    assert "do not divide into" in reason
+    assert not len(timebase.SessionClock & key)
+
+
+def test_a_stage_inside_a_transaction_is_given_the_recorded_reason(landed):
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import NoClock, clock_for
+
+    key, _session_dir = _ni_that_does_not_hold(landed)
+    timebase.SessionClock.populate(key, suppress_errors=False)
+    with dj.conn().transaction:
+        with pytest.raises(NoClock, match=r"the NI's codes do not: run 1's trial 2 does not end") as raised:
+            clock_for(key)
+    assert "not recorded yet" not in str(raised.value)

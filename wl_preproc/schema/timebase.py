@@ -112,36 +112,65 @@ class SessionClock(dj.Imported):
     # never overridden here: a `make` of our own would run inside the
     # transaction.
 
-    def make_fetch(self, key: dict) -> tuple[str, dict[str, str], bool]:
-        """What the choice reads from the database: the session's folder,
-        what it was landed without, and whether it was already timed
-        (`timebase/clock.py::landed_facts`)."""
+    def make_fetch(self, key: dict) -> tuple:
+        """What the choice reads: the session's folder, what it was landed
+        without, whether it was already timed (`timebase/clock.py::
+        landed_facts`), the digest of its inputs (`choice_inputs`), and the
+        refusal recorded for it, `(reason, inputs)`, or None."""
         from wl_preproc.schema import ingest
-        from wl_preproc.timebase.clock import landed_facts
+        from wl_preproc.timebase.clock import choice_inputs, landed_facts
 
-        return ((ingest.Ingestion & key).fetch1("session_dir"), *landed_facts(key))
+        session_dir = (ingest.Ingestion & key).fetch1("session_dir")
+        landed_without, already_timed = landed_facts(key)
+        inputs = choice_inputs(Path(session_dir), key["subject"], landed_without, already_timed=already_timed)
+        refused = [(row["reason"], row["inputs"]) for row in (ClockRefusal & key).to_dicts()]
+        return session_dir, landed_without, already_timed, inputs, (refused[0] if refused else None)
 
-    def make_compute(self, key: dict, session_dir: str, landed_without: dict[str, str],
-                     already_timed: bool) -> tuple:
-        """The choice, made as `clock_for` makes it outside a transaction:
-        the sync box's log first, the NI's codes only when it does not hold
-        every run. None where no clock built so far can time the session."""
-        from wl_preproc.timebase.clock import NoClock, choose_landed
+    def make_compute(self, key: dict, session_dir: str, landed_without: dict[str, str], already_timed: bool,
+                     inputs: str, refused: tuple[str, str] | None) -> tuple:
+        """`(choice, reason, inputs)`: the choice, made as `clock_for` makes it
+        outside a transaction (the sync box's log first, the NI's codes only
+        when it does not reach the session's last run), or None and why no
+        clock built so far can time the session. A refusal recorded for these
+        same inputs is given again without decoding."""
+        from wl_preproc.timebase.clock import NoClock, choose_landed, refusal_reason
 
+        if refused is not None and refused[1] == inputs:
+            return None, refused[0], inputs
         try:
-            return (choose_landed(Path(session_dir), key["subject"], landed_without, already_timed),)
-        except NoClock:
-            # Nothing recorded and no error parked: a session no clock built
-            # so far can time is asked again on the next pass, so one part 4
-            # can time is timed once it exists. Its events stage says why on
-            # each pass (part 3a's final review, I3).
-            return (None,)
+            return choose_landed(Path(session_dir), key["subject"], landed_without, already_timed), None, inputs
+        except NoClock as error:
+            return None, refusal_reason(error, Path(session_dir)), inputs
 
-    def make_insert(self, key: dict, choice) -> None:
-        if choice is not None:
-            # A stage's `clock_for` may have recorded the same choice since
-            # this pass looked.
-            self.insert1({**key, "source": choice.source, "reason": choice.reason}, skip_duplicates=True)
+    def make_insert(self, key: dict, choice, reason: str | None, inputs: str) -> None:
+        """The clock, its refusal cleared; or, where none can time it, its
+        refusal recorded in place of any earlier one, and nothing here: the
+        session is asked again on the next pass, so one part 4 can time is
+        timed once it exists, and its events stage says why on each pass
+        (part 3a's final review, I3, amendment 37)."""
+        if choice is None:
+            ClockRefusal.insert1({**key, "reason": reason, "inputs": inputs}, replace=True)
+            return
+        # A stage's `clock_for` may have recorded the same choice since this
+        # pass looked.
+        self.insert1({**key, "source": choice.source, "reason": choice.reason}, skip_duplicates=True)
+        (ClockRefusal & key).delete_quick()
+
+
+@schema
+class ClockRefusal(dj.Manual):
+    definition = """
+    # Why no clock built so far can time the session, as the daemon's
+    # `SessionClock` pass found it, and a digest of what that choice read,
+    # so it is decided again only when one of those changes, never by
+    # decoding the NI on every pass (`timebase/clock.py::choice_inputs`).
+    # Its events stage reports it on each pass. Cleared once a clock is
+    # recorded. Key: (subject, session_datetime).
+    -> pipeline.Session
+    ---
+    reason : varchar(255)  # one sentence, as `NoClock` gave it
+    inputs : char(64)      # sha256 hex of the choice's inputs
+    """
 
 
 @schema

@@ -16,9 +16,10 @@ against any run.
 **With no rig record** (none, or one naming no run), the stream holds the
 session when it decodes both `SESSION_START` and `SESSION_END`.
 
-**The sync box needs only the session's last run** (`unheld_last`,
-amendment 42): the NI keeps time only when the box's log ends before that run
-does, with no later segment; a gap within the session keeps the box.
+**The sync box needs only to reach the end of the session's last run**
+(`unreached_end`, amendment 42): the NI keeps time only when the box's log
+ends before that run does, with no later segment; a gap within the session
+keeps the box.
 
 Pure: no DataJoint, no I/O, as `timebase/coverage.py` is."""
 
@@ -34,48 +35,74 @@ def unheld(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: Ri
     """None when `decoded` holds every run the rig recorded, else one
     sentence saying the first thing it does not hold, e.g. "run 3's trial 41
     is not in its codes". Rule 2's test, the NI's (amendment 44)."""
-    return _unheld(decoded, rig_runs, rig_trials, last_only=False)
-
-
-def unheld_last(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None) -> str | None:
-    """`unheld` for the session's last run only: with the rig's record, the
-    run of the highest number it names, held as every run is; with none,
-    `SESSION_END` decoded. Rule 1's test, the sync box's (amendment 42): it
-    keeps time unless its log ends before the session's last run does, so a
-    gap within the session, or a log that starts late, keeps it."""
-    return _unheld(decoded, rig_runs, rig_trials, last_only=True)
-
-
-def _unheld(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None, *,
-            last_only: bool) -> str | None:
     named = rig_runs.runs if rig_runs is not None else ()
     if not named:
-        markers = {event.code for event in decoded if isinstance(event, SimpleEvent)}
-        needed = (Marker.SESSION_END,) if last_only else (Marker.SESSION_START, Marker.SESSION_END)
-        for marker in needed:
-            if marker not in markers:
-                return f"its codes hold no {marker.name}"
-        return None
-
+        return _markers_unheld(decoded, (Marker.SESSION_START, Marker.SESSION_END))
     assembly = assemble(decoded)
     runs = {run.run_number for run in assembly.runs}
-    trials: dict[int, bool] = {}
-    for trial in assembly.trials:
-        trials[trial.trial_id] = trials.get(trial.trial_id, False) or trial.end_s is not None
-    # wl-xcon's `run`, from 0, names a run in both files; the run's number is
-    # what `RUN_START` strobes.
+    trials = _closed(assembly)
+    given = _trial_lines(named, rig_trials)
+    for run in sorted(named, key=lambda run: run.number):
+        if run.number not in runs:
+            return f"run {run.number} is not in its codes"
+        for number in given.get(run.number, ()):
+            sentence = _trial_unheld(run.number, number, trials)
+            if sentence is not None:
+                return sentence
+    return None
+
+
+def unreached_end(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_trials: RigRecord | None) -> str | None:
+    """None when `decoded` reaches the end of the session's last run, else
+    one sentence saying what of it is missing. Rule 1's test, the sync
+    box's (amendment 42: the NI keeps time only when its log "ends before the
+    session's last run does"). With the rig's record, the last run is the
+    one of the highest number it names: its last trial line must be an
+    assembled trial that closes (a missing `RUN_END` allowed), or, with no
+    trial lines, the run must be present. With none, `SESSION_END` must be
+    decoded. A gap before the last run, a log that starts late, or a gap
+    inside the last run that resumes before its last trial reach its end."""
+    named = rig_runs.runs if rig_runs is not None else ()
+    if not named:
+        return _markers_unheld(decoded, (Marker.SESSION_END,))
+    last = max(named, key=lambda run: run.number)
+    lines = _trial_lines(named, rig_trials).get(last.number, [])
+    assembly = assemble(decoded)
+    if lines:
+        return _trial_unheld(last.number, lines[-1], _closed(assembly))
+    if last.number not in {run.run_number for run in assembly.runs}:
+        return f"run {last.number} is not in its codes"
+    return None
+
+
+def _markers_unheld(decoded: list[DecodedEvent], markers: tuple[Marker, ...]) -> str | None:
+    decoded_markers = {event.code for event in decoded if isinstance(event, SimpleEvent)}
+    return next((f"its codes hold no {marker.name}" for marker in markers if marker not in decoded_markers), None)
+
+
+def _trial_lines(named, rig_trials: RigRecord | None) -> dict[int, list[int]]:
+    """Each named run's trial numbers, in its trial lines' order, joined by
+    wl-xcon's `run`, from 0, which names a run in both files; the run's
+    number is what `RUN_START` strobes."""
     numbers = {run.index: run.number for run in named if run.index is not None}
     given: dict[int, list[int]] = {}
     for trial in rig_trials.trials if rig_trials is not None else ():
         if trial.run in numbers:
             given.setdefault(numbers[trial.run], []).append(trial.number)
-    ordered = sorted(named, key=lambda run: run.number)
-    for run in ordered[-1:] if last_only else ordered:
-        if run.number not in runs:
-            return f"run {run.number} is not in its codes"
-        for number in given.get(run.number, ()):
-            if number not in trials:
-                return f"run {run.number}'s trial {number} is not in its codes"
-            if not trials[number]:
-                return f"run {run.number}'s trial {number} does not end in its codes"
+    return given
+
+
+def _closed(assembly) -> dict[int, bool]:
+    """Each assembled trial's number: whether one of that number closes."""
+    trials: dict[int, bool] = {}
+    for trial in assembly.trials:
+        trials[trial.trial_id] = trials.get(trial.trial_id, False) or trial.end_s is not None
+    return trials
+
+
+def _trial_unheld(run: int, number: int, trials: dict[int, bool]) -> str | None:
+    if number not in trials:
+        return f"run {run}'s trial {number} is not in its codes"
+    if not trials[number]:
+        return f"run {run}'s trial {number} does not end in its codes"
     return None

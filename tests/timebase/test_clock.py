@@ -90,6 +90,22 @@ def test_a_sync_box_with_a_gap_before_the_last_run_stays_the_clock(tmp_path):
         source="syncbox", reason="the sync box's codes reach the rig's last run; a run before it is not in its codes")
 
 
+def test_a_sync_box_with_a_gap_inside_the_last_run_stays_the_clock(tmp_path):
+    """Amendment 42's "its log ends before the session's last run does": a
+    gap inside the last run (8.5 s to 10 s, losing its second trial) that
+    resumes before its last trial reaches the run's end, so the box stays
+    the clock."""
+    from wl_preproc.contracts.events import TaskTypeCode
+    from wl_preproc.synth.recipe import BlockSpec, SyncBoxRollSpec
+    from wl_preproc.timebase.clock import Choice, choose
+
+    session_dir = _session(tmp_path, runs=True, syncbox_roll=SyncBoxRollSpec(at_s=8.5, gap_s=1.5), blocks=(
+        BlockSpec(task_type=TaskTypeCode.RESTING_DARK, n_trials=1, trial_duration_s=6.0),
+        BlockSpec(task_type=TaskTypeCode.RF_MAP, n_trials=3, trial_duration_s=3.0)))
+    assert choose(session_dir, "pico") == Choice(
+        source="syncbox", reason="the sync box's codes reach the rig's last run; a run before it is not in its codes")
+
+
 def test_a_sync_box_that_restarted_stays_the_clock(tmp_path):
     """Amendment 42: its restart is bridged by a device that recorded through
     it (wl-sync part 2), so the NI is not chosen, though its codes hold more."""

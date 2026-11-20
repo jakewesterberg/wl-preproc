@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -29,11 +31,13 @@ from types import MappingProxyType
 from wl_sync.clock import BARCODE_EPOCH
 
 from wl_preproc.contracts.events import decode_stream
+from wl_preproc.contracts.paths import XCON_DIRNAME
+from wl_preproc.events import rigruns, rigtrials
 from wl_preproc.events.rigruns import RigRuns, read_rig_runs
 from wl_preproc.events.rigtrials import RigRecord, read_rig_trials
 from wl_preproc.timebase import segments
 from wl_preproc.timebase.extract import find_recordings
-from wl_preproc.timebase.holding import unheld, unheld_last
+from wl_preproc.timebase.holding import unheld, unreached_end
 
 # What may keep a session's time (section 4.1), as `timebase.SessionClock`
 # declares it.
@@ -131,7 +135,7 @@ def _sync_box_choice(session_dir: Path, landed_without: Mapping[str, str], rig_r
     decoded = decode_stream(session.codes())
     if unheld(decoded, rig_runs, rig_trials) is None:
         return Choice(source="syncbox", reason=SYNC_BOX_HOLDS), ""
-    sentence = unheld_last(decoded, rig_runs, rig_trials)
+    sentence = unreached_end(decoded, rig_runs, rig_trials)
     if sentence is None:
         return Choice(source="syncbox", reason=SYNC_BOX_REACHES_LAST), ""
     if segments.SEGMENT_AFTER_RESTART in session.roles():
@@ -168,7 +172,10 @@ def _ni_choice(session_dir: Path, landed_without: Mapping[str, str], rig_runs: R
         try:
             decoded += decode_stream(nidq_codes(path))
         except ValueError as error:
-            raise _no_clock(session_dir, why, f"the NI's codes cannot be read: {error}") from error
+            # Recorded first, so the reason survives its column's width.
+            unreadable = str(error).replace(f"{session_dir}/", "")
+            raise NoClock(f"{session_dir}: the NI's codes cannot be read: {unreadable}; and the sync box {why}: lab "
+                          "time is part 4, so no clock built yet can time this session") from error
     sentence = unheld(decoded, rig_runs, rig_trials)
     if sentence is not None:
         raise _no_clock(session_dir, why, f"the NI's codes do not: {sentence}")
@@ -181,9 +188,10 @@ def choose(session_dir: Path, subject: str, landed_without: Mapping[str, str] = 
     session without (`ingest.LandedWithout`) to who did, named in the reason.
 
     **Rule 1:** the sync box keeps time if it has a log, was not landed
-    without, and either its codes hold the session's last run (amendment 42:
-    every run, or at least the last), or it restarted within the session. **Rule 2:** otherwise the NI keeps time, if SpikeGLX was not
-    landed without and its codes hold every run; its codes are decoded only
+    without, and either its codes reach the end of the session's last run
+    (amendment 42), or it restarted within the session. **Rule 2:**
+    otherwise the NI keeps time, if SpikeGLX was not landed without and its
+    codes hold every run; its codes are decoded only
     here, when rule 1 fails. **Otherwise** `NoClock`, naming both reasons:
     lab time is part 4."""
     rig_runs, rig_trials = _rig_record(session_dir, subject)
@@ -191,6 +199,41 @@ def choose(session_dir: Path, subject: str, landed_without: Mapping[str, str] = 
     if choice is not None:
         return choice
     return _ni_choice(session_dir, landed_without, rig_runs, rig_trials, why)
+
+
+def choice_inputs(session_dir: Path, subject: str, landed_without: Mapping[str, str], *,
+                  already_timed: bool = False) -> str:
+    """A sha256 hex digest of what `choose_landed` reads: each sync box log,
+    each NI file and its `.meta`, and the rig's record files `read_rig_runs`
+    and `read_rig_trials` read, by path within the session, size and
+    `mtime_ns` (stat only, never their contents), with what the session was
+    landed without and whether it was already timed. A recorded refusal
+    (`timebase.ClockRefusal`) stands while this is unchanged, so a session no
+    clock can time is not decoded again on every pass."""
+    xcon = session_dir / XCON_DIRNAME
+    paths = [*find_recordings("syncbox", session_dir / "syncbox"),
+             *(path for nidq in nidq_files(session_dir) for path in (nidq, nidq.with_suffix(".meta"))),
+             xcon / rigruns.RECORD_NAME, xcon / rigruns.CONFIG_NAME, xcon / rigtrials.RECORD_NAME]
+
+    def stat(path: Path) -> list:
+        try:
+            status = path.stat()
+        except FileNotFoundError:
+            return [str(path.relative_to(session_dir)), None, None]
+        return [str(path.relative_to(session_dir)), status.st_size, status.st_mtime_ns]
+
+    read = {"subject": subject, "files": [stat(path) for path in paths],
+            "landed_without": sorted(landed_without.items()), "already_timed": already_timed}
+    return hashlib.sha256(json.dumps(read, sort_keys=True).encode()).hexdigest()
+
+
+def refusal_reason(error: NoClock, session_dir: Path) -> str:
+    """A `NoClock`'s reason as `timebase.ClockRefusal` keeps it: without the
+    session's folder, which the row's key already names, clipped to its
+    column."""
+    reason = str(error)
+    prefix = f"{session_dir}: "
+    return clipped(reason[len(prefix):] if reason.startswith(prefix) else reason)
 
 
 def landed_facts(session_key: dict) -> tuple[dict[str, str], bool]:
@@ -333,9 +376,10 @@ def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
     Outside any transaction the choice is computed in full, then inserted.
     Inside one, the NI is never decoded (amendment 43): the sync box is still
     chosen where rule 1 gives it, which needs only its log and the rig's
-    record, and a session whose NI would have to be decoded raises
-    `NotRecordedYet`, unless another pass has committed its clock since this
-    transaction's snapshot. Raises `NoClock`, recording nothing, when no
+    record, and a session whose NI would have to be decoded raises the
+    reason a daemon pass recorded (`timebase.ClockRefusal`), or
+    `NotRecordedYet` where no pass has asked yet, unless another pass has
+    committed its clock since this transaction's snapshot. Raises `NoClock`, recording nothing, when no
     clock built so far can time the session."""
     import datajoint as dj
 
@@ -362,6 +406,12 @@ def clock_for(session_key: dict, session_dir: Path | None = None) -> Clock:
         except NotRecordedYet:
             rows = committed()
             if not rows:
+                # A daemon pass that found no clock can time it recorded why
+                # (`timebase.ClockRefusal`); only a session no pass has asked
+                # yet is truly not recorded.
+                refused = (timebase.ClockRefusal & session).to_dicts()
+                if refused:
+                    raise NoClock(f"{session_dir}: {refused[0]['reason']}") from None
                 raise
         else:
             timebase.SessionClock.insert1({**session, "source": choice.source, "reason": choice.reason},
