@@ -587,7 +587,9 @@ Authorization: Bearer <token>
 - **Each session:**
   - `subject`, `session_datetime` (naive, UTC), and `session_name`, the rig's `YYYY-MM-DD_NN`;
   - `tier`, the timing tier (`A` to `D`, or `N` where the NI kept the session's time, its codes hold
-    every run and nothing failed; `D` quarantined), or `null` until computed; and
+    every run and nothing failed; `D` quarantined), or `null` until computed (under the NI, Intan is placed
+    by its strobes, so a session with Intan can be `N`; a session with the eye tracker or the cameras under
+    the NI is still `D`); and
     `rejected_segments`, each file this host could not use, with its reason;
   - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
     (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and

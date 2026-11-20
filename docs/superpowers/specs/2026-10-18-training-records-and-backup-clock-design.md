@@ -868,3 +868,99 @@ spike behind amendment 49, is in `~/.cache/wl-preproc-scratch/2026-10-30-part3b/
       work, and the lab owner's to approve.
     - **wl-sync or the lab** owe the eye tracker's per-frame host stamps. wl-sync had no live session to tell
       on 2026-11-19.
+
+## Amendments, 2026-11-20, made while building part 3b-2
+
+Part 3b-2 builds amendment 49: Intan placed on the NI's clock by its strobes. The plan
+(`docs/superpowers/plans/2026-11-20-part-3b-2-intan-by-strobes.md`) made eight decisions the spec was silent on
+(52). Building the matcher showed that amendment 49's algorithm, as written, accepts wrong anchors, so the
+rulings of the build changed it (53). Where 53 differs from 49, 53 binds. The ledger,
+`.superpowers/sdd/2026-11-20-part-3b-2-intan-by-strobes/progress.md`, holds the full wording of every ruling.
+
+52. **The plan's eight decisions.**
+    1. **Windows.** The anchor's 2 s windows are tried one after another, from Intan's first edge through its
+       first 600 s (`ANCHOR_SEARCH_S`). The first window whose best candidate passes the ambiguity rule anchors
+       the map. Amendment 44 lets the rig strobe before SpikeGLX starts, so Intan's first window may hold no
+       edge the NI saw. The extension runs forward from the anchoring window, then backward from it.
+    2. **What the 95% is a fraction of.** Intan's edges in the verification span whose predicted NI time lies
+       within the NI's recording, give or take 0.5 ms. An edge strobed before the NI started is no evidence
+       against the anchor.
+    3. **A floor.** A candidate needs at least 10 matched edges (`MIN_MATCHED_EDGES`) to be scored at all.
+       Fewer cannot be told from chance.
+    4. **Each Intan recording separately.** Each is anchored on its own against the NI's first file, the only
+       one on session time (amendment 50). The system's rate is pooled across the anchored recordings, each
+       with its own intercept, as for barcodes. A recording that cannot be anchored is rejected as
+       `no_strobe_anchor`, and the others are kept.
+    5. **What is recorded.** `RejectedSegment.reason` is a fixed vocabulary, so it holds `no_strobe_anchor`.
+       The full sentence goes to the module's logger at INFO. `SystemTimebase` gains `n_strobes_matched`
+       (null except under strobes).
+    6. **The NWB file.** Under the NI, `processing/timebase/system_clocks` gains a `time_source` column
+       (`clock`, `strobes`, `none`), and the NI texts no longer say every residual is 0. Sync-box files are
+       untouched.
+    7. **The synthetic sessions.** Back-to-back trials of fixed length are a periodic strobe stream, which
+       cannot anchor; the rig's trials start on the animal. The fixture is corrected, not the design: a recipe
+       field `trial_waits_s`, empty by default, gives an animal-paced wait before each trial. The new recipe
+       `NI_INTAN_RECIPE` uses it.
+    8. **Strobe witnesses.** `TimingProvenance.n_strobe_witnesses` stays 0 under the NI. Intan is fitted
+       there, not counted as a witness, and tier N does not read the column.
+53. **The matcher as built.** These rulings changed amendment 49's algorithm. Constants are in
+    `wl_preproc/timebase/strobes.py`.
+    - **R1, refit from 3 pairs** (49: "refitted as it goes", about 10 edges at first). The walk refits rate and
+      offset once 3 pairs exist, over the last 20,000. With 20 pairs at rate 1.0, verification drifted, and
+      whether a period-shifted rival verified was luck: 8 of 144 swept periodic streams anchored wrongly, every
+      pair wrong, and the margin rule never fired.
+    - **R2, the whole recording must match at least 95%** (49: the best anchor matches 95%). After the full
+      extension, the matched fraction of the recording's eligible edges must reach 95%, or the recording is
+      `Unanchored`. A wrong map drifts off. This makes an Intan with more than about 5% glitch edges a refusal
+      (R9), which is honest, not a wrong placement.
+    - **R3, neighbour rivals.** The runner-up set also holds the best candidate's 8 neighbouring alignments on
+      each side, each verified, so the margin rule has deterministic rivals. Kept (R8) although no test pins
+      it after R1: it is insurance, and removing it slowed the suite.
+    - **R4, residual blocks of 2,000 pairs.** The 100 µs limit is applied per consecutive block of 2,000
+      pairs against that block's own line, not one global line, because a real crystal's rate wanders over 12 h.
+      The final fit stays global, with residuals kept as for barcodes. **R14(e):** blocks are split at
+      re-anchor points, so a line is never extrapolated across a blind stretch.
+    - **R5, one-to-one pairs.** Where two Intan edges match one NI edge, the nearer is kept.
+    - **R7, the brief's periodic stream was a code.** The spike's periodic stream (2.0 s, jitter 0.5 ms, bursts
+      up to 4 words) anchors rightly on 12 of 12 seeds: its random burst sizes are a code, not a strictly
+      periodic stream. The test for refusal uses one word per burst. The brief's stream joins a property test
+      (R6): no wrong match, across periods 0.25-2 s, jitter 0-200 µs and burst sizes 1 and 4.
+    - **R11-R14, re-anchoring.** A strobe-free break can let a sub-ppm rate change lock every later edge one
+      word (1 ms) off, and the matcher returned them (6,733 of 89,743 pairs wrong, no exception). So:
+      - **R11:** the walk anchors again after a blind stretch, under the same rule (95%, 10 points of margin).
+        If that fails, the recording is refused, with the sentence "the strobes after a N s gap at T s cannot
+        be anchored again".
+      - **R14(b), the trigger:** more than 10 s (`REANCHOR_GAP_S`) of device time since the last matched
+        pair, not the spacing of Intan edges. Sparse strobes under 10 s apart through a break had defeated the
+        edge-spacing trigger.
+      - **R14(c), the search:** the re-anchor scores a 2 s window from the resume edge against only the NI edges
+        within 50 ms (`REANCHOR_SEARCH_S`) of the prediction. A spurious resume edge cannot hide the true
+        alignment.
+      - **R12:** the re-anchor is made at the first edge with at least 10 Intan edges after it within
+        `VERIFY_S`. Sparse edges before it are left unmatched, never a refusal on their own: a stray edge in
+        a break is not evidence about the map. **R13:** that count, and the re-anchor's check, stop at the next
+        gap.
+      - **R14(a), the refit:** it uses only the pairs from the last 120 s (`REFIT_SPAN_S`) of device time, and
+        at most 20,000, so sparse pairs steer it.
+      - **R14(d):** the refusal's gap is the device time since the last matched pair.
+    - **R15:** Intan edges predicted outside the NI's recording are skipped, not re-anchored. They are
+      ineligible by decision 1 of amendment 52, and re-anchoring on them refused the NI-late case.
+    - **R16:** a re-anchor takes candidate offsets from every edge of its window, not only the first, so a
+      spurious first edge cannot hide the truth.
+    - **R17:** a 0.5 s periodic stretch after a break now anchors rightly: a period shift lies outside the
+      50 ms search, and continuity across a break is evidence. The test of an ambiguous stretch uses 20 ms.
+    - **R18:** an NI-side strobe loss longer than 10 s inside its recording makes the re-anchor fail and refuses
+      the Intan recording. An NI that lost strobes mid-run also lost code words, which rule 2 already refuses.
+    - **R10:** the backward pass is seeded with the fit over the forward pass's first 20,000 pairs, the ones
+      nearest the junction, not the forward pass's final fit, which can be hours away.
+    - **R19:** the synthetic Intan writes `rhs/<session_id>_rhs/`, and a recording is resolved with
+      `find_recordings("rhs", session_dir / "rhs")`.
+    - **R20:** the cache holds only edge sample indices. Each rate is read from its sidecar (`info.rhs`, the
+      NI's `.meta`) on every call, so a changed header with unchanged data never returns a stale rate.
+    - **R21:** under strobes, `n_barcodes_decoded` keeps the true count of barcodes Intan decoded, and
+      `n_barcodes_matched` stays 0. The count is nonzero only where a sync box also ran (3b-3's case).
+    - **R22:** a session with one unanchorable Intan recording is tier D, though its other recording is placed.
+      This matches today's rule that any rejected file makes a session D (§6.4: "as an unfitted system is
+      today").
+    - **Left to later parts:** a partial sync box as the cross-check (3b-3), an NI restart (3c), and the eye
+      tracker and cameras (part 4, amendment 51).
