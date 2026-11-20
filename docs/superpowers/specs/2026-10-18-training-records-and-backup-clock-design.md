@@ -855,3 +855,16 @@ spike behind amendment 49, is in `~/.cache/wl-preproc-scratch/2026-10-30-part3b/
     - **wl.works** is sent the key's name and shape when this spec is approved, before anything changes (its
       `lab-host-protocol-wl-preproc.md` asks for it with 3b's spec). It also hears of tier N, the
       `reference_source` values `rig_clock` and `nidq_meta`, and the listing's `clock` at 3b-1's merge.
+51. **Under the NI, a device with no way onto its clock makes the session tier D** (the requester's choice of
+    2026-11-19, over leaving it out and publishing). 3b-1 places only the SpikeGLX files on the NI's clock. The
+    eye tracker and the cameras wait for lab time's host stamps, and Intan for 3b-2. A session that recorded
+    any of them is tier D, refused for publishing, as an unfitted system makes any session today
+    (`TimingProvenance.make`'s `failed`); it publishes once a later part can place every device it had. Asked
+    at the same time, the requester made lab time a priority, "so that data can be synced in a pinch".
+    - **wl-xcon** was asked to plan its three inputs (its XC-391 to XC-393), and holds them for its PI's next
+      check-in.
+    - **wl.works** answered that ordinary NTP (chrony) on the rig and eye-tracker computers suffices until row
+      60's appliance exists. It also said that configuring those computers is wl-orchestrator's machine stacks'
+      work, and the lab owner's to approve.
+    - **wl-sync or the lab** owe the eye tracker's per-frame host stamps. wl-sync had no live session to tell
+      on 2026-11-19.
