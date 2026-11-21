@@ -394,14 +394,21 @@ def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
     return session.codes()
 
 
-@functools.lru_cache(maxsize=8)
+# Ruling R16: every eye stage and every barcode-placed coverage key asks for
+# the covered span, so a backlog of more NI sessions than the cache holds
+# decoded each NI file's 12 h barcode line once per table. An entry is one
+# file's barcodes, a few KB.
+NI_BARCODE_CACHE_FILES = 256
+
+
+@functools.lru_cache(maxsize=NI_BARCODE_CACHE_FILES)
 def _ni_barcodes(path: str, size: int, mtime_ns: int) -> tuple[tuple[int, float], ...]:
     """One NI file's gap-clear barcodes, `(value, seconds from its first
     sample)`, decoded once per file version (the size and mtime key it, as
-    `_syncbox_log` keys its own reads)."""
-    scans = segments.scan_system("spikeglx", Path(path).parent)
-    return tuple((barcode.value, barcode.start_us / 1e6)
-                 for scan in scans if scan.path == Path(path) for barcode in scan.barcodes)
+    `_syncbox_log` keys its own reads). That file alone is decoded, never
+    the session's other NI files (ruling R16)."""
+    scan = segments.scan_recording("spikeglx", Path(path))
+    return tuple((barcode.value, barcode.start_us / 1e6) for barcode in scan.barcodes)
 
 
 def ni_barcodes(session_dir: Path) -> dict[int, float]:

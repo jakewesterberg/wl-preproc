@@ -555,26 +555,25 @@ def scan_system(system: str, system_dir: Path) -> list[RecordingScan]:
     barcodes grouped by recording, so extracting twice would double the I/O on
     the largest files in the pipeline to produce identical bytes.
     """
-    from wl_sync.barcode import decode_edges
-
-    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps, find_recordings
+    from wl_preproc.timebase.extract import find_recordings
 
     if system == "syncbox":
         return syncbox_scans(system_dir.parent) if find_recordings(system, system_dir) else []
-    scans = []
-    for path in find_recordings(system, system_dir):
-        stream = EXTRACTORS[system](path)
-        decoded = decode_edges(list(stream.edges))
-        kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
-        scans.append(
-            RecordingScan(
-                path=path,
-                stream=stream,
-                barcodes=kept,
-                n_barcodes_dropped=len(decoded) - len(kept),
-            )
-        )
-    return scans
+    return [scan_recording(system, path) for path in find_recordings(system, system_dir)]
+
+
+def scan_recording(system: str, path: Path) -> RecordingScan:
+    """Extract and decode one recording of one system other than the sync box:
+    `scan_system`'s step for each file, and alone where one file is wanted
+    (`timebase/clock.py::_ni_barcodes`, the NI's first file, ruling R16)."""
+    from wl_sync.barcode import decode_edges
+
+    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps
+
+    stream = EXTRACTORS[system](path)
+    decoded = decode_edges(list(stream.edges))
+    kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
+    return RecordingScan(path=path, stream=stream, barcodes=kept, n_barcodes_dropped=len(decoded) - len(kept))
 
 
 def rate_fit_from_row(row: dict) -> RateFit:

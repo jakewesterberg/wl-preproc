@@ -594,3 +594,30 @@ def test_every_stage_reads_the_sessions_time_through_the_clock():
         for number in _reaching(path.read_text(encoding="utf-8"))
     )
     assert reaching == []
+
+
+def test_the_nis_covered_span_decodes_only_its_first_file(tmp_path, monkeypatch):
+    """Ruling R16: the NI's barcode reference is its first file's, so a
+    session with a second NI file, a restart, decodes the first alone. Each
+    NI file's barcode line is extracted through `extract.EXTRACTORS`, counted
+    here by a wrapper that still extracts, and the cache keeps enough files
+    for a backlog of sessions."""
+    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE, RestartSpec
+    from wl_preproc.timebase import clock, extract
+
+    session_dir, _truth = _generated(tmp_path, NI_CLOCK_RECIPE.model_copy(
+        update={"systems": ("syncbox", "spikeglx"), "spikeglx_restart": RestartSpec(at_s=11.0, gap_s=0.5)}))
+    first, _second = clock.nidq_files(session_dir)
+    extracted = []
+    real = extract.EXTRACTORS["spikeglx"]
+
+    def counted(path):
+        extracted.append(path)
+        return real(path)
+
+    monkeypatch.setitem(extract.EXTRACTORS, "spikeglx", counted)
+    clock._ni_barcodes.cache_clear()
+    span = clock.Clock(source="nidq", session_dir=session_dir).covered_span()
+    assert span is not None
+    assert extracted == [first]
+    assert clock._ni_barcodes.cache_info().maxsize >= 256
