@@ -25,7 +25,7 @@ Pure: no DataJoint, no I/O, as `timebase/coverage.py` is."""
 
 from __future__ import annotations
 
-from wl_preproc.contracts.events import DecodedEvent, Marker, SimpleEvent
+from wl_preproc.contracts.events import DecodeError, DecodedEvent, Marker, SimpleEvent
 from wl_preproc.events.assemble import assemble
 from wl_preproc.events.rigruns import RigRuns
 from wl_preproc.events.rigtrials import RigRecord
@@ -56,22 +56,27 @@ def unreached_end(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_tri
     """None when `decoded` reaches the end of the session's last run, else
     one sentence saying what of it is missing. Rule 1's test, the sync
     box's (amendment 42: the NI keeps time only when its log "ends before the
-    session's last run does"). A log that decodes `SESSION_END` did not end
-    before it, nor, with the rig's record, one that decodes the last run's
+    session's last run does"). A log that ends with `SESSION_END` did not end
+    before it, nor, with the rig's record, one that ends with the last run's
     `RUN_END`, whatever was lost or failed its checksum before them (the
-    final review's I1). Otherwise, with the rig's record, the last run is
-    the one of the highest number it names: its last trial line must be an
+    final review's I1). An end code ends the log only when it is the last
+    decoded code event, or only `BLOCK_END` and `RUN_END` follow it (decode
+    errors are not code events): a stray one read from a lost escape word,
+    with the log going on after it, shows nothing (amendment 62). Otherwise, with the rig's record, the
+    last run is the one of the highest number it names: its last trial line must be an
     assembled trial that closes (a missing `RUN_END` allowed), or, with no
     trial lines, the run must be present. With none, `SESSION_END` must be
     decoded. A gap before the last run, a log that starts late, or a gap
     inside the last run that resumes before its last trial reach its end."""
     named = rig_runs.runs if rig_runs is not None else ()
-    unended = _markers_unheld(decoded, (Marker.SESSION_END,))
-    if not named or unended is None:
-        return unended
+    ending, tail = _ending(decoded)  # whether SESSION_END ends the log; the times of its trailing run/block ends
+    if ending:
+        return None
+    if not named:
+        return _markers_unheld(decoded, (Marker.SESSION_END,)) or "its codes do not end with SESSION_END"
     last = max(named, key=lambda run: run.number)
     assembly = assemble(decoded)
-    if any(run.run_number == last.number and run.end_s is not None for run in assembly.runs):
+    if any(run.run_number == last.number and run.end_s in tail for run in assembly.runs):
         return None
     lines = _trial_lines(named, rig_trials).get(last.number, [])
     if lines:
@@ -79,6 +84,19 @@ def unreached_end(decoded: list[DecodedEvent], rig_runs: RigRuns | None, rig_tri
     if last.number not in {run.run_number for run in assembly.runs}:
         return f"run {last.number} is not in its codes"
     return None
+
+
+def _ending(decoded: list[DecodedEvent]) -> tuple[bool, set[float]]:
+    """Whether `SESSION_END` ends the log, and the times of its trailing
+    `BLOCK_END`/`RUN_END` codes: walking back from the last code event past
+    those, then one `SESSION_END` before them. Decode errors are skipped."""
+    codes = [event for event in decoded if not isinstance(event, DecodeError)]
+    trailing = (Marker.BLOCK_END.value, Marker.RUN_END.value)
+    tail: set[float] = set()
+    while codes and isinstance(codes[-1], SimpleEvent) and codes[-1].code in trailing:
+        tail.add(codes.pop().time_s)
+    ended = bool(codes) and isinstance(codes[-1], SimpleEvent) and codes[-1].code == Marker.SESSION_END.value
+    return ended, tail
 
 
 def _markers_unheld(decoded: list[DecodedEvent], markers: tuple[Marker, ...]) -> str | None:

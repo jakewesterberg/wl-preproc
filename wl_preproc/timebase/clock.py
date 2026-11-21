@@ -106,7 +106,7 @@ REASON_WIDTH = 255
 # rather than reused (the final review's I2). Bump it whenever `choose`, or
 # anything it reads a session through (`timebase/holding.py`, the NI's
 # reader, the sync box's), changes which clock it chooses or why.
-CHOICE_RULES = "3b-1"
+CHOICE_RULES = "3b-3"
 
 
 def clipped(reason: str, width: int = REASON_WIDTH) -> str:
