@@ -68,8 +68,8 @@ def _errors_of(report: dict, key: dict) -> list[str]:
 def landed(dj_conn, prefix, tmp_path_factory):
     """Each session by name, `(recipe, truth, key, session_dir)`, after one
     daemon pass: the NI alone, the same run with the sync box beside it, the
-    NI with the eye tracker, the NI restarted, and the NI with a sync box log
-    that ends inside the last run. Deleted afterwards, as
+    NI with the eye tracker, the NI restarted, and the NI with a sync box that
+    stops inside the last run. Deleted afterwards, as
     `test_session_clock.py` deletes its own."""
     from wl_preproc import daemon
     from wl_preproc.schema import pipeline
@@ -77,7 +77,6 @@ def landed(dj_conn, prefix, tmp_path_factory):
     from wl_preproc.synth.session import generate_session
 
     from tests.schema.test_eye_populate import _land
-    from tests.timebase.test_clock import _cut_the_sync_box_log
 
     daemon.activate_all(prefix=prefix)
     serial = new_serial()
@@ -93,8 +92,6 @@ def landed(dj_conn, prefix, tmp_path_factory):
         root = tmp_path_factory.mktemp(name)
         truth = generate_session(root, recipe)
         session_dir = root / recipe.session_id
-        if name == "partial":
-            _cut_the_sync_box_log(session_dir, 12.0)
         if name == "corrupt":
             # Word 6 is a payload word of the first block's start, so its
             # checksum fails; the run, and every trial, are still there.
@@ -108,7 +105,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("synced", systems=("syncbox", "spikeglx"))
     land("ohdpi", systems=("spikeglx", "ohdpi"))
     land("restart", spikeglx_restart=RestartSpec(**RESTART))
-    land("partial", systems=("syncbox", "spikeglx"))
+    # The box stops as a Pi that lost power, so no device carries a barcode
+    # after it (the plan's decision 4).
+    land("partial", systems=("syncbox", "spikeglx"), syncbox_stop_s=12.0)
     land("corrupt")
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
@@ -257,23 +256,25 @@ def test_a_second_ni_file_is_a_restart_and_the_session_is_tier_d(landed):
     _assert_failed_tier_d(key, rejected=1)
 
 
-def test_a_partial_sync_box_log_under_the_ni_is_unfittable_until_3b_3(landed):
-    """Amendments 40 and 47: a sync box that landed but whose log ends early
-    is 3b-3's cross-check. Until then it has no way onto the NI's clock, and
-    the session is tier D."""
+def test_a_sync_box_that_stops_under_the_ni_is_fitted_by_its_barcodes(landed):
+    """Amendments 40, 47 and 56, and the plan's decision 5: a sync box that
+    stopped inside the last run is fitted to the NI by the NI's own barcodes,
+    over the part it covered, and the session is tier N where 3b-1 made it D."""
     from wl_preproc.schema import core, timebase
 
     _recipe, _truth, key, _session_dir = landed["partial"]
     assert _clock(key) == "nidq"
     fit = (timebase.SystemTimebase & key & {"system": "syncbox"}).fetch1()
-    assert (fit["fit_status"], fit["time_source"]) == ("unfittable", "none")
-    assert {row["reason"] for row in (core.RejectedSegment & key & {"system": "syncbox"}).to_dicts()} == {
-        "unfitted_system"}
-    # SpikeGLX is on the NI's clock, the barcode its NI carries unused.
+    assert (fit["fit_status"], fit["time_source"]) == ("fitted", "barcode")
+    assert len(core.Segment & key & {"system": "syncbox"}) == 1
+    assert not len(core.RejectedSegment & key)
+    # SpikeGLX is on the NI's clock, on the identity map.
     spikeglx = (timebase.SystemTimebase & key & {"system": "spikeglx"}).fetch1()
     assert (spikeglx["fit_status"], spikeglx["time_source"]) == ("fitted", "clock")
     assert (core.Segment & key & {"system": "spikeglx"}).fetch1("offset_s") == 0.0
-    _assert_failed_tier_d(key, rejected=len(core.RejectedSegment & key))
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "N", row
+    assert (row["n_systems_aligned"], row["n_rejected_segments"]) == (2, 0)
 
 
 def test_an_ni_session_whose_codes_hold_every_run_is_tier_n(landed):

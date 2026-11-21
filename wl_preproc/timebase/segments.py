@@ -98,20 +98,33 @@ NI_RESTARTED = "ni_restarted"
 # count, go to that module's log (part 3b-2; amendment 49).
 NO_STROBE_ANCHOR = "no_strobe_anchor"
 
+# Not a verdict `classify_segment` can reach either: under the NI's clock a
+# file carrying the sync box's barcodes is placed by the NI's own
+# (`timebase/clock.py::ni_barcodes`), and one that decoded barcodes, none of
+# them the NI's, was recorded while the box ran but outside the NI's record of
+# it, so nothing places it. Under the NI, and only there, it does not fail the
+# session, nor does a system whose every file is it; a file that decoded no
+# barcode at all is still `no_barcode`, and fails (part 3b-3; amendment 57).
+OUTSIDE_COVERED_SPAN = "outside_covered_span"
+
 #: Every reason `RejectedSegment.reason` can hold, and where each is
 #: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
 #: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
 #: exists for it to inherit, or, under the NI's clock, when the system has no
-#: way onto it. `NO_SHARED_BARCODE` is decided per FILE, in `Segment.make`,
+#: way onto it: no strobes, or barcodes the NI did not record (amendments 51
+#: and 54). `NO_SHARED_BARCODE` is decided per FILE, in `Segment.make`,
 #: against session time's reference. `GAP_CORRUPTED` is decided per FILE, in
 #: `Segment.make`, overriding the verdict `classify_segment` returned for that
 #: file rather than adding a fact `classify_segment` itself lacked the inputs
 #: to see. `NI_RESTARTED` is decided per FILE, in `Segment.make`, under the
 #: NI's clock. `NO_STROBE_ANCHOR` is decided per FILE, in `Segment.make`,
 #: under the NI's clock, for an Intan recording whose strobes cannot anchor.
+#: `OUTSIDE_COVERED_SPAN` is decided per FILE, in `Segment.make`, under the
+#: NI's clock, against the NI's barcodes, where `NO_SHARED_BARCODE` would be
+#: under the sync box's.
 REJECTION_REASONS: frozenset[str] = frozenset(
     {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED,
-     NO_STROBE_ANCHOR}
+     NO_STROBE_ANCHOR, OUTSIDE_COVERED_SPAN}
 )
 
 

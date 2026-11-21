@@ -493,13 +493,18 @@ class Segment(dj.Computed):
             segments.rate_fit_from_row(fit) if fit["fit_status"] == "fitted" else None
         )
         clock = clock_for(session_key, session_dir)
-        # Under the NI's clock nothing is placed by a barcode (design spec
+        # Under the NI's clock (design spec
         # `2026-10-18-training-records-and-backup-clock-design.md`, amendments
-        # 40, 50 and 51): SpikeGLX's first NI file, by gate and trigger and
-        # never by path, is session time itself, and every other system is
-        # unfitted, with no way onto it yet.
+        # 40, 50, 51 and 54 to 57) SpikeGLX's first NI file, by gate and
+        # trigger and never by path, is session time itself, and Intan is
+        # placed by its strobes. The systems carrying the sync box's barcodes
+        # are placed by the NI's own, in the barcode loop below, where
+        # `SystemTimebase` fitted them by those (`time_source` 'barcode');
+        # where it did not, the NI decoded none, and they are unfitted, as in
+        # 3b-1 (the plan's decision 2).
         on_the_ni = clock.source == "nidq"
-        reference = {} if on_the_ni else clock.barcode_reference()
+        by_the_nis_barcodes = on_the_ni and fit["time_source"] == "barcode"
+        reference = clock.barcode_reference() if not on_the_ni or by_the_nis_barcodes else {}
         first_ni = nidq_files(session_dir)[0] if on_the_ni else None
 
         accepted, rejected = [], []
@@ -534,7 +539,7 @@ class Segment(dj.Computed):
                     "n_barcodes_dropped": scan.n_barcodes_dropped,
                 })
                 continue
-            if on_the_ni:
+            if on_the_ni and not by_the_nis_barcodes:
                 if rate is None:
                     rejected.append({**key, "file_path": file_path, "reason": segments.UNFITTED_SYSTEM})
                 elif scan.path != first_ni:
@@ -575,8 +580,12 @@ class Segment(dj.Computed):
             # whose every recording did has no fit for that reason, not for a
             # mostly-dead cable (design spec
             # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
+            # Under the NI's clock the reference is the NI's barcodes, and a
+            # file sharing none was recorded outside the NI's record of the
+            # box's (amendment 57).
             if not any(barcode.value in reference for barcode in scan.barcodes):
-                rejected.append({**key, "file_path": file_path, "reason": segments.NO_SHARED_BARCODE})
+                reason = segments.OUTSIDE_COVERED_SPAN if on_the_ni else segments.NO_SHARED_BARCODE
+                rejected.append({**key, "file_path": file_path, "reason": reason})
                 continue
             if rate is None:
                 rejected.append(
