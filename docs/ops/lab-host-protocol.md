@@ -588,9 +588,15 @@ Authorization: Bearer <token>
   - `subject`, `session_datetime` (naive, UTC), and `session_name`, the rig's `YYYY-MM-DD_NN`;
   - `tier`, the timing tier (`A` to `D`, or `N` where the NI kept the session's time, its codes hold
     every run and nothing failed; `D` quarantined), or `null` until computed (under the NI, Intan is placed
-    by its strobes, so a session with Intan can be `N`; a session with the eye tracker or the cameras under
-    the NI is still `D`); and
-    `rejected_segments`, each file this host could not use, with its reason;
+    by its strobes, so a session with Intan can be `N`; where a sync box recorded part of the session, the
+    NI's own barcodes place the box, the eye tracker and the cameras over that part, and the box's codes there
+    are checked against the NI's, so such a session can be `N` too; a session with the eye tracker or the
+    cameras under the NI where the NI recorded no barcode, or with an eye or camera file that decoded none, is
+    still `D`);
+    and
+    `rejected_segments`, each file this host could not use, with its reason (under the NI,
+    `outside_covered_span` is a file none of whose barcodes the NI recorded, so it lies outside the part the
+    sync box covered: it is left out and named, and does not make the session `D`);
   - `runs`, measured from the recording's `RUN_START` (`0x8006`) and `RUN_END` (4): `run_number`
     (wl-xcon's `run_in_session`), `task_code`, `task` (wl-xcon's name for it), `start_s` and
     `end_s` on the recording's clock, `closed`, wl-xcon's `stopped_because` and `stop_kind`,
