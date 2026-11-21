@@ -156,6 +156,34 @@ def test_code_agreement_tolerates_a_dropped_word_at_the_head():
     )
 
 
+
+def test_containment_of_an_exact_part_is_one():
+    """Part 3b-3, the plan's decision 3: a partial sync box's words, every one
+    found in order in the NI's, are wholly contained."""
+    codes = list(range(1000, 1100))
+    assert agreement.code_containment(codes, codes) == pytest.approx(1.0)
+    assert agreement.code_containment([], codes) == 1.0
+
+
+def test_containment_counts_only_the_part():
+    """The box recorded 10 words of a session of 1000. Containment divides by
+    the part, so the words the box never recorded do not count against it;
+    `code_agreement` divides by the longer stream and would read the same
+    honest part as 1% agreement."""
+    whole = list(range(1000, 2000))
+    part = whole[400:410]
+    assert agreement.code_containment(part, whole) == pytest.approx(1.0)
+    assert agreement.code_agreement(part, whole) == pytest.approx(0.01)
+
+
+def test_containment_tolerates_a_dropped_word_in_the_whole():
+    """A word of the part the whole lacks is one of the part's not found: the
+    rest still match in order, on the same content matcher."""
+    whole = list(range(1000, 2000))
+    part = whole[400:410]
+    dropped = whole[:405] + whole[406:]
+    assert agreement.code_containment(part, dropped) == pytest.approx(9 / 10)
+
 def test_min_code_word_slot_s_tracks_synth_timelines_spacing_or_flags_the_drift():
     """Fix round 4 (coordinator review): a drift detector, not a coupling.
 

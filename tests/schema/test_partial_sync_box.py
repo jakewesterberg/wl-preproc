@@ -22,6 +22,15 @@ STOP_S = 9.0
 # (`wl_sync.barcode.decode_edges` needs an edge past a frame's end).
 NI_STARTS_AT_S = 0.0005
 CAMERA_STOPS_AT_S = 1.1
+# A desync inside the box's part: it opens on the code word at 3.0 s, the last
+# the box recorded before it, and the box lost the two words after it, the
+# 3.001 s trial number escape and its first payload word, so the next word it
+# recorded, at 3.003 s, closes it (wl-sync's note 8).
+DESYNC_FROM_S = 3.0
+DESYNC_LOST_UNTIL_S = 3.003
+# The box's code word, by its number in its log, read as another: the first
+# trial's first trial-number payload word, at 0.011 s.
+FLIPPED_BOX_WORD = 11
 
 
 def _start_the_ni_late(session_dir, at_s: float) -> None:
@@ -53,6 +62,48 @@ def _stop_the_camera(session_dir, at_s: float) -> None:
     sidecar["frame_count"] = kept
     sidecar["video_files"][0]["last_frame_index"] = kept - 1
     path.write_text(yaml.safe_dump(sidecar, sort_keys=False))
+
+
+def _box_tick_us(time_s: float) -> int:
+    """Session time `time_s` as the synthetic box's tick: undrifted, after
+    `SYNCBOX_PRE_ROLL_S` (`synth/syncbox.py::_write_segment`)."""
+    from wl_preproc.synth.syncbox import SYNCBOX_PRE_ROLL_S
+
+    return int(round((time_s + SYNCBOX_PRE_ROLL_S) * 1e6))
+
+
+def _box_log(session_dir):
+    (path,) = sorted((session_dir / "syncbox").glob("seg-*.log"))
+    return path
+
+
+def _lose_the_box_words(session_dir, after_s: float, before_s: float) -> None:
+    """The box's `W` records strictly between session times `after_s` and
+    `before_s` gone from its log, as a box that lost them leaves it: the
+    synthetic writer writes an `L` record but keeps every code word
+    (`synth/syncbox.py::_write_segment`), which no box does. Every other line
+    as written."""
+    path = _box_log(session_dir)
+    low, high = _box_tick_us(after_s), _box_tick_us(before_s)
+    lines = path.read_text().splitlines(keepends=True)
+    kept = [line for line in lines
+            if not (line.startswith("W,") and low < int(line.split(",")[1]) < high)]
+    assert len(lines) - len(kept) == 2, "the fixture's desync is meant to lose two code words"
+    path.write_text("".join(kept))
+
+
+def _flip_a_box_word(session_dir, word_index: int) -> None:
+    """The box's code word number `word_index` read as another, as
+    `tests/schema/test_ni_clock.py::_flip_a_payload_word` does the NI's: its
+    `W,tick,word` record's word has its lowest bit flipped, every other line
+    as written."""
+    path = _box_log(session_dir)
+    lines = path.read_text().splitlines(keepends=True)
+    words = [number for number, line in enumerate(lines) if line.startswith("W,")]
+    number = words[word_index]
+    kind, tick, word = lines[number].rstrip("\n").split(",")
+    lines[number] = f"{kind},{tick},{int(word) ^ 1}\n"
+    path.write_text("".join(lines))
 
 
 def _clear_the_ni_barcode_line(session_dir) -> None:
@@ -102,11 +153,14 @@ def landed(dj_conn, prefix, tmp_path_factory):
     with the NI started after the box's first barcode and the camera stopped
     before its third, so the camera's barcodes all precede the NI; `dead_ni_line`,
     the same as `partial` with the NI's barcode line dead; `dead_cable`, the
-    same as `partial` with the camera's barcode line dead; and `synced`, the
-    box running the whole session and keeping time. Deleted afterwards."""
+    same as `partial` with the camera's barcode line dead; `box_loss`, the
+    same as `partial` with a desync inside the box's part and the two code
+    words it lost gone from the box's log; `disagree`, the same as `partial`
+    with one of the box's code words read as another; and `synced`, the box
+    running the whole session and keeping time. Deleted afterwards."""
     from wl_preproc import daemon
     from wl_preproc.schema import pipeline
-    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE
+    from wl_preproc.synth.recipe import NI_CLOCK_RECIPE, SyncBoxLossSpec
     from wl_preproc.synth.session import generate_session
 
     from tests.schema.test_eye_populate import _land
@@ -133,6 +187,10 @@ def landed(dj_conn, prefix, tmp_path_factory):
             _clear_the_ni_barcode_line(session_dir)
         if name == "dead_cable":
             _kill_the_camera_cable(session_dir)
+        if name == "box_loss":
+            _lose_the_box_words(session_dir, DESYNC_FROM_S, DESYNC_LOST_UNTIL_S)
+        if name == "disagree":
+            _flip_a_box_word(session_dir, FLIPPED_BOX_WORD)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
@@ -140,6 +198,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("before_ni", syncbox_stop_s=STOP_S)
     land("dead_ni_line", syncbox_stop_s=STOP_S)
     land("dead_cable", syncbox_stop_s=STOP_S)
+    land("box_loss", syncbox_stop_s=STOP_S,
+         syncbox_losses=(SyncBoxLossSpec(cause="desync", count=2, from_s=DESYNC_FROM_S),))
+    land("disagree", syncbox_stop_s=STOP_S)
     land("synced")
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
@@ -233,9 +294,6 @@ def test_a_partial_sync_box_session_is_tier_n_and_records_its_span(landed):
     assert span is not None
     assert row["covered_start_s"] == pytest.approx(span[0], abs=1e-9)
     assert row["covered_end_s"] == pytest.approx(span[1], abs=1e-9)
-    # The NI's codes are the session's: the box's are not read as them.
-    assert row["n_full_code_records"] == 1
-    assert row["event_code_agreement"] is None
 
 
 def test_a_file_whose_barcodes_precede_the_ni_is_outside_and_does_not_fail(landed):
@@ -341,5 +399,89 @@ def test_the_passes_report_no_error(landed):
     """Every stage runs on these sessions without an error: the pass's report
     holds no error but those naming another session, a stage-wide one
     included."""
-    for name in ("partial", "before_ni", "synced"):
+    for name in ("partial", "before_ni", "box_loss", "disagree", "synced"):
         assert _errors_of(landed.report, landed.key(name)) == [], name
+
+
+def _box_part(session_dir, reference) -> list[tuple[float, int]]:
+    """The box's code words the cross-check reads, found here from the box's
+    log as the plan's decision 3 states it: in box time, from the box's time
+    of the smallest NI-reference value it holds to that of the largest, less
+    every loss window."""
+    import math
+
+    from wl_preproc.timebase import segments
+
+    box = segments.read_syncbox_session(session_dir)
+    own = box.reference()
+    shared = set(own) & set(reference)
+    low, high = own[min(shared)], own[max(shared)]
+    windows = [(-math.inf if loss.start_s is None else loss.start_s,
+                math.inf if loss.stop_s is None else loss.stop_s) for loss in box.losses()]
+    return [(time_s, word) for time_s, word in box.codes()
+            if low <= time_s <= high and not any(start < time_s < stop for start, stop in windows)]
+
+
+def test_a_partial_box_that_agrees_records_its_agreement(landed):
+    """Amendment 59, as the plan's decision 3 reads it: the box's code words
+    over what it recorded are all found, in order, in the NI's, so the
+    containment is kept as the agreement, with two full-code records. The
+    box's words after its last barcode the NI holds, and every word after it
+    stopped, are no part of it: `code_agreement` over the whole of both
+    streams would read the words the box never recorded as disagreement."""
+    from wl_preproc.events import agreement
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import clock_for, nidq_codes, nidq_files
+
+    key = landed.key("partial")
+    session_dir = landed.session_dir("partial")
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "N", row
+    assert row["n_full_code_records"] == 2
+    assert row["event_code_agreement"] == pytest.approx(1.0)
+    assert row["decode_errors"] == 0
+    # The fixture is what it says: the box recorded part of the NI's stream.
+    part = [word for _time_s, word in _box_part(session_dir, clock_for(key, session_dir).barcode_reference())]
+    whole = [word for _time_s, word in nidq_codes(nidq_files(session_dir)[0])]
+    assert part and len(part) < len(whole)
+    assert agreement.code_agreement(part, whole) < agreement.AGREEMENT_THRESHOLD
+
+
+def test_a_box_loss_inside_its_part_does_not_fail_the_cross_check(landed):
+    """Amendments 59 and 60: a desync the next code word closes, inside the
+    box's part and inside a measured run, which under the sync box's clock
+    fails the timing check. Under the NI its window is out of the
+    cross-check, and the box's losses are reported, never failing: the
+    session is N, the box's words agreeing."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase import segments
+
+    key = landed.key("box_loss")
+    session_dir = landed.session_dir("box_loss")
+    assert _clock(key) == "nidq"
+    (desync,) = [loss for loss in segments.read_syncbox_session(session_dir).losses() if loss.cause == "desync"]
+    assert (desync.start_s, desync.stop_s) == pytest.approx((DESYNC_FROM_S, DESYNC_LOST_UNTIL_S), abs=1e-6)
+    (stored,) = (timebase.SyncBoxSegment.Loss & key).to_dicts()
+    assert stored["cause"] == "desync"
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "N", row
+    assert row["n_full_code_records"] == 2
+    assert row["event_code_agreement"] == pytest.approx(1.0)
+
+
+def test_a_box_whose_codes_disagree_is_d(landed):
+    """Amendment 59: one of the box's words over its part is not the NI's, so
+    fewer than `AGREEMENT_THRESHOLD` of them are found in the NI's stream and
+    the session is D. The box's own decode error does not count: the tier's
+    `decode_errors` stays the NI's, none."""
+    from wl_preproc.events import agreement
+    from wl_preproc.schema import timebase
+
+    key = landed.key("disagree")
+    assert _clock(key) == "nidq"
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "D", row
+    assert row["n_full_code_records"] == 2
+    assert row["event_code_agreement"] < agreement.AGREEMENT_THRESHOLD
+    assert row["decode_errors"] == 0
+    assert (row["n_systems_aligned"], row["n_rejected_segments"]) == (4, 0)

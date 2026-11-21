@@ -800,7 +800,8 @@ class TimingProvenance(dj.Computed):
             from wl_preproc.timebase.holding import unheld
 
             try:
-                decoded = decode_stream(nidq_codes(nidq_files(session_dir)[0]))
+                ni_pairs = nidq_codes(nidq_files(session_dir)[0])
+                decoded = decode_stream(ni_pairs)
                 rig_runs, rig_trials = _rig_record(session_dir, key["subject"])
             except (FileNotFoundError, ValueError, IndexError, NoClock):
                 pass  # the codes cannot be read: not held, so not tier N
@@ -808,6 +809,23 @@ class TimingProvenance(dj.Computed):
                 decode_errors = sum(1 for event in decoded if isinstance(event, DecodeError))
                 n_full_code_records = 1
                 ni_holds_every_run = unheld(decoded, rig_runs, rig_trials) is None
+                # The cross-check (amendment 59, as the plan's decision 3
+                # reads it): where the box was placed by the NI's barcodes,
+                # its words over what it recorded must all be found, in
+                # order, in the NI's stream. Containment, not agreement: the
+                # box's words are a part of the NI's whole, and the NI's
+                # words from where the box never recorded are no
+                # disagreement. Its own decode errors do not count; the
+                # tier's `decode_errors` stays the NI's. With no box placed,
+                # or none of its words in what the NI covers, the NI stands
+                # alone, as in 3b-1.
+                if any(fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits):
+                    part = _box_words_recorded(
+                        session_dir, clock_for(session_key, session_dir).barcode_reference())
+                    if part:
+                        event_code_agreement = agreement.code_containment(
+                            part, [code for _, code in ni_pairs])
+                        n_full_code_records = 2
             # What the NI's barcodes cover, stored for the record and the NWB
             # file's notes (amendment 55; the plan's decision 1). None where
             # it decoded none.
@@ -935,7 +953,8 @@ class TimingProvenance(dj.Computed):
             decode_errors=decode_errors,
         )
         if under_the_ni:
-            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 else "D"
+            box_agrees = event_code_agreement is None or event_code_agreement >= agreement.AGREEMENT_THRESHOLD
+            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 and box_agrees else "D"
         else:
             tier = "D" if failed else agreement.resolve_tier(inputs)
 
@@ -975,6 +994,44 @@ class TimingProvenance(dj.Computed):
                 "covered_end_s": None if covered_span is None else covered_span[1],
             }
         )
+
+
+def _box_words_recorded(session_dir: Path, reference: dict[int, float]) -> list[int]:
+    """The sync box's code words over what it recorded of an NI-timed
+    session, the cross-check's part (amendment 59; the plan's decision 3),
+    cut wholly in the box's own session time, so no box-to-NI fit enters and
+    a split clock's drift cannot move a word across an edge:
+
+    - from the box's time of the smallest NI-reference value it also holds
+      to that of the largest, both included: what the NI's barcodes cover;
+    - less every loss window of session time's clock (`SyncBoxSession.losses`:
+      its `L` records and its gaps), a window open at both ends, since its
+      ends are records the box captured (`segments.timing_check_fails`), an
+      end None running to infinity.
+
+    A loss of a segment outside session time's clock is placed nowhere, and
+    its words are not in `codes()`, so it cuts nothing. Empty where the box
+    holds no NI-reference value, or its log cannot be read."""
+    import math
+
+    from wl_preproc.timebase import segments
+
+    try:
+        box = segments.read_syncbox_session(session_dir)
+        own = box.reference()
+        codes = box.codes()
+        losses = box.losses()
+    except (FileNotFoundError, ValueError):
+        return []
+    shared = own.keys() & reference.keys()
+    if not shared:
+        return []
+    low, high = own[min(shared)], own[max(shared)]
+    windows = [(-math.inf if loss.start_s is None else loss.start_s,
+                math.inf if loss.stop_s is None else loss.stop_s)
+               for loss in losses if box.in_session_time(loss.index)]
+    return [word for time_s, word in codes
+            if low <= time_s <= high and not any(start < time_s < stop for start, stop in windows)]
 
 
 # Why a session timed before its clock was recorded is given the sync box's
