@@ -3,7 +3,7 @@ slug: wl-preproc
 class: pipeline
 lifecycle: active
 visibility: private
-remote: https://github.com/jakewesterberg/wl-preproc.git
+remote: https://github.com/westerberg-lab-be/wl-preproc.git
 
 summary: >-
   Aligns LFP, multiunit, Kilosort output, eye tracking and task codes into one

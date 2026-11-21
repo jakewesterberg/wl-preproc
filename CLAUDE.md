@@ -5,7 +5,7 @@
 
 Update it, then run:
 
-    pip install git+https://github.com/jakewesterberg/wl-manifest.git && wl-check
+    pip install git+https://github.com/westerberg-lab-be/wl-manifest.git && wl-check
 
 `wl-check` reads only this repository's manifest and fails only on this
 repository's faults. It never reads another package, and once installed it

@@ -29,5 +29,5 @@ jobs:
       # wl-manifest can turn this red without anything here changing.
       - name: This package's manifest is true
         run: |
-          pip install "wl-manifest @ git+https://github.com/jakewesterberg/wl-manifest.git@6552b4a92ed19af97cb8c717dfcb8124cbc0b18b"
+          pip install "wl-manifest @ git+https://github.com/westerberg-lab-be/wl-manifest.git@6552b4a92ed19af97cb8c717dfcb8124cbc0b18b"
           wl-check .

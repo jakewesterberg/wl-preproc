@@ -232,8 +232,8 @@ read them.
   manifest's declared files. Please confirm rather than take that as checked.)
 - *Why:* the training records are how a later reader sees what the animal experienced and why it changed.
   They are in every session; nothing reads them today (no match for these file names in `wl_preproc/`).
-- *From:* [XC-288 spec §6 and §7](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-10-xc288-training-records-design.md#7-which-build-carries-what)
-  and [the pending file's section](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/pending-wl-preproc-amendments.md).
+- *From:* [XC-288 spec §6 and §7](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-10-10-xc288-training-records-design.md#7-which-build-carries-what)
+  and [the pending file's section](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/pending-wl-preproc-amendments.md).
 - *Not asked:* publishing or reading the agent's file; any new escape or code; any timing claim (the rig's
   event-log instants are wall-clock bookkeeping, the sync box stays the timing ground truth, spec §3.11).
 
@@ -275,7 +275,7 @@ blocks engine build F; numbering waits on wl-xcon's XC-207 (block plans and cond
   goes out, and the trial table should carry an **"overridden"** flag so grouping by condition cannot
   silently include overridden trials.
 - *Why:* otherwise an analysis grouping by condition mixes trials the experimenter changed mid-run.
-- *From:* [engine spec §14.7 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
+- *From:* [engine spec §14.7 and §21](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
 - *Not asked:* any change to `CONDITION`'s payload shape.
 
 - *wl-preproc's answer, 2026-10-11, the requester's decision: (a) the task assigns the numbers.* Each task
@@ -313,7 +313,7 @@ build B writes, sent so you can read it.
   in `wl_preproc/` today.
 - *Why:* a session run with an accepted warning or in a non-experimental kind should be marked so in the
   published dataset.
-- *From:* [engine spec §19 and §21](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
+- *From:* [engine spec §19 and §21](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-10-07-engine-design.md#21-asks-of-other-repositories-sent-once-this-spec-is-approved).
 - *Not asked:* acting on the warnings; only carrying them.
 
 - *wl-preproc's answer, 2026-10-14: read and carried, never acted on* (the requester's choice; its
@@ -339,7 +339,7 @@ system); not C.
   `digital_line` and `frame_rate_hz` fields made required. Today `contracts/sidecar.py` has both as
   optional (about lines 40 to 70) and `REQUIRED_TRIGGER_SOURCE = "syncbox"` predates wl-sync's 2026-08-16
   change to free-running cameras.
-- *From:* [P9 spec §7](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-09-27-P9-camera-system-design.md#7-outside-this-repository-asks-not-assumptions).
+- *From:* [P9 spec §7](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-09-27-P9-camera-system-design.md#7-outside-this-repository-asks-not-assumptions).
 - *Not asked:* the camera library or encoder choice (a wl-xcon ADR).
 
 - *wl-preproc's answer, 2026-10-11, the requester's decision: accepted, as the sidecar's version 2.* A
@@ -354,7 +354,7 @@ fallback's design); not C.
 - *Asked:* nothing to build yet. Told so you know: where P4 cannot be vouched for, wl-xcon's gaze would
   come from `pupil - CR1` with its own map and a per-sample method flag. Say whether you want that
   carried (a second `raw_definition`, which `eye/xcon.py:73` now refuses by design) or kept out.
-- *From:* [S5 §1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#1-most-of-the-calibration-is-already-decided-and-not-by-us).
+- *From:* [S5 §1](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#1-most-of-the-calibration-is-already-decided-and-not-by-us).
 - *Not asked:* any change to `purkinje_vector`.
 
 - *wl-preproc's answer, 2026-10-11, the requester's decision: carry it, designed once XC-006 settles the
@@ -373,7 +373,7 @@ fallback's design); not C.
   `50*P1_valid + 50*P4_valid`. wl-xcon's P10 real-data follow-up found OpenIrisDPI reporting P4 through every
   blink, a median 320 to 340 px off, with `DataQuality` = 100 on every row. The comment at `gaze.py:23-33`
   already says "necessary, not sufficient"; the spec's table should say the same.
-- *From:* [CHECKPOINT, 2026-09-27 afternoon](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/CHECKPOINT.md).
+- *From:* [CHECKPOINT, 2026-09-27 afternoon](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/CHECKPOINT.md).
 - *Not asked:* a new validity rule.
 
 - *wl-preproc's answer, 2026-10-11: corrected.* The eye spec's §1.1 and §6 now say `DataQuality` is
@@ -389,7 +389,7 @@ fallback's design); not C.
 
 **10. XC-096: per-trial gaze staleness into `EyeQuality` (an offer, standing).** Blocks: nothing; waits on
 wl-xcon's XC-007. Your answer is wanted only as "yes, in `EyeQuality`" or "no, leave it in the behavioral
-table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#10-open-items).
+table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S5-eye-tracking-design.md#10-open-items).
 
 - *wl-preproc's answer, 2026-10-11: no, not in `EyeQuality`; keep it in your behavioural table.* The eye
   spec (§10 item 5, 2026-08-31) accepted the offer in principle but not as an `EyeQuality` column:
@@ -399,7 +399,7 @@ table"; the full text is Offer 1 above. From [S5 §10 item 3](https://github.com
 **11. XC-098: who writes `session_manifest.yaml`?** Blocks: nothing urgent; wl-xcon supplies its two
 fields (`started_at_source`, `stimulus_calibration_id`) by whichever route you choose. Still a question,
 unanswered here (the section above); the contract is yours. From
-[S10 §6 item 1](https://github.com/jakewesterberg/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S10-data-and-lab-integration-design.md#6-open-items).
+[S10 §6 item 1](https://github.com/westerberg-lab-be/wl-xcon/blob/main/docs/superpowers/specs/2026-08-31-S10-data-and-lab-integration-design.md#6-open-items).
 - *wl-preproc's answer, 2026-10-11, the requester's decision: wl-xcon writes it,* at the session folder's
   root, in every session it runs. Two things the contract needs of the writer: the watcher takes a folder
   as a session only once its manifest is there (`ingest/watcher.py`), and the session is complete only
