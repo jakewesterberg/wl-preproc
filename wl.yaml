@@ -119,12 +119,18 @@ status:
     NI's, so a session with the NI and Intan can be tier N. wl-sync's notes
     7 and 8 are read (c31dd89; docs/handoffs/2026-11-20-wl-sync-notes-7-8.md):
     its one-clock build's two timebases, and a desync that code words
-    follow, closed as a gap; the wl-sync pin moved to fc18551. Next, part
-    3b-3; then our reader of wl-xcon's console settings
-    (XC-513, accepted 2026-11-18); then its pop-out revision (XC-543); then
-    part 2, the bridges.
+    follow, closed as a gap; the wl-sync pin moved to fc18551. Part 3b-3
+    is merged (291bbea; docs/handoffs/2026-11-20-part-3b-3.md): under the
+    NI, a sync box that recorded only part of a session is kept as a
+    cross-check over its covered span, and its eye tracker and cameras are
+    placed over that span. Next, the eye tracker placed by its analog copy
+    on the NI, and cameras by clock time (amendment 65); then our reader of
+    wl-xcon's console settings (XC-513, accepted 2026-11-18); then its
+    pop-out revision (XC-543); then part 2, the bridges; then lab time,
+    part 4, once wl-xcon writes its words and clock files.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: wl-sync's notes 7 and 8 (c31dd89). Before it, part 3b-2,
+    Done: part 3b-3, a partial sync box (291bbea). Before it, wl-sync's
+    notes 7 and 8 (c31dd89). Before it, part 3b-2,
     Intan by strobes (2c35577). Before it, part 3b-1,
     the NI keeping time (36aac64). Before it, the
     SpikeGLX imroTbl header (6638fcb). Before it, v4 of the
@@ -297,8 +303,9 @@ status:
   # `36aac64` on 2026-11-20; the phase text above had moved on past it.
   # Was `36aac64` until part 3b-2's merge `2c35577` on 2026-11-20.
   # Was `2c35577` until wl-sync's notes 7-8 merge `c31dd89` on 2026-11-20.
+  # Was `c31dd89` until part 3b-3's merge `291bbea` on 2026-11-21.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "c31dd89"
+  describes: "291bbea"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

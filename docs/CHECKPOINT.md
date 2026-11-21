@@ -1,10 +1,23 @@
 # Where this build actually is
 
-**Last updated 2026-11-21**, describing `main` at `c31dd89`: the merge of `feat/wl-sync-notes-7-8`, reading
-wl-sync's one-clock build and its desync that code words follow (`handoffs/2026-11-20-wl-sync-notes-7-8.md`).
-CI read off `c31dd89` is green on both interpreters, 3263 passed on each with 37 skipped and 1 xfailed, and the
-manifest check is green (`gh run view 44842081433`).
-- **wl-sync's notes 7 and 8:**
+**Last updated 2026-11-21**, describing `main` at `291bbea`: the merge of `feat/part-3b-3`, a sync box that recorded
+part of an NI-timed session (`handoffs/2026-11-20-part-3b-3.md`). CI read off `291bbea` is green on both
+interpreters, 3323 passed on each with 37 skipped and 1 xfailed, and the manifest check is green
+(`gh run view 44906246212`).
+- **Part 3b-3, a partial sync box:**
+  - Under the NI, the NI's own barcodes are the barcode reference. The sync box, the eye tracker and the cameras
+    are placed by them over the part the box covered (its covered span, stored on `TimingProvenance`).
+  - A file whose barcodes all lie outside that span is left out and named (`outside_covered_span`), not failed. A
+    file with no barcode still fails.
+  - The box's code words, cut to what it recorded, must all be found in order in the NI's (containment, 0.999),
+    or the session is D.
+  - Eye data is used and published only inside the span. The daily report counts no eye validity outside it.
+  - The full suite with every reference set passed 3357 on each interpreter at `bb532d1`.
+  - wl.works and wl-xcon are told.
+- **What waits on hardware** is now one list, `hardware-checks.md` (the requester's choice, 2026-11-21).
+- **Next:** the eye tracker placed by its analog copy on the NI (spec amendments 77-84, approved 2026-11-21), being
+  built on `feat/eye-analog-copy`.
+- **wl-sync's notes 7 and 8 (`c31dd89`, CI green, run 44842081433, 3263 on each):**
   - Its timebases `rp1-pio-si` and `rp1-pio` share one rate, and under them a roll in place may step by 3 when
     its ticks agree.
   - A desync the box left open is closed by the first code word after it, and fails the timing check only where
