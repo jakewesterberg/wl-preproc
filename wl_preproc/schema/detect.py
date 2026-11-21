@@ -240,8 +240,9 @@ class EyeValidity(dj.Computed):
         **Presence is a sound gate because `EyeCalibration.make()` writes
         BOTH eyes' rows in every terminal case, verified by reading it
         rather than assumed**: its `if not segments` branch inserts two
-        refused rows and returns, its `if windows and not row_ranges` branch
-        does the same, and its main path appends one row per eye inside a
+        refused rows and returns, its `if n_named and not windows` branch (no
+        window inside the covered span) and its `if windows and not
+        row_ranges` branch do the same, and its main path appends one row per eye inside a
         loop over a fixed `("left", "right")` pair before a single
         `self.insert(rows)`. There is no path that returns having written
         nothing. If `make()` RAISES, no row is written and this key simply

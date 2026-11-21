@@ -556,8 +556,44 @@ class EyeCalibration(dj.Computed):
         # nothing verified, so a window there is no calibration window: it is
         # not counted among those found, and no note says it lacked coverage.
         # `None` under the sync box: every window is kept, as before.
+        #
+        # **Where windows existed and none is inside, the refusal says so**
+        # (ruling R10, part 3b-3's fix round 1), as the coverage-gap refusal
+        # below does and for its reason: `resolve_calibration`'s own "no
+        # fixation epoch named a target position" would be FALSE, pointing a
+        # reader at the task code for a fault that is the sync box's.
         span = clock.covered_span()
+        n_named = len(windows)
         windows = [window for window in windows if inside_span(np.array(window[:2]), span).all()]
+        if n_named and not windows:
+            reason = (
+                f"{n_named} fixation epoch(s) named a target, but the sync box's "
+                "coverage ended before any calibration window: none lies inside "
+                f"the covered span its barcodes place ({span[0]:.3f} to {span[1]:.3f} s)"
+            )
+            self.insert(
+                [
+                    {
+                        **session_key,
+                        "eye": eye_value,
+                        "calibration_source": "refused",
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
+                        "validation_error_deg": None,
+                        "n_points": 0,
+                        "n_from_calibration_block": 0,
+                        "n_from_task_fixation": 0,
+                        "conditioning": None,
+                        "conditioning_second_order": None,
+                        "residual_deg_rms": None,
+                        "residual_deg_max": None,
+                        "carried_from_session_datetime": None,
+                        "reason": _bounded_reason(reason),
+                    }
+                    for eye_value in ("left", "right")
+                ]
+            )
+            return
 
         # -- Resolve each window to an ohDPI row range, once: identical for
         # both eyes (same file, same segment timing -- only the PURKINJE

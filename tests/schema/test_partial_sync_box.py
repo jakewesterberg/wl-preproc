@@ -64,6 +64,18 @@ _RAMP_STEPS = 16
 _BLINKS_S = (1.0, 4.0, 10.0, 12.0, 13.5)
 _BLINK_ROWS = 20
 _BLINK_COLUMNS = ("PupilWidth", "PupilHeight", "CR1X", "CR1Y")
+# `eyes` only (fix round 1): one more ramp, across the span's end at the box's
+# last barcode, 8 s, inside the sixth window's hold, which the span already
+# leaves out. Its first half lies inside the span and its second after it.
+_EDGE_RAMP_S = 8.0 - _RAMP_S / 2
+_EDGE_HOLD_PX = (500.0, 500.0)
+# `late_eyes` (fix round 1, ruling R10): only the windows wholly after the
+# span, so the box's coverage ended before any calibration window.
+_LATE_WINDOWS = tuple(index for index, start_s in enumerate(_WINDOW_STARTS_S) if start_s > 8.0)
+# How far, in rows, a stored saccade may start from its planted ramp's first
+# row: the detectors find these within a sample or two
+# (`test_detect_populate.py`), and the ramps are 750 rows apart.
+_RAMP_ROWS_TOLERANCE = 10
 
 
 def _start_the_ni_late(session_dir, at_s: float) -> None:
@@ -165,9 +177,17 @@ def _kill_the_camera_cable(session_dir) -> None:
     path.write_text(yaml.safe_dump(sidecar, sort_keys=False))
 
 
-def _eye_fixations() -> tuple:
+def _ramp_starts_s(edge_ramp: bool = False) -> list[float]:
+    """Each planted ramp's first instant, in truth time, in order."""
+    starts = [start_s + _RAMP_AFTER_S for start_s in _WINDOW_STARTS_S[:-1]]
+    return sorted([*starts, _EDGE_RAMP_S]) if edge_ramp else starts
+
+
+def _eye_fixations(edge_ramp: bool = False) -> tuple:
     """The gaze of the eye sessions: held at `_HOLDS_PX` in turn, one hold
-    per calibration window, joined by ramps, from 0 s to the session's end."""
+    per calibration window, joined by ramps, from 0 s to the session's end.
+    With `edge_ramp`, the sixth window's hold ramps to `_EDGE_HOLD_PX` across
+    the span's end and holds there until its own ramp."""
     from wl_preproc.synth.recipe import EyeFixationSpec
 
     from tests.schema.test_detect_populate import _ramp_fixations
@@ -180,6 +200,10 @@ def _eye_fixations() -> tuple:
             fixations.append(EyeFixationSpec(start_s=held_from_s, end_s=15.0, x_px=here[0], y_px=here[1]))
             break
         ramp_s = start_s + _RAMP_AFTER_S
+        if edge_ramp and held_from_s < _EDGE_RAMP_S < ramp_s:
+            fixations.append(EyeFixationSpec(start_s=held_from_s, end_s=_EDGE_RAMP_S, x_px=here[0], y_px=here[1]))
+            fixations.extend(_ramp_fixations(_EDGE_RAMP_S, here, _EDGE_HOLD_PX, _RAMP_S, _RAMP_STEPS))
+            held_from_s, here = _EDGE_RAMP_S + _RAMP_S, _EDGE_HOLD_PX
         fixations.append(EyeFixationSpec(start_s=held_from_s, end_s=ramp_s, x_px=here[0], y_px=here[1]))
         fixations.extend(_ramp_fixations(ramp_s, here, _HOLDS_PX[(index + 1) % len(_HOLDS_PX)], _RAMP_S,
                                          _RAMP_STEPS))
@@ -187,11 +211,11 @@ def _eye_fixations() -> tuple:
     return tuple(fixations)
 
 
-def _write_calibration_windows(session_dir, recipe, truth) -> None:
+def _write_calibration_windows(session_dir, recipe, truth, windows=None) -> None:
     """The session's code words with one calibration window per
-    `_WINDOW_STARTS_S`, written where the rig strobes them: the NI's data
-    lines and the box's log, which keeps only what it recorded before its
-    stop (`synth/syncbox.py::write_syncbox_log`)."""
+    `_WINDOW_STARTS_S` (or those numbered in `windows`), written where the rig
+    strobes them: the NI's data lines and the box's log, which keeps only
+    what it recorded before its stop (`synth/syncbox.py::write_syncbox_log`)."""
     import dataclasses
 
     from wl_preproc.synth.spikeglx import write_nidq
@@ -201,6 +225,8 @@ def _write_calibration_windows(session_dir, recipe, truth) -> None:
 
     extra = []
     for index, start_s in enumerate(_WINDOW_STARTS_S):
+        if windows is not None and index not in windows:
+            continue
         x_px, y_px = _HOLDS_PX[index % len(_HOLDS_PX)]
         extra.extend(_fixation_words(start_s, (CAL_SCALE * x_px, CAL_SCALE * y_px)))
     words = tuple(sorted((*truth.code_words, *extra), key=lambda pair: pair[0]))
@@ -260,7 +286,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
     with a photodiode edge lost inside the box's part; `synced`, the box
     running the whole session and keeping time; and `eyes` and
     `synced_eyes`, `partial` and `synced` with calibration windows, ramps
-    and blinks in the eye recording (`_eye_fixations`). Deleted afterwards."""
+    and blinks in the eye recording (`_eye_fixations`), `eyes` with one more
+    ramp across the span's end; and `late_eyes`, `partial` with only the
+    calibration windows after the span. Deleted afterwards."""
     from wl_sync.pins import GPIO_MAP
 
     from wl_preproc import daemon
@@ -301,6 +329,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
         if name in ("eyes", "synced_eyes"):
             _write_calibration_windows(session_dir, recipe, truth)
             _plant_blinks(session_dir)
+        if name == "late_eyes":
+            _write_calibration_windows(session_dir, recipe, truth, windows=_LATE_WINDOWS)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
@@ -315,8 +345,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("edge_loss", syncbox_stop_s=STOP_S, syncbox_losses=(SyncBoxLossSpec(
         cause="buffer_overflow", count=3, from_s=EDGE_LOSS_S[0], to_s=EDGE_LOSS_S[1], gpio=GPIO_MAP["pd1_comp"]),))
     land("synced")
-    land("eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations())
+    land("eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations(edge_ramp=True))
     land("synced_eyes", eye_fixations=_eye_fixations())
+    land("late_eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations())
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
     for _recipe, _truth, key, _session_dir in sessions.values():
@@ -859,3 +890,110 @@ def test_the_eye_sessions_report_no_error(landed):
     """The eye stages run on both eye sessions without an error."""
     for name in ("eyes", "synced_eyes"):
         assert _errors_of(landed.report, landed.key(name)) == [], name
+
+
+# -- Fix round 1 ------------------------------------------------------------------
+
+
+def test_a_box_that_stopped_before_every_calibration_window_refuses_and_names_the_span(landed):
+    """Ruling R10: every fixation epoch named a target, but all lie after the
+    span, so the refusal says the box's coverage ended before any of them.
+    `resolve_calibration`'s "no fixation epoch named a target position" would
+    point at the task code for a fault that is the sync box's."""
+    from wl_preproc.schema import eye
+
+    key = landed.key("late_eyes")
+    start_s, end_s = _span(landed, "late_eyes")
+    windows = _windows(landed, "late_eyes")
+    assert len(windows) == len(_LATE_WINDOWS) and all(window[0] > end_s for window in windows)
+    rows = (eye.EyeCalibration & key).to_dicts()
+    assert {row["eye"] for row in rows} == {"left", "right"}
+    for row in rows:
+        assert row["calibration_source"] == "refused", row
+        assert row["n_points"] == 0
+        assert "no fixation epoch named a target position" not in row["reason"], row["reason"]
+        assert f"{len(windows)} fixation epoch(s) named a target" in row["reason"], row["reason"]
+        assert "covered span" in row["reason"] and f"{end_s:.3f}" in row["reason"], row["reason"]
+
+
+def _ramp_rows(edge_ramp: bool) -> list[int]:
+    """Each planted ramp's first row in the eye file, as `synth/ohdpi.py::
+    write_ohdpi` places a hold: the frame of its truth time on the tracker's
+    drifted clock after its pre-roll. No frame is dropped, so frame is row."""
+    from wl_preproc.synth.ohdpi import OHDPI_FPS, OHDPI_PRE_ROLL_S
+    from wl_preproc.synth.timeline import apply_drift
+
+    drift_ppm = dict(DRIFT_PPM)["ohdpi"]
+    return [int((apply_drift(start_s, drift_ppm) + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
+            for start_s in _ramp_starts_s(edge_ramp)]
+
+
+def _per_eye_traces(key):
+    """Each computed per-eye detection row with its detector's name."""
+    from wl_preproc.schema import detect, paramset
+
+    for row in (detect.EyeDetection & key & 'status = "computed"' & 'trace in ("left", "right")').to_dicts():
+        params = (paramset.ParamSet & {"paramset_type": row["paramset_type"],
+                                       "paramset_idx": row["paramset_idx"]}).fetch1("params")
+        yield params["detector"], row
+
+
+def test_each_stored_saccade_lies_on_its_planted_ramp(landed):
+    """Fix round 1 (review I2): a detector reads the span's rows alone, so its
+    runs are placed back among the recording's rows by the span's first row,
+    which on `eyes` is about 350 rows in. Each stored saccade of a degree or
+    more starts within `_RAMP_ROWS_TOLERANCE` rows of a planted ramp's first
+    row. Every per-eye trace holds at least one, and Engbert-Kliegl's finds
+    each ramp wholly inside the span: a shift dropped or doubled misplaces
+    every event by hundreds of rows. Only Engbert-Kliegl is held to every
+    ramp: NSLR's right eye calls the 1.8 degree ramp at row 3900 no saccade,
+    which is its classifier's business, not this test's."""
+    from wl_preproc.schema import detect
+
+    key = landed.key("eyes")
+    start_s, end_s = _span(landed, "eyes")
+    _segment, _path, times = _eye_recording(landed, "eyes")
+    first_row, stop_row = int((times < start_s).sum()), int((times <= end_s).sum())
+    assert first_row > 100
+    ramps = _ramp_rows(edge_ramp=True)
+    inside = [row for row in ramps if first_row < row and row + _RAMP_STEPS < stop_row]
+    assert len(inside) == 5
+    traces = list(_per_eye_traces(key))
+    assert traces
+    for detector, row in traces:
+        runs = (detect.EyeDetection.Run & row & 'label in ("saccade", "microsaccade")').to_dicts()
+        large = [run for run in runs if run["amplitude_deg"] is not None and run["amplitude_deg"] >= 1.0]
+        assert large, (detector, row["trace"])
+        for run in large:
+            assert min(abs(run["run_start"] - ramp) for ramp in ramps) <= _RAMP_ROWS_TOLERANCE, (detector, run)
+        if detector != "engbert_kliegl":
+            continue
+        for ramp in inside:
+            assert any(abs(run["run_start"] - ramp) <= _RAMP_ROWS_TOLERANCE for run in runs), (detector, row["trace"],
+                                                                                                ramp)
+
+
+def test_a_ramp_across_the_spans_end_is_detected_on_the_span_alone(landed):
+    """Fix round 1 (review I2, M3): Engbert-Kliegl reads the velocity, which is
+    the estimator's over the span's rows alone, so zero on the span's last two
+    rows, as `velocity` states its own edges. A saccade across the span's end
+    therefore stops before them. Read over the whole recording, its velocity
+    there is the ramp's, and its run reaches the span's end, where the mask
+    cuts it."""
+    from wl_preproc.schema import detect
+
+    key = landed.key("eyes")
+    _start_s, end_s = _span(landed, "eyes")
+    _segment, _path, times = _eye_recording(landed, "eyes")
+    stop_row = int((times <= end_s).sum())
+    (edge,) = [row for row in _ramp_rows(edge_ramp=True) if row < stop_row < row + _RAMP_STEPS]
+    assert stop_row - edge >= 6
+    checked = 0
+    for detector, row in _per_eye_traces(key):
+        if detector != "engbert_kliegl":
+            continue
+        for run in (detect.EyeDetection.Run & row & 'label in ("saccade", "microsaccade")').to_dicts():
+            if run["run_stop"] > edge - _RAMP_ROWS_TOLERANCE:
+                assert run["run_stop"] <= stop_row - 2, run
+        checked += 1
+    assert checked
