@@ -41,6 +41,11 @@ LAST_TRIAL_NUMBER_WORD = 26
 # A lost-edge window inside the box's part, on a photodiode line, over the
 # code words from 2.998 s to 3.004 s: the box lost edges there, not words.
 EDGE_LOSS_S = (2.9, 3.1)
+# `holey_ni` (ruling R14): the NI's barcode line is dead over this stretch of
+# session time, so its reference holds the barcodes at 0, 1, 2, 7 and 8 s; the
+# camera's carries a barcode over the same stretch alone, those at 3 to 6 s.
+# Each value lies between the reference's ends, and none is in it.
+NI_HOLE_S = (2.5, 6.5)
 
 # The eye sessions (`eyes`, and `synced_eyes` under the box's clock): the
 # synthetic stream holds no fixation, so every eye stage of `partial` refuses
@@ -168,6 +173,38 @@ def _clear_the_ni_barcode_line(session_dir) -> None:
     samples.flush()
 
 
+def _clear_the_ni_barcode_line_over(session_dir, from_s: float, to_s: float) -> None:
+    """`_clear_the_ni_barcode_line`, over session times `from_s` to `to_s`
+    alone, as a cable that came loose and back leaves it."""
+    import numpy as np
+
+    from wl_preproc.synth.spikeglx import NIDQ_SAMPLE_RATE_HZ, SPIKEGLX_PRE_ROLL_S
+    from wl_preproc.timebase._nidq_meta import read_nidq_meta
+    from wl_preproc.timebase.clock import nidq_files
+
+    (path,) = nidq_files(session_dir)
+    meta = read_nidq_meta(path.with_suffix(".meta"))
+    samples = np.memmap(path, dtype=np.int16, mode="r+").reshape(-1, meta.n_channels)
+    low, high = (round((at_s + SPIKEGLX_PRE_ROLL_S) * NIDQ_SAMPLE_RATE_HZ) for at_s in (from_s, to_s))
+    samples[low:high, meta.n_analog_channels] &= ~np.int16(1)
+    samples.flush()
+
+
+def _keep_the_camera_line_over(session_dir, from_s: float, to_s: float) -> None:
+    """The camera's barcode line low on every frame outside session times
+    `from_s` to `to_s`, as a cable that worked over that stretch alone."""
+    import yaml
+
+    from wl_preproc.synth.peripherals import BCAM_PRE_ROLL_S, CAMERA_FPS
+
+    path = session_dir / "bcam" / "frames.yaml"
+    sidecar = yaml.safe_load(path.read_text())
+    low, high = (int((at_s + BCAM_PRE_ROLL_S) * CAMERA_FPS) for at_s in (from_s, to_s))
+    sidecar["digital_line"] = [bit if low <= index < high else 0
+                               for index, bit in enumerate(sidecar["digital_line"])]
+    path.write_text(yaml.safe_dump(sidecar, sort_keys=False))
+
+
 def _kill_the_camera_cable(session_dir) -> None:
     """The camera's barcode line low on every frame, as a dead cable leaves
     it: its frames all there, none carrying a barcode."""
@@ -290,8 +327,10 @@ def landed(dj_conn, prefix, tmp_path_factory):
     `synced_eyes`, `partial` and `synced` with calibration windows, ramps
     and blinks in the eye recording (`_eye_fixations`), `eyes` with one more
     ramp across the span's end; and `late_eyes`, `partial` with only the
-    calibration windows after the span; and `camera_only`, `partial` with no
-    eye tracker. Deleted afterwards."""
+    calibration windows after the span; `camera_only`, `partial` with no
+    eye tracker; and `holey_ni`, `partial` with the NI's barcode line dead
+    over `NI_HOLE_S` and the camera's live over it alone. Deleted
+    afterwards."""
     from wl_sync.pins import GPIO_MAP
 
     from wl_preproc import daemon
@@ -323,6 +362,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
             _clear_the_ni_barcode_line(session_dir)
         if name == "dead_cable":
             _kill_the_camera_cable(session_dir)
+        if name == "holey_ni":
+            _clear_the_ni_barcode_line_over(session_dir, *NI_HOLE_S)
+            _keep_the_camera_line_over(session_dir, *NI_HOLE_S)
         if name == "box_loss":
             _lose_the_box_words(session_dir, DESYNC_FROM_S, DESYNC_LOST_UNTIL_S)
         if name == "disagree":
@@ -341,6 +383,7 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("before_ni", syncbox_stop_s=STOP_S)
     land("dead_ni_line", syncbox_stop_s=STOP_S)
     land("dead_cable", syncbox_stop_s=STOP_S)
+    land("holey_ni", syncbox_stop_s=STOP_S)
     land("box_loss", syncbox_stop_s=STOP_S,
          syncbox_losses=(SyncBoxLossSpec(cause="desync", count=2, from_s=DESYNC_FROM_S),))
     land("disagree", syncbox_stop_s=STOP_S)
@@ -543,6 +586,36 @@ def test_a_dead_barcode_cable_under_the_ni_fails_the_session(landed):
         assert _fit(key, system)["fit_status"] == "fitted", system
     row = (timebase.TimingProvenance & key).fetch1()
     assert (row["n_systems_aligned"], row["n_rejected_segments"], row["decode_errors"]) == (3, 1, 0)
+    assert row["tier"] == "D", row
+
+
+def test_a_file_inside_a_hole_in_the_nis_barcodes_is_not_outside_and_fails(landed):
+    """Ruling R14 (amendment 76): "outside" is decided by range, not by
+    membership. The camera's barcodes lie between the NI reference's first
+    and last values, none of them in it, as under a hole in the NI's decode:
+    the file ran inside the span, so it is not left out as outside it. It is
+    `no_shared_barcode`, and fails the session."""
+    from wl_preproc.schema import core, timebase
+    from wl_preproc.timebase import segments
+    from wl_preproc.timebase.clock import clock_for
+
+    key = landed.key("holey_ni")
+    session_dir = landed.session_dir("holey_ni")
+    assert _clock(key) == "nidq"
+    reference = clock_for(key, session_dir).barcode_reference()
+    (scan,) = segments.scan_system("bcam", session_dir / "bcam")
+    # The fixture is what it says: values between the reference's ends, none in it.
+    values = [barcode.value for barcode in scan.barcodes]
+    assert values and not set(values) & set(reference)
+    assert all(min(reference) < value < max(reference) for value in values)
+
+    fit = _fit(key, "bcam")
+    assert (fit["fit_status"], fit["time_source"]) == ("unfittable", "barcode")
+    assert [row["reason"] for row in (core.RejectedSegment & key).to_dicts()] == ["no_shared_barcode"]
+    for system in ("syncbox", "spikeglx", "ohdpi"):
+        assert _fit(key, system)["fit_status"] == "fitted", system
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert (row["n_systems_aligned"], row["n_rejected_segments"]) == (3, 1)
     assert row["tier"] == "D", row
 
 

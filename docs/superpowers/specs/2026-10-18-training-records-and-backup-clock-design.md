@@ -1174,6 +1174,14 @@ made five decisions the spec was silent on (66). The build's rulings corrected o
     - So a stray end code before it stays the log's last decoded code, and a box that stopped inside the last run
       is kept as the clock.
     - The window is about 4 words. Outside it, amendment 64's last line holds.
-76. **"Outside the span" means "no barcode in the reference"** (Task 4's review). A file whose barcodes were
-    misdecoded to values between the reference's first and last, but not in it, still passes as outside, and does
-    not fail the session. A check that each value lies outside `[first, last]` would be cheap. It is not built.
+76. **"Outside the span" is decided by range, not by membership** (Task 4's review; ruling R14, the final
+    review). Under the NI, a file that decoded barcodes, none of them in the NI's reference, is
+    `outside_covered_span` only where every value lies outside `[min, max]` of the reference's values: before its
+    first or after its last. Such a file does not fail the session.
+    - A file sharing none whose values lie between the reference's ends ran inside the span: the NI's decode has a
+      hole under it, or its values were misdecoded. It is `no_shared_barcode`, and fails the session, as under the
+      sync box (`timebase/segments.py::unshared_reason`).
+    - This is built. The test is `holey_ni`: the NI's barcode line dead from 2.5 s to 6.5 s, and the camera's live
+      over that stretch alone (`test_a_file_inside_a_hole_in_the_nis_barcodes_is_not_outside_and_fails`). That
+      session is D. `before_ni`'s camera, whose one barcode precedes the NI's first, is still
+      `outside_covered_span`, and its session N.

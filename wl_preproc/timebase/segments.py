@@ -100,11 +100,15 @@ NO_STROBE_ANCHOR = "no_strobe_anchor"
 
 # Not a verdict `classify_segment` can reach either: under the NI's clock a
 # file carrying the sync box's barcodes is placed by the NI's own
-# (`timebase/clock.py::ni_barcodes`), and one that decoded barcodes, none of
-# them the NI's, was recorded while the box ran but outside the NI's record of
-# it, so nothing places it. Under the NI, and only there, it does not fail the
-# session, nor does a system whose every file is it; a file that decoded no
-# barcode at all is still `no_barcode`, and fails (part 3b-3; amendment 57).
+# (`timebase/clock.py::ni_barcodes`), and one that decoded barcodes, every one
+# of them before the NI's first or after its last, was recorded while the box
+# ran but outside the NI's record of it, so nothing places it. Under the NI,
+# and only there, it does not fail the session, nor does a system whose every
+# file is it; a file that decoded no barcode at all is still `no_barcode`, and
+# fails (part 3b-3; amendment 57). A file sharing none whose values lie between
+# the NI's ends ran inside the span, under a hole in the NI's decode or a
+# misdecoded value, so it is `NO_SHARED_BARCODE`, and fails (`unshared_reason`;
+# ruling R14, amendment 76).
 OUTSIDE_COVERED_SPAN = "outside_covered_span"
 
 #: Every reason `RejectedSegment.reason` can hold, and where each is
@@ -120,12 +124,29 @@ OUTSIDE_COVERED_SPAN = "outside_covered_span"
 #: NI's clock. `NO_STROBE_ANCHOR` is decided per FILE, in `Segment.make`,
 #: under the NI's clock, for an Intan recording whose strobes cannot anchor.
 #: `OUTSIDE_COVERED_SPAN` is decided per FILE, in `Segment.make`, under the
-#: NI's clock, against the NI's barcodes, where `NO_SHARED_BARCODE` would be
-#: under the sync box's.
+#: NI's clock, against the range of the NI's barcode values, where
+#: `NO_SHARED_BARCODE` would be under the sync box's (`unshared_reason`).
 REJECTION_REASONS: frozenset[str] = frozenset(
     {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED,
      NO_STROBE_ANCHOR, OUTSIDE_COVERED_SPAN}
 )
+
+
+def unshared_reason(values, reference, on_the_ni: bool) -> str:
+    """Why a file whose barcode `values` share none with `reference` (value ->
+    session seconds) is rejected. `OUTSIDE_COVERED_SPAN` under the NI's clock
+    where every value lies outside `[min(reference), max(reference)]`, the
+    reference's first and last values, so the file was recorded outside the
+    NI's record of the box; else `NO_SHARED_BARCODE`. "Outside" is decided by
+    range, not by membership (ruling R14, amendment 76): a value between the
+    ends that is not in the reference is a hole in the NI's decode or a
+    misdecoded value, the file ran inside the span, and losing its placement
+    must fail the session."""
+    if on_the_ni and reference:
+        low, high = min(reference), max(reference)
+        if all(value < low or value > high for value in values):
+            return OUTSIDE_COVERED_SPAN
+    return NO_SHARED_BARCODE
 
 
 def classify_segment(duration_s: float, n_barcodes: int) -> str:

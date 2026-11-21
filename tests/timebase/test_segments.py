@@ -623,3 +623,20 @@ def test_a_system_with_one_barcode_rejects_its_files_by_name(dj_conn, prefix, tm
     # The other systems are unaffected: one bad line is not a bad session.
     assert timebase.SystemTimebase & {**session_key, "system": "spikeglx"}
     assert core.Segment & {**session_key, "system": "spikeglx"}
+
+
+def test_outside_is_decided_by_range_not_by_membership():
+    """Ruling R14: a file sharing no barcode with the NI's reference is
+    outside its span only where every value lies before its first value or
+    after its last. One between them is a hole or a misdecode, and fails as
+    `no_shared_barcode`, as every such file does under the sync box."""
+    from wl_preproc.timebase.segments import NO_SHARED_BARCODE, OUTSIDE_COVERED_SPAN, unshared_reason
+
+    reference = {100: 0.0, 101: 1.0, 102: 2.0, 107: 7.0, 108: 8.0}
+    assert unshared_reason([97, 98, 99], reference, on_the_ni=True) == OUTSIDE_COVERED_SPAN
+    assert unshared_reason([109, 110], reference, on_the_ni=True) == OUTSIDE_COVERED_SPAN
+    assert unshared_reason([99, 109], reference, on_the_ni=True) == OUTSIDE_COVERED_SPAN
+    assert unshared_reason([103, 104], reference, on_the_ni=True) == NO_SHARED_BARCODE
+    assert unshared_reason([99, 104], reference, on_the_ni=True) == NO_SHARED_BARCODE
+    assert unshared_reason([97, 98], reference, on_the_ni=False) == NO_SHARED_BARCODE
+    assert unshared_reason([97], {}, on_the_ni=True) == NO_SHARED_BARCODE

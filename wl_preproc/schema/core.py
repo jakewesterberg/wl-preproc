@@ -582,9 +582,10 @@ class Segment(dj.Computed):
             # `2026-10-22-syncbox-records-and-segments-design.md` section 4).
             # Under the NI's clock the reference is the NI's barcodes, and a
             # file sharing none was recorded outside the NI's record of the
-            # box's (amendment 57).
+            # box's (amendment 57) only where every value lies outside the
+            # reference's range (ruling R14, `segments.unshared_reason`).
             if not any(barcode.value in reference for barcode in scan.barcodes):
-                reason = segments.OUTSIDE_COVERED_SPAN if on_the_ni else segments.NO_SHARED_BARCODE
+                reason = segments.unshared_reason([barcode.value for barcode in scan.barcodes], reference, on_the_ni)
                 rejected.append({**key, "file_path": file_path, "reason": reason})
                 continue
             if rate is None:
