@@ -7,6 +7,8 @@ and taken through one daemon pass."""
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.identities import new_animal, new_serial
@@ -288,7 +290,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
     `synced_eyes`, `partial` and `synced` with calibration windows, ramps
     and blinks in the eye recording (`_eye_fixations`), `eyes` with one more
     ramp across the span's end; and `late_eyes`, `partial` with only the
-    calibration windows after the span. Deleted afterwards."""
+    calibration windows after the span; and `camera_only`, `partial` with no
+    eye tracker. Deleted afterwards."""
     from wl_sync.pins import GPIO_MAP
 
     from wl_preproc import daemon
@@ -348,6 +351,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations(edge_ramp=True))
     land("synced_eyes", eye_fixations=_eye_fixations())
     land("late_eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations())
+    land("camera_only", syncbox_stop_s=STOP_S, systems=("syncbox", "spikeglx", "bcam"),
+         system_drift_ppm=(("bcam", dict(DRIFT_PPM)["bcam"]),))
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
     for _recipe, _truth, key, _session_dir in sessions.values():
@@ -1003,9 +1008,25 @@ def test_a_ramp_across_the_spans_end_is_detected_on_the_span_alone(landed):
 
 # The sessions whose canonical NWB file is built: `partial`, which has no
 # calibration and so only pupil series and no event; `eyes`, with gaze and
-# events; `before_ni`, with a camera file outside the span; and `synced_eyes`,
-# under the box's clock.
-_NWB_SESSIONS = ("partial", "eyes", "before_ni", "synced_eyes")
+# events; `before_ni`, with a camera file outside the span; `camera_only`,
+# with no eye tracker; and `synced` and `synced_eyes`, under the box's clock.
+_NWB_SESSIONS = ("partial", "eyes", "before_ni", "camera_only", "synced", "synced_eyes")
+
+# The note stating the span (amendment 63; ruling R12), its two ends and the
+# systems the NI's barcodes placed read back from it.
+_SPAN_NOTE = re.compile(r"^the sync box's covered span is (\d+\.\d{3}) s to (\d+\.\d{3}) s; the NI's own barcodes "
+                        r"placed (.+) over it$")
+
+
+def _span_note(notes) -> tuple[float, float, list[str]] | None:
+    """The span note's ends and systems, or None where the notes hold none;
+    two would be a fault."""
+    found = [match for match in map(_SPAN_NOTE.match, notes) if match]
+    assert len(found) <= 1, notes
+    if not found:
+        return None
+    (match,) = found
+    return float(match[1]), float(match[2]), match[3].replace(" and ", ", ").split(", ")
 
 
 @pytest.fixture(scope="module")
@@ -1144,8 +1165,10 @@ def test_the_nwb_file_names_what_it_left_out(landed, nwb_files):
         session_start_s, session_end_s = _session_extent(landed, name)
         assert session_start_s < start_s and end_s < session_end_s
         notes = nwb_files[name]["description"]["notes"]
-        left_out = [note for note in notes if note.startswith("eye data outside the sync box's covered span")]
-        assert left_out == [
+        spanned = [note for note in notes if "covered span" in note]
+        assert len(spanned) == 3 and _SPAN_NOTE.match(spanned[0]), (name, spanned)
+        assert _span_note(notes)[:2] == pytest.approx((start_s, end_s), abs=5e-4), name
+        assert spanned[1:] == [
             f"eye data outside the sync box's covered span, {session_start_s:.3f} s to {start_s:.3f} s, is left "
             "out: no barcode placed it",
             f"eye data outside the sync box's covered span, {end_s:.3f} s to {session_end_s:.3f} s, is left "
@@ -1216,3 +1239,29 @@ def test_under_the_sync_box_the_nwb_file_says_nothing_of_a_span(landed, nwb_file
         assert "time_source" not in nwb.processing["timebase"]["system_clocks"].colnames
         times = nwb.processing["behavior"]["PupilTracking"]["pupil_left"].timestamps[:]
     assert len(times) == runs.contains(raw).sum()
+
+
+def test_the_nwb_file_states_the_covered_span(landed, nwb_files):
+    """Amendment 63, ruling R12: under the NI the notes state the covered span
+    and the systems the NI's barcodes placed over it, whether or not an eye
+    tracker ran. `camera_only` has none, and no file outside the span, so no
+    other note carries the span's numbers. A file under the box states none."""
+    from wl_preproc.schema import core, timebase
+
+    key = landed.key("camera_only")
+    assert not (core.Segment & key & {"system": "ohdpi"})
+    assert not (core.RejectedSegment & key)
+    assert (timebase.TimingProvenance & key).fetch1("tier") == "N"
+    placed = sorted(row["system"] for row in (timebase.SystemTimebase & key).to_dicts()
+                    if (row["fit_status"], row["time_source"]) == ("fitted", "barcode"))
+    assert placed == ["bcam", "syncbox"]
+    notes = nwb_files["camera_only"]["description"]["notes"]
+    start_s, end_s, systems = _span_note(notes)
+    assert (start_s, end_s) == pytest.approx(_stored_span(landed, "camera_only"), abs=5e-4)
+    assert systems == placed
+    assert not any(note.startswith("eye data outside") for note in notes), notes
+    # `before_ni`'s camera was left out, not placed, so it is not named.
+    assert _span_note(nwb_files["before_ni"]["description"]["notes"])[2] == ["ohdpi", "syncbox"]
+    for name in ("synced", "synced_eyes"):
+        notes = nwb_files[name]["description"]["notes"]
+        assert _span_note(notes) is None and not any("covered span" in note for note in notes), (name, notes)

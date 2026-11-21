@@ -310,7 +310,7 @@ class NwbDescription(_Frozen):
     # recording strobed and the file does not hold (a repeated number, one too
     # large to store), then what the file could not place or join about a
     # probe, then, under the NI with a sync box that recorded part of the
-    # session, the stretches and files its covered span left out.
+    # session, its covered span and the stretches and files it left out.
     notes: list[str]
     checksums: Checksums
     # What wl-xcon's record says the session was (design spec

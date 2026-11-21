@@ -66,8 +66,9 @@ class Gathered:
     # files when the file is built, by table (`nwb/rig_record.py::TABLES`;
     # design spec `2026-11-07-rig-record-fields-design.md` section 2).
     rig_tables: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
-    # Under the NI with a sync box that recorded part of the session, what the
-    # covered span left out: the stretches of session time outside it, whose
+    # Under the NI with a sync box that recorded part of the session, the
+    # covered span, the systems placed over it, and what it left out: the
+    # stretches of session time outside it, whose
     # eye data the file does not hold, and each file none of whose barcodes the
     # NI recorded (design spec `2026-10-18-training-records-and-backup-clock-
     # design.md`, amendments 57, 58 and 63). Empty otherwise. See `_span_notes`.
@@ -462,20 +463,26 @@ def _timebase(session_key: dict, provenance: dict, clock: dict, session_clock: s
 
 
 def _span_notes(session_key: dict, provenance: dict) -> list[str]:
-    """What the covered span left out of the file, from the span
-    `TimingProvenance` stored (plan decision 1): under the NI, where the eye
-    tracker was placed, each stretch of session time outside the span, from
+    """The covered span and what it left out of the file, from the span
+    `TimingProvenance` stored (plan decision 1): under the NI, the span
+    itself and the systems the NI's barcodes placed over it (amendment 63;
+    ruling R12), whatever ran; where the eye tracker was placed, each stretch of session time outside the span, from
     the NI's first sample to the span's start and from its end to the NI's
     last, since its eye data is left out (amendment 58); and each file
     `outside_covered_span` (amendment 57). Empty where nothing was placed by
     the NI's barcodes, or under the sync box."""
-    from wl_preproc.schema import core
+    from wl_preproc.schema import core, timebase
     from wl_preproc.timebase.segments import OUTSIDE_COVERED_SPAN
 
     start_s, end_s = provenance["covered_start_s"], provenance["covered_end_s"]
     if start_s is None or end_s is None:
         return []
-    notes = []
+    # A system left out is `unfittable` by barcode, not placed, so not named.
+    placed = sorted(row["system"] for row in (timebase.SystemTimebase & session_key).to_dicts()
+                    if (row["fit_status"], row["time_source"]) == ("fitted", "barcode"))
+    named = (" and ".join(placed) if len(placed) < 3 else ", ".join(placed[:-1]) + " and " + placed[-1]) or "no system"
+    notes = [f"the sync box's covered span is {start_s:.3f} s to {end_s:.3f} s; the NI's own barcodes placed {named} "
+             "over it"]
     # Session time under the NI is its first file's, the one SpikeGLX
     # segment, from t = 0.
     session = (core.Segment & {**session_key, "system": "spikeglx"}).to_dicts()
