@@ -1320,6 +1320,11 @@ whole file on the NI's clock with no barcode. This is amendment 65's eye half, "
 82. **What waits on hardware** goes to `docs/hardware-checks.md`: the lag on a real session with both the box and
     the copy; which NI inputs carry the eye; what the DAC actually puts out (78a); the plan's constants against
     real traces; the board's buffering and any smoothing on the eye channels.
+83. **Carried: the camera half of amendment 65.** The ask to the camera package (wl-camacq): write each video
+    file's start and end on the camera computer's wall clock, with its synchronisation state, in the sidecar.
+    The same ask corrects our sidecar contract (`contracts/sidecar.py`), which still requires `trigger_source`
+    `syncbox`: wl-sync voided the camera triggers on 2026-08-16, and the cameras free-run and record the barcode
+    line (wl-sync `docs/superpowers/plans/2026-08-13-sync-box.md:1158`).
 84. **This supersedes the 1c-4 timebase design's §2.1 for this use only** (the requester, 2026-11-21, told of the
     conflict). §2.1 rejected aligning the eye tracker through its analog output, on the instrument's paper
     (10.1016/j.jneumeth.2026.110693): frame processing "1.1±0.1 ms (median ± IQR)" but "up to a maximum of 50 ms",
@@ -1336,8 +1341,3 @@ whole file on the NI's clock with no barcode. This is amendment 65's eye half, "
       paper's typical delays (roughly 4-5 ms) plus the filter's, where barcodes place it within one 2 ms frame.
       The file says so (80).
     - Barcodes stay the eye tracker's sync path wherever they exist (77); §2.1 stands for every other use.
-83. **Carried: the camera half of amendment 65.** The ask to the camera package (wl-camacq): write each video
-    file's start and end on the camera computer's wall clock, with its synchronisation state, in the sidecar.
-    The same ask corrects our sidecar contract (`contracts/sidecar.py`), which still requires `trigger_source`
-    `syncbox`: wl-sync voided the camera triggers on 2026-08-16, and the cameras free-run and record the barcode
-    line (wl-sync `docs/superpowers/plans/2026-08-13-sync-box.md:1158`).
