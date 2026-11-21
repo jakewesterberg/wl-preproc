@@ -182,6 +182,18 @@ ADJACENT_VALUE_STEPS = (1, 2)
 #: adjacent too; two drops (4 or more) are not told from a gap, and are one.
 ONE_COUNT_TIMEBASES = frozenset({"rp1-pio-si", "rp1-pio"})
 ONE_COUNT_VALUE_STEPS = (*ADJACENT_VALUE_STEPS, 3)
+#: wl-sync's figure for RP1's crystal against CLOCK_MONOTONIC, the rate
+#: unmeasured: code words on a split clock drift from barcodes by about this
+#: times the time since the box's process began capture (design spec
+#: `2026-11-04-syncbox-header-design.md` section 7). Defined here, beside the
+#: timebases, since the daily report (`cli/report.py`) and the NI's
+#: cross-check (`schema/timebase.py`) both read it.
+SPLIT_CLOCK_PPM = 50.0
+#: The `timebase` values whose ticks share one rate: the test backend's, with no
+#: hardware clock, and the two of wl-sync's one-clock build, which put every
+#: path on one count at one rate (its note 7). Every other value, or none,
+#: leaves the rates unknown.
+ONE_RATE_TIMEBASES = frozenset({"fake"}) | ONE_COUNT_TIMEBASES
 #: The most a boundary's tick step may differ from its barcode value step
 #: before one clock is contradicted: a roll in place's second frame comes
 #: about 1.6 s after the first for a value step of 2, and NTP slews both.

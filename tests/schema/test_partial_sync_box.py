@@ -31,6 +31,14 @@ DESYNC_LOST_UNTIL_S = 3.003
 # The box's code word, by its number in its log, read as another: the first
 # trial's first trial-number payload word, at 0.011 s.
 FLIPPED_BOX_WORD = 11
+# The last trial number of the box's part, by its number in the box's log: the
+# third trial's payload, 3, at 7.003 s, after the escape at 7.001 s. The box's
+# last barcode the NI holds is at 8 s, so the words after it in the NI's
+# stream are no part of what this word is checked against.
+LAST_TRIAL_NUMBER_WORD = 26
+# A lost-edge window inside the box's part, on a photodiode line, over the
+# code words from 2.998 s to 3.004 s: the box lost edges there, not words.
+EDGE_LOSS_S = (2.9, 3.1)
 
 
 def _start_the_ni_late(session_dir, at_s: float) -> None:
@@ -156,8 +164,12 @@ def landed(dj_conn, prefix, tmp_path_factory):
     same as `partial` with the camera's barcode line dead; `box_loss`, the
     same as `partial` with a desync inside the box's part and the two code
     words it lost gone from the box's log; `disagree`, the same as `partial`
-    with one of the box's code words read as another; and `synced`, the box
+    with one of the box's code words read as another; `last_trial`, the same
+    with the part's last trial number read as another; `edge_loss`, the same
+    with a photodiode edge lost inside the box's part; and `synced`, the box
     running the whole session and keeping time. Deleted afterwards."""
+    from wl_sync.pins import GPIO_MAP
+
     from wl_preproc import daemon
     from wl_preproc.schema import pipeline
     from wl_preproc.synth.recipe import NI_CLOCK_RECIPE, SyncBoxLossSpec
@@ -191,6 +203,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
             _lose_the_box_words(session_dir, DESYNC_FROM_S, DESYNC_LOST_UNTIL_S)
         if name == "disagree":
             _flip_a_box_word(session_dir, FLIPPED_BOX_WORD)
+        if name == "last_trial":
+            _flip_a_box_word(session_dir, LAST_TRIAL_NUMBER_WORD)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
@@ -201,6 +215,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("box_loss", syncbox_stop_s=STOP_S,
          syncbox_losses=(SyncBoxLossSpec(cause="desync", count=2, from_s=DESYNC_FROM_S),))
     land("disagree", syncbox_stop_s=STOP_S)
+    land("last_trial", syncbox_stop_s=STOP_S)
+    land("edge_loss", syncbox_stop_s=STOP_S, syncbox_losses=(SyncBoxLossSpec(
+        cause="buffer_overflow", count=3, from_s=EDGE_LOSS_S[0], to_s=EDGE_LOSS_S[1], gpio=GPIO_MAP["pd1_comp"]),))
     land("synced")
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
@@ -399,27 +416,8 @@ def test_the_passes_report_no_error(landed):
     """Every stage runs on these sessions without an error: the pass's report
     holds no error but those naming another session, a stage-wide one
     included."""
-    for name in ("partial", "before_ni", "box_loss", "disagree", "synced"):
+    for name in ("partial", "before_ni", "box_loss", "disagree", "last_trial", "edge_loss", "synced"):
         assert _errors_of(landed.report, landed.key(name)) == [], name
-
-
-def _box_part(session_dir, reference) -> list[tuple[float, int]]:
-    """The box's code words the cross-check reads, found here from the box's
-    log as the plan's decision 3 states it: in box time, from the box's time
-    of the smallest NI-reference value it holds to that of the largest, less
-    every loss window."""
-    import math
-
-    from wl_preproc.timebase import segments
-
-    box = segments.read_syncbox_session(session_dir)
-    own = box.reference()
-    shared = set(own) & set(reference)
-    low, high = own[min(shared)], own[max(shared)]
-    windows = [(-math.inf if loss.start_s is None else loss.start_s,
-                math.inf if loss.stop_s is None else loss.stop_s) for loss in box.losses()]
-    return [(time_s, word) for time_s, word in box.codes()
-            if low <= time_s <= high and not any(start < time_s < stop for start, stop in windows)]
 
 
 def test_a_partial_box_that_agrees_records_its_agreement(landed):
@@ -441,7 +439,7 @@ def test_a_partial_box_that_agrees_records_its_agreement(landed):
     assert row["event_code_agreement"] == pytest.approx(1.0)
     assert row["decode_errors"] == 0
     # The fixture is what it says: the box recorded part of the NI's stream.
-    part = [word for _time_s, word in _box_part(session_dir, clock_for(key, session_dir).barcode_reference())]
+    part = timebase._box_words_recorded(session_dir, clock_for(key, session_dir).barcode_reference())
     whole = [word for _time_s, word in nidq_codes(nidq_files(session_dir)[0])]
     assert part and len(part) < len(whole)
     assert agreement.code_agreement(part, whole) < agreement.AGREEMENT_THRESHOLD
@@ -485,3 +483,58 @@ def test_a_box_whose_codes_disagree_is_d(landed):
     assert row["event_code_agreement"] < agreement.AGREEMENT_THRESHOLD
     assert row["decode_errors"] == 0
     assert (row["n_systems_aligned"], row["n_rejected_segments"]) == (4, 0)
+
+
+def test_a_box_whose_last_trial_number_disagrees_is_d(landed):
+    """Amendment 59's "both streams are cut" (fix round 1, review I1 and M7):
+    the box's last trial number is read as another. Against the NI's whole
+    session, the matcher's last segment would run on into everything the NI
+    recorded after the box's part ended, and find the wrong word there. Cut to
+    the box's span, the NI's stream holds nothing for it to hide in, and the
+    session is D."""
+    from wl_preproc.contracts.events import Escape
+    from wl_preproc.events import agreement
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase import segments
+
+    key = landed.key("last_trial")
+    session_dir = landed.session_dir("last_trial")
+    # The fixture is what it says: the flipped word is the payload of the
+    # part's last trial-number escape.
+    box = segments.read_syncbox_session(session_dir)
+    codes = box.codes()
+    high = max(box.reference().values())
+    escapes = [index for index, (time_s, word) in enumerate(codes)
+               if word == Escape.TRIAL_NUMBER and time_s <= high]
+    assert escapes[-1] + 2 == LAST_TRIAL_NUMBER_WORD
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "D", row
+    assert row["n_full_code_records"] == 2
+    assert row["event_code_agreement"] < agreement.AGREEMENT_THRESHOLD
+    assert row["decode_errors"] == 0
+
+
+def test_an_edge_window_does_not_cut_the_part(landed):
+    """Fix round 1 (R9): only a loss of code words (`path` W, a gap among
+    them) cuts the box's part. A lost photodiode edge loses no code word, so
+    the part keeps every word across its window, as many as `partial`'s."""
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase import segments
+    from wl_preproc.timebase.clock import clock_for
+
+    key = landed.key("edge_loss")
+    session_dir = landed.session_dir("edge_loss")
+    box = segments.read_syncbox_session(session_dir)
+    (loss,) = box.losses()
+    assert loss.path == "E"
+    assert (loss.start_s, loss.stop_s) == pytest.approx(EDGE_LOSS_S, abs=1e-6)
+    inside = [word for time_s, word in box.codes() if EDGE_LOSS_S[0] < time_s < EDGE_LOSS_S[1]]
+    assert len(inside) == 7
+    part = timebase._box_words_recorded(session_dir, clock_for(key, session_dir).barcode_reference())
+    honest = timebase._box_words_recorded(
+        landed.session_dir("partial"), clock_for(landed.key("partial"), landed.session_dir("partial"))
+        .barcode_reference())
+    assert len(part) == len(honest) == 28
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert row["tier"] == "N", row
+    assert row["event_code_agreement"] == pytest.approx(1.0)

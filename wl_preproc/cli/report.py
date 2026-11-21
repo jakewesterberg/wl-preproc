@@ -20,7 +20,7 @@ from wl_sync.clock import BARCODE_EPOCH
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.schema import DEFAULT_PREFIX
-from wl_preproc.timebase.segments import ONE_COUNT_TIMEBASES
+from wl_preproc.timebase.segments import ONE_RATE_TIMEBASES, SPLIT_CLOCK_PPM
 
 # Ingested is windowed to 24 h because "what landed since yesterday's report"
 # is the question that section answers. Quarantine is not the same question and
@@ -1425,18 +1425,6 @@ def _landed_without(session: dict) -> str:
                                     "session_datetime": session["session_datetime"]}).to_dicts(order_by="system")
     return "".join(f" — landed without {row['system']} by {row['actor']} at {row['recorded_at']:%Y-%m-%d %H:%M} "
                    f"UTC: {row['reason']}" for row in rows)
-
-
-#: wl-sync's figure for RP1's crystal against CLOCK_MONOTONIC, the rate
-#: unmeasured: code words on a split clock drift from barcodes by about this
-#: times the time since the box's process began capture (design spec
-#: `2026-11-04-syncbox-header-design.md` section 7).
-SPLIT_CLOCK_PPM = 50.0
-#: The `timebase` values whose ticks share one rate: the test backend's, with no
-#: hardware clock, and the two of wl-sync's one-clock build, which put every
-#: path on one count at one rate (its note 7). Every other value, or none,
-#: leaves the rates unknown.
-ONE_RATE_TIMEBASES = frozenset({"fake"}) | ONE_COUNT_TIMEBASES
 
 
 def _syncbox_losses(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[dict]:

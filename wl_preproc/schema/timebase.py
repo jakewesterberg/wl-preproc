@@ -812,19 +812,23 @@ class TimingProvenance(dj.Computed):
                 # The cross-check (amendment 59, as the plan's decision 3
                 # reads it): where the box was placed by the NI's barcodes,
                 # its words over what it recorded must all be found, in
-                # order, in the NI's stream. Containment, not agreement: the
-                # box's words are a part of the NI's whole, and the NI's
-                # words from where the box never recorded are no
-                # disagreement. Its own decode errors do not count; the
-                # tier's `decode_errors` stays the NI's. With no box placed,
-                # or none of its words in what the NI covers, the NI stands
-                # alone, as in 3b-1.
+                # order, in the NI's stream over the same span. Containment,
+                # not agreement: the box's words are a part of the NI's, and
+                # the NI's words from where the box lost them are no
+                # disagreement. Both streams are cut (fix round 1, review
+                # I1): against the NI's whole session the matcher's last
+                # segment runs on into everything the NI recorded after the
+                # box's part, where a wrong last word finds its match. Its
+                # own decode errors do not count; the tier's `decode_errors`
+                # stays the NI's. With no box placed, or none of its words in
+                # what the NI covers, the NI stands alone, as in 3b-1.
                 if any(fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits):
-                    part = _box_words_recorded(
+                    cross_check = _box_cross_check(
                         session_dir, clock_for(session_key, session_dir).barcode_reference())
-                    if part:
-                        event_code_agreement = agreement.code_containment(
-                            part, [code for _, code in ni_pairs])
+                    if cross_check is not None:
+                        part, (ni_low_s, ni_high_s) = cross_check
+                        whole = [code for time_s, code in ni_pairs if ni_low_s <= time_s <= ni_high_s]
+                        event_code_agreement = agreement.code_containment(part, whole)
                         n_full_code_records = 2
             # What the NI's barcodes cover, stored for the record and the NWB
             # file's notes (amendment 55; the plan's decision 1). None where
@@ -996,22 +1000,46 @@ class TimingProvenance(dj.Computed):
         )
 
 
-def _box_words_recorded(session_dir: Path, reference: dict[int, float]) -> list[int]:
-    """The sync box's code words over what it recorded of an NI-timed
-    session, the cross-check's part (amendment 59; the plan's decision 3),
-    cut wholly in the box's own session time, so no box-to-NI fit enters and
-    a split clock's drift cannot move a word across an edge:
+#: How far past the box's span, in NI seconds, the NI's stream is kept for the
+#: cross-check (fix round 1, ruling R8). The box's words are cut in its own
+#: time and the NI's in the NI's, so the NI's cut must hold every word a box
+#: word could be placed at: on one rate, within the fit's residual,
+#: microseconds. Half a barcode interval holds that many times over and still
+#: stops the NI's stream well short of the next barcode's stretch, so a wrong
+#: word at the box's edge has half an interval of the NI's words, not the rest
+#: of the session, to be matched against. On a split clock the box's code
+#: words drift from its barcodes, so `_box_cross_check` widens it by that
+#: drift (`segments.SPLIT_CLOCK_PPM`).
+CROSS_CHECK_MARGIN_S = 0.5
+
+
+def _box_cross_check(session_dir: Path, reference: dict[int, float]
+                     ) -> tuple[list[int], tuple[float, float]] | None:
+    """The cross-check's two cuts (amendment 59; the plan's decision 3; fix
+    round 1): the sync box's code words over what it recorded of an NI-timed
+    session, and the NI-seconds span the NI's stream is cut to.
+
+    The box's words are cut wholly in its own session time, so no box-to-NI
+    fit enters:
 
     - from the box's time of the smallest NI-reference value it also holds
       to that of the largest, both included: what the NI's barcodes cover;
-    - less every loss window of session time's clock (`SyncBoxSession.losses`:
-      its `L` records and its gaps), a window open at both ends, since its
-      ends are records the box captured (`segments.timing_check_fails`), an
-      end None running to infinity.
+    - less every window of a loss of its code words (`SyncBoxSession.losses`
+      on path W: its `W` `L` records and its gaps; ruling R9), a window open
+      at both ends, since its ends are records the box captured
+      (`segments.timing_check_fails`), an end None running to infinity. A
+      lost edge (path E) loses no code word, and cuts nothing.
+
+    The NI's span is those two values' NI times, `reference`'s own, widened
+    by `CROSS_CHECK_MARGIN_S`, and on a box whose session-time segments name
+    a timebase outside `segments.ONE_RATE_TIMEBASES` also by
+    `segments.SPLIT_CLOCK_PPM` times its last code word's tick, the time
+    since its capture began.
 
     A loss of a segment outside session time's clock is placed nowhere, and
-    its words are not in `codes()`, so it cuts nothing. Empty where the box
-    holds no NI-reference value, or its log cannot be read."""
+    its words are not in `codes()`, so it cuts nothing. None where the box
+    holds no NI-reference value, holds no word over it, or its log cannot be
+    read."""
     import math
 
     from wl_preproc.timebase import segments
@@ -1022,16 +1050,31 @@ def _box_words_recorded(session_dir: Path, reference: dict[int, float]) -> list[
         codes = box.codes()
         losses = box.losses()
     except (FileNotFoundError, ValueError):
-        return []
+        return None
     shared = own.keys() & reference.keys()
     if not shared:
-        return []
+        return None
     low, high = own[min(shared)], own[max(shared)]
     windows = [(-math.inf if loss.start_s is None else loss.start_s,
                 math.inf if loss.stop_s is None else loss.stop_s)
-               for loss in losses if box.in_session_time(loss.index)]
-    return [word for time_s, word in codes
+               for loss in losses if loss.path == "W" and box.in_session_time(loss.index)]
+    part = [word for time_s, word in codes
             if low <= time_s <= high and not any(start < time_s < stop for start, stop in windows)]
+    if not part:
+        return None
+    timed = [log for index, log in enumerate(box.logs) if box.in_session_time(index)]
+    margin_s = CROSS_CHECK_MARGIN_S
+    if any(log.timebase not in segments.ONE_RATE_TIMEBASES for log in timed):
+        last_tick_us = max((tick_us for log in timed for tick_us, _word in log.codes), default=0)
+        margin_s += segments.SPLIT_CLOCK_PPM * 1e-6 * last_tick_us / 1e6
+    return part, (reference[min(shared)] - margin_s, reference[max(shared)] + margin_s)
+
+
+def _box_words_recorded(session_dir: Path, reference: dict[int, float]) -> list[int]:
+    """The box's part of the cross-check alone (`_box_cross_check`): empty
+    where there is none."""
+    cross_check = _box_cross_check(session_dir, reference)
+    return [] if cross_check is None else cross_check[0]
 
 
 # Why a session timed before its clock was recorded is given the sync box's
