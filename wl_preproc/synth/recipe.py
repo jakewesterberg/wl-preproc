@@ -363,6 +363,11 @@ class SessionRecipe(BaseModel):
     # None by default (design spec `2026-11-04-syncbox-header-design.md`
     # section 10).
     syncbox_roll: SyncBoxRollSpec | None = None
+    # The sync box stopping for good at this session time, as a Pi that lost
+    # power: no device carries a barcode from then on, and its log holds the
+    # records before it and no trailer. None by default, so every existing
+    # profile is byte-identical.
+    syncbox_stop_s: float | None = None
     # What the box's header says of its clocks, and its measured barcode delay:
     # "fake", the test backend its unit runs until bench acceptance, and
     # unmeasured, by default.
@@ -625,6 +630,16 @@ class SessionRecipe(BaseModel):
             if change is not None and change.at_s + change.gap_s >= self.duration_s:
                 raise ValueError(f"{name} resumes at {change.at_s + change.gap_s} s, at or after the session ends "
                                  f"at {self.duration_s} s; its second segment would record nothing")
+        if self.syncbox_stop_s is not None:
+            if "syncbox" not in self.systems:
+                raise ValueError("syncbox_stop_s needs the sync box in systems: nothing else stops")
+            for name, change in (("syncbox_restart", self.syncbox_restart), ("syncbox_roll", self.syncbox_roll)):
+                if change is not None:
+                    raise ValueError(f"syncbox_stop_s and {name} together: a box that has stopped for good "
+                                     f"does not resume")
+            if not 0.0 < self.syncbox_stop_s < self.duration_s:
+                raise ValueError(f"syncbox_stop_s {self.syncbox_stop_s} s lies outside the session's "
+                                 f"{self.duration_s} s; the box would record all of it or none")
         for loss in self.syncbox_losses:
             if any(time_s is not None and not 0.0 <= time_s < self.duration_s for time_s in (loss.from_s, loss.to_s)):
                 raise ValueError(f"a sync box loss's window, {loss.from_s} to {loss.to_s} s, lies outside the "

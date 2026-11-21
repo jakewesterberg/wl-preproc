@@ -4634,6 +4634,13 @@ def test_registering_a_third_detector_does_not_raise(daemon_module):
         assert params["some_threshold"] == 0.25
     finally:
         del DETECTORS["a_third_detector"]
+        # Its paramset too: left in the database every module shares, it names
+        # a detector no later process registers, and every later daemon pass
+        # errs on each session's detection key for it.
+        for row in (paramset.ParamSet & {"paramset_type": "eye_detection"}).to_dicts():
+            if row["params"].get("detector") == "a_third_detector":
+                (paramset.ParamSet & {"paramset_type": row["paramset_type"],
+                                      "paramset_idx": row["paramset_idx"]}).delete(prompt=False)
 
 
 def test_the_shared_threshold_still_wins_over_a_detectors_own_field():

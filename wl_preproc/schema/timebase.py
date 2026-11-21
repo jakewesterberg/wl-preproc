@@ -46,6 +46,13 @@ _TIME_SOURCE_ENUM = "enum('barcode','trigger','clock','none','strobes')"
 # first minor: the identity row stops assuming the sync box).
 _KEEPS_TIME = {"syncbox": "syncbox", "nidq": "spikeglx"}
 
+# The systems carrying the sync box's barcodes that, under the NI's clock, are
+# fitted by them against the NI's own (part 3b-3; design spec
+# `2026-10-18-training-records-and-backup-clock-design.md`, amendment 56): the
+# box itself, from its `B` records, the eye tracker and the cameras. SpikeGLX
+# keeps the identity map and Intan its strobes, so neither is here.
+_BY_THE_NIS_BARCODES = frozenset({"syncbox", "ohdpi", "bcam"})
+
 # 'A', 'B', 'C' or 'D' -- 'pending' retired -- or 'N', where the NI kept time
 # and its codes hold every run (part 3b-1). Design spec section 8: tier D was
 # always fully derivable from timing alone -- any timing check failed -- but
@@ -382,12 +389,16 @@ class SystemTimebase(dj.Computed):
         'strobes', part 3b-2): each recording is anchored on its own against
         the NI's (`timebase/intan.py::place_intan`), and the ones that anchor
         are pooled into one rate, each with its own intercept, as barcodes
-        are. Every other system is `unfittable`, by no mechanism
-        (`time_source` 'none'): the eye tracker and the cameras wait for lab
-        time's host stamps, and a sync box that recorded part of the session
-        for 3b-3 (design spec
-        `2026-10-18-training-records-and-backup-clock-design.md`, amendments
-        40 and 44 to 51).
+        are. The sync box, the eye tracker and the cameras
+        (`_BY_THE_NIS_BARCODES`) take the barcode path below against the NI's
+        own barcodes, `clock.barcode_reference()` (part 3b-3, amendments 54
+        and 56): a box that recorded part of the session places them over the
+        part it covered. Where the NI decoded no barcode, that reference is
+        empty, and they are `unfittable`, by no mechanism (`time_source`
+        'none'), as in 3b-1: a dead NI barcode line places nothing, and never
+        makes their files outside the span (the plan's decision 2). See
+        design spec `2026-10-18-training-records-and-backup-clock-design.md`,
+        amendments 40 and 44 to 57.
         """
         from wl_preproc.schema import ingest
         from wl_preproc.timebase import segments
@@ -419,11 +430,14 @@ class SystemTimebase(dj.Computed):
         # trigger-timed yet. Whether the sync box can also trigger ohdpi's
         # frames is design spec section 12's open hardware question; until it
         # is answered, claiming 'trigger' would assert a precision that was
-        # never measured. Under the NI, 'clock' for SpikeGLX and 'none' for
-        # every other system.
+        # never measured. Under the NI, 'clock' for SpikeGLX, 'strobes' for
+        # Intan, and 'barcode' for the systems carrying the box's barcodes
+        # where the NI decoded some; 'none' for them where it decoded none.
         by_strobes = clock.source == "nidq" and key["system"] == "rhs"
         if clock.source == "nidq":
-            row["time_source"] = "clock" if keeps_time else "strobes" if by_strobes else "none"
+            reference = clock.barcode_reference() if key["system"] in _BY_THE_NIS_BARCODES else {}
+            row["time_source"] = ("clock" if keeps_time else "strobes" if by_strobes
+                                  else "barcode" if reference else "none")
 
         # `scan.barcodes` is the gap-CLEAR set, not the raw decode:
         # `segments.scan_system` drops any word a dropped-frame gap fell
@@ -443,8 +457,9 @@ class SystemTimebase(dj.Computed):
             # sync box, matched are the barcodes session time holds: a later
             # process's are the box's too, but nothing places them until a
             # bridge does (part 1's deferred finding; design spec
-            # `2026-11-04-syncbox-header-design.md` section 9). The NI's clock
-            # places no barcode, so under it none is matched.
+            # `2026-11-04-syncbox-header-design.md` section 9). Under the NI's
+            # clock SpikeGLX's own barcodes ARE the reference (amendment 54),
+            # so nothing is matched against it and none is counted.
             reference = clock.barcode_reference() if decoded and clock.source == "syncbox" else {}
             self.insert1(
                 {
@@ -464,13 +479,16 @@ class SystemTimebase(dj.Computed):
             self._make_by_strobes(row, scans, session_dir, nominal_rate_hz)
             return
 
-        if clock.source == "nidq":
-            # No way onto the NI's clock yet (amendment 51): the fit columns
-            # stay NULL, as for any system that could not be fitted.
+        if clock.source == "nidq" and row["time_source"] == "none":
+            # No way onto the NI's clock: not a system carrying the box's
+            # barcodes, or the NI decoded none of them (amendment 51; the
+            # plan's decision 2). The fit columns stay NULL, as for any system
+            # that could not be fitted.
             self.insert1({**row, "fit_status": "unfittable", "nominal_rate_hz": nominal_rate_hz})
             return
 
-        reference = clock.barcode_reference()
+        if clock.source != "nidq":
+            reference = clock.barcode_reference()
         try:
             fit = fit_rate_across([scan.barcodes for scan in scans], reference, nominal_rate_hz)
         except ValueError:
@@ -573,6 +591,8 @@ class TimingProvenance(dj.Computed):
     n_full_code_records        : int unsigned  # independent Pi/NI records that decoded content
     n_strobe_witnesses         : int unsigned  # RHS-style witnesses whose edge count matched
     decode_errors               : int unsigned  # DecodeErrors across every full-code record
+    covered_start_s=null : double  # under the NI: its first barcode, session s; null where it decoded none, or under the sync box
+    covered_end_s=null   : double  # under the NI: its last barcode, session s; null where covered_start_s is
     """
 
     @property
@@ -645,21 +665,42 @@ class TimingProvenance(dj.Computed):
         )
         aligned = [fit for fit in fits if fit["fit_status"] == "fitted"]
 
-        # A timing check failed if any present system could not be fitted, or
-        # if any file was rejected. Both are failures of THIS phase's own
-        # checks, unrelated to any of TierInputs' own fields and unchanged
-        # from before 1c-5.
-        failed = len(aligned) < len(systems) or bool(rejected)
-
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         clocks = (SessionClock & session_key).to_dicts()
         under_the_ni = bool(clocks) and clocks[0]["source"] == "nidq"
+
+        # Under the NI's clock a file whose barcodes the NI did not record is
+        # left out and named, not failed, and so is a system whose every file
+        # is that (amendment 57). Such a system is `unfittable` with no
+        # `Segment` row: `Segment.make` writes each file of a system with no
+        # fit as rejected, so its reasons are every file's. Only one fitted
+        # by the NI's barcodes (`time_source` 'barcode'): with no reference
+        # nothing is outside it (the plan's decision 2), whatever a file's
+        # reason says.
+        outside = [row for row in rejected
+                   if under_the_ni and row["reason"] == segments.OUTSIDE_COVERED_SPAN]
+        left_out = {
+            fit["system"] for fit in fits
+            if fit["fit_status"] == "unfittable" and fit["time_source"] == "barcode"
+            and any(row["system"] == fit["system"] for row in outside)
+            and all(row["reason"] == segments.OUTSIDE_COVERED_SPAN
+                    for row in rejected if row["system"] == fit["system"])
+        }
+
+        # A timing check failed if any present system could not be fitted, or
+        # if any file was rejected. Both are failures of THIS phase's own
+        # checks, unrelated to any of TierInputs' own fields and unchanged
+        # from before 1c-5, but for what amendment 57 leaves out.
+        failed = len(aligned) + len(left_out) < len(systems) or len(rejected) > len(outside)
 
         # And if the box lost code words of session time where they mattered:
         # in a measured run, or by a desync no code word follows, after which
         # nothing is measured (design spec `2026-11-04-syncbox-header-design.md`
         # section 6; wl-sync's note 8 closes one that a code word follows).
-        if "syncbox" in system_names:
+        # Not under the NI's clock (amendment 60): there the NI's codes are
+        # the session's record and the box's a cross-check only, so its
+        # losses are not asked, and never fail the session.
+        if "syncbox" in system_names and not under_the_ni:
             runs = measured_runs(session_key)
             try:
                 failed = failed or segments.read_syncbox_session(session_dir).fails_the_timing_check(runs)
@@ -716,11 +757,14 @@ class TimingProvenance(dj.Computed):
         # on its own, unconditionally, below; only the evidence-gathering
         # gate changed.
         #
-        # Under the NI's clock the sync box is never fitted (`SystemTimebase.
-        # make`: it has no way onto that clock until 3b-3), so nothing below
-        # reads the NI's codes as the Pi's or asks the NI's clock for a
-        # barcode reference.
-        syncbox_fitted = any(
+        # **Only where the sync box is the clock** (amendment 61). Under the
+        # NI's clock the box is fitted too, by the NI's barcodes
+        # (`SystemTimebase.make`, amendment 56), but its codes are not the
+        # session's: `clock_for(...).codes()` there is the NI's own, which
+        # this block would read as the Pi's and compare with themselves. So
+        # nothing below reads the NI's codes as the Pi's; the box's enter
+        # under the NI only through amendment 59's cross-check.
+        syncbox_fitted = bool(clocks) and clocks[0]["source"] == "syncbox" and any(
             fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits
         )
         syncbox_pairs: list[tuple[float, int]] = []
@@ -745,15 +789,19 @@ class TimingProvenance(dj.Computed):
         # are the one full-code record (amendment 50), decoded as rule 2
         # decodes them and held against the rig's record again, since the
         # choice that made the NI the clock was made before the session was
-        # processed. Never `clock.barcode_reference()`, which the NI's clock
-        # does not have, and nothing here reads these codes as the sync box's.
+        # processed. Its codes, not its barcodes: `clock.barcode_reference()`
+        # under the NI is the NI's barcodes (amendment 54), which place the
+        # systems carrying the box's and hold no code word, and nothing here
+        # reads these codes as the sync box's.
         ni_holds_every_run = False
+        covered_span = None
         if under_the_ni:
             from wl_preproc.timebase.clock import NoClock, nidq_codes, nidq_files
             from wl_preproc.timebase.holding import unheld
 
             try:
-                decoded = decode_stream(nidq_codes(nidq_files(session_dir)[0]))
+                ni_pairs = nidq_codes(nidq_files(session_dir)[0])
+                decoded = decode_stream(ni_pairs)
                 rig_runs, rig_trials = _rig_record(session_dir, key["subject"])
             except (FileNotFoundError, ValueError, IndexError, NoClock):
                 pass  # the codes cannot be read: not held, so not tier N
@@ -761,6 +809,34 @@ class TimingProvenance(dj.Computed):
                 decode_errors = sum(1 for event in decoded if isinstance(event, DecodeError))
                 n_full_code_records = 1
                 ni_holds_every_run = unheld(decoded, rig_runs, rig_trials) is None
+                # The cross-check (amendment 59, as the plan's decision 3
+                # reads it): where the box was placed by the NI's barcodes,
+                # its words over what it recorded must all be found, in
+                # order, in the NI's stream over the same span. Containment,
+                # not agreement: the box's words are a part of the NI's, and
+                # the NI's words from where the box lost them are no
+                # disagreement. Both streams are cut (fix round 1, review
+                # I1): against the NI's whole session the matcher's last
+                # segment runs on into everything the NI recorded after the
+                # box's part, where a wrong last word finds its match. Its
+                # own decode errors do not count; the tier's `decode_errors`
+                # stays the NI's. With no box placed, or none of its words in
+                # what the NI covers, the NI stands alone, as in 3b-1.
+                if any(fit["system"] == "syncbox" and fit["fit_status"] == "fitted" for fit in fits):
+                    cross_check = _box_cross_check(
+                        session_dir, clock_for(session_key, session_dir).barcode_reference())
+                    if cross_check is not None:
+                        part, (ni_low_s, ni_high_s) = cross_check
+                        whole = [code for time_s, code in ni_pairs if ni_low_s <= time_s <= ni_high_s]
+                        event_code_agreement = agreement.code_containment(part, whole)
+                        n_full_code_records = 2
+            # What the NI's barcodes cover, stored for the record and the NWB
+            # file's notes (amendment 55; the plan's decision 1). None where
+            # it decoded none.
+            try:
+                covered_span = clock_for(session_key, session_dir).covered_span()
+            except (FileNotFoundError, ValueError, NoClock):
+                covered_span = None
 
         if syncbox_available:
             syncbox_events = decode_stream(syncbox_pairs)
@@ -787,6 +863,8 @@ class TimingProvenance(dj.Computed):
                 )
                 if spikeglx_fit is not None:
                     rate = segments.rate_fit_from_row(spikeglx_fit)
+                    # The sync box's reference: only its clock reaches here
+                    # (`syncbox_fitted`, amendment 61).
                     reference = clock_for(session_key, session_dir).barcode_reference()
                     pairs: list[tuple[float, int]] = []
                     for scan in segments.scan_system("spikeglx", session_dir / "spikeglx"):
@@ -879,7 +957,8 @@ class TimingProvenance(dj.Computed):
             decode_errors=decode_errors,
         )
         if under_the_ni:
-            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 else "D"
+            box_agrees = event_code_agreement is None or event_code_agreement >= agreement.AGREEMENT_THRESHOLD
+            tier = "N" if ni_holds_every_run and not failed and decode_errors == 0 and box_agrees else "D"
         else:
             tier = "D" if failed else agreement.resolve_tier(inputs)
 
@@ -915,8 +994,87 @@ class TimingProvenance(dj.Computed):
                 "n_full_code_records": n_full_code_records,
                 "n_strobe_witnesses": n_strobe_witnesses,
                 "decode_errors": decode_errors,
+                "covered_start_s": None if covered_span is None else covered_span[0],
+                "covered_end_s": None if covered_span is None else covered_span[1],
             }
         )
+
+
+#: How far past the box's span, in NI seconds, the NI's stream is kept for the
+#: cross-check (fix round 1, ruling R8). The box's words are cut in its own
+#: time and the NI's in the NI's, so the NI's cut must hold every word a box
+#: word could be placed at: on one rate, within the fit's residual,
+#: microseconds. Half a barcode interval holds that many times over and still
+#: stops the NI's stream well short of the next barcode's stretch, so a wrong
+#: word at the box's edge has half an interval of the NI's words, not the rest
+#: of the session, to be matched against. On a split clock the box's code
+#: words drift from its barcodes, so `_box_cross_check` widens it by that
+#: drift (`segments.SPLIT_CLOCK_PPM`).
+CROSS_CHECK_MARGIN_S = 0.5
+
+
+def _box_cross_check(session_dir: Path, reference: dict[int, float]
+                     ) -> tuple[list[int], tuple[float, float]] | None:
+    """The cross-check's two cuts (amendment 59; the plan's decision 3; fix
+    round 1): the sync box's code words over what it recorded of an NI-timed
+    session, and the NI-seconds span the NI's stream is cut to.
+
+    The box's words are cut wholly in its own session time, so no box-to-NI
+    fit enters:
+
+    - from the box's time of the smallest NI-reference value it also holds
+      to that of the largest, both included: what the NI's barcodes cover;
+    - less every window of a loss of its code words (`SyncBoxSession.losses`
+      on path W: its `W` `L` records and its gaps; ruling R9), a window open
+      at both ends, since its ends are records the box captured
+      (`segments.timing_check_fails`), an end None running to infinity. A
+      lost edge (path E) loses no code word, and cuts nothing.
+
+    The NI's span is those two values' NI times, `reference`'s own, widened
+    by `CROSS_CHECK_MARGIN_S`, and on a box whose session-time segments name
+    a timebase outside `segments.ONE_RATE_TIMEBASES` also by
+    `segments.SPLIT_CLOCK_PPM` times its last code word's tick, the time
+    since its capture began.
+
+    A loss of a segment outside session time's clock is placed nowhere, and
+    its words are not in `codes()`, so it cuts nothing. None where the box
+    holds no NI-reference value, holds no word over it, or its log cannot be
+    read."""
+    import math
+
+    from wl_preproc.timebase import segments
+
+    try:
+        box = segments.read_syncbox_session(session_dir)
+        own = box.reference()
+        codes = box.codes()
+        losses = box.losses()
+    except (FileNotFoundError, ValueError):
+        return None
+    shared = own.keys() & reference.keys()
+    if not shared:
+        return None
+    low, high = own[min(shared)], own[max(shared)]
+    windows = [(-math.inf if loss.start_s is None else loss.start_s,
+                math.inf if loss.stop_s is None else loss.stop_s)
+               for loss in losses if loss.path == "W" and box.in_session_time(loss.index)]
+    part = [word for time_s, word in codes
+            if low <= time_s <= high and not any(start < time_s < stop for start, stop in windows)]
+    if not part:
+        return None
+    timed = [log for index, log in enumerate(box.logs) if box.in_session_time(index)]
+    margin_s = CROSS_CHECK_MARGIN_S
+    if any(log.timebase not in segments.ONE_RATE_TIMEBASES for log in timed):
+        last_tick_us = max((tick_us for log in timed for tick_us, _word in log.codes), default=0)
+        margin_s += segments.SPLIT_CLOCK_PPM * 1e-6 * last_tick_us / 1e6
+    return part, (reference[min(shared)] - margin_s, reference[max(shared)] + margin_s)
+
+
+def _box_words_recorded(session_dir: Path, reference: dict[int, float]) -> list[int]:
+    """The box's part of the cross-check alone (`_box_cross_check`): empty
+    where there is none."""
+    cross_check = _box_cross_check(session_dir, reference)
+    return [] if cross_check is None else cross_check[0]
 
 
 # Why a session timed before its clock was recorded is given the sync box's

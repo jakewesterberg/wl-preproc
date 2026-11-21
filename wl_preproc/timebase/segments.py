@@ -98,21 +98,55 @@ NI_RESTARTED = "ni_restarted"
 # count, go to that module's log (part 3b-2; amendment 49).
 NO_STROBE_ANCHOR = "no_strobe_anchor"
 
+# Not a verdict `classify_segment` can reach either: under the NI's clock a
+# file carrying the sync box's barcodes is placed by the NI's own
+# (`timebase/clock.py::ni_barcodes`), and one that decoded barcodes, every one
+# of them before the NI's first or after its last, was recorded while the box
+# ran but outside the NI's record of it, so nothing places it. Under the NI,
+# and only there, it does not fail the session, nor does a system whose every
+# file is it; a file that decoded no barcode at all is still `no_barcode`, and
+# fails (part 3b-3; amendment 57). A file sharing none whose values lie between
+# the NI's ends ran inside the span, under a hole in the NI's decode or a
+# misdecoded value, so it is `NO_SHARED_BARCODE`, and fails (`unshared_reason`;
+# ruling R14, amendment 76).
+OUTSIDE_COVERED_SPAN = "outside_covered_span"
+
 #: Every reason `RejectedSegment.reason` can hold, and where each is
 #: decided. `TOO_SHORT` and `NO_BARCODE` come from `classify_segment`.
 #: `UNFITTED_SYSTEM` is decided per SYSTEM, above the file, when no rate fit
 #: exists for it to inherit, or, under the NI's clock, when the system has no
-#: way onto it. `NO_SHARED_BARCODE` is decided per FILE, in `Segment.make`,
+#: way onto it: no strobes, or barcodes the NI did not record (amendments 51
+#: and 54). `NO_SHARED_BARCODE` is decided per FILE, in `Segment.make`,
 #: against session time's reference. `GAP_CORRUPTED` is decided per FILE, in
 #: `Segment.make`, overriding the verdict `classify_segment` returned for that
 #: file rather than adding a fact `classify_segment` itself lacked the inputs
 #: to see. `NI_RESTARTED` is decided per FILE, in `Segment.make`, under the
 #: NI's clock. `NO_STROBE_ANCHOR` is decided per FILE, in `Segment.make`,
 #: under the NI's clock, for an Intan recording whose strobes cannot anchor.
+#: `OUTSIDE_COVERED_SPAN` is decided per FILE, in `Segment.make`, under the
+#: NI's clock, against the range of the NI's barcode values, where
+#: `NO_SHARED_BARCODE` would be under the sync box's (`unshared_reason`).
 REJECTION_REASONS: frozenset[str] = frozenset(
     {TOO_SHORT, NO_BARCODE, UNFITTED_SYSTEM, GAP_CORRUPTED, NO_SHARED_BARCODE, NI_RESTARTED,
-     NO_STROBE_ANCHOR}
+     NO_STROBE_ANCHOR, OUTSIDE_COVERED_SPAN}
 )
+
+
+def unshared_reason(values, reference, on_the_ni: bool) -> str:
+    """Why a file whose barcode `values` share none with `reference` (value ->
+    session seconds) is rejected. `OUTSIDE_COVERED_SPAN` under the NI's clock
+    where every value lies outside `[min(reference), max(reference)]`, the
+    reference's first and last values, so the file was recorded outside the
+    NI's record of the box; else `NO_SHARED_BARCODE`. "Outside" is decided by
+    range, not by membership (ruling R14, amendment 76): a value between the
+    ends that is not in the reference is a hole in the NI's decode or a
+    misdecoded value, the file ran inside the span, and losing its placement
+    must fail the session."""
+    if on_the_ni and reference:
+        low, high = min(reference), max(reference)
+        if all(value < low or value > high for value in values):
+            return OUTSIDE_COVERED_SPAN
+    return NO_SHARED_BARCODE
 
 
 def classify_segment(duration_s: float, n_barcodes: int) -> str:
@@ -169,6 +203,18 @@ ADJACENT_VALUE_STEPS = (1, 2)
 #: adjacent too; two drops (4 or more) are not told from a gap, and are one.
 ONE_COUNT_TIMEBASES = frozenset({"rp1-pio-si", "rp1-pio"})
 ONE_COUNT_VALUE_STEPS = (*ADJACENT_VALUE_STEPS, 3)
+#: wl-sync's figure for RP1's crystal against CLOCK_MONOTONIC, the rate
+#: unmeasured: code words on a split clock drift from barcodes by about this
+#: times the time since the box's process began capture (design spec
+#: `2026-11-04-syncbox-header-design.md` section 7). Defined here, beside the
+#: timebases, since the daily report (`cli/report.py`) and the NI's
+#: cross-check (`schema/timebase.py`) both read it.
+SPLIT_CLOCK_PPM = 50.0
+#: The `timebase` values whose ticks share one rate: the test backend's, with no
+#: hardware clock, and the two of wl-sync's one-clock build, which put every
+#: path on one count at one rate (its note 7). Every other value, or none,
+#: leaves the rates unknown.
+ONE_RATE_TIMEBASES = frozenset({"fake"}) | ONE_COUNT_TIMEBASES
 #: The most a boundary's tick step may differ from its barcode value step
 #: before one clock is contradicted: a roll in place's second frame comes
 #: about 1.6 s after the first for a value step of 2, and NTP slews both.
@@ -530,26 +576,25 @@ def scan_system(system: str, system_dir: Path) -> list[RecordingScan]:
     barcodes grouped by recording, so extracting twice would double the I/O on
     the largest files in the pipeline to produce identical bytes.
     """
-    from wl_sync.barcode import decode_edges
-
-    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps, find_recordings
+    from wl_preproc.timebase.extract import find_recordings
 
     if system == "syncbox":
         return syncbox_scans(system_dir.parent) if find_recordings(system, system_dir) else []
-    scans = []
-    for path in find_recordings(system, system_dir):
-        stream = EXTRACTORS[system](path)
-        decoded = decode_edges(list(stream.edges))
-        kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
-        scans.append(
-            RecordingScan(
-                path=path,
-                stream=stream,
-                barcodes=kept,
-                n_barcodes_dropped=len(decoded) - len(kept),
-            )
-        )
-    return scans
+    return [scan_recording(system, path) for path in find_recordings(system, system_dir)]
+
+
+def scan_recording(system: str, path: Path) -> RecordingScan:
+    """Extract and decode one recording of one system other than the sync box:
+    `scan_system`'s step for each file, and alone where one file is wanted
+    (`timebase/clock.py::_ni_barcodes`, the NI's first file, ruling R16)."""
+    from wl_sync.barcode import decode_edges
+
+    from wl_preproc.timebase.extract import EXTRACTORS, barcode_clear_of_gaps
+
+    stream = EXTRACTORS[system](path)
+    decoded = decode_edges(list(stream.edges))
+    kept = tuple(b for b in decoded if barcode_clear_of_gaps(b, stream.gaps))
+    return RecordingScan(path=path, stream=stream, barcodes=kept, n_barcodes_dropped=len(decoded) - len(kept))
 
 
 def rate_fit_from_row(row: dict) -> RateFit:

@@ -43,6 +43,17 @@ last run, SpikeGLX's NI keeps the time. **Shipped at 3b-1's merge**, not before.
   Intan recording whose strobes could not be matched to the NI's. `docs/schemas/session_listing.json` types a
   `RejectedFile`'s `reason` as a plain string, not a fixed set, so no vendored copy refuses it; a reader that
   names each reason needs the new one.
+- **Added by 3b-3 (2026-11-20): under the NI, a session whose sync box recorded only part of it can be tier N.**
+  The NI's own barcodes place the sync box, the eye tracker and the cameras over the part the box covered, and
+  the box's codes there are checked against the NI's. A session whose eye tracker or cameras the NI's barcodes
+  cannot place, because the NI recorded none or a file decoded none, stays `D`. Nothing in the listing's or the
+  description's shape changes: the description's `notes` name the covered span and what it left out, and the NWB
+  file's `system_clocks.time_source` may read `barcode` under the NI, in the file, not in the description.
+- **Added by 3b-3: `GET /sessions`: a listed rejected segment's `reason` may now be `outside_covered_span`**: under
+  the NI, a file none of whose barcodes the NI recorded, so it lies outside the part the sync box covered. It is
+  left out and named, and does not make the session `D`. `docs/schemas/session_listing.json` types a
+  `RejectedFile`'s `reason` as a plain string, not a fixed set, so no vendored copy refuses it; a reader that
+  names each reason needs the new one.
 - **Every listed session is listed once more** when this ships: each segment's key changes, so each digest does.
 - **Every NWB file built before this stays as it is.** Nothing here asks for one to be rebuilt.
 

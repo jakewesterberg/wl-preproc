@@ -973,3 +973,221 @@ rulings of the build changed it (53). Where 53 differs from 49, 53 binds. The le
     - From the final review (I4): under the NI, when no Intan recording anchored, every file is rejected as
       `no_strobe_anchor` without searching again.
     - From the final review (I3): no residual gate is placed on the stored map. This is put to the requester.
+
+## Amendments, 2026-11-20: part 3b-3, a sync box that recorded part of the session, designed
+
+**Why.** When the sync box stops partway, the NI keeps time (3b-1). The box's files then have no way onto that
+clock, so the session is tier D, and so is every session whose eye tracker or cameras ran. The requester wants
+such data "synced in a pinch" (amendment 51).
+
+**What the requester chose, 2026-11-20:**
+- the part the sync box covered places the eye tracker and the cameras, not only checks the NI;
+- outside that part, their data is left out and named;
+- they are placed through the NI's own barcodes, over the sync box's own log.
+
+54. **The NI's own barcodes are the barcode reference under the NI.**
+    - While the sync box ran, the NI recorded its barcodes on its barcode line (bit 0 of digital word 0), at the
+      NI's own samples.
+    - Under the NI's clock, `Clock.barcode_reference()` returns those barcodes as value → NI seconds. They are
+      the first NI file's, gap-clear, as `segments.scan_system` decodes them, on the identity map
+      (amendment 50).
+    - No fit is needed: the NI is session time.
+    - With no barcode on that file, the reference is empty and nothing is placed by barcode, as in 3b-1.
+55. **The covered span** is `[first, last]` of that reference, in session seconds. The span is a property of
+    the session, stored once, recomputed from the files as the clock is. Outside it no device is placed by
+    barcode.
+56. **Each system carrying the barcodes is fitted by today's barcode path** against that reference:
+    - the sync box, from its own `B` records;
+    - the eye tracker (`ohdpi`);
+    - the cameras (`bcam`).
+
+    `SystemTimebase.time_source` is `'barcode'` and each file's offset comes from its own barcodes
+    (`fit_rate_across`, `fit_offset`).
+    - SpikeGLX stays on the identity map.
+    - Intan stays fitted by its strobes (3b-2), which span its whole recording. Its barcodes are not used under
+      the NI.
+57. **A file whose barcodes all lie outside the covered span** is rejected as `outside_covered_span`, a new
+    reason. Under the NI, a file rejected only for this reason does not fail the session (§6.4, as the requester
+    chose). It is named in the NWB file and the listing.
+    - This is a file that decoded barcodes, none of them in the NI's reference: for example a device that ran
+      while the sync box did, but outside the NI's recording.
+    - A system whose every file is outside the span is left out of the file and named, likewise. It is
+      `unfittable`, but does not fail the session.
+    - **A file that decoded no barcode at all** stays `no_barcode` and fails the session, as today. This
+      includes every eye and camera file when the reference is empty, so such a session is D, as in 3b-1.
+    - This is the requester's choice of 2026-11-20. A file that ran wholly after the box stopped and a file
+      whose barcode cable was dead look the same, and only another way of placing them can tell them apart.
+      That way is the next piece (amendment 65).
+    - Every other rejection still fails it.
+58. **Eye data is used and published only inside the covered span.**
+    - The eye tracker's samples outside it are placed by extrapolating the fit, which nothing verified.
+    - So no stage uses them: not calibration, detection, quality, the main sequence, or the NWB file's samples
+      and events.
+    - The NWB file names the stretch left out.
+    - Cameras have no data in the NWB file. Their placement is only what keeps them from failing the session.
+59. **The cross-check** (decision 8; §7's N, "with the sync box's codes over that part"). The sync box's code
+    words, placed by its barcode fit, are compared by content with the NI's, with `agreement.code_agreement`.
+    The comparison runs only where the box's log actually holds code words:
+    - its session-time segments' extent, within the covered span;
+    - less every window `SyncBoxSession.losses()` gives (its `L` records and its gaps).
+
+    Both streams are cut to those stretches. A stretch the box did not record cannot disagree; amendment 60 keeps
+    the box's losses from failing the session, and this keeps them out of its agreement too.
+    - The box's own decode errors do not count. A payload cut at a stretch's edge decodes as an error, which is
+      no disagreement. The tier's `decode_errors` stays the NI's.
+    - Agreement below `AGREEMENT_THRESHOLD` (0.999) is tier D.
+    - These are the builder check's two calls, settled as the designer's, 2026-11-20.
+    - `TimingProvenance` keeps the agreement in `event_code_agreement` and counts two full-code records.
+    - A session with no sync box, or none placed, is N on the NI alone, as in 3b-1.
+60. **Under the NI, the sync box's own losses do not fail the timing check.** The NI's codes are the session's
+    record, and the box's are a cross-check only. Its losses are reported, and `fails_the_timing_check` is not
+    asked of them. This was 3b-1's carried item, which compared the box's losses in its own time against the
+    NI's runs.
+61. **`TimingProvenance` reads the sync box's codes as the session's only where the sync box is the clock.**
+    `syncbox_fitted` also requires `clock.source == "syncbox"` (3b-1's carried item). Under the NI, the box's
+    codes enter only through amendment 59.
+62. **Rule 1 counts an end code only where it ends the log** (3b-1's carried item; its review's stray end code).
+    - `SESSION_END`, or the last run's `RUN_END`, reaches the end only when it is the log's last decoded code.
+    - `BLOCK_END` or `RUN_END` may follow it, but nothing else.
+    - Otherwise the last trial line decides, as before.
+    - `CHOICE_RULES` becomes `"3b-3"`, so every refusal is decided again.
+63. **The NWB file under the NI** says which systems the barcodes placed, and the covered span:
+    - `system_clocks.time_source` reads `barcode` for them;
+    - the NI texts say barcodes place what they place;
+    - the description gains nothing.
+
+    The left-out stretch is named in the file's notes.
+64. **Testing, on synthetic sessions.** The NI and the sync box ran with the eye tracker and a camera, and the
+    box's log was cut at a time. Tests assert:
+    - the barcode reference is the NI's;
+    - the span;
+    - the eye tracker's and the camera's fits;
+    - tier N;
+    - the NWB file's eye samples and events lie inside the span, with the rest named;
+    - a camera file wholly after the cut is `outside_covered_span` and the session still N;
+    - a sync box whose codes disagree with the NI's is D;
+    - a stray end code no longer keeps a sync box that stopped inside the last run.
+65. **Next, its own piece: the eye tracker placed by its analog copy on the NI.** This is the requester's
+    suggestion, 2026-11-20, ordered right after 3b-3.
+    - On recording days the eye tracker's analog output, gaze X/Y and pupil for both eyes, from the ACCESIO DAC,
+      goes into the NI's analog inputs. See the parent spec §7.1's second sync path, and wl-sync's
+      `docs/superpowers/specs/2026-08-13-syncbox-breakout-pcb-design.md` §3.2.
+    - Matching the eye file's signal to that copy places the eye file on the NI's clock with no barcode, over
+      its whole recording. That covers any NI session, with a partial sync box or none, and it closes amendment
+      51 for the eye tracker.
+    - The cameras have no analog copy. That piece also weighs placing a barcode-less camera file by its own
+      clock time against when the box stopped.
+    - Until it lands, amendment 57's `no_barcode` rule stands.
+
+## Amendments, 2026-11-20, made while planning and building part 3b-3
+
+Part 3b-3 builds amendments 54-64. The plan (`docs/superpowers/plans/2026-11-20-part-3b-3-partial-sync-box.md`)
+made five decisions the spec was silent on (66). The build's rulings corrected or sharpened what 54-64 say
+(67-72), and the build left notes for this spec (73-76). Where these differ from 54-64, these bind. The ledger,
+`.superpowers/sdd/2026-11-20-part-3b-3-partial-sync-box/progress.md`, holds the full wording of every ruling.
+
+66. **The plan's five decisions.**
+    1. **The span is computed, and also recorded.** `Clock.covered_span()` computes it from the files, cached;
+       `TimingProvenance` stores it as `covered_start_s` / `covered_end_s`, null outside this case.
+    2. **An empty reference keeps 3b-1's behaviour.** If the NI decoded no barcode, every barcode system under the
+       NI is `unfittable` with `time_source` `none`, its files `unfitted_system`, even where they decoded the box's.
+    3. **The cross-check is containment, not agreement.** `agreement.code_containment(part, whole)`: the box's
+       words found in order in the NI's, over the box's count, on `code_agreement`'s matcher. (see amendment 69)
+    4. **The synthetic box can stop.** A recipe field `syncbox_stop_s`, None by default: no barcode from then on,
+       and a log of the records before it with no trailer.
+    5. **3b-1's `partial` session changes tier.** Its sync box is fitted through the NI's barcodes and
+       cross-checked, so it is N where it was D; its fixture moves to `syncbox_stop_s`.
+67. **Amendment 64's camera line is corrected** (ruling R3). It says a camera file wholly after the cut is
+    `outside_covered_span` and the session still N. That contradicts amendment 57.
+    - Such a file decodes no barcode, so it is `no_barcode`, and it fails the session.
+    - The test of `outside_covered_span` is a camera file whose only barcode was sent before the NI's first sample
+      (`test_a_file_whose_barcodes_precede_the_ni_is_outside_and_does_not_fail`). That session is N.
+68. **Coverage stops at the span** (ruling R5). Under the NI, `RunCoverage` and `TrialCoverage` cut each extent of
+    a system the NI's barcodes placed to the covered span (`schema/coverage.py::_extents`).
+    - A run past the span reads the sync box, the eye tracker and the cameras as not covered there. That is true of
+      everything that reads them.
+    - SpikeGLX, and Intan on its strobes, keep their extents.
+69. **Amendment 59's cut, as built** (rulings R8 and R9). Both streams are cut, as 59 says. Where this differs
+    from decision 3 of amendment 66, it binds.
+    - **The box's part** is cut in its own session time: from its own time of the smallest NI-reference value it
+      also holds to that of the largest, both included (`schema/timebase.py::_box_cross_check`).
+    - **Only path-W loss windows are cut from it:** its `W` `L` records and its gaps. A lost edge (path E) loses no
+      code word, and cuts nothing.
+    - On an honest box the window cut cannot change the value: a box loses words, but never records wrong ones.
+      It is kept as amendment 59 says (ruling R6).
+    - **The NI's stream** is cut to those two values' NI times, widened each side by a margin of 0.5 s
+      (`CROSS_CHECK_MARGIN_S`).
+    - **Where the box's timebase is not one-rate**, a session-time segment naming a timebase outside
+      `ONE_RATE_TIMEBASES`, the margin also gains `SPLIT_CLOCK_PPM` (50) × 1e-6 × the box's last code tick, in
+      seconds since its capture began. Both constants now live in `timebase/segments.py`.
+    - Extra NI words cost containment nothing, so the margin only widens what can be matched.
+    - **The residual.** A wrong word among the box's last words can still be matched against an NI word within the
+      margin. The task review's probes bound this at about 3-4 tail words. On a 12 h split clock the margin grows
+      by about 2 s, which leaves about one trial at the end unchecked.
+70. **A box that stopped before every calibration window refuses calibration, and names the span** (ruling R10).
+    Under a span, a window not wholly inside it is no calibration window.
+    - Where windows existed and none lies inside the span, both eyes' `EyeCalibration` rows are `refused`, with
+      the reason "N fixation epoch(s) named a target, but the sync box's coverage ended before any calibration
+      window: none lies inside the covered span its barcodes place (a to b s)".
+    - Not "no fixation epoch named a target position", which would point a reader at the task code for the sync
+      box's fault.
+71. **The NWB file's notes under a span** (rulings R11 and R12). Wherever `TimingProvenance.covered_start_s` is
+    set, `nwb/gather.py::_span_notes` writes, in this order, each time to the millisecond:
+    - **The span, and what the NI's barcodes placed over it:** "the sync box's covered span is a s to b s; the NI's
+      own barcodes placed X over it". X is every system `fitted` with `time_source` `barcode`, or "no system". A
+      system left out is not named.
+    - **Each stretch left out, before the span and after it,** where the file has an eye tracker segment and the
+      stretch is not empty: "eye data outside the sync box's covered span, a s to b s, is left out: no barcode
+      placed it". The stretches run from the NI's first sample to the span's start, and from its end to the NI's
+      last. The NI's first barcode comes after its first sample, so the stretch before is in nearly every such
+      file (R11).
+    - **Each `outside_covered_span` file:** "{system} file {path} is left out: none of its barcodes is one the NI
+      recorded, so it lies outside the sync box's covered span, a s to b s".
+
+    These sentences go in the description's `notes`, after the probe notes. No field is added, as amendment 63
+    says. A file under the sync box has none.
+72. **Eye validity outside the span: the report leaves it out** (the final review's I1). Under a span, `EyeValidity`
+    stores every row outside it as `invalid`, with no criterion naming them. Each `frac_*` stays a fraction of all
+    the recording's rows.
+    - Left so, `cli/report.py::_unusable_fractions` counted the left-out stretch as unusable, and a partial-box
+      session's daily report read it as a tracking problem, against its own span-cut `EyeQuality` lines.
+    - **Fixed.** `EyeValidity` stores the span's rows, `span_row_start` and `span_row_stop` (exclusive), null where
+      the span holds every row, as always under the sync box. `_detection_rows` clips each run to them in SQL, since
+      a run outside can merge with an `invalid` run inside and cannot be split after the fact.
+    - The per-eye unusable line counts the rows inside the span alone, and ends ", and K samples outside the sync
+      box's covered span, not counted". The running total leaves them out too, and names their sum on a line of its
+      own. Under the sync box both are as they were.
+73. **wl-xcon's lab-time files** (XC-391 to XC-393; amendments 25 and 27). wl-xcon proposed these shapes, and the
+    requester accepted them on 2026-11-20:
+    - `xcon/words.jsonl`: rows `{process, n, word, at}`, and overflow rows `{process, lost, after_n}`;
+    - `xcon/clock.jsonl`: rows `{kind, process, at, host, spread, sync}`, `kind` one of `open`, `pair` or `close`,
+      and `sync` `{source, synchronized, offset, error, read_at}`; open rows also carry `opened`;
+    - pairs are at least 60 s apart, and written between trials only;
+    - `process` is counted from 0, and `n` is contiguous from 0;
+    - decoding is split at each `lost`;
+    - `synchronized` null means not synchronized;
+    - `session_kind` marks a simulated session.
+
+    They are read here once wl-xcon writes them.
+74. **Amendment 27 is corrected.** It says a resumed process "writes no such row yet". wl-xcon at `243afb9`
+    already writes one.
+    - `Session.resume` writes a `session resumed` row to `welfare_notes.jsonl` (its `taskd.py`, line 778).
+    - Its instant is the resume's, `wall_now()`, which also becomes that process's `opened_wall_at`.
+    - The row has no `at` field. The instant is in `was` and `now`, both the same (its `record.py::welfare_note`),
+      in the `session opened` row too.
+75. **Amendment 62's residual** (Task 2's review, its P8 and P9). A lost escape whose phantom payload is cut off
+    by the box's stop leaves a truncated decode error, which rule 1 skips.
+    - So a stray end code before it stays the log's last decoded code, and a box that stopped inside the last run
+      is kept as the clock.
+    - The window is about 4 words. Outside it, amendment 64's last line holds.
+76. **"Outside the span" is decided by range, not by membership** (Task 4's review; ruling R14, the final
+    review). Under the NI, a file that decoded barcodes, none of them in the NI's reference, is
+    `outside_covered_span` only where every value lies outside `[min, max]` of the reference's values: before its
+    first or after its last. Such a file does not fail the session.
+    - A file sharing none whose values lie between the reference's ends ran inside the span: the NI's decode has a
+      hole under it, or its values were misdecoded. It is `no_shared_barcode`, and fails the session, as under the
+      sync box (`timebase/segments.py::unshared_reason`).
+    - This is built. The test is `holey_ni`: the NI's barcode line dead from 2.5 s to 6.5 s, and the camera's live
+      over that stretch alone (`test_a_file_inside_a_hole_in_the_nis_barcodes_is_not_outside_and_fails`). That
+      session is D. `before_ni`'s camera, whose one barcode precedes the NI's first, is still
+      `outside_covered_span`, and its session N.

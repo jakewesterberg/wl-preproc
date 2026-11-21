@@ -309,7 +309,8 @@ class NwbDescription(_Frozen):
     # Why any trial's condition or settings are unknown, then which trials the
     # recording strobed and the file does not hold (a repeated number, one too
     # large to store), then what the file could not place or join about a
-    # probe.
+    # probe, then, under the NI with a sync box that recorded part of the
+    # session, its covered span and the stretches and files it left out.
     notes: list[str]
     checksums: Checksums
     # What wl-xcon's record says the session was (design spec

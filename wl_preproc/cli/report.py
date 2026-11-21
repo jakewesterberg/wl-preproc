@@ -20,7 +20,7 @@ from wl_sync.clock import BARCODE_EPOCH
 from wl_preproc.cli.doctor import scratch_headroom
 from wl_preproc.eye.detect.geometry import PER_AXIS, TRUE_ANGLE, UNSTATED_GEOMETRY
 from wl_preproc.schema import DEFAULT_PREFIX
-from wl_preproc.timebase.segments import ONE_COUNT_TIMEBASES
+from wl_preproc.timebase.segments import ONE_RATE_TIMEBASES, SPLIT_CLOCK_PPM
 
 # Ingested is windowed to 24 h because "what landed since yesterday's report"
 # is the question that section answers. Quarantine is not the same question and
@@ -668,6 +668,16 @@ def _eye_row_line(
     return f"- {who} — {quality_bit} — {calibration_bit}"
 
 
+# One `EyeValidity.Run`'s rows inside its mask's covered span, `[span_row_start,
+# span_row_stop)`, a bound that is NULL being the run's own end. Signed, since
+# MySQL refuses an unsigned difference below zero, and a run wholly outside the
+# span gives one before `GREATEST` floors it.
+_IN_SPAN_ROWS = (
+    "GREATEST(0, CAST(LEAST(run_stop, COALESCE(span_row_stop, run_stop)) AS SIGNED)"
+    " - CAST(GREATEST(run_start, COALESCE(span_row_start, run_start)) AS SIGNED))"
+)
+
+
 def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict]]:
     """Every `EyeDetection` row on record, and one row per `(subject,
     session_datetime, eye, validity paramset, label)` carrying how many
@@ -728,17 +738,30 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
     projection that drops `eye`, never as a grouping. `label` is a SECONDARY
     attribute of `EyeValidity.Run`, which `dj.U` groups by exactly as it
     groups by a primary one.
+
+    **Inside the covered span alone (the final review's I1).** Under the NI
+    with a sync box that stopped partway, `EyeValidity` stores every row
+    outside the span as `invalid` by no criterion, and the span's rows in
+    `span_row_start`/`span_row_stop`. Each run is clipped to them here
+    (`_IN_SPAN_ROWS`), since one run outside can merge with an `invalid` one
+    inside and so cannot be split after the fact. `samples` is a label's
+    rows inside the span and `outside` its rows outside, which no fraction
+    counts and `build_report` names. Both bounds are NULL where the span is
+    every row, as under the sync box, and there `samples` is the run's whole
+    length and `outside` 0, as before.
     """
     import datajoint as dj
 
     from wl_preproc.schema import detect as detect_schema
 
     detect_schema.activate(prefix=prefix)
+    runs = detect_schema.EyeValidity.Run * detect_schema.EyeValidity.proj("span_row_start", "span_row_stop")
     label_totals = dj.U(
         "subject", "session_datetime", "eye", "paramset_type",
         "validity_paramset_idx", "label",
     ).aggr(
-        detect_schema.EyeValidity.Run, samples="SUM(run_stop - run_start)"
+        runs, samples=f"SUM({_IN_SPAN_ROWS})",
+        outside=f"SUM(CAST(run_stop AS SIGNED) - CAST(run_start AS SIGNED) - {_IN_SPAN_ROWS})",
     ).to_dicts()
     return detect_schema.EyeDetection.to_dicts(), [
         # MySQL answers `SUM()` over an integer expression with a DECIMAL,
@@ -747,7 +770,7 @@ def _detection_rows(prefix: str = DEFAULT_PREFIX) -> tuple[list[dict], list[dict
         # arithmetic it was over a type the row-by-row version never
         # produced -- and so the equivalence test that compares the two can
         # compare values rather than types.
-        {**row, "samples": int(row["samples"])}
+        {**row, "samples": int(row["samples"]), "outside": int(row["outside"])}
         for row in label_totals
     ]
 
@@ -818,8 +841,10 @@ def _unusable_fractions(label_totals: list[dict]) -> dict[str, float]:
 
 def _unusable_per_eye(label_totals: list[dict]) -> list[dict]:
     """One entry per `(subject, session_datetime, eye, validity paramset)`:
-    that trace's own `blink`/`invalid` fractions and the sample count they
-    are fractions of, sorted the way `build_report` renders them.
+    that trace's own `blink`/`invalid` fractions, the sample count they
+    are fractions of, and the samples outside a sync box's covered span that
+    none counts (`n_outside`, `_detection_rows`), sorted the way
+    `build_report` renders them.
 
     **Per EYE, never pooled into one number per session.** Design spec
     section 9 asks for each session's fraction, and `EyeValidity`'s own
@@ -850,6 +875,7 @@ def _unusable_per_eye(label_totals: list[dict]) -> list[dict]:
             "paramset_type": paramset_type,
             "validity_paramset_idx": paramset_idx,
             "n_samples": sum(row["samples"] for row in rows),
+            "n_outside": sum(row.get("outside", 0) for row in rows),
             **_unusable_fractions(rows),
         }
         for (subject, session_datetime, eye_value, paramset_type, paramset_idx), rows
@@ -1425,18 +1451,6 @@ def _landed_without(session: dict) -> str:
                                     "session_datetime": session["session_datetime"]}).to_dicts(order_by="system")
     return "".join(f" — landed without {row['system']} by {row['actor']} at {row['recorded_at']:%Y-%m-%d %H:%M} "
                    f"UTC: {row['reason']}" for row in rows)
-
-
-#: wl-sync's figure for RP1's crystal against CLOCK_MONOTONIC, the rate
-#: unmeasured: code words on a split clock drift from barcodes by about this
-#: times the time since the box's process began capture (design spec
-#: `2026-11-04-syncbox-header-design.md` section 7).
-SPLIT_CLOCK_PPM = 50.0
-#: The `timebase` values whose ticks share one rate: the test backend's, with no
-#: hardware clock, and the two of wl-sync's one-clock build, which put every
-#: path on one count at one rate (its note 7). Every other value, or none,
-#: leaves the rates unknown.
-ONE_RATE_TIMEBASES = frozenset({"fake"}) | ONE_COUNT_TIMEBASES
 
 
 def _syncbox_losses(ingested_keys: set, prefix: str = DEFAULT_PREFIX) -> list[dict]:
@@ -2035,6 +2049,9 @@ def build_report(
         f"{entry['eye']} (validity paramset {entry['validity_paramset_idx']}): "
         f"blink {entry['blink']:.1%}, invalid {entry['invalid']:.1%}, lost {entry['lost']:.1%} "
         f"of {entry['n_samples']} samples"
+        # Under the sync box there are none, and the line is as it was.
+        + (f", and {entry['n_outside']} samples outside the sync box's covered span, not counted"
+           if entry["n_outside"] else "")
         for entry in per_eye
     ] or ["- none"]
 
@@ -2060,6 +2077,9 @@ def build_report(
     unusable = _unusable_fractions(validity_label_totals)
     lines += ["", "### Unusable samples, running total across every session (lower bound)", ""]
     lines += [f"- {label}: {unusable[label]:.1%}" for label in ("blink", "invalid", "lost")]
+    outside = sum(row.get("outside", 0) for row in validity_label_totals)
+    if outside:
+        lines += [f"- {outside} samples outside a sync box's covered span, not counted"]
     # One note for the pair, placed after both: it opens on "these", and
     # both headings above it already carry the "lower bound" qualifier it
     # explains.

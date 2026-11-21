@@ -60,6 +60,7 @@ from wl_preproc.eye.calibration import (
 )
 from wl_preproc.eye.gaze import purkinje_vector
 from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
+from wl_preproc.eye.span import Span, clip_to_span, inside_span, rows_inside
 from wl_preproc.contracts.paths import XCON_DIRNAME
 from wl_preproc.schema import DEFAULT_PREFIX, core, pipeline
 
@@ -471,7 +472,8 @@ class EyeCalibration(dj.Computed):
 
         # -- Re-decode the sync box's own code stream (see this method's own
         # docstring for why this cannot instead read `pipeline.event.Event`).
-        decoded = decode_stream(clock_for(session_key, session_dir).codes())
+        clock = clock_for(session_key, session_dir)
+        decoded = decode_stream(clock.codes())
 
         # -- One pass over the stream: track the most recently announced
         # target per role and the most recently opened block, and close a
@@ -547,6 +549,51 @@ class EyeCalibration(dj.Computed):
             # DecodeError: a corrupt payload elsewhere in the stream must not
             # cost this session its calibration -- ignored here exactly as
             # `events/assemble.py::assemble` ignores one for trial assembly.
+
+        # -- Only the windows inside the covered span (amendment 58). Under the
+        # NI with a sync box that stopped partway, the eye tracker's samples
+        # outside it are placed by extrapolating its barcode fit, which
+        # nothing verified, so a window there is no calibration window: it is
+        # not counted among those found, and no note says it lacked coverage.
+        # `None` under the sync box: every window is kept, as before.
+        #
+        # **Where windows existed and none is inside, the refusal says so**
+        # (ruling R10, part 3b-3's fix round 1), as the coverage-gap refusal
+        # below does and for its reason: `resolve_calibration`'s own "no
+        # fixation epoch named a target position" would be FALSE, pointing a
+        # reader at the task code for a fault that is the sync box's.
+        span = clock.covered_span()
+        n_named = len(windows)
+        windows = [window for window in windows if inside_span(np.array(window[:2]), span).all()]
+        if n_named and not windows:
+            reason = (
+                f"{n_named} fixation epoch(s) named a target, but the sync box's "
+                "coverage ended before any calibration window: none lies inside "
+                f"the covered span its barcodes place ({span[0]:.3f} to {span[1]:.3f} s)"
+            )
+            self.insert(
+                [
+                    {
+                        **session_key,
+                        "eye": eye_value,
+                        "calibration_source": "refused",
+                        "calibration_model": None,
+                        **_coefficient_columns(None),
+                        "validation_error_deg": None,
+                        "n_points": 0,
+                        "n_from_calibration_block": 0,
+                        "n_from_task_fixation": 0,
+                        "conditioning": None,
+                        "conditioning_second_order": None,
+                        "residual_deg_rms": None,
+                        "residual_deg_max": None,
+                        "carried_from_session_datetime": None,
+                        "reason": _bounded_reason(reason),
+                    }
+                    for eye_value in ("left", "right")
+                ]
+            )
+            return
 
         # -- Resolve each window to an ohDPI row range, once: identical for
         # both eyes (same file, same segment timing -- only the PURKINJE
@@ -919,6 +966,15 @@ def row_session_times(segment: dict, offsets: np.ndarray) -> np.ndarray:
     return segment["start_s"] + np.asarray(offsets, dtype=float) * (span / segment["n_samples"])
 
 
+def placed_rows(span: Span | None, segment: dict, offsets: np.ndarray) -> slice | None:
+    """The rows of one ohDPI recording whose session time lies inside the
+    covered span (amendment 58; `eye/span.py`), or `None` where the span is
+    the whole session. Every stage that reads the eye tracker's samples takes
+    only these: outside them a row is placed by extrapolating the barcode fit,
+    which nothing verified. `offsets` as `row_session_times` takes them."""
+    return rows_inside(row_session_times(segment, offsets), span) if span is not None else None
+
+
 def _find_xcon_log(session_dir: Path) -> Path | None:
     """The session's own experiment-controller log, if one exists.
 
@@ -1162,12 +1218,20 @@ class EyeQuality(dj.Computed):
 
         *Until 2026-10-11 both read `DataQuality` below 100, and so read zero
         on every real recording; true when written.*
+
+        **Only inside the covered span** (amendment 58): under the NI with a
+        sync box that stopped partway, both count the frames whose session
+        time lies inside it (`placed_rows`), and the rate is over the seconds
+        of recording inside it. Under the sync box, the whole recording.
         """
         from wl_preproc.schema import ingest
+        from wl_preproc.timebase.clock import clock_for
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         session_dir = Path((ingest.Ingestion & session_key).fetch1("session_dir"))
         segments = (core.Segment & {**session_key, "system": "ohdpi"}).to_dicts()
+        span = clock_for(session_key, session_dir).covered_span()
+        frame_offsets: dict[Path, np.ndarray] = {}
 
         rows = []
         for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
@@ -1186,10 +1250,15 @@ class EyeQuality(dj.Computed):
                 duration_s = segment["end_s"] - segment["start_s"]
                 # The segment's own rate, from what it stores: no second read.
                 merge_samples = round(BLINK_MERGE_S * segment["n_samples"] / duration_s) if duration_s > 0 else 0
-                lost_frames += int((loss.lost | loss.unreadable).sum())
-                total_frames += loss.blink.size
-                blink_runs += _count_blinks(loss.blink, merge_samples)
-                total_duration_s += duration_s
+                # The frame counter is read only where a span cuts the
+                # recording; the whole of it is `slice(None)`.
+                placed = slice(None) if span is None else placed_rows(
+                    span, segment, _frame_offsets(path, frame_offsets))
+                extent = clip_to_span(segment["start_s"], segment["end_s"], span)
+                lost_frames += int((loss.lost | loss.unreadable)[placed].sum())
+                total_frames += loss.blink[placed].size
+                blink_runs += _count_blinks(loss.blink[placed], merge_samples)
+                total_duration_s += 0.0 if extent is None else extent[1] - extent[0]
 
             rows.append(
                 {

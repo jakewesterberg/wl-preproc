@@ -150,14 +150,44 @@ def code_agreement(reference: Sequence[int], other: Sequence[int]) -> float:
     """
     if not reference and not other:
         return 1.0
-    longest = max(len(reference), len(other))
+    return _fraction_matched(reference, other, max(len(reference), len(other)))
+
+
+def code_containment(part: Sequence[int], whole: Sequence[int]) -> float:
+    """Fraction of `part`'s codes found, in order, in `whole` (part 3b-3,
+    design spec `2026-10-18-training-records-and-backup-clock-design.md`
+    amendment 59, as the plan's decision 3 reads it): a sync box that
+    recorded part of an NI-timed session, its words over what it recorded
+    against the NI's whole stream.
+
+    **Over `part`, not the longer stream.** `code_agreement` divides by the
+    longer of the two, so the NI's words from where the box never recorded
+    would count as disagreement: a box that recorded a tenth of the session,
+    every word of it right, would agree on a tenth. Here only the box's own
+    words count, each found or not.
+
+    The same anchored matcher as `code_agreement`, with the same whole-stream
+    band (`TIER_BAND`), so a value a tier could turn on is the whole stream's.
+    An empty part holds no word to disagree: 1.0.
+    """
+    if not part:
+        return 1.0
+    return _fraction_matched(part, whole, len(part))
+
+
+def _fraction_matched(reference: Sequence[int], other: Sequence[int], denominator: int) -> float:
+    """The codes the two streams match, anchored between trial numbers
+    (`_paired_anchors`), over `denominator`; the whole stream's count where
+    the anchored value lies in `TIER_BAND` below `AGREEMENT_THRESHOLD`, up
+    to, not including, 1.0, or where the anchors are out of order."""
     pairs = _paired_anchors(reference, other)
     if pairs is None:
-        return _matched(reference, other) / longest
+        return _matched(reference, other) / denominator
     cuts = [(0, 0), *pairs, (len(reference), len(other))]
-    anchored = sum(_matched(reference[a0:a1], other[b0:b1]) for (a0, b0), (a1, b1) in zip(cuts, cuts[1:])) / longest
+    anchored = sum(_matched(reference[a0:a1], other[b0:b1])
+                   for (a0, b0), (a1, b1) in zip(cuts, cuts[1:])) / denominator
     if AGREEMENT_THRESHOLD - TIER_BAND <= anchored < 1.0:
-        return _matched(reference, other) / longest
+        return _matched(reference, other) / denominator
     return anchored
 
 

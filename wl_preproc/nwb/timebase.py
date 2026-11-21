@@ -51,18 +51,32 @@ _TEXTS = {
                    "nidq_meta, else manifest, each within 60 s of started_at."),
         "difference": ("started_at minus the source's time of t = 0, seconds; for manifest, minus the first of "
                        "rig_clock and nidq_meta that disagreed, NaN where neither gave a time."),
-        # Under the NI, SpikeGLX is on the identity map and Intan is fitted by
-        # its strobe edges (part 3b-2).
-        "worst_residual": ("Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, and "
-                           "Intan's largest strobe residual where it was fitted."),
+        # Under the NI, SpikeGLX is on the identity map, Intan is fitted by its
+        # strobe edges (part 3b-2), and the sync box, the eye tracker and the
+        # cameras by the NI's own barcodes, over the part the box covered
+        # (part 3b-3; amendment 63). Each text holds where the NI decoded no
+        # barcode and so placed nothing by one.
+        "worst_residual": ("Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, Intan's "
+                           "largest strobe residual where it was fitted, and the largest barcode residual of a system "
+                           "the NI's barcodes placed."),
         "fitted_rate": ("The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate "
-                        "fitted against the NI's strobes; NaN for a system not placed on the NI's clock."),
+                        "fitted against the NI's strobes; a system the NI's barcodes placed, its rate fitted against "
+                        "them; NaN for a system not placed on the NI's clock."),
         "residual_rms": ("RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe "
-                         "residual; NaN for a system not placed on the NI's clock."),
+                         "residual; a system the NI's barcodes placed, its RMS barcode residual; NaN for a system not "
+                         "placed on the NI's clock."),
         "first_sample": ("Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file "
-                         "being session time; for Intan, the first strobe edge matched to the NI's."),
-        "time_source": ("How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; "
-                        "strobes, Intan fitted by its strobe edges matched to the NI's; none, not placed."),
+                         "being session time; for Intan, the first strobe edge matched to the NI's; for a system the "
+                         "NI's barcodes placed, the segment's first barcode."),
+        # Ruling R15: `time_source` is the mechanism attempted, so a system
+        # left out, or one whose barcode cable was dead, stores `barcode`
+        # beside `unfittable`. Each mechanism is stated for both statuses, so
+        # every row reads true.
+        "time_source": ("How the system was placed on the NI's clock where fit_status is fitted, and how placing it "
+                        "was attempted where it is unfittable: clock, SpikeGLX on the identity map; strobes, Intan "
+                        "by its strobe edges matched to the NI's; barcode, by the NI's own barcodes, over the part "
+                        "the sync box covered: where fitted they placed it, where unfittable they placed none of "
+                        "it; none, by no mechanism, not placed."),
     },
 }
 

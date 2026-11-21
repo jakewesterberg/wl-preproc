@@ -154,3 +154,49 @@ def test_a_lost_or_corrupt_word_in_the_last_trial_still_reaches_the_end():
         "run 2's trial 4 is not in its codes")
     # A RUN_END of an earlier run is not the last run's.
     assert unreached_end(_session(_run(1.0, 1, [1]), end=False), *rig) == "run 2's trial 4 is not in its codes"
+
+
+def _with_tail(*codes: int, end: bool = False):
+    """The last run's trial 4 lost its end by a corrupt word (so the trial
+    line says unreached), then `codes` as strobed markers."""
+    corrupt = [(t, 5 if (t, w) == (11.003, 4) else w) for t, w in _run(10.0, 2, [4])]
+    corrupt = [code for code in corrupt if code[1] != Marker.RUN_END.value]
+    tail = [(50.0 + offset, code) for offset, code in enumerate(codes)]
+    return _session(_run(1.0, 1, [1]), corrupt, tail, end=end)
+
+
+def test_a_session_end_followed_by_trial_codes_does_not_reach_the_end():
+    """A `SESSION_END` read from a lost escape word, with the log going on
+    into a trial, is not the log's end (amendment 62)."""
+    from wl_preproc.timebase.holding import unreached_end
+
+    rig = _rig({1: [1], 2: [4]})
+    stray = _with_tail(Marker.SESSION_END.value, Marker.TRIAL_START.value)
+    assert unreached_end(stray, *rig) == "run 2's trial 4 is not in its codes"
+    assert unreached_end(stray, None, None) is not None
+
+
+def test_a_session_end_followed_by_run_and_block_ends_reaches_it():
+    from wl_preproc.timebase.holding import unreached_end
+
+    rig = _rig({1: [1], 2: [4]})
+    ended = _with_tail(Marker.SESSION_END.value, Marker.BLOCK_END.value, Marker.RUN_END.value)
+    assert unreached_end(ended, *rig) is None
+    assert unreached_end(ended, None, None) is None
+
+
+def test_a_last_run_end_that_is_not_the_last_code_does_not_count():
+    from wl_preproc.timebase.holding import unreached_end
+
+    rig = _rig({1: [1], 2: [4]})
+    corrupt = [(t, 5 if (t, w) == (11.003, 4) else w) for t, w in _run(10.0, 2, [4])]
+    assert corrupt[-1][1] == Marker.RUN_END.value
+    later = [(50.0, Marker.TRIAL_START.value)]
+    stream = _session(_run(1.0, 1, [1]), corrupt, later, end=False)
+    assert unreached_end(stream, *rig) == "run 2's trial 4 is not in its codes"
+
+
+def test_the_rules_are_3b_3():
+    from wl_preproc.timebase import clock
+
+    assert clock.CHOICE_RULES == "3b-3"

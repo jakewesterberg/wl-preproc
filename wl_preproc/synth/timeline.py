@@ -106,7 +106,8 @@ def build_timeline(recipe: SessionRecipe) -> GroundTruth:
         # after it is never emitted (wl-sync's "+1 or +2").
         down = restart is not None and restart.at_s <= time_s < restart.at_s + restart.gap_s
         skipped = roll is not None and roll.gap_s == 0 and roll.at_s <= time_s < roll.at_s + BARCODE_INTERVAL_S
-        if not down and not skipped:
+        stopped = recipe.syncbox_stop_s is not None and time_s >= recipe.syncbox_stop_s
+        if not down and not skipped and not stopped:
             barcodes.append((value, time_s))
         value += 1
         time_s += BARCODE_INTERVAL_S
