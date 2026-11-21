@@ -409,10 +409,10 @@ def test_a_desync_with_no_code_word_after_it_stays_open(tmp_path):
 def test_a_desync_is_closed_by_the_next_segments_first_code_word(tmp_path):
     """A desync that is its segment's last record: the first code word of the
     next segment on the same clock follows it."""
-    session = _rolled(tmp_path, *_barcodes((4.0, 103)), *_codes((4.4, 0x8002)))
     syncbox_dir = tmp_path / "s" / "syncbox"
     _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
                                              _desync(2.5)], process_uuid=PROCESS)
+    _segment(syncbox_dir, "seg-001.log", 1, [*_barcodes((4.0, 103)), *_codes((4.4, 0x8002))], process_uuid=PROCESS)
     session = segments.read_syncbox_session(tmp_path / "s")
     (loss,) = session.losses()
     assert loss.stop_s == pytest.approx(2.4)
@@ -425,3 +425,36 @@ def test_a_closed_desync_between_runs_does_not_fail_the_timing_check():
     assert not segments.timing_check_fails("W", "desync", 6.0, 8.0, runs)
     assert segments.timing_check_fails("W", "desync", 4.0, 8.0, runs)
     assert segments.timing_check_fails("W", "desync", 6.0, None, runs)
+
+
+def test_desyncs_in_a_row_are_closed_by_the_same_code_word(tmp_path):
+    """Note 8: one run of dropped words across several drains gives a record
+    at each, their counts adding; the first `W` after them closes them all."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
+                                             _desync(2.5), _desync(2.5), *_codes((3.2, 0x8002))], process_uuid=PROCESS)
+    losses = segments.read_syncbox_session(tmp_path / "s").losses()
+    assert [loss.stop_s for loss in losses] == pytest.approx([1.2, 1.2])
+
+
+def test_a_desync_before_any_code_word_is_closed_by_the_first(tmp_path):
+    """Before any code word the box writes the record at its clock's tick with
+    the window empty at both ends (note 6); the first `W` still closes it."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    early = Loss(tick_us=2_200_000, path="W", gpio=None, count=1, bound="at_least", cause="desync",
+                 before_us=None, after_us=None)
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), early,
+                                             *_codes((2.5, 0x8001))], process_uuid=PROCESS)
+    (loss,) = segments.read_syncbox_session(tmp_path / "s").losses()
+    assert loss.start_s is None and loss.stop_s == pytest.approx(0.5)
+
+
+def test_a_closed_desync_between_runs_passes_the_sessions_timing_check(tmp_path):
+    """Through the session's own check: closed between two measured runs, a
+    desync fails nothing (the requester's choice, 2026-11-20); open, it fails."""
+    syncbox_dir = tmp_path / "s" / "syncbox"
+    _segment(syncbox_dir, "seg-000.log", 0, [*_barcodes((1.0, 100), (2.0, 101), (3.0, 102)), *_codes((2.5, 0x8001)),
+                                             _desync(2.5), *_codes((2.8, 0x8002))], process_uuid=PROCESS)
+    session = segments.read_syncbox_session(tmp_path / "s")
+    assert not session.fails_the_timing_check([(0.0, 0.4), (1.0, 2.0)])
+    assert session.fails_the_timing_check([(0.0, 0.6)])

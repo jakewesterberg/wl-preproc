@@ -41,7 +41,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
                                                      gpio=GPIO_MAP["pd1_comp"]),)}),
         ("gap", {"syncbox_roll": SyncBoxRollSpec(at_s=5.5, gap_s=3.0)}),
         ("split", {"syncbox_timebase": "split"}),
-        ("one_count", {"syncbox_timebase": "rp1-pio-si"}),
+        # The one count measures no barcode delay: its `B` tick is the lead edge itself (note 7).
+        ("one_count", {"syncbox_timebase": "rp1-pio-si", "syncbox_barcode_delay_us": 0}),
         ("restart", {"syncbox_restart": SyncBoxRestartSpec(at_s=7.5, gap_s=1.2)}),
         ("noisy", {"syncbox_losses": tuple(
             SyncBoxLossSpec(cause="coalesced", from_s=from_s, to_s=to_s, gpio=GPIO_MAP["pd1_comp"])
