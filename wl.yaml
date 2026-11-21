@@ -116,13 +116,16 @@ status:
     and a session neither can time is refused until lab time, part 4. Part
     3b-2 is merged (2c35577; docs/handoffs/2026-11-20-part-3b-2.md): under
     the NI's clock, Intan is placed by matching its strobe edges to the
-    NI's, so a session with the NI and Intan can be tier N. Next, a
-    wl-sync follow-up (its notes 7 and 8), then part 3b-3; then our reader
-    of wl-xcon's console settings
+    NI's, so a session with the NI and Intan can be tier N. wl-sync's notes
+    7 and 8 are read (c31dd89; docs/handoffs/2026-11-20-wl-sync-notes-7-8.md):
+    its one-clock build's two timebases, and a desync that code words
+    follow, closed as a gap; the wl-sync pin moved to fc18551. Next, part
+    3b-3; then our reader of wl-xcon's console settings
     (XC-513, accepted 2026-11-18); then its pop-out revision (XC-543); then
     part 2, the bridges.
     Fine-tuning U'n'Eye waits for hand-labelled lab data.
-    Done: part 3b-2, Intan by strobes (2c35577). Before it, part 3b-1,
+    Done: wl-sync's notes 7 and 8 (c31dd89). Before it, part 3b-2,
+    Intan by strobes (2c35577). Before it, part 3b-1,
     the NI keeping time (36aac64). Before it, the
     SpikeGLX imroTbl header (6638fcb). Before it, v4 of the
     saccade fixtures (0f3edf8). Before it, the two-eye
@@ -293,8 +296,9 @@ status:
   # Was `920048a` (wl-sync's part 1, 2026-10-30) until part 3b-1's merge
   # `36aac64` on 2026-11-20; the phase text above had moved on past it.
   # Was `36aac64` until part 3b-2's merge `2c35577` on 2026-11-20.
+  # Was `2c35577` until wl-sync's notes 7-8 merge `c31dd89` on 2026-11-20.
   # Quoted: an all-digit SHA is otherwise read by YAML as an integer.
-  describes: "2c35577"
+  describes: "c31dd89"
 
 runs_on: [serv]
 # The pipeline is deployed to the preprocessing server, but it is written and

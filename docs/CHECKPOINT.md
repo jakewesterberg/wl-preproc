@@ -1,10 +1,19 @@
 # Where this build actually is
 
-**Last updated 2026-11-20**, describing `main` at `2c35577`: the merge of `feat/part-3b-2`, Intan
-placed on the NI's clock by its strobe edges (`handoffs/2026-11-20-part-3b-2.md`). CI read off
-`2c35577` is green on both interpreters, 3253 passed on each with 37 skipped and 1 xfailed, and the
-manifest check is green (`gh run view 44810622901`).
-- **Part 3b-2, Intan by strobes:**
+**Last updated 2026-11-21**, describing `main` at `c31dd89`: the merge of `feat/wl-sync-notes-7-8`, reading
+wl-sync's one-clock build and its desync that code words follow (`handoffs/2026-11-20-wl-sync-notes-7-8.md`).
+CI read off `c31dd89` is green on both interpreters, 3263 passed on each with 37 skipped and 1 xfailed, and the
+manifest check is green (`gh run view 44842081433`).
+- **wl-sync's notes 7 and 8:**
+  - Its timebases `rp1-pio-si` and `rp1-pio` share one rate, and under them a roll in place may step by 3 when
+    its ticks agree.
+  - A desync the box left open is closed by the first code word after it, and fails the timing check only where
+    it overlaps a measured run, as a gap does. This is the requester's choice of 2026-11-20, which accepts the
+    gaps' hole of a swallowed `RUN_START`.
+  - The wl-sync pin moved to `fc18551`; the exported schemas are unchanged. Notes 4-8 are filed in
+    `HANDOVER-wl-sync.md`.
+  - The full suite with every reference set passed 3294 on each interpreter at `a829dfe`.
+- **Part 3b-2, Intan by strobes (`2c35577`, CI green, run 44810622901, 3253 on each):**
   - Under the NI's clock, each Intan recording is placed by matching its strobe rising edges to the
     NI's. Edges carry no values, so the match is by pattern alone.
   - The matcher (`timebase/strobes.py`) refuses rather than matches wrongly. It took three review
