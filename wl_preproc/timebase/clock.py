@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import functools
 import hashlib
 import json
 import re
@@ -393,6 +394,27 @@ def syncbox_codes(session_dir: Path) -> list[tuple[float, int]]:
     return session.codes()
 
 
+@functools.lru_cache(maxsize=8)
+def _ni_barcodes(path: str, size: int, mtime_ns: int) -> tuple[tuple[int, float], ...]:
+    """One NI file's gap-clear barcodes, `(value, seconds from its first
+    sample)`, decoded once per file version (the size and mtime key it, as
+    `_syncbox_log` keys its own reads)."""
+    scans = segments.scan_system("spikeglx", Path(path).parent)
+    return tuple((barcode.value, barcode.start_us / 1e6)
+                 for scan in scans if scan.path == Path(path) for barcode in scan.barcodes)
+
+
+def ni_barcodes(session_dir: Path) -> dict[int, float]:
+    """The first NI file's own barcodes, value -> NI seconds (amendment 54).
+    The NI's first sample is session t = 0 (amendment 50), so these are session
+    seconds on the identity map. Empty where the NI decoded none."""
+    files = nidq_files(session_dir)
+    if not files:
+        raise NoClock(f"{session_dir}: the NI's clock has no NI recording")
+    status = files[0].stat()
+    return dict(_ni_barcodes(str(files[0]), status.st_size, status.st_mtime_ns))
+
+
 @dataclasses.dataclass(frozen=True)
 class Clock:
     """A session's clock, as `timebase.SessionClock` chose it: one of
@@ -414,10 +436,20 @@ class Clock:
     def barcode_reference(self) -> dict[int, float]:
         """Barcode value -> session seconds: how a system carrying the sync
         box's barcode is placed on this clock (`timebase/fit.py`). The NI's
-        clock places none: no device carries a barcode without the sync box."""
+        clock places by the NI's own barcodes (amendment 54): the first NI
+        file's, gap-clear, value -> NI seconds; empty where it decoded none."""
         if self.source == "nidq":
-            raise NoClock("the NI's clock places no barcode")
+            return ni_barcodes(self.session_dir)
         return segments.session_reference(self.session_dir)
+
+    def covered_span(self) -> tuple[float, float] | None:
+        """The session seconds the barcode reference covers (amendment 55):
+        its first and last. Under the NI, None where it decoded no barcode;
+        under the sync box, always None, since the whole session is covered."""
+        if self.source != "nidq":
+            return None
+        reference = self.barcode_reference()
+        return (min(reference.values()), max(reference.values())) if reference else None
 
     def codes(self) -> list[tuple[float, int]]:
         """The session's code words, `(session seconds, code)`, in emission

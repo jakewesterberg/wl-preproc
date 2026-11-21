@@ -275,10 +275,10 @@ def test_the_ni_clock_gives_the_ni_codes(tmp_path):
                                        abs=1 / NIDQ_SAMPLE_RATE_HZ)
 
 
-def test_the_ni_clock_places_no_barcode(tmp_path):
+def test_the_ni_clock_without_an_ni_recording_has_no_reference(tmp_path):
     from wl_preproc.timebase.clock import Clock, NoClock
 
-    with pytest.raises(NoClock, match="the NI's clock places no barcode"):
+    with pytest.raises(NoClock, match="has no NI recording"):
         Clock(source="nidq", session_dir=tmp_path).barcode_reference()
 
 
