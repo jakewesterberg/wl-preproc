@@ -148,7 +148,7 @@ def describe(data, *, status: str, n_critical: int, checksums: list[dict], built
             "clock": session["session_clock"],
             "eye_usable_fraction": (eye or {}).get("usable_fraction") or {"left": None, "right": None},
         },
-        "notes": [*data.condition_notes, *data.trial_notes, *data.probe_notes],
+        "notes": [*data.condition_notes, *data.trial_notes, *data.probe_notes, *data.span_notes],
         "checksums": {"algorithm": "sha256", "datasets": checksums},
         **_rig_record(data.rig_record),
     }

@@ -997,3 +997,222 @@ def test_a_ramp_across_the_spans_end_is_detected_on_the_span_alone(landed):
                 assert run["run_stop"] <= stop_row - 2, run
         checked += 1
     assert checked
+
+
+# -- Task 7: the NWB file (amendments 58 and 63) ----------------------------------
+
+# The sessions whose canonical NWB file is built: `partial`, which has no
+# calibration and so only pupil series and no event; `eyes`, with gaze and
+# events; `before_ni`, with a camera file outside the span; and `synced_eyes`,
+# under the box's clock.
+_NWB_SESSIONS = ("partial", "eyes", "before_ni", "synced_eyes")
+
+
+@pytest.fixture(scope="module")
+def nwb_files(landed, prefix, tmp_path_factory):
+    """Each `_NWB_SESSIONS` session's canonical NWB file, built by the daemon
+    in one pass, as `test_ni_clock.py::ni_nwb` builds one: by name, its
+    `NwbFile` row."""
+    from wl_preproc import daemon
+    from wl_preproc.responder.jobs import accept
+    from wl_preproc.schema import core
+    from wl_preproc.schema import nwb as nwb_schema
+
+    from tests.schema.test_nwb_build import _montage, _request
+
+    keys = {}
+    for name in _NWB_SESSIONS:
+        session_key = landed.key(name)
+        runs = [{"run_number": row["run_number"], "start_s": row["run_start_time"], "end_s": row["run_stop_time"],
+                 "works_run_id": f"wr-{row['run_number']}"}
+                for row in (core.Run & session_key).to_dicts(order_by="run_number")]
+        keys[name] = accept(_request(session_key, landed.animals[name].key("canonical"), _montage(runs), runs),
+                            prefix=prefix)
+    report = daemon.run_once(prefix=prefix, nwb_root=tmp_path_factory.mktemp("partial-nwb"))
+    files = {}
+    for name, key in keys.items():
+        rows = (nwb_schema.NwbFile & key).to_dicts()
+        assert rows, (name, report["errors"])
+        assert rows[0]["status"] == "written", (name, rows[0]["reason"] or rows[0]["inspector_findings"])
+        files[name] = rows[0]
+    return files
+
+
+def _stored_span(landed, name) -> tuple[float, float]:
+    from wl_preproc.schema import timebase
+
+    row = (timebase.TimingProvenance & landed.key(name)).fetch1()
+    return row["covered_start_s"], row["covered_end_s"]
+
+
+def _session_extent(landed, name) -> tuple[float, float]:
+    """Session time's extent under the NI: its first file, the one SpikeGLX
+    segment, from t = 0."""
+    from wl_preproc.schema import core
+
+    segment = (core.Segment & landed.key(name) & {"system": "spikeglx"}).fetch1()
+    return segment["start_s"], segment["end_s"]
+
+
+def _runs(landed, name):
+    """The session's measured runs, every one the canonical file holds, as
+    the file's block set (`nwb/trim.py`)."""
+    from wl_preproc.nwb.trim import BlockSet
+    from wl_preproc.schema import core
+
+    return BlockSet.of([{"start_s": row["run_start_time"], "end_s": row["run_stop_time"]}
+                        for row in (core.Run & landed.key(name)).to_dicts()])
+
+
+def test_the_nwb_eye_series_ends_inside_the_span(landed, nwb_files):
+    """Amendment 58: every eye sample the file holds lies inside the span, on
+    `partial` (pupil alone, no calibration) and on `eyes` (gaze and pupil).
+    The raw recording has samples before the span and, inside the file's
+    runs, after it, so the file's are cut by the span, not by its runs; and
+    the series reaches the span's last sample, so it is not cut short of it.
+    The first run starts after the span does, so only its end cuts here."""
+    from pynwb import NWBHDF5IO
+
+    for name in ("partial", "eyes"):
+        start_s, end_s = _span(landed, name)
+        _segment, _path, raw = _eye_recording(landed, name)
+        runs = _runs(landed, name)
+        in_runs = raw[runs.contains(raw)]
+        assert (in_runs > end_s).any() and (raw < start_s).any(), name
+        last_inside = raw[raw <= end_s].max()
+        with NWBHDF5IO(nwb_files[name]["path"], "r") as handle:
+            behavior = handle.read().processing["behavior"]
+            series = [*behavior["PupilTracking"].time_series.values(),
+                      *(behavior["EyeTracking"].spatial_series.values() if "EyeTracking" in behavior.data_interfaces
+                        else ())]
+            assert len(series) == (2 if name == "partial" else 6), (name, [item.name for item in series])
+            for item in series:
+                times = item.timestamps[:]
+                assert len(times) == len(item.data), (name, item.name)
+                assert len(times) > 0 and (times < end_s).any(), (name, item.name)
+                assert times.min() >= start_s and times.max() <= end_s, (name, item.name)
+                assert times.max() == pytest.approx(last_inside, abs=1e-9), (name, item.name)
+
+
+def test_the_nwb_eye_events_lie_inside_the_span(landed, nwb_files):
+    """Amendment 58, on `eyes`: every detector's event, the mask's withheld
+    stretches, the glitch repairs and the both-eyes trace's sources cover
+    only samples inside the span. Each stop is exclusive, one sample past the
+    stretch's last, so it is no later than the first sample after the span."""
+    from pynwb import NWBHDF5IO
+
+    from wl_preproc.schema import detect
+
+    start_s, end_s = _span(landed, "eyes")
+    _segment, _path, raw = _eye_recording(landed, "eyes")
+    first_after = raw[raw > end_s].min()
+    with NWBHDF5IO(nwb_files["eyes"]["path"], "r") as handle:
+        nwb = handle.read()
+        tables = {name: table for name, table in nwb.processing["eye_events"].data_interfaces.items()
+                  if name != "detector_agreement"}
+        tables.update({name: table for name, table in nwb.processing["behavior"].data_interfaces.items()
+                       if name.startswith(("eye_validity_", "eye_glitch_repairs_"))})
+        assert any(name.endswith("_conjunction") for name in tables)
+        assert any(name.endswith("_source") for name in tables)
+        assert {"eye_validity_left", "eye_validity_right"} <= set(tables)
+        n_events = 0
+        for name, table in tables.items():
+            frame = table.to_dataframe()
+            if not len(frame):
+                continue
+            assert frame["start_time"].min() >= start_s, name
+            assert frame["stop_time"].max() <= first_after, name
+            n_events += len(frame) if not name.startswith("eye_") else 0
+        assert n_events > 0
+    # The mask withheld the whole recording after the span as `invalid`, so
+    # its stretches would reach past the span were they not cut.
+    after = int((raw <= end_s).sum())
+    withheld = (detect.EyeValidity.Run & landed.key("eyes") & {"eye": "left"} & 'label = "invalid"').to_dicts()
+    assert any(run["run_start"] >= after for run in withheld)
+
+
+def test_the_nwb_file_names_what_it_left_out(landed, nwb_files):
+    """Amendment 58: the notes name each stretch of session time outside the
+    span, eye data in it left out, from the stored span: before it, from the
+    NI's first sample, and after it, to the NI's last. The description says
+    nothing of it (amendment 63)."""
+    from pynwb import NWBHDF5IO
+
+    for name in ("partial", "eyes"):
+        start_s, end_s = _stored_span(landed, name)
+        assert (start_s, end_s) == pytest.approx(_span(landed, name), abs=1e-9)
+        session_start_s, session_end_s = _session_extent(landed, name)
+        assert session_start_s < start_s and end_s < session_end_s
+        notes = nwb_files[name]["description"]["notes"]
+        left_out = [note for note in notes if note.startswith("eye data outside the sync box's covered span")]
+        assert left_out == [
+            f"eye data outside the sync box's covered span, {session_start_s:.3f} s to {start_s:.3f} s, is left "
+            "out: no barcode placed it",
+            f"eye data outside the sync box's covered span, {end_s:.3f} s to {session_end_s:.3f} s, is left "
+            "out: no barcode placed it",
+        ], name
+        with NWBHDF5IO(nwb_files[name]["path"], "r") as handle:
+            assert "span" not in handle.read().session_description, name
+
+
+def test_the_nwb_file_names_each_file_outside_the_span(landed, nwb_files):
+    """Amendment 57: `before_ni`'s camera file is `outside_covered_span`, and
+    the notes name it."""
+    from wl_preproc.schema import core
+
+    start_s, end_s = _stored_span(landed, "before_ni")
+    (rejected,) = (core.RejectedSegment & landed.key("before_ni")).to_dicts()
+    assert (rejected["system"], rejected["reason"]) == ("bcam", "outside_covered_span")
+    notes = nwb_files["before_ni"]["description"]["notes"]
+    assert (f"bcam file {rejected['file_path']} is left out: none of its barcodes is one the NI recorded, so it "
+            f"lies outside the sync box's covered span, {start_s:.3f} s to {end_s:.3f} s") in notes
+    assert not any("is left out: none of its barcodes" in note for note in nwb_files["partial"]["description"]["notes"])
+
+
+def test_the_nwb_file_says_barcodes_placed_the_eye_tracker(nwb_files):
+    """Amendment 63: `system_clocks.time_source` reads `barcode` for each
+    system the NI's barcodes placed and `clock` for SpikeGLX, and the NI's
+    texts say barcodes place what they place."""
+    from pynwb import NWBHDF5IO
+
+    with NWBHDF5IO(nwb_files["partial"]["path"], "r") as handle:
+        module = handle.read().processing["timebase"]
+        clocks = module["system_clocks"]
+        assert dict(zip(clocks["system"][:], clocks["time_source"][:], strict=True)) == {
+            "spikeglx": "clock", "syncbox": "barcode", "ohdpi": "barcode", "bcam": "barcode"}
+        assert clocks["time_source"].description == (
+            "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan "
+            "fitted by its strobe edges matched to the NI's; barcode, a system the NI's own barcodes placed, over "
+            "the part the sync box covered; none, not placed.")
+        assert clocks["fitted_rate_hz"].description == (
+            "The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate fitted "
+            "against the NI's strobes; a system the NI's barcodes placed, its rate fitted against them; NaN for a "
+            "system not placed on the NI's clock.")
+        assert clocks["residual_us_rms"].description == (
+            "RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe residual; a system "
+            "the NI's barcodes placed, its RMS barcode residual; NaN for a system not placed on the NI's clock.")
+        assert module["timing_provenance"]["worst_residual_us"].description == (
+            "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, Intan's largest "
+            "strobe residual where it was fitted, and the largest barcode residual of a system the NI's barcodes "
+            "placed.")
+        assert module["segments"]["first_sample"].description == (
+            "Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file being session "
+            "time; for Intan, the first strobe edge matched to the NI's; for a system the NI's barcodes placed, "
+            "the segment's first barcode.")
+
+
+def test_under_the_sync_box_the_nwb_file_says_nothing_of_a_span(landed, nwb_files):
+    """A session the box times keeps its file: no time_source column, no
+    note of a span, and every eye sample the recording has inside the
+    file's runs."""
+    from pynwb import NWBHDF5IO
+
+    notes = nwb_files["synced_eyes"]["description"]["notes"]
+    assert not any("covered span" in note for note in notes), notes
+    _segment, _path, raw = _eye_recording(landed, "synced_eyes")
+    runs = _runs(landed, "synced_eyes")
+    with NWBHDF5IO(nwb_files["synced_eyes"]["path"], "r") as handle:
+        nwb = handle.read()
+        assert "time_source" not in nwb.processing["timebase"]["system_clocks"].colnames
+        times = nwb.processing["behavior"]["PupilTracking"]["pupil_left"].timestamps[:]
+    assert len(times) == runs.contains(raw).sum()

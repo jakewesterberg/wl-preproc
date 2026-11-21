@@ -66,6 +66,12 @@ class Gathered:
     # files when the file is built, by table (`nwb/rig_record.py::TABLES`;
     # design spec `2026-11-07-rig-record-fields-design.md` section 2).
     rig_tables: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
+    # Under the NI with a sync box that recorded part of the session, what the
+    # covered span left out: the stretches of session time outside it, whose
+    # eye data the file does not hold, and each file none of whose barcodes the
+    # NI recorded (design spec `2026-10-18-training-records-and-backup-clock-
+    # design.md`, amendments 57, 58 and 63). Empty otherwise. See `_span_notes`.
+    span_notes: list[str] = dataclasses.field(default_factory=list)
 
 
 def _run_set(activation_key: dict, session_key: dict) -> list[dict]:
@@ -455,6 +461,35 @@ def _timebase(session_key: dict, provenance: dict, clock: dict, session_clock: s
     }
 
 
+def _span_notes(session_key: dict, provenance: dict) -> list[str]:
+    """What the covered span left out of the file, from the span
+    `TimingProvenance` stored (plan decision 1): under the NI, where the eye
+    tracker was placed, each stretch of session time outside the span, from
+    the NI's first sample to the span's start and from its end to the NI's
+    last, since its eye data is left out (amendment 58); and each file
+    `outside_covered_span` (amendment 57). Empty where nothing was placed by
+    the NI's barcodes, or under the sync box."""
+    from wl_preproc.schema import core
+    from wl_preproc.timebase.segments import OUTSIDE_COVERED_SPAN
+
+    start_s, end_s = provenance["covered_start_s"], provenance["covered_end_s"]
+    if start_s is None or end_s is None:
+        return []
+    notes = []
+    # Session time under the NI is its first file's, the one SpikeGLX
+    # segment, from t = 0.
+    session = (core.Segment & {**session_key, "system": "spikeglx"}).to_dicts()
+    if session and (core.Segment & {**session_key, "system": "ohdpi"}):
+        first_s, last_s = min(row["start_s"] for row in session), max(row["end_s"] for row in session)
+        notes += [f"eye data outside the sync box's covered span, {a:.3f} s to {b:.3f} s, is left out: no barcode "
+                  "placed it" for a, b in ((first_s, start_s), (end_s, last_s)) if a < b]
+    for row in (core.RejectedSegment & session_key & {"reason": OUTSIDE_COVERED_SPAN}).to_dicts(
+            order_by=("system", "file_path")):
+        notes.append(f"{row['system']} file {row['file_path']} is left out: none of its barcodes is one the NI "
+                     f"recorded, so it lies outside the sync box's covered span, {start_s:.3f} s to {end_s:.3f} s")
+    return notes
+
+
 def _usable_fraction(times: np.ndarray, stretches: list[tuple]) -> float | None:
     """The share of the file's samples of one eye that no withheld stretch
     covers (design spec `2026-09-29-nwb-publishing-design.md` section 2)."""
@@ -485,18 +520,31 @@ def _edges(times: np.ndarray, segment: dict) -> np.ndarray:
     return np.append(times, times[-1] + step)
 
 
-def _runs_to_intervals(runs, edges: np.ndarray, blocks: BlockSet) -> list[tuple]:
-    """`(start_row, stop_row, *rest)` runs, as clipped `(start_s, stop_s, *rest)`."""
+def _runs_to_intervals(runs, edges: np.ndarray, blocks: BlockSet, placed: slice | None = None) -> list[tuple]:
+    """`(start_row, stop_row, *rest)` runs, as clipped `(start_s, stop_s, *rest)`.
+    With `placed`, the rows inside the covered span (`eye.placed_rows`), each
+    run is first cut to those rows, so no stretch reaches a sample outside it
+    (amendment 58): its stop is at most one sample past the span's last."""
     out = []
     for start, stop, *rest in runs:
+        if placed is not None:
+            start, stop = max(start, placed.start), min(stop, placed.stop)
+            if stop <= start:
+                continue
         out.extend((a, b, *rest) for a, b in blocks.clip(float(edges[start]), float(edges[stop])))
     return out
 
 
-def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: int, detection_idx: dict) -> dict | None:
+def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: int, detection_idx: dict,
+         span: tuple[float, float] | None = None) -> dict | None:
+    """The eye tracker's samples, tables and events in the file's blocks and,
+    with `span`, the covered span (amendment 58): every eye stage used only
+    the samples inside it, and the file holds only those. `None` is the whole
+    session."""
     from wl_preproc.eye.detect.labels import true_runs
     from wl_preproc.eye.detect.validity import ValidityParams
     from wl_preproc.eye.ohdpi import read_columns, read_ohdpi
+    from wl_preproc.eye.span import inside_span
     from wl_preproc.nwb.eye import EYES, PUPIL_COLUMNS
     from wl_preproc.schema import consensus, core, detect, paramset
     from wl_preproc.schema import eye as eye_schema
@@ -512,11 +560,18 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
     offsets = recording.frame_numbers - recording.frame_numbers[0]
     times = eye_schema.row_session_times(segment, offsets)
     edges = _edges(times, segment)
+    placed = eye_schema.placed_rows(span, segment, offsets)
     keep = blocks.contains(times)
     if not keep.any():
         # The tracker started after, or stopped before, these blocks (the
         # final review's I2): nothing to write, and HDF5 cannot chunk it.
         return {"no_samples": True}
+    keep &= inside_span(times, span)
+    if not keep.any():
+        # The blocks hold samples, but none inside the span: nothing to write,
+        # and the notes name the stretch left out (`_span_notes`), so the
+        # description says nothing of it (amendment 63).
+        return {"no_samples": True, "outside_span": True}
     validity_params = ValidityParams(**(paramset.ParamSet & {"paramset_type": "eye_validity",
                                                             "paramset_idx": validity_idx}).fetch1("params"))
 
@@ -532,13 +587,18 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
             continue
         calibrated.append(eye)
         calibration.append({"eye": eye, **{k: v for k, v in rows[0].items() if k not in ("subject", "session_datetime", "eye")}})
-        repaired_gaze, repaired = detect._repaired_gaze(path, file_eye, map_, recording.fs_hz, validity_params)
+        # The gaze the mask and every detector read: repaired over the span's
+        # rows alone (`detect._repaired_gaze`).
+        repaired_gaze, repaired = detect._repaired_gaze(path, file_eye, map_, recording.fs_hz, validity_params,
+                                                        placed)
         gaze[eye] = repaired_gaze[keep]
-        repairs[eye] = _runs_to_intervals(true_runs(repaired), edges, blocks)
+        repairs[eye] = _runs_to_intervals(true_runs(repaired), edges, blocks, placed)
         mask_runs = (detect.EyeValidity.Run & {**session_key, "eye": eye, "paramset_type": "eye_validity",
                                                "validity_paramset_idx": validity_idx}).to_dicts()
+        # The mask withholds every row outside the span as `invalid`; cut to
+        # the span, those stretches are gone with the samples they withheld.
         validity[eye] = _runs_to_intervals([(r["run_start"], r["run_stop"], r["label"]) for r in mask_runs
-                                            if r["label"] in MASK_LABELS], edges, blocks)
+                                            if r["label"] in MASK_LABELS], edges, blocks, placed)
 
     names = {idx: name for name, idx in detection_idx.items()}
     detections, sources = [], []
@@ -556,6 +616,12 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
             # per row (design spec `2026-11-14-scaling-long-sessions-design.md`
             # section 4.9).
             inside = blocks.contains([float(edges[row["run_start"]]) for row in rows])
+            # Each detector read the span's rows alone (amendment 58), so its
+            # events lie inside them; one that did not would be left out, not
+            # cut, since a cut event is not the one the detector measured.
+            if placed is not None:
+                inside &= np.array([placed.start <= row["run_start"] and row["run_stop"] <= placed.stop
+                                    for row in rows], dtype=bool)
             runs = [{"start_s": float(edges[row["run_start"]]), "stop_s": float(edges[row["run_stop"]]),
                      "label": row["label"], **{field: row.get(field) for field in MEASUREMENTS}}
                     for row, kept in zip(rows, inside, strict=True) if kept and row["label"] not in MASK_LABELS]
@@ -567,7 +633,7 @@ def _eye(session_key: dict, session_dir: Path, blocks: BlockSet, validity_idx: i
                 sources.append({"name": f"{name}_source",
                                 "description": f"{name}: which eye each stretch of the both-eyes trace came from.",
                                 "runs": _runs_to_intervals([(r["source_start"], r["source_stop"], r["source"])
-                                                            for r in source_rows], edges, blocks)})
+                                                            for r in source_rows], edges, blocks, placed)})
 
     agreement = agreement_rows(
         (consensus.DetectorAgreement & {**session_key, "validity_paramset_idx": validity_idx}).to_dicts(), names)
@@ -736,9 +802,11 @@ def gather(activation_key: dict) -> Gathered:
     clock = session_clock.wall_reference(key["session_datetime"],
                                          rig_at_zero=rig_clock[0]["rig_at_zero"] if rig_clock else None)
     validity_idx, detection_idx = _paramsets()
-    eye = _eye(session_key, session_dir, extent, validity_idx, detection_idx)
-    no_eye_samples = eye is not None and eye.get("no_samples", False)
-    if no_eye_samples:
+    eye = _eye(session_key, session_dir, extent, validity_idx, detection_idx, session_clock.covered_span())
+    # Samples in these runs, but none inside the covered span: the notes say
+    # so, and the description gains nothing (amendment 63).
+    no_eye_samples = eye is not None and eye.get("no_samples", False) and not eye.get("outside_span", False)
+    if eye is not None and eye.get("no_samples", False):
         eye = None
 
     session_id = session_dir.name
@@ -805,4 +873,5 @@ def gather(activation_key: dict) -> Gathered:
         trial_notes=_trial_notes(session_key, run_rows) + _outside_runs_notes(key, session_key, activation["role"]),
         rig_record=rig_record,
         rig_tables=rig_tables,
+        span_notes=_span_notes(session_key, provenance[0]),
     )

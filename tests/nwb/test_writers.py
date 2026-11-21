@@ -255,6 +255,17 @@ def _timebase_texts(tmp_path, clock: str, reference: dict) -> dict:
                 "difference": module["clock_reference"].to_dataframe()["started_at_difference_s"].tolist()}
 
 
+def _time_source_text(tmp_path) -> str:
+    """`system_clocks.time_source`'s text under the NI: a column only the
+    NI's file has, so read apart from `_timebase_texts`, whose keys the sync
+    box's file holds too."""
+    from pynwb import NWBHDF5IO
+
+    (path,) = tmp_path.glob("f.nwb")
+    with NWBHDF5IO(str(path), "r") as io:
+        return io.read().processing["timebase"]["system_clocks"]["time_source"].description
+
+
 def test_a_sync_box_nwb_file_is_unchanged(tmp_path):
     """Under the sync box every text is as it was before the NI could keep
     time (part 3b-1's Task 6), but `file_path`'s, corrected under both
@@ -280,13 +291,15 @@ def test_a_sync_box_nwb_file_is_unchanged(tmp_path):
 
 
 def test_an_ni_timed_file_says_the_ni_kept_time(tmp_path):
-    """Under the NI (amendments 46 and 50): t = 0 is the NI's first sample,
-    tier N is named, drift is against the session's clock, and the wall
-    clock's sources are all four. A manifest's start with no clock to differ
+    """Under the NI (amendments 46, 50 and 63): t = 0 is the NI's first
+    sample, tier N is named, drift is against the session's clock, the
+    barcodes are named where they place, and the wall clock's sources are
+    all four. A manifest's start with no clock to differ
     from has no difference: NaN."""
     reference = {"source": "manifest", "reference_datetime": T0.isoformat(), "manifest_started_at": T0.isoformat(),
                  "started_at_difference_s": float("nan")}
     texts = _timebase_texts(tmp_path, "nidq", reference)
+    texts["system_clocks.time_source"] = _time_source_text(tmp_path)
     assert texts["module"] == (
         "How every time in this file was placed on session time: t = 0 is the NI's first sample, the NI keeping "
         "time because the sync box did not record the session throughout. PTP, where present, is a cross-check "
@@ -295,25 +308,29 @@ def test_an_ni_timed_file_says_the_ni_kept_time(tmp_path):
         "A to D, or N: the NI kept time and its codes hold every run (parent spec section 4.7; design spec "
         "2026-10-18 section 7).")
     assert texts["system_clocks.drift_ppm"] == "Clock drift against the session's clock, parts per million."
-    # No barcode places anything under the NI (the final review's M1):
-    # SpikeGLX is on the identity map, every other system unplaced.
+    # Under the NI, SpikeGLX is on the identity map, Intan is fitted by its
+    # strobes, and the sync box, the eye tracker and the cameras are placed
+    # by the NI's own barcodes over the part the box covered (amendment 63).
+    # Each text is true of a session whose NI decoded no barcode as well.
     assert texts["timing_provenance.worst_residual_us"] == (
-        "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, and Intan's largest "
-        "strobe residual where it was fitted.")
+        "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, Intan's largest strobe "
+        "residual where it was fitted, and the largest barcode residual of a system the NI's barcodes placed.")
     assert texts["system_clocks.fitted_rate_hz"] == (
         "The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate fitted "
-        "against the NI's strobes; NaN for a system not placed on the NI's clock.")
-    assert texts["system_clocks.residual_us_rms"] == (
-        "RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe residual; NaN for a "
+        "against the NI's strobes; a system the NI's barcodes placed, its rate fitted against them; NaN for a "
         "system not placed on the NI's clock.")
+    assert texts["system_clocks.residual_us_rms"] == (
+        "RMS residual, microseconds: 0 for SpikeGLX on the identity map; Intan's RMS strobe residual; a system the "
+        "NI's barcodes placed, its RMS barcode residual; NaN for a system not placed on the NI's clock.")
     assert texts["segments.file_path"] == "The recording file, relative to its system's folder."
     assert texts["segments.first_sample"] == (
         "Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file being session "
-        "time; for Intan, the first strobe edge matched to the NI's.")
-    assert not any("barcode residual" in texts[name] or "against the barcodes" in texts[name]
-                   or "first barcode" in texts[name]
-                   for name in ("timing_provenance.worst_residual_us", "system_clocks.fitted_rate_hz",
-                                "system_clocks.residual_us_rms", "segments.first_sample"))
+        "time; for Intan, the first strobe edge matched to the NI's; for a system the NI's barcodes placed, the "
+        "segment's first barcode.")
+    assert texts["system_clocks.time_source"] == (
+        "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan fitted "
+        "by its strobe edges matched to the NI's; barcode, a system the NI's own barcodes placed, over the part "
+        "the sync box covered; none, not placed.")
     source = texts["clock_reference.source"]
     assert all(f"{name}:" in source for name in ("barcode", "manifest", "rig_clock", "nidq_meta")), source
     assert "barcode's" not in texts["clock_reference.started_at_difference_s"]
