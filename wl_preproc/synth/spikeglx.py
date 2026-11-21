@@ -453,8 +453,9 @@ _EYE_COPY_SEED_KEY = 0xEC09
 def eye_copy_frame_arrivals_s(recipe: SessionRecipe, copy: EyeCopy, ni_drift_ppm: float) -> np.ndarray:
     """When each eye frame's copy reaches the NI, in NI-file seconds: the frame's
     capture time, on the NI's clock, plus `lag_s`, the frame's own processing
-    delay and any stall. Frames come out of the DAC in order, so a slow frame
-    holds back the ones behind it rather than being overtaken."""
+    delay and any stall. Not sorted: a slow frame arrives after later ones, and
+    the DAC writes whatever arrives when it arrives, so a slow frame is shown
+    late (stale) for its own interval and never holds the frames behind it back."""
     n = int((recipe.duration_s + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
     eye_ppm = dict(recipe.system_drift_ppm).get("ohdpi", recipe.drift_ppm)
     session_s = (np.arange(n) / OHDPI_FPS - OHDPI_PRE_ROLL_S) / (1.0 + eye_ppm * 1e-6)
@@ -468,7 +469,7 @@ def eye_copy_frame_arrivals_s(recipe: SessionRecipe, copy: EyeCopy, ni_drift_ppm
     if copy.stall is not None:
         start_s, stop_s, extra_s = copy.stall
         arrival = arrival + np.where((session_s >= start_s) & (session_s < stop_s), extra_s, 0.0)
-    return np.maximum.accumulate(arrival)
+    return arrival
 
 
 def _eye_copy_analog(recipe: SessionRecipe, copy: EyeCopy, n_samples: int, ni_drift_ppm: float) -> np.ndarray:
@@ -491,9 +492,12 @@ def _eye_copy_analog(recipe: SessionRecipe, copy: EyeCopy, n_samples: int, ni_dr
         scale = EYE_COPY_TANH_SCALE_SDS * float(np.std(mixed))
         per_frame = copy.gain_v * scale * np.tanh(mixed / scale) + copy.offset_v
         arrival = eye_copy_frame_arrivals_s(recipe, copy, ni_drift_ppm)
+        # The frame shown at each sample is the last to have arrived (ties to the
+        # later frame): arrival order, not frame order.
         first = np.ceil(arrival * NIDQ_SAMPLE_RATE_HZ).astype(np.int64)
-        frame_of = np.searchsorted(first, np.arange(n_samples), side="right") - 1
-        held = per_frame[np.clip(frame_of, 0, None)]
+        order = np.argsort(first, kind="stable")
+        position = np.searchsorted(first[order], np.arange(n_samples), side="right") - 1
+        held = per_frame[order[np.clip(position, 0, None)]]
         if copy.smoothing_samples > 1:
             held = np.convolve(held, np.ones(copy.smoothing_samples) / copy.smoothing_samples, mode="same")
         volts[:, k] += held

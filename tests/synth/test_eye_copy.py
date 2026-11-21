@@ -9,6 +9,7 @@ from the writer's arrival function, so they cross the boundary.
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,12 @@ from wl_preproc.contracts.events import TaskTypeCode
 from wl_preproc.synth.ohdpi import OHDPI_FPS, OHDPI_PRE_ROLL_S, eye_traces
 from wl_preproc.synth.recipe import EYE_RECIPE, RECIPES, BlockSpec, EyeCopy, MontageSpec, SessionRecipe
 from wl_preproc.synth.session import generate_session
-from wl_preproc.synth.spikeglx import NIDQ_N_DIGITAL_WORDS, NIDQ_SAMPLE_RATE_HZ, SPIKEGLX_PRE_ROLL_S
+from wl_preproc.synth.spikeglx import (
+    NIDQ_N_DIGITAL_WORDS,
+    NIDQ_SAMPLE_RATE_HZ,
+    SPIKEGLX_PRE_ROLL_S,
+    eye_copy_frame_arrivals_s,
+)
 from wl_preproc.timebase._nidq_meta import read_nidq_meta
 
 N_XA = 16
@@ -82,6 +88,15 @@ NIDQ_HASHES_AT_FC33EBE = {
     ),
 }
 
+# sha256 of the eye file (`OpenIris-synthetic.txt`) for the recipes that write
+# one, computed at fc33ebe, before `write_ohdpi` was split into `eye_traces`.
+# The file passes through sin/cos, which Linux rounds otherwise in the last
+# digits, so it is compared where it was taken (macOS) and skipped elsewhere.
+OHDPI_HASHES_AT_FC33EBE = {
+    "eye": "4cf5a5ff117c84c02c81d01ada9a48058d9c28337ddf8036c5360ceef5229343",
+    "drift": "6fa3ddc063c2f350a87c3d1b95ba7270e8269e87f2e12eaf060963c0a83e08d0",
+}
+
 
 @pytest.mark.parametrize("name", sorted(NIDQ_HASHES_AT_FC33EBE))
 def test_a_recipe_without_a_copy_writes_the_same_bytes(tmp_path, name):
@@ -90,6 +105,14 @@ def test_a_recipe_without_a_copy_writes_the_same_bytes(tmp_path, name):
     bin_hash, meta_hash = NIDQ_HASHES_AT_FC33EBE[name]
     assert hashlib.sha256(nidq.read_bytes()).hexdigest() == bin_hash
     assert hashlib.sha256(nidq.with_suffix(".meta").read_bytes()).hexdigest() == meta_hash
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="trig rounds differently on Linux; hashes taken on macOS")
+@pytest.mark.parametrize("name", sorted(OHDPI_HASHES_AT_FC33EBE))
+def test_a_recipe_without_a_copy_writes_the_same_eye_file(tmp_path, name):
+    generate_session(tmp_path, RECIPES[name])
+    (eye,) = tmp_path.rglob("OpenIris-synthetic.txt")
+    assert hashlib.sha256(eye.read_bytes()).hexdigest() == OHDPI_HASHES_AT_FC33EBE[name]
 
 
 def _generate_plain(root: Path, recipe: SessionRecipe) -> Path:
@@ -140,11 +163,21 @@ def test_the_copy_is_not_the_column_the_matcher_reads(tmp_path):
         "P1 Y": traces.common_y + traces.p1y_jitter_left,
     }
     frames, seen = _channel_at_frames(volts, COPY_CHANNEL, len(x), copy.lag_s)
+    # Not "residual above the noise", which the channel's own noise and jitter
+    # meet for a pure-X copy as well: the best single column must leave a good
+    # part of the variance unexplained.
+    # In 10-frame means, which take out the per-frame jitter and the white
+    # P1 noise a pure-X copy would also lose, so that a pure-X copy explains
+    # over 0.95 and only the mixing is left to fail it.
+    block = 10
+    usable = len(frames) // block * block
+    seen_blocks = seen[:usable].reshape(-1, block).mean(axis=1)
     for name, column in candidates.items():
-        design = np.column_stack((column[frames], np.ones(len(frames))))
-        coef, *_ = np.linalg.lstsq(design, seen, rcond=None)
-        residual_rms = float(np.sqrt(np.mean((seen - design @ coef) ** 2)))
-        assert residual_rms > NOISE_V, name
+        column_blocks = column[frames][:usable].reshape(-1, block).mean(axis=1)
+        design = np.column_stack((column_blocks, np.ones(len(seen_blocks))))
+        coef, *_ = np.linalg.lstsq(design, seen_blocks, rcond=None)
+        explained = 1.0 - np.var(seen_blocks - design @ coef) / np.var(seen_blocks)
+        assert explained < 0.95, (name, explained)
 
 
 def _best_delay_s(volts: np.ndarray, x: np.ndarray, frames: np.ndarray) -> float:
@@ -191,3 +224,19 @@ def test_the_copy_is_deterministic_and_clipped(tmp_path):
     assert first == second
     volts = _volts(_generate(tmp_path / "c", recipe))
     assert volts[:, COPY_CHANNEL].max() <= 2.0 + 5.0 / 32768
+
+
+def test_the_frames_shown_are_late_as_the_instrument_is(tmp_path):
+    """Each frame's delay after capture, less the DAC's lag: a median near the
+    paper's 1.1 ms, and 2% of frames 10-50 ms (amendment 84), none of them
+    holding the frames behind them back."""
+    recipe = _recipe(eye_copy=EyeCopy(channel=COPY_CHANNEL, lag_s=0.0))
+    n_frames = len(eye_traces(recipe).t)
+    nominal = np.arange(n_frames) / OHDPI_FPS - OHDPI_PRE_ROLL_S + SPIKEGLX_PRE_ROLL_S
+    delay = eye_copy_frame_arrivals_s(recipe, recipe.eye_copy, 0.0) - nominal
+    assert 0.9e-3 < np.median(delay) < 1.3e-3
+    slow = np.mean((delay >= 10e-3) & (delay <= 50e-3))
+    assert 0.01 < slow < 0.04
+    # No chain: the frame after a slow one arrives on its own schedule.
+    after_slow = delay[1:][delay[:-1] >= 10e-3]
+    assert np.median(after_slow) < 3e-3
