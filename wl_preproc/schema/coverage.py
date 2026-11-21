@@ -56,7 +56,8 @@ class RunCoverage(dj.Computed):
         Both sides are ours and already in session time: `core.Run` is
         decoded from the event codes, and `Segment.start_s`/`end_s` carry each
         recording's extent after its own offset fit, so no conversion happens
-        here.
+        here. Each extent is cut to the covered span where the NI's barcodes
+        placed the system (`_extents`, amendment 58).
         """
         from wl_preproc.timebase.coverage import classify_coverage
 
@@ -64,11 +65,7 @@ class RunCoverage(dj.Computed):
         if run[1] <= run[0]:
             self.insert1({**key, "coverage": "absent", "covered_s": 0.0})
             return
-        extents = [
-            (row["start_s"], row["end_s"])
-            for row in (core.Segment & key).to_dicts()
-        ]
-        state, covered_s = classify_coverage(run, extents)
+        state, covered_s = classify_coverage(run, _extents(key))
         self.insert1({**key, "coverage": state, "covered_s": covered_s})
 
 
@@ -100,7 +97,8 @@ class TrialCoverage(dj.Computed):
         return pipeline.trial.Trial * core.AcquisitionSystem
 
     def make(self, key: dict) -> None:
-        """Intersect this trial's interval with this system's segment extents.
+        """Intersect this trial's interval with this system's segment extents,
+        cut to the covered span as `RunCoverage.make()`'s are (`_extents`).
 
         The same rule `RunCoverage.make()` calls -- `timebase/coverage.py`'s
         own docstring names this table as a caller, "so the rule has one
@@ -125,12 +123,39 @@ class TrialCoverage(dj.Computed):
                 "session_dir) for it, then clear this table's errored jobs for the session")
         (row,) = rows
         trial = (row["start_s"], row["stop_s"])
-        extents = [
-            (row["start_s"], row["end_s"])
-            for row in (core.Segment & key).to_dicts()
-        ]
-        state, covered_s = classify_coverage(trial, extents)
+        state, covered_s = classify_coverage(trial, _extents(key))
         self.insert1({**key, "coverage": state, "covered_s": covered_s})
+
+
+def _extents(key: dict) -> list[tuple[float, float]]:
+    """This system's segment extents in session time, each cut to the covered
+    span where the NI's barcodes placed the system (amendment 58, ruling R5
+    of part 3b-3).
+
+    Under the NI with a sync box that stopped partway, the eye tracker's and
+    the cameras' segments run on past the span, placed there by extrapolating
+    their barcode fit, which nothing verified, so no stage uses those samples.
+    Coverage says so: a run past the span reads those systems as not covered
+    there, which is true of everything that reads them. A system the NI does
+    not place by barcode, SpikeGLX itself or Intan on its strobes, keeps its
+    extents, and under the sync box the span is the whole session."""
+    from wl_preproc.eye.span import clip_to_span
+    from wl_preproc.schema import timebase
+    from wl_preproc.timebase.clock import clock_for
+
+    extents = [(row["start_s"], row["end_s"]) for row in (core.Segment & key).to_dicts()]
+    # Only the NI's clock has a span (`Clock.covered_span`), so a session the
+    # sync box times never asks for one.
+    clock = (timebase.SessionClock & key).to_dicts()
+    if not extents or not clock or clock[0]["source"] != "nidq":
+        return extents
+    if (timebase.SystemTimebase & key).fetch1("time_source") != "barcode":
+        return extents
+    span = clock_for(key).covered_span()
+    if span is None:
+        return extents
+    return [extent for extent in (clip_to_span(start_s, end_s, span) for start_s, end_s in extents)
+            if extent is not None]
 
 
 def activate(prefix: str = DEFAULT_PREFIX) -> None:

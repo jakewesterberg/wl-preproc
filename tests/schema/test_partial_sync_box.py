@@ -40,6 +40,31 @@ LAST_TRIAL_NUMBER_WORD = 26
 # code words from 2.998 s to 3.004 s: the box lost edges there, not words.
 EDGE_LOSS_S = (2.9, 3.1)
 
+# The eye sessions (`eyes`, and `synced_eyes` under the box's clock): the
+# synthetic stream holds no fixation, so every eye stage of `partial` refuses
+# for want of a calibration, and no eye sample is used inside the span or out.
+# These add one calibration window every 1.5 s from 0.1 s (truth time), each
+# `tests/schema/test_eye_populate.py::_fixation_words`' five code words, its
+# target the hold under it at `CAL_SCALE` degrees per raw unit. The gaze holds
+# at one of `_HOLDS_PX` through each window and ramps to the next between them
+# (`tests/schema/test_detect_populate.py::_ramp_fixations`), so each ramp is a
+# saccade. Five windows lie inside the span, which ends at the box's last
+# barcode at 8 s; the sixth's fixation straddles its end, and four lie after.
+CAL_SCALE = 0.005
+_HOLDS_PX = ((0.0, 0.0), (500.0, 0.0), (500.0, 500.0), (0.0, 500.0), (250.0, 250.0))
+_WINDOW_STARTS_S = tuple(0.1 + 1.5 * index for index in range(10))
+# Each ramp starts 1.1 s into its window's hold, after the fixation's end at
+# 0.8 s, and lasts 32 ms in 16 steps, as `test_detect_populate.py`'s first.
+_RAMP_AFTER_S = 1.1
+_RAMP_S = 0.032
+_RAMP_STEPS = 16
+# Blinks, both eyes, 40 ms each, clear of every fixation and ramp: two inside
+# the span and three after it, so the span's share of loss and its blink rate
+# differ from the whole recording's.
+_BLINKS_S = (1.0, 4.0, 10.0, 12.0, 13.5)
+_BLINK_ROWS = 20
+_BLINK_COLUMNS = ("PupilWidth", "PupilHeight", "CR1X", "CR1Y")
+
 
 def _start_the_ni_late(session_dir, at_s: float) -> None:
     """The NI's file as one SpikeGLX started at session time `at_s`: every
@@ -140,6 +165,72 @@ def _kill_the_camera_cable(session_dir) -> None:
     path.write_text(yaml.safe_dump(sidecar, sort_keys=False))
 
 
+def _eye_fixations() -> tuple:
+    """The gaze of the eye sessions: held at `_HOLDS_PX` in turn, one hold
+    per calibration window, joined by ramps, from 0 s to the session's end."""
+    from wl_preproc.synth.recipe import EyeFixationSpec
+
+    from tests.schema.test_detect_populate import _ramp_fixations
+
+    fixations = []
+    held_from_s = 0.0
+    for index, start_s in enumerate(_WINDOW_STARTS_S):
+        here = _HOLDS_PX[index % len(_HOLDS_PX)]
+        if index == len(_WINDOW_STARTS_S) - 1:
+            fixations.append(EyeFixationSpec(start_s=held_from_s, end_s=15.0, x_px=here[0], y_px=here[1]))
+            break
+        ramp_s = start_s + _RAMP_AFTER_S
+        fixations.append(EyeFixationSpec(start_s=held_from_s, end_s=ramp_s, x_px=here[0], y_px=here[1]))
+        fixations.extend(_ramp_fixations(ramp_s, here, _HOLDS_PX[(index + 1) % len(_HOLDS_PX)], _RAMP_S,
+                                         _RAMP_STEPS))
+        held_from_s = ramp_s + _RAMP_S
+    return tuple(fixations)
+
+
+def _write_calibration_windows(session_dir, recipe, truth) -> None:
+    """The session's code words with one calibration window per
+    `_WINDOW_STARTS_S`, written where the rig strobes them: the NI's data
+    lines and the box's log, which keeps only what it recorded before its
+    stop (`synth/syncbox.py::write_syncbox_log`)."""
+    import dataclasses
+
+    from wl_preproc.synth.spikeglx import write_nidq
+    from wl_preproc.synth.syncbox import write_syncbox_log
+
+    from tests.schema.test_eye_populate import _fixation_words
+
+    extra = []
+    for index, start_s in enumerate(_WINDOW_STARTS_S):
+        x_px, y_px = _HOLDS_PX[index % len(_HOLDS_PX)]
+        extra.extend(_fixation_words(start_s, (CAL_SCALE * x_px, CAL_SCALE * y_px)))
+    words = tuple(sorted((*truth.code_words, *extra), key=lambda pair: pair[0]))
+    written = dataclasses.replace(truth, code_words=words)
+    write_syncbox_log(session_dir / "syncbox" / "seg-000.log", recipe, written)
+    write_nidq(session_dir / "spikeglx", recipe, written,
+               drift_ppm=dict(recipe.system_drift_ppm).get("spikeglx", recipe.drift_ppm))
+
+
+def _plant_blinks(session_dir) -> None:
+    """A blink in both eyes at each `_BLINKS_S`, as OpenIrisDPI writes one
+    (`tests/schema/test_eye_loss_populate.py`): the pupil and P1 at 0 for
+    `_BLINK_ROWS` frames, `DataQuality` left at 100."""
+    from wl_preproc.synth.ohdpi import HEADER
+
+    from tests.schema.test_detect_populate import _first_row_at
+
+    (path,) = (session_dir / "ohdpi").glob("*.txt")
+    header, *rows = path.read_text(encoding="utf-8").splitlines()
+    columns = [HEADER.index(f"{eye}{name}") for eye in ("Left", "Right") for name in _BLINK_COLUMNS]
+    for time_s in _BLINKS_S:
+        first = _first_row_at(time_s)
+        for row in range(first, first + _BLINK_ROWS):
+            fields = rows[row].split(" ")
+            for column in columns:
+                fields[column] = "0.0000"
+            rows[row] = " ".join(fields)
+    path.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+
+
 class _Landed(dict):
     report: dict
 
@@ -166,8 +257,10 @@ def landed(dj_conn, prefix, tmp_path_factory):
     words it lost gone from the box's log; `disagree`, the same as `partial`
     with one of the box's code words read as another; `last_trial`, the same
     with the part's last trial number read as another; `edge_loss`, the same
-    with a photodiode edge lost inside the box's part; and `synced`, the box
-    running the whole session and keeping time. Deleted afterwards."""
+    with a photodiode edge lost inside the box's part; `synced`, the box
+    running the whole session and keeping time; and `eyes` and
+    `synced_eyes`, `partial` and `synced` with calibration windows, ramps
+    and blinks in the eye recording (`_eye_fixations`). Deleted afterwards."""
     from wl_sync.pins import GPIO_MAP
 
     from wl_preproc import daemon
@@ -205,6 +298,9 @@ def landed(dj_conn, prefix, tmp_path_factory):
             _flip_a_box_word(session_dir, FLIPPED_BOX_WORD)
         if name == "last_trial":
             _flip_a_box_word(session_dir, LAST_TRIAL_NUMBER_WORD)
+        if name in ("eyes", "synced_eyes"):
+            _write_calibration_windows(session_dir, recipe, truth)
+            _plant_blinks(session_dir)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
@@ -219,6 +315,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
     land("edge_loss", syncbox_stop_s=STOP_S, syncbox_losses=(SyncBoxLossSpec(
         cause="buffer_overflow", count=3, from_s=EDGE_LOSS_S[0], to_s=EDGE_LOSS_S[1], gpio=GPIO_MAP["pd1_comp"]),))
     land("synced")
+    land("eyes", syncbox_stop_s=STOP_S, eye_fixations=_eye_fixations())
+    land("synced_eyes", eye_fixations=_eye_fixations())
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
     for _recipe, _truth, key, _session_dir in sessions.values():
@@ -538,3 +636,226 @@ def test_an_edge_window_does_not_cut_the_part(landed):
     row = (timebase.TimingProvenance & key).fetch1()
     assert row["tier"] == "N", row
     assert row["event_code_agreement"] == pytest.approx(1.0)
+
+
+# -- Eye data only inside the span (amendment 58) ------------------------------
+
+
+def _span(landed, name) -> tuple[float, float]:
+    from wl_preproc.timebase.clock import clock_for
+
+    return clock_for(landed.key(name), landed.session_dir(name)).covered_span()
+
+
+def _eye_recording(landed, name):
+    """The eye tracker's segment, its file, and every row's session time,
+    re-derived here rather than through `eye.row_session_times`: sample `k`
+    at `start_s + k * (end_s - start_s) / n_samples`, a row's sample read off
+    its frame counter."""
+    import numpy as np
+
+    from wl_preproc.eye.ohdpi import read_ohdpi
+    from wl_preproc.schema import core
+
+    segment = (core.Segment & landed.key(name) & {"system": "ohdpi"}).fetch1()
+    path = landed.session_dir(name) / "ohdpi" / segment["segment_id"]
+    numbers = read_ohdpi(path).frame_numbers
+    step_s = (segment["end_s"] - segment["start_s"]) / segment["n_samples"]
+    return segment, path, segment["start_s"] + (numbers - numbers[0]).astype(np.float64) * step_s
+
+
+def _windows(landed, name) -> list[tuple[float, float]]:
+    """Each calibration window's `(FIXATION_ACQUIRED, FIXATION_END)` in
+    session time, as the session's clock decodes its codes."""
+    from wl_preproc.contracts.events import TaskEvent
+    from wl_preproc.timebase.clock import clock_for
+
+    codes = clock_for(landed.key(name), landed.session_dir(name)).codes()
+    acquired = [time_s for time_s, word in codes if word == int(TaskEvent.FIXATION_ACQUIRED)]
+    ended = [time_s for time_s, word in codes if word == int(TaskEvent.FIXATION_END)]
+    return list(zip(acquired, ended, strict=True))
+
+
+def test_no_eye_stage_uses_a_sample_past_the_span(landed):
+    """Amendment 58, under the NI with a box that stopped at `STOP_S` while the
+    eye tracker ran on: a calibration window outside the span is not one, the
+    mask withholds every sample outside it, and so no detected event, and no
+    saccade the main sequence takes, lies outside it."""
+    from wl_preproc.eye.detect.labels import Label
+    from wl_preproc.schema import detect, eye, main_sequence, paramset
+
+    key = landed.key("eyes")
+    assert _clock(key) == "nidq"
+    start_s, end_s = _span(landed, "eyes")
+    segment, _path, times = _eye_recording(landed, "eyes")
+    # The fixture is what it says: the eye tracker recorded well past the span,
+    # and some windows lie wholly after it.
+    assert segment["end_s"] > end_s + 5.0
+    windows = _windows(landed, "eyes")
+    inside = [window for window in windows if start_s <= window[0] and window[1] <= end_s]
+    assert len(inside) == 5 and len([window for window in windows if window[0] > end_s]) == 4
+
+    for row in (eye.EyeCalibration & key).to_dicts():
+        assert row["calibration_source"] == "fitted", row
+        assert row["n_points"] == len(inside), row["eye"]
+    residuals = (eye.EyeCalibration.BlockResidual & key).to_dicts()
+    assert residuals and sum(row["n_points"] for row in residuals) == 2 * len(inside)
+
+    outside = (times < start_s) | (times > end_s)
+    assert outside.any() and not outside.all()
+    validity = (detect.EyeValidity & key).to_dicts()
+    assert validity and all(row["status"] == "computed" for row in validity)
+    for row in validity:
+        assert row["n_samples"] == len(times)
+        for run in (detect.EyeValidity.Run & row).to_dicts():
+            if outside[run["run_start"]:run["run_stop"]].any():
+                assert run["label"] == Label.INVALID.value, run
+
+    detections = (detect.EyeDetection & key & 'status = "computed"').to_dicts()
+    assert detections
+    masked = {Label.BLINK.value, Label.INVALID.value, Label.LOST.value}
+    saccades = 0
+    for row in detections:
+        for run in (detect.EyeDetection.Run & row).to_dicts():
+            if run["label"] in masked:
+                continue
+            assert start_s <= times[run["run_start"]] and times[run["run_stop"] - 1] <= end_s, run
+            saccades += run["label"] == Label.SACCADE.value
+    assert saccades > 0
+
+    for row in (main_sequence.SaccadeMainSequence & key).to_dicts():
+        detection = {name: row[name] for name in detect.EyeDetection.primary_key}
+        params = main_sequence.MainSequenceParams(**(paramset.ParamSet & {
+            "paramset_type": row["fit_paramset_type"], "paramset_idx": row["fit_paramset_idx"]}).fetch1("params"))
+        runs = (detect.EyeDetection.Run & detection & 'label in ("saccade", "microsaccade")').to_dicts(
+            order_by="run_index")
+        taken = [run for run in main_sequence.selected_runs(runs, row["fs_hz"], params)
+                 if start_s <= times[run["run_start"]] <= end_s]
+        assert row["n_saccades"] == len(taken), row
+
+
+def test_eye_quality_counts_only_the_span(landed):
+    """Amendment 58: tracking loss is the share of the frames inside the span
+    the tracker lost, and the blink rate the blinks inside it over the seconds
+    of recording inside it. Two of the five planted blinks lie inside."""
+    import numpy as np
+
+    from wl_preproc.eye.ohdpi import read_tracker_loss
+    from wl_preproc.schema import eye
+
+    key = landed.key("eyes")
+    start_s, end_s = _span(landed, "eyes")
+    segment, path, times = _eye_recording(landed, "eyes")
+    inside = (times >= start_s) & (times <= end_s)
+    seconds = min(segment["end_s"], end_s) - max(segment["start_s"], start_s)
+    rows = {row["eye"]: row for row in (eye.EyeQuality & key).to_dicts()}
+    assert set(rows) == {"left", "right"}
+    for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
+        loss = read_tracker_loss(path, file_eye)
+        lost = loss.lost | loss.unreadable
+        blinks = int(np.sum(np.diff(np.concatenate(([0], loss.blink[inside].astype(np.int8), [0]))) == 1))
+        assert blinks == 2
+        assert rows[eye_value]["tracking_loss_fraction"] == pytest.approx(lost[inside].sum() / inside.sum())
+        assert rows[eye_value]["blink_rate_hz"] == pytest.approx(blinks / seconds)
+        # The fixture is what it says: the whole recording reads otherwise.
+        assert lost.sum() / lost.size != pytest.approx(lost[inside].sum() / inside.sum())
+        assert 5 / (segment["end_s"] - segment["start_s"]) != pytest.approx(blinks / seconds)
+
+
+def _rows_of(tables, session_key) -> dict[str, list[dict]]:
+    return {table.full_table_name: (table & session_key).to_dicts() for table in tables}
+
+
+def _same_rows(made: list[dict], stored: list[dict], primary_key) -> None:
+    """Every row `make()` would insert, against what is stored, matched by
+    primary key, floats to a tolerance."""
+    def by_key(rows):
+        return {tuple(str(row[name]) for name in primary_key): row for row in rows}
+
+    made_rows, stored_rows = by_key(made), by_key(stored)
+    assert made_rows.keys() == stored_rows.keys()
+    for name, row in made_rows.items():
+        for column, value in row.items():
+            expected = stored_rows[name][column]
+            if isinstance(expected, float) or isinstance(value, float):
+                assert value == pytest.approx(expected, rel=1e-12, abs=1e-12, nan_ok=True), (name, column)
+            else:
+                assert value == expected or str(value) == str(expected), (name, column, value, expected)
+
+
+def test_under_the_sync_box_the_eye_stages_are_unchanged(landed, monkeypatch):
+    """Under the box's clock the span is None, and every eye table's stored
+    rows equal those its `make()` gives through the span's own path with a
+    span that holds the whole recording: nothing is cut, so nothing changes."""
+    import math
+
+    import datajoint as dj
+
+    from wl_preproc.schema import detect, eye, main_sequence, pipeline
+    from wl_preproc.timebase.clock import Clock
+
+    key = landed.key("synced_eyes")
+    assert _clock(key) == "syncbox"
+    assert _span(landed, "synced_eyes") is None
+    calibrations = (eye.EyeCalibration & key).to_dicts()
+    assert calibrations and all(row["calibration_source"] == "fitted" for row in calibrations)
+    assert len(detect.EyeDetection & key & 'status = "computed"')
+
+    stages = (
+        (eye.EyeCalibration, (eye.EyeCalibration, eye.EyeCalibration.BlockResidual)),
+        (eye.EyeQuality, (eye.EyeQuality,)),
+        (detect.EyeValidity, (detect.EyeValidity, detect.EyeValidity.Run)),
+        (detect.EyeDetection, (detect.EyeDetection, detect.EyeDetection.Run, detect.EyeDetection.Source)),
+        (main_sequence.SaccadeMainSequence, (main_sequence.SaccadeMainSequence,
+                                             main_sequence.SaccadeMainSequence.Block,
+                                             main_sequence.SaccadeMainSequence.Condition)),
+    )
+    session_key = {name: key[name] for name in pipeline.Session.primary_key}
+    stored = {name: rows for _stage, tables in stages for name, rows in _rows_of(tables, session_key).items()}
+    made: dict[str, list[dict]] = {name: [] for name in stored}
+
+    def capture(table, rows, **_kwargs):
+        made.setdefault(table.full_table_name, []).extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(Clock, "covered_span", lambda _self: (-math.inf, math.inf))
+    monkeypatch.setattr(dj.Table, "insert", capture)
+    # The keys each stage stored, so a key whose `make()` raised in the pass
+    # is not compared against the nothing it stored.
+    for stage, _tables in stages:
+        for stage_key in (stage.key_source & session_key & stage.proj()).keys():
+            stage().make(stage_key)
+    for _stage, tables in stages:
+        for table in tables:
+            name = table.full_table_name
+            _same_rows(made[name], stored[name], table.primary_key)
+
+
+def test_coverage_stops_at_the_span(landed):
+    """Ruling R5 (amendment 58): a system the NI's barcodes placed is covered
+    only over the span, so a run wholly after it shows no eye or camera
+    coverage, though their segments' extents run on past it. SpikeGLX, the
+    clock, still covers it."""
+    from wl_preproc.schema import core, coverage
+
+    key = landed.key("partial")
+    _start_s, end_s = _span(landed, "partial")
+    assert (core.Segment & key & {"system": "ohdpi"}).fetch1("end_s") > end_s + 5.0
+    runs = [run for run in (core.Run & key).to_dicts() if run["run_start_time"] > end_s]
+    assert runs
+    for run in runs:
+        run_key = {name: run[name] for name in core.Run.primary_key}
+        for system in ("ohdpi", "bcam", "syncbox"):
+            row = (coverage.RunCoverage & run_key & {"system": system}).fetch1()
+            assert (row["coverage"], row["covered_s"]) == ("absent", 0.0), system
+        assert (coverage.RunCoverage & run_key & {"system": "spikeglx"}).fetch1("coverage") == "full"
+    trials = [row for row in (core.TrialTime & key).to_dicts() if row["start_s"] > end_s]
+    assert trials
+    for trial in trials:
+        row = (coverage.TrialCoverage & key & {"trial_id": trial["trial_id"], "system": "ohdpi"}).fetch1()
+        assert (row["coverage"], row["covered_s"]) == ("absent", 0.0)
+
+
+def test_the_eye_sessions_report_no_error(landed):
+    """The eye stages run on both eye sessions without an error."""
+    for name in ("eyes", "synced_eyes"):
+        assert _errors_of(landed.report, landed.key(name)) == [], name

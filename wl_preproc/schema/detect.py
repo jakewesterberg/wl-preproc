@@ -94,6 +94,7 @@ See `EyeDetection.key_source`'s own docstring.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from pathlib import Path
 
@@ -291,11 +292,23 @@ class EyeValidity(dj.Computed):
         return super().populate(*args, **kwargs)
 
     def make(self, key: dict) -> None:
-        """Both eyes' mask for one session and one paramset."""
+        """Both eyes' mask for one session and one paramset.
+
+        **Only inside the covered span** (amendment 58). Under the NI with a
+        sync box that stopped partway, the eye tracker's rows outside it are
+        placed by extrapolating the barcode fit, which nothing verified. The
+        mask is built over the rows inside it alone (`eye.placed_rows`), as a
+        recording that began and ended at its edges, and every row outside it
+        is `invalid`: no detector is offered one, so no stage downstream uses
+        it. `n_samples` stays the recording's, so the runs still tile its
+        rows, and each fraction is still over all of them: a row outside the
+        span is counted under no criterion, as dilation's halo is not. Under
+        the sync box the span is the whole session and nothing changes."""
         from wl_preproc.eye.detect.validity import ValidityParams, validity_labels
         from wl_preproc.eye.detect.velocity import velocity
         from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
         from wl_preproc.schema import eye as eye_schema, ingest
+        from wl_preproc.timebase.clock import clock_for
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         # `ParamSet`'s own primary key is `(paramset_type, paramset_idx)`,
@@ -321,6 +334,8 @@ class EyeValidity(dj.Computed):
         # (design spec `2026-11-06-eye-lost-data-and-region-design.md` section 7).
         setup = (core.SessionSetup & session_key).to_dicts()
         field_deg = (setup[0]["half_field_h_deg"], setup[0]["half_field_v_deg"]) if setup else None
+        placed = eye_schema.placed_rows(clock_for(session_key, session_dir).covered_span(), segment,
+                                        recording.frame_numbers - recording.frame_numbers[0])
 
         for eye_value, file_eye in (("left", "Left"), ("right", "Right")):
             calibration = (eye_schema.EyeCalibration & {**session_key, "eye": eye_value})
@@ -333,13 +348,30 @@ class EyeValidity(dj.Computed):
                 self.insert1({**row, "status": "refused", "reason":
                               "no usable calibration, so gaze is undefined"})
                 continue
+            if placed is not None and placed.stop == placed.start:
+                self.insert1({**row, "status": "refused", "reason":
+                              "no sample of the eye tracker's recording lies inside the span its barcodes cover"})
+                continue
 
-            gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params)
-            mask = validity_labels(
-                gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
-                recording.frame_gaps, params, fs_hz=recording.fs_hz, repaired=repaired, field_deg=field_deg,
-            )
-            labels = mask.labels
+            gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params, placed)
+            if placed is None:
+                mask = validity_labels(
+                    gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
+                    recording.frame_gaps, params, fs_hz=recording.fs_hz, repaired=repaired, field_deg=field_deg,
+                )
+                labels = mask.labels
+                fractions = mask.fractions
+            else:
+                inside = gaze[placed]
+                mask = validity_labels(
+                    inside, velocity(inside, recording.fs_hz), _loss_inside(read_tracker_loss(path, file_eye), placed),
+                    _gaps_inside(recording.frame_gaps, placed), params, fs_hz=recording.fs_hz,
+                    repaired=repaired[placed], field_deg=field_deg,
+                )
+                labels = np.full(len(gaze), Label.INVALID, dtype=object)
+                labels[placed] = mask.labels
+                share = len(inside) / len(gaze)
+                fractions = {criterion: value * share for criterion, value in mask.fractions.items()}
             # `validity_labels` returns `None` for a usable sample; encoded
             # here as `FIXATION` ONLY for storage, because the mask's own
             # runs must still tile `[0, n_samples)` -- `runs_from_labels`
@@ -382,7 +414,7 @@ class EyeValidity(dj.Computed):
                 # and this table's own column comment above carries the
                 # short version for a reader looking only at the schema.
                 **{f"frac_{criterion}": value
-                   for criterion, value in mask.fractions.items()},
+                   for criterion, value in fractions.items()},
                 "region_half_width_deg": mask.region_deg[0], "region_half_height_deg": mask.region_deg[1],
                 "region_from_setup": int(mask.region_from_setup),
                 "reason": "",
@@ -631,6 +663,7 @@ class EyeDetection(dj.Computed):
         from wl_preproc.eye.detect.velocity import local_velocity, velocity
         from wl_preproc.eye.ohdpi import read_ohdpi
         from wl_preproc.schema import eye as eye_schema, ingest
+        from wl_preproc.timebase.clock import clock_for
 
         session_key = {k: key[k] for k in pipeline.Session.primary_key}
         validity_key = {**session_key, "validity_paramset_idx": key["validity_paramset_idx"]}
@@ -666,6 +699,11 @@ class EyeDetection(dj.Computed):
         path = session_dir / "ohdpi" / segment["segment_id"]
         recording = read_ohdpi(path)
         fs_hz = recording.fs_hz
+        # The rows inside the covered span (amendment 58), the only ones the
+        # mask offered: the repair and the velocities are made over them
+        # alone, and a detector reads them alone. `None` under the sync box.
+        placed = eye_schema.placed_rows(clock_for(session_key, session_dir).covered_span(), segment,
+                                        recording.frame_numbers - recording.frame_numbers[0])
 
         spans: dict[str, list[Run]] = {}
         per_eye: dict[str, tuple] = {}
@@ -693,7 +731,7 @@ class EyeDetection(dj.Computed):
             map_ = eye_schema._map_from_row(
                 (eye_schema.EyeCalibration & {**session_key, "eye": eye_value}).fetch1()
             )
-            gaze, _repaired = _repaired_gaze(path, file_eye, map_, fs_hz, validity_params)
+            gaze, _repaired = _repaired_gaze(path, file_eye, map_, fs_hz, validity_params, placed)
             available = labels_from_runs(
                 [Run(r["run_start"], r["run_stop"], Label(r["label"]))
                  for r in (EyeValidity.Run & {**validity_key, "eye": eye_value}).to_dicts(
@@ -708,18 +746,28 @@ class EyeDetection(dj.Computed):
             # section 3); the velocities are the filled gaze's.
             gaze = fill_lost(gaze, offered, frame_numbers(len(gaze), recording.frame_gaps),
                              rows_across_gaps(len(gaze), recording.frame_gaps))
-            v = velocity(gaze, fs_hz)
+            # Inside the covered span, the velocities are the estimator's over
+            # its rows alone, and outside it zero (`_inside`), so no row the
+            # mask withholds there shapes a velocity inside it (amendment 58).
+            v = _inside(gaze, placed, lambda values: velocity(values, fs_hz))
             # Under true angle, the eye's angular velocity in the local frame at
             # each sample (true-angle spec section 5): what every run is
             # measured on, and what a detector that detects in the setting's
             # geometry is handed (`registry.Detector.detects_in_geometry`).
             # Under per-axis, the per-axis velocity, as v1.
-            measured_v = local_velocity(gaze, fs_hz) if geometry == TRUE_ANGLE else v
+            measured_v = _inside(gaze, placed, lambda values: local_velocity(values, fs_hz)) \
+                if geometry == TRUE_ANGLE else v
             # `detector.detect`, never `detector.run`: the wrapper is what
             # holds the detector to its own declared `vocabulary`, and this
-            # is the one place in production that runs a detector at all.
-            spans[eye_value] = detector.detect(gaze, measured_v if detector.detects_in_geometry else v, offered,
-                                               fs_hz, detector_params)
+            # is the one place in production that runs a detector at all. It
+            # reads only the rows inside the covered span, and its runs are
+            # placed back among the recording's rows.
+            inside = slice(None) if placed is None else placed
+            found = detector.detect(gaze[inside], (measured_v if detector.detects_in_geometry else v)[inside],
+                                    offered[inside], fs_hz, detector_params)
+            spans[eye_value] = found if placed is None else [
+                dataclasses.replace(run, start=run.start + placed.start, stop=run.stop + placed.start)
+                for run in found]
             per_eye[eye_value] = (gaze, measured_v, offered)
 
         for eye_value in ("left", "right"):
@@ -1950,16 +1998,59 @@ def _geometry_of(params: dict) -> str:
     return geometry
 
 
-def _repaired_gaze(path, file_eye: str, map_, fs_hz: float, validity_params):
+def _repaired_gaze(path, file_eye: str, map_, fs_hz: float, validity_params, placed: slice | None = None):
     """One eye's gaze in degrees, with tracker glitches repaired, and which
     samples were: the one place `EyeValidity` and `EyeDetection` both get
     their gaze from, so the mask and every detector read the same gaze
-    (`eye/detect/glitch.py`, the requester's decision of 2026-09-28)."""
+    (`eye/detect/glitch.py`, the requester's decision of 2026-09-28).
+
+    With `placed`, the rows inside the covered span (`eye.placed_rows`), the
+    repair reads those rows alone, so no row outside the span shapes a repair
+    inside it (amendment 58). The rows outside are returned as read, never
+    marked repaired; the mask withholds them all."""
     from wl_preproc.eye.detect.glitch import repair_glitches
     from wl_preproc.eye.gaze import gaze_trace
 
-    return repair_glitches(gaze_trace(path, file_eye, map_), fs_hz,
-                           validity_params.max_speed_deg_s, validity_params.max_glitch_ms)
+    gaze = gaze_trace(path, file_eye, map_)
+    if placed is None:
+        return repair_glitches(gaze, fs_hz, validity_params.max_speed_deg_s, validity_params.max_glitch_ms)
+    inside, repaired_inside = repair_glitches(gaze[placed], fs_hz, validity_params.max_speed_deg_s,
+                                              validity_params.max_glitch_ms)
+    repaired = np.zeros(len(gaze), dtype=bool)
+    gaze = gaze.copy()
+    gaze[placed], repaired[placed] = inside, repaired_inside
+    return gaze, repaired
+
+
+def _inside(values: np.ndarray, placed: slice | None, compute) -> np.ndarray:
+    """`compute(values)` over the rows inside the covered span alone, set into
+    an array of the whole recording's length that is zero outside them, as
+    `velocity` states its own edges: a value the estimator did not make there
+    is quiet, not wrong. `compute(values)` itself where the span is the whole
+    session."""
+    if placed is None:
+        return compute(values)
+    inside = compute(values[placed])
+    out = np.zeros((len(values), *inside.shape[1:]), dtype=inside.dtype)
+    out[placed] = inside
+    return out
+
+
+def _gaps_inside(frame_gaps, placed: slice):
+    """The camera's dropped frames between two rows inside the covered span,
+    each `row` counted from its first."""
+    from wl_preproc.eye.ohdpi import FrameGap
+
+    return tuple(FrameGap(row=gap.row - placed.start, n_missing=gap.n_missing) for gap in frame_gaps
+                 if placed.start <= gap.row and gap.row + 1 < placed.stop)
+
+
+def _loss_inside(loss, placed: slice):
+    """`TrackerLoss` over the rows inside the covered span."""
+    from wl_preproc.eye.ohdpi import TrackerLoss
+
+    return TrackerLoss(blink=loss.blink[placed], feature_lost=loss.feature_lost[placed],
+                       unreadable=loss.unreadable[placed])
 
 
 def _min_duration_samples(detector_params, fs_hz: float) -> int:
