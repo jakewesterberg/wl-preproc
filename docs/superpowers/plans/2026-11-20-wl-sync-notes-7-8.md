@@ -7,7 +7,8 @@ Move our wl-sync pin to the main that holds both, and file notes 4-8 in `HANDOVE
 6 (:302), 7 (:425) and 8 (:486). wl-preproc's answer to note 7's open question was sent on 2026-11-20: allow a step
 of 3 under the two new timebases only, when the ticks agree.
 
-**Not built:** anything the box does not yet write in a real session. The box runs `fc18551` under `--fake`.
+**Not built:** anything the box does not yet write in a real session. The box runs under `--fake`.
+wl-sync's `wl.yaml` names `77a1f5a` as installed, running from its next restart.
 
 ## Decisions
 
@@ -20,6 +21,8 @@ of 3 under the two new timebases only, when the ticks agree.
    - Under any other timebase, 3 is a gap, as today.
    - 4 or more is a gap under every timebase: two or more dropped `B`s. That is conservative, and costs a
      false gap only on a rare double drop.
+   - Its other cost, from the review: under the one count a visit to `unassigned/` that misses exactly two
+     frames also steps by 3, and reads as adjacent with no gap row.
 3. **A desync that code words follow (note 8).**
    - A `desync` record's window opens at `before_us` and the box leaves its end empty.
    - The first `W` written after the record in the same stream is "the first code word known to follow the
@@ -29,8 +32,10 @@ of 3 under the two new timebases only, when the ticks agree.
      comes from that code word.
    - `timing_check_fails` then treats a closed desync as any other code-word loss: it fails only where the
      window overlaps a measured run.
-   - A desync with no code word after it, which is the box before `fc18551`, whose word pump stopped, still
-     fails as today.
+   - A desync with no code word after it still fails as today. That is a box before wl-sync's Task 1.20,
+     whose word pump stopped, a word still waiting for its counter when capture stops, or a restart.
+   - The requester chose this on 2026-11-20, over keeping every desync failing: treat a closed desync as a
+     gap. It accepts the gaps' hole, a swallowed `RUN_START` (spec `2026-11-04`, amendment 18).
    - The daily report's line says "from X s to Y s" for a closed desync.
 4. **The pin.** `pyproject.toml`'s wl-sync pin moves from `fe1ea63` to `fc18551` (wl-sync main, 2026-11-20).
    - Its reading API only gains functions (`read_header`, `iter_records`, `rises_us`). The header's JSON schema

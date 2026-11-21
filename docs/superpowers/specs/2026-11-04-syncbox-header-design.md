@@ -329,3 +329,37 @@ answers in `HANDOVER-wl-sync.md`.
 14. **The report on a database declared before the header** (§8, the review's second Important finding). Its
     rows lack the new columns as this process reads them, and the report raised. It now lists the restarts it
     can read and, in place of the split clocks, names the `ALTER TABLE`.
+
+## Amendments, 2026-11-20: wl-sync's notes 7 and 8
+
+These are from `docs/superpowers/plans/2026-11-20-wl-sync-notes-7-8.md`. wl-sync's text is its
+`docs/pending-wl-preproc-amendments.md` at `fc18551`: note 7 at :425, note 8 at :486.
+
+15. **Two more `timebase` values share one rate.** These are `"rp1-pio-si"` and `"rp1-pio"`, wl-sync's one-clock
+    build; note 7 says "all paths share one rate". This replaces amendment 7's "`"fake"` is the one `timebase`
+    taken to share one rate". The daily report does not list them under split clocks.
+16. **Under those two, a roll in place may step by 3.** §4's adjacency check takes "plus 1 or 2" under every
+    other `timebase`.
+    - On one count, a frame whose lead edge was not stamped has no `B`, and its value was spent. So one `B`
+      dropped just after a re-gridded roll steps the value by 3.
+    - The step is adjacent when the later segment names one of the two values and its ticks agree within 2 s.
+    - A step of 4 or more is a gap under every `timebase`.
+    - **What this costs:** under the one count, a visit to `unassigned/` that misses exactly two frames also
+      steps by 3 with agreeing ticks. It reads as adjacent, so its stretch's code words go missing with no
+      gap row (the review's probe). A one-frame visit, a step of 2, was already ambiguous in the same way.
+      wl-sync calls the round trip rare.
+17. **A `desync` that code words follow is closed by the first of them** (note 8: the box pairs its FIFO's stream
+    again and goes on, and "the first `W` after it in the stream is the first code word known to follow the
+    loss").
+    - The close is that code word in the record's segment, or else the first code word of the next segment on
+      the same clock.
+    - `after_us` is stored as written, empty. `stop_s` comes from that code word.
+    - A desync no code word follows still has no end, and fails as before. That is a box before wl-sync's
+      Task 1.20, a word still waiting for its counter when capture stops, or a restart.
+18. **A closed `desync` fails the timing check as a gap does** (the requester's choice, 2026-11-20, over keeping
+    every desync failing). It fails only where its window overlaps a measured run. This replaces §6's Ruling on
+    an open window, for closed windows only, and amendment 6's "a `desync` and a gap are what fail".
+    - **What this accepts, as for gaps:** if a closed window swallows a run's `RUN_START`, that run is never
+      measured, so no overlap shows it, and the session can pass.
+    - The same hole exists for gaps (§4's Ruling). A later piece may close both, for example against the rig's
+      own run record.

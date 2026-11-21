@@ -183,13 +183,15 @@ once the requester approves. Its `84c55d6` adds a streaming reader and changes n
 
 ## wl-sync's notes 4-8, and its answers to items 3-6, delivered 2026-11-20
 
-wl-sync delivered these by message on 2026-11-20. Its text is `docs/pending-wl-preproc-amendments.md` at
-wl-sync's `origin/main` `fc18551`. Each item below is a summary, with what wl-preproc did; the line numbers point
-at wl-sync's own text, which is the one to read.
+wl-sync delivered these by message on 2026-11-20. Note 8 came in a second message that evening. Its text is
+`docs/pending-wl-preproc-amendments.md` at wl-sync's `origin/main` `fc18551`. That text still marks note 8 "Not
+yet delivered"; wl-sync's later commit `f89b6af`, which only marks it delivered, had not reached `origin/main`
+when this was written. Each item below is a summary, with what wl-preproc did. The line numbers point at wl-sync's
+own text, which is the one to read.
 
 - **Answers to items 3-6 (:172).**
   - Item 3: two segments in one folder can share a clock, at NTP's first sync (note 4) or after a failed
-    session-state read; `process_uuid` says which.
+    session-state read. `process_uuid` says whether two segments share a clock, not which cause rolled it.
   - Item 4: both asks are built, `barcode_delay_us` (`73f4395`) and records landing in the closing segment
     (`4043737`).
   - Item 5: clock trust is judged again at every roll (`2b420c0`).
@@ -213,6 +215,9 @@ at wl-sync's own text, which is the one to read.
     segment, or else at the next segment's first code word on the same clock.
   - The stored `after_us` stays empty, as written, and `stop_s` comes from that code word.
   - A closed desync fails the timing check only where it overlaps a measured run.
-  - A desync no code word follows, which is the box before `fc18551`, fails as before.
+  - A desync no code word follows still fails as before. That is a box before wl-sync's Task 1.20, a word
+    still waiting for its counter when capture stops, or a restart.
+  - The requester chose, on 2026-11-20, to treat a closed desync as a gap. A window that swallows a run's
+    `RUN_START` can therefore pass, as a gap's can (the spec `2026-11-04-syncbox-header-design.md`, amendment 18).
 - **The pin** moves from `fe1ea63` to `fc18551` with that branch. The header's schema is unchanged
   (`wlpp schemas export` gives no diff).
