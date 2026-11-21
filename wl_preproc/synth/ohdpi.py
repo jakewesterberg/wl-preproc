@@ -28,6 +28,12 @@ exactly the frames that matter. The OpenIrisDPI wiki's own recommendation is a
 shared digital synchronisation line; the sync box's barcode is that line with a
 better encoding.
 
+Amendment 84 of the training-records design supersedes that rejection for one
+use: under the NI's clock, with no barcodes to place the file, the copy the DAC
+writes onto the NI's analog inputs places it (`SessionRecipe.eye_copy`,
+written by `spikeglx.write_nidq` from `eye_traces` below). The barcode stays
+this module's line; the copy is a fallback, and a lag measured where both ran.
+
 **Why P1 and P4 move independently.** Gaze calibration (later tasks) needs a
 signal to recover, not merely two columns that happen to be nonzero: P1 and P4
 here share a slow common translation (the eye moving in the socket) and differ
@@ -73,6 +79,7 @@ now apply:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -218,65 +225,38 @@ def _digital_line(
     return line
 
 
-def write_ohdpi(
-    dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
-) -> Path:
-    """Render one session's eye recording in OpenIris's real format.
+@dataclass(frozen=True, slots=True)
+class EyeTraces:
+    """The synthetic eye's per-frame ground truth, before it is formatted into
+    rows: the one place the traces are drawn, shared by `write_ohdpi` and by
+    `spikeglx.write_nidq`, whose analog copy of the eye is made from the same
+    numbers rather than from a second derivation of them."""
 
-    `Seconds` is derived from the frame index and `OHDPI_FPS` so the two
-    columns cannot disagree -- an extractor is entitled to derive the rate
-    from the timestamps instead of assuming `OHDPI_FPS` (design spec section
-    3.1), and a fixture whose columns disagreed would make that derivation
-    wrong while every value-based assertion still passed. The right eye's
-    `Seconds` carries the reference recording's constant offset
-    (`RIGHT_SECONDS_OFFSET_S`).
+    t: np.ndarray  # eye-device seconds, pre-roll included
+    common_x: np.ndarray
+    common_y: np.ndarray
+    p1x_jitter_left: np.ndarray
+    p1y_jitter_left: np.ndarray
+    p1x_jitter_right: np.ndarray
+    p1y_jitter_right: np.ndarray
+    rot_x_left: np.ndarray
+    rot_y_left: np.ndarray
+    rot_x_right: np.ndarray
+    rot_y_right: np.ndarray
 
-    Pupil and Purkinje positions follow a slow common drift (translation)
-    shared by both eyes. P4 adds a rotation term on top of it, one version per
-    eye and per axis, so `P1 - P4` carries that per-eye rotation term plus
-    P1's own jitter (below) -- realistic measurement noise on top of the
-    signal a calibration can recover, not a contradiction of it (see the
-    module docstring). P1 adds its own independent per-eye, per-axis jitter,
-    so the two eyes' raw traces are never byte-identical on either P1 or P4,
-    on either axis (see "Why the two eyes are not byte-identical" in the
-    module docstring).
+    def left_p1_minus_p4(self) -> tuple[np.ndarray, np.ndarray]:
+        """The left eye's `CR1 - CR4`, X and Y, as the rows carry them."""
+        p1x, p1y = self.common_x + self.p1x_jitter_left, self.common_y + self.p1y_jitter_left
+        p4x, p4y = self.common_x - self.rot_x_left, self.common_y - self.rot_y_left
+        return p1x - p4x, p1y - p4y
 
-    `recipe.eye_fixations` HOLDS the gaze at a stated raw position for a
-    stated window, overriding the drift there. Empty by default, so every
-    profile predating it is unchanged. It exists because free viewing cannot
-    represent a calibration session at all -- see `EyeFixationSpec`, which
-    carries the measurement.
 
-    `recipe.ohdpi_dropped_frames` OMITS the rows it names while leaving
-    `FrameNumber` derived from the original index, so the file carries the
-    hole a real dropped frame leaves in the camera's own counter -- the one
-    thing `eye/ohdpi.py::read_ohdpi` detects a gap from. Also empty by
-    default. Every other column of every surviving row is untouched by it,
-    including `Seconds`, which stays derived from the original index: the
-    camera kept running through the frames that never reached disk, so the
-    surviving rows' timestamps do NOT close up, and `extract_ohdpi`'s rate
-    measurement depends on exactly that.
-    """
-    line = _digital_line(recipe, truth, drift_ppm)
-    n = len(line)
+def eye_traces(recipe: SessionRecipe, drift_ppm: float = 0.0) -> EyeTraces:
+    """Draw one session's eye traces. Every random draw `write_ohdpi` made
+    inline is made here in the same order, so the file is byte-identical."""
+    n = frame_count(recipe)
     rng = np.random.default_rng(recipe.seed)
 
-    # Skip the ROW, keep the numbering: the frame counter is the camera's own
-    # and a dropped frame leaves a hole in it. Renumbering contiguously would
-    # produce a file with no detectable gap, which would make every gap test
-    # in the suite pass against a fixture that has none.
-    #
-    # A set, and resolved before the row loop rather than inside it, because
-    # `heavily_gapped_session` (tests/schema/conftest.py) plants one run per
-    # barcode word -- a linear scan of a tuple per row would turn writing a
-    # fixture into quadratic work for no reason. Empty for every recipe that
-    # does not ask for gaps, so those files are byte-identical to before.
-    dropped = set(recipe.ohdpi_dropped_frames)
-
-    # Not zero: matches the reference recording's own camera counter, and
-    # `wl_preproc/eye/ohdpi.py`'s reader depends on frame numbers being
-    # CONTIGUOUS rather than starting at any particular position.
-    frame0 = 308788
     t = np.arange(n) / OHDPI_FPS
     # Slow common motion (translation), shared by both eyes -- feeds both P1
     # and P4 below, for both eyes, on both axes.
@@ -344,6 +324,78 @@ def write_ohdpi(
 
     rot_x_right = rot_x_left + RIGHT_EYE_ROTATION_OFFSET_PX
     rot_y_right = rot_y_left + RIGHT_EYE_ROTATION_OFFSET_PX
+    return EyeTraces(
+        t=t, common_x=common_x, common_y=common_y,
+        p1x_jitter_left=p1x_jitter_left, p1y_jitter_left=p1y_jitter_left,
+        p1x_jitter_right=p1x_jitter_right, p1y_jitter_right=p1y_jitter_right,
+        rot_x_left=rot_x_left, rot_y_left=rot_y_left, rot_x_right=rot_x_right, rot_y_right=rot_y_right,
+    )
+
+
+def write_ohdpi(
+    dir_path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
+) -> Path:
+    """Render one session's eye recording in OpenIris's real format.
+
+    `Seconds` is derived from the frame index and `OHDPI_FPS` so the two
+    columns cannot disagree -- an extractor is entitled to derive the rate
+    from the timestamps instead of assuming `OHDPI_FPS` (design spec section
+    3.1), and a fixture whose columns disagreed would make that derivation
+    wrong while every value-based assertion still passed. The right eye's
+    `Seconds` carries the reference recording's constant offset
+    (`RIGHT_SECONDS_OFFSET_S`).
+
+    Pupil and Purkinje positions follow a slow common drift (translation)
+    shared by both eyes. P4 adds a rotation term on top of it, one version per
+    eye and per axis, so `P1 - P4` carries that per-eye rotation term plus
+    P1's own jitter (below) -- realistic measurement noise on top of the
+    signal a calibration can recover, not a contradiction of it (see the
+    module docstring). P1 adds its own independent per-eye, per-axis jitter,
+    so the two eyes' raw traces are never byte-identical on either P1 or P4,
+    on either axis (see "Why the two eyes are not byte-identical" in the
+    module docstring).
+
+    `recipe.eye_fixations` HOLDS the gaze at a stated raw position for a
+    stated window, overriding the drift there. Empty by default, so every
+    profile predating it is unchanged. It exists because free viewing cannot
+    represent a calibration session at all -- see `EyeFixationSpec`, which
+    carries the measurement.
+
+    `recipe.ohdpi_dropped_frames` OMITS the rows it names while leaving
+    `FrameNumber` derived from the original index, so the file carries the
+    hole a real dropped frame leaves in the camera's own counter -- the one
+    thing `eye/ohdpi.py::read_ohdpi` detects a gap from. Also empty by
+    default. Every other column of every surviving row is untouched by it,
+    including `Seconds`, which stays derived from the original index: the
+    camera kept running through the frames that never reached disk, so the
+    surviving rows' timestamps do NOT close up, and `extract_ohdpi`'s rate
+    measurement depends on exactly that.
+    """
+    line = _digital_line(recipe, truth, drift_ppm)
+    n = len(line)
+    # Not zero: matches the reference recording's own camera counter, and
+    # `wl_preproc/eye/ohdpi.py`'s reader depends on frame numbers being
+    # CONTIGUOUS rather than starting at any particular position.
+    frame0 = 308788
+    traces = eye_traces(recipe, drift_ppm)
+    t = traces.t
+    common_x, common_y = traces.common_x, traces.common_y
+    p1x_jitter_left, p1y_jitter_left = traces.p1x_jitter_left, traces.p1y_jitter_left
+    p1x_jitter_right, p1y_jitter_right = traces.p1x_jitter_right, traces.p1y_jitter_right
+    rot_x_left, rot_y_left = traces.rot_x_left, traces.rot_y_left
+    rot_x_right, rot_y_right = traces.rot_x_right, traces.rot_y_right
+
+    # Skip the ROW, keep the numbering: the frame counter is the camera's own
+    # and a dropped frame leaves a hole in it. Renumbering contiguously would
+    # produce a file with no detectable gap, which would make every gap test
+    # in the suite pass against a fixture that has none.
+    #
+    # A set, and resolved before the row loop rather than inside it, because
+    # `heavily_gapped_session` (tests/schema/conftest.py) plants one run per
+    # barcode word -- a linear scan of a tuple per row would turn writing a
+    # fixture into quadratic work for no reason. Empty for every recipe that
+    # does not ask for gaps, so those files are byte-identical to before.
+    dropped = set(recipe.ohdpi_dropped_frames)
 
     path = dir_path / FILENAME
     with path.open("w", encoding="utf-8") as handle:

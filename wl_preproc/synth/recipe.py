@@ -315,6 +315,38 @@ class RigRecordSpec(BaseModel):
     fields: bool = False
 
 
+class EyeCopy(BaseModel):
+    """The eye tracker's analog copy on the NI's analog inputs (design spec
+    `2026-10-18-training-records-and-backup-clock-design.md`, amendments 77-84).
+
+    `n_channels` XA channels precede the NI file's digital words; `channel`
+    carries the copy and the others independent noise of `noise_v`. The copy of
+    frame k is held from `frame_time_k + lag_s + jitter` to the next frame's.
+    `stall` is `(start_s, stop_s, extra_lag_s)`, session time: frames inside it
+    are late by the extra as well. `source` says what `channel` carries: the
+    eye ("eye"), noise alone, or `offset_v` held flat."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    channel: int = Field(ge=0)
+    n_channels: int = Field(default=16, ge=1)
+    lag_s: float = Field(default=0.005, ge=0)
+    gain_v: float = 0.004
+    offset_v: float = 0.3
+    noise_v: float = Field(default=0.002, ge=0)
+    smoothing_samples: int = Field(default=30, ge=1)
+    jitter: bool = True
+    stall: tuple[float, float, float] | None = None
+    clip_v: float = Field(default=5.0, gt=0)
+    source: Literal["eye", "noise", "flat"] = "eye"
+
+    @model_validator(mode="after")
+    def _channel_exists(self) -> EyeCopy:
+        if self.channel >= self.n_channels:
+            raise ValueError(f"channel {self.channel} is not among the {self.n_channels} analog channels")
+        return self
+
+
 class SessionRecipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -449,6 +481,10 @@ class SessionRecipe(BaseModel):
     # word destroys it (design spec sections 2 and 3), and a randomly-placed
     # drop cannot express either case on purpose.
     ohdpi_dropped_frames: tuple[int, ...] = ()
+
+    # The eye tracker's analog copy on the NI (`EyeCopy`). None writes the NI
+    # file as before, byte for byte.
+    eye_copy: EyeCopy | None = None
     ap_sample_rate_hz: float
     seed: int
     # The zone the synthetic NI machine's clock is set to: SpikeGLX writes
@@ -520,6 +556,8 @@ class SessionRecipe(BaseModel):
                 "timeline (spec section 4.5), so its drift against itself is "
                 "zero by construction rather than by choice"
             )
+        if self.eye_copy is not None and not {"spikeglx", "ohdpi"} <= set(self.systems):
+            raise ValueError("eye_copy needs spikeglx (the NI it is written on) and ohdpi (the eye it copies)")
         if self.rig_record is not None and not self.runs:
             raise ValueError("rig_record needs runs: it is written with the run record")
         if self.rig_record is not None:

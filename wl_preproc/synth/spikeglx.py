@@ -32,7 +32,8 @@ import numpy as np
 from wl_sync.barcode import encode
 
 from wl_preproc.ephys.geometry import electrode_rows
-from wl_preproc.synth.recipe import SYNTH_EPOCH, ProbeSpec, SessionRecipe
+from wl_preproc.synth.ohdpi import OHDPI_FPS, OHDPI_PRE_ROLL_S, eye_traces
+from wl_preproc.synth.recipe import SYNTH_EPOCH, EyeCopy, ProbeSpec, SessionRecipe
 from wl_preproc.synth.rhs import STROBE_WIDTH_S
 from wl_preproc.synth.timeline import (
     SAMPLE_COUNT_ROUNDING_SLACK,
@@ -109,6 +110,9 @@ NIDQ_BARCODE_XD_LINE = 0
 # "T1 is the strobe pulse width, and the latching edge is its far end."
 NIDQ_CODE_STROBE_XD_LINE = 1
 NIDQ_N_DIGITAL_WORDS = 2
+
+# `niAiRangeMax` of the meta: an int16 analog sample is `value * range / 32768` volts.
+NIDQ_AI_RANGE_V = 5.0
 
 
 # SpikeGLX's own type for each part number the generator writes (`pnToType`,
@@ -354,7 +358,7 @@ def _restart(dir_path: Path, recipe: SessionRecipe) -> None:
         for band, fs in (("ap", recipe.ap_sample_rate_hz), ("lf", LF_SAMPLE_RATE_HZ)):
             streams.append((f"{run}_imec{index}.{band}.bin", f"{run}_g1_t0.imec{index}.{band}.bin", fs, band, index))
     for name, name_after, fs, band, index in streams:
-        n_channels = NIDQ_N_DIGITAL_WORDS if band is None else recipe.n_ap_channels + 1
+        n_channels = _nidq_n_channels(recipe) if band is None else recipe.n_ap_channels + 1
         data = np.fromfile(dir_path / name, dtype=np.int16).reshape(-1, n_channels)
         cut = round((restart.at_s + SPIKEGLX_PRE_ROLL_S) * fs)
         resume = round((restart.at_s + restart.gap_s + SPIKEGLX_PRE_ROLL_S) * fs)
@@ -389,17 +393,24 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
     the barcode line is invisible to anything that asks the reader rather than
     the bytes.
     """
-    file_bytes = n_samples * NIDQ_N_DIGITAL_WORDS * 2
+    n_xa = recipe.eye_copy.n_channels if recipe.eye_copy is not None else 0
+    n_saved = n_xa + NIDQ_N_DIGITAL_WORDS
+    file_bytes = n_samples * n_saved * 2
+    # Written only with analog channels, so a file without them is the bytes it
+    # always was. SpikeGLX lists a non-muxed analog channel as `XA<k>`, and the
+    # word-0 and word-1 digital lines after them.
+    analog_fields = [f"niXAChans1=0:{n_xa - 1}"] if n_xa else []
+    analog_map = "".join(f"(XA{k};{k})" for k in range(n_xa))
     return "\n".join(
         [
             "typeThis=nidq",
             f"fileName={bin_name}",
             f"niSampRate={NIDQ_SAMPLE_RATE_HZ:g}",
-            f"nSavedChans={NIDQ_N_DIGITAL_WORDS}",
+            f"nSavedChans={n_saved}",
             f"fileSizeBytes={file_bytes}",
             f"fileTimeSecs={n_samples / NIDQ_SAMPLE_RATE_HZ:.6f}",
-            f"acqMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
-            f"snsMnMaXaDw=0,0,0,{NIDQ_N_DIGITAL_WORDS}",
+            f"acqMnMaXaDw=0,0,{n_xa},{NIDQ_N_DIGITAL_WORDS}",
+            f"snsMnMaXaDw=0,0,{n_xa},{NIDQ_N_DIGITAL_WORDS}",
             # Gains for channel types this file has none of. The reader indexes
             # them unconditionally, so absent fields are a KeyError rather than
             # an unused default.
@@ -409,10 +420,88 @@ def _nidq_meta_text(recipe: SessionRecipe, n_samples: int, bin_name: str) -> str
             "niAiRangeMin=-5",
             "firstSample=0",
             f"fileCreateTime={_nidq_file_create_time(recipe)}",
+            *analog_fields,
             "niXDChans1=0:1",
-            f"~snsChanMap=(0,0,0,{NIDQ_N_DIGITAL_WORDS},0)(XD0;0:1)(XD1;0:15)",
+            f"~snsChanMap=(0,0,{n_xa},{NIDQ_N_DIGITAL_WORDS},0){analog_map}(XD0;0:1)(XD1;0:15)",
         ]
     ) + "\n"
+
+
+def _nidq_n_channels(recipe: SessionRecipe) -> int:
+    """Channels per NI sample: the analog copy's, if any, then the digital words."""
+    n_xa = recipe.eye_copy.n_channels if recipe.eye_copy is not None else 0
+    return n_xa + NIDQ_N_DIGITAL_WORDS
+
+
+# The eye tracker's processing delay (amendment 84, from the instrument's paper,
+# 10.1016/j.jneumeth.2026.110693): 1.1 ms median with 0.1 ms IQR, and 2% of
+# frames 10 ms or more, up to 50 ms. The DAC's 3-4 ms is `EyeCopy.lag_s`.
+EYE_PROCESSING_MEDIAN_S = 1.1e-3
+EYE_PROCESSING_IQR_S = 0.1e-3
+EYE_SLOW_FRAME_FRACTION = 0.02
+EYE_SLOW_FRAME_RANGE_S = (10e-3, 50e-3)
+
+# Mixed in the copy, so that it is not any one column the matcher reads (78).
+EYE_COPY_X_WEIGHT = 0.7
+EYE_COPY_Y_WEIGHT = 0.3
+EYE_COPY_TANH_SCALE_SDS = 3.0
+
+# An independent stream from the recipe's seed, so no other draw moves.
+_EYE_COPY_SEED_KEY = 0xEC09
+
+
+def eye_copy_frame_arrivals_s(recipe: SessionRecipe, copy: EyeCopy, ni_drift_ppm: float) -> np.ndarray:
+    """When each eye frame's copy reaches the NI, in NI-file seconds: the frame's
+    capture time, on the NI's clock, plus `lag_s`, the frame's own processing
+    delay and any stall. Frames come out of the DAC in order, so a slow frame
+    holds back the ones behind it rather than being overtaken."""
+    n = int((recipe.duration_s + OHDPI_PRE_ROLL_S) * OHDPI_FPS)
+    eye_ppm = dict(recipe.system_drift_ppm).get("ohdpi", recipe.drift_ppm)
+    session_s = (np.arange(n) / OHDPI_FPS - OHDPI_PRE_ROLL_S) / (1.0 + eye_ppm * 1e-6)
+    arrival = session_s * (1.0 + ni_drift_ppm * 1e-6) + SPIKEGLX_PRE_ROLL_S + copy.lag_s
+    if copy.jitter:
+        rng = np.random.default_rng([recipe.seed, _EYE_COPY_SEED_KEY])
+        delay = rng.normal(EYE_PROCESSING_MEDIAN_S, EYE_PROCESSING_IQR_S / 1.349, n)
+        slow = rng.random(n) < EYE_SLOW_FRAME_FRACTION
+        delay[slow] = rng.uniform(*EYE_SLOW_FRAME_RANGE_S, int(slow.sum()))
+        arrival = arrival + delay
+    if copy.stall is not None:
+        start_s, stop_s, extra_s = copy.stall
+        arrival = arrival + np.where((session_s >= start_s) & (session_s < stop_s), extra_s, 0.0)
+    return np.maximum.accumulate(arrival)
+
+
+def _eye_copy_analog(recipe: SessionRecipe, copy: EyeCopy, n_samples: int, ni_drift_ppm: float) -> np.ndarray:
+    """The NI's analog channels as int16: every channel noise of `noise_v`,
+    and `copy.channel` the eye's copy (or noise alone, or flat).
+
+    The value is `0.7 * (P1-P4 X) + 0.3 * (P1-P4 Y)` of the left eye, soft-limited
+    by `tanh` at 3 standard deviations of the trace, times `gain_v` (volts per
+    pixel), plus `offset_v`, held per frame from its arrival, averaged over
+    `smoothing_samples`, with noise, clipped at `clip_v`. A mixed, mildly
+    nonlinear map, never one column of the eye file the matcher reads (78).
+    Volts become int16 by SpikeGLX's convention: full scale is the range, so a
+    reader gets volts back as `value * 5 / 32768`."""
+    rng = np.random.default_rng([recipe.seed, _EYE_COPY_SEED_KEY, 1])
+    volts = rng.normal(0.0, copy.noise_v, (n_samples, copy.n_channels))
+    k = copy.channel
+    if copy.source == "eye":
+        x, y = eye_traces(recipe, dict(recipe.system_drift_ppm).get("ohdpi", recipe.drift_ppm)).left_p1_minus_p4()
+        mixed = EYE_COPY_X_WEIGHT * x + EYE_COPY_Y_WEIGHT * y
+        scale = EYE_COPY_TANH_SCALE_SDS * float(np.std(mixed))
+        per_frame = copy.gain_v * scale * np.tanh(mixed / scale) + copy.offset_v
+        arrival = eye_copy_frame_arrivals_s(recipe, copy, ni_drift_ppm)
+        first = np.ceil(arrival * NIDQ_SAMPLE_RATE_HZ).astype(np.int64)
+        frame_of = np.searchsorted(first, np.arange(n_samples), side="right") - 1
+        held = per_frame[np.clip(frame_of, 0, None)]
+        if copy.smoothing_samples > 1:
+            held = np.convolve(held, np.ones(copy.smoothing_samples) / copy.smoothing_samples, mode="same")
+        volts[:, k] += held
+    elif copy.source == "flat":
+        volts[:, k] = copy.offset_v
+    np.clip(volts, -copy.clip_v, copy.clip_v, out=volts)
+    counts = np.rint(volts * (32768.0 / NIDQ_AI_RANGE_V))
+    return np.clip(counts, -32768, 32767).astype(np.int16)
 
 
 def write_nidq(
@@ -479,7 +568,7 @@ def write_nidq(
 
     bin_path = dir_path / f"{recipe.session_id}.nidq.bin"
     # NI writes every analog channel first, then digital word 0, then word 1;
-    # this stream has no analog channels, so each sample is (word 0, word 1).
+    # without an `eye_copy` this stream has none, so each sample is (word 0, word 1).
     # `.view`, not `.astype`: values like Escape.BLOCK_START (0x8002) exceed
     # int16's signed range, and what this file needs written to disk is the
     # 16-bit pattern, which `.view` reinterprets by definition and round-trips
@@ -491,8 +580,14 @@ def write_nidq(
     # the difference here is intent rather than output: `.view` says "these
     # bits", which is what the format specifies, while `.astype` says "these
     # values" and would go silently wrong the day the two stop coinciding.
-    interleaved = np.column_stack((control, data))
-    interleaved.view(np.int16).tofile(bin_path)
+    digital = np.column_stack((control, data)).view(np.int16)
+    if recipe.eye_copy is None:
+        interleaved = digital
+    else:
+        # Every analog channel first, as NI writes them, then the two words.
+        analog = _eye_copy_analog(recipe, recipe.eye_copy, n_samples, drift_ppm)
+        interleaved = np.column_stack((analog, digital))
+    interleaved.tofile(bin_path)
     bin_path.with_suffix(".meta").write_text(
         _nidq_meta_text(recipe, n_samples, bin_path.name), encoding="utf-8"
     )
