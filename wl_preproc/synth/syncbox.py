@@ -53,9 +53,12 @@ def process_uuid(recipe: SessionRecipe, number: int) -> str:
 def write_syncbox_log(
     path: Path, recipe: SessionRecipe, truth: GroundTruth, drift_ppm: float = 0.0
 ) -> None:
-    """The whole session as one segment, the first."""
-    _write_segment(path, recipe, truth, index=0, since_s=None, until_s=None, origin_s=0.0,
-                   pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=drift_ppm, process=0)
+    """The whole session as one segment, the first; or, for
+    `recipe.syncbox_stop_s`, the records before the stop and no trailer, as a
+    Pi that lost power leaves its log."""
+    _write_segment(path, recipe, truth, index=0, since_s=None, until_s=recipe.syncbox_stop_s, origin_s=0.0,
+                   pre_roll_s=SYNCBOX_PRE_ROLL_S, drift_ppm=drift_ppm, process=0,
+                   closed=recipe.syncbox_stop_s is None)
 
 
 def write_syncbox_segments(directory: Path, recipe: SessionRecipe, truth: GroundTruth) -> list[Path]:
@@ -87,7 +90,7 @@ def write_syncbox_segments(directory: Path, recipe: SessionRecipe, truth: Ground
 
 def _write_segment(path: Path, recipe: SessionRecipe, truth: GroundTruth, *, index: int, since_s: float | None,
                    until_s: float | None, origin_s: float, pre_roll_s: float, drift_ppm: float,
-                   process: int) -> None:
+                   process: int, closed: bool = True) -> None:
     """The records of session time `[since_s, until_s)`, ticked from `origin_s`
     after `pre_roll_s` of this segment's process's clock; a barcode's tick read
     `barcode_delay_us` before its frame reaches the wire."""
@@ -129,4 +132,11 @@ def _write_segment(path: Path, recipe: SessionRecipe, truth: GroundTruth, *, ind
     writer = SegmentWriter(path, header)
     for record in records:
         writer.write(record)
-    writer.close(SYNTH_EPOCH)
+    if closed:
+        writer.close(SYNTH_EPOCH)
+    else:
+        # No trailer: the segment was never closed cleanly. The writer has no
+        # call for that, because the box never makes one; its own tests cut
+        # the file the same way.
+        writer.flush()
+        writer._handle.close()
