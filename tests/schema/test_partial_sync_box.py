@@ -70,6 +70,17 @@ def _clear_the_ni_barcode_line(session_dir) -> None:
     samples.flush()
 
 
+def _kill_the_camera_cable(session_dir) -> None:
+    """The camera's barcode line low on every frame, as a dead cable leaves
+    it: its frames all there, none carrying a barcode."""
+    import yaml
+
+    path = session_dir / "bcam" / "frames.yaml"
+    sidecar = yaml.safe_load(path.read_text())
+    sidecar["digital_line"] = [0] * len(sidecar["digital_line"])
+    path.write_text(yaml.safe_dump(sidecar, sort_keys=False))
+
+
 class _Landed(dict):
     report: dict
 
@@ -90,7 +101,8 @@ def landed(dj_conn, prefix, tmp_path_factory):
     camera: `partial`, the box stopping at `STOP_S`; `before_ni`, the same
     with the NI started after the box's first barcode and the camera stopped
     before its third, so the camera's barcodes all precede the NI; `dead_ni_line`,
-    the same as `partial` with the NI's barcode line dead; and `synced`, the
+    the same as `partial` with the NI's barcode line dead; `dead_cable`, the
+    same as `partial` with the camera's barcode line dead; and `synced`, the
     box running the whole session and keeping time. Deleted afterwards."""
     from wl_preproc import daemon
     from wl_preproc.schema import pipeline
@@ -119,12 +131,15 @@ def landed(dj_conn, prefix, tmp_path_factory):
             _stop_the_camera(session_dir, CAMERA_STOPS_AT_S)
         if name == "dead_ni_line":
             _clear_the_ni_barcode_line(session_dir)
+        if name == "dead_cable":
+            _kill_the_camera_cable(session_dir)
         key = _land(root, recipe, session.session_datetime, acquisition_systems=recipe.systems)
         sessions[name] = (recipe, truth, key, session_dir)
 
     land("partial", syncbox_stop_s=STOP_S)
     land("before_ni", syncbox_stop_s=STOP_S)
     land("dead_ni_line", syncbox_stop_s=STOP_S)
+    land("dead_cable", syncbox_stop_s=STOP_S)
     land("synced")
     sessions.report = daemon.run_once(prefix=prefix)
     yield sessions
@@ -296,6 +311,30 @@ def test_under_the_sync_box_nothing_changes(landed):
     assert row["n_full_code_records"] == 2
     assert row["n_barcodes_emitted"] > 0
     assert (row["covered_start_s"], row["covered_end_s"]) == (None, None)
+
+
+def test_a_dead_barcode_cable_under_the_ni_fails_the_session(landed):
+    """Amendment 57: a file that decoded no barcode at all stays `no_barcode`
+    and fails the session, though the NI holds barcodes. A camera whose cable
+    was dead and one that ran wholly after the box stopped look the same, and
+    neither is left out as outside the span."""
+    from wl_preproc.schema import core, timebase
+    from wl_preproc.timebase.clock import clock_for
+
+    key = landed.key("dead_cable")
+    assert _clock(key) == "nidq"
+    assert clock_for(key, landed.session_dir("dead_cable")).barcode_reference()
+    fit = _fit(key, "bcam")
+    assert (fit["fit_status"], fit["time_source"]) == ("unfittable", "barcode")
+    assert fit["n_barcodes_decoded"] == 0
+    assert [row["reason"] for row in (core.RejectedSegment & key).to_dicts()] == ["no_barcode"]
+    # Not left out: everything else was placed and the NI's codes are clean,
+    # so the camera is the only thing D can be for.
+    for system in ("syncbox", "spikeglx", "ohdpi"):
+        assert _fit(key, system)["fit_status"] == "fitted", system
+    row = (timebase.TimingProvenance & key).fetch1()
+    assert (row["n_systems_aligned"], row["n_rejected_segments"], row["decode_errors"]) == (3, 1, 0)
+    assert row["tier"] == "D", row
 
 
 def test_the_passes_report_no_error(landed):

@@ -673,12 +673,15 @@ class TimingProvenance(dj.Computed):
         # left out and named, not failed, and so is a system whose every file
         # is that (amendment 57). Such a system is `unfittable` with no
         # `Segment` row: `Segment.make` writes each file of a system with no
-        # fit as rejected, so its reasons are every file's.
+        # fit as rejected, so its reasons are every file's. Only one fitted
+        # by the NI's barcodes (`time_source` 'barcode'): with no reference
+        # nothing is outside it (the plan's decision 2), whatever a file's
+        # reason says.
         outside = [row for row in rejected
                    if under_the_ni and row["reason"] == segments.OUTSIDE_COVERED_SPAN]
         left_out = {
             fit["system"] for fit in fits
-            if fit["fit_status"] == "unfittable"
+            if fit["fit_status"] == "unfittable" and fit["time_source"] == "barcode"
             and any(row["system"] == fit["system"] for row in outside)
             and all(row["reason"] == segments.OUTSIDE_COVERED_SPAN
                     for row in rejected if row["system"] == fit["system"])
