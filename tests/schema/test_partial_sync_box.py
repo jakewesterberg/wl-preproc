@@ -871,6 +871,86 @@ def test_eye_quality_counts_only_the_span(landed):
         assert 5 / (segment["end_s"] - segment["start_s"]) != pytest.approx(blinks / seconds)
 
 
+def _unusable_lines(prefix, root, key) -> tuple[dict[str, str], str]:
+    """The daily report's "Unusable samples per session per eye" line for
+    each eye of `key`'s session, by eye, and its running total's lines. The
+    report is read an hour after the session's hand-landed ingestion
+    (`tests/schema/test_eye_populate.py::_land`), inside its 24 h window."""
+    import datetime
+
+    from wl_preproc.cli.report import build_report
+
+    root.mkdir()
+    now = (key["session_datetime"] + datetime.timedelta(hours=2)).replace(tzinfo=datetime.timezone.utc)
+    subject = key["subject"]
+    section = build_report(root, prefix=prefix, now=now).split("\n## Detection", 1)[1].split("\n## ", 1)[0]
+    per_eye = section.split("\n### Unusable samples per session per eye", 1)[1].split("\n### ", 1)[0]
+    total = section.split("\n### Unusable samples, running total", 1)[1].split("\n### ", 1)[0]
+    lines = {}
+    for line in per_eye.splitlines():
+        if f"`{subject}`" in line:
+            eye_value = line.split(" — ", 1)[1].split(" ", 1)[0]
+            assert eye_value not in lines, line
+            lines[eye_value] = line
+    return lines, total
+
+
+def _in_span_counts(runs, start: int, stop: int) -> dict[str, int]:
+    """Each label's rows of `runs` inside `[start, stop)`, each run clipped."""
+    counts: dict[str, int] = {}
+    for run in runs:
+        rows = max(0, min(run["run_stop"], stop) - max(run["run_start"], start))
+        counts[run["label"]] = counts.get(run["label"], 0) + rows
+    return counts
+
+
+def test_the_daily_report_counts_only_the_span_as_unusable(landed, prefix, tmp_path):
+    """Final review I1: `EyeValidity` stores every row outside the span as
+    `invalid`, by no criterion, and records the rows inside it. The daily
+    report's unusable line counts the rows inside the span alone, as the
+    eye's quality does, and names how many it left out. Under the sync box
+    the line is as it was."""
+    import numpy as np
+
+    from wl_preproc.schema import detect
+
+    key = landed.key("eyes")
+    start_s, end_s = _span(landed, "eyes")
+    _segment, _path, times = _eye_recording(landed, "eyes")
+    inside = np.flatnonzero((times >= start_s) & (times <= end_s))
+    first, stop = int(inside[0]), int(inside[-1]) + 1
+    assert stop - first == inside.size and 0 < first and stop < times.size
+    lines, total = _unusable_lines(prefix, tmp_path / "scratch", key)
+    validity = (detect.EyeValidity & key & 'status = "computed"').to_dicts()
+    assert validity and set(lines) == {row["eye"] for row in validity}
+    for row in validity:
+        assert (row["span_row_start"], row["span_row_stop"]) == (first, stop), row
+        runs = (detect.EyeValidity.Run & row).to_dicts()
+        counts = _in_span_counts(runs, first, stop)
+        n_inside, n_outside = stop - first, row["n_samples"] - (stop - first)
+        shares = {label: counts.get(label, 0) / n_inside for label in ("blink", "invalid", "lost")}
+        line = lines[row["eye"]]
+        assert line.endswith(
+            f"blink {shares['blink']:.1%}, invalid {shares['invalid']:.1%}, lost {shares['lost']:.1%} of "
+            f"{n_inside} samples, and {n_outside} samples outside the sync box's covered span, not counted"), line
+        # The fixture is what it says: over every row the invalid share reads otherwise.
+        everything = _in_span_counts(runs, 0, row["n_samples"])
+        assert f"invalid {everything['invalid'] / row['n_samples']:.1%}" not in line
+    assert "samples outside a sync box's covered span, not counted" in total
+
+    synced = landed.key("synced_eyes")
+    lines, _total = _unusable_lines(prefix, tmp_path / "synced", synced)
+    validity = (detect.EyeValidity & synced & 'status = "computed"').to_dicts()
+    assert validity and set(lines) == {row["eye"] for row in validity}
+    for row in validity:
+        assert (row["span_row_start"], row["span_row_stop"]) == (None, None), row
+        counts = _in_span_counts((detect.EyeValidity.Run & row).to_dicts(), 0, row["n_samples"])
+        shares = {label: counts.get(label, 0) / row["n_samples"] for label in ("blink", "invalid", "lost")}
+        assert lines[row["eye"]].endswith(
+            f"blink {shares['blink']:.1%}, invalid {shares['invalid']:.1%}, lost {shares['lost']:.1%} of "
+            f"{row['n_samples']} samples"), lines[row["eye"]]
+
+
 def _rows_of(tables, session_key) -> dict[str, list[dict]]:
     return {table.full_table_name: (table & session_key).to_dicts() for table in tables}
 

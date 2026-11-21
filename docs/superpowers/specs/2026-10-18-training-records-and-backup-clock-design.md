@@ -1146,11 +1146,17 @@ made five decisions the spec was silent on (66). The build's rulings corrected o
 
     These sentences go in the description's `notes`, after the probe notes. No field is added, as amendment 63
     says. A file under the sync box has none.
-72. **Eye validity outside the span: a known effect, open for the final review.** Under a span, `EyeValidity`
+72. **Eye validity outside the span: the report leaves it out** (the final review's I1). Under a span, `EyeValidity`
     stores every row outside it as `invalid`, with no criterion naming them. Each `frac_*` stays a fraction of all
     the recording's rows.
-    - So `cli/report.py::_unusable_fractions` counts the left-out stretch as unusable, and a partial-box session's
-      daily report reads it as a tracking problem.
+    - Left so, `cli/report.py::_unusable_fractions` counted the left-out stretch as unusable, and a partial-box
+      session's daily report read it as a tracking problem, against its own span-cut `EyeQuality` lines.
+    - **Fixed.** `EyeValidity` stores the span's rows, `span_row_start` and `span_row_stop` (exclusive), null where
+      the span holds every row, as always under the sync box. `_detection_rows` clips each run to them in SQL, since
+      a run outside can merge with an `invalid` run inside and cannot be split after the fact.
+    - The per-eye unusable line counts the rows inside the span alone, and ends ", and K samples outside the sync
+      box's covered span, not counted". The running total leaves them out too, and names their sum on a line of its
+      own. Under the sync box both are as they were.
 73. **wl-xcon's lab-time files** (XC-391 to XC-393; amendments 25 and 27). wl-xcon proposed these shapes, and the
     requester accepted them on 2026-11-20:
     - `xcon/words.jsonl`: rows `{process, n, word, at}`, and overflow rows `{process, lost, after_n}`;

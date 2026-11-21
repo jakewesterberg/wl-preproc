@@ -147,6 +147,15 @@ class EyeValidity(dj.Computed):
     # stated reason, exactly as a refused calibration has no map.
     status : enum('computed','refused')
     n_samples=null : int unsigned
+    # The rows inside the covered span, `[span_row_start, span_row_stop)`
+    # (amendment 58; the final review's I1). Under the NI with a sync box that
+    # stopped partway every row outside them is `invalid` by no criterion, so a
+    # reader counting unusable samples leaves them out (`cli/report.py::
+    # _detection_rows`): no run can be split after the fact, since one outside
+    # merges with an `invalid` one inside. NULL where the span holds every row,
+    # as it always does under the sync box, and on a refused row.
+    span_row_start=null : int unsigned
+    span_row_stop=null  : int unsigned
     # Per-criterion bookkeeping, so a mask that rejects most of a session says
     # WHICH criterion did it rather than only that something did. They match
     # OpenIrisDPI's own five (design spec section 2): eye open, gaze within a
@@ -303,8 +312,10 @@ class EyeValidity(dj.Computed):
         is `invalid`: no detector is offered one, so no stage downstream uses
         it. `n_samples` stays the recording's, so the runs still tile its
         rows, and each fraction is still over all of them: a row outside the
-        span is counted under no criterion, as dilation's halo is not. Under
-        the sync box the span is the whole session and nothing changes."""
+        span is counted under no criterion, as dilation's halo is not. The
+        span's rows are stored (`span_row_start`, `span_row_stop`) where they
+        are not every row, so a reader can leave the rest out. Under the sync
+        box the span is the whole session and nothing changes."""
         from wl_preproc.eye.detect.validity import ValidityParams, validity_labels
         from wl_preproc.eye.detect.velocity import velocity
         from wl_preproc.eye.ohdpi import read_ohdpi, read_tracker_loss
@@ -355,6 +366,10 @@ class EyeValidity(dj.Computed):
                 continue
 
             gaze, repaired = _repaired_gaze(path, file_eye, map_, recording.fs_hz, params, placed)
+            # NULL where the span holds every row (always under the sync box),
+            # so a whole span stores what no span does.
+            span_rows = ({"span_row_start": int(placed.start), "span_row_stop": int(placed.stop)}
+                         if placed is not None and (placed.start, placed.stop) != (0, len(gaze)) else {})
             if placed is None:
                 mask = validity_labels(
                     gaze, velocity(gaze, recording.fs_hz), read_tracker_loss(path, file_eye),
@@ -386,7 +401,7 @@ class EyeValidity(dj.Computed):
             # scalar fill happens to preserve the enum wrapper or not.
             runs = runs_from_labels(np.where(labels == None, Label.FIXATION, labels))  # noqa: E711
             self.insert1({
-                **row, "status": "computed", "n_samples": len(labels),
+                **row, "status": "computed", "n_samples": len(labels), **span_rows,
                 "frac_glitch_repaired": float(repaired.mean()),
                 # Every one of design spec section 7's "per-criterion
                 # rejected fractions" (five, six since `non_finite`
