@@ -1279,8 +1279,9 @@ whole file on the NI's clock with no barcode. This is amendment 65's eye half, "
     software. So the matcher tries each likely source against each NI input: the DPI's P1-P4 difference vector
     (X and Y), P1 alone (X and Y), and the pupil, each eye, and takes the best. The file records which matched. A
     hardware check confirms what the output carries, and the search narrows to it then.
-79. **The lag.** The copy trails each frame by the eye tracker's processing and the DAC's update. Its size is
-    unknown until measured; a few milliseconds is a guess, not a measurement.
+79. **The lag.** The copy trails each frame by the eye tracker's processing and the DAC's update. The instrument's
+    paper gives its parts (84): about 1.1 ms of processing typically and 3-4 ms from the analog output, plus a
+    fixed filter delay before the NI digitises it. Its true size is unknown until measured.
     - **Measured** wherever one eye file is placed both by barcodes (over the covered span) and by its copy: the
       mean difference of the two placements over the span. It is recorded per session, with the rig and the
       session it came from.
@@ -1319,6 +1320,22 @@ whole file on the NI's clock with no barcode. This is amendment 65's eye half, "
 82. **What waits on hardware** goes to `docs/hardware-checks.md`: the lag on a real session with both the box and
     the copy; which NI inputs carry the eye; what the DAC actually puts out (78a); the plan's constants against
     real traces; the board's buffering and any smoothing on the eye channels.
+84. **This supersedes the 1c-4 timebase design's §2.1 for this use only** (the requester, 2026-11-21, told of the
+    conflict). §2.1 rejected aligning the eye tracker through its analog output, on the instrument's paper
+    (10.1016/j.jneumeth.2026.110693): frame processing "1.1±0.1 ms (median ± IQR)" but "up to a maximum of 50 ms",
+    "2% of frames ≥ 10 ms", and the analog output "imposed an additional 3-4 ms delay". It concluded "there is no
+    single offset to recover". That holds for the copy's frames one by one, and less for what is built here:
+    - **what is placed is the eye file's own frame times,** stamped at capture. A frame slow to process is late
+      only in the copy, not in the file.
+    - **the copy only fits a rate and an offset** through many windows (78). A late frame is noise in one window,
+      a burst of them is a window off the line, dropped (78), and what remains is the typical delay, the lag (79),
+      which the box measures where it ran.
+    - §2.1's other objection, that it needs the NI and so cannot serve an Intan-only rig, does not apply to a
+      fallback under the NI's clock alone.
+    - **Its cost:** until the lag is measured on a real session, eye data placed this way is off by about the
+      paper's typical delays (roughly 4-5 ms) plus the filter's, where barcodes place it within one 2 ms frame.
+      The file says so (80).
+    - Barcodes stay the eye tracker's sync path wherever they exist (77); §2.1 stands for every other use.
 83. **Carried: the camera half of amendment 65.** The ask to the camera package (wl-camacq): write each video
     file's start and end on the camera computer's wall clock, with its synchronisation state, in the sidecar.
     The same ask corrects our sidecar contract (`contracts/sidecar.py`), which still requires `trigger_source`
