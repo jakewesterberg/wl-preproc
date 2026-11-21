@@ -328,9 +328,11 @@ def test_an_ni_timed_file_says_the_ni_kept_time(tmp_path):
         "time; for Intan, the first strobe edge matched to the NI's; for a system the NI's barcodes placed, the "
         "segment's first barcode.")
     assert texts["system_clocks.time_source"] == (
-        "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan fitted "
-        "by its strobe edges matched to the NI's; barcode, a system the NI's own barcodes placed, over the part "
-        "the sync box covered; none, not placed.")
+        "How the system was placed on the NI's clock where fit_status is fitted, and how placing it was "
+        "attempted where it is unfittable: clock, SpikeGLX on the identity map; strobes, Intan by its strobe "
+        "edges matched to the NI's; barcode, by the NI's own barcodes, over the part the sync box covered: "
+        "where fitted they placed it, where unfittable they placed none of it; none, by no mechanism, not "
+        "placed.")
     source = texts["clock_reference.source"]
     assert all(f"{name}:" in source for name in ("barcode", "manifest", "rig_clock", "nidq_meta")), source
     assert "barcode's" not in texts["clock_reference.started_at_difference_s"]

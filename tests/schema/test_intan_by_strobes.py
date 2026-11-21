@@ -219,9 +219,11 @@ def test_the_nwb_file_says_intan_was_placed_by_strobes(ni_intan_nwb):
     # Part 3b-3's texts (amendment 63): each names the barcodes where they
     # place, and holds where, as here, nothing was placed by one.
     assert text["time_source"] == (
-        "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan fitted "
-        "by its strobe edges matched to the NI's; barcode, a system the NI's own barcodes placed, over the part "
-        "the sync box covered; none, not placed.")
+        "How the system was placed on the NI's clock where fit_status is fitted, and how placing it was "
+        "attempted where it is unfittable: clock, SpikeGLX on the identity map; strobes, Intan by its strobe "
+        "edges matched to the NI's; barcode, by the NI's own barcodes, over the part the sync box covered: "
+        "where fitted they placed it, where unfittable they placed none of it; none, by no mechanism, not "
+        "placed.")
     assert worst == (
         "Largest residual, microseconds: under the NI, 0 for SpikeGLX on the identity map, Intan's largest strobe "
         "residual where it was fitted, and the largest barcode residual of a system the NI's barcodes placed.")

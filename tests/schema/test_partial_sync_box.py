@@ -1277,9 +1277,11 @@ def test_the_nwb_file_says_barcodes_placed_the_eye_tracker(nwb_files):
         assert dict(zip(clocks["system"][:], clocks["time_source"][:], strict=True)) == {
             "spikeglx": "clock", "syncbox": "barcode", "ohdpi": "barcode", "bcam": "barcode"}
         assert clocks["time_source"].description == (
-            "How the system was placed on the NI's clock: clock, SpikeGLX on the identity map; strobes, Intan "
-            "fitted by its strobe edges matched to the NI's; barcode, a system the NI's own barcodes placed, over "
-            "the part the sync box covered; none, not placed.")
+            "How the system was placed on the NI's clock where fit_status is fitted, and how placing it was "
+            "attempted where it is unfittable: clock, SpikeGLX on the identity map; strobes, Intan by its "
+            "strobe edges matched to the NI's; barcode, by the NI's own barcodes, over the part the sync box "
+            "covered: where fitted they placed it, where unfittable they placed none of it; none, by no "
+            "mechanism, not placed.")
         assert clocks["fitted_rate_hz"].description == (
             "The rate on the session's clock: SpikeGLX's nominal rate on the identity map; Intan's rate fitted "
             "against the NI's strobes; a system the NI's barcodes placed, its rate fitted against them; NaN for a "
@@ -1295,6 +1297,23 @@ def test_the_nwb_file_says_barcodes_placed_the_eye_tracker(nwb_files):
             "Native index the segment's offset is anchored to: 0 for SpikeGLX, the NI's first file being session "
             "time; for Intan, the first strobe edge matched to the NI's; for a system the NI's barcodes placed, "
             "the segment's first barcode.")
+
+
+def test_the_nwb_time_source_text_holds_for_a_system_left_out(landed, nwb_files):
+    """Ruling R15: `time_source` is the mechanism attempted, so `before_ni`'s
+    camera, left out, is `unfittable` by `barcode`. The column's text says what
+    `barcode` means for each status, so its row does not read as placed."""
+    from pynwb import NWBHDF5IO
+
+    with NWBHDF5IO(nwb_files["before_ni"]["path"], "r") as handle:
+        clocks = handle.read().processing["timebase"]["system_clocks"]
+        rows = {system: (status, source) for system, status, source in zip(
+            clocks["system"][:], clocks["fit_status"][:], clocks["time_source"][:], strict=True)}
+        assert rows["bcam"] == ("unfittable", "barcode")
+        text = clocks["time_source"].description
+    assert "barcode, a system the NI's own barcodes placed" not in text
+    assert "barcode, by the NI's own barcodes" in text
+    assert "where unfittable they placed none of it" in text
 
 
 def test_under_the_sync_box_the_nwb_file_says_nothing_of_a_span(landed, nwb_files):
